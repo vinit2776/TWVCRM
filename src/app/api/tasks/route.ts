@@ -14,6 +14,7 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get("status");
   const priority = searchParams.get("priority");
   const assigned_to = searchParams.get("assigned_to");
+  const lead_id = searchParams.get("lead_id");
 
   const offset = (page - 1) * limit;
 
@@ -28,6 +29,7 @@ export async function GET(request: NextRequest) {
   if (status) query = query.eq("status", status);
   if (priority) query = query.eq("priority", priority);
   if (assigned_to) query = query.eq("assigned_to", assigned_to);
+  if (lead_id) query = query.eq("lead_id", lead_id);
 
   query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
 
