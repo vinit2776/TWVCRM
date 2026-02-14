@@ -93,8 +93,13 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
     }
   };
 
+  // Log validation errors for debugging
+  const onFormError = (formErrors: Record<string, unknown>) => {
+    console.error("Form validation errors:", formErrors);
+  };
+
   return (
-    <form onSubmit={handleSubmit(onFormSubmit)} className="space-y-8">
+    <form onSubmit={handleSubmit(onFormSubmit, onFormError)} className="space-y-8">
       {/* Action buttons */}
       <div className="flex items-center justify-end gap-2 sticky top-0 bg-background z-10 pb-4 border-b">
         <Button type="button" variant="outline" onClick={onCancel}>
@@ -247,7 +252,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
               type="number"
               min={0}
               max={100}
-              {...register("score", { valueAsNumber: true })}
+              {...register("score", { setValueAs: (v: string) => v === "" ? 0 : Number(v) })}
             />
           </div>
           <div className="space-y-2">
@@ -259,7 +264,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             <Input
               id="no_of_employees"
               type="number"
-              {...register("no_of_employees", { valueAsNumber: true })}
+              {...register("no_of_employees", { setValueAs: (v: string) => v === "" ? undefined : Number(v) })}
             />
           </div>
         </div>
@@ -299,7 +304,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             <Input
               id="seat_capacity"
               type="number"
-              {...register("seat_capacity", { valueAsNumber: true })}
+              {...register("seat_capacity", { setValueAs: (v: string) => v === "" ? undefined : Number(v) })}
             />
           </div>
           <div className="space-y-2">
@@ -318,7 +323,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             <Input
               id="budget_per_seat"
               type="number"
-              {...register("budget_per_seat", { valueAsNumber: true })}
+              {...register("budget_per_seat", { setValueAs: (v: string) => v === "" ? undefined : Number(v) })}
             />
           </div>
         </div>
