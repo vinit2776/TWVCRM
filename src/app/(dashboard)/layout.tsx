@@ -1,5 +1,7 @@
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { Header } from "@/components/dashboard/header";
+import { MobileNav } from "@/components/shared/mobile-nav";
+import { CommandPalette } from "@/components/shared/command-palette";
 
 export default function DashboardLayout({
   children,
@@ -11,8 +13,12 @@ export default function DashboardLayout({
       <Sidebar />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header />
-        <main className="flex-1 overflow-y-auto p-4 lg:p-6">{children}</main>
+        <main className="flex-1 overflow-y-auto p-4 pb-20 lg:p-6 lg:pb-6">
+          {children}
+        </main>
       </div>
+      <MobileNav />
+      <CommandPalette />
     </div>
   );
 }

@@ -1,12 +1,198 @@
+"use client";
+
+import { useState, useEffect } from "react";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Separator } from "@/components/ui/separator";
+import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { createClient } from "@/lib/supabase/client";
+import { getInitials } from "@/lib/utils";
+import { toast } from "sonner";
+import { User, Mail, Phone, Shield } from "lucide-react";
+
 export default function SettingsPage() {
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [profile, setProfile] = useState({
+    full_name: "",
+    email: "",
+    phone: "",
+    role: "",
+  });
+
+  useEffect(() => {
+    const fetchProfile = async () => {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) return;
+
+      const { data } = await supabase
+        .from("users")
+        .select("full_name, email, phone, role")
+        .eq("auth_id", user.id)
+        .single();
+
+      if (data) {
+        setProfile({
+          full_name: data.full_name || "",
+          email: data.email || "",
+          phone: data.phone || "",
+          role: data.role || "",
+        });
+      }
+      setLoading(false);
+    };
+    fetchProfile();
+  }, []);
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const supabase = createClient();
+      const { data: { user } } = await supabase.auth.getUser();
+      if (!user) throw new Error("Not authenticated");
+
+      const { error } = await supabase
+        .from("users")
+        .update({
+          full_name: profile.full_name,
+          phone: profile.phone,
+        })
+        .eq("auth_id", user.id);
+
+      if (error) throw error;
+      toast.success("Profile updated successfully");
+    } catch {
+      toast.error("Failed to update profile");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="space-y-6">
+        <div>
+          <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
+          <p className="text-muted-foreground">Manage your account and preferences</p>
+        </div>
+        <div className="animate-pulse space-y-4">
+          <div className="h-64 rounded-lg bg-muted" />
+        </div>
+      </div>
+    );
+  }
+
+  const roleLabel =
+    profile.role === "admin"
+      ? "Admin"
+      : profile.role === "manager"
+        ? "Manager"
+        : "Sales Rep";
+
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight">Settings</h1>
         <p className="text-muted-foreground">Manage your account and preferences</p>
       </div>
-      <div className="rounded-lg border p-8 text-center">
-        <p className="text-muted-foreground">Settings page coming soon.</p>
+
+      <div className="grid gap-6 max-w-2xl">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base flex items-center gap-2">
+              <User className="h-4 w-4" />
+              Profile Information
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-6">
+            <div className="flex items-center gap-4">
+              <Avatar className="h-16 w-16">
+                <AvatarFallback className="text-lg">
+                  {getInitials(profile.full_name || "U")}
+                </AvatarFallback>
+              </Avatar>
+              <div>
+                <p className="font-medium">{profile.full_name}</p>
+                <p className="text-sm text-muted-foreground">{profile.email}</p>
+              </div>
+            </div>
+
+            <Separator />
+
+            <div className="grid gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="full_name">Full Name</Label>
+                <div className="relative">
+                  <User className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="full_name"
+                    value={profile.full_name}
+                    onChange={(e) =>
+                      setProfile({ ...profile, full_name: e.target.value })
+                    }
+                    className="pl-9"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="email">Email</Label>
+                <div className="relative">
+                  <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="email"
+                    value={profile.email}
+                    disabled
+                    className="pl-9 bg-muted"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Email cannot be changed from here
+                </p>
+              </div>
+
+              <div className="space-y-2">
+                <Label htmlFor="phone">Phone</Label>
+                <div className="relative">
+                  <Phone className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    id="phone"
+                    value={profile.phone}
+                    onChange={(e) =>
+                      setProfile({ ...profile, phone: e.target.value })
+                    }
+                    className="pl-9"
+                    placeholder="+91 XXXXX XXXXX"
+                  />
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <Label>Role</Label>
+                <div className="relative">
+                  <Shield className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                  <Input
+                    value={roleLabel}
+                    disabled
+                    className="pl-9 bg-muted"
+                  />
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Role can only be changed by an admin
+                </p>
+              </div>
+            </div>
+
+            <div className="flex justify-end">
+              <Button onClick={handleSave} disabled={saving}>
+                {saving ? "Saving..." : "Save Changes"}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
       </div>
     </div>
   );

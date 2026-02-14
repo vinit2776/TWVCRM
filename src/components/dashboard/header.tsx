@@ -3,7 +3,6 @@
 import { Menu, Search, LogOut } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { useUiStore } from "@/stores/ui-store";
 import { createClient } from "@/lib/supabase/client";
@@ -32,6 +31,12 @@ export function Header() {
     router.push("/login");
   }
 
+  function openCommandPalette() {
+    document.dispatchEvent(
+      new KeyboardEvent("keydown", { key: "k", metaKey: true })
+    );
+  }
+
   return (
     <header className="flex h-16 items-center gap-4 border-b bg-background px-4 lg:px-6">
       {/* Mobile menu button */}
@@ -44,16 +49,21 @@ export function Header() {
         <Menu className="h-5 w-5" />
       </Button>
 
-      {/* Search */}
-      <div className="flex-1 max-w-md">
+      {/* Search - opens command palette */}
+      <button
+        onClick={openCommandPalette}
+        className="flex-1 max-w-md"
+      >
         <div className="relative">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-          <Input
-            placeholder="Search records..."
-            className="pl-9 bg-muted/50 border-0 focus-visible:ring-1"
-          />
+          <div className="flex items-center justify-between w-full rounded-md bg-muted/50 pl-9 pr-3 py-2 text-sm text-muted-foreground cursor-pointer hover:bg-muted transition-colors">
+            <span>Search...</span>
+            <kbd className="hidden sm:inline-flex items-center gap-0.5 rounded border px-1.5 py-0.5 text-[10px]">
+              <span className="text-xs">&#8984;</span>K
+            </kbd>
+          </div>
         </div>
-      </div>
+      </button>
 
       <div className="flex items-center gap-3 ml-auto">
         {/* User info */}
