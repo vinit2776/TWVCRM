@@ -20,12 +20,14 @@ const COMPANY_EMAIL = "contact@theworkvilla.com";
 const COMPANY_WEBSITE = "www.theworkvilla.com";
 
 function formatCurrencyPDF(amount: number): string {
-  return new Intl.NumberFormat("en-IN", {
-    style: "currency",
-    currency: "INR",
-    minimumFractionDigits: 0,
-    maximumFractionDigits: 2,
-  }).format(amount);
+  // Use "Rs." instead of Unicode ₹ symbol — jsPDF's Helvetica cannot render ₹
+  return (
+    "Rs. " +
+    new Intl.NumberFormat("en-IN", {
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
+    }).format(amount)
+  );
 }
 
 function formatDatePDF(date: string | Date): string {
@@ -213,9 +215,9 @@ function generatePDF(options: PDFOptions): jsPDF {
     columnStyles: {
       0: { cellWidth: 12, halign: "center" },
       1: { cellWidth: "auto" },
-      2: { cellWidth: 18, halign: "center" },
-      3: { cellWidth: 35, halign: "right" },
-      4: { cellWidth: 35, halign: "right" },
+      2: { cellWidth: 16, halign: "center" },
+      3: { cellWidth: 38, halign: "right" },
+      4: { cellWidth: 38, halign: "right" },
     },
     margin: { left: 14, right: 14 },
   });
@@ -224,7 +226,7 @@ function generatePDF(options: PDFOptions): jsPDF {
   y = (doc as any).lastAutoTable.finalY + 8;
 
   // ── Totals Section ──
-  const totalsX = pageWidth - 80;
+  const totalsX = pageWidth - 85;
   const totalsValueX = pageWidth - 14;
 
   doc.setFontSize(10);
