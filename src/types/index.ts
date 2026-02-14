@@ -288,6 +288,134 @@ export interface CrmDocument {
 }
 
 // ==========================================
+// Contract Types
+// ==========================================
+export type ContractStatus =
+  | "draft"
+  | "active"
+  | "renewed"
+  | "expired"
+  | "terminated";
+
+export type BillingCycle =
+  | "monthly"
+  | "quarterly"
+  | "half_yearly"
+  | "yearly";
+
+export interface Contract {
+  id: string;
+  contract_number: string;
+  lead_id: string;
+  lead?: Lead;
+  proposal_id: string;
+  proposal?: Proposal;
+  title: string;
+  status: ContractStatus;
+  items: LineItem[];
+  subtotal: number;
+  tax_percentage: number;
+  tax_amount: number;
+  discount_percentage: number;
+  discount_amount: number;
+  total_amount: number;
+  billing_cycle: BillingCycle;
+  tenure_months: number;
+  start_date: string;
+  end_date: string;
+  next_billing_date?: string;
+  seats: number;
+  terms_and_conditions?: string;
+  notes?: string;
+  activated_at?: string;
+  renewed_at?: string;
+  terminated_at?: string;
+  termination_reason?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// ==========================================
+// Voucher Types
+// ==========================================
+export type VoucherStatus = "available" | "issued" | "expired" | "revoked";
+
+export interface VoucherRepository {
+  id: string;
+  voucher_code: string;
+  status: VoucherStatus;
+  metadata: Record<string, unknown>;
+  uploaded_by?: string;
+  uploaded_at: string;
+  issued_at?: string;
+  expires_at?: string;
+}
+
+export interface VoucherIssuance {
+  id: string;
+  contract_id: string;
+  voucher_id: string;
+  voucher?: VoucherRepository;
+  lead_id: string;
+  seat_number: number;
+  issued_by?: string;
+  issued_at: string;
+  valid_from: string;
+  valid_until: string;
+  revoked_at?: string;
+  revoke_reason?: string;
+}
+
+// ==========================================
+// Usage Charge & Billing Types
+// ==========================================
+export type UsageChargeStatus = "pending" | "billed" | "waived";
+export type BillingStatementStatus = "draft" | "finalized" | "exported";
+
+export interface UsageCharge {
+  id: string;
+  contract_id: string;
+  lead_id: string;
+  description: string;
+  quantity: number;
+  unit_price: number;
+  total: number;
+  charge_date: string;
+  status: UsageChargeStatus;
+  billing_statement_id?: string;
+  notes?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface BillingStatement {
+  id: string;
+  statement_number: string;
+  contract_id: string;
+  contract?: Contract;
+  lead_id: string;
+  lead?: Lead;
+  period_start: string;
+  period_end: string;
+  fixed_amount: number;
+  usage_amount: number;
+  subtotal: number;
+  tax_percentage: number;
+  tax_amount: number;
+  total_amount: number;
+  status: BillingStatementStatus;
+  usage_charges?: UsageCharge[];
+  finalized_at?: string;
+  exported_at?: string;
+  notes?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// ==========================================
 // Audit Log Types
 // ==========================================
 export type AuditAction = "create" | "update" | "delete";
@@ -298,7 +426,11 @@ export type AuditEntityType =
   | "proposal"
   | "invoice"
   | "document"
-  | "user";
+  | "user"
+  | "contract"
+  | "voucher"
+  | "usage_charge"
+  | "billing_statement";
 
 export interface AuditLog {
   id: string;

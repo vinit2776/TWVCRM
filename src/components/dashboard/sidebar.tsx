@@ -15,6 +15,9 @@ import {
   UserPlus,
   Settings,
   ClipboardList,
+  ScrollText,
+  Wifi,
+  IndianRupee,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -29,6 +32,8 @@ const navItems = [
   { href: "/tasks", label: "Tasks", icon: CheckSquare },
   { href: "/proposals", label: "Proposals", icon: FileText },
   { href: "/invoices", label: "Invoices", icon: Receipt },
+  { href: "/contracts", label: "Contracts", icon: ScrollText },
+  { href: "/billing", label: "Billing", icon: IndianRupee },
   { href: "/documents", label: "Documents", icon: FolderOpen },
 ];
 
@@ -112,6 +117,21 @@ export function Sidebar() {
 
         {/* Bottom nav */}
         <div className="border-t border-sidebar-accent px-3 py-4 space-y-1">
+          {isAdmin && (
+            <Link
+              href="/vouchers"
+              onClick={() => setSidebarOpen(false)}
+              className={cn(
+                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                pathname === "/vouchers" || pathname.startsWith("/vouchers/")
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+              )}
+            >
+              <Wifi className="h-5 w-5 shrink-0" />
+              Vouchers
+            </Link>
+          )}
           {isAdmin && (
             <Link
               href="/audit-logs"

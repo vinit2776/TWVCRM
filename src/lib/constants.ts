@@ -180,6 +180,116 @@ export const RATING_LABELS: Record<string, string> = {
   cold: "Cold",
 };
 
+// ==========================================
+// Contract Constants
+// ==========================================
+export const CONTRACT_STATUSES = [
+  "draft",
+  "active",
+  "renewed",
+  "expired",
+  "terminated",
+] as const;
+
+export const CONTRACT_STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  active: "Active",
+  renewed: "Renewed",
+  expired: "Expired",
+  terminated: "Terminated",
+};
+
+export const CONTRACT_STATUS_COLORS: Record<string, string> = {
+  draft: "bg-gray-100 text-gray-800",
+  active: "bg-green-100 text-green-800",
+  renewed: "bg-blue-100 text-blue-800",
+  expired: "bg-orange-100 text-orange-800",
+  terminated: "bg-red-100 text-red-800",
+};
+
+export const BILLING_CYCLES = [
+  "monthly",
+  "quarterly",
+  "half_yearly",
+  "yearly",
+] as const;
+
+export const BILLING_CYCLE_LABELS: Record<string, string> = {
+  monthly: "Monthly",
+  quarterly: "Quarterly",
+  half_yearly: "Half-Yearly",
+  yearly: "Yearly",
+};
+
+export const BILLING_CYCLE_MONTHS: Record<string, number> = {
+  monthly: 1,
+  quarterly: 3,
+  half_yearly: 6,
+  yearly: 12,
+};
+
+// ==========================================
+// Voucher Constants
+// ==========================================
+export const VOUCHER_STATUSES = [
+  "available",
+  "issued",
+  "expired",
+  "revoked",
+] as const;
+
+export const VOUCHER_STATUS_LABELS: Record<string, string> = {
+  available: "Available",
+  issued: "Issued",
+  expired: "Expired",
+  revoked: "Revoked",
+};
+
+export const VOUCHER_STATUS_COLORS: Record<string, string> = {
+  available: "bg-green-100 text-green-800",
+  issued: "bg-blue-100 text-blue-800",
+  expired: "bg-orange-100 text-orange-800",
+  revoked: "bg-red-100 text-red-800",
+};
+
+// ==========================================
+// Usage Charge Constants
+// ==========================================
+export const USAGE_CHARGE_STATUSES = ["pending", "billed", "waived"] as const;
+
+export const USAGE_CHARGE_STATUS_LABELS: Record<string, string> = {
+  pending: "Pending",
+  billed: "Billed",
+  waived: "Waived",
+};
+
+export const USAGE_CHARGE_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-yellow-100 text-yellow-800",
+  billed: "bg-green-100 text-green-800",
+  waived: "bg-gray-100 text-gray-800",
+};
+
+// ==========================================
+// Billing Statement Constants
+// ==========================================
+export const BILLING_STATEMENT_STATUSES = [
+  "draft",
+  "finalized",
+  "exported",
+] as const;
+
+export const BILLING_STATEMENT_STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  finalized: "Finalized",
+  exported: "Exported",
+};
+
+export const BILLING_STATEMENT_STATUS_COLORS: Record<string, string> = {
+  draft: "bg-gray-100 text-gray-800",
+  finalized: "bg-blue-100 text-blue-800",
+  exported: "bg-green-100 text-green-800",
+};
+
 export const DOCUMENT_CATEGORIES = [
   "contract",
   "identity",

@@ -161,3 +161,43 @@ export const createInvoiceSchema = z.object({
 });
 
 export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
+
+// ==========================================
+// Contract Validations
+// ==========================================
+export const createContractSchema = z.object({
+  proposal_id: z.string().uuid("Invalid proposal ID"),
+  billing_cycle: z.enum(["monthly", "quarterly", "half_yearly", "yearly"]),
+  tenure_months: z.number().int().positive("Tenure must be positive"),
+  start_date: z.string().min(1, "Start date is required"),
+  seats: z.number().int().positive("Seats must be positive"),
+  terms_and_conditions: z.string().optional(),
+  notes: z.string().optional(),
+});
+
+export type CreateContractInput = z.infer<typeof createContractSchema>;
+
+// ==========================================
+// Usage Charge Validations
+// ==========================================
+export const createUsageChargeSchema = z.object({
+  contract_id: z.string().uuid("Invalid contract ID"),
+  description: z.string().min(1, "Description is required"),
+  quantity: z.number().positive("Quantity must be positive"),
+  unit_price: z.number().min(0, "Price must be non-negative"),
+  total: z.number(),
+  charge_date: z.string().min(1, "Charge date is required"),
+  notes: z.string().optional(),
+});
+
+export type CreateUsageChargeInput = z.infer<typeof createUsageChargeSchema>;
+
+// ==========================================
+// Billing Statement Validations
+// ==========================================
+export const generateBillingStatementSchema = z.object({
+  contract_id: z.string().uuid("Invalid contract ID"),
+  period_start: z.string().min(1, "Period start is required"),
+  period_end: z.string().min(1, "Period end is required"),
+  notes: z.string().optional(),
+});

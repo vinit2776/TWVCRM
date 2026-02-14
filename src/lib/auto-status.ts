@@ -26,13 +26,14 @@ function statusIndex(status: LeadStatus): number {
  * Rules:
  *  - activity (call/meeting/note/email/tour) → "contacted" (if currently "new")
  *  - proposal created → "proposal_sent" (if currently before "proposal_sent")
+ *  - contract activated → "won" + set converted_at (unless already "won" or "lost")
  *
  * Never downgrades: if the lead is already at or past the target status, no change is made.
  */
 export async function autoUpdateLeadStatus(
   supabase: SupabaseClient,
   leadId: string,
-  trigger: "activity" | "proposal"
+  trigger: "activity" | "proposal" | "contract"
 ): Promise<void> {
   // Fetch current lead status
   const { data: lead } = await supabase
@@ -56,12 +57,24 @@ export async function autoUpdateLeadStatus(
     if (statusIndex(currentStatus) < statusIndex("proposal_sent")) {
       targetStatus = "proposal_sent";
     }
+  } else if (trigger === "contract") {
+    // Advance to "won" when a contract becomes active (unless already won or lost)
+    if (currentStatus !== "won" && currentStatus !== "lost") {
+      targetStatus = "won";
+    }
   }
 
   if (targetStatus && targetStatus !== currentStatus) {
+    const updatePayload: Record<string, unknown> = { status: targetStatus };
+
+    // Set converted_at when lead is won via contract activation
+    if (trigger === "contract" && targetStatus === "won") {
+      updatePayload.converted_at = new Date().toISOString();
+    }
+
     await supabase
       .from("leads")
-      .update({ status: targetStatus })
+      .update(updatePayload)
       .eq("id", leadId);
   }
 }

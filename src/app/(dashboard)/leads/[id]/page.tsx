@@ -39,6 +39,7 @@ import {
 import { ActivityTimeline } from "@/components/activities/activity-timeline";
 import { ActivityForm } from "@/components/activities/activity-form";
 import { LeadProposalsTab } from "@/components/leads/lead-proposals-tab";
+import { LeadContractsTab } from "@/components/leads/lead-contracts-tab";
 import { LeadDocumentsTab } from "@/components/leads/lead-documents-tab";
 import { LeadTasksTab } from "@/components/leads/lead-tasks-tab";
 
@@ -138,6 +139,7 @@ export default function LeadDetailPage({
           <TabsTrigger value="activities">Activities</TabsTrigger>
           <TabsTrigger value="tasks">Tasks</TabsTrigger>
           <TabsTrigger value="proposals">Proposals</TabsTrigger>
+          <TabsTrigger value="contracts">Contracts</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
         </TabsList>
 
@@ -442,6 +444,10 @@ export default function LeadDetailPage({
 
         <TabsContent value="proposals" className="mt-4">
           <LeadProposalsTab leadId={id} />
+        </TabsContent>
+
+        <TabsContent value="contracts" className="mt-4">
+          <LeadContractsTab leadId={id} />
         </TabsContent>
 
         <TabsContent value="documents" className="mt-4">
