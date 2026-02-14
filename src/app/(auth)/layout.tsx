@@ -1,4 +1,4 @@
-import { APP_NAME } from "@/lib/constants";
+import Image from "next/image";
 
 export default function AuthLayout({
   children,
@@ -8,9 +8,15 @@ export default function AuthLayout({
   return (
     <div className="flex min-h-screen items-center justify-center bg-muted/30 px-4">
       <div className="w-full max-w-md space-y-6">
-        <div className="text-center">
-          <h1 className="text-3xl font-bold text-primary">{APP_NAME}</h1>
-          <p className="mt-1 text-sm text-muted-foreground">
+        <div className="flex flex-col items-center gap-3">
+          <Image
+            src="/logo.png"
+            alt="The WorkVilla"
+            width={220}
+            height={56}
+            priority
+          />
+          <p className="text-sm text-muted-foreground">
             Coworking Space Management
           </p>
         </div>

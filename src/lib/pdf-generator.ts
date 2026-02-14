@@ -2,6 +2,22 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import type { Proposal, ProformaInvoice, Lead, LineItem } from "@/types";
 
+// TWV Brand Colors
+const BRAND_TEAL: [number, number, number] = [1, 94, 101]; // #015E65
+const BRAND_GREEN: [number, number, number] = [0, 174, 108]; // #00AE6C
+const BRAND_DARK: [number, number, number] = [26, 27, 30]; // #1A1B1E
+
+// Company Details
+const COMPANY_NAME = "SREE DESIGN INFRASTRUCTURE PVT LTD";
+const BRAND_NAME = "The WorkVilla";
+const COMPANY_ADDRESS = [
+  "Prakash Presidium, 110, Mahatma Gandhi Road,",
+  "Nungambakkam, Chennai - 600034",
+];
+const COMPANY_PHONE = "+91 97910 97900";
+const COMPANY_EMAIL = "contact@theworkvilla.com";
+const COMPANY_WEBSITE = "www.theworkvilla.com";
+
 function formatCurrencyPDF(amount: number): string {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
@@ -38,62 +54,94 @@ interface PDFOptions {
   notes?: string;
 }
 
+function addLogoToDoc(doc: jsPDF): number {
+  // Draw a colored icon placeholder and brand text
+  // We use text-based header since jsPDF image from URL is complex in client-side
+  const pageWidth = doc.internal.pageSize.getWidth();
+  let y = 15;
+
+  // Brand colored bar at top
+  doc.setFillColor(...BRAND_TEAL);
+  doc.rect(0, 0, pageWidth, 4, "F");
+
+  // Brand name
+  doc.setFontSize(24);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text(BRAND_NAME, 14, y + 6);
+
+  // Tagline
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(...BRAND_GREEN);
+  doc.text("Empower your business with flexible workspaces", 14, y + 13);
+
+  // Company details on the right
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(100, 100, 100);
+  doc.text(COMPANY_NAME, pageWidth - 14, y, { align: "right" });
+  doc.text(COMPANY_ADDRESS[0], pageWidth - 14, y + 4.5, { align: "right" });
+  doc.text(COMPANY_ADDRESS[1], pageWidth - 14, y + 9, { align: "right" });
+  doc.text(`Ph: ${COMPANY_PHONE} | ${COMPANY_EMAIL}`, pageWidth - 14, y + 13.5, {
+    align: "right",
+  });
+
+  return y + 20;
+}
+
 function generatePDF(options: PDFOptions): jsPDF {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
-  let y = 20;
 
-  // ── Header ──
-  doc.setFontSize(22);
+  // ── Header with Logo ──
+  let y = addLogoToDoc(doc);
+
+  // ── Divider ──
+  doc.setDrawColor(...BRAND_TEAL);
+  doc.setLineWidth(0.5);
+  doc.line(14, y, pageWidth - 14, y);
+  y += 10;
+
+  // ── Document Title & Number ──
+  doc.setFontSize(18);
   doc.setFont("helvetica", "bold");
-  doc.setTextColor(30, 64, 175); // Blue
-  doc.text("TWV Coworking", 14, y);
-
-  doc.setFontSize(10);
-  doc.setFont("helvetica", "normal");
-  doc.setTextColor(100, 100, 100);
-  doc.text("Premium Workspace Solutions", 14, y + 7);
+  doc.setTextColor(...BRAND_DARK);
+  doc.text(options.title, 14, y);
 
   // Document number & date — right aligned
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
-  doc.setTextColor(30, 30, 30);
+  doc.setTextColor(...BRAND_TEAL);
   doc.text(options.documentNumber, pageWidth - 14, y, { align: "right" });
+  y += 7;
+
   doc.setFontSize(9);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(100, 100, 100);
-  doc.text(`Date: ${formatDatePDF(options.createdAt)}`, pageWidth - 14, y + 7, {
+  doc.text(`Date: ${formatDatePDF(options.createdAt)}`, pageWidth - 14, y, {
     align: "right",
   });
 
   if (options.validUntil) {
+    y += 5;
     doc.text(
       `Valid Until: ${formatDatePDF(options.validUntil)}`,
       pageWidth - 14,
-      y + 13,
+      y,
       { align: "right" }
     );
   }
   if (options.dueDate) {
+    y += 5;
     doc.text(
       `Due Date: ${formatDatePDF(options.dueDate)}`,
       pageWidth - 14,
-      y + 13,
+      y,
       { align: "right" }
     );
   }
 
-  // ── Divider ──
-  y += 22;
-  doc.setDrawColor(200, 200, 200);
-  doc.line(14, y, pageWidth - 14, y);
-  y += 10;
-
-  // ── Title ──
-  doc.setFontSize(16);
-  doc.setFont("helvetica", "bold");
-  doc.setTextColor(30, 30, 30);
-  doc.text(options.title, 14, y);
   y += 8;
 
   // ── Description ──
@@ -108,29 +156,35 @@ function generatePDF(options: PDFOptions): jsPDF {
 
   // ── Prepared For (Lead Info) ──
   if (options.lead) {
+    // Section header with teal accent
+    doc.setFillColor(240, 250, 245); // light green-gray bg
+    doc.rect(14, y - 4, pageWidth - 28, 6, "F");
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(100, 100, 100);
-    doc.text("PREPARED FOR", 14, y);
+    doc.setTextColor(...BRAND_TEAL);
+    doc.text("PREPARED FOR", 16, y);
     y += 6;
 
     doc.setFont("helvetica", "normal");
-    doc.setTextColor(30, 30, 30);
+    doc.setTextColor(...BRAND_DARK);
     const leadName = `${options.lead.first_name || ""} ${options.lead.last_name || ""}`.trim();
     if (leadName) {
-      doc.text(leadName, 14, y);
+      doc.setFont("helvetica", "bold");
+      doc.text(leadName, 16, y);
+      doc.setFont("helvetica", "normal");
       y += 5;
     }
     if (options.lead.company) {
-      doc.text(options.lead.company, 14, y);
+      doc.text(options.lead.company, 16, y);
       y += 5;
     }
     if (options.lead.email) {
-      doc.text(options.lead.email, 14, y);
+      doc.setTextColor(100, 100, 100);
+      doc.text(options.lead.email, 16, y);
       y += 5;
     }
     if (options.lead.phone || options.lead.mobile) {
-      doc.text(options.lead.phone || options.lead.mobile || "", 14, y);
+      doc.text(options.lead.phone || options.lead.mobile || "", 16, y);
       y += 5;
     }
     y += 4;
@@ -151,12 +205,15 @@ function generatePDF(options: PDFOptions): jsPDF {
     body: tableRows,
     theme: "striped",
     headStyles: {
-      fillColor: [30, 64, 175],
+      fillColor: BRAND_TEAL,
       textColor: [255, 255, 255],
       fontStyle: "bold",
       fontSize: 10,
     },
-    bodyStyles: { fontSize: 9 },
+    alternateRowStyles: {
+      fillColor: [240, 250, 245],
+    },
+    bodyStyles: { fontSize: 9, textColor: BRAND_DARK },
     columnStyles: {
       0: { cellWidth: 12, halign: "center" },
       1: { cellWidth: "auto" },
@@ -201,29 +258,34 @@ function generatePDF(options: PDFOptions): jsPDF {
   }
 
   // Total line
-  doc.setDrawColor(30, 64, 175);
+  doc.setDrawColor(...BRAND_TEAL);
+  doc.setLineWidth(0.5);
   doc.line(totalsX, y, totalsValueX, y);
-  y += 6;
+  y += 7;
 
+  // Total amount with teal background
+  doc.setFillColor(...BRAND_TEAL);
+  doc.roundedRect(totalsX - 2, y - 5, totalsValueX - totalsX + 4, 10, 2, 2, "F");
   doc.setFontSize(12);
   doc.setFont("helvetica", "bold");
-  doc.setTextColor(30, 64, 175);
-  doc.text("Total:", totalsX, y);
-  doc.text(formatCurrencyPDF(options.totalAmount), totalsValueX, y, {
+  doc.setTextColor(255, 255, 255);
+  doc.text("Total:", totalsX + 2, y + 1);
+  doc.text(formatCurrencyPDF(options.totalAmount), totalsValueX - 2, y + 1, {
     align: "right",
   });
-  y += 12;
+  y += 14;
 
   // ── Terms & Conditions ──
   if (options.termsAndConditions) {
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(80, 80, 80);
+    doc.setTextColor(...BRAND_TEAL);
     doc.text("Terms & Conditions", 14, y);
     y += 6;
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
+    doc.setTextColor(80, 80, 80);
     const tcLines = doc.splitTextToSize(
       options.termsAndConditions,
       pageWidth - 28
@@ -236,25 +298,37 @@ function generatePDF(options: PDFOptions): jsPDF {
   if (options.notes) {
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(80, 80, 80);
+    doc.setTextColor(...BRAND_TEAL);
     doc.text("Notes", 14, y);
     y += 6;
 
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
+    doc.setTextColor(80, 80, 80);
     const notesLines = doc.splitTextToSize(options.notes, pageWidth - 28);
     doc.text(notesLines, 14, y);
   }
 
   // ── Footer ──
   const pageHeight = doc.internal.pageSize.getHeight();
+
+  // Footer bar
+  doc.setFillColor(...BRAND_TEAL);
+  doc.rect(0, pageHeight - 18, pageWidth, 18, "F");
+
   doc.setFontSize(8);
   doc.setFont("helvetica", "normal");
-  doc.setTextColor(150, 150, 150);
+  doc.setTextColor(255, 255, 255);
   doc.text(
-    "Generated by TWV CRM | TWV Coworking",
+    `${BRAND_NAME} | ${COMPANY_NAME}`,
     pageWidth / 2,
-    pageHeight - 10,
+    pageHeight - 11,
+    { align: "center" }
+  );
+  doc.text(
+    `${COMPANY_ADDRESS.join(" ")} | ${COMPANY_PHONE} | ${COMPANY_WEBSITE}`,
+    pageWidth / 2,
+    pageHeight - 6,
     { align: "center" }
   );
 

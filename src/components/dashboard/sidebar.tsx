@@ -17,7 +17,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
-import { APP_NAME } from "@/lib/constants";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -58,8 +57,8 @@ export function Sidebar() {
       >
         {/* Logo */}
         <div className="flex h-16 items-center justify-between px-6">
-          <Link href="/dashboard" className="text-xl font-bold">
-            {APP_NAME}
+          <Link href="/dashboard" className="flex items-center gap-2">
+            <img src="/logo-white.png" alt="The WorkVilla" className="h-8" />
           </Link>
           <button
             onClick={() => setSidebarOpen(false)}

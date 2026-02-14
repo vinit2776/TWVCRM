@@ -64,21 +64,31 @@ export async function POST(
     const pdfBuffer = Buffer.from(pdfBase64, "base64");
 
     await resend.emails.send({
-      from: "TWV CRM <onboarding@resend.dev>",
+      from: "The WorkVilla <onboarding@resend.dev>",
       to: recipients,
       subject: `Proposal ${proposal.proposal_number} - ${proposal.title}`,
       html: `
-        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
-          <h2 style="color: #1e40af;">TWV Coworking</h2>
-          <p>Dear ${proposal.lead?.first_name || "Client"},</p>
-          <p>Please find attached our proposal <strong>${proposal.proposal_number}</strong> for <strong>${proposal.title}</strong>.</p>
-          <table style="border-collapse: collapse; margin: 16px 0;">
-            <tr><td style="padding: 4px 12px; color: #666;">Proposal:</td><td style="padding: 4px 12px; font-weight: bold;">${proposal.proposal_number}</td></tr>
-            <tr><td style="padding: 4px 12px; color: #666;">Amount:</td><td style="padding: 4px 12px; font-weight: bold;">₹${Number(proposal.total_amount).toLocaleString("en-IN")}</td></tr>
-            ${proposal.valid_until ? `<tr><td style="padding: 4px 12px; color: #666;">Valid Until:</td><td style="padding: 4px 12px;">${new Date(proposal.valid_until).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}</td></tr>` : ""}
-          </table>
-          <p>We look forward to hearing from you.</p>
-          <p>Best regards,<br/>${senderName}<br/>TWV Coworking</p>
+        <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+          <div style="background-color: #015E65; padding: 24px 32px;">
+            <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: bold;">The WorkVilla</h1>
+            <p style="color: #00AE6C; margin: 4px 0 0; font-size: 12px;">Empower your business with flexible workspaces</p>
+          </div>
+          <div style="padding: 32px;">
+            <p style="color: #1a1b1e; font-size: 15px;">Dear ${proposal.lead?.first_name || "Client"},</p>
+            <p style="color: #333; font-size: 14px;">Please find attached our proposal <strong>${proposal.proposal_number}</strong> for <strong>${proposal.title}</strong>.</p>
+            <table style="border-collapse: collapse; margin: 20px 0; width: 100%; background: #f0faf5; border-radius: 6px;">
+              <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Proposal:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">${proposal.proposal_number}</td></tr>
+              <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Amount:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">₹${Number(proposal.total_amount).toLocaleString("en-IN")}</td></tr>
+              ${proposal.valid_until ? `<tr><td style="padding: 10px 16px; color: #666;">Valid Until:</td><td style="padding: 10px 16px; color: #333;">${new Date(proposal.valid_until).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}</td></tr>` : ""}
+            </table>
+            <p style="color: #333; font-size: 14px;">We look forward to hearing from you.</p>
+            <p style="color: #333; font-size: 14px;">Best regards,<br/><strong>${senderName}</strong><br/>The WorkVilla</p>
+          </div>
+          <div style="background-color: #015E65; padding: 16px 32px; text-align: center;">
+            <p style="color: #ffffff; margin: 0; font-size: 11px;">SREE DESIGN INFRASTRUCTURE PVT LTD</p>
+            <p style="color: rgba(255,255,255,0.7); margin: 4px 0 0; font-size: 10px;">Prakash Presidium, 110, MG Road, Nungambakkam, Chennai - 600034 | +91 97910 97900</p>
+            <p style="color: #00AE6C; margin: 4px 0 0; font-size: 10px;">www.theworkvilla.com</p>
+          </div>
         </div>
       `,
       attachments: [

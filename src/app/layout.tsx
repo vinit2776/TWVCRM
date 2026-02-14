@@ -3,8 +3,8 @@ import "./globals.css";
 import { ToastProvider } from "@/components/shared/toast-provider";
 
 export const metadata: Metadata = {
-  title: "TWV CRM",
-  description: "Coworking Space CRM for The WorkVilla",
+  title: "The WorkVilla CRM",
+  description: "Coworking Space CRM for The WorkVilla - Empower your business with flexible workspaces",
 };
 
 export default function RootLayout({
