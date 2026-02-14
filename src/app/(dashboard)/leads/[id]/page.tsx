@@ -38,6 +38,8 @@ import {
 } from "@/components/ui/dialog";
 import { ActivityTimeline } from "@/components/activities/activity-timeline";
 import { ActivityForm } from "@/components/activities/activity-form";
+import { LeadProposalsTab } from "@/components/leads/lead-proposals-tab";
+import { LeadDocumentsTab } from "@/components/leads/lead-documents-tab";
 
 export default function LeadDetailPage({
   params,
@@ -430,19 +432,11 @@ export default function LeadDetailPage({
         </TabsContent>
 
         <TabsContent value="proposals" className="mt-4">
-          <Card>
-            <CardContent className="py-8 text-center text-muted-foreground">
-              Proposals will be available in Phase 4.
-            </CardContent>
-          </Card>
+          <LeadProposalsTab leadId={id} />
         </TabsContent>
 
         <TabsContent value="documents" className="mt-4">
-          <Card>
-            <CardContent className="py-8 text-center text-muted-foreground">
-              Documents will be available in Phase 6.
-            </CardContent>
-          </Card>
+          <LeadDocumentsTab leadId={id} />
         </TabsContent>
       </Tabs>
 
