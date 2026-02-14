@@ -1,6 +1,7 @@
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import type { Proposal, ProformaInvoice, Lead, LineItem } from "@/types";
+import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
 
 // TWV Brand Colors
 const BRAND_TEAL: [number, number, number] = [1, 94, 101]; // #015E65
@@ -55,39 +56,34 @@ interface PDFOptions {
 }
 
 function addLogoToDoc(doc: jsPDF): number {
-  // Draw a colored icon placeholder and brand text
-  // We use text-based header since jsPDF image from URL is complex in client-side
   const pageWidth = doc.internal.pageSize.getWidth();
-  let y = 15;
 
-  // Brand colored bar at top
+  // ── Teal accent bar at the very top ──
   doc.setFillColor(...BRAND_TEAL);
-  doc.rect(0, 0, pageWidth, 4, "F");
+  doc.rect(0, 0, pageWidth, 3, "F");
 
-  // Brand name
-  doc.setFontSize(24);
-  doc.setFont("helvetica", "bold");
-  doc.setTextColor(...BRAND_TEAL);
-  doc.text(BRAND_NAME, 14, y + 6);
+  // ── Logo image (left side) ──
+  // Original logo aspect ratio is ~4:1 (1024x260)
+  const logoW = 52;
+  const logoH = 13;
+  doc.addImage(TWV_LOGO_BASE64, "PNG", 14, 8, logoW, logoH);
 
-  // Tagline
-  doc.setFontSize(9);
-  doc.setFont("helvetica", "normal");
-  doc.setTextColor(...BRAND_GREEN);
-  doc.text("Empower your business with flexible workspaces", 14, y + 13);
-
-  // Company details on the right
-  doc.setFontSize(8);
+  // ── Company details (right-aligned, beside logo) ──
+  doc.setFontSize(7.5);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(100, 100, 100);
-  doc.text(COMPANY_NAME, pageWidth - 14, y, { align: "right" });
-  doc.text(COMPANY_ADDRESS[0], pageWidth - 14, y + 4.5, { align: "right" });
-  doc.text(COMPANY_ADDRESS[1], pageWidth - 14, y + 9, { align: "right" });
-  doc.text(`Ph: ${COMPANY_PHONE} | ${COMPANY_EMAIL}`, pageWidth - 14, y + 13.5, {
-    align: "right",
-  });
+  doc.text(COMPANY_NAME, pageWidth - 14, 10, { align: "right" });
+  doc.text(COMPANY_ADDRESS[0], pageWidth - 14, 14, { align: "right" });
+  doc.text(COMPANY_ADDRESS[1], pageWidth - 14, 18, { align: "right" });
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text(
+    `${COMPANY_PHONE}  |  ${COMPANY_EMAIL}`,
+    pageWidth - 14,
+    22,
+    { align: "right" }
+  );
 
-  return y + 20;
+  return 28;
 }
 
 function generatePDF(options: PDFOptions): jsPDF {
@@ -311,24 +307,34 @@ function generatePDF(options: PDFOptions): jsPDF {
 
   // ── Footer ──
   const pageHeight = doc.internal.pageSize.getHeight();
+  const footerH = 16;
+  const footerY = pageHeight - footerH;
 
-  // Footer bar
+  // Footer teal bar
   doc.setFillColor(...BRAND_TEAL);
-  doc.rect(0, pageHeight - 18, pageWidth, 18, "F");
+  doc.rect(0, footerY, pageWidth, footerH, "F");
 
-  doc.setFontSize(8);
-  doc.setFont("helvetica", "normal");
+  // Thin green accent line at top of footer
+  doc.setFillColor(...BRAND_GREEN);
+  doc.rect(0, footerY, pageWidth, 0.8, "F");
+
+  doc.setFontSize(7);
+  doc.setFont("helvetica", "bold");
   doc.setTextColor(255, 255, 255);
   doc.text(
-    `${BRAND_NAME} | ${COMPANY_NAME}`,
+    `${BRAND_NAME}  |  ${COMPANY_NAME}`,
     pageWidth / 2,
-    pageHeight - 11,
+    footerY + 6,
     { align: "center" }
   );
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(6.5);
+  doc.setTextColor(200, 230, 220);
   doc.text(
-    `${COMPANY_ADDRESS.join(" ")} | ${COMPANY_PHONE} | ${COMPANY_WEBSITE}`,
+    `${COMPANY_ADDRESS.join(" ")}  |  ${COMPANY_PHONE}  |  ${COMPANY_WEBSITE}`,
     pageWidth / 2,
-    pageHeight - 6,
+    footerY + 11,
     { align: "center" }
   );
 
