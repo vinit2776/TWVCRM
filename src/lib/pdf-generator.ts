@@ -18,6 +18,7 @@ const COMPANY_ADDRESS = [
 const COMPANY_PHONE = "+91 97910 97900";
 const COMPANY_EMAIL = "contact@theworkvilla.com";
 const COMPANY_WEBSITE = "www.theworkvilla.com";
+const COMPANY_GST = "GST: 33AAACU4245J1ZF";
 
 function formatCurrencyPDF(amount: number): string {
   // Use "Rs." instead of Unicode ₹ symbol — jsPDF's Helvetica cannot render ₹
@@ -84,8 +85,10 @@ function addLogoToDoc(doc: jsPDF): number {
     22,
     { align: "right" }
   );
+  doc.setTextColor(100, 100, 100);
+  doc.text(COMPANY_GST, pageWidth - 14, 26, { align: "right" });
 
-  return 28;
+  return 32;
 }
 
 function generatePDF(options: PDFOptions): jsPDF {
@@ -309,7 +312,7 @@ function generatePDF(options: PDFOptions): jsPDF {
 
   // ── Footer ──
   const pageHeight = doc.internal.pageSize.getHeight();
-  const footerH = 16;
+  const footerH = 20;
   const footerY = pageHeight - footerH;
 
   // Footer teal bar
@@ -337,6 +340,12 @@ function generatePDF(options: PDFOptions): jsPDF {
     `${COMPANY_ADDRESS.join(" ")}  |  ${COMPANY_PHONE}  |  ${COMPANY_WEBSITE}`,
     pageWidth / 2,
     footerY + 11,
+    { align: "center" }
+  );
+  doc.text(
+    COMPANY_GST,
+    pageWidth / 2,
+    footerY + 16,
     { align: "center" }
   );
 
