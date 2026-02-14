@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { logAudit, diffChanges } from "@/lib/audit";
 
 export async function PATCH(
   request: NextRequest,
@@ -53,8 +54,18 @@ export async function PATCH(
       return NextResponse.json({ error: pwError.message }, { status: 400 });
     }
 
-    // If only password change, return early
+    // If only password change, log and return early
     if (!body.role && typeof body.is_active !== "boolean" && !body.full_name && !body.phone) {
+      const { data: adminDbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+      if (adminDbUser?.id) {
+        logAudit(supabase, {
+          entityType: "user",
+          entityId: id,
+          action: "update",
+          performedBy: adminDbUser.id,
+          changes: { password: { old: "***", new: "***" } },
+        });
+      }
       return NextResponse.json({ message: "Password updated successfully" });
     }
   }
@@ -79,6 +90,8 @@ export async function PATCH(
     return NextResponse.json({ message: "No profile changes to apply" });
   }
 
+  const { data: oldUser } = await supabase.from("users").select("*").eq("id", id).single();
+
   const { data, error } = await supabase
     .from("users")
     .update(allowedFields)
@@ -87,5 +100,19 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const { data: adminDbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (adminDbUser?.id && oldUser) {
+    const changes = diffChanges(oldUser as Record<string, unknown>, allowedFields);
+    if (body.password) changes.password = { old: "***", new: "***" };
+    logAudit(supabase, {
+      entityType: "user",
+      entityId: id,
+      action: "update",
+      performedBy: adminDbUser.id,
+      changes,
+    });
+  }
+
   return NextResponse.json({ data });
 }

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { logAudit } from "@/lib/audit";
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -73,6 +74,21 @@ export async function POST(request: NextRequest) {
         phone: phone || null,
         role: userRole,
         is_active: true,
+      });
+    }
+  }
+
+  // Audit log: get the admin's internal ID and the new user's ID
+  const { data: adminDbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (adminDbUser?.id && authData.user) {
+    const { data: newDbUser } = await adminSupabase.from("users").select("id").eq("auth_id", authData.user.id).single();
+    if (newDbUser) {
+      logAudit(supabase, {
+        entityType: "user",
+        entityId: newDbUser.id,
+        action: "create",
+        performedBy: adminDbUser.id,
+        changes: { record: { old: null, new: { email, full_name, role: userRole } } },
       });
     }
   }

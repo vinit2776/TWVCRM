@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { updateTaskSchema } from "@/lib/validations";
+import { logAudit, diffChanges } from "@/lib/audit";
 
 export async function GET(
   _request: NextRequest,
@@ -39,6 +40,8 @@ export async function PATCH(
     );
   }
 
+  const { data: oldTask } = await supabase.from("tasks").select("*").eq("id", id).single();
+
   const updateData: Record<string, unknown> = { ...result.data };
   if (result.data.status === "done") {
     updateData.completed_at = new Date().toISOString();
@@ -52,6 +55,18 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (dbUser?.id && oldTask) {
+    logAudit(supabase, {
+      entityType: "task",
+      entityId: id,
+      action: "update",
+      performedBy: dbUser.id,
+      changes: diffChanges(oldTask as Record<string, unknown>, updateData),
+    });
+  }
+
   return NextResponse.json({ data });
 }
 
@@ -64,7 +79,21 @@ export async function DELETE(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const { data: oldTask } = await supabase.from("tasks").select("*").eq("id", id).single();
+
   const { error } = await supabase.from("tasks").delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (dbUser?.id) {
+    logAudit(supabase, {
+      entityType: "task",
+      entityId: id,
+      action: "delete",
+      performedBy: dbUser.id,
+      changes: { record: { old: oldTask, new: null } },
+    });
+  }
+
   return NextResponse.json({ message: "Task deleted" });
 }

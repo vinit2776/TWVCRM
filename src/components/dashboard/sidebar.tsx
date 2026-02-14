@@ -1,5 +1,6 @@
 "use client";
 
+import { useState, useEffect } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -13,10 +14,12 @@ import {
   FolderOpen,
   UserPlus,
   Settings,
+  ClipboardList,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
+import { createClient } from "@/lib/supabase/client";
 
 const navItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -37,6 +40,21 @@ const bottomNavItems = [
 export function Sidebar() {
   const pathname = usePathname();
   const { sidebarOpen, setSidebarOpen } = useUiStore();
+  const [isAdmin, setIsAdmin] = useState(false);
+
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      if (user) {
+        const { data } = await supabase
+          .from("users")
+          .select("role")
+          .eq("auth_id", user.id)
+          .single();
+        setIsAdmin(data?.role === "admin");
+      }
+    });
+  }, []);
 
   return (
     <>
@@ -94,6 +112,21 @@ export function Sidebar() {
 
         {/* Bottom nav */}
         <div className="border-t border-sidebar-accent px-3 py-4 space-y-1">
+          {isAdmin && (
+            <Link
+              href="/audit-logs"
+              onClick={() => setSidebarOpen(false)}
+              className={cn(
+                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                pathname === "/audit-logs" || pathname.startsWith("/audit-logs/")
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+              )}
+            >
+              <ClipboardList className="h-5 w-5 shrink-0" />
+              Audit Logs
+            </Link>
+          )}
           {bottomNavItems.map((item) => {
             const isActive =
               pathname === item.href || pathname.startsWith(item.href + "/");

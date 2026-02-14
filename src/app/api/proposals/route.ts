@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createProposalSchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
+import { logAudit } from "@/lib/audit";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -73,6 +74,16 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  if (data && dbUser?.id) {
+    logAudit(supabase, {
+      entityType: "proposal",
+      entityId: data.id,
+      action: "create",
+      performedBy: dbUser.id,
+      changes: { record: { old: null, new: data } },
+    });
+  }
 
   // Auto-advance lead status → proposal_sent
   if (result.data.lead_id) {

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { logAudit, diffChanges } from "@/lib/audit";
 
 export async function GET(
   _request: NextRequest,
@@ -42,6 +43,8 @@ export async function PATCH(
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });
   }
 
+  const { data: oldInvoice } = await supabase.from("proforma_invoices").select("*").eq("id", id).single();
+
   const { data, error } = await supabase
     .from("proforma_invoices")
     .update(allowedFields)
@@ -50,5 +53,17 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (dbUser?.id && oldInvoice) {
+    logAudit(supabase, {
+      entityType: "invoice",
+      entityId: id,
+      action: "update",
+      performedBy: dbUser.id,
+      changes: diffChanges(oldInvoice as Record<string, unknown>, allowedFields),
+    });
+  }
+
   return NextResponse.json({ data });
 }

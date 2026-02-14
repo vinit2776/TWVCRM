@@ -288,6 +288,30 @@ export interface CrmDocument {
 }
 
 // ==========================================
+// Audit Log Types
+// ==========================================
+export type AuditAction = "create" | "update" | "delete";
+export type AuditEntityType =
+  | "lead"
+  | "activity"
+  | "task"
+  | "proposal"
+  | "invoice"
+  | "document"
+  | "user";
+
+export interface AuditLog {
+  id: string;
+  entity_type: AuditEntityType;
+  entity_id: string;
+  action: AuditAction;
+  changes: Record<string, { old: unknown; new: unknown }>;
+  performed_by?: string;
+  performer?: User;
+  created_at: string;
+}
+
+// ==========================================
 // API Response Types
 // ==========================================
 export interface ApiResponse<T> {

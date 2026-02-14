@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createTaskSchema } from "@/lib/validations";
+import { logAudit } from "@/lib/audit";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -67,5 +68,16 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  if (data && dbUser?.id) {
+    logAudit(supabase, {
+      entityType: "task",
+      entityId: data.id,
+      action: "create",
+      performedBy: dbUser.id,
+      changes: { record: { old: null, new: data } },
+    });
+  }
+
   return NextResponse.json({ data }, { status: 201 });
 }
