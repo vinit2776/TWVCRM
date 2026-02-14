@@ -1,0 +1,319 @@
+// ==========================================
+// User Types
+// ==========================================
+export type UserRole = "admin" | "manager" | "sales_rep";
+
+export interface User {
+  id: string;
+  auth_id: string;
+  email: string;
+  full_name: string;
+  avatar_url?: string;
+  phone?: string;
+  role: UserRole;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+  last_login_at?: string;
+}
+
+// ==========================================
+// Lead Types
+// ==========================================
+export type LeadStatus =
+  | "new"
+  | "contacted"
+  | "tour_scheduled"
+  | "tour_completed"
+  | "proposal_sent"
+  | "negotiating"
+  | "won"
+  | "lost";
+
+export type LeadSource =
+  | "meta_ads"
+  | "direct_walkin"
+  | "online_form"
+  | "referral"
+  | "social_media"
+  | "advertisement"
+  | "cold_call"
+  | "event"
+  | "partner"
+  | "other";
+
+export type WorkspaceType =
+  | "hot_desk"
+  | "dedicated_desk"
+  | "private_office"
+  | "meeting_room"
+  | "conference_room"
+  | "virtual_office";
+
+export type Rating = "none" | "hot" | "warm" | "cold";
+
+export interface Lead {
+  id: string;
+  first_name: string;
+  last_name: string;
+  company?: string;
+  aggregator_contact_name?: string;
+  email?: string;
+  phone?: string;
+  mobile?: string;
+  website?: string;
+  title?: string;
+  secondary_email?: string;
+  status: LeadStatus;
+  source: LeadSource;
+  industry?: string;
+  no_of_employees?: number;
+  rating: Rating;
+  score: number;
+  // Coworking-specific
+  workspace_type?: WorkspaceType;
+  seat_capacity?: number;
+  preferred_location?: string;
+  working_hours?: string;
+  budget_per_seat?: number;
+  // Address
+  street?: string;
+  city?: string;
+  state?: string;
+  zip_code?: string;
+  country?: string;
+  // Links
+  enquiry_form_google?: string;
+  enquiry_form_direct?: string;
+  // Meta
+  description?: string;
+  tags: string[];
+  assigned_to?: string;
+  assigned_user?: User;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+  converted_at?: string;
+  lost_at?: string;
+  lost_reason?: string;
+}
+
+// ==========================================
+// Activity Types
+// ==========================================
+export type ActivityType = "call" | "meeting" | "note" | "email" | "tour";
+
+export type CallOutcome =
+  | "connected"
+  | "no_answer"
+  | "voicemail"
+  | "busy"
+  | "wrong_number"
+  | "callback_scheduled";
+
+export interface Activity {
+  id: string;
+  lead_id: string;
+  type: ActivityType;
+  subject?: string;
+  description?: string;
+  call_duration_seconds?: number;
+  call_outcome?: CallOutcome;
+  meeting_location?: string;
+  meeting_start_at?: string;
+  meeting_end_at?: string;
+  follow_up_date?: string;
+  follow_up_notes?: string;
+  is_follow_up_done: boolean;
+  created_by?: string;
+  creator?: User;
+  created_at: string;
+  updated_at: string;
+  attendees?: MeetingAttendee[];
+  minutes?: MeetingMinutes;
+}
+
+export interface MeetingAttendee {
+  id: string;
+  activity_id: string;
+  user_id?: string;
+  user?: User;
+  external_name?: string;
+  external_email?: string;
+  is_external: boolean;
+}
+
+export interface MeetingMinutes {
+  id: string;
+  activity_id: string;
+  agenda?: string;
+  minutes_content: string;
+  decisions?: string;
+  action_items: ActionItem[];
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ActionItem {
+  description: string;
+  assignee_id?: string;
+  due_date?: string;
+  status: "pending" | "done";
+}
+
+// ==========================================
+// Task Types
+// ==========================================
+export type TaskStatus = "todo" | "in_progress" | "done";
+export type TaskPriority = "low" | "medium" | "high" | "urgent";
+
+export interface Task {
+  id: string;
+  title: string;
+  description?: string;
+  status: TaskStatus;
+  priority: TaskPriority;
+  lead_id?: string;
+  lead?: Lead;
+  parent_task_id?: string;
+  assigned_to?: string;
+  assignee?: User;
+  due_date?: string;
+  completed_at?: string;
+  tags: string[];
+  subtasks?: Task[];
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// ==========================================
+// Proposal Types
+// ==========================================
+export type ProposalStatus = "draft" | "sent" | "viewed" | "accepted" | "rejected" | "expired";
+
+export interface LineItem {
+  description: string;
+  quantity: number;
+  unit_price: number;
+  total: number;
+}
+
+export interface Proposal {
+  id: string;
+  lead_id: string;
+  lead?: Lead;
+  proposal_number: string;
+  title: string;
+  status: ProposalStatus;
+  description?: string;
+  items: LineItem[];
+  subtotal: number;
+  tax_percentage: number;
+  tax_amount: number;
+  discount_percentage: number;
+  discount_amount: number;
+  total_amount: number;
+  valid_until?: string;
+  terms_and_conditions?: string;
+  notes?: string;
+  sent_at?: string;
+  viewed_at?: string;
+  accepted_at?: string;
+  rejected_at?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// ==========================================
+// Invoice Types
+// ==========================================
+export type InvoiceStatus = "draft" | "sent" | "paid" | "overdue" | "cancelled";
+
+export interface ProformaInvoice {
+  id: string;
+  lead_id?: string;
+  lead?: Lead;
+  proposal_id?: string;
+  invoice_number: string;
+  title: string;
+  status: InvoiceStatus;
+  items: LineItem[];
+  subtotal: number;
+  tax_percentage: number;
+  tax_amount: number;
+  discount_percentage: number;
+  discount_amount: number;
+  total_amount: number;
+  due_date?: string;
+  paid_at?: string;
+  payment_reference?: string;
+  notes?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// ==========================================
+// Document Types
+// ==========================================
+export interface DocumentFolder {
+  id: string;
+  name: string;
+  parent_folder_id?: string;
+  children?: DocumentFolder[];
+  created_by?: string;
+  created_at: string;
+}
+
+export interface CrmDocument {
+  id: string;
+  title: string;
+  description?: string;
+  file_name: string;
+  file_path: string;
+  mime_type: string;
+  size_bytes: number;
+  folder_id?: string;
+  category?: string;
+  tags: string[];
+  version: number;
+  parent_document_id?: string;
+  uploaded_by?: string;
+  uploader?: User;
+  created_at: string;
+  updated_at: string;
+}
+
+// ==========================================
+// API Response Types
+// ==========================================
+export interface ApiResponse<T> {
+  data?: T;
+  error?: string;
+  message?: string;
+}
+
+export interface PaginatedResponse<T> {
+  data: T[];
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+}
+
+// ==========================================
+// Dashboard Types
+// ==========================================
+export interface DashboardStats {
+  pipeline: { status: LeadStatus; count: number }[];
+  tasks_due_today: number;
+  tasks_overdue: number;
+  recent_activities: Activity[];
+  conversion: { total_leads: number; won: number; lost: number; rate: number };
+  pending_follow_ups: number;
+}
