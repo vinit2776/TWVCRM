@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createActivitySchema } from "@/lib/validations";
+import { autoUpdateLeadStatus } from "@/lib/auto-status";
 
 export async function GET(
   _request: NextRequest,
@@ -71,6 +72,9 @@ export async function POST(
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  // Auto-advance lead status: new → contacted
+  await autoUpdateLeadStatus(supabase, id, "activity");
 
   return NextResponse.json({ data }, { status: 201 });
 }

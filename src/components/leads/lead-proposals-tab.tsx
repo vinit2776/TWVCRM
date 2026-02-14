@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Plus, FileText, Receipt } from "lucide-react";
+import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -9,12 +9,21 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { ProposalForm } from "@/components/proposals/proposal-form";
 import { InvoiceForm } from "@/components/invoices/invoice-form";
+import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   PROPOSAL_STATUS_LABELS,
   INVOICE_STATUS_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import type { Proposal, ProformaInvoice } from "@/types";
+import { generateProposalPDF, generateInvoicePDF } from "@/lib/pdf-generator";
+import type { Proposal, ProformaInvoice, Lead } from "@/types";
 
 const PROPOSAL_STATUS_COLORS: Record<string, string> = {
   draft: "bg-gray-100 text-gray-800",
@@ -38,17 +47,31 @@ interface LeadProposalsTabProps {
 }
 
 export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
-  const [proposals, setProposals] = useState<Proposal[]>([]);
-  const [invoices, setInvoices] = useState<ProformaInvoice[]>([]);
+  const [proposals, setProposals] = useState<(Proposal & { lead?: Lead })[]>([]);
+  const [invoices, setInvoices] = useState<(ProformaInvoice & { lead?: Lead })[]>([]);
   const [loading, setLoading] = useState(true);
   const [proposalFormOpen, setProposalFormOpen] = useState(false);
   const [invoiceFormOpen, setInvoiceFormOpen] = useState(false);
 
+  // Email dialog state
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  const [emailConfig, setEmailConfig] = useState<{
+    type: "proposal" | "invoice";
+    id: string;
+    number: string;
+    leadEmail?: string;
+    generatePDF: () => string;
+  } | null>(null);
+
+  // Lead info for PDF generation
+  const [lead, setLead] = useState<Lead | null>(null);
+
   const fetchData = useCallback(async () => {
     setLoading(true);
-    const [proposalsRes, invoicesRes] = await Promise.all([
+    const [proposalsRes, invoicesRes, leadRes] = await Promise.all([
       fetch(`/api/proposals?lead_id=${leadId}`),
       fetch(`/api/invoices?lead_id=${leadId}`),
+      fetch(`/api/leads/${leadId}`),
     ]);
 
     if (proposalsRes.ok) {
@@ -59,6 +82,10 @@ export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
       const json = await invoicesRes.json();
       setInvoices(json.data || []);
     }
+    if (leadRes.ok) {
+      const json = await leadRes.json();
+      setLead(json.data || null);
+    }
     setLoading(false);
   }, [leadId]);
 
@@ -68,6 +95,51 @@ export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
 
   const handleSuccess = () => {
     fetchData();
+  };
+
+  // ── Download Proposal PDF ──
+  const handleDownloadProposalPDF = (p: Proposal) => {
+    const doc = generateProposalPDF(p, lead || undefined);
+    doc.save(`${p.proposal_number}.pdf`);
+  };
+
+  // ── Download Invoice PDF ──
+  const handleDownloadInvoicePDF = (inv: ProformaInvoice) => {
+    const doc = generateInvoicePDF(inv, lead || undefined);
+    doc.save(`${inv.invoice_number}.pdf`);
+  };
+
+  // ── Email Proposal ──
+  const handleEmailProposal = (p: Proposal) => {
+    setEmailConfig({
+      type: "proposal",
+      id: p.id,
+      number: p.proposal_number,
+      leadEmail: lead?.email || undefined,
+      generatePDF: () => {
+        const doc = generateProposalPDF(p, lead || undefined);
+        // Get base64 without data URI prefix
+        const base64 = doc.output("datauristring").split(",")[1];
+        return base64;
+      },
+    });
+    setEmailDialogOpen(true);
+  };
+
+  // ── Email Invoice ──
+  const handleEmailInvoice = (inv: ProformaInvoice) => {
+    setEmailConfig({
+      type: "invoice",
+      id: inv.id,
+      number: inv.invoice_number,
+      leadEmail: lead?.email || undefined,
+      generatePDF: () => {
+        const doc = generateInvoicePDF(inv, lead || undefined);
+        const base64 = doc.output("datauristring").split(",")[1];
+        return base64;
+      },
+    });
+    setEmailDialogOpen(true);
   };
 
   if (loading) {
@@ -104,6 +176,7 @@ export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
                     <th className="px-4 py-3 text-left font-medium">Status</th>
                     <th className="px-4 py-3 text-right font-medium">Amount</th>
                     <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Created</th>
+                    <th className="px-4 py-3 text-left font-medium w-16">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -121,6 +194,26 @@ export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
                       </td>
                       <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
                         {formatDate(p.created_at)}
+                      </td>
+                      <td className="px-4 py-3">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon">
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => handleDownloadProposalPDF(p)}>
+                              <Download className="mr-2 h-4 w-4" />
+                              Download PDF
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onClick={() => handleEmailProposal(p)}>
+                              <Mail className="mr-2 h-4 w-4" />
+                              Email to Lead
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </td>
                     </tr>
                   ))}
@@ -159,6 +252,7 @@ export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
                     <th className="px-4 py-3 text-left font-medium">Status</th>
                     <th className="px-4 py-3 text-right font-medium">Amount</th>
                     <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Due Date</th>
+                    <th className="px-4 py-3 text-left font-medium w-16">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
@@ -176,6 +270,26 @@ export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
                       </td>
                       <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
                         {inv.due_date ? formatDate(inv.due_date) : "-"}
+                      </td>
+                      <td className="px-4 py-3">
+                        <DropdownMenu>
+                          <DropdownMenuTrigger asChild>
+                            <Button variant="ghost" size="icon">
+                              <MoreHorizontal className="h-4 w-4" />
+                            </Button>
+                          </DropdownMenuTrigger>
+                          <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => handleDownloadInvoicePDF(inv)}>
+                              <Download className="mr-2 h-4 w-4" />
+                              Download PDF
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            <DropdownMenuItem onClick={() => handleEmailInvoice(inv)}>
+                              <Mail className="mr-2 h-4 w-4" />
+                              Email to Lead
+                            </DropdownMenuItem>
+                          </DropdownMenuContent>
+                        </DropdownMenu>
                       </td>
                     </tr>
                   ))}
@@ -199,6 +313,20 @@ export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
         onOpenChange={setInvoiceFormOpen}
         onSuccess={handleSuccess}
       />
+
+      {/* Email Dialog */}
+      {emailConfig && (
+        <EmailDocumentDialog
+          open={emailDialogOpen}
+          onOpenChange={setEmailDialogOpen}
+          documentType={emailConfig.type}
+          documentId={emailConfig.id}
+          documentNumber={emailConfig.number}
+          leadEmail={emailConfig.leadEmail}
+          onGeneratePDF={emailConfig.generatePDF}
+          onSuccess={handleSuccess}
+        />
+      )}
     </div>
   );
 }
