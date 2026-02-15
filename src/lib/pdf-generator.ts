@@ -2,7 +2,7 @@ import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import type { Proposal, ProformaInvoice, Lead, LineItem, Contract, BillingStatement } from "@/types";
 import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
-import { BILLING_CYCLE_LABELS } from "@/lib/constants";
+import { BILLING_CYCLE_LABELS, COMPANY_BANK_DETAILS } from "@/lib/constants";
 
 // TWV Brand Colors
 const BRAND_TEAL: [number, number, number] = [1, 94, 101]; // #015E65
@@ -295,6 +295,29 @@ function generatePDF(options: PDFOptions): jsPDF {
     doc.text(tcLines, 14, y);
     y += tcLines.length * 4.5 + 6;
   }
+
+  // ── Bank Details ──
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text("Bank Details", 14, y);
+  y += 6;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(80, 80, 80);
+  const bankLines = [
+    `Account Name: ${COMPANY_BANK_DETAILS.accountName}`,
+    `Account Number: ${COMPANY_BANK_DETAILS.accountNumber}`,
+    `IFSC Code: ${COMPANY_BANK_DETAILS.ifscCode}`,
+    `Bank: ${COMPANY_BANK_DETAILS.bank}`,
+    `Branch: ${COMPANY_BANK_DETAILS.branch}`,
+  ];
+  bankLines.forEach((line) => {
+    doc.text(line, 14, y);
+    y += 4.5;
+  });
+  y += 6;
 
   // ── Notes ──
   if (options.notes) {
@@ -596,6 +619,29 @@ export function generateBillingStatementPDF(
   doc.text("Total:", totalsX + 2, y + 1);
   doc.text(formatCurrencyPDF(statement.total_amount), totalsValueX - 2, y + 1, { align: "right" });
   y += 14;
+
+  // Bank Details
+  doc.setFontSize(10);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text("Bank Details", 14, y);
+  y += 6;
+
+  doc.setFont("helvetica", "normal");
+  doc.setFontSize(9);
+  doc.setTextColor(80, 80, 80);
+  const bsBankLines = [
+    `Account Name: ${COMPANY_BANK_DETAILS.accountName}`,
+    `Account Number: ${COMPANY_BANK_DETAILS.accountNumber}`,
+    `IFSC Code: ${COMPANY_BANK_DETAILS.ifscCode}`,
+    `Bank: ${COMPANY_BANK_DETAILS.bank}`,
+    `Branch: ${COMPANY_BANK_DETAILS.branch}`,
+  ];
+  bsBankLines.forEach((line) => {
+    doc.text(line, 14, y);
+    y += 4.5;
+  });
+  y += 6;
 
   // Note
   doc.setFontSize(8);

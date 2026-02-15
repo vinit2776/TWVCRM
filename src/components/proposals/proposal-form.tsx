@@ -14,6 +14,7 @@ import {
 import { LineItemsEditor, type LineItemData } from "@/components/shared/line-items-editor";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
+import { DEFAULT_PROPOSAL_TERMS } from "@/lib/constants";
 
 interface ProposalFormProps {
   leadId: string;
@@ -36,7 +37,7 @@ export function ProposalForm({
   const [taxPercentage, setTaxPercentage] = useState(18);
   const [discountPercentage, setDiscountPercentage] = useState(0);
   const [validUntil, setValidUntil] = useState("");
-  const [termsAndConditions, setTermsAndConditions] = useState("");
+  const [termsAndConditions, setTermsAndConditions] = useState(DEFAULT_PROPOSAL_TERMS);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -47,7 +48,7 @@ export function ProposalForm({
     setTaxPercentage(18);
     setDiscountPercentage(0);
     setValidUntil("");
-    setTermsAndConditions("");
+    setTermsAndConditions(DEFAULT_PROPOSAL_TERMS);
     setNotes("");
   };
 

@@ -290,6 +290,28 @@ export const BILLING_STATEMENT_STATUS_COLORS: Record<string, string> = {
   exported: "bg-green-100 text-green-800",
 };
 
+// ==========================================
+// Default Terms & Conditions
+// ==========================================
+export const DEFAULT_PROPOSAL_TERMS = `• Taxes as applicable
+• 3 months rent payable as an interest free refundable security deposit
+• Advance monthly rent payable on or before 5th of every month
+• Term 1 year (Lock-in 11 months)
+• Notice period 2 months post lock-in
+• Center timing Monday - Saturday 9AM to 7PM
+• This proposal is valid upto 10 days only from the date of issue.`;
+
+// ==========================================
+// Company Bank Details
+// ==========================================
+export const COMPANY_BANK_DETAILS = {
+  accountName: "Sree Design Infrastructure Private Limited",
+  accountNumber: "000905000140",
+  ifscCode: "ICIC0000009",
+  bank: "ICICI Bank Ltd",
+  branch: "Nungambakkam",
+};
+
 export const DOCUMENT_CATEGORIES = [
   "contract",
   "identity",
