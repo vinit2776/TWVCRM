@@ -381,7 +381,7 @@ export function generateProposalPDF(
   lead?: Partial<Lead>
 ): jsPDF {
   return generatePDF({
-    title: proposal.title,
+    title: "PRO-FORMA INVOICE / PROPOSAL",
     documentNumber: proposal.proposal_number,
     items: proposal.items,
     subtotal: proposal.subtotal,
@@ -393,7 +393,7 @@ export function generateProposalPDF(
     lead,
     createdAt: proposal.created_at,
     validUntil: proposal.valid_until,
-    description: proposal.description,
+    description: [proposal.title, proposal.description].filter(Boolean).join("\n"),
     termsAndConditions: proposal.terms_and_conditions,
     notes: proposal.notes,
   });
