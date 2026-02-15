@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   Phone,
@@ -9,7 +8,6 @@ import {
   FileText,
   Mail,
   MapPin,
-  Clock,
   ChevronLeft,
   ChevronRight,
 } from "lucide-react";
@@ -44,7 +42,6 @@ const ACTIVITY_ICONS: Record<
 };
 
 export default function ActivitiesPage() {
-  const router = useRouter();
   const [activities, setActivities] = useState<(Activity & { lead?: { id: string; first_name: string; last_name: string; company?: string } })[]>([]);
   const [pagination, setPagination] = useState({
     page: 1,

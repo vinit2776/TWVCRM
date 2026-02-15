@@ -19,7 +19,7 @@ import {
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
 import { useLeads } from "@/hooks/use-leads";
-import { StatusBadge, RatingBadge } from "@/components/shared/status-badge";
+import { RatingBadge } from "@/components/shared/status-badge";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import {
   LEAD_STATUSES,
@@ -28,7 +28,7 @@ import {
 } from "@/lib/constants";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import type { Lead, LeadStatus } from "@/types";
+import type { Lead } from "@/types";
 
 function LeadCard({
   lead,

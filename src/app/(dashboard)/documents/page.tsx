@@ -10,12 +10,11 @@ import {
   Download,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { formatDate } from "@/lib/utils";
-import type { CrmDocument, DocumentFolder } from "@/types";
+import type { CrmDocument } from "@/types";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 
@@ -39,7 +38,6 @@ function getFileIcon(mimeType: string) {
 
 export default function DocumentsPage() {
   const [documents, setDocuments] = useState<(CrmDocument & { uploader?: { full_name: string } })[]>([]);
-  const [folders, setFolders] = useState<DocumentFolder[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -50,7 +48,6 @@ export default function DocumentsPage() {
     if (res.ok) {
       const json = await res.json();
       setDocuments(json.data || []);
-      setFolders(json.folders || []);
     }
     setLoading(false);
   }, []);

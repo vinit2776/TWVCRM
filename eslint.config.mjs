@@ -13,6 +13,19 @@ const eslintConfig = defineConfig([
     "build/**",
     "next-env.d.ts",
   ]),
+  {
+    rules: {
+      // Data-fetching effects that call useCallback functions which set state
+      // are a common and valid pattern in this codebase. The fetched data must
+      // be stored in state, and the effect must run on dependency changes.
+      "react-hooks/set-state-in-effect": "off",
+      // Allow unused vars prefixed with underscore
+      "@typescript-eslint/no-unused-vars": [
+        "warn",
+        { argsIgnorePattern: "^_", varsIgnorePattern: "^_" },
+      ],
+    },
+  },
 ]);
 
 export default eslintConfig;
