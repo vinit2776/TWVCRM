@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Wifi, ChevronDown, ChevronRight, Loader2, Ticket, AlertTriangle, Mail } from "lucide-react";
+import { Wifi, ChevronDown, ChevronRight, Loader2, Ticket, AlertTriangle, Mail, CheckCircle2, XCircle } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate, getValidityLabel } from "@/lib/utils";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -61,6 +61,13 @@ export function ContractVouchersSection({
     matched_validity_days?: number | null;
     match_warning?: string | null;
   }>({});
+  const [inventoryCheck, setInventoryCheck] = useState<{
+    loading: boolean;
+    compatible: boolean;
+    matchedGroup: string | null;
+    availableCount: number;
+    neededCount: number;
+  }>({ loading: false, compatible: false, matchedGroup: null, availableCount: 0, neededCount: 0 });
 
   const fetchIssuances = useCallback(async () => {
     setLoading(true);
@@ -72,9 +79,68 @@ export function ContractVouchersSection({
     setLoading(false);
   }, [contractId]);
 
+  // Check voucher inventory compatibility for this contract's duration
+  const checkInventoryCompatibility = useCallback(async (issuedCount: number) => {
+    if (!tenureMonths) return;
+    const targetDays = tenureMonths * 30;
+    const tolerance = 0.20;
+    const minAcceptable = Math.floor(targetDays * (1 - tolerance));
+    const maxAcceptable = Math.ceil(targetDays * (1 + tolerance));
+    const needed = seats - issuedCount;
+    if (needed <= 0) return;
+
+    setInventoryCheck((prev) => ({ ...prev, loading: true }));
+    try {
+      const res = await fetch("/api/vouchers/inventory");
+      if (res.ok) {
+        const json = await res.json();
+        const groups: { validity_days: number | null; available: number }[] = json.data || [];
+
+        // Find groups within tolerance
+        const compatible = groups.filter(
+          (g) => g.validity_days != null && g.validity_days >= minAcceptable && g.validity_days <= maxAcceptable
+        );
+
+        if (compatible.length > 0) {
+          // Pick closest match
+          const sorted = compatible.sort((a, b) => {
+            const distA = Math.abs((a.validity_days || 0) - targetDays);
+            const distB = Math.abs((b.validity_days || 0) - targetDays);
+            return distA - distB;
+          });
+          const best = sorted[0];
+          setInventoryCheck({
+            loading: false,
+            compatible: best.available >= needed,
+            matchedGroup: getValidityLabel(best.validity_days),
+            availableCount: best.available,
+            neededCount: needed,
+          });
+        } else {
+          setInventoryCheck({
+            loading: false,
+            compatible: false,
+            matchedGroup: null,
+            availableCount: 0,
+            neededCount: needed,
+          });
+        }
+      }
+    } catch {
+      setInventoryCheck((prev) => ({ ...prev, loading: false }));
+    }
+  }, [tenureMonths, seats]);
+
   useEffect(() => {
     fetchIssuances();
   }, [fetchIssuances]);
+
+  // After issuances are loaded, check inventory compatibility for remaining seats
+  useEffect(() => {
+    if (!loading && issuances.length < seats && contractStatus === "active") {
+      checkInventoryCompatibility(issuances.length);
+    }
+  }, [loading, issuances.length, seats, contractStatus, checkInventoryCompatibility]);
 
   const handleIssueVouchers = async () => {
     setIssuing(true);
@@ -238,11 +304,35 @@ export function ContractVouchersSection({
           </div>
         )}
 
-        {/* Expected validity info */}
+        {/* Expected validity info with inventory compatibility */}
         {expectedValidity && isContractActive && !allSeatsFilled && !loading && (
-          <div className="mb-4 text-xs text-muted-foreground">
-            Expected voucher type: <Badge variant="outline" className="text-xs ml-1">{getValidityLabel(expectedValidity)}</Badge>
-            <span className="ml-1">(based on {tenureMonths}-month tenure)</span>
+          <div className="mb-4 rounded-md border p-3 space-y-2">
+            <div className="text-xs text-muted-foreground flex items-center gap-1">
+              Required voucher type: <Badge variant="outline" className="text-xs ml-1 font-medium">{getValidityLabel(expectedValidity)}</Badge>
+              <span className="ml-1">(based on {tenureMonths}-month tenure)</span>
+            </div>
+            {inventoryCheck.loading ? (
+              <div className="text-xs text-muted-foreground flex items-center gap-1">
+                <Loader2 className="h-3 w-3 animate-spin" /> Checking voucher inventory...
+              </div>
+            ) : inventoryCheck.matchedGroup ? (
+              inventoryCheck.compatible ? (
+                <div className="text-xs text-green-700 flex items-center gap-1">
+                  <CheckCircle2 className="h-3.5 w-3.5" />
+                  {inventoryCheck.availableCount} compatible vouchers available ({inventoryCheck.matchedGroup}) — need {inventoryCheck.neededCount}
+                </div>
+              ) : (
+                <div className="text-xs text-amber-700 flex items-center gap-1">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  Only {inventoryCheck.availableCount} compatible vouchers ({inventoryCheck.matchedGroup}) — need {inventoryCheck.neededCount}. Upload more before issuing.
+                </div>
+              )
+            ) : inventoryCheck.neededCount > 0 ? (
+              <div className="text-xs text-red-600 flex items-center gap-1">
+                <XCircle className="h-3.5 w-3.5" />
+                No compatible vouchers found. Upload {getValidityLabel(expectedValidity)} vouchers before issuing.
+              </div>
+            ) : null}
           </div>
         )}
 

@@ -84,9 +84,19 @@ export function maskVoucherCode(code: string): string {
 
 /**
  * Returns a human-readable label for a validity_days value.
+ * Converts days to months/years when applicable for better readability.
  */
 export function getValidityLabel(days: number | null | undefined): string {
   if (days == null) return "Unclassified";
   if (days === 1) return "1 Day";
+  if (days === 7) return "7 Days";
+  if (days % 365 === 0 && days >= 365) {
+    const years = days / 365;
+    return years === 1 ? "1 Year (365d)" : `${years} Years (${days}d)`;
+  }
+  if (days % 30 === 0 && days >= 30) {
+    const months = days / 30;
+    return months === 1 ? "1 Month (30d)" : `${months} Months (${days}d)`;
+  }
   return `${days} Days`;
 }

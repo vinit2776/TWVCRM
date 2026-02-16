@@ -75,10 +75,16 @@ export async function POST(
     );
   }
 
-  // ===== Smart Validity Matching =====
+  // ===== Smart Validity Matching with Duration Enforcement =====
   // Calculate target days from contract tenure
   const tenureMonths: number = contract.tenure_months || 1;
   const targetDays = tenureMonths * 30;
+
+  // Tolerance: allow vouchers within 20% of target duration
+  // e.g., 360-day target accepts 288–432 day vouchers (so 365d ✓, 30d ✗)
+  const TOLERANCE = 0.20;
+  const minAcceptable = Math.floor(targetDays * (1 - TOLERANCE));
+  const maxAcceptable = Math.ceil(targetDays * (1 + TOLERANCE));
 
   // Find available validity groups with counts
   const { data: availabilityGroups, error: groupError } = await supabase
@@ -102,13 +108,24 @@ export async function POST(
     }
   }
 
-  // Find the closest validity group that has enough vouchers
+  // Helper to format days as a human-readable duration
+  const formatDays = (d: number) => {
+    if (d % 365 === 0 && d >= 365) return `${d / 365} year${d / 365 > 1 ? "s" : ""} (${d}d)`;
+    if (d % 30 === 0 && d >= 30) return `${d / 30} month${d / 30 > 1 ? "s" : ""} (${d}d)`;
+    return `${d} day${d !== 1 ? "s" : ""}`;
+  };
+
+  // Find the closest validity group WITHIN tolerance that has enough vouchers
   let matchedValidity: number | null = null;
   let matchWarning: string | null = null;
 
   if (groupCounts.size > 0) {
-    // Sort groups by distance from target, preferring >= target when equidistant
-    const sortedGroups = Array.from(groupCounts.entries())
+    // Filter to groups within the acceptable tolerance range
+    const withinTolerance = Array.from(groupCounts.entries())
+      .filter(([days]) => days >= minAcceptable && days <= maxAcceptable);
+
+    // Sort within-tolerance groups by distance from target, preferring >= target
+    const sortedGroups = withinTolerance
       .filter(([, count]) => count >= remaining)
       .sort(([a], [b]) => {
         const distA = Math.abs(a - targetDays);
@@ -121,39 +138,50 @@ export async function POST(
     if (sortedGroups.length > 0) {
       matchedValidity = sortedGroups[0][0];
       if (matchedValidity !== targetDays) {
-        matchWarning = `Exact ${targetDays}d vouchers not available. Using closest match: ${matchedValidity}d vouchers.`;
+        matchWarning = `Exact ${formatDays(targetDays)} vouchers not available. Using closest match: ${formatDays(matchedValidity)} vouchers.`;
       }
+    } else if (withinTolerance.length > 0) {
+      // Groups exist within tolerance but none have enough vouchers
+      const bestMatch = withinTolerance.sort(([a], [b]) => {
+        const distA = Math.abs(a - targetDays);
+        const distB = Math.abs(b - targetDays);
+        return distA - distB;
+      })[0];
+      return NextResponse.json(
+        {
+          error: `Not enough ${formatDays(bestMatch[0])} vouchers. Only ${bestMatch[1]} available, need ${remaining}. Upload more vouchers matching this contract's ${tenureMonths}-month tenure.`,
+        },
+        { status: 400 }
+      );
     } else {
-      // No single group has enough, try any group
-      const anyGroupSorted = Array.from(groupCounts.entries())
-        .sort(([a], [b]) => {
-          const distA = Math.abs(a - targetDays);
-          const distB = Math.abs(b - targetDays);
-          if (distA !== distB) return distA - distB;
-          return b - a;
-        });
-
-      if (anyGroupSorted.length > 0) {
-        matchedValidity = anyGroupSorted[0][0];
-        matchWarning = `Not enough ${matchedValidity}d vouchers. Only ${anyGroupSorted[0][1]} available, need ${remaining}.`;
-      }
+      // No groups within tolerance — list what's available
+      const availableGroups = Array.from(groupCounts.entries())
+        .map(([days, count]) => `${formatDays(days)}: ${count} available`)
+        .join(", ");
+      return NextResponse.json(
+        {
+          error: `No vouchers matching the contract duration of ${formatDays(targetDays)} (tolerance: ${formatDays(minAcceptable)}–${formatDays(maxAcceptable)}). Available voucher types: ${availableGroups || "none"}. Please upload vouchers with the correct validity period.`,
+        },
+        { status: 400 }
+      );
     }
+  } else {
+    return NextResponse.json(
+      {
+        error: `No vouchers with a validity period found in the repository. Please upload vouchers matching this contract's ${tenureMonths}-month (${formatDays(targetDays)}) tenure.`,
+      },
+      { status: 400 }
+    );
   }
 
-  // Build the query for available vouchers
-  let voucherQuery = supabase
+  // Build the query — matchedValidity is guaranteed non-null here
+  const { data: availableVouchers, error: fetchError } = await supabase
     .from("voucher_repository")
     .select("*")
     .eq("status", "available")
+    .eq("validity_days", matchedValidity)
     .order("uploaded_at", { ascending: true })
     .limit(remaining);
-
-  // Apply validity filter if we found a match
-  if (matchedValidity !== null) {
-    voucherQuery = voucherQuery.eq("validity_days", matchedValidity);
-  }
-
-  const { data: availableVouchers, error: fetchError } = await voucherQuery;
 
   if (fetchError) {
     return NextResponse.json({ error: fetchError.message }, { status: 500 });
@@ -162,7 +190,7 @@ export async function POST(
   if (!availableVouchers || availableVouchers.length < remaining) {
     return NextResponse.json(
       {
-        error: `Not enough vouchers available. Need ${remaining}, but only ${availableVouchers?.length || 0} available${matchedValidity !== null ? ` (${matchedValidity}d group)` : ""}.`,
+        error: `Not enough vouchers available. Need ${remaining}, but only ${availableVouchers?.length || 0} available in the ${formatDays(matchedValidity)} group.`,
       },
       { status: 400 }
     );

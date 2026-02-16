@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail } from "lucide-react";
+import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -23,6 +23,7 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { generateProposalPDF, generateInvoicePDF } from "@/lib/pdf-generator";
+import { toast } from "sonner";
 import type { Proposal, ProformaInvoice, Lead } from "@/types";
 
 const PROPOSAL_STATUS_COLORS: Record<string, string> = {
@@ -142,6 +143,61 @@ export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
     setEmailDialogOpen(true);
   };
 
+  // ── Update Proposal Status ──
+  const handleUpdateProposalStatus = async (
+    proposalId: string,
+    status: string,
+    label: string
+  ) => {
+    const now = new Date().toISOString();
+    const body: Record<string, unknown> = { status };
+
+    // Set timestamp fields based on status
+    if (status === "sent") body.sent_at = now;
+    if (status === "viewed") body.viewed_at = now;
+    if (status === "accepted") body.accepted_at = now;
+    if (status === "rejected") body.rejected_at = now;
+
+    const res = await fetch(`/api/proposals/${proposalId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (res.ok) {
+      toast.success(`Proposal marked as ${label}`);
+      fetchData();
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || `Failed to update proposal status`);
+    }
+  };
+
+  // ── Update Invoice Status ──
+  const handleUpdateInvoiceStatus = async (
+    invoiceId: string,
+    status: string,
+    label: string
+  ) => {
+    const now = new Date().toISOString();
+    const body: Record<string, unknown> = { status };
+    if (status === "paid") body.paid_at = now;
+
+    const res = await fetch(`/api/invoices/${invoiceId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (res.ok) {
+      toast.success(`Invoice marked as ${label}`);
+      fetchData();
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || `Failed to update invoice status`);
+    }
+  };
+
   if (loading) {
     return <TableSkeleton rows={4} />;
   }
@@ -207,11 +263,42 @@ export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
                               <Download className="mr-2 h-4 w-4" />
                               Download PDF
                             </DropdownMenuItem>
-                            <DropdownMenuSeparator />
                             <DropdownMenuItem onClick={() => handleEmailProposal(p)}>
                               <Mail className="mr-2 h-4 w-4" />
                               Email to Lead
                             </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            {/* Status transition actions */}
+                            {p.status === "draft" && (
+                              <DropdownMenuItem onClick={() => handleUpdateProposalStatus(p.id, "sent", "Sent")}>
+                                <Send className="mr-2 h-4 w-4" />
+                                Mark as Sent
+                              </DropdownMenuItem>
+                            )}
+                            {(p.status === "sent") && (
+                              <DropdownMenuItem onClick={() => handleUpdateProposalStatus(p.id, "viewed", "Viewed")}>
+                                <Eye className="mr-2 h-4 w-4" />
+                                Mark as Viewed
+                              </DropdownMenuItem>
+                            )}
+                            {(p.status === "sent" || p.status === "viewed") && (
+                              <>
+                                <DropdownMenuItem
+                                  onClick={() => handleUpdateProposalStatus(p.id, "accepted", "Accepted")}
+                                  className="text-green-600"
+                                >
+                                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                                  Accept Proposal
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => handleUpdateProposalStatus(p.id, "rejected", "Rejected")}
+                                  className="text-red-600"
+                                >
+                                  <XCircle className="mr-2 h-4 w-4" />
+                                  Reject Proposal
+                                </DropdownMenuItem>
+                              </>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </td>
@@ -283,11 +370,35 @@ export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
                               <Download className="mr-2 h-4 w-4" />
                               Download PDF
                             </DropdownMenuItem>
-                            <DropdownMenuSeparator />
                             <DropdownMenuItem onClick={() => handleEmailInvoice(inv)}>
                               <Mail className="mr-2 h-4 w-4" />
                               Email to Lead
                             </DropdownMenuItem>
+                            <DropdownMenuSeparator />
+                            {inv.status === "draft" && (
+                              <DropdownMenuItem onClick={() => handleUpdateInvoiceStatus(inv.id, "sent", "Sent")}>
+                                <Send className="mr-2 h-4 w-4" />
+                                Mark as Sent
+                              </DropdownMenuItem>
+                            )}
+                            {(inv.status === "sent" || inv.status === "overdue") && (
+                              <DropdownMenuItem
+                                onClick={() => handleUpdateInvoiceStatus(inv.id, "paid", "Paid")}
+                                className="text-green-600"
+                              >
+                                <CheckCircle2 className="mr-2 h-4 w-4" />
+                                Mark as Paid
+                              </DropdownMenuItem>
+                            )}
+                            {inv.status === "sent" && (
+                              <DropdownMenuItem
+                                onClick={() => handleUpdateInvoiceStatus(inv.id, "overdue", "Overdue")}
+                                className="text-red-600"
+                              >
+                                <XCircle className="mr-2 h-4 w-4" />
+                                Mark as Overdue
+                              </DropdownMenuItem>
+                            )}
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </td>
