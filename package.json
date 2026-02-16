@@ -33,7 +33,6 @@
     "jspdf-autotable": "^5.0.7",
     "lucide-react": "^0.564.0",
     "next": "16.1.6",
-    "pdfjs-dist": "^5.4.624",
     "react": "19.2.3",
     "react-dom": "19.2.3",
     "react-hook-form": "^7.71.1",
@@ -41,6 +40,7 @@
     "resend": "^6.9.2",
     "sonner": "^2.0.7",
     "tailwind-merge": "^3.4.0",
+    "unpdf": "^1.4.0",
     "zod": "^4.3.6",
     "zustand": "^5.0.11"
   },

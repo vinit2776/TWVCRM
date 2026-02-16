@@ -1,5 +1,3 @@
-import type { TextItem } from "pdfjs-dist/types/src/display/api";
-
 export interface ParsedVoucherResult {
   vouchers: Array<{ voucher_code: string; metadata: Record<string, unknown> }>;
   detected_validity: number | null;
@@ -12,57 +10,17 @@ export interface ParsedVoucherResult {
  *
  *   U+E088 → "-" (dash between the two 5-digit halves)
  *   U+E06B → "0" (digit zero)
- *
- * This function normalises the raw extracted text so that standard
- * regex matching works on the decoded voucher codes.
  */
 function normalisePdfText(raw: string): string {
   return raw.replace(/\uE088/g, "-").replace(/\uE06B/g, "0");
 }
 
 /**
- * Extracts text from a PDF buffer using pdfjs-dist (pure JS, no native deps).
- * Uses the legacy build for Node.js / serverless compatibility.
- */
-async function extractPdfText(data: Uint8Array): Promise<string> {
-  // Dynamic import so the heavy pdfjs-dist bundle is only loaded on demand
-  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
-
-  const doc = await pdfjsLib.getDocument({
-    data,
-    useWorkerFetch: false,
-    isEvalSupported: false,
-    useSystemFonts: false,
-  }).promise;
-
-  let fullText = "";
-  for (let i = 1; i <= doc.numPages; i++) {
-    const page = await doc.getPage(i);
-    const textContent = await page.getTextContent();
-
-    for (const item of textContent.items) {
-      const textItem = item as TextItem;
-      if (textItem.str !== undefined) {
-        fullText += textItem.str;
-        if (textItem.hasEOL) fullText += "\n";
-      }
-    }
-    fullText += "\n";
-  }
-
-  doc.destroy();
-  return fullText;
-}
-
-/**
  * Parses a PDF buffer containing WiFi vouchers.
  *
- * WiFi system PDFs have a repeating structure per voucher:
- *   "Valid for Xd"
- *   <XXXXX-XXXXX code>  (uses PUA chars for dash and zero)
- *   "Download speed: ..."
- *   "Upload speed: ..."
- *   "Data Limit: ..."
+ * Uses `unpdf` (serverless-compatible PDF.js redistribution) to extract
+ * text, then decodes PUA font-encoded characters and extracts voucher
+ * codes in XXXXX-XXXXX format.
  */
 export async function parseVoucherPDF(
   buffer: Buffer
@@ -71,7 +29,11 @@ export async function parseVoucherPDF(
   let rawText: string;
 
   try {
-    rawText = await extractPdfText(new Uint8Array(buffer));
+    const { extractText } = await import("unpdf");
+    const result = await extractText(new Uint8Array(buffer));
+    rawText = Array.isArray(result.text)
+      ? result.text.join("\n")
+      : String(result.text);
   } catch (err) {
     return {
       vouchers: [],
