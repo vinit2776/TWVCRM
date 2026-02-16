@@ -1,12 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Wifi, ChevronDown, ChevronRight, Loader2, Ticket } from "lucide-react";
+import { Wifi, ChevronDown, ChevronRight, Loader2, Ticket, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
-import { formatDate } from "@/lib/utils";
+import { formatDate, getValidityLabel } from "@/lib/utils";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { VOUCHER_STATUS_LABELS, VOUCHER_STATUS_COLORS } from "@/lib/constants";
@@ -20,6 +20,7 @@ interface VoucherIssuance {
     voucher_code: string;
     status: string;
     metadata: Record<string, unknown>;
+    validity_days?: number | null;
   };
   lead_id: string;
   seat_number: number;
@@ -36,6 +37,7 @@ interface ContractVouchersSectionProps {
   contractStatus: string;
   startDate: string;
   endDate: string;
+  tenureMonths?: number;
 }
 
 export function ContractVouchersSection({
@@ -44,11 +46,16 @@ export function ContractVouchersSection({
   contractStatus,
   startDate,
   endDate,
+  tenureMonths,
 }: ContractVouchersSectionProps) {
   const [issuances, setIssuances] = useState<VoucherIssuance[]>([]);
   const [loading, setLoading] = useState(true);
   const [issuing, setIssuing] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [matchInfo, setMatchInfo] = useState<{
+    matched_validity_days?: number | null;
+    match_warning?: string | null;
+  }>({});
 
   const fetchIssuances = useCallback(async () => {
     setLoading(true);
@@ -75,7 +82,11 @@ export function ContractVouchersSection({
 
     if (res.ok) {
       const json = await res.json();
-      const count = json.count || 0;
+      const count = json.data?.length || 0;
+      setMatchInfo({
+        matched_validity_days: json.matched_validity_days,
+        match_warning: json.match_warning,
+      });
       toast.success(`Issued ${count} voucher${count !== 1 ? "s" : ""} successfully`);
       fetchIssuances();
     } else {
@@ -99,6 +110,9 @@ export function ContractVouchersSection({
   const isContractActive = contractStatus === "active";
   const allSeatsFilled = issuances.length >= seats;
   const canIssue = isContractActive && !allSeatsFilled;
+
+  // Compute expected validity from tenure
+  const expectedValidity = tenureMonths ? tenureMonths * 30 : null;
 
   return (
     <Card>
@@ -138,6 +152,32 @@ export function ContractVouchersSection({
         </Button>
       </CardHeader>
       <CardContent>
+        {/* Match info banner */}
+        {matchInfo.match_warning && (
+          <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+            <div>
+              <p>{matchInfo.match_warning}</p>
+              {matchInfo.matched_validity_days && (
+                <p className="text-xs mt-1">
+                  Matched validity:{" "}
+                  <Badge variant="outline" className="text-xs">
+                    {getValidityLabel(matchInfo.matched_validity_days)}
+                  </Badge>
+                </p>
+              )}
+            </div>
+          </div>
+        )}
+
+        {/* Expected validity info */}
+        {expectedValidity && isContractActive && !allSeatsFilled && !loading && (
+          <div className="mb-4 text-xs text-muted-foreground">
+            Expected voucher type: <Badge variant="outline" className="text-xs ml-1">{getValidityLabel(expectedValidity)}</Badge>
+            <span className="ml-1">(based on {tenureMonths}-month tenure)</span>
+          </div>
+        )}
+
         {loading ? (
           <TableSkeleton rows={3} />
         ) : issuances.length === 0 ? (
@@ -160,6 +200,7 @@ export function ContractVouchersSection({
                   <th className="px-4 py-3 text-left font-medium w-10"></th>
                   <th className="px-4 py-3 text-left font-medium">Seat #</th>
                   <th className="px-4 py-3 text-left font-medium">Voucher Code</th>
+                  <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Validity</th>
                   <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Valid From</th>
                   <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Valid Until</th>
                   <th className="px-4 py-3 text-left font-medium">Status</th>
@@ -173,9 +214,8 @@ export function ContractVouchersSection({
                   const hasMetadata = Object.keys(metadata).length > 0;
 
                   return (
-                    <>
+                    <Fragment key={issuance.id}>
                       <tr
-                        key={issuance.id}
                         className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
                         onClick={() => hasMetadata && toggleRow(issuance.id)}
                       >
@@ -191,6 +231,11 @@ export function ContractVouchersSection({
                         <td className="px-4 py-3 font-medium">{issuance.seat_number}</td>
                         <td className="px-4 py-3 font-mono text-xs">
                           {issuance.voucher?.voucher_code || "-"}
+                        </td>
+                        <td className="px-4 py-3 hidden sm:table-cell">
+                          <Badge variant="outline" className="text-xs">
+                            {getValidityLabel(issuance.voucher?.validity_days)}
+                          </Badge>
                         </td>
                         <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
                           {issuance.valid_from ? formatDate(issuance.valid_from) : formatDate(startDate)}
@@ -214,8 +259,8 @@ export function ContractVouchersSection({
                       </tr>
                       {/* Expanded metadata row */}
                       {isExpanded && hasMetadata && (
-                        <tr key={`${issuance.id}-meta`} className="border-b bg-muted/10">
-                          <td colSpan={6} className="px-4 py-3">
+                        <tr className="border-b bg-muted/10">
+                          <td colSpan={7} className="px-4 py-3">
                             <div className="pl-10 space-y-1">
                               <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">
                                 Metadata
@@ -242,7 +287,7 @@ export function ContractVouchersSection({
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   );
                 })}
               </tbody>
@@ -265,3 +310,4 @@ export function ContractVouchersSection({
     </Card>
   );
 }
+

@@ -17,6 +17,7 @@ import { Separator } from "@/components/ui/separator";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/shared/loading-skeleton";
+import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
 import {
   Dialog,
   DialogContent,
@@ -283,6 +284,16 @@ export default function ContractDetailPage({
               </CardContent>
             </Card>
           )}
+
+          {/* Vouchers Section */}
+          <ContractVouchersSection
+            contractId={id}
+            seats={contract.seats}
+            contractStatus={contract.status}
+            startDate={contract.start_date}
+            endDate={contract.end_date}
+            tenureMonths={contract.tenure_months}
+          />
 
           {/* Notes */}
           {contract.notes && (

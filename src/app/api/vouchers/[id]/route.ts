@@ -48,6 +48,7 @@ export async function PATCH(
 
   if (body.status) allowedFields.status = body.status;
   if (body.metadata !== undefined) allowedFields.metadata = body.metadata;
+  if (body.validity_days !== undefined) allowedFields.validity_days = body.validity_days;
 
   if (Object.keys(allowedFields).length === 0) {
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });

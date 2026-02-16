@@ -66,3 +66,27 @@ export function formatDuration(seconds: number): string {
 export function generateId(): string {
   return crypto.randomUUID();
 }
+
+/**
+ * Masks a voucher code for display, e.g. "81346-46018" -> "813**-****8"
+ */
+export function maskVoucherCode(code: string): string {
+  if (code.length <= 4) return code.replace(/./g, "*");
+  const parts = code.split("-");
+  if (parts.length === 2) {
+    const left = parts[0].slice(0, 3) + "*".repeat(Math.max(0, parts[0].length - 3));
+    const right = "*".repeat(Math.max(0, parts[1].length - 1)) + parts[1].slice(-1);
+    return `${left}-${right}`;
+  }
+  // Fallback: show first 3 and last 1
+  return code.slice(0, 3) + "*".repeat(code.length - 4) + code.slice(-1);
+}
+
+/**
+ * Returns a human-readable label for a validity_days value.
+ */
+export function getValidityLabel(days: number | null | undefined): string {
+  if (days == null) return "Unclassified";
+  if (days === 1) return "1 Day";
+  return `${days} Days`;
+}

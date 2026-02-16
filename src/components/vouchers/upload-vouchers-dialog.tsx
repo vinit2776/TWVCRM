@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -9,240 +9,267 @@ import {
   DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Eye, Upload } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import { Loader2, Upload, FileText, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
-
-interface ParsedVoucher {
-  voucher_code: string;
-  metadata: Record<string, unknown>;
-}
+import { VOUCHER_VALIDITY_OPTIONS, VOUCHER_VALIDITY_LABELS } from "@/lib/constants";
 
 interface UploadVouchersDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
+  preselectedValidity?: number;
 }
 
-const PLACEHOLDER_JSON = `[
-  {
-    "voucher_code": "TWV-WIFI-001",
-    "metadata": { "type": "wifi", "plan": "50mbps" }
-  },
-  {
-    "voucher_code": "TWV-WIFI-002",
-    "metadata": { "type": "wifi", "plan": "100mbps" }
-  }
-]`;
+interface ParseResult {
+  count: number;
+  detected_validity: number | null;
+  applied_validity: number | null;
+  parse_warnings: string[];
+}
 
 export function UploadVouchersDialog({
   open,
   onOpenChange,
   onSuccess,
+  preselectedValidity,
 }: UploadVouchersDialogProps) {
-  const [jsonInput, setJsonInput] = useState("");
-  const [parsed, setParsed] = useState<ParsedVoucher[] | null>(null);
-  const [parseError, setParseError] = useState("");
+  const [file, setFile] = useState<File | null>(null);
+  const [validityOverride, setValidityOverride] = useState<string>(
+    preselectedValidity ? String(preselectedValidity) : "auto"
+  );
   const [submitting, setSubmitting] = useState(false);
+  const [result, setResult] = useState<ParseResult | null>(null);
+  const [error, setError] = useState("");
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const resetForm = () => {
-    setJsonInput("");
-    setParsed(null);
-    setParseError("");
+    setFile(null);
+    setValidityOverride(preselectedValidity ? String(preselectedValidity) : "auto");
+    setResult(null);
+    setError("");
+    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const handleParse = () => {
-    setParseError("");
-    setParsed(null);
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const selectedFile = e.target.files?.[0] || null;
+    setFile(selectedFile);
+    setResult(null);
+    setError("");
+  };
 
-    if (!jsonInput.trim()) {
-      setParseError("Please enter JSON data.");
-      return;
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const droppedFile = e.dataTransfer.files?.[0];
+    if (droppedFile && droppedFile.name.toLowerCase().endsWith(".pdf")) {
+      setFile(droppedFile);
+      setResult(null);
+      setError("");
+    } else {
+      setError("Only PDF files are accepted.");
     }
+  };
 
-    try {
-      const data = JSON.parse(jsonInput.trim());
-
-      if (!Array.isArray(data)) {
-        setParseError("Input must be a JSON array.");
-        return;
-      }
-
-      if (data.length === 0) {
-        setParseError("Array must contain at least one voucher.");
-        return;
-      }
-
-      const vouchers: ParsedVoucher[] = [];
-      for (let i = 0; i < data.length; i++) {
-        const item = data[i];
-        if (!item.voucher_code || typeof item.voucher_code !== "string") {
-          setParseError(`Item at index ${i} is missing a valid "voucher_code" string.`);
-          return;
-        }
-        vouchers.push({
-          voucher_code: item.voucher_code.trim(),
-          metadata: item.metadata && typeof item.metadata === "object" ? item.metadata : {},
-        });
-      }
-
-      // Check for duplicate voucher codes within the batch
-      const codes = vouchers.map((v) => v.voucher_code);
-      const duplicates = codes.filter((code, idx) => codes.indexOf(code) !== idx);
-      if (duplicates.length > 0) {
-        setParseError(`Duplicate voucher codes found: ${[...new Set(duplicates)].join(", ")}`);
-        return;
-      }
-
-      setParsed(vouchers);
-    } catch {
-      setParseError("Invalid JSON. Please check your input format.");
-    }
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
   };
 
   const handleSubmit = async () => {
-    if (!parsed || parsed.length === 0) return;
+    if (!file) return;
 
     setSubmitting(true);
+    setError("");
+    setResult(null);
+
+    const formData = new FormData();
+    formData.append("file", file);
+    if (validityOverride !== "auto") {
+      formData.append("validity_days", validityOverride);
+    }
+
     const res = await fetch("/api/vouchers", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ vouchers: parsed }),
+      body: formData,
     });
 
     setSubmitting(false);
 
     if (res.ok) {
       const json = await res.json();
-      const count = json.count || parsed.length;
-      toast.success(`Successfully uploaded ${count} voucher${count !== 1 ? "s" : ""}`);
-      resetForm();
-      onOpenChange(false);
+      setResult({
+        count: json.count || 0,
+        detected_validity: json.detected_validity,
+        applied_validity: json.applied_validity,
+        parse_warnings: json.parse_warnings || [],
+      });
+      toast.success(
+        `Successfully uploaded ${json.count} voucher${json.count !== 1 ? "s" : ""} from PDF`
+      );
       onSuccess();
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to upload vouchers");
+      setError(err?.error || "Failed to upload vouchers");
+      if (err?.parse_warnings?.length) {
+        setError(
+          `${err.error}\n\nWarnings:\n${err.parse_warnings.join("\n")}`
+        );
+      }
     }
   };
 
   const handleOpenChange = (value: boolean) => {
-    if (!value) {
-      resetForm();
-    }
+    if (!value) resetForm();
     onOpenChange(value);
   };
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Upload Vouchers</DialogTitle>
+          <DialogTitle>Upload Vouchers (PDF)</DialogTitle>
         </DialogHeader>
 
         <div className="space-y-4">
-          {/* JSON Input */}
-          <div className="space-y-2">
-            <label className="text-sm font-medium">
-              Voucher JSON <span className="text-destructive">*</span>
-            </label>
-            <p className="text-xs text-muted-foreground">
-              Paste a JSON array of voucher objects. Each object must have a{" "}
-              <code className="bg-muted px-1 rounded">voucher_code</code> and optional{" "}
-              <code className="bg-muted px-1 rounded">metadata</code>.
-            </p>
-            <Textarea
-              value={jsonInput}
-              onChange={(e) => {
-                setJsonInput(e.target.value);
-                setParsed(null);
-                setParseError("");
-              }}
-              placeholder={PLACEHOLDER_JSON}
-              rows={10}
-              className="font-mono text-xs"
+          {/* Drop Zone */}
+          <div
+            onDrop={handleDrop}
+            onDragOver={handleDragOver}
+            onClick={() => fileInputRef.current?.click()}
+            className="relative border-2 border-dashed rounded-lg p-8 text-center cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-colors"
+          >
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf"
+              onChange={handleFileChange}
+              className="hidden"
             />
-          </div>
-
-          {/* Parse Error */}
-          {parseError && (
-            <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700">
-              {parseError}
-            </div>
-          )}
-
-          {/* Parse Button */}
-          {!parsed && (
-            <Button type="button" variant="outline" onClick={handleParse} disabled={!jsonInput.trim()}>
-              <Eye className="mr-2 h-4 w-4" />
-              Parse &amp; Preview
-            </Button>
-          )}
-
-          {/* Preview Table */}
-          {parsed && parsed.length > 0 && (
-            <div className="space-y-3">
-              <div className="flex items-center justify-between">
-                <p className="text-sm font-medium">
-                  Preview: <Badge variant="secondary">{parsed.length}</Badge> voucher{parsed.length !== 1 ? "s" : ""}
+            {file ? (
+              <div className="space-y-2">
+                <FileText className="h-10 w-10 mx-auto text-primary" />
+                <p className="text-sm font-medium">{file.name}</p>
+                <p className="text-xs text-muted-foreground">
+                  {(file.size / 1024).toFixed(1)} KB
                 </p>
                 <Button
                   type="button"
                   variant="ghost"
                   size="sm"
-                  onClick={() => { setParsed(null); setParseError(""); }}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setFile(null);
+                    setResult(null);
+                    if (fileInputRef.current) fileInputRef.current.value = "";
+                  }}
                 >
-                  Edit JSON
+                  Remove
                 </Button>
               </div>
-              <div className="rounded-md border overflow-x-auto max-h-[300px] overflow-y-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b bg-muted/50">
-                      <th className="px-4 py-2 text-left font-medium w-12">#</th>
-                      <th className="px-4 py-2 text-left font-medium">Voucher Code</th>
-                      <th className="px-4 py-2 text-left font-medium">Metadata</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {parsed.map((v, i) => (
-                      <tr key={i} className="border-b">
-                        <td className="px-4 py-2 text-muted-foreground">{i + 1}</td>
-                        <td className="px-4 py-2 font-mono text-xs">{v.voucher_code}</td>
-                        <td className="px-4 py-2 text-xs text-muted-foreground font-mono">
-                          {Object.keys(v.metadata).length > 0
-                            ? JSON.stringify(v.metadata)
-                            : "-"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            ) : (
+              <div className="space-y-2">
+                <Upload className="h-10 w-10 mx-auto text-muted-foreground" />
+                <p className="text-sm text-muted-foreground">
+                  Drop a voucher PDF here or click to browse
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Supports PDF files with voucher codes in XXXXX-XXXXX format
+                </p>
               </div>
+            )}
+          </div>
+
+          {/* Validity Override */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Validity Period</label>
+            <Select value={validityOverride} onValueChange={setValidityOverride}>
+              <SelectTrigger>
+                <SelectValue placeholder="Auto-detect from PDF" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="auto">Auto-detect from PDF</SelectItem>
+                {VOUCHER_VALIDITY_OPTIONS.map((days) => (
+                  <SelectItem key={days} value={String(days)}>
+                    {VOUCHER_VALIDITY_LABELS[days]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              The system will auto-detect validity from the PDF header. Override if needed.
+            </p>
+          </div>
+
+          {/* Error Display */}
+          {error && (
+            <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm text-red-700 whitespace-pre-wrap">
+              <AlertTriangle className="inline h-4 w-4 mr-1 -mt-0.5" />
+              {error}
+            </div>
+          )}
+
+          {/* Success Result */}
+          {result && (
+            <div className="rounded-md border border-green-200 bg-green-50 p-4 space-y-2">
+              <div className="flex items-center gap-2 text-green-800">
+                <CheckCircle2 className="h-5 w-5" />
+                <span className="font-medium">
+                  {result.count} voucher{result.count !== 1 ? "s" : ""} uploaded
+                </span>
+              </div>
+              <div className="text-sm text-green-700 space-y-1">
+                {result.detected_validity && (
+                  <p>
+                    Detected validity:{" "}
+                    <Badge variant="secondary" className="ml-1">
+                      {result.detected_validity}d
+                    </Badge>
+                  </p>
+                )}
+                {result.applied_validity && (
+                  <p>
+                    Applied validity:{" "}
+                    <Badge variant="secondary" className="ml-1">
+                      {result.applied_validity}d
+                    </Badge>
+                  </p>
+                )}
+              </div>
+              {result.parse_warnings.length > 0 && (
+                <div className="text-xs text-amber-700 mt-2">
+                  <AlertTriangle className="inline h-3 w-3 mr-1" />
+                  {result.parse_warnings.join("; ")}
+                </div>
+              )}
             </div>
           )}
         </div>
 
         <DialogFooter>
           <Button variant="outline" onClick={() => handleOpenChange(false)}>
-            Cancel
+            {result ? "Close" : "Cancel"}
           </Button>
-          <Button
-            onClick={handleSubmit}
-            disabled={!parsed || parsed.length === 0 || submitting}
-          >
-            {submitting ? (
-              <>
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                Uploading...
-              </>
-            ) : (
-              <>
-                <Upload className="mr-2 h-4 w-4" />
-                Upload {parsed ? `${parsed.length} Voucher${parsed.length !== 1 ? "s" : ""}` : "Vouchers"}
-              </>
-            )}
-          </Button>
+          {!result && (
+            <Button onClick={handleSubmit} disabled={!file || submitting}>
+              {submitting ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Uploading...
+                </>
+              ) : (
+                <>
+                  <Upload className="mr-2 h-4 w-4" />
+                  Upload PDF
+                </>
+              )}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>

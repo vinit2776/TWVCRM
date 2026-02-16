@@ -13,7 +13,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("voucher_issuances")
-    .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at)")
+    .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
     .eq("contract_id", id)
     .order("seat_number", { ascending: true });
 
@@ -68,13 +68,85 @@ export async function POST(
     );
   }
 
-  // Fetch available vouchers (FIFO by uploaded_at)
-  const { data: availableVouchers, error: fetchError } = await supabase
+  // ===== Smart Validity Matching =====
+  // Calculate target days from contract tenure
+  const tenureMonths: number = contract.tenure_months || 1;
+  const targetDays = tenureMonths * 30;
+
+  // Find available validity groups with counts
+  const { data: availabilityGroups, error: groupError } = await supabase
+    .from("voucher_repository")
+    .select("validity_days")
+    .eq("status", "available")
+    .not("validity_days", "is", null);
+
+  if (groupError) {
+    return NextResponse.json({ error: groupError.message }, { status: 500 });
+  }
+
+  // Count available vouchers per validity group
+  const groupCounts = new Map<number, number>();
+  for (const row of availabilityGroups || []) {
+    if (row.validity_days != null) {
+      groupCounts.set(
+        row.validity_days,
+        (groupCounts.get(row.validity_days) || 0) + 1
+      );
+    }
+  }
+
+  // Find the closest validity group that has enough vouchers
+  let matchedValidity: number | null = null;
+  let matchWarning: string | null = null;
+
+  if (groupCounts.size > 0) {
+    // Sort groups by distance from target, preferring >= target when equidistant
+    const sortedGroups = Array.from(groupCounts.entries())
+      .filter(([, count]) => count >= remaining)
+      .sort(([a], [b]) => {
+        const distA = Math.abs(a - targetDays);
+        const distB = Math.abs(b - targetDays);
+        if (distA !== distB) return distA - distB;
+        // Prefer >= target when equidistant
+        return b - a;
+      });
+
+    if (sortedGroups.length > 0) {
+      matchedValidity = sortedGroups[0][0];
+      if (matchedValidity !== targetDays) {
+        matchWarning = `Exact ${targetDays}d vouchers not available. Using closest match: ${matchedValidity}d vouchers.`;
+      }
+    } else {
+      // No single group has enough, try any group
+      const anyGroupSorted = Array.from(groupCounts.entries())
+        .sort(([a], [b]) => {
+          const distA = Math.abs(a - targetDays);
+          const distB = Math.abs(b - targetDays);
+          if (distA !== distB) return distA - distB;
+          return b - a;
+        });
+
+      if (anyGroupSorted.length > 0) {
+        matchedValidity = anyGroupSorted[0][0];
+        matchWarning = `Not enough ${matchedValidity}d vouchers. Only ${anyGroupSorted[0][1]} available, need ${remaining}.`;
+      }
+    }
+  }
+
+  // Build the query for available vouchers
+  let voucherQuery = supabase
     .from("voucher_repository")
     .select("*")
     .eq("status", "available")
     .order("uploaded_at", { ascending: true })
     .limit(remaining);
+
+  // Apply validity filter if we found a match
+  if (matchedValidity !== null) {
+    voucherQuery = voucherQuery.eq("validity_days", matchedValidity);
+  }
+
+  const { data: availableVouchers, error: fetchError } = await voucherQuery;
 
   if (fetchError) {
     return NextResponse.json({ error: fetchError.message }, { status: 500 });
@@ -83,7 +155,7 @@ export async function POST(
   if (!availableVouchers || availableVouchers.length < remaining) {
     return NextResponse.json(
       {
-        error: `Not enough vouchers available. Need ${remaining}, but only ${availableVouchers?.length || 0} available.`,
+        error: `Not enough vouchers available. Need ${remaining}, but only ${availableVouchers?.length || 0} available${matchedValidity !== null ? ` (${matchedValidity}d group)` : ""}.`,
       },
       { status: 400 }
     );
@@ -103,7 +175,7 @@ export async function POST(
     const voucher = availableVouchers[i];
     const seatNumber = issuedCount + i + 1;
 
-    // Update voucher_repository: status → "issued"
+    // Update voucher_repository: status -> "issued"
     const { error: updateError } = await supabase
       .from("voucher_repository")
       .update({
@@ -129,7 +201,7 @@ export async function POST(
         valid_from: contract.start_date,
         valid_until: contract.end_date,
       })
-      .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at)")
+      .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
       .single();
 
     if (insertError) {
@@ -149,6 +221,7 @@ export async function POST(
       changes: {
         count: { old: null, new: issuedVouchers.length },
         contract_id: { old: null, new: id },
+        matched_validity_days: { old: null, new: matchedValidity },
       },
     });
   }
@@ -157,6 +230,8 @@ export async function POST(
     {
       data: issuedVouchers,
       message: `${issuedVouchers.length} vouchers issued`,
+      matched_validity_days: matchedValidity,
+      match_warning: matchWarning,
     },
     { status: 201 }
   );

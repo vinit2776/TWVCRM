@@ -345,11 +345,23 @@ export interface VoucherRepository {
   id: string;
   voucher_code: string;
   status: VoucherStatus;
+  validity_days?: number;
   metadata: Record<string, unknown>;
   uploaded_by?: string;
   uploaded_at: string;
   issued_at?: string;
   expires_at?: string;
+}
+
+export type VoucherStockLevel = "green" | "amber" | "red";
+
+export interface VoucherInventoryGroup {
+  validity_days: number | null;
+  label: string;
+  available: number;
+  issued: number;
+  total: number;
+  stock_level: VoucherStockLevel;
 }
 
 export interface VoucherIssuance {
