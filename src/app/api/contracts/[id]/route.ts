@@ -14,7 +14,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("contracts")
-    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile), proposal:proposals!contracts_proposal_id_fkey(proposal_number, title)")
+    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile), proposal:proposals!contracts_proposal_id_fkey(proposal_number, title), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at)")
     .eq("id", id)
     .single();
 
@@ -43,6 +43,7 @@ export async function PATCH(
   if (body.end_date) allowedFields.end_date = body.end_date;
   if (body.tenure_months) allowedFields.tenure_months = body.tenure_months;
   if (body.renewed_at) allowedFields.renewed_at = body.renewed_at;
+  if (body.signed_document_id !== undefined) allowedFields.signed_document_id = body.signed_document_id;
 
   if (Object.keys(allowedFields).length === 0) {
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });

@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Wifi, ChevronDown, ChevronRight, Loader2, Ticket, AlertTriangle } from "lucide-react";
+import { Wifi, ChevronDown, ChevronRight, Loader2, Ticket, AlertTriangle, Mail } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate, getValidityLabel } from "@/lib/utils";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -38,6 +38,8 @@ interface ContractVouchersSectionProps {
   startDate: string;
   endDate: string;
   tenureMonths?: number;
+  signedDocumentId?: string;
+  leadEmail?: string;
 }
 
 export function ContractVouchersSection({
@@ -47,10 +49,13 @@ export function ContractVouchersSection({
   startDate,
   endDate,
   tenureMonths,
+  signedDocumentId,
+  leadEmail,
 }: ContractVouchersSectionProps) {
   const [issuances, setIssuances] = useState<VoucherIssuance[]>([]);
   const [loading, setLoading] = useState(true);
   const [issuing, setIssuing] = useState(false);
+  const [emailing, setEmailing] = useState(false);
   const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
   const [matchInfo, setMatchInfo] = useState<{
     matched_validity_days?: number | null;
@@ -95,6 +100,29 @@ export function ContractVouchersSection({
     }
   };
 
+  const handleEmailVouchers = async () => {
+    if (!leadEmail) {
+      toast.error("No email address found for this lead");
+      return;
+    }
+
+    setEmailing(true);
+    const res = await fetch(`/api/contracts/${contractId}/vouchers/email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ recipients: [leadEmail] }),
+    });
+
+    setEmailing(false);
+
+    if (res.ok) {
+      toast.success(`Voucher details emailed to ${leadEmail}`);
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to send email");
+    }
+  };
+
   const toggleRow = (id: string) => {
     setExpandedRows((prev) => {
       const next = new Set(prev);
@@ -108,11 +136,22 @@ export function ContractVouchersSection({
   };
 
   const isContractActive = contractStatus === "active";
+  const hasSignedDoc = !!signedDocumentId;
   const allSeatsFilled = issuances.length >= seats;
-  const canIssue = isContractActive && !allSeatsFilled;
+  const canIssue = isContractActive && !allSeatsFilled && hasSignedDoc;
+  const canEmail = issuances.length > 0 && !!leadEmail;
 
   // Compute expected validity from tenure
   const expectedValidity = tenureMonths ? tenureMonths * 30 : null;
+
+  // Determine tooltip for issue button
+  const issueTooltip = !isContractActive
+    ? "Contract must be active to issue vouchers"
+    : !hasSignedDoc
+    ? "Upload signed contract before issuing vouchers"
+    : allSeatsFilled
+    ? "All seats have been filled"
+    : "Issue vouchers for remaining seats";
 
   return (
     <Card>
@@ -126,32 +165,61 @@ export function ContractVouchersSection({
             </Badge>
           )}
         </CardTitle>
-        <Button
-          size="sm"
-          onClick={handleIssueVouchers}
-          disabled={!canIssue || issuing}
-          title={
-            !isContractActive
-              ? "Contract must be active to issue vouchers"
-              : allSeatsFilled
-              ? "All seats have been filled"
-              : "Issue vouchers for remaining seats"
-          }
-        >
-          {issuing ? (
-            <>
-              <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              Issuing...
-            </>
-          ) : (
-            <>
-              <Wifi className="mr-2 h-4 w-4" />
-              Issue Vouchers
-            </>
+        <div className="flex items-center gap-2">
+          {canEmail && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleEmailVouchers}
+              disabled={emailing}
+              title={
+                !leadEmail
+                  ? "Lead has no email address"
+                  : `Email vouchers to ${leadEmail}`
+              }
+            >
+              {emailing ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Sending...
+                </>
+              ) : (
+                <>
+                  <Mail className="mr-2 h-4 w-4" />
+                  Email Vouchers
+                </>
+              )}
+            </Button>
           )}
-        </Button>
+          <Button
+            size="sm"
+            onClick={handleIssueVouchers}
+            disabled={!canIssue || issuing}
+            title={issueTooltip}
+          >
+            {issuing ? (
+              <>
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                Issuing...
+              </>
+            ) : (
+              <>
+                <Wifi className="mr-2 h-4 w-4" />
+                Issue Vouchers
+              </>
+            )}
+          </Button>
+        </div>
       </CardHeader>
       <CardContent>
+        {/* Signed document warning */}
+        {isContractActive && !hasSignedDoc && !loading && (
+          <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 flex items-start gap-2">
+            <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
+            <p>Upload a signed contract document before issuing vouchers.</p>
+          </div>
+        )}
+
         {/* Match info banner */}
         {matchInfo.match_warning && (
           <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 flex items-start gap-2">
@@ -185,9 +253,11 @@ export function ContractVouchersSection({
             icon={Ticket}
             title="No vouchers issued"
             description={
-              isContractActive
-                ? "Issue vouchers to assign them to this contract's seats."
-                : "Activate the contract to issue vouchers."
+              !isContractActive
+                ? "Activate the contract to issue vouchers."
+                : !hasSignedDoc
+                ? "Upload a signed contract document to enable voucher issuance."
+                : "Issue vouchers to assign them to this contract's seats."
             }
             actionLabel={canIssue ? "Issue Vouchers" : undefined}
             onAction={canIssue ? handleIssueVouchers : undefined}
@@ -310,4 +380,3 @@ export function ContractVouchersSection({
     </Card>
   );
 }
-

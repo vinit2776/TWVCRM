@@ -331,6 +331,8 @@ export interface Contract {
   renewed_at?: string;
   terminated_at?: string;
   termination_reason?: string;
+  signed_document_id?: string;
+  signed_document?: CrmDocument;
   created_by?: string;
   created_at: string;
   updated_at: string;
@@ -430,7 +432,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete";
+export type AuditAction = "create" | "update" | "delete" | "login";
 export type AuditEntityType =
   | "lead"
   | "activity"

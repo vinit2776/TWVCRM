@@ -30,6 +30,7 @@ interface UploadVouchersDialogProps {
 
 interface ParseResult {
   count: number;
+  skipped_duplicates: number;
   detected_validity: number | null;
   applied_validity: number | null;
   parse_warnings: string[];
@@ -103,15 +104,21 @@ export function UploadVouchersDialog({
 
     if (res.ok) {
       const json = await res.json();
+      const skipped = json.skipped_duplicates || 0;
       setResult({
         count: json.count || 0,
+        skipped_duplicates: skipped,
         detected_validity: json.detected_validity,
         applied_validity: json.applied_validity,
         parse_warnings: json.parse_warnings || [],
       });
-      toast.success(
-        `Successfully uploaded ${json.count} voucher${json.count !== 1 ? "s" : ""} from PDF`
-      );
+      if (json.count > 0) {
+        toast.success(
+          `Successfully uploaded ${json.count} voucher${json.count !== 1 ? "s" : ""} from PDF${skipped > 0 ? ` (${skipped} duplicates skipped)` : ""}`
+        );
+      } else if (skipped > 0) {
+        toast.warning(`All ${skipped} voucher codes already exist in the repository`);
+      }
       onSuccess();
     } else {
       const err = await res.json().catch(() => null);
@@ -216,14 +223,32 @@ export function UploadVouchersDialog({
 
           {/* Success Result */}
           {result && (
-            <div className="rounded-md border border-green-200 bg-green-50 p-4 space-y-2">
-              <div className="flex items-center gap-2 text-green-800">
-                <CheckCircle2 className="h-5 w-5" />
+            <div className={`rounded-md border p-4 space-y-2 ${
+              result.count > 0
+                ? "border-green-200 bg-green-50"
+                : "border-amber-200 bg-amber-50"
+            }`}>
+              <div className={`flex items-center gap-2 ${
+                result.count > 0 ? "text-green-800" : "text-amber-800"
+              }`}>
+                {result.count > 0 ? (
+                  <CheckCircle2 className="h-5 w-5" />
+                ) : (
+                  <AlertTriangle className="h-5 w-5" />
+                )}
                 <span className="font-medium">
-                  {result.count} voucher{result.count !== 1 ? "s" : ""} uploaded
+                  {result.count > 0
+                    ? `${result.count} voucher${result.count !== 1 ? "s" : ""} uploaded`
+                    : "No new vouchers uploaded"}
                 </span>
               </div>
-              <div className="text-sm text-green-700 space-y-1">
+              {result.skipped_duplicates > 0 && (
+                <div className="text-sm text-amber-700 flex items-center gap-1">
+                  <AlertTriangle className="h-3.5 w-3.5" />
+                  {result.skipped_duplicates} duplicate code{result.skipped_duplicates !== 1 ? "s" : ""} skipped (already in repository)
+                </div>
+              )}
+              <div className={`text-sm space-y-1 ${result.count > 0 ? "text-green-700" : "text-amber-700"}`}>
                 {result.detected_validity && (
                   <p>
                     Detected validity:{" "}

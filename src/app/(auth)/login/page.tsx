@@ -33,6 +33,9 @@ export default function LoginPage() {
       return;
     }
 
+    // Log the login event (fire-and-forget — don't block navigation)
+    fetch("/api/auth/login-audit", { method: "POST" }).catch(() => {});
+
     router.push("/dashboard");
   }
 

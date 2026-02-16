@@ -9,6 +9,11 @@ import {
   XCircle,
   Download,
   Loader2,
+  Upload,
+  FileText,
+  Eye,
+  RefreshCw,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -48,6 +53,7 @@ export default function ContractDetailPage({
   const [terminateOpen, setTerminateOpen] = useState(false);
   const [terminating, setTerminating] = useState(false);
   const [terminationReason, setTerminationReason] = useState("");
+  const [uploadingSignedDoc, setUploadingSignedDoc] = useState(false);
 
   const fetchContract = useCallback(async () => {
     setLoading(true);
@@ -109,6 +115,75 @@ export default function ContractDetailPage({
   const handleDownloadPDF = () => {
     // Open the PDF download endpoint in a new tab
     window.open(`/api/contracts/${id}/pdf`, "_blank");
+  };
+
+  const handleSignedDocUpload = async (file: File) => {
+    if (!contract) return;
+    setUploadingSignedDoc(true);
+
+    // Step 1: Upload the file to /api/documents
+    const formData = new FormData();
+    formData.append("file", file);
+    formData.append("title", `Signed Contract - ${contract.contract_number}`);
+    formData.append("category", "signed_contract");
+    formData.append("lead_id", contract.lead_id);
+
+    const uploadRes = await fetch("/api/documents", {
+      method: "POST",
+      body: formData,
+    });
+
+    if (!uploadRes.ok) {
+      const err = await uploadRes.json().catch(() => null);
+      toast.error(err?.error || "Failed to upload document");
+      setUploadingSignedDoc(false);
+      return;
+    }
+
+    const { data: doc } = await uploadRes.json();
+
+    // Step 2: Link document to contract
+    const patchRes = await fetch(`/api/contracts/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ signed_document_id: doc.id }),
+    });
+
+    if (patchRes.ok) {
+      toast.success("Signed contract uploaded successfully");
+      fetchContract();
+    } else {
+      const err = await patchRes.json().catch(() => null);
+      toast.error(err?.error || "Failed to link document to contract");
+    }
+
+    setUploadingSignedDoc(false);
+  };
+
+  const handleViewSignedDoc = async () => {
+    if (!contract?.signed_document?.file_path) return;
+    // Use Supabase Storage public/signed URL
+    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    if (supabaseUrl && supabaseKey) {
+      const res = await fetch(
+        `${supabaseUrl}/storage/v1/object/sign/crm-documents/${contract.signed_document.file_path}`,
+        {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${supabaseKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ expiresIn: 3600 }),
+        }
+      );
+      if (res.ok) {
+        const { signedURL } = await res.json();
+        window.open(`${supabaseUrl}/storage/v1${signedURL}`, "_blank");
+        return;
+      }
+    }
+    toast.error("Failed to get download URL");
   };
 
   if (loading) {
@@ -293,6 +368,8 @@ export default function ContractDetailPage({
             startDate={contract.start_date}
             endDate={contract.end_date}
             tenureMonths={contract.tenure_months}
+            signedDocumentId={contract.signed_document_id}
+            leadEmail={contract.lead?.email}
           />
 
           {/* Notes */}
@@ -349,6 +426,97 @@ export default function ContractDetailPage({
                 <span className="text-muted-foreground">Seats</span>
                 <span>{contract.seats}</span>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Signed Contract */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <FileText className="h-4 w-4" />
+                Signed Contract
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {contract.signed_document ? (
+                <div className="space-y-3">
+                  <div className="flex items-center gap-2 text-sm">
+                    <FileText className="h-4 w-4 text-green-600" />
+                    <span className="truncate font-medium">
+                      {contract.signed_document.file_name}
+                    </span>
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Uploaded {formatDate(contract.signed_document.created_at)}
+                  </p>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={handleViewSignedDoc}
+                    >
+                      <Eye className="mr-1.5 h-3.5 w-3.5" />
+                      View
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        const input = document.createElement("input");
+                        input.type = "file";
+                        input.accept = ".pdf,.jpg,.jpeg,.png";
+                        input.onchange = (e) => {
+                          const file = (e.target as HTMLInputElement).files?.[0];
+                          if (file) handleSignedDocUpload(file);
+                        };
+                        input.click();
+                      }}
+                      disabled={uploadingSignedDoc}
+                    >
+                      <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                      Replace
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div
+                  className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-colors"
+                  onClick={() => {
+                    if (uploadingSignedDoc) return;
+                    const input = document.createElement("input");
+                    input.type = "file";
+                    input.accept = ".pdf,.jpg,.jpeg,.png";
+                    input.onchange = (e) => {
+                      const file = (e.target as HTMLInputElement).files?.[0];
+                      if (file) handleSignedDocUpload(file);
+                    };
+                    input.click();
+                  }}
+                >
+                  {uploadingSignedDoc ? (
+                    <div className="space-y-2">
+                      <Loader2 className="h-6 w-6 mx-auto animate-spin text-muted-foreground" />
+                      <p className="text-xs text-muted-foreground">Uploading...</p>
+                    </div>
+                  ) : (
+                    <div className="space-y-2">
+                      <Upload className="h-6 w-6 mx-auto text-muted-foreground" />
+                      <p className="text-xs text-muted-foreground">
+                        Upload signed contract
+                      </p>
+                      <p className="text-[10px] text-muted-foreground">
+                        PDF, JPG, or PNG (max 10MB)
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+              {!contract.signed_document && contract.status === "active" && (
+                <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3" />
+                  Required before issuing vouchers
+                </p>
+              )}
             </CardContent>
           </Card>
 

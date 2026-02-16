@@ -106,36 +106,34 @@ export async function POST(request: NextRequest) {
       uploaded_by: currentUser.id,
     }));
 
+    // Use upsert with ignoreDuplicates to skip existing codes gracefully
     const { data, error } = await supabase
       .from("voucher_repository")
-      .insert(rows)
+      .upsert(rows, { onConflict: "voucher_code", ignoreDuplicates: true })
       .select("*");
 
     if (error) {
-      // Handle duplicate code errors
-      if (error.code === "23505") {
-        return NextResponse.json(
-          { error: "Some voucher codes already exist in the repository" },
-          { status: 409 }
-        );
-      }
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    if (data && data.length > 0) {
+    const insertedCount = data?.length || 0;
+    const skippedDuplicates = rows.length - insertedCount;
+
+    if (insertedCount > 0) {
       logAudit(supabase, {
         entityType: "voucher",
-        entityId: data[0].id,
+        entityId: data![0].id,
         action: "create",
         performedBy: currentUser.id,
-        changes: { count: { old: null, new: data.length }, source: { old: null, new: "pdf" } },
+        changes: { count: { old: null, new: insertedCount }, source: { old: null, new: "pdf" } },
       });
     }
 
     return NextResponse.json(
       {
-        message: `${data?.length || 0} vouchers uploaded from PDF`,
-        count: data?.length || 0,
+        message: `${insertedCount} vouchers uploaded from PDF`,
+        count: insertedCount,
+        skipped_duplicates: skippedDuplicates,
         detected_validity: parsed.detected_validity,
         applied_validity: validityDays,
         parse_warnings: parsed.errors,
@@ -166,33 +164,35 @@ export async function POST(request: NextRequest) {
     uploaded_by: currentUser.id,
   }));
 
+  // Use upsert with ignoreDuplicates to skip existing codes gracefully
   const { data, error } = await supabase
     .from("voucher_repository")
-    .insert(rows)
+    .upsert(rows, { onConflict: "voucher_code", ignoreDuplicates: true })
     .select("*");
 
   if (error) {
-    if (error.code === "23505") {
-      return NextResponse.json(
-        { error: "Some voucher codes already exist in the repository" },
-        { status: 409 }
-      );
-    }
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  if (data && data.length > 0) {
+  const insertedCount = data?.length || 0;
+  const skippedDuplicates = rows.length - insertedCount;
+
+  if (insertedCount > 0) {
     logAudit(supabase, {
       entityType: "voucher",
-      entityId: data[0].id,
+      entityId: data![0].id,
       action: "create",
       performedBy: currentUser.id,
-      changes: { count: { old: null, new: data.length } },
+      changes: { count: { old: null, new: insertedCount } },
     });
   }
 
   return NextResponse.json(
-    { message: `${data?.length || 0} vouchers uploaded`, count: data?.length || 0 },
+    {
+      message: `${insertedCount} vouchers uploaded`,
+      count: insertedCount,
+      skipped_duplicates: skippedDuplicates,
+    },
     { status: 201 }
   );
 }

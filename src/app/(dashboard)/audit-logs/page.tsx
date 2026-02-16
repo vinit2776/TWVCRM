@@ -11,6 +11,7 @@ import {
   Pencil,
   Trash2,
   Loader2,
+  LogIn,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -35,6 +36,10 @@ const ENTITY_TYPE_LABELS: Record<string, string> = {
   activity: "Activity",
   document: "Document",
   user: "User",
+  contract: "Contract",
+  voucher: "Voucher",
+  usage_charge: "Usage Charge",
+  billing_statement: "Billing Statement",
 };
 
 const ENTITY_TYPE_COLORS: Record<string, string> = {
@@ -45,12 +50,17 @@ const ENTITY_TYPE_COLORS: Record<string, string> = {
   activity: "bg-cyan-100 text-cyan-800",
   document: "bg-gray-100 text-gray-800",
   user: "bg-red-100 text-red-800",
+  contract: "bg-teal-100 text-teal-800",
+  voucher: "bg-indigo-100 text-indigo-800",
+  usage_charge: "bg-orange-100 text-orange-800",
+  billing_statement: "bg-lime-100 text-lime-800",
 };
 
 const ACTION_CONFIG: Record<string, { label: string; icon: React.ComponentType<{ className?: string }>; color: string }> = {
   create: { label: "Created", icon: Plus, color: "bg-emerald-100 text-emerald-800" },
   update: { label: "Updated", icon: Pencil, color: "bg-sky-100 text-sky-800" },
   delete: { label: "Deleted", icon: Trash2, color: "bg-red-100 text-red-800" },
+  login: { label: "Login", icon: LogIn, color: "bg-violet-100 text-violet-800" },
 };
 
 function ChangesDisplay({ changes }: { changes: Record<string, { old: unknown; new: unknown }> }) {

@@ -49,6 +49,13 @@ export async function POST(
     );
   }
 
+  if (!contract.signed_document_id) {
+    return NextResponse.json(
+      { error: "A signed contract document must be uploaded before vouchers can be issued" },
+      { status: 400 }
+    );
+  }
+
   const totalSeats: number = contract.seats;
 
   // Count existing issuances for this contract (not revoked)
