@@ -1,4 +1,4 @@
-import { PDFParse } from "pdf-parse";
+import type { TextItem } from "pdfjs-dist/types/src/display/api";
 
 export interface ParsedVoucherResult {
   vouchers: Array<{ voucher_code: string; metadata: Record<string, unknown> }>;
@@ -8,19 +8,50 @@ export interface ParsedVoucherResult {
 
 /**
  * WiFi system PDFs use a custom font that maps certain characters to
- * Private Use Area (PUA) Unicode codepoints. The dash separator and
- * the digit "0" are encoded as PUA chars in the text layer:
+ * Private Use Area (PUA) Unicode codepoints:
  *
- *   U+E088 (57480) → "-" (dash between the two 5-digit halves)
- *   U+E06B (57451) → "0" (digit zero)
+ *   U+E088 → "-" (dash between the two 5-digit halves)
+ *   U+E06B → "0" (digit zero)
  *
  * This function normalises the raw extracted text so that standard
  * regex matching works on the decoded voucher codes.
  */
 function normalisePdfText(raw: string): string {
-  return raw
-    .replace(/\uE088/g, "-")
-    .replace(/\uE06B/g, "0");
+  return raw.replace(/\uE088/g, "-").replace(/\uE06B/g, "0");
+}
+
+/**
+ * Extracts text from a PDF buffer using pdfjs-dist (pure JS, no native deps).
+ * Uses the legacy build for Node.js / serverless compatibility.
+ */
+async function extractPdfText(data: Uint8Array): Promise<string> {
+  // Dynamic import so the heavy pdfjs-dist bundle is only loaded on demand
+  const pdfjsLib = await import("pdfjs-dist/legacy/build/pdf.mjs");
+
+  const doc = await pdfjsLib.getDocument({
+    data,
+    useWorkerFetch: false,
+    isEvalSupported: false,
+    useSystemFonts: false,
+  }).promise;
+
+  let fullText = "";
+  for (let i = 1; i <= doc.numPages; i++) {
+    const page = await doc.getPage(i);
+    const textContent = await page.getTextContent();
+
+    for (const item of textContent.items) {
+      const textItem = item as TextItem;
+      if (textItem.str !== undefined) {
+        fullText += textItem.str;
+        if (textItem.hasEOL) fullText += "\n";
+      }
+    }
+    fullText += "\n";
+  }
+
+  doc.destroy();
+  return fullText;
 }
 
 /**
@@ -40,10 +71,7 @@ export async function parseVoucherPDF(
   let rawText: string;
 
   try {
-    const pdf = new PDFParse({ data: new Uint8Array(buffer) });
-    const result = await pdf.getText();
-    rawText = result.text;
-    await pdf.destroy();
+    rawText = await extractPdfText(new Uint8Array(buffer));
   } catch (err) {
     return {
       vouchers: [],
@@ -76,13 +104,11 @@ export async function parseVoucherPDF(
   }
 
   // Strategy 2: Line-based fallback — standalone digit strings (5-10 digits)
-  // that didn't already get caught. Formats 10-digit strings as XXXXX-XXXXX.
   const lines = text.split("\n").map((l) => l.trim());
   for (const line of lines) {
     if (/^\d{10}$/.test(line)) {
       codes.add(`${line.slice(0, 5)}-${line.slice(5)}`);
     } else if (/^\d{5,9}$/.test(line)) {
-      // Shorter codes — store raw (text extraction was lossy)
       codes.add(line);
     }
   }
@@ -94,7 +120,6 @@ export async function parseVoucherPDF(
   }
 
   // ── Detect validity period ──
-  // Pattern: "Valid for 1d", "valid for 30d", "Valid for 356d"
   let detected_validity: number | null = null;
   const validityRegex = /valid\s+for\s+(\d+)\s*d/gi;
   const validityMatch = validityRegex.exec(text);
@@ -103,7 +128,6 @@ export async function parseVoucherPDF(
     detected_validity = parseInt(validityMatch[1], 10);
   }
 
-  // Try alternate patterns: "1 Day", "30 Days", "365 days"
   if (detected_validity === null) {
     const altRegex = /(\d+)\s*day(?:s)?/gi;
     const altMatch = altRegex.exec(text);

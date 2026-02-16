@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
-import { parseVoucherPDF } from "@/lib/voucher-pdf-parser";
 import { maskVoucherCode } from "@/lib/utils";
 
 export async function GET(request: NextRequest) {
@@ -81,6 +80,8 @@ export async function POST(request: NextRequest) {
     const arrayBuffer = await file.arrayBuffer();
     const buffer = Buffer.from(arrayBuffer);
 
+    // Dynamic import — keeps pdfjs-dist out of the initial bundle
+    const { parseVoucherPDF } = await import("@/lib/voucher-pdf-parser");
     const parsed = await parseVoucherPDF(buffer);
 
     if (parsed.vouchers.length === 0) {
