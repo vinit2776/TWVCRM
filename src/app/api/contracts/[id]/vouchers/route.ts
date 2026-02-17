@@ -317,7 +317,7 @@ export async function POST(
 }
 
 // ===== Helper: Issue 1 voucher for a specific seat =====
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
+/* eslint-disable @typescript-eslint/no-explicit-any */
 async function findAndIssueOneVoucher(
   supabase: any,
   contract: any,
@@ -326,6 +326,7 @@ async function findAndIssueOneVoucher(
   seatOccupantEmail: string | undefined,
   authUserId: string
 ) {
+/* eslint-enable @typescript-eslint/no-explicit-any */
   const tenureMonths: number = contract.tenure_months || 1;
   const targetDays = tenureMonths * 30;
   const TOLERANCE = 0.20;
