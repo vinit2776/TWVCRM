@@ -158,7 +158,7 @@ export function LeadContractsTab({ leadId }: LeadContractsTabProps) {
                 </thead>
                 <tbody>
                   {contracts.map((c) => (
-                    <tr key={c.id} className="border-b hover:bg-muted/30 transition-colors">
+                    <tr key={c.id} className="border-b hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => router.push(`/contracts/${c.id}`)}>
                       <td className="px-4 py-3 font-mono text-xs">{c.contract_number}</td>
                       <td className="px-4 py-3">
                         <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[c.status]}>
@@ -174,7 +174,7 @@ export function LeadContractsTab({ leadId }: LeadContractsTabProps) {
                       <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
                         {formatDate(c.start_date)} - {formatDate(c.end_date)}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon">

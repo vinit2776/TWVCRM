@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { ChevronLeft, ChevronRight, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -10,17 +11,12 @@ import {
 } from "@/components/ui/select";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
-import { PROPOSAL_STATUSES, PROPOSAL_STATUS_LABELS } from "@/lib/constants";
+import { PROPOSAL_STATUSES, PROPOSAL_STATUS_LABELS, PROPOSAL_STATUS_COLORS } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { Proposal } from "@/types";
 
-const STATUS_COLORS: Record<string, string> = {
-  draft: "bg-gray-100 text-gray-800", sent: "bg-blue-100 text-blue-800",
-  viewed: "bg-purple-100 text-purple-800", accepted: "bg-green-100 text-green-800",
-  rejected: "bg-red-100 text-red-800", expired: "bg-orange-100 text-orange-800",
-};
-
 export default function ProposalsPage() {
+  const router = useRouter();
   const [proposals, setProposals] = useState<(Proposal & { lead?: { id: string; first_name: string; last_name: string } })[]>([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
@@ -68,11 +64,11 @@ export default function ProposalsPage() {
               <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Created</th>
             </tr></thead>
             <tbody>{proposals.map((p) => (
-              <tr key={p.id} className="border-b hover:bg-muted/30 transition-colors">
+              <tr key={p.id} className="border-b hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => router.push(`/proposals/${p.id}`)}>
                 <td className="px-4 py-3 font-mono text-xs">{p.proposal_number}</td>
                 <td className="px-4 py-3 font-medium">{p.title}</td>
-                <td className="px-4 py-3 hidden md:table-cell">{p.lead ? <Link href={`/leads/${p.lead.id}`} className="text-primary hover:underline">{p.lead.first_name} {p.lead.last_name}</Link> : "-"}</td>
-                <td className="px-4 py-3"><Badge variant="secondary" className={STATUS_COLORS[p.status]}>{PROPOSAL_STATUS_LABELS[p.status]}</Badge></td>
+                <td className="px-4 py-3 hidden md:table-cell" onClick={(e) => e.stopPropagation()}>{p.lead ? <Link href={`/leads/${p.lead.id}`} className="text-primary hover:underline">{p.lead.first_name} {p.lead.last_name}</Link> : "-"}</td>
+                <td className="px-4 py-3"><Badge variant="secondary" className={PROPOSAL_STATUS_COLORS[p.status]}>{PROPOSAL_STATUS_LABELS[p.status]}</Badge></td>
                 <td className="px-4 py-3 text-right hidden md:table-cell font-medium">{formatCurrency(p.total_amount)}</td>
                 <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{formatDate(p.created_at)}</td>
               </tr>

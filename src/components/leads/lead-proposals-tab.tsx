@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -19,21 +20,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import {
   PROPOSAL_STATUS_LABELS,
+  PROPOSAL_STATUS_COLORS,
   INVOICE_STATUS_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { generateProposalPDF, generateInvoicePDF } from "@/lib/pdf-generator";
 import { toast } from "sonner";
 import type { Proposal, ProformaInvoice, Lead } from "@/types";
-
-const PROPOSAL_STATUS_COLORS: Record<string, string> = {
-  draft: "bg-gray-100 text-gray-800",
-  sent: "bg-blue-100 text-blue-800",
-  viewed: "bg-purple-100 text-purple-800",
-  accepted: "bg-green-100 text-green-800",
-  rejected: "bg-red-100 text-red-800",
-  expired: "bg-orange-100 text-orange-800",
-};
 
 const INVOICE_STATUS_COLORS: Record<string, string> = {
   draft: "bg-gray-100 text-gray-800",
@@ -48,6 +41,7 @@ interface LeadProposalsTabProps {
 }
 
 export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
+  const router = useRouter();
   const [proposals, setProposals] = useState<(Proposal & { lead?: Lead })[]>([]);
   const [invoices, setInvoices] = useState<(ProformaInvoice & { lead?: Lead })[]>([]);
   const [loading, setLoading] = useState(true);
@@ -237,7 +231,7 @@ export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
                 </thead>
                 <tbody>
                   {proposals.map((p) => (
-                    <tr key={p.id} className="border-b hover:bg-muted/30 transition-colors">
+                    <tr key={p.id} className="border-b hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => router.push(`/proposals/${p.id}`)}>
                       <td className="px-4 py-3 font-mono text-xs">{p.proposal_number}</td>
                       <td className="px-4 py-3 font-medium">{p.title}</td>
                       <td className="px-4 py-3">
@@ -251,7 +245,7 @@ export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
                       <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
                         {formatDate(p.created_at)}
                       </td>
-                      <td className="px-4 py-3">
+                      <td className="px-4 py-3" onClick={(e) => e.stopPropagation()}>
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
                             <Button variant="ghost" size="icon">
@@ -259,6 +253,11 @@ export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
+                            <DropdownMenuItem onClick={() => router.push(`/proposals/${p.id}`)}>
+                              <Eye className="mr-2 h-4 w-4" />
+                              View
+                            </DropdownMenuItem>
+                            <DropdownMenuSeparator />
                             <DropdownMenuItem onClick={() => handleDownloadProposalPDF(p)}>
                               <Download className="mr-2 h-4 w-4" />
                               Download PDF

@@ -153,6 +153,15 @@ export const PROPOSAL_STATUS_LABELS: Record<string, string> = {
   expired: "Expired",
 };
 
+export const PROPOSAL_STATUS_COLORS: Record<string, string> = {
+  draft: "bg-gray-100 text-gray-800",
+  sent: "bg-blue-100 text-blue-800",
+  viewed: "bg-purple-100 text-purple-800",
+  accepted: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+  expired: "bg-orange-100 text-orange-800",
+};
+
 export const INVOICE_STATUSES = ["draft", "sent", "paid", "overdue", "cancelled"] as const;
 
 export const INVOICE_STATUS_LABELS: Record<string, string> = {
