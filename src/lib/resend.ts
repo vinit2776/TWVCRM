@@ -7,3 +7,15 @@ if (!process.env.RESEND_API_KEY) {
 // Use a placeholder key during build to prevent Resend from throwing at construction time.
 // Actual email sends will still fail gracefully without a real key.
 export const resend = new Resend(process.env.RESEND_API_KEY || "re_placeholder");
+
+/**
+ * Centralized "from" address for all outgoing emails.
+ *
+ * Set RESEND_FROM_EMAIL in your env to use a verified custom domain, e.g.:
+ *   RESEND_FROM_EMAIL="The WorkVilla <noreply@theworkvilla.com>"
+ *
+ * If not set, falls back to the Resend test address which can ONLY
+ * deliver to the Resend account owner's email.
+ */
+export const EMAIL_FROM =
+  process.env.RESEND_FROM_EMAIL || "The WorkVilla <onboarding@resend.dev>";

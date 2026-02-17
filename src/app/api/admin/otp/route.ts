@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { resend } from "@/lib/resend";
+import { resend, EMAIL_FROM } from "@/lib/resend";
 import { OTP_EXPIRY_MINUTES, OTP_MAX_ATTEMPTS } from "@/lib/constants";
 
 /**
@@ -74,7 +74,7 @@ export async function POST(request: NextRequest) {
   // Send OTP email to all approvers
   try {
     await resend.emails.send({
-      from: "The WorkVilla <onboarding@resend.dev>",
+      from: EMAIL_FROM,
       to: approverEmails,
       subject: `Voucher Replacement OTP — ${otpCode}`,
       html: `

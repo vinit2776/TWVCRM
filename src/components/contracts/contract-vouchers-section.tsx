@@ -104,6 +104,9 @@ export function ContractVouchersSection({
     seatEmail?: string;
   }>({ open: false, issuanceId: "", seatNumber: 0, voucherCode: "" });
 
+  // Per-seat email drafts for unissued seats
+  const [unissuedEmails, setUnissuedEmails] = useState<Record<number, string>>({});
+
   const fetchIssuances = useCallback(async () => {
     setLoading(true);
     const params = showHistory ? "?show_history=true" : "";
@@ -169,17 +172,24 @@ export function ContractVouchersSection({
 
   // Issue voucher for a specific seat
   const handleIssueSeat = async (seatNumber: number) => {
+    const email = unissuedEmails[seatNumber]?.trim();
+    if (!email) {
+      toast.error("Enter an email address before issuing");
+      return;
+    }
     setIssuingSeat(seatNumber);
     const res = await fetch(`/api/contracts/${contractId}/vouchers`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ seat_number: seatNumber }),
+      body: JSON.stringify({ seat_number: seatNumber, seat_occupant_email: email }),
     });
     setIssuingSeat(null);
 
     if (res.ok) {
       const json = await res.json();
       setMatchInfo({ matched_validity_days: json.matched_validity_days, match_warning: json.match_warning });
+      // Clear the draft email for this seat
+      setUnissuedEmails((prev) => { const next = { ...prev }; delete next[seatNumber]; return next; });
       toast.success(`Voucher issued for seat ${seatNumber}`);
       fetchIssuances();
     } else {
@@ -258,6 +268,12 @@ export function ContractVouchersSection({
       else next.add(id);
       return next;
     });
+  };
+
+  // Mask voucher code: show only last 5 chars
+  const maskCode = (code: string) => {
+    if (!code || code.length <= 5) return code;
+    return "•••••" + code.slice(-5);
   };
 
   const isContractActive = contractStatus === "active";
@@ -420,11 +436,23 @@ export function ContractVouchersSection({
                   const { seatNumber, issuance, isUnissued } = row;
 
                   if (isUnissued) {
+                    const draftEmail = unissuedEmails[seatNumber] || "";
+                    const hasEmail = draftEmail.trim().length > 0;
                     return (
                       <tr key={`empty-${seatNumber}`} className="border-b bg-muted/10">
                         <td className="px-3 py-3"></td>
                         <td className="px-3 py-3 text-center font-medium text-muted-foreground">{seatNumber}</td>
-                        <td className="px-3 py-3 text-muted-foreground text-xs italic" colSpan={4}>Not issued</td>
+                        <td className="px-3 py-3">
+                          <Input
+                            type="email"
+                            value={draftEmail}
+                            onChange={(e) => setUnissuedEmails((prev) => ({ ...prev, [seatNumber]: e.target.value }))}
+                            onKeyDown={(e) => { if (e.key === "Enter" && hasEmail) handleIssueSeat(seatNumber); }}
+                            placeholder="email@example.com"
+                            className="h-7 text-xs w-48"
+                          />
+                        </td>
+                        <td className="px-3 py-3 text-muted-foreground text-xs italic" colSpan={3}>—</td>
                         <td className="px-3 py-3">
                           <Badge variant="outline" className="text-xs text-muted-foreground">Unissued</Badge>
                         </td>
@@ -433,8 +461,9 @@ export function ContractVouchersSection({
                             size="sm"
                             variant="outline"
                             onClick={() => handleIssueSeat(seatNumber)}
-                            disabled={issuingSeat === seatNumber || issuingAll}
+                            disabled={!hasEmail || issuingSeat === seatNumber || issuingAll}
                             className="text-xs h-7"
+                            title={hasEmail ? `Issue voucher for ${draftEmail.trim()}` : "Enter email first"}
                           >
                             {issuingSeat === seatNumber ? (
                               <Loader2 className="h-3 w-3 animate-spin" />
@@ -508,7 +537,7 @@ export function ContractVouchersSection({
                             </div>
                           )}
                         </td>
-                        <td className="px-3 py-3 font-mono text-xs">{issuance.voucher?.voucher_code || "-"}</td>
+                        <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{maskCode(issuance.voucher?.voucher_code || "-")}</td>
                         <td className="px-3 py-3 hidden sm:table-cell">
                           <Badge variant="outline" className="text-xs">{getValidityLabel(issuance.voucher?.validity_days)}</Badge>
                         </td>
@@ -606,7 +635,7 @@ export function ContractVouchersSection({
                         <td className="px-3 py-2"></td>
                         <td className="px-3 py-2 text-center font-medium text-muted-foreground">{issuance.seat_number}</td>
                         <td className="px-3 py-2 text-xs text-muted-foreground">{issuance.seat_occupant_email || "—"}</td>
-                        <td className="px-3 py-2 font-mono text-xs line-through text-muted-foreground">{issuance.voucher?.voucher_code || "-"}</td>
+                        <td className="px-3 py-2 font-mono text-xs line-through text-muted-foreground">{maskCode(issuance.voucher?.voucher_code || "-")}</td>
                         <td className="px-3 py-2 hidden sm:table-cell">
                           <Badge variant="outline" className="text-xs opacity-60">{getValidityLabel(issuance.voucher?.validity_days)}</Badge>
                         </td>

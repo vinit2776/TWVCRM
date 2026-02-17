@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { resend } from "@/lib/resend";
+import { resend, EMAIL_FROM } from "@/lib/resend";
 
 export async function POST(
   request: NextRequest,
@@ -64,7 +64,7 @@ export async function POST(
     const pdfBuffer = Buffer.from(pdfBase64, "base64");
 
     await resend.emails.send({
-      from: "The WorkVilla <onboarding@resend.dev>",
+      from: EMAIL_FROM,
       to: recipients,
       subject: `Proposal ${proposal.proposal_number} - ${proposal.title}`,
       html: `

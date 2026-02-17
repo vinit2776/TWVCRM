@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { resend } from "@/lib/resend";
+import { resend, EMAIL_FROM } from "@/lib/resend";
 
 export async function POST(
   request: NextRequest,
@@ -83,8 +83,8 @@ export async function POST(
       : "—";
 
     try {
-      await resend.emails.send({
-        from: "The WorkVilla <onboarding@resend.dev>",
+      const sendResult = await resend.emails.send({
+        from: EMAIL_FROM,
         to: [recipientEmail],
         subject: `Your WiFi Access Code — The WorkVilla`,
         html: buildPerSeatEmailHTML({
@@ -97,6 +97,16 @@ export async function POST(
           senderName,
         }),
       });
+
+      // Check for Resend API-level errors (e.g. domain not verified)
+      if (sendResult.error) {
+        console.error("Resend API error:", sendResult.error);
+        const msg = sendResult.error.message || "Email delivery failed";
+        return NextResponse.json(
+          { error: `Email failed: ${msg}. If using onboarding@resend.dev, it can only send to the Resend account owner's email. Add a verified domain in Resend dashboard.` },
+          { status: 500 }
+        );
+      }
 
       // Update issuance: set emailed_at and seat_occupant_email
       const now = new Date().toISOString();
@@ -115,7 +125,7 @@ export async function POST(
     } catch (error) {
       console.error("Per-seat email error:", error);
       return NextResponse.json(
-        { error: "Failed to send email. Check RESEND_API_KEY configuration." },
+        { error: "Failed to send email. Check RESEND_API_KEY and domain configuration." },
         { status: 500 }
       );
     }
@@ -164,7 +174,7 @@ export async function POST(
 
       try {
         await resend.emails.send({
-          from: "The WorkVilla <onboarding@resend.dev>",
+          from: EMAIL_FROM,
           to: [email],
           subject: `Your WiFi Access Code — The WorkVilla`,
           html: buildPerSeatEmailHTML({
@@ -253,7 +263,7 @@ export async function POST(
 
   try {
     await resend.emails.send({
-      from: "The WorkVilla <onboarding@resend.dev>",
+      from: EMAIL_FROM,
       to: recipients,
       subject: `Internet Access Vouchers - Contract ${contract.contract_number}`,
       html: `
