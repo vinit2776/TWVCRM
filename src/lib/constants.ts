@@ -275,6 +275,12 @@ export const VOUCHER_VALIDITY_LABELS: Record<number, string> = {
 export const VOUCHER_LOW_STOCK_THRESHOLD = 10;
 
 // ==========================================
+// OTP Configuration
+// ==========================================
+export const OTP_EXPIRY_MINUTES = 10;
+export const OTP_MAX_ATTEMPTS = 5;
+
+// ==========================================
 // Usage Charge Constants
 // ==========================================
 export const USAGE_CHARGE_STATUSES = ["pending", "billed", "waived"] as const;

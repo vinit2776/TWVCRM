@@ -3,7 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
 export async function GET(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
@@ -11,11 +11,21 @@ export async function GET(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data, error } = await supabase
+  const showHistory = request.nextUrl.searchParams.get("show_history") === "true";
+
+  let query = supabase
     .from("voucher_issuances")
     .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
-    .eq("contract_id", id)
-    .order("seat_number", { ascending: true });
+    .eq("contract_id", id);
+
+  // By default only show active issuances; show_history includes revoked/replaced
+  if (!showHistory) {
+    query = query.eq("is_active", true);
+  }
+
+  query = query.order("seat_number", { ascending: true }).order("is_active", { ascending: false });
+
+  const { data, error } = await query;
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
@@ -23,13 +33,23 @@ export async function GET(
 }
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // Parse body — may contain per-seat params
+  let body: { seat_number?: number; seat_occupant_email?: string } = {};
+  try {
+    body = await request.json();
+  } catch {
+    // No body = bulk mode (backward compat)
+  }
+
+  const isPerSeatMode = typeof body.seat_number === "number";
 
   // Fetch the contract — must be active
   const { data: contract, error: contractError } = await supabase
@@ -58,14 +78,61 @@ export async function POST(
 
   const totalSeats: number = contract.seats;
 
-  // Count existing issuances for this contract (not revoked)
+  // Count existing ACTIVE issuances for this contract
   const { count: alreadyIssued } = await supabase
     .from("voucher_issuances")
     .select("*", { count: "exact", head: true })
     .eq("contract_id", id)
-    .is("revoked_at", null);
+    .eq("is_active", true);
 
   const issuedCount = alreadyIssued || 0;
+
+  // Per-seat mode: issue 1 voucher for a specific seat
+  if (isPerSeatMode) {
+    const seatNumber = body.seat_number!;
+
+    if (seatNumber < 1 || seatNumber > totalSeats) {
+      return NextResponse.json(
+        { error: `Seat number must be between 1 and ${totalSeats}` },
+        { status: 400 }
+      );
+    }
+
+    // Check if seat already has an active voucher
+    const { data: existingSeat } = await supabase
+      .from("voucher_issuances")
+      .select("id")
+      .eq("contract_id", id)
+      .eq("seat_number", seatNumber)
+      .eq("is_active", true)
+      .maybeSingle();
+
+    if (existingSeat) {
+      return NextResponse.json(
+        { error: `Seat ${seatNumber} already has an active voucher` },
+        { status: 400 }
+      );
+    }
+
+    // Issue 1 voucher using smart validity matching
+    const voucher = await findAndIssueOneVoucher(supabase, contract, id, seatNumber, body.seat_occupant_email, user.id);
+
+    if ("error" in voucher) {
+      return NextResponse.json({ error: voucher.error }, { status: voucher.status || 400 });
+    }
+
+    return NextResponse.json(
+      {
+        data: [voucher.data],
+        message: "1 voucher issued",
+        matched_validity_days: voucher.matched_validity_days,
+        match_warning: voucher.match_warning,
+      },
+      { status: 201 }
+    );
+  }
+
+  // Bulk mode: issue for all remaining seats
   const remaining = totalSeats - issuedCount;
 
   if (remaining <= 0) {
@@ -76,17 +143,12 @@ export async function POST(
   }
 
   // ===== Smart Validity Matching with Duration Enforcement =====
-  // Calculate target days from contract tenure
   const tenureMonths: number = contract.tenure_months || 1;
   const targetDays = tenureMonths * 30;
-
-  // Tolerance: allow vouchers within 20% of target duration
-  // e.g., 360-day target accepts 288–432 day vouchers (so 365d ✓, 30d ✗)
   const TOLERANCE = 0.20;
   const minAcceptable = Math.floor(targetDays * (1 - TOLERANCE));
   const maxAcceptable = Math.ceil(targetDays * (1 + TOLERANCE));
 
-  // Find available validity groups with counts
   const { data: availabilityGroups, error: groupError } = await supabase
     .from("voucher_repository")
     .select("validity_days")
@@ -97,41 +159,32 @@ export async function POST(
     return NextResponse.json({ error: groupError.message }, { status: 500 });
   }
 
-  // Count available vouchers per validity group
   const groupCounts = new Map<number, number>();
   for (const row of availabilityGroups || []) {
     if (row.validity_days != null) {
-      groupCounts.set(
-        row.validity_days,
-        (groupCounts.get(row.validity_days) || 0) + 1
-      );
+      groupCounts.set(row.validity_days, (groupCounts.get(row.validity_days) || 0) + 1);
     }
   }
 
-  // Helper to format days as a human-readable duration
   const formatDays = (d: number) => {
     if (d % 365 === 0 && d >= 365) return `${d / 365} year${d / 365 > 1 ? "s" : ""} (${d}d)`;
     if (d % 30 === 0 && d >= 30) return `${d / 30} month${d / 30 > 1 ? "s" : ""} (${d}d)`;
     return `${d} day${d !== 1 ? "s" : ""}`;
   };
 
-  // Find the closest validity group WITHIN tolerance that has enough vouchers
   let matchedValidity: number | null = null;
   let matchWarning: string | null = null;
 
   if (groupCounts.size > 0) {
-    // Filter to groups within the acceptable tolerance range
     const withinTolerance = Array.from(groupCounts.entries())
       .filter(([days]) => days >= minAcceptable && days <= maxAcceptable);
 
-    // Sort within-tolerance groups by distance from target, preferring >= target
     const sortedGroups = withinTolerance
       .filter(([, count]) => count >= remaining)
       .sort(([a], [b]) => {
         const distA = Math.abs(a - targetDays);
         const distB = Math.abs(b - targetDays);
         if (distA !== distB) return distA - distB;
-        // Prefer >= target when equidistant
         return b - a;
       });
 
@@ -141,40 +194,25 @@ export async function POST(
         matchWarning = `Exact ${formatDays(targetDays)} vouchers not available. Using closest match: ${formatDays(matchedValidity)} vouchers.`;
       }
     } else if (withinTolerance.length > 0) {
-      // Groups exist within tolerance but none have enough vouchers
-      const bestMatch = withinTolerance.sort(([a], [b]) => {
-        const distA = Math.abs(a - targetDays);
-        const distB = Math.abs(b - targetDays);
-        return distA - distB;
-      })[0];
+      const bestMatch = withinTolerance.sort(([a], [b]) => Math.abs(a - targetDays) - Math.abs(b - targetDays))[0];
       return NextResponse.json(
-        {
-          error: `Not enough ${formatDays(bestMatch[0])} vouchers. Only ${bestMatch[1]} available, need ${remaining}. Upload more vouchers matching this contract's ${tenureMonths}-month tenure.`,
-        },
+        { error: `Not enough ${formatDays(bestMatch[0])} vouchers. Only ${bestMatch[1]} available, need ${remaining}. Upload more vouchers matching this contract's ${tenureMonths}-month tenure.` },
         { status: 400 }
       );
     } else {
-      // No groups within tolerance — list what's available
-      const availableGroups = Array.from(groupCounts.entries())
-        .map(([days, count]) => `${formatDays(days)}: ${count} available`)
-        .join(", ");
+      const availableGroups = Array.from(groupCounts.entries()).map(([days, count]) => `${formatDays(days)}: ${count} available`).join(", ");
       return NextResponse.json(
-        {
-          error: `No vouchers matching the contract duration of ${formatDays(targetDays)} (tolerance: ${formatDays(minAcceptable)}–${formatDays(maxAcceptable)}). Available voucher types: ${availableGroups || "none"}. Please upload vouchers with the correct validity period.`,
-        },
+        { error: `No vouchers matching the contract duration of ${formatDays(targetDays)} (tolerance: ${formatDays(minAcceptable)}–${formatDays(maxAcceptable)}). Available voucher types: ${availableGroups || "none"}. Please upload vouchers with the correct validity period.` },
         { status: 400 }
       );
     }
   } else {
     return NextResponse.json(
-      {
-        error: `No vouchers with a validity period found in the repository. Please upload vouchers matching this contract's ${tenureMonths}-month (${formatDays(targetDays)}) tenure.`,
-      },
+      { error: `No vouchers with a validity period found in the repository. Please upload vouchers matching this contract's ${tenureMonths}-month (${formatDays(targetDays)}) tenure.` },
       { status: 400 }
     );
   }
 
-  // Build the query — matchedValidity is guaranteed non-null here
   const { data: availableVouchers, error: fetchError } = await supabase
     .from("voucher_repository")
     .select("*")
@@ -189,14 +227,11 @@ export async function POST(
 
   if (!availableVouchers || availableVouchers.length < remaining) {
     return NextResponse.json(
-      {
-        error: `Not enough vouchers available. Need ${remaining}, but only ${availableVouchers?.length || 0} available in the ${formatDays(matchedValidity)} group.`,
-      },
+      { error: `Not enough vouchers available. Need ${remaining}, but only ${availableVouchers?.length || 0} available in the ${formatDays(matchedValidity)} group.` },
       { status: 400 }
     );
   }
 
-  // Get user's DB ID
   const { data: dbUser } = await supabase
     .from("users")
     .select("id")
@@ -206,25 +241,34 @@ export async function POST(
   const now = new Date().toISOString();
   const issuedVouchers = [];
 
-  for (let i = 0; i < remaining; i++) {
-    const voucher = availableVouchers[i];
-    const seatNumber = issuedCount + i + 1;
+  // Find which seat numbers are already active
+  const { data: activeIssuances } = await supabase
+    .from("voucher_issuances")
+    .select("seat_number")
+    .eq("contract_id", id)
+    .eq("is_active", true);
 
-    // Update voucher_repository: status -> "issued"
+  const activeSeatNumbers = new Set((activeIssuances || []).map((i) => i.seat_number));
+
+  // Find unfilled seat numbers
+  const unfilledSeats: number[] = [];
+  for (let s = 1; s <= totalSeats; s++) {
+    if (!activeSeatNumbers.has(s)) unfilledSeats.push(s);
+  }
+
+  for (let i = 0; i < Math.min(remaining, unfilledSeats.length); i++) {
+    const voucher = availableVouchers[i];
+    const seatNumber = unfilledSeats[i];
+
     const { error: updateError } = await supabase
       .from("voucher_repository")
-      .update({
-        status: "issued",
-        issued_at: now,
-        expires_at: contract.end_date,
-      })
+      .update({ status: "issued", issued_at: now, expires_at: contract.end_date })
       .eq("id", voucher.id);
 
     if (updateError) {
       return NextResponse.json({ error: updateError.message }, { status: 500 });
     }
 
-    // Insert into voucher_issuances
     const { data: issuance, error: insertError } = await supabase
       .from("voucher_issuances")
       .insert({
@@ -235,6 +279,7 @@ export async function POST(
         issued_by: dbUser?.id,
         valid_from: contract.start_date,
         valid_until: contract.end_date,
+        is_active: true,
       })
       .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
       .single();
@@ -246,7 +291,6 @@ export async function POST(
     issuedVouchers.push(issuance);
   }
 
-  // Audit log
   if (dbUser?.id) {
     logAudit(supabase, {
       entityType: "voucher",
@@ -270,4 +314,136 @@ export async function POST(
     },
     { status: 201 }
   );
+}
+
+// ===== Helper: Issue 1 voucher for a specific seat =====
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function findAndIssueOneVoucher(
+  supabase: any,
+  contract: any,
+  contractId: string,
+  seatNumber: number,
+  seatOccupantEmail: string | undefined,
+  authUserId: string
+) {
+  const tenureMonths: number = contract.tenure_months || 1;
+  const targetDays = tenureMonths * 30;
+  const TOLERANCE = 0.20;
+  const minAcceptable = Math.floor(targetDays * (1 - TOLERANCE));
+  const maxAcceptable = Math.ceil(targetDays * (1 + TOLERANCE));
+
+  const formatDays = (d: number) => {
+    if (d % 365 === 0 && d >= 365) return `${d / 365} year${d / 365 > 1 ? "s" : ""} (${d}d)`;
+    if (d % 30 === 0 && d >= 30) return `${d / 30} month${d / 30 > 1 ? "s" : ""} (${d}d)`;
+    return `${d} day${d !== 1 ? "s" : ""}`;
+  };
+
+  // Find available voucher with matching validity
+  const { data: availabilityGroups } = await supabase
+    .from("voucher_repository")
+    .select("validity_days")
+    .eq("status", "available")
+    .not("validity_days", "is", null);
+
+  const groupCounts = new Map<number, number>();
+  for (const row of availabilityGroups || []) {
+    if (row.validity_days != null) {
+      groupCounts.set(row.validity_days, (groupCounts.get(row.validity_days) || 0) + 1);
+    }
+  }
+
+  if (groupCounts.size === 0) {
+    return { error: `No vouchers available. Upload vouchers matching ${tenureMonths}-month tenure.`, status: 400 };
+  }
+
+  const withinTolerance = Array.from(groupCounts.entries())
+    .filter(([days]) => days >= minAcceptable && days <= maxAcceptable);
+
+  const sortedGroups = withinTolerance
+    .filter(([, count]) => count >= 1)
+    .sort(([a], [b]) => {
+      const distA = Math.abs(a - targetDays);
+      const distB = Math.abs(b - targetDays);
+      if (distA !== distB) return distA - distB;
+      return b - a;
+    });
+
+  if (sortedGroups.length === 0) {
+    return { error: `No compatible vouchers for ${formatDays(targetDays)} tenure.`, status: 400 };
+  }
+
+  const matchedValidity = sortedGroups[0][0];
+  const matchWarning = matchedValidity !== targetDays
+    ? `Using closest match: ${formatDays(matchedValidity)} vouchers.`
+    : null;
+
+  // Grab 1 voucher
+  const { data: vouchers } = await supabase
+    .from("voucher_repository")
+    .select("*")
+    .eq("status", "available")
+    .eq("validity_days", matchedValidity)
+    .order("uploaded_at", { ascending: true })
+    .limit(1);
+
+  if (!vouchers || vouchers.length === 0) {
+    return { error: "No vouchers available", status: 400 };
+  }
+
+  const voucher = vouchers[0];
+  const now = new Date().toISOString();
+
+  // Get DB user
+  const { data: dbUser } = await supabase
+    .from("users")
+    .select("id")
+    .eq("auth_id", authUserId)
+    .single();
+
+  // Mark voucher as issued
+  const { error: updateError } = await supabase
+    .from("voucher_repository")
+    .update({ status: "issued", issued_at: now, expires_at: contract.end_date })
+    .eq("id", voucher.id);
+
+  if (updateError) {
+    return { error: updateError.message, status: 500 };
+  }
+
+  // Create issuance
+  const { data: issuance, error: insertError } = await supabase
+    .from("voucher_issuances")
+    .insert({
+      contract_id: contractId,
+      voucher_id: voucher.id,
+      lead_id: contract.lead_id,
+      seat_number: seatNumber,
+      issued_by: dbUser?.id,
+      valid_from: contract.start_date,
+      valid_until: contract.end_date,
+      seat_occupant_email: seatOccupantEmail || null,
+      is_active: true,
+    })
+    .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
+    .single();
+
+  if (insertError) {
+    return { error: insertError.message, status: 500 };
+  }
+
+  // Audit
+  if (dbUser?.id) {
+    logAudit(supabase, {
+      entityType: "voucher",
+      entityId: contractId,
+      action: "create",
+      performedBy: dbUser.id,
+      changes: {
+        seat_number: { old: null, new: seatNumber },
+        seat_occupant_email: { old: null, new: seatOccupantEmail || null },
+      },
+    });
+  }
+
+  return { data: issuance, matched_validity_days: matchedValidity, match_warning: matchWarning };
 }

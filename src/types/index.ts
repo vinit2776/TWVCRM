@@ -379,6 +379,24 @@ export interface VoucherIssuance {
   valid_until: string;
   revoked_at?: string;
   revoke_reason?: string;
+  // Per-seat email tracking
+  seat_occupant_email?: string;
+  emailed_at?: string;
+  is_active: boolean;
+  replaces_issuance_id?: string;
+}
+
+export interface AdminOtp {
+  id: string;
+  otp_code: string;
+  purpose: string;
+  reference_id: string;
+  requested_by: string;
+  verified_at?: string;
+  expires_at: string;
+  is_used: boolean;
+  attempts: number;
+  created_at: string;
 }
 
 // ==========================================
