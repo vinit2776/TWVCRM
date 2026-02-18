@@ -73,7 +73,7 @@ export async function POST(request: NextRequest) {
 
   // Send OTP email to all approvers
   try {
-    await resend.emails.send({
+    const sendResult = await resend.emails.send({
       from: EMAIL_FROM,
       to: approverEmails,
       subject: `Voucher Replacement OTP — ${otpCode}`,
@@ -102,9 +102,20 @@ export async function POST(request: NextRequest) {
         </div>
       `,
     });
+
+    if (sendResult.error) {
+      console.error("OTP Resend API error:", sendResult.error);
+      return NextResponse.json(
+        { error: `OTP created but email failed: ${sendResult.error.message}. Recipients: ${approverEmails.join(", ")}` },
+        { status: 500 }
+      );
+    }
   } catch (error) {
     console.error("OTP email send error:", error);
-    // OTP is still stored — admin can retrieve it from DB if email fails
+    return NextResponse.json(
+      { error: "OTP created but email delivery failed. Check Resend configuration." },
+      { status: 500 }
+    );
   }
 
   return NextResponse.json({
