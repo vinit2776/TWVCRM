@@ -63,6 +63,12 @@ export function InvoiceForm({
       return;
     }
 
+    const invalidQty = validItems.find((item) => item.quantity <= 0);
+    if (invalidQty) {
+      toast.error("Each line item must have a quantity of at least 1");
+      return;
+    }
+
     setSubmitting(true);
 
     const body = {
@@ -71,9 +77,9 @@ export function InvoiceForm({
       title: title.trim(),
       items: validItems.map((item) => ({
         description: item.description,
-        quantity: item.quantity,
+        quantity: Math.max(1, item.quantity),
         unit_price: item.unit_price,
-        total: item.quantity * item.unit_price,
+        total: Math.max(1, item.quantity) * item.unit_price,
       })),
       tax_percentage: taxPercentage,
       discount_percentage: discountPercentage,

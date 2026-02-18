@@ -42,7 +42,8 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const result = createProposalSchema.safeParse(body);
   if (!result.success) {
-    return NextResponse.json({ error: "Validation failed", details: result.error.issues }, { status: 400 });
+    const fieldErrors = result.error.issues.map(i => `${i.path.join(".")}: ${i.message}`).join("; ");
+    return NextResponse.json({ error: `Validation failed: ${fieldErrors}`, details: result.error.issues }, { status: 400 });
   }
 
   const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
