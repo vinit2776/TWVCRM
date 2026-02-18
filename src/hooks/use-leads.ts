@@ -12,6 +12,7 @@ interface UseLeadsOptions {
   search?: string;
   assigned_to?: string;
   rating?: string;
+  location_id?: string;
   sort_by?: string;
   sort_order?: "asc" | "desc";
 }
@@ -39,6 +40,7 @@ export function useLeads(options: UseLeadsOptions = {}) {
     if (options.search) params.set("search", options.search);
     if (options.assigned_to) params.set("assigned_to", options.assigned_to);
     if (options.rating) params.set("rating", options.rating);
+    if (options.location_id) params.set("location_id", options.location_id);
     if (options.sort_by) params.set("sort_by", options.sort_by);
     if (options.sort_order) params.set("sort_order", options.sort_order);
 
@@ -62,6 +64,7 @@ export function useLeads(options: UseLeadsOptions = {}) {
     options.search,
     options.assigned_to,
     options.rating,
+    options.location_id,
     options.sort_by,
     options.sort_order,
   ]);

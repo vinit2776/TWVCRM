@@ -1,18 +1,23 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { VOUCHER_LOW_STOCK_THRESHOLD } from "@/lib/constants";
 import { getValidityLabel } from "@/lib/utils";
 import type { VoucherStockLevel } from "@/types";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const locationId = request.nextUrl.searchParams.get("location_id");
+
   // Fetch all vouchers and group in JS (simple, no RPC needed)
-  const { data: allVouchers, error: fetchError } = await supabase
+  let query = supabase
     .from("voucher_repository")
     .select("validity_days, status");
+  if (locationId) query = query.eq("location_id", locationId);
+
+  const { data: allVouchers, error: fetchError } = await query;
 
   if (fetchError) {
     return NextResponse.json({ error: fetchError.message }, { status: 500 });

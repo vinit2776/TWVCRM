@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/shared/loading-skeleton";
 import { UploadVouchersDialog } from "@/components/vouchers/upload-vouchers-dialog";
 import { VoucherInventoryCard } from "@/components/vouchers/voucher-inventory-card";
 import { LowStockAlert } from "@/components/vouchers/low-stock-alert";
+import { LocationSelector } from "@/components/shared/location-selector";
 import {
   VOUCHER_STATUSES,
   VOUCHER_STATUS_LABELS,
@@ -33,6 +34,7 @@ interface Voucher {
   uploaded_at: string;
   issued_at?: string;
   created_at: string;
+  location?: { id: string; name: string; code: string } | null;
 }
 
 type TabType = "inventory" | "all";
@@ -54,6 +56,9 @@ export default function VouchersPage() {
   const [validityFilter, setValidityFilter] = useState("");
   const [search, setSearch] = useState("");
 
+  // Location filter (shared across tabs)
+  const [locationFilter, setLocationFilter] = useState<string | null>(null);
+
   // Upload dialog
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadPreselectedValidity, setUploadPreselectedValidity] = useState<number | undefined>();
@@ -61,14 +66,16 @@ export default function VouchersPage() {
   // Fetch inventory
   const fetchInventory = useCallback(async () => {
     setInventoryLoading(true);
-    const res = await fetch("/api/vouchers/inventory");
+    const params = new URLSearchParams();
+    if (locationFilter) params.set("location_id", locationFilter);
+    const res = await fetch(`/api/vouchers/inventory?${params}`);
     if (res.ok) {
       const json = await res.json();
       setInventory(json.data || []);
       setLowStockAlerts(json.low_stock_alerts || []);
     }
     setInventoryLoading(false);
-  }, []);
+  }, [locationFilter]);
 
   // Fetch all vouchers
   const fetchVouchers = useCallback(async () => {
@@ -78,6 +85,7 @@ export default function VouchersPage() {
     if (validityFilter) {
       params.set("validity_days", validityFilter);
     }
+    if (locationFilter) params.set("location_id", locationFilter);
     if (search.trim()) params.set("search", search.trim());
     const res = await fetch(`/api/vouchers?${params}`);
     if (res.ok) {
@@ -86,7 +94,7 @@ export default function VouchersPage() {
       setPagination(json.pagination || { page: 1, limit: 25, total: 0, totalPages: 0 });
     }
     setLoading(false);
-  }, [page, statusFilter, validityFilter, search]);
+  }, [page, statusFilter, validityFilter, locationFilter, search]);
 
   useEffect(() => {
     if (activeTab === "inventory") {
@@ -100,10 +108,11 @@ export default function VouchersPage() {
     setSearch("");
     setStatusFilter("");
     setValidityFilter("");
+    setLocationFilter(null);
     setPage(1);
   };
 
-  const hasFilters = search || statusFilter || validityFilter;
+  const hasFilters = search || statusFilter || validityFilter || locationFilter;
 
   const handleRefill = (validityDays: number | null) => {
     setUploadPreselectedValidity(validityDays ?? undefined);
@@ -125,10 +134,18 @@ export default function VouchersPage() {
             Manage WiFi voucher inventory and issuance
           </p>
         </div>
-        <Button onClick={() => { setUploadPreselectedValidity(undefined); setUploadOpen(true); }}>
-          <Upload className="mr-2 h-4 w-4" />
-          Upload Vouchers
-        </Button>
+        <div className="flex items-center gap-2">
+          <LocationSelector
+            value={locationFilter}
+            onValueChange={(val) => { setLocationFilter(val); setPage(1); }}
+            includeAllOption
+            placeholder="All Locations"
+          />
+          <Button onClick={() => { setUploadPreselectedValidity(undefined); setUploadOpen(true); }}>
+            <Upload className="mr-2 h-4 w-4" />
+            Upload Vouchers
+          </Button>
+        </div>
       </div>
 
       {/* Tabs */}
@@ -251,7 +268,7 @@ export default function VouchersPage() {
                     <th className="px-4 py-3 text-left font-medium">Voucher Code</th>
                     <th className="px-4 py-3 text-left font-medium">Status</th>
                     <th className="px-4 py-3 text-left font-medium">Validity</th>
-                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Metadata</th>
+                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Location</th>
                     <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Uploaded</th>
                     <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Issued</th>
                   </tr>
@@ -270,15 +287,8 @@ export default function VouchersPage() {
                           {getValidityLabel(v.validity_days)}
                         </Badge>
                       </td>
-                      <td className="px-4 py-3 hidden md:table-cell">
-                        {v.metadata && Object.keys(v.metadata).length > 0 ? (
-                          <span className="text-xs text-muted-foreground font-mono">
-                            {JSON.stringify(v.metadata).slice(0, 60)}
-                            {JSON.stringify(v.metadata).length > 60 ? "..." : ""}
-                          </span>
-                        ) : (
-                          <span className="text-muted-foreground">-</span>
-                        )}
+                      <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
+                        {v.location?.name || "—"}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
                         {formatDate(v.uploaded_at || v.created_at)}
@@ -316,6 +326,7 @@ export default function VouchersPage() {
         onOpenChange={setUploadOpen}
         onSuccess={handleUploadSuccess}
         preselectedValidity={uploadPreselectedValidity}
+        preselectedLocationId={locationFilter || undefined}
       />
     </div>
   );

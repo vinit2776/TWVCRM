@@ -19,7 +19,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("leads")
-    .select("*, assigned_user:users!leads_assigned_to_fkey(*)")
+    .select("*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code)")
     .eq("id", id)
     .single();
 
@@ -71,7 +71,7 @@ export async function PATCH(
     .from("leads")
     .update(updateData)
     .eq("id", id)
-    .select("*, assigned_user:users!leads_assigned_to_fkey(*)")
+    .select("*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code)")
     .single();
 
   if (error) {

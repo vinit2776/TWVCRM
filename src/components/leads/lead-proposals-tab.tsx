@@ -38,9 +38,10 @@ const INVOICE_STATUS_COLORS: Record<string, string> = {
 
 interface LeadProposalsTabProps {
   leadId: string;
+  leadLocationId?: string;
 }
 
-export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
+export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabProps) {
   const router = useRouter();
   const [proposals, setProposals] = useState<(Proposal & { lead?: Lead })[]>([]);
   const [invoices, setInvoices] = useState<(ProformaInvoice & { lead?: Lead })[]>([]);
@@ -413,6 +414,7 @@ export function LeadProposalsTab({ leadId }: LeadProposalsTabProps) {
       {/* Dialogs */}
       <ProposalForm
         leadId={leadId}
+        leadLocationId={leadLocationId}
         open={proposalFormOpen}
         onOpenChange={setProposalFormOpen}
         onSuccess={handleSuccess}

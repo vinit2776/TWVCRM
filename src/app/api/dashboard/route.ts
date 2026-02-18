@@ -1,69 +1,101 @@
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const locationId = request.nextUrl.searchParams.get("location_id");
+
+  // If filtering by location, get lead IDs for that location first
+  let locationLeadIds: string[] | null = null;
+  if (locationId) {
+    const { data: locationLeads } = await supabase
+      .from("leads")
+      .select("id")
+      .eq("location_id", locationId);
+    locationLeadIds = (locationLeads || []).map((l) => l.id);
+  }
+
   // Pipeline counts
-  const { data: pipeline } = await supabase
-    .from("leads")
-    .select("status")
-    .then(({ data }) => {
-      const counts: Record<string, number> = {};
-      data?.forEach((l) => {
-        counts[l.status] = (counts[l.status] || 0) + 1;
-      });
-      return {
-        data: Object.entries(counts).map(([status, count]) => ({ status, count })),
-      };
-    });
+  let pipelineQuery = supabase.from("leads").select("status");
+  if (locationId) pipelineQuery = pipelineQuery.eq("location_id", locationId);
+  const { data: pipelineData } = await pipelineQuery;
+
+  const pipelineCounts: Record<string, number> = {};
+  pipelineData?.forEach((l) => {
+    pipelineCounts[l.status] = (pipelineCounts[l.status] || 0) + 1;
+  });
+  const pipeline = Object.entries(pipelineCounts).map(([status, count]) => ({ status, count }));
 
   // Total leads
-  const { count: totalLeads } = await supabase
-    .from("leads")
-    .select("*", { count: "exact", head: true });
+  let totalQuery = supabase.from("leads").select("*", { count: "exact", head: true });
+  if (locationId) totalQuery = totalQuery.eq("location_id", locationId);
+  const { count: totalLeads } = await totalQuery;
 
   // Won/lost counts
-  const { count: wonCount } = await supabase
-    .from("leads")
-    .select("*", { count: "exact", head: true })
-    .eq("status", "won");
+  let wonQuery = supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "won");
+  if (locationId) wonQuery = wonQuery.eq("location_id", locationId);
+  const { count: wonCount } = await wonQuery;
 
-  const { count: lostCount } = await supabase
-    .from("leads")
-    .select("*", { count: "exact", head: true })
-    .eq("status", "lost");
+  let lostQuery = supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "lost");
+  if (locationId) lostQuery = lostQuery.eq("location_id", locationId);
+  const { count: lostCount } = await lostQuery;
 
-  // Tasks due today
+  // Tasks due today — filter by lead_id if location is set
   const today = new Date().toISOString().split("T")[0];
-  const { count: tasksDueToday } = await supabase
+  let tasksDueTodayQuery = supabase
     .from("tasks")
     .select("*", { count: "exact", head: true })
     .eq("due_date", today)
     .neq("status", "done");
+  if (locationId && locationLeadIds && locationLeadIds.length > 0) {
+    tasksDueTodayQuery = tasksDueTodayQuery.in("lead_id", locationLeadIds);
+  } else if (locationId) {
+    // No leads for this location, so 0 tasks
+    tasksDueTodayQuery = tasksDueTodayQuery.eq("lead_id", "00000000-0000-0000-0000-000000000000");
+  }
+  const { count: tasksDueToday } = await tasksDueTodayQuery;
 
   // Tasks overdue
-  const { count: tasksOverdue } = await supabase
+  let tasksOverdueQuery = supabase
     .from("tasks")
     .select("*", { count: "exact", head: true })
     .lt("due_date", today)
     .neq("status", "done");
+  if (locationId && locationLeadIds && locationLeadIds.length > 0) {
+    tasksOverdueQuery = tasksOverdueQuery.in("lead_id", locationLeadIds);
+  } else if (locationId) {
+    tasksOverdueQuery = tasksOverdueQuery.eq("lead_id", "00000000-0000-0000-0000-000000000000");
+  }
+  const { count: tasksOverdue } = await tasksOverdueQuery;
 
-  // Recent activities
-  const { data: recentActivities } = await supabase
+  // Recent activities — filter by lead_id if location is set
+  let activitiesQuery = supabase
     .from("activities")
     .select("*, creator:users!activities_created_by_fkey(full_name), lead:leads!activities_lead_id_fkey(first_name, last_name)")
     .order("created_at", { ascending: false })
     .limit(10);
+  if (locationId && locationLeadIds && locationLeadIds.length > 0) {
+    activitiesQuery = activitiesQuery.in("lead_id", locationLeadIds);
+  } else if (locationId) {
+    activitiesQuery = activitiesQuery.eq("lead_id", "00000000-0000-0000-0000-000000000000");
+  }
+  const { data: recentActivities } = await activitiesQuery;
 
   // Pending follow-ups
-  const { count: pendingFollowUps } = await supabase
+  let followUpsQuery = supabase
     .from("activities")
     .select("*", { count: "exact", head: true })
     .eq("is_follow_up_done", false)
     .not("follow_up_date", "is", null);
+  if (locationId && locationLeadIds && locationLeadIds.length > 0) {
+    followUpsQuery = followUpsQuery.in("lead_id", locationLeadIds);
+  } else if (locationId) {
+    followUpsQuery = followUpsQuery.eq("lead_id", "00000000-0000-0000-0000-000000000000");
+  }
+  const { count: pendingFollowUps } = await followUpsQuery;
 
   const total = totalLeads || 0;
   const won = wonCount || 0;

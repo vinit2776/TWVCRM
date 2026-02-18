@@ -17,6 +17,7 @@ import { StatusBadge, RatingBadge } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { useLeads } from "@/hooks/use-leads";
+import { LocationSelector } from "@/components/shared/location-selector";
 import {
   LEAD_STATUSES,
   LEAD_STATUS_LABELS,
@@ -31,6 +32,7 @@ export default function LeadsPage() {
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<string>("");
   const [sourceFilter, setSourceFilter] = useState<string>("");
+  const [locationFilter, setLocationFilter] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState("");
 
   const { data: leads, pagination, loading } = useLeads({
@@ -38,6 +40,7 @@ export default function LeadsPage() {
     search,
     status: statusFilter || undefined,
     source: sourceFilter || undefined,
+    location_id: locationFilter || undefined,
   });
 
   const handleSearch = () => {
@@ -114,6 +117,17 @@ export default function LeadsPage() {
               ))}
             </SelectContent>
           </Select>
+          <div className="w-[180px]">
+            <LocationSelector
+              value={locationFilter}
+              onValueChange={(id) => {
+                setLocationFilter(id);
+                setPage(1);
+              }}
+              includeAllOption
+              placeholder="All Locations"
+            />
+          </div>
         </div>
       </div>
 
@@ -146,6 +160,9 @@ export default function LeadsPage() {
                 <th className="px-4 py-3 text-left font-medium">Status</th>
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">
                   Source
+                </th>
+                <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">
+                  Location
                 </th>
                 <th className="px-4 py-3 text-left font-medium hidden xl:table-cell">
                   Rating
@@ -185,6 +202,9 @@ export default function LeadsPage() {
                   </td>
                   <td className="px-4 py-3 hidden md:table-cell">
                     {LEAD_SOURCE_LABELS[lead.source] || lead.source}
+                  </td>
+                  <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
+                    {lead.location?.name || "—"}
                   </td>
                   <td className="px-4 py-3 hidden xl:table-cell">
                     <RatingBadge rating={lead.rating} />

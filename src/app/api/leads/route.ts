@@ -21,6 +21,7 @@ export async function GET(request: NextRequest) {
   const search = searchParams.get("search");
   const assigned_to = searchParams.get("assigned_to");
   const rating = searchParams.get("rating");
+  const location_id = searchParams.get("location_id");
   const sort_by = searchParams.get("sort_by") || "created_at";
   const sort_order = searchParams.get("sort_order") || "desc";
 
@@ -28,7 +29,7 @@ export async function GET(request: NextRequest) {
 
   let query = supabase
     .from("leads")
-    .select("*, assigned_user:users!leads_assigned_to_fkey(*)", {
+    .select("*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code)", {
       count: "exact",
     });
 
@@ -36,6 +37,7 @@ export async function GET(request: NextRequest) {
   if (source) query = query.eq("source", source);
   if (assigned_to) query = query.eq("assigned_to", assigned_to);
   if (rating) query = query.eq("rating", rating);
+  if (location_id) query = query.eq("location_id", location_id);
   if (search) query = query.or(
     `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,company.ilike.%${search}%`
   );

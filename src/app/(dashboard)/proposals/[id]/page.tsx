@@ -146,7 +146,12 @@ export default function ProposalDetailPage({
                 {PROPOSAL_STATUS_LABELS[proposal.status]}
               </Badge>
             </div>
-            <p className="text-sm text-muted-foreground">{proposal.title}</p>
+            <p className="text-sm text-muted-foreground">
+              {proposal.title}
+              {proposal.location && (
+                <span className="ml-2 inline-flex items-center gap-1 text-xs bg-muted px-1.5 py-0.5 rounded">{proposal.location.name}</span>
+              )}
+            </p>
           </div>
         </div>
         <div className="flex flex-wrap gap-2">

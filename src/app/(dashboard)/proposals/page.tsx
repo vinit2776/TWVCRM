@@ -60,6 +60,7 @@ export default function ProposalsPage() {
               <th className="px-4 py-3 text-left font-medium">Title</th>
               <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Lead</th>
               <th className="px-4 py-3 text-left font-medium">Status</th>
+              <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Location</th>
               <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Amount</th>
               <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Created</th>
             </tr></thead>
@@ -69,6 +70,7 @@ export default function ProposalsPage() {
                 <td className="px-4 py-3 font-medium">{p.title}</td>
                 <td className="px-4 py-3 hidden md:table-cell" onClick={(e) => e.stopPropagation()}>{p.lead ? <Link href={`/leads/${p.lead.id}`} className="text-primary hover:underline">{p.lead.first_name} {p.lead.last_name}</Link> : "-"}</td>
                 <td className="px-4 py-3"><Badge variant="secondary" className={PROPOSAL_STATUS_COLORS[p.status]}>{PROPOSAL_STATUS_LABELS[p.status]}</Badge></td>
+                <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{p.location?.name || "—"}</td>
                 <td className="px-4 py-3 text-right hidden md:table-cell font-medium">{formatCurrency(p.total_amount)}</td>
                 <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{formatDate(p.created_at)}</td>
               </tr>

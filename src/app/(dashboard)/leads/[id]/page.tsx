@@ -241,8 +241,8 @@ export default function LeadDetailPage({
                         value={lead.seat_capacity?.toString()}
                       />
                       <InfoRow
-                        label="Preferred Location"
-                        value={lead.preferred_location}
+                        label="Location"
+                        value={lead.location?.name || lead.preferred_location}
                       />
                       <InfoRow
                         label="Working Hours"
@@ -443,7 +443,7 @@ export default function LeadDetailPage({
         </TabsContent>
 
         <TabsContent value="proposals" className="mt-4">
-          <LeadProposalsTab leadId={id} />
+          <LeadProposalsTab leadId={id} leadLocationId={lead?.location_id} />
         </TabsContent>
 
         <TabsContent value="contracts" className="mt-4">

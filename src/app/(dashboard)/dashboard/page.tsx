@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import {
   Users,
@@ -17,6 +17,7 @@ import {
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/shared/loading-skeleton";
+import { LocationSelector } from "@/components/shared/location-selector";
 import { LEAD_STATUS_LABELS, ACTIVITY_TYPE_LABELS } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
 import type { DashboardStats } from "@/types";
@@ -28,18 +29,23 @@ const ACTIVITY_ICONS: Record<string, React.ComponentType<{ className?: string }>
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [loading, setLoading] = useState(true);
+  const [locationFilter, setLocationFilter] = useState<string | null>(null);
+
+  const fetchStats = useCallback(async () => {
+    setLoading(true);
+    const params = new URLSearchParams();
+    if (locationFilter) params.set("location_id", locationFilter);
+    const res = await fetch(`/api/dashboard?${params}`);
+    if (res.ok) {
+      const json = await res.json();
+      setStats(json.data);
+    }
+    setLoading(false);
+  }, [locationFilter]);
 
   useEffect(() => {
-    const fetchStats = async () => {
-      const res = await fetch("/api/dashboard");
-      if (res.ok) {
-        const json = await res.json();
-        setStats(json.data);
-      }
-      setLoading(false);
-    };
     fetchStats();
-  }, []);
+  }, [fetchStats]);
 
   if (loading) {
     return (
@@ -58,7 +64,15 @@ export default function DashboardPage() {
 
   return (
     <div className="space-y-6">
-      <h1 className="text-2xl font-bold">Dashboard</h1>
+      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+        <h1 className="text-2xl font-bold">Dashboard</h1>
+        <LocationSelector
+          value={locationFilter}
+          onValueChange={setLocationFilter}
+          includeAllOption
+          placeholder="All Locations"
+        />
+      </div>
 
       {/* Stat Cards */}
       <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">

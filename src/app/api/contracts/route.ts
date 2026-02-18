@@ -20,7 +20,7 @@ export async function GET(request: NextRequest) {
 
   let query = supabase
     .from("contracts")
-    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email)", { count: "exact" });
+    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email), location:locations!contracts_location_id_fkey(id, name, code)", { count: "exact" });
 
   if (status) query = query.eq("status", status);
   if (leadId) query = query.eq("lead_id", leadId);
@@ -107,6 +107,7 @@ export async function POST(request: NextRequest) {
       seats: result.data.seats,
       terms_and_conditions: result.data.terms_and_conditions,
       notes: result.data.notes,
+      location_id: result.data.location_id || proposal.location_id || null,
       created_by: dbUser?.id,
     })
     .select("*")

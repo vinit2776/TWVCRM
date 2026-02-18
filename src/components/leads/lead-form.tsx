@@ -27,6 +27,7 @@ import {
 import type { Lead } from "@/types";
 import { useState } from "react";
 import { Loader2 } from "lucide-react";
+import { LocationSelector } from "@/components/shared/location-selector";
 
 interface LeadFormProps {
   lead?: Lead;
@@ -65,6 +66,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
       workspace_type: lead?.workspace_type || undefined,
       seat_capacity: lead?.seat_capacity || undefined,
       preferred_location: lead?.preferred_location || "",
+      location_id: lead?.location_id || "",
       working_hours: lead?.working_hours || "",
       budget_per_seat: lead?.budget_per_seat || undefined,
       street: lead?.street || "",
@@ -308,11 +310,15 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="preferred_location">Preferred Location</Label>
-            <Input
-              id="preferred_location"
-              {...register("preferred_location")}
+            <Label>Preferred Location</Label>
+            <LocationSelector
+              value={watch("location_id") || null}
+              onValueChange={(id) => setValue("location_id", id || "")}
+              placeholder="Select center"
             />
+            {lead?.preferred_location && !lead?.location_id && (
+              <p className="text-xs text-muted-foreground">Legacy: {lead.preferred_location}</p>
+            )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="working_hours">Working Hours/Shift Timings</Label>

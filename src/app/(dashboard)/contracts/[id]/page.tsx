@@ -226,7 +226,12 @@ export default function ContractDetailPage({
                 {CONTRACT_STATUS_LABELS[contract.status]}
               </Badge>
             </div>
-            <p className="text-sm text-muted-foreground">{contract.title}</p>
+            <p className="text-sm text-muted-foreground">
+              {contract.title}
+              {contract.location && (
+                <span className="ml-2 inline-flex items-center gap-1 text-xs bg-muted px-1.5 py-0.5 rounded">{contract.location.name}</span>
+              )}
+            </p>
           </div>
         </div>
         <div className="flex gap-2">
@@ -370,6 +375,7 @@ export default function ContractDetailPage({
             tenureMonths={contract.tenure_months}
             signedDocumentId={contract.signed_document_id}
             leadEmail={contract.lead?.email}
+            locationId={contract.location_id}
           />
 
           {/* Notes */}

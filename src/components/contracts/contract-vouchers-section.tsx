@@ -61,6 +61,7 @@ interface ContractVouchersSectionProps {
   tenureMonths?: number;
   signedDocumentId?: string;
   leadEmail?: string;
+  locationId?: string;
 }
 
 export function ContractVouchersSection({
@@ -72,6 +73,7 @@ export function ContractVouchersSection({
   tenureMonths,
   signedDocumentId,
   leadEmail,
+  locationId,
 }: ContractVouchersSectionProps) {
   const [issuances, setIssuances] = useState<VoucherIssuance[]>([]);
   const [loading, setLoading] = useState(true);
@@ -130,7 +132,9 @@ export function ContractVouchersSection({
 
     setInventoryCheck((prev) => ({ ...prev, loading: true }));
     try {
-      const res = await fetch("/api/vouchers/inventory");
+      const params = new URLSearchParams();
+      if (locationId) params.set("location_id", locationId);
+      const res = await fetch(`/api/vouchers/inventory?${params}`);
       if (res.ok) {
         const json = await res.json();
         const groups: { validity_days: number | null; available: number }[] = json.data || [];
@@ -154,7 +158,7 @@ export function ContractVouchersSection({
     } catch {
       setInventoryCheck((prev) => ({ ...prev, loading: false }));
     }
-  }, [tenureMonths, seats]);
+  }, [tenureMonths, seats, locationId]);
 
   useEffect(() => {
     fetchIssuances();

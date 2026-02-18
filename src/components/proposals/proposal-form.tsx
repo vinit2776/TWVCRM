@@ -15,9 +15,11 @@ import { LineItemsEditor, type LineItemData } from "@/components/shared/line-ite
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { DEFAULT_PROPOSAL_TERMS } from "@/lib/constants";
+import { LocationSelector } from "@/components/shared/location-selector";
 
 interface ProposalFormProps {
   leadId: string;
+  leadLocationId?: string;
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
@@ -25,11 +27,13 @@ interface ProposalFormProps {
 
 export function ProposalForm({
   leadId,
+  leadLocationId,
   open,
   onOpenChange,
   onSuccess,
 }: ProposalFormProps) {
   const [title, setTitle] = useState("");
+  const [locationId, setLocationId] = useState<string | null>(leadLocationId || null);
   const [description, setDescription] = useState("");
   const [items, setItems] = useState<LineItemData[]>([
     { description: "", quantity: 1, unit_price: 0, total: 0 },
@@ -50,6 +54,7 @@ export function ProposalForm({
     setValidUntil("");
     setTermsAndConditions(DEFAULT_PROPOSAL_TERMS);
     setNotes("");
+    setLocationId(leadLocationId || null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -70,6 +75,7 @@ export function ProposalForm({
 
     const body = {
       lead_id: leadId,
+      location_id: locationId || undefined,
       title: title.trim(),
       description: description.trim() || undefined,
       items: validItems.map((item) => ({
@@ -111,7 +117,7 @@ export function ProposalForm({
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div className="space-y-2 sm:col-span-2">
+            <div className="space-y-2">
               <Label htmlFor="proposal-title">
                 Title <span className="text-destructive">*</span>
               </Label>
@@ -120,6 +126,14 @@ export function ProposalForm({
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 placeholder="e.g. Private Office - 15 Seats"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>Location</Label>
+              <LocationSelector
+                value={locationId}
+                onValueChange={setLocationId}
+                placeholder="Select center"
               />
             </div>
             <div className="space-y-2 sm:col-span-2">

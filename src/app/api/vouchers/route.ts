@@ -13,14 +13,16 @@ export async function GET(request: NextRequest) {
   const limit = parseInt(searchParams.get("limit") || "50");
   const status = searchParams.get("status");
   const validityDays = searchParams.get("validity_days");
+  const locationId = searchParams.get("location_id");
 
   const offset = (page - 1) * limit;
 
   let query = supabase
     .from("voucher_repository")
-    .select("*", { count: "exact" });
+    .select("*, location:locations!voucher_repository_location_id_fkey(id, name, code)", { count: "exact" });
 
   if (status) query = query.eq("status", status);
+  if (locationId) query = query.eq("location_id", locationId);
   if (validityDays) {
     if (validityDays === "unclassified") {
       query = query.is("validity_days", null);
@@ -68,6 +70,7 @@ export async function POST(request: NextRequest) {
     const formData = await request.formData();
     const file = formData.get("file") as File | null;
     const validityOverride = formData.get("validity_days") as string | null;
+    const uploadLocationId = formData.get("location_id") as string | null;
 
     if (!file) {
       return NextResponse.json({ error: "No file provided" }, { status: 400 });
@@ -104,6 +107,7 @@ export async function POST(request: NextRequest) {
       validity_days: validityDays,
       metadata: v.metadata,
       uploaded_by: currentUser.id,
+      location_id: uploadLocationId || null,
     }));
 
     // Use upsert with ignoreDuplicates to skip existing codes gracefully
@@ -144,9 +148,10 @@ export async function POST(request: NextRequest) {
 
   // ===== Legacy JSON Upload =====
   const body = await request.json();
-  const { vouchers, validity_days: bodyValidity } = body as {
+  const { vouchers, validity_days: bodyValidity, location_id: bodyLocationId } = body as {
     vouchers: Array<{ voucher_code: string; metadata?: Record<string, unknown> }>;
     validity_days?: number;
+    location_id?: string;
   };
 
   if (!vouchers || !Array.isArray(vouchers) || vouchers.length === 0) {
@@ -162,6 +167,7 @@ export async function POST(request: NextRequest) {
     validity_days: bodyValidity ?? null,
     metadata: v.metadata || {},
     uploaded_by: currentUser.id,
+    location_id: bodyLocationId || null,
   }));
 
   // Use upsert with ignoreDuplicates to skip existing codes gracefully

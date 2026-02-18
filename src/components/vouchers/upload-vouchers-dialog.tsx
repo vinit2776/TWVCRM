@@ -20,12 +20,14 @@ import {
 import { Loader2, Upload, FileText, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { VOUCHER_VALIDITY_OPTIONS, VOUCHER_VALIDITY_LABELS } from "@/lib/constants";
+import { LocationSelector } from "@/components/shared/location-selector";
 
 interface UploadVouchersDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
   preselectedValidity?: number;
+  preselectedLocationId?: string;
 }
 
 interface ParseResult {
@@ -41,11 +43,13 @@ export function UploadVouchersDialog({
   onOpenChange,
   onSuccess,
   preselectedValidity,
+  preselectedLocationId,
 }: UploadVouchersDialogProps) {
   const [file, setFile] = useState<File | null>(null);
   const [validityOverride, setValidityOverride] = useState<string>(
     preselectedValidity ? String(preselectedValidity) : "auto"
   );
+  const [locationId, setLocationId] = useState<string | null>(preselectedLocationId || null);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<ParseResult | null>(null);
   const [error, setError] = useState("");
@@ -54,6 +58,7 @@ export function UploadVouchersDialog({
   const resetForm = () => {
     setFile(null);
     setValidityOverride(preselectedValidity ? String(preselectedValidity) : "auto");
+    setLocationId(preselectedLocationId || null);
     setResult(null);
     setError("");
     if (fileInputRef.current) fileInputRef.current.value = "";
@@ -93,6 +98,9 @@ export function UploadVouchersDialog({
     formData.append("file", file);
     if (validityOverride !== "auto") {
       formData.append("validity_days", validityOverride);
+    }
+    if (locationId) {
+      formData.append("location_id", locationId);
     }
 
     const res = await fetch("/api/vouchers", {
@@ -190,6 +198,19 @@ export function UploadVouchersDialog({
                 </p>
               </div>
             )}
+          </div>
+
+          {/* Location */}
+          <div className="space-y-2">
+            <label className="text-sm font-medium">Location</label>
+            <LocationSelector
+              value={locationId}
+              onValueChange={setLocationId}
+              placeholder="Select location..."
+            />
+            <p className="text-xs text-muted-foreground">
+              Vouchers will be assigned to this location&apos;s inventory.
+            </p>
           </div>
 
           {/* Validity Override */}

@@ -52,6 +52,7 @@ export const createLeadSchema = z.object({
     .optional(),
   seat_capacity: z.number().int().positive().optional(),
   preferred_location: z.string().optional(),
+  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   working_hours: z.string().optional(),
   budget_per_seat: z.number().positive().optional(),
   street: z.string().optional(),
@@ -69,8 +70,8 @@ export const createLeadSchema = z.object({
 
 export const updateLeadSchema = createLeadSchema.partial();
 
-export type CreateLeadInput = z.infer<typeof createLeadSchema>;
-export type UpdateLeadInput = z.infer<typeof updateLeadSchema>;
+export type CreateLeadInput = z.input<typeof createLeadSchema>;
+export type UpdateLeadInput = z.input<typeof updateLeadSchema>;
 
 // ==========================================
 // Activity Validations
@@ -132,6 +133,7 @@ const lineItemSchema = z.object({
 
 export const createProposalSchema = z.object({
   lead_id: z.string().uuid("Invalid lead ID"),
+  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   title: z.string().min(1, "Title is required"),
   description: z.string().optional(),
   items: z.array(lineItemSchema).min(1, "At least one line item is required"),
@@ -144,7 +146,7 @@ export const createProposalSchema = z.object({
 
 export const updateProposalSchema = createProposalSchema.partial();
 
-export type CreateProposalInput = z.infer<typeof createProposalSchema>;
+export type CreateProposalInput = z.input<typeof createProposalSchema>;
 
 // ==========================================
 // Invoice Validations
@@ -167,6 +169,7 @@ export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
 // ==========================================
 export const createContractSchema = z.object({
   proposal_id: z.string().uuid("Invalid proposal ID"),
+  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   billing_cycle: z.enum(["monthly", "quarterly", "half_yearly", "yearly"]),
   tenure_months: z.number().int().positive("Tenure must be positive"),
   start_date: z.string().min(1, "Start date is required"),
@@ -175,7 +178,7 @@ export const createContractSchema = z.object({
   notes: z.string().optional(),
 });
 
-export type CreateContractInput = z.infer<typeof createContractSchema>;
+export type CreateContractInput = z.input<typeof createContractSchema>;
 
 // ==========================================
 // Usage Charge Validations

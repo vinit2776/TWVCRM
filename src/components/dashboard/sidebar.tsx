@@ -18,6 +18,7 @@ import {
   ScrollText,
   Wifi,
   IndianRupee,
+  MapPin,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -130,6 +131,21 @@ export function Sidebar() {
             >
               <Wifi className="h-5 w-5 shrink-0" />
               Vouchers
+            </Link>
+          )}
+          {isAdmin && (
+            <Link
+              href="/locations"
+              onClick={() => setSidebarOpen(false)}
+              className={cn(
+                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                pathname === "/locations" || pathname.startsWith("/locations/")
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+              )}
+            >
+              <MapPin className="h-5 w-5 shrink-0" />
+              Locations
             </Link>
           )}
           {isAdmin && (

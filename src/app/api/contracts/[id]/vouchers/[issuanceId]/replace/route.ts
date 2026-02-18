@@ -92,13 +92,15 @@ export async function POST(
     );
   }
 
-  const { data: replacementVouchers } = await supabase
+  let replaceQuery = supabase
     .from("voucher_repository")
     .select("*")
     .eq("status", "available")
-    .eq("validity_days", validityDays)
-    .order("uploaded_at", { ascending: true })
-    .limit(1);
+    .eq("validity_days", validityDays);
+  if (contract.location_id) replaceQuery = replaceQuery.eq("location_id", contract.location_id);
+  replaceQuery = replaceQuery.order("uploaded_at", { ascending: true }).limit(1);
+
+  const { data: replacementVouchers } = await replaceQuery;
 
   if (!replacementVouchers || replacementVouchers.length === 0) {
     return NextResponse.json(

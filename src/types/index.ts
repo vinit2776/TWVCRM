@@ -1,4 +1,19 @@
 // ==========================================
+// Location Types
+// ==========================================
+export interface Location {
+  id: string;
+  name: string;
+  code: string;
+  address?: string;
+  city?: string;
+  state?: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+// ==========================================
 // User Types
 // ==========================================
 export type UserRole = "admin" | "manager" | "sales_rep";
@@ -74,6 +89,8 @@ export interface Lead {
   workspace_type?: WorkspaceType;
   seat_capacity?: number;
   preferred_location?: string;
+  location_id?: string;
+  location?: Location;
   working_hours?: string;
   budget_per_seat?: number;
   // Address
@@ -204,6 +221,8 @@ export interface Proposal {
   id: string;
   lead_id: string;
   lead?: Lead;
+  location_id?: string;
+  location?: Location;
   proposal_number: string;
   title: string;
   status: ProposalStatus;
@@ -310,6 +329,8 @@ export interface Contract {
   lead?: Lead;
   proposal_id: string;
   proposal?: Proposal;
+  location_id?: string;
+  location?: Location;
   title: string;
   status: ContractStatus;
   items: LineItem[];
@@ -348,6 +369,8 @@ export interface VoucherRepository {
   voucher_code: string;
   status: VoucherStatus;
   validity_days?: number;
+  location_id?: string;
+  location?: Location;
   metadata: Record<string, unknown>;
   uploaded_by?: string;
   uploaded_at: string;

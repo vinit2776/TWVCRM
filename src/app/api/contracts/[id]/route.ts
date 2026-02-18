@@ -14,7 +14,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("contracts")
-    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile), proposal:proposals!contracts_proposal_id_fkey(proposal_number, title), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at)")
+    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile), proposal:proposals!contracts_proposal_id_fkey(proposal_number, title, location_id), location:locations!contracts_location_id_fkey(id, name, code), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at)")
     .eq("id", id)
     .single();
 
@@ -37,6 +37,7 @@ export async function PATCH(
   const allowedFields: Record<string, unknown> = {};
 
   if (body.status) allowedFields.status = body.status;
+  if (body.location_id !== undefined) allowedFields.location_id = body.location_id || null;
   if (body.notes !== undefined) allowedFields.notes = body.notes;
   if (body.termination_reason) allowedFields.termination_reason = body.termination_reason;
   if (body.next_billing_date) allowedFields.next_billing_date = body.next_billing_date;

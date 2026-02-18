@@ -99,6 +99,7 @@ export default function ContractsPage() {
               <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Billing Cycle</th>
               <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Start Date</th>
               <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">End Date</th>
+              <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Location</th>
               <th className="px-4 py-3 text-left font-medium">Status</th>
             </tr></thead>
             <tbody>{contracts.map((c) => (
@@ -123,6 +124,7 @@ export default function ContractsPage() {
                 <td className="px-4 py-3 hidden lg:table-cell">{BILLING_CYCLE_LABELS[c.billing_cycle]}</td>
                 <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">{formatDate(c.start_date)}</td>
                 <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{formatDate(c.end_date)}</td>
+                <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{c.location?.name || "—"}</td>
                 <td className="px-4 py-3">
                   <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[c.status]}>
                     {CONTRACT_STATUS_LABELS[c.status]}

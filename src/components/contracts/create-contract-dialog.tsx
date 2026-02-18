@@ -22,6 +22,7 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { BILLING_CYCLES, BILLING_CYCLE_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
+import { LocationSelector } from "@/components/shared/location-selector";
 import type { Proposal } from "@/types";
 
 interface CreateContractDialogProps {
@@ -46,6 +47,7 @@ export function CreateContractDialog({
   const [seats, setSeats] = useState<number>(1);
   const [termsAndConditions, setTermsAndConditions] = useState("");
   const [notes, setNotes] = useState("");
+  const [locationId, setLocationId] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
   // Fetch accepted proposals when dialog opens
@@ -79,6 +81,13 @@ export function CreateContractDialog({
     [proposals, selectedProposalId]
   );
 
+  // Auto-populate location from selected proposal
+  useEffect(() => {
+    if (selectedProposal?.location_id) {
+      setLocationId(selectedProposal.location_id);
+    }
+  }, [selectedProposal]);
+
   // Calculate end date
   const calculatedEndDate = useMemo(() => {
     if (!startDate || !tenureMonths) return "";
@@ -95,6 +104,7 @@ export function CreateContractDialog({
     setSeats(1);
     setTermsAndConditions("");
     setNotes("");
+    setLocationId(null);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -125,6 +135,7 @@ export function CreateContractDialog({
 
     const body = {
       proposal_id: selectedProposalId,
+      location_id: locationId || undefined,
       billing_cycle: billingCycle,
       tenure_months: tenureMonths,
       start_date: startDate,
@@ -203,6 +214,16 @@ export function CreateContractDialog({
               <p><span className="text-muted-foreground">Total Amount:</span> <span className="font-medium">{formatCurrency(selectedProposal.total_amount)}</span></p>
             </div>
           )}
+
+          {/* Location */}
+          <div className="space-y-2">
+            <Label>Location</Label>
+            <LocationSelector
+              value={locationId}
+              onValueChange={setLocationId}
+              placeholder="Select center"
+            />
+          </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             {/* Billing Cycle */}

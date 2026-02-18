@@ -115,7 +115,7 @@ export async function POST(
     }
 
     // Issue 1 voucher using smart validity matching
-    const voucher = await findAndIssueOneVoucher(supabase, contract, id, seatNumber, body.seat_occupant_email, user.id);
+    const voucher = await findAndIssueOneVoucher(supabase, contract, id, seatNumber, body.seat_occupant_email, user.id, contract.location_id || null);
 
     if ("error" in voucher) {
       return NextResponse.json({ error: voucher.error }, { status: voucher.status || 400 });
@@ -148,12 +148,16 @@ export async function POST(
   const TOLERANCE = 0.20;
   const minAcceptable = Math.floor(targetDays * (1 - TOLERANCE));
   const maxAcceptable = Math.ceil(targetDays * (1 + TOLERANCE));
+  const locationId: string | null = contract.location_id || null;
 
-  const { data: availabilityGroups, error: groupError } = await supabase
+  let availQuery = supabase
     .from("voucher_repository")
     .select("validity_days")
     .eq("status", "available")
     .not("validity_days", "is", null);
+  if (locationId) availQuery = availQuery.eq("location_id", locationId);
+
+  const { data: availabilityGroups, error: groupError } = await availQuery;
 
   if (groupError) {
     return NextResponse.json({ error: groupError.message }, { status: 500 });
@@ -213,13 +217,15 @@ export async function POST(
     );
   }
 
-  const { data: availableVouchers, error: fetchError } = await supabase
+  let grabQuery = supabase
     .from("voucher_repository")
     .select("*")
     .eq("status", "available")
-    .eq("validity_days", matchedValidity)
-    .order("uploaded_at", { ascending: true })
-    .limit(remaining);
+    .eq("validity_days", matchedValidity);
+  if (locationId) grabQuery = grabQuery.eq("location_id", locationId);
+  grabQuery = grabQuery.order("uploaded_at", { ascending: true }).limit(remaining);
+
+  const { data: availableVouchers, error: fetchError } = await grabQuery;
 
   if (fetchError) {
     return NextResponse.json({ error: fetchError.message }, { status: 500 });
@@ -324,7 +330,8 @@ async function findAndIssueOneVoucher(
   contractId: string,
   seatNumber: number,
   seatOccupantEmail: string | undefined,
-  authUserId: string
+  authUserId: string,
+  locationId: string | null
 ) {
 /* eslint-enable @typescript-eslint/no-explicit-any */
   const tenureMonths: number = contract.tenure_months || 1;
@@ -340,11 +347,14 @@ async function findAndIssueOneVoucher(
   };
 
   // Find available voucher with matching validity
-  const { data: availabilityGroups } = await supabase
+  let availQ = supabase
     .from("voucher_repository")
     .select("validity_days")
     .eq("status", "available")
     .not("validity_days", "is", null);
+  if (locationId) availQ = availQ.eq("location_id", locationId);
+
+  const { data: availabilityGroups } = await availQ;
 
   const groupCounts = new Map<number, number>();
   for (const row of availabilityGroups || []) {
@@ -379,13 +389,15 @@ async function findAndIssueOneVoucher(
     : null;
 
   // Grab 1 voucher
-  const { data: vouchers } = await supabase
+  let grabQ = supabase
     .from("voucher_repository")
     .select("*")
     .eq("status", "available")
-    .eq("validity_days", matchedValidity)
-    .order("uploaded_at", { ascending: true })
-    .limit(1);
+    .eq("validity_days", matchedValidity);
+  if (locationId) grabQ = grabQ.eq("location_id", locationId);
+  grabQ = grabQ.order("uploaded_at", { ascending: true }).limit(1);
+
+  const { data: vouchers } = await grabQ;
 
   if (!vouchers || vouchers.length === 0) {
     return { error: "No vouchers available", status: 400 };

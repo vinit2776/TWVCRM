@@ -13,7 +13,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("proposals")
-    .select("*, lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)")
+    .select("*, lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, location_id), location:locations!proposals_location_id_fkey(id, name, code)")
     .eq("id", id)
     .single();
 
@@ -36,6 +36,7 @@ export async function PATCH(
   const allowedFields: Record<string, unknown> = {};
 
   if (body.status) allowedFields.status = body.status;
+  if (body.location_id !== undefined) allowedFields.location_id = body.location_id || null;
   if (body.sent_at) allowedFields.sent_at = body.sent_at;
   if (body.viewed_at) allowedFields.viewed_at = body.viewed_at;
   if (body.accepted_at) allowedFields.accepted_at = body.accepted_at;
