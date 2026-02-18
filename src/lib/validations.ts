@@ -53,6 +53,7 @@ export const createLeadSchema = z.object({
   seat_capacity: z.number().int().positive().optional(),
   preferred_location: z.string().optional(),
   location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  pan_number: z.string().optional(),
   working_hours: z.string().optional(),
   budget_per_seat: z.number().positive().optional(),
   street: z.string().optional(),
@@ -168,14 +169,29 @@ export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
 // Contract Validations
 // ==========================================
 export const createContractSchema = z.object({
-  proposal_id: z.string().uuid("Invalid proposal ID"),
+  lead_id: z.string().uuid("Invalid lead ID"),
+  proposal_id: z.string().uuid("Invalid proposal ID").optional().or(z.literal("")).transform(v => v || undefined),
   location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   billing_cycle: z.enum(["monthly", "quarterly", "half_yearly", "yearly"]),
   tenure_months: z.number().int().positive("Tenure must be positive"),
   start_date: z.string().min(1, "Start date is required"),
   seats: z.number().int().positive("Seats must be positive"),
+  monthly_membership_fee: z.number().positive("Monthly fee must be positive"),
+  // Membership agreement fields
+  workspace_description: z.string().min(1, "Workspace description is required"),
+  parking_space: z.string().optional(),
+  complimentary_services: z.string().optional(),
+  security_deposit_months: z.number().min(0).default(3.0),
+  escalation_percentage: z.number().min(0).max(100).default(10.0),
+  notice_period_months: z.number().min(0).default(2.0),
+  member_signatory_name: z.string().min(1, "Signatory name is required"),
+  member_signatory_designation: z.string().min(1, "Signatory designation is required"),
+  agreement_date: z.string().min(1, "Agreement date is required"),
+  // Optional fields
   terms_and_conditions: z.string().optional(),
   notes: z.string().optional(),
+  // Lead data to save back
+  pan_number: z.string().optional(),
 });
 
 export type CreateContractInput = z.input<typeof createContractSchema>;

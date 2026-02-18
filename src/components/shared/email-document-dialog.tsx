@@ -17,7 +17,7 @@ import { toast } from "sonner";
 interface EmailDocumentDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  documentType: "proposal" | "invoice";
+  documentType: "proposal" | "invoice" | "contract";
   documentId: string;
   documentNumber: string;
   leadEmail?: string;
@@ -82,7 +82,9 @@ export function EmailDocumentDialog({
       const apiPath =
         documentType === "proposal"
           ? `/api/proposals/${documentId}/email`
-          : `/api/invoices/${documentId}/email`;
+          : documentType === "contract"
+            ? `/api/contracts/${documentId}/email`
+            : `/api/invoices/${documentId}/email`;
 
       const res = await fetch(apiPath, {
         method: "POST",
@@ -91,8 +93,9 @@ export function EmailDocumentDialog({
       });
 
       if (res.ok) {
+        const docLabel = documentType === "proposal" ? "Proposal" : documentType === "contract" ? "Agreement" : "Invoice";
         toast.success(
-          `${documentType === "proposal" ? "Proposal" : "Invoice"} sent to ${recipients.length} recipient${recipients.length > 1 ? "s" : ""}`
+          `${docLabel} sent to ${recipients.length} recipient${recipients.length > 1 ? "s" : ""}`
         );
         onOpenChange(false);
         onSuccess?.();
@@ -122,7 +125,7 @@ export function EmailDocumentDialog({
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Mail className="h-5 w-5" />
-            Email {documentType === "proposal" ? "Proposal" : "Invoice"}
+            Email {documentType === "proposal" ? "Proposal" : documentType === "contract" ? "Agreement" : "Invoice"}
           </DialogTitle>
           <p className="text-sm text-muted-foreground">{documentNumber}</p>
         </DialogHeader>

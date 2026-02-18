@@ -14,6 +14,8 @@ import {
   Eye,
   RefreshCw,
   AlertTriangle,
+  Mail,
+  Send,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
+import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import {
   Dialog,
   DialogContent,
@@ -37,6 +40,7 @@ import {
   BILLING_CYCLE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { generateMembershipAgreementPDF } from "@/lib/pdf-generator";
 import { toast } from "sonner";
 import type { Contract } from "@/types";
 
@@ -49,11 +53,12 @@ export default function ContractDetailPage({
   const router = useRouter();
   const [contract, setContract] = useState<Contract | null>(null);
   const [loading, setLoading] = useState(true);
-  const [activating, setActivating] = useState(false);
+  const [statusUpdating, setStatusUpdating] = useState(false);
   const [terminateOpen, setTerminateOpen] = useState(false);
   const [terminating, setTerminating] = useState(false);
   const [terminationReason, setTerminationReason] = useState("");
   const [uploadingSignedDoc, setUploadingSignedDoc] = useState(false);
+  const [emailDialogOpen, setEmailDialogOpen] = useState(false);
 
   const fetchContract = useCallback(async () => {
     setLoading(true);
@@ -69,21 +74,22 @@ export default function ContractDetailPage({
     fetchContract();
   }, [fetchContract]);
 
-  const handleActivate = async () => {
-    setActivating(true);
+  const handleStatusUpdate = async (newStatus: string) => {
+    setStatusUpdating(true);
     const res = await fetch(`/api/contracts/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "active" }),
+      body: JSON.stringify({ status: newStatus }),
     });
     if (res.ok) {
-      toast.success("Contract activated successfully");
+      const statusLabel = CONTRACT_STATUS_LABELS[newStatus] || newStatus;
+      toast.success(`Contract marked as ${statusLabel}`);
       fetchContract();
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to activate contract");
+      toast.error(err?.error || `Failed to update contract status`);
     }
-    setActivating(false);
+    setStatusUpdating(false);
   };
 
   const handleTerminate = async () => {
@@ -113,15 +119,35 @@ export default function ContractDetailPage({
   };
 
   const handleDownloadPDF = () => {
-    // Open the PDF download endpoint in a new tab
-    window.open(`/api/contracts/${id}/pdf`, "_blank");
+    if (!contract) return;
+    const doc = generateMembershipAgreementPDF(
+      contract,
+      contract.lead || undefined,
+      contract.location || undefined
+    );
+    doc.save(`${contract.contract_number}.pdf`);
+  };
+
+  const handleGeneratePDFBase64 = (): string => {
+    if (!contract) return "";
+    const doc = generateMembershipAgreementPDF(
+      contract,
+      contract.lead || undefined,
+      contract.location || undefined
+    );
+    const arrayBuffer = doc.output("arraybuffer");
+    const bytes = new Uint8Array(arrayBuffer);
+    let binary = "";
+    for (let i = 0; i < bytes.byteLength; i++) {
+      binary += String.fromCharCode(bytes[i]);
+    }
+    return btoa(binary);
   };
 
   const handleSignedDocUpload = async (file: File) => {
     if (!contract) return;
     setUploadingSignedDoc(true);
 
-    // Step 1: Upload the file to /api/documents
     const formData = new FormData();
     formData.append("file", file);
     formData.append("title", `Signed Contract - ${contract.contract_number}`);
@@ -142,7 +168,6 @@ export default function ContractDetailPage({
 
     const { data: doc } = await uploadRes.json();
 
-    // Step 2: Link document to contract
     const patchRes = await fetch(`/api/contracts/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -162,7 +187,6 @@ export default function ContractDetailPage({
 
   const handleViewSignedDoc = async () => {
     if (!contract?.signed_document?.file_path) return;
-    // Use Supabase Storage public/signed URL
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
     const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
     if (supabaseUrl && supabaseKey) {
@@ -211,6 +235,8 @@ export default function ContractDetailPage({
     );
   }
 
+  const securityDeposit = (contract.security_deposit_months || 3) * contract.total_amount;
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -234,14 +260,45 @@ export default function ContractDetailPage({
             </p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          {/* Status-based action buttons */}
           {contract.status === "draft" && (
-            <Button onClick={handleActivate} disabled={activating}>
-              {activating ? (
-                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-              ) : (
-                <CheckCircle2 className="mr-2 h-4 w-4" />
-              )}
+            <Button onClick={() => setEmailDialogOpen(true)} disabled={statusUpdating}>
+              <Send className="mr-2 h-4 w-4" />
+              Send Agreement
+            </Button>
+          )}
+          {contract.status === "sent" && (
+            <>
+              <Button variant="outline" onClick={() => handleStatusUpdate("viewed")} disabled={statusUpdating}>
+                {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Eye className="mr-2 h-4 w-4" />}
+                Mark Viewed
+              </Button>
+              <Button onClick={() => handleStatusUpdate("accepted")} disabled={statusUpdating}>
+                {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                Accept
+              </Button>
+              <Button variant="destructive" onClick={() => handleStatusUpdate("rejected")} disabled={statusUpdating}>
+                <XCircle className="mr-2 h-4 w-4" />
+                Reject
+              </Button>
+            </>
+          )}
+          {contract.status === "viewed" && (
+            <>
+              <Button onClick={() => handleStatusUpdate("accepted")} disabled={statusUpdating}>
+                {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                Accept
+              </Button>
+              <Button variant="destructive" onClick={() => handleStatusUpdate("rejected")} disabled={statusUpdating}>
+                <XCircle className="mr-2 h-4 w-4" />
+                Reject
+              </Button>
+            </>
+          )}
+          {contract.status === "accepted" && (
+            <Button onClick={() => handleStatusUpdate("active")} disabled={statusUpdating}>
+              {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
               Activate
             </Button>
           )}
@@ -249,6 +306,13 @@ export default function ContractDetailPage({
             <Button variant="destructive" onClick={() => setTerminateOpen(true)}>
               <XCircle className="mr-2 h-4 w-4" />
               Terminate
+            </Button>
+          )}
+          {/* Email button for sent/viewed/accepted/rejected */}
+          {["sent", "viewed", "accepted", "rejected"].includes(contract.status) && (
+            <Button variant="outline" onClick={() => setEmailDialogOpen(true)}>
+              <Mail className="mr-2 h-4 w-4" />
+              Email
             </Button>
           )}
           <Button variant="outline" onClick={handleDownloadPDF}>
@@ -291,6 +355,12 @@ export default function ContractDetailPage({
                         <p>{contract.lead.email}</p>
                       </div>
                     )}
+                    {contract.lead.pan_number && (
+                      <div>
+                        <p className="text-muted-foreground text-xs">PAN</p>
+                        <p className="font-mono">{contract.lead.pan_number}</p>
+                      </div>
+                    )}
                   </>
                 )}
                 {contract.proposal && (
@@ -303,22 +373,88 @@ export default function ContractDetailPage({
               <Separator className="my-4" />
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                 <div>
-                  <p className="text-muted-foreground text-xs">Subtotal</p>
-                  <p className="font-medium">{formatCurrency(contract.subtotal)}</p>
+                  <p className="text-muted-foreground text-xs">Monthly Fee</p>
+                  <p className="font-bold text-lg">{formatCurrency(contract.total_amount)}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">Tax ({contract.tax_percentage}%)</p>
                   <p className="font-medium">{formatCurrency(contract.tax_amount)}</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground text-xs">Discount ({contract.discount_percentage}%)</p>
-                  <p className="font-medium">-{formatCurrency(contract.discount_amount)}</p>
+                  <p className="text-muted-foreground text-xs">Security Deposit</p>
+                  <p className="font-medium">{formatCurrency(securityDeposit)}</p>
                 </div>
                 <div>
-                  <p className="text-muted-foreground text-xs">Total</p>
-                  <p className="font-bold text-lg">{formatCurrency(contract.total_amount)}</p>
+                  <p className="text-muted-foreground text-xs">Seats</p>
+                  <p className="font-medium">{contract.seats}</p>
                 </div>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Agreement Details Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Agreement Details</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+                {contract.workspace_description && (
+                  <div className="sm:col-span-2">
+                    <p className="text-muted-foreground text-xs">Workspace Description</p>
+                    <p>{contract.workspace_description}</p>
+                  </div>
+                )}
+                {contract.parking_space && (
+                  <div>
+                    <p className="text-muted-foreground text-xs">Parking Space</p>
+                    <p>{contract.parking_space}</p>
+                  </div>
+                )}
+                {contract.complimentary_services && (
+                  <div className="sm:col-span-2">
+                    <p className="text-muted-foreground text-xs">Complimentary Services</p>
+                    <p className="whitespace-pre-wrap">{contract.complimentary_services}</p>
+                  </div>
+                )}
+                <div>
+                  <p className="text-muted-foreground text-xs">Security Deposit</p>
+                  <p>{contract.security_deposit_months || 3}x Monthly Fee = {formatCurrency(securityDeposit)}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Annual Escalation</p>
+                  <p>{contract.escalation_percentage || 10}%</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Notice Period</p>
+                  <p>{contract.notice_period_months || 2} months</p>
+                </div>
+                {contract.agreement_date && (
+                  <div>
+                    <p className="text-muted-foreground text-xs">Agreement Date</p>
+                    <p>{formatDate(contract.agreement_date)}</p>
+                  </div>
+                )}
+              </div>
+              {(contract.member_signatory_name || contract.member_signatory_designation) && (
+                <>
+                  <Separator className="my-4" />
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+                    {contract.member_signatory_name && (
+                      <div>
+                        <p className="text-muted-foreground text-xs">Member Signatory</p>
+                        <p className="font-medium">{contract.member_signatory_name}</p>
+                      </div>
+                    )}
+                    {contract.member_signatory_designation && (
+                      <div>
+                        <p className="text-muted-foreground text-xs">Designation</p>
+                        <p>{contract.member_signatory_designation}</p>
+                      </div>
+                    )}
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
 
@@ -526,21 +662,52 @@ export default function ContractDetailPage({
             </CardContent>
           </Card>
 
-          {/* Quick Info */}
+          {/* Timeline Card */}
           <Card>
             <CardHeader>
-              <CardTitle className="text-base">Quick Info</CardTitle>
+              <CardTitle className="text-base">Timeline</CardTitle>
             </CardHeader>
             <CardContent className="space-y-3 text-sm">
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Created</span>
                 <span>{formatDate(contract.created_at)}</span>
               </div>
-              <Separator />
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Updated</span>
-                <span>{formatDate(contract.updated_at)}</span>
-              </div>
+              {contract.sent_at && (
+                <>
+                  <Separator />
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Sent</span>
+                    <span>{formatDate(contract.sent_at)}</span>
+                  </div>
+                </>
+              )}
+              {contract.viewed_at && (
+                <>
+                  <Separator />
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Viewed</span>
+                    <span>{formatDate(contract.viewed_at)}</span>
+                  </div>
+                </>
+              )}
+              {contract.accepted_at && (
+                <>
+                  <Separator />
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Accepted</span>
+                    <span>{formatDate(contract.accepted_at)}</span>
+                  </div>
+                </>
+              )}
+              {contract.rejected_at && (
+                <>
+                  <Separator />
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Rejected</span>
+                    <span>{formatDate(contract.rejected_at)}</span>
+                  </div>
+                </>
+              )}
               {contract.activated_at && (
                 <>
                   <Separator />
@@ -577,6 +744,11 @@ export default function ContractDetailPage({
                   </div>
                 </>
               )}
+              <Separator />
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Last Updated</span>
+                <span>{formatDate(contract.updated_at)}</span>
+              </div>
             </CardContent>
           </Card>
         </div>
@@ -625,6 +797,18 @@ export default function ContractDetailPage({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Email Dialog */}
+      <EmailDocumentDialog
+        open={emailDialogOpen}
+        onOpenChange={setEmailDialogOpen}
+        documentType="contract"
+        documentId={id}
+        documentNumber={contract.contract_number}
+        leadEmail={contract.lead?.email}
+        onGeneratePDF={handleGeneratePDFBase64}
+        onSuccess={fetchContract}
+      />
     </div>
   );
 }

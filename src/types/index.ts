@@ -93,6 +93,7 @@ export interface Lead {
   location?: Location;
   working_hours?: string;
   budget_per_seat?: number;
+  pan_number?: string;
   // Address
   street?: string;
   city?: string;
@@ -311,6 +312,10 @@ export interface CrmDocument {
 // ==========================================
 export type ContractStatus =
   | "draft"
+  | "sent"
+  | "viewed"
+  | "accepted"
+  | "rejected"
   | "active"
   | "renewed"
   | "expired"
@@ -327,7 +332,7 @@ export interface Contract {
   contract_number: string;
   lead_id: string;
   lead?: Lead;
-  proposal_id: string;
+  proposal_id?: string;
   proposal?: Proposal;
   location_id?: string;
   location?: Location;
@@ -348,6 +353,21 @@ export interface Contract {
   seats: number;
   terms_and_conditions?: string;
   notes?: string;
+  // Membership agreement fields
+  workspace_description?: string;
+  parking_space?: string;
+  complimentary_services?: string;
+  security_deposit_months?: number;
+  escalation_percentage?: number;
+  notice_period_months?: number;
+  member_signatory_name?: string;
+  member_signatory_designation?: string;
+  agreement_date?: string;
+  // Status timestamps
+  sent_at?: string;
+  viewed_at?: string;
+  accepted_at?: string;
+  rejected_at?: string;
   activated_at?: string;
   renewed_at?: string;
   terminated_at?: string;

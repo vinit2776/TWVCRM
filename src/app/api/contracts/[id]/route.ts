@@ -14,7 +14,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("contracts")
-    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile), proposal:proposals!contracts_proposal_id_fkey(proposal_number, title, location_id), location:locations!contracts_location_id_fkey(id, name, code), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at)")
+    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, pan_number, street, city, state, zip_code, country), proposal:proposals!contracts_proposal_id_fkey(proposal_number, title, location_id), location:locations!contracts_location_id_fkey(id, name, code, address, city, state), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at)")
     .eq("id", id)
     .single();
 
@@ -55,15 +55,24 @@ export async function PATCH(
 
   // Handle special status transitions
   if (body.status && body.status !== oldContract.status) {
-    if (body.status === "active") {
-      allowedFields.activated_at = new Date().toISOString();
+    const now = new Date().toISOString();
+    if (body.status === "sent") {
+      allowedFields.sent_at = body.sent_at || now;
+    } else if (body.status === "viewed") {
+      allowedFields.viewed_at = body.viewed_at || now;
+    } else if (body.status === "accepted") {
+      allowedFields.accepted_at = body.accepted_at || now;
+    } else if (body.status === "rejected") {
+      allowedFields.rejected_at = body.rejected_at || now;
+    } else if (body.status === "active") {
+      allowedFields.activated_at = now;
     } else if (body.status === "terminated") {
       if (!body.termination_reason && !allowedFields.termination_reason) {
         return NextResponse.json({ error: "Termination reason is required" }, { status: 400 });
       }
-      allowedFields.terminated_at = new Date().toISOString();
+      allowedFields.terminated_at = now;
     } else if (body.status === "renewed") {
-      allowedFields.renewed_at = new Date().toISOString();
+      allowedFields.renewed_at = now;
     }
   }
 

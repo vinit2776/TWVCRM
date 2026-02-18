@@ -194,6 +194,10 @@ export const RATING_LABELS: Record<string, string> = {
 // ==========================================
 export const CONTRACT_STATUSES = [
   "draft",
+  "sent",
+  "viewed",
+  "accepted",
+  "rejected",
   "active",
   "renewed",
   "expired",
@@ -202,6 +206,10 @@ export const CONTRACT_STATUSES = [
 
 export const CONTRACT_STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
+  sent: "Sent",
+  viewed: "Viewed",
+  accepted: "Accepted",
+  rejected: "Rejected",
   active: "Active",
   renewed: "Renewed",
   expired: "Expired",
@@ -210,7 +218,11 @@ export const CONTRACT_STATUS_LABELS: Record<string, string> = {
 
 export const CONTRACT_STATUS_COLORS: Record<string, string> = {
   draft: "bg-gray-100 text-gray-800",
-  active: "bg-green-100 text-green-800",
+  sent: "bg-blue-100 text-blue-800",
+  viewed: "bg-purple-100 text-purple-800",
+  accepted: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+  active: "bg-emerald-100 text-emerald-800",
   renewed: "bg-blue-100 text-blue-800",
   expired: "bg-orange-100 text-orange-800",
   terminated: "bg-red-100 text-red-800",

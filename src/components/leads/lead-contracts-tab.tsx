@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, ScrollText, MoreHorizontal, Eye, CheckCircle2, XCircle } from "lucide-react";
+import { Plus, ScrollText, MoreHorizontal, Eye, CheckCircle2, XCircle, Send, Mail } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -49,7 +49,7 @@ export function LeadContractsTab({ leadId }: LeadContractsTabProps) {
   const [terminatingContract, setTerminatingContract] = useState<Contract | null>(null);
   const [terminationReason, setTerminationReason] = useState("");
   const [terminating, setTerminating] = useState(false);
-  const [activatingId, setActivatingId] = useState<string | null>(null);
+  const [updatingId, setUpdatingId] = useState<string | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -69,21 +69,22 @@ export function LeadContractsTab({ leadId }: LeadContractsTabProps) {
     fetchData();
   };
 
-  const handleActivate = async (contract: Contract) => {
-    setActivatingId(contract.id);
+  const handleStatusUpdate = async (contract: Contract, newStatus: string) => {
+    setUpdatingId(contract.id);
     const res = await fetch(`/api/contracts/${contract.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: "active" }),
+      body: JSON.stringify({ status: newStatus }),
     });
     if (res.ok) {
-      toast.success("Contract activated successfully");
+      const label = CONTRACT_STATUS_LABELS[newStatus] || newStatus;
+      toast.success(`Contract marked as ${label}`);
       fetchData();
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to activate contract");
+      toast.error(err?.error || "Failed to update contract");
     }
-    setActivatingId(null);
+    setUpdatingId(null);
   };
 
   const openTerminateDialog = (contract: Contract) => {
@@ -190,11 +191,49 @@ export function LeadContractsTab({ leadId }: LeadContractsTabProps) {
                               <>
                                 <DropdownMenuSeparator />
                                 <DropdownMenuItem
-                                  onClick={() => handleActivate(c)}
-                                  disabled={activatingId === c.id}
+                                  onClick={() => router.push(`/contracts/${c.id}`)}
                                 >
+                                  <Send className="mr-2 h-4 w-4" />
+                                  Send Agreement
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                            {c.status === "sent" && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => handleStatusUpdate(c, "viewed")} disabled={updatingId === c.id}>
+                                  <Eye className="mr-2 h-4 w-4" />
+                                  Mark Viewed
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleStatusUpdate(c, "accepted")} disabled={updatingId === c.id}>
                                   <CheckCircle2 className="mr-2 h-4 w-4" />
-                                  {activatingId === c.id ? "Activating..." : "Activate"}
+                                  Accept
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleStatusUpdate(c, "rejected")} disabled={updatingId === c.id} className="text-destructive focus:text-destructive">
+                                  <XCircle className="mr-2 h-4 w-4" />
+                                  Reject
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                            {c.status === "viewed" && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => handleStatusUpdate(c, "accepted")} disabled={updatingId === c.id}>
+                                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                                  Accept
+                                </DropdownMenuItem>
+                                <DropdownMenuItem onClick={() => handleStatusUpdate(c, "rejected")} disabled={updatingId === c.id} className="text-destructive focus:text-destructive">
+                                  <XCircle className="mr-2 h-4 w-4" />
+                                  Reject
+                                </DropdownMenuItem>
+                              </>
+                            )}
+                            {c.status === "accepted" && (
+                              <>
+                                <DropdownMenuSeparator />
+                                <DropdownMenuItem onClick={() => handleStatusUpdate(c, "active")} disabled={updatingId === c.id}>
+                                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                                  Activate
                                 </DropdownMenuItem>
                               </>
                             )}
