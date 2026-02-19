@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Loader2, Clock, IndianRupee, Search, Phone, User2, Building2 } from "lucide-react";
+import { ArrowLeft, Loader2, Clock, IndianRupee, Search, Phone, User2, Building2, Banknote, CreditCard, Smartphone } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -14,7 +14,7 @@ import {
 } from "@/components/ui/select";
 import { useLocations } from "@/hooks/use-locations";
 import { formatCurrency } from "@/lib/utils";
-import { BOOKING_CUSTOMER_TYPE_LABELS, PAYMENT_MODES, PAYMENT_MODE_LABELS } from "@/lib/constants";
+import { BOOKING_CUSTOMER_TYPE_LABELS, PAYMENT_MODES, PAYMENT_MODE_LABELS, BOOKING_PAYMENT_MODES, BOOKING_PAYMENT_MODE_LABELS } from "@/lib/constants";
 import { toast } from "sonner";
 import type { Space, SpaceFacility } from "@/types";
 
@@ -90,6 +90,10 @@ function NewBookingForm() {
   const [paymentMode, setPaymentMode] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
   const [notes, setNotes] = useState("");
+  const [collectAdvancePayment, setCollectAdvancePayment] = useState(false);
+  const [advancePaymentMode, setAdvancePaymentMode] = useState<string>("cash");
+  const [advancePaymentReference, setAdvancePaymentReference] = useState("");
+  const [advancePaymentAmount, setAdvancePaymentAmount] = useState("");
 
   // --- Customer Search ---
   const searchCustomers = useCallback(async (q: string) => {
@@ -284,6 +288,19 @@ function NewBookingForm() {
 
     setSaving(true);
     try {
+      // Build advance_payment object if collecting at booking time
+      let advancePayment: { amount: number; payment_mode: string; payment_reference?: string } | undefined;
+      if (collectAdvancePayment && customerType === "walk_in") {
+        const advAmt = parseFloat(advancePaymentAmount);
+        if (advAmt > 0 && (advancePaymentMode === "cash" || advancePaymentMode === "card")) {
+          advancePayment = {
+            amount: advAmt,
+            payment_mode: advancePaymentMode,
+            payment_reference: advancePaymentReference.trim() || undefined,
+          };
+        }
+      }
+
       const payload = {
         space_id: spaceId,
         booking_date: bookingDate,
@@ -301,6 +318,7 @@ function NewBookingForm() {
         payment_mode: paymentMode || undefined,
         payment_reference: paymentReference.trim() || undefined,
         notes: notes.trim() || undefined,
+        advance_payment: advancePayment,
       };
 
       const res = await fetch("/api/bookings", {
@@ -323,7 +341,13 @@ function NewBookingForm() {
           }).catch(() => {});
         }
 
-        router.push(bookingId ? `/bookings/${bookingId}` : "/bookings");
+        // If advance payment was UPI/Razorpay → redirect to detail page to complete
+        if (collectAdvancePayment && (advancePaymentMode === "upi" || advancePaymentMode === "razorpay")) {
+          toast.info("Redirecting to booking page to complete payment...");
+          router.push(bookingId ? `/bookings/${bookingId}?collect_payment=true` : "/bookings");
+        } else {
+          router.push(bookingId ? `/bookings/${bookingId}` : "/bookings");
+        }
       } else {
         toast.error(json.error || "Failed to create booking");
       }
@@ -699,22 +723,92 @@ function NewBookingForm() {
         <Card>
           <CardHeader><CardTitle className="text-base">5. Payment</CardTitle></CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-              <div className="space-y-2">
-                <Label>Payment Mode</Label>
-                <Select value={paymentMode} onValueChange={setPaymentMode}>
-                  <SelectTrigger><SelectValue placeholder="Select mode" /></SelectTrigger>
-                  <SelectContent>
-                    {PAYMENT_MODES.map(m => <SelectItem key={m} value={m}>{PAYMENT_MODE_LABELS[m]}</SelectItem>)}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-2">
-                <Label>Payment Reference</Label>
-                <Input value={paymentReference} onChange={(e) => setPaymentReference(e.target.value)} placeholder="UPI Ref / Transaction ID" />
-              </div>
+            {/* Advance payment toggle */}
+            <div className="flex items-center space-x-2">
+              <input
+                type="checkbox"
+                id="collect-advance"
+                checked={collectAdvancePayment}
+                onChange={(e) => {
+                  setCollectAdvancePayment(e.target.checked);
+                  if (e.target.checked && !advancePaymentAmount) {
+                    setAdvancePaymentAmount(totalAmount > 0 ? totalAmount.toFixed(2) : "");
+                  }
+                }}
+                className="h-4 w-4 rounded border-gray-300"
+              />
+              <label htmlFor="collect-advance" className="text-sm font-medium cursor-pointer">
+                Collect advance payment now
+              </label>
             </div>
-            <p className="text-xs text-muted-foreground">Payment can also be recorded later from the booking detail page.</p>
+
+            {collectAdvancePayment && (
+              <div className="border rounded-lg p-4 space-y-4 bg-muted/20">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div className="space-y-2">
+                    <Label>Amount</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="1"
+                      value={advancePaymentAmount}
+                      onChange={(e) => setAdvancePaymentAmount(e.target.value)}
+                      placeholder={`Total: ${formatCurrency(totalAmount)}`}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label>Payment Method</Label>
+                    <div className="flex gap-1.5">
+                      {[
+                        { mode: "cash", icon: Banknote, label: "Cash" },
+                        { mode: "card", icon: CreditCard, label: "Card" },
+                        { mode: "upi", icon: Smartphone, label: "UPI" },
+                      ].map(({ mode, icon: Icon, label }) => (
+                        <Button
+                          key={mode}
+                          type="button"
+                          variant={advancePaymentMode === mode ? "default" : "outline"}
+                          size="sm"
+                          className="text-xs flex-1 gap-1"
+                          onClick={() => setAdvancePaymentMode(mode)}
+                        >
+                          <Icon className="h-3.5 w-3.5" />{label}
+                        </Button>
+                      ))}
+                    </div>
+                  </div>
+                  {(advancePaymentMode === "card" || advancePaymentMode === "upi") && (
+                    <div className="space-y-2">
+                      <Label>Reference</Label>
+                      <Input
+                        value={advancePaymentReference}
+                        onChange={(e) => setAdvancePaymentReference(e.target.value)}
+                        placeholder={advancePaymentMode === "upi" ? "UPI Ref / UTR" : "Transaction ID"}
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {advancePaymentMode === "cash" && (
+                  <p className="text-xs text-green-700 bg-green-50 rounded px-2.5 py-1.5">
+                    <Banknote className="inline h-3.5 w-3.5 mr-1" />
+                    Cash payment of {formatCurrency(parseFloat(advancePaymentAmount) || 0)} will be recorded as collected.
+                  </p>
+                )}
+                {advancePaymentMode === "upi" && (
+                  <p className="text-xs text-amber-700 bg-amber-50 rounded px-2.5 py-1.5">
+                    <Smartphone className="inline h-3.5 w-3.5 mr-1" />
+                    After booking is created, you&apos;ll be redirected to complete UPI payment with QR code &amp; screenshot upload.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {!collectAdvancePayment && (
+              <p className="text-xs text-muted-foreground">
+                Payment can be collected later from the booking detail page before check-in.
+              </p>
+            )}
           </CardContent>
         </Card>
       )}

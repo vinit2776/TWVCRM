@@ -402,6 +402,30 @@ export async function POST(request: NextRequest) {
     // The voucher can be issued later from the booking detail page
   }
 
+  // 7b. Handle advance payment (creates a booking_payments record)
+  if (body.advance_payment && booking && input.customer_type === "walk_in") {
+    const { amount, payment_mode, payment_reference } = body.advance_payment;
+    if (amount > 0 && (payment_mode === "cash" || payment_mode === "card")) {
+      // Cash/card payments are auto-verified
+      await supabase.from("booking_payments").insert({
+        booking_id: booking.id,
+        amount,
+        payment_mode,
+        payment_reference: payment_reference || null,
+        status: "verified",
+        created_by: dbUser.id,
+      });
+
+      // If full amount paid, update booking payment status
+      if (amount >= totalAmount) {
+        await supabase
+          .from("bookings")
+          .update({ payment_status: "paid", payment_mode })
+          .eq("id", booking.id);
+      }
+    }
+  }
+
   // 8. Log activity on lead timeline
   if (leadId && booking) {
     await supabase.from("activities").insert({

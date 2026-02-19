@@ -7,10 +7,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClient } from "@/lib/supabase/client";
 import { getInitials } from "@/lib/utils";
 import { toast } from "sonner";
-import { User, Mail, Phone, Shield } from "lucide-react";
+import { User, Mail, Phone, Shield, CreditCard } from "lucide-react";
+import { PaymentGatewaySettings } from "@/components/settings/payment-gateway-settings";
 
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
@@ -90,7 +92,9 @@ export default function SettingsPage() {
       ? "Admin"
       : profile.role === "manager"
         ? "Manager"
-        : "Sales Rep";
+        : profile.role === "floor_manager"
+          ? "Floor Manager"
+          : "Sales Rep";
 
   return (
     <div className="space-y-6">
@@ -99,101 +103,120 @@ export default function SettingsPage() {
         <p className="text-muted-foreground">Manage your account and preferences</p>
       </div>
 
-      <div className="grid gap-6 max-w-2xl">
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base flex items-center gap-2">
-              <User className="h-4 w-4" />
-              Profile Information
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-6">
-            <div className="flex items-center gap-4">
-              <Avatar className="h-16 w-16">
-                <AvatarFallback className="text-lg">
-                  {getInitials(profile.full_name || "U")}
-                </AvatarFallback>
-              </Avatar>
-              <div>
-                <p className="font-medium">{profile.full_name}</p>
-                <p className="text-sm text-muted-foreground">{profile.email}</p>
-              </div>
-            </div>
+      <Tabs defaultValue="profile" className="max-w-3xl">
+        <TabsList>
+          <TabsTrigger value="profile" className="flex items-center gap-1.5">
+            <User className="h-3.5 w-3.5" />Profile
+          </TabsTrigger>
+          {profile.role === "admin" && (
+            <TabsTrigger value="payment-gateway" className="flex items-center gap-1.5">
+              <CreditCard className="h-3.5 w-3.5" />Payment Gateway
+            </TabsTrigger>
+          )}
+        </TabsList>
 
-            <Separator />
-
-            <div className="grid gap-4">
-              <div className="space-y-2">
-                <Label htmlFor="full_name">Full Name</Label>
-                <div className="relative">
-                  <User className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    id="full_name"
-                    value={profile.full_name}
-                    onChange={(e) =>
-                      setProfile({ ...profile, full_name: e.target.value })
-                    }
-                    className="pl-9"
-                  />
+        <TabsContent value="profile" className="mt-6">
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <User className="h-4 w-4" />
+                Profile Information
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-6">
+              <div className="flex items-center gap-4">
+                <Avatar className="h-16 w-16">
+                  <AvatarFallback className="text-lg">
+                    {getInitials(profile.full_name || "U")}
+                  </AvatarFallback>
+                </Avatar>
+                <div>
+                  <p className="font-medium">{profile.full_name}</p>
+                  <p className="text-sm text-muted-foreground">{profile.email}</p>
                 </div>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="email">Email</Label>
-                <div className="relative">
-                  <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    id="email"
-                    value={profile.email}
-                    disabled
-                    className="pl-9 bg-muted"
-                  />
+              <Separator />
+
+              <div className="grid gap-4">
+                <div className="space-y-2">
+                  <Label htmlFor="full_name">Full Name</Label>
+                  <div className="relative">
+                    <User className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="full_name"
+                      value={profile.full_name}
+                      onChange={(e) =>
+                        setProfile({ ...profile, full_name: e.target.value })
+                      }
+                      className="pl-9"
+                    />
+                  </div>
                 </div>
-                <p className="text-xs text-muted-foreground">
-                  Email cannot be changed from here
-                </p>
+
+                <div className="space-y-2">
+                  <Label htmlFor="email">Email</Label>
+                  <div className="relative">
+                    <Mail className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="email"
+                      value={profile.email}
+                      disabled
+                      className="pl-9 bg-muted"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Email cannot be changed from here
+                  </p>
+                </div>
+
+                <div className="space-y-2">
+                  <Label htmlFor="phone">Phone</Label>
+                  <div className="relative">
+                    <Phone className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      id="phone"
+                      value={profile.phone}
+                      onChange={(e) =>
+                        setProfile({ ...profile, phone: e.target.value })
+                      }
+                      className="pl-9"
+                      placeholder="+91 XXXXX XXXXX"
+                    />
+                  </div>
+                </div>
+
+                <div className="space-y-2">
+                  <Label>Role</Label>
+                  <div className="relative">
+                    <Shield className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+                    <Input
+                      value={roleLabel}
+                      disabled
+                      className="pl-9 bg-muted"
+                    />
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Role can only be changed by an admin
+                  </p>
+                </div>
               </div>
 
-              <div className="space-y-2">
-                <Label htmlFor="phone">Phone</Label>
-                <div className="relative">
-                  <Phone className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    id="phone"
-                    value={profile.phone}
-                    onChange={(e) =>
-                      setProfile({ ...profile, phone: e.target.value })
-                    }
-                    className="pl-9"
-                    placeholder="+91 XXXXX XXXXX"
-                  />
-                </div>
+              <div className="flex justify-end">
+                <Button onClick={handleSave} disabled={saving}>
+                  {saving ? "Saving..." : "Save Changes"}
+                </Button>
               </div>
+            </CardContent>
+          </Card>
+        </TabsContent>
 
-              <div className="space-y-2">
-                <Label>Role</Label>
-                <div className="relative">
-                  <Shield className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
-                  <Input
-                    value={roleLabel}
-                    disabled
-                    className="pl-9 bg-muted"
-                  />
-                </div>
-                <p className="text-xs text-muted-foreground">
-                  Role can only be changed by an admin
-                </p>
-              </div>
-            </div>
-
-            <div className="flex justify-end">
-              <Button onClick={handleSave} disabled={saving}>
-                {saving ? "Saving..." : "Save Changes"}
-              </Button>
-            </div>
-          </CardContent>
-        </Card>
-      </div>
+        {profile.role === "admin" && (
+          <TabsContent value="payment-gateway" className="mt-6">
+            <PaymentGatewaySettings />
+          </TabsContent>
+        )}
+      </Tabs>
     </div>
   );
 }

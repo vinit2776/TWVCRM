@@ -461,3 +461,29 @@ export const DEFAULT_FACILITIES = [
   "Water",
   "WiFi",
 ] as const;
+
+// ==========================================
+// Booking Payment Record Constants
+// ==========================================
+export const BOOKING_PAYMENT_MODES = ["cash", "upi", "card", "razorpay"] as const;
+
+export const BOOKING_PAYMENT_MODE_LABELS: Record<string, string> = {
+  cash: "Cash",
+  upi: "UPI",
+  card: "Card",
+  razorpay: "Pay Online (Razorpay)",
+};
+
+export const BOOKING_PAYMENT_RECORD_STATUSES = ["pending", "verified", "rejected"] as const;
+
+export const BOOKING_PAYMENT_RECORD_STATUS_LABELS: Record<string, string> = {
+  pending: "Pending Verification",
+  verified: "Verified",
+  rejected: "Rejected",
+};
+
+export const BOOKING_PAYMENT_RECORD_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-yellow-100 text-yellow-800",
+  verified: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+};

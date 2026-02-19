@@ -508,7 +508,9 @@ export type AuditEntityType =
   | "usage_charge"
   | "billing_statement"
   | "space"
-  | "booking";
+  | "booking"
+  | "booking_payment"
+  | "app_setting";
 
 export interface AuditLog {
   id: string;
@@ -642,6 +644,44 @@ export interface BookingFeedback {
   rated_by?: string;
   rater?: User;
   booking?: Booking;
+  created_at: string;
+  updated_at: string;
+}
+
+// ==========================================
+// Booking Payment Types (multi-payment per booking)
+// ==========================================
+export type BookingPaymentMode = "cash" | "upi" | "card" | "razorpay";
+export type BookingPaymentRecordStatus = "pending" | "verified" | "rejected";
+
+export interface BookingPayment {
+  id: string;
+  booking_id: string;
+  amount: number;
+  payment_mode: BookingPaymentMode;
+  payment_reference?: string;
+  screenshot_path?: string;
+  screenshot_verified?: boolean | null;
+  verification_notes?: string;
+  status: BookingPaymentRecordStatus;
+  razorpay_order_id?: string;
+  razorpay_payment_id?: string;
+  razorpay_signature?: string;
+  created_by?: string;
+  creator?: { id: string; full_name: string };
+  created_at: string;
+  updated_at: string;
+}
+
+// ==========================================
+// App Settings Types
+// ==========================================
+export interface AppSetting {
+  id: string;
+  key: string;
+  value: string;
+  is_encrypted: boolean;
+  updated_by?: string;
   created_at: string;
   updated_at: string;
 }

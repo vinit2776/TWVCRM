@@ -79,6 +79,30 @@ export async function PATCH(
         if (!canManage) {
           return NextResponse.json({ error: "Only managers/floor managers can check in" }, { status: 403 });
         }
+
+        // PAYMENT GATE: Walk-in bookings require full payment before check-in
+        if (booking.customer_type === "walk_in") {
+          const { data: verifiedPayments } = await supabase
+            .from("booking_payments")
+            .select("amount")
+            .eq("booking_id", id)
+            .eq("status", "verified");
+
+          const totalPaid = (verifiedPayments || []).reduce(
+            (sum: number, p: { amount: number }) => sum + Number(p.amount), 0
+          );
+
+          if (totalPaid < Number(booking.total_amount)) {
+            return NextResponse.json({
+              error: "Payment required before check-in",
+              payment_required: true,
+              total_amount: Number(booking.total_amount),
+              amount_paid: totalPaid,
+              balance_due: Number(booking.total_amount) - totalPaid,
+            }, { status: 402 });
+          }
+        }
+
         updates.status = "checked_in";
         updates.check_in_at = new Date().toISOString();
         updates.checked_in_by = dbUser.id;

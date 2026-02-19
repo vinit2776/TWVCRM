@@ -1,19 +1,20 @@
 "use client";
 
 import { use, useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, LogIn, LogOut, XCircle, Mail, Loader2,
   Clock, Users as UsersIcon, IndianRupee, Wifi,
   Phone, AlertTriangle, ShieldCheck, Star,
+  Banknote, CheckCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/shared/loading-skeleton";
-import { RecordPaymentDialog } from "@/components/bookings/record-payment-dialog";
+import { CollectPaymentDialog } from "@/components/bookings/collect-payment-dialog";
 import { NoShowRefundDialog } from "@/components/bookings/no-show-refund-dialog";
 import { CheckoutFeedbackDialog } from "@/components/bookings/checkout-feedback-dialog";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
@@ -22,9 +23,12 @@ import {
   BOOKING_CUSTOMER_TYPE_LABELS, BOOKING_CUSTOMER_TYPE_COLORS,
   BOOKING_PAYMENT_STATUS_LABELS, BOOKING_PAYMENT_STATUS_COLORS,
   PAYMENT_MODE_LABELS,
+  BOOKING_PAYMENT_MODE_LABELS,
+  BOOKING_PAYMENT_RECORD_STATUS_LABELS,
+  BOOKING_PAYMENT_RECORD_STATUS_COLORS,
   FEEDBACK_DIMENSIONS,
 } from "@/lib/constants";
-import type { BookingFeedback } from "@/types";
+import type { BookingFeedback, BookingPayment } from "@/types";
 import { toast } from "sonner";
 import type { Booking } from "@/types";
 
@@ -38,12 +42,20 @@ function formatTime12(timeStr: string): string {
 export default function BookingDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [booking, setBooking] = useState<Booking & { voucher_issuances?: { voucher?: { voucher_code: string }; is_active: boolean }[] } | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [refundDialogOpen, setRefundDialogOpen] = useState(false);
   const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false);
+
+  // Payment records + gateway config
+  const [existingPayments, setExistingPayments] = useState<BookingPayment[]>([]);
+  const [razorpayEnabled, setRazorpayEnabled] = useState(false);
+  const [razorpayKeyId, setRazorpayKeyId] = useState("");
+  const [upiId, setUpiId] = useState("");
+  const [upiQrCodePath, setUpiQrCodePath] = useState("");
 
   const fetchBooking = useCallback(async () => {
     setLoading(true);
@@ -52,10 +64,36 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
       const json = await res.json();
       setBooking(json.data || null);
     }
+
+    // Fetch existing payment records
+    const paymentsRes = await fetch(`/api/booking-payments?booking_id=${id}`);
+    if (paymentsRes.ok) {
+      const pJson = await paymentsRes.json();
+      setExistingPayments(pJson.data || []);
+    }
+
+    // Fetch public gateway settings
+    const settingsRes = await fetch("/api/settings/public");
+    if (settingsRes.ok) {
+      const sJson = await settingsRes.json();
+      const settings = sJson.data || {};
+      setRazorpayEnabled(settings.razorpay_enabled === "true");
+      setRazorpayKeyId(settings.razorpay_key_id || "");
+      setUpiId(settings.upi_id || "");
+      setUpiQrCodePath(settings.upi_qr_code_path || "");
+    }
+
     setLoading(false);
   }, [id]);
 
   useEffect(() => { fetchBooking(); }, [fetchBooking]);
+
+  // Auto-open collect payment dialog if redirected from booking creation
+  useEffect(() => {
+    if (searchParams.get("collect_payment") === "true" && !loading && booking) {
+      setPaymentDialogOpen(true);
+    }
+  }, [searchParams, loading, booking]);
 
   const handleStatusAction = async (action: string) => {
     const body: Record<string, string> = {};
@@ -87,6 +125,15 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           body: JSON.stringify({ type: "cleaning" }),
         }).catch(() => {});
         setFeedbackDialogOpen(true);
+      }
+    } else if (res.status === 402) {
+      // Payment required — open collect-payment dialog
+      const err = await res.json().catch(() => null);
+      if (err?.payment_required) {
+        toast.info("Payment required before check-in. Please collect payment first.");
+        setPaymentDialogOpen(true);
+      } else {
+        toast.error(err?.error || "Payment required");
       }
     } else {
       const err = await res.json().catch(() => null);
@@ -184,9 +231,9 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <LogOut className="mr-1 h-4 w-4" />Check Out
             </Button>
           )}
-          {booking.payment_status === "pending" && booking.customer_type === "walk_in" && (
+          {booking.customer_type === "walk_in" && booking.payment_status !== "paid" && (
             <Button variant="outline" size="sm" onClick={() => setPaymentDialogOpen(true)}>
-              <IndianRupee className="mr-1 h-4 w-4" />Record Payment
+              <IndianRupee className="mr-1 h-4 w-4" />Collect Payment
             </Button>
           )}
           {booking.status === "no_show" && !booking.refund_status && (
@@ -315,6 +362,44 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <span className="text-muted-foreground">Total Amount</span>
               <span>{formatCurrency(booking.total_amount)}</span>
             </div>
+
+            {/* Payment summary from booking_payments */}
+            {(() => {
+              const verifiedTotal = existingPayments
+                .filter((p) => p.status === "verified")
+                .reduce((sum, p) => sum + Number(p.amount), 0);
+              const pendingTotal = existingPayments
+                .filter((p) => p.status === "pending")
+                .reduce((sum, p) => sum + Number(p.amount), 0);
+              const balanceDue = Math.max(0, Number(booking.total_amount) - verifiedTotal);
+
+              return (
+                <>
+                  {existingPayments.length > 0 && (
+                    <>
+                      <Separator />
+                      <div className="flex justify-between">
+                        <span className="text-muted-foreground">Amount Paid</span>
+                        <span className="font-medium text-green-700">{formatCurrency(verifiedTotal)}</span>
+                      </div>
+                      {pendingTotal > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Pending Verification</span>
+                          <span className="text-amber-600">{formatCurrency(pendingTotal)}</span>
+                        </div>
+                      )}
+                      {balanceDue > 0 && (
+                        <div className="flex justify-between">
+                          <span className="text-muted-foreground">Balance Due</span>
+                          <span className="font-medium text-red-600">{formatCurrency(balanceDue)}</span>
+                        </div>
+                      )}
+                    </>
+                  )}
+                </>
+              );
+            })()}
+
             <Separator />
             <div className="flex justify-between">
               <span className="text-muted-foreground">Payment Status</span>
@@ -333,6 +418,29 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                 <span className="text-muted-foreground">Reference</span>
                 <span className="font-mono text-xs">{booking.payment_reference}</span>
               </div>
+            )}
+
+            {/* Individual payment records */}
+            {existingPayments.length > 0 && (
+              <>
+                <Separator />
+                <p className="text-xs text-muted-foreground font-medium">Payment Records</p>
+                <div className="space-y-1.5">
+                  {existingPayments.map((p) => (
+                    <div key={p.id} className="flex items-center justify-between text-xs bg-muted/30 rounded px-2.5 py-1.5">
+                      <div className="flex items-center gap-2">
+                        <span className="font-medium">{formatCurrency(p.amount)}</span>
+                        <span className="text-muted-foreground">
+                          {BOOKING_PAYMENT_MODE_LABELS[p.payment_mode] || p.payment_mode}
+                        </span>
+                      </div>
+                      <Badge variant="secondary" className={`text-[10px] ${BOOKING_PAYMENT_RECORD_STATUS_COLORS[p.status]}`}>
+                        {BOOKING_PAYMENT_RECORD_STATUS_LABELS[p.status]}
+                      </Badge>
+                    </div>
+                  ))}
+                </div>
+              </>
             )}
           </CardContent>
         </Card>
@@ -454,12 +562,16 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         </Card>
       )}
 
-      <RecordPaymentDialog
+      <CollectPaymentDialog
         open={paymentDialogOpen}
         onOpenChange={setPaymentDialogOpen}
         bookingId={booking.id}
-        amount={booking.total_amount}
+        totalAmount={Number(booking.total_amount)}
         onSuccess={fetchBooking}
+        razorpayEnabled={razorpayEnabled}
+        razorpayKeyId={razorpayKeyId}
+        upiId={upiId}
+        upiQrCodePath={upiQrCodePath}
       />
 
       <NoShowRefundDialog
