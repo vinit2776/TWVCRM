@@ -19,8 +19,8 @@ import { toast } from "sonner";
 import type { Space, SpaceFacility } from "@/types";
 
 interface AvailableSlot {
-  start: string;
-  end: string;
+  start_time: string;
+  end_time: string;
 }
 
 interface ContractOption {
@@ -177,8 +177,8 @@ function NewBookingForm() {
   const timeOptions = (() => {
     const times = new Set<string>();
     availableSlots.forEach(slot => {
-      times.add(slot.start);
-      times.add(slot.end);
+      times.add(slot.start_time);
+      times.add(slot.end_time);
     });
     return Array.from(times).sort();
   })();
@@ -327,9 +327,9 @@ function NewBookingForm() {
                 <div className="flex flex-wrap gap-1.5">
                   {availableSlots.map((slot, i) => (
                     <Badge key={i} variant="outline" className="text-xs bg-green-50 text-green-700 cursor-pointer hover:bg-green-100"
-                      onClick={() => { setStartTime(slot.start); setEndTime(slot.end); }}
+                      onClick={() => { setStartTime(slot.start_time); setEndTime(slot.end_time); }}
                     >
-                      {formatTime12(slot.start)} – {formatTime12(slot.end)}
+                      {formatTime12(slot.start_time)} – {formatTime12(slot.end_time)}
                     </Badge>
                   ))}
                 </div>
