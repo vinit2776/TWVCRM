@@ -186,5 +186,50 @@ export async function PATCH(
     changes: diffChanges(booking, { ...booking, ...updates }),
   });
 
+  // Log activity on lead timeline for status changes
+  if (booking.lead_id && body.status) {
+    const spaceName = (updated?.space as { name?: string } | null)?.name || "Conference Room";
+    const activityMap: Record<string, { subject: string; description: string }> = {
+      checked_in: {
+        subject: `Checked In — ${booking.booking_number}`,
+        description: `Checked in at ${spaceName} for booking #${booking.booking_number}`,
+      },
+      checked_out: {
+        subject: `Checked Out — ${booking.booking_number}`,
+        description: `Checked out from ${spaceName}. Booking #${booking.booking_number}`,
+      },
+      cancelled: {
+        subject: `Booking Cancelled — ${booking.booking_number}`,
+        description: `Booking #${booking.booking_number} at ${spaceName} was cancelled`,
+      },
+      no_show: {
+        subject: `No-Show — ${booking.booking_number}`,
+        description: `Customer did not show up for booking #${booking.booking_number} at ${spaceName}`,
+      },
+    };
+
+    const activity = activityMap[body.status];
+    if (activity) {
+      await supabase.from("activities").insert({
+        lead_id: booking.lead_id,
+        type: "note",
+        subject: activity.subject,
+        description: activity.description,
+        created_by: dbUser.id,
+      });
+    }
+  }
+
+  // Log refund approval activity
+  if (booking.lead_id && body.refund_status === "approved") {
+    await supabase.from("activities").insert({
+      lead_id: booking.lead_id,
+      type: "note",
+      subject: `Refund Exception Approved — ${booking.booking_number}`,
+      description: `Refund of ₹${body.refund_amount} approved for booking #${booking.booking_number}. Reason: ${body.refund_reason}`,
+      created_by: dbUser.id,
+    });
+  }
+
   return NextResponse.json({ data: updated });
 }

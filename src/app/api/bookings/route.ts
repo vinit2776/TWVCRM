@@ -2,8 +2,72 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createBookingSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 const DAYS_OF_WEEK = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+
+/**
+ * Find an existing lead by phone or create a new one from booking guest details.
+ * Used for walk-in and guest bookings to ensure every customer is tracked as a lead.
+ */
+async function findOrCreateLeadForBooking(
+  supabase: SupabaseClient,
+  params: {
+    guestName?: string;
+    guestEmail?: string;
+    guestPhone?: string;
+    bookerPhone: string;
+    guestCompany?: string;
+    locationId: string;
+    createdBy: string;
+  }
+): Promise<string | null> {
+  const searchPhone = params.bookerPhone || params.guestPhone;
+  if (!searchPhone) return null;
+
+  // 1. Try to find existing lead by phone/mobile match
+  const { data: existingLeads } = await supabase
+    .from("leads")
+    .select("id")
+    .or(`phone.eq.${searchPhone},mobile.eq.${searchPhone}`)
+    .limit(1);
+
+  if (existingLeads && existingLeads.length > 0) {
+    return existingLeads[0].id;
+  }
+
+  // 2. Parse guest name into first/last
+  let firstName = "Walk-in";
+  let lastName = "Customer";
+  if (params.guestName?.trim()) {
+    const parts = params.guestName.trim().split(/\s+/);
+    firstName = parts[0];
+    lastName = parts.length > 1 ? parts.slice(1).join(" ") : "—";
+  }
+
+  // 3. Create new lead
+  const { data: newLead } = await supabase
+    .from("leads")
+    .insert({
+      first_name: firstName,
+      last_name: lastName,
+      email: params.guestEmail || null,
+      phone: params.guestPhone || null,
+      mobile: params.bookerPhone,
+      company: params.guestCompany || null,
+      location_id: params.locationId,
+      source: "direct_walkin",
+      status: "new",
+      rating: "none",
+      score: 0,
+      created_by: params.createdBy,
+      assigned_to: params.createdBy,
+    })
+    .select("id")
+    .single();
+
+  return newLead?.id || null;
+}
 
 function timeToMinutes(time: string): number {
   const [h, m] = time.split(":").map(Number);
@@ -220,13 +284,38 @@ export async function POST(request: NextRequest) {
   }
 
   if (input.customer_type === "walk_in") {
-    leadId = input.lead_id;
+    if (input.lead_id) {
+      leadId = input.lead_id;
+    } else {
+      // Auto-create or find lead from guest details
+      leadId = (await findOrCreateLeadForBooking(supabase, {
+        guestName: input.guest_name,
+        guestEmail: input.guest_email,
+        guestPhone: input.guest_phone,
+        bookerPhone: input.booker_phone,
+        guestCompany: input.guest_company,
+        locationId: space.location_id,
+        createdBy: dbUser.id,
+      })) || undefined;
+    }
     paymentStatus = "pending";
   }
 
-  // For guest type, also set guest details from input
+  // For guest type, create/find lead for the guest person (separate from contract holder)
   if (input.customer_type === "guest") {
-    // leadId already set from contract above
+    const guestLeadId = await findOrCreateLeadForBooking(supabase, {
+      guestName: input.guest_name,
+      guestEmail: input.guest_email,
+      guestPhone: input.guest_phone,
+      bookerPhone: input.booker_phone,
+      guestCompany: input.guest_company,
+      locationId: space.location_id,
+      createdBy: dbUser.id,
+    });
+    if (guestLeadId) {
+      leadId = guestLeadId; // Booking tracks the guest, not the contract holder
+    }
+    // Note: usage charge is already linked to contract via contractId + contract.lead_id
   }
 
   // 5. Insert booking
@@ -313,7 +402,18 @@ export async function POST(request: NextRequest) {
     // The voucher can be issued later from the booking detail page
   }
 
-  // 8. Audit log
+  // 8. Log activity on lead timeline
+  if (leadId && booking) {
+    await supabase.from("activities").insert({
+      lead_id: leadId,
+      type: "meeting",
+      subject: `Conference Room Booking — ${space.name}`,
+      description: `Booked ${space.name} on ${input.booking_date} from ${input.start_time}–${input.end_time} (${durationHours}hrs). Booking #${booking.booking_number}. Amount: ₹${totalAmount}`,
+      created_by: dbUser.id,
+    });
+  }
+
+  // 9. Audit log
   logAudit(supabase, {
     entityType: "booking",
     entityId: booking.id,
@@ -322,7 +422,7 @@ export async function POST(request: NextRequest) {
     changes: { record: { old: null, new: booking } },
   });
 
-  // 9. Return full booking
+  // 10. Return full booking
   const { data: fullBooking } = await supabase
     .from("bookings")
     .select("*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate), location:locations!bookings_location_id_fkey(id, name, code), contract:contracts!bookings_contract_id_fkey(id, contract_number), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email), facilities:booking_facilities(*)")
