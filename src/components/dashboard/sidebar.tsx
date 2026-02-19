@@ -28,24 +28,35 @@ import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
 import { createClient } from "@/lib/supabase/client";
 
-const allNavItems = [
+type NavItem = {
+  href: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  roles: string[] | null; // null = visible to all roles
+};
+
+const allNavItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
-  { href: "/leads", label: "Leads", icon: Users, roles: ["admin", "manager", "sales_rep"] },
-  { href: "/pipeline", label: "Pipeline", icon: GitBranch, roles: ["admin", "manager", "sales_rep"] },
-  { href: "/activities", label: "Activities", icon: Activity, roles: ["admin", "manager", "sales_rep"] },
-  { href: "/tasks", label: "Tasks", icon: CheckSquare, roles: ["admin", "manager", "sales_rep"] },
-  { href: "/proposals", label: "Proposals", icon: FileText, roles: ["admin", "manager", "sales_rep"] },
-  { href: "/invoices", label: "Invoices", icon: Receipt, roles: ["admin", "manager", "sales_rep"] },
-  { href: "/contracts", label: "Contracts", icon: ScrollText, roles: ["admin", "manager", "sales_rep"] },
-  { href: "/billing", label: "Billing", icon: IndianRupee, roles: ["admin", "manager", "sales_rep"] },
+  { href: "/leads", label: "Leads", icon: Users, roles: null },
+  { href: "/pipeline", label: "Pipeline", icon: GitBranch, roles: null },
+  { href: "/activities", label: "Activities", icon: Activity, roles: null },
+  { href: "/tasks", label: "Tasks", icon: CheckSquare, roles: null },
+  { href: "/proposals", label: "Proposals", icon: FileText, roles: null },
+  { href: "/invoices", label: "Invoices", icon: Receipt, roles: null },
+  { href: "/contracts", label: "Contracts", icon: ScrollText, roles: null },
+  { href: "/billing", label: "Billing", icon: IndianRupee, roles: null },
   { href: "/spaces", label: "Spaces", icon: DoorOpen, roles: null },
   { href: "/bookings", label: "Bookings", icon: CalendarClock, roles: null },
-  { href: "/documents", label: "Documents", icon: FolderOpen, roles: ["admin", "manager", "sales_rep"] },
+  { href: "/documents", label: "Documents", icon: FolderOpen, roles: null },
+  { href: "/vouchers", label: "Vouchers", icon: Wifi, roles: null },
 ];
 
-const bottomNavItems = [
-  { href: "/team", label: "Team", icon: UserPlus },
-  { href: "/settings", label: "Settings", icon: Settings },
+const adminNavItems = [
+  { href: "/locations", label: "Locations", icon: MapPin, roles: ["admin", "manager"] },
+  { href: "/audit-logs", label: "Audit Logs", icon: ClipboardList, roles: ["admin", "manager"] },
+  { href: "/infrastructure", label: "Infrastructure", icon: Server, roles: ["admin"] },
+  { href: "/settings", label: "Settings", icon: Settings, roles: ["admin"] },
+  { href: "/team", label: "Team", icon: UserPlus, roles: ["admin", "manager", "sales_rep"] },
 ];
 
 export function Sidebar() {
@@ -67,11 +78,13 @@ export function Sidebar() {
     });
   }, []);
 
-  const isAdmin = userRole === "admin";
-
   // Filter nav items based on role (null = visible to all roles)
   const visibleNavItems = allNavItems.filter(
     (item) => item.roles === null || (userRole && item.roles.includes(userRole))
+  );
+
+  const visibleAdminItems = adminNavItems.filter(
+    (item) => userRole && item.roles.includes(userRole)
   );
 
   return (
@@ -128,91 +141,31 @@ export function Sidebar() {
           })}
         </nav>
 
-        {/* Bottom nav */}
-        <div className="border-t border-sidebar-accent px-3 py-4 space-y-1">
-          {isAdmin && (
-            <Link
-              href="/vouchers"
-              onClick={() => setSidebarOpen(false)}
-              className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                pathname === "/vouchers" || pathname.startsWith("/vouchers/")
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-              )}
-            >
-              <Wifi className="h-5 w-5 shrink-0" />
-              Vouchers
-            </Link>
-          )}
-          {isAdmin && (
-            <Link
-              href="/locations"
-              onClick={() => setSidebarOpen(false)}
-              className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                pathname === "/locations" || pathname.startsWith("/locations/")
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-              )}
-            >
-              <MapPin className="h-5 w-5 shrink-0" />
-              Locations
-            </Link>
-          )}
-          {isAdmin && (
-            <Link
-              href="/audit-logs"
-              onClick={() => setSidebarOpen(false)}
-              className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                pathname === "/audit-logs" || pathname.startsWith("/audit-logs/")
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-              )}
-            >
-              <ClipboardList className="h-5 w-5 shrink-0" />
-              Audit Logs
-            </Link>
-          )}
-          {isAdmin && (
-            <Link
-              href="/infrastructure"
-              onClick={() => setSidebarOpen(false)}
-              className={cn(
-                "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                pathname === "/infrastructure"
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-              )}
-            >
-              <Server className="h-5 w-5 shrink-0" />
-              Infrastructure
-            </Link>
-          )}
-          {bottomNavItems.map((item) => {
-            // Floor managers only see Settings, not Team
-            if (userRole === "floor_manager" && item.href === "/team") return null;
-            const isActive =
-              pathname === item.href || pathname.startsWith(item.href + "/");
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => setSidebarOpen(false)}
-                className={cn(
-                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-                )}
-              >
-                <item.icon className="h-5 w-5 shrink-0" />
-                {item.label}
-              </Link>
-            );
-          })}
-        </div>
+        {/* Bottom nav — role-restricted items */}
+        {visibleAdminItems.length > 0 && (
+          <div className="border-t border-sidebar-accent px-3 py-4 space-y-1">
+            {visibleAdminItems.map((item) => {
+              const isActive =
+                pathname === item.href || pathname.startsWith(item.href + "/");
+              return (
+                <Link
+                  key={item.href}
+                  href={item.href}
+                  onClick={() => setSidebarOpen(false)}
+                  className={cn(
+                    "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                    isActive
+                      ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                      : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                  )}
+                >
+                  <item.icon className="h-5 w-5 shrink-0" />
+                  {item.label}
+                </Link>
+              );
+            })}
+          </div>
+        )}
       </aside>
     </>
   );
