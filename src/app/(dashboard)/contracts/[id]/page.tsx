@@ -25,6 +25,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
+import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import {
   Dialog,
@@ -513,6 +514,11 @@ export default function ContractDetailPage({
             leadEmail={contract.lead?.email}
             locationId={contract.location_id}
           />
+
+          {/* Billing Section */}
+          {["active", "completed"].includes(contract.status) && (
+            <ContractBillingSection contractId={id} />
+          )}
 
           {/* Notes */}
           {contract.notes && (

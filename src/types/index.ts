@@ -510,7 +510,11 @@ export type AuditEntityType =
   | "space"
   | "booking"
   | "booking_payment"
-  | "app_setting";
+  | "app_setting"
+  | "contract_facility"
+  | "accounting_period"
+  | "facility_usage_record"
+  | "contract_payment";
 
 export interface AuditLog {
   id: string;
@@ -715,4 +719,143 @@ export interface DashboardStats {
   recent_activities: Activity[];
   conversion: { total_leads: number; won: number; lost: number; rate: number };
   pending_follow_ups: number;
+}
+
+// ==========================================
+// Accounting Module Types
+// ==========================================
+export type AccountingPeriodStatus = "open" | "locked";
+export type CashHandoverStatus = "pending_handover" | "handed_over";
+export type ContractPaymentMode = "cash" | "upi" | "card" | "bank_transfer" | "razorpay";
+export type ContractPaymentStatus = "pending" | "verified" | "rejected";
+export type GstInvoiceStatus = "invoiced" | "sent";
+
+export interface ContractFacility {
+  id: string;
+  contract_id: string;
+  name: string;
+  unit: string;
+  cost_per_unit: number;
+  free_quota: number;
+  is_active: boolean;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AccountingPeriod {
+  id: string;
+  year: number;
+  month: number;
+  status: AccountingPeriodStatus;
+  locked_at?: string;
+  locked_by?: string;
+  locker?: User;
+  unlocked_at?: string;
+  unlocked_by?: string;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FacilityUsageRecord {
+  id: string;
+  accounting_period_id: string;
+  contract_id: string;
+  contract_facility_id: string;
+  contract_facility?: ContractFacility;
+  quantity_used: number;
+  free_quota_applied: number;
+  billable_quantity: number;
+  unit_price: number;
+  total_charge: number;
+  notes?: string;
+  is_template?: boolean; // true when auto-populated from previous month (not yet saved)
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContractPayment {
+  id: string;
+  payment_number: string;
+  contract_id: string;
+  contract?: Contract;
+  accounting_period_id?: string;
+  amount: number;
+  payment_mode: ContractPaymentMode;
+  payment_reference?: string;
+  screenshot_path?: string;
+  screenshot_verified?: boolean | null;
+  status: ContractPaymentStatus;
+  payment_date: string;
+  gst_invoice_number?: string;
+  gst_invoice_path?: string;
+  gst_invoice_status?: GstInvoiceStatus | null;
+  gst_invoice_sent_at?: string;
+  gst_invoice_sent_to?: string;
+  reminder_sent_at?: string;
+  cash_handover_status?: CashHandoverStatus | null;
+  collected_by?: string;
+  collector?: User;
+  collected_at?: string;
+  handed_over_to?: string;
+  handed_over_at?: string;
+  handover_confirmed_by?: string;
+  handover_confirmed_at?: string;
+  handover_notes?: string;
+  notes?: string;
+  created_by?: string;
+  creator?: User;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgingBucket {
+  label: string;
+  days_range: string;
+  count: number;
+  total_amount: number;
+  contract_ids: string[];
+}
+
+export interface ContractAccountingSummary {
+  contract: Contract;
+  recurring_amount: number;
+  carried_forward_balance: number;
+  facility_usage_total: number;
+  facility_usages: FacilityUsageRecord[];
+  adhoc_charges_total: number;
+  adhoc_charges: UsageCharge[];
+  booking_charges_total: number;
+  bookings: Booking[];
+  payments_total: number;
+  payments: ContractPayment[];
+  gst_invoice_number?: string;
+  gst_invoice_status?: GstInvoiceStatus | null;
+  gst_invoice_path?: string;
+  gst_invoice_sent_at?: string;
+  current_month_total: number;
+  total_owed: number;
+}
+
+export interface MonthlyAccountingSummary {
+  period: AccountingPeriod;
+  contracts: ContractAccountingSummary[];
+  walkin_bookings: {
+    booking: Booking;
+    payments: BookingPayment[];
+  }[];
+  cash_collections: {
+    pending: (ContractPayment | BookingPayment)[];
+    handed_over: (ContractPayment | BookingPayment)[];
+  };
+  aging_buckets: AgingBucket[];
+  totals: {
+    total_billable: number;
+    total_collected: number;
+    total_outstanding: number;
+    total_cash_pending_handover: number;
+    total_carried_forward: number;
+  };
 }

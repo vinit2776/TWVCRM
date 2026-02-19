@@ -21,6 +21,7 @@ import {
   MapPin,
   DoorOpen,
   CalendarClock,
+  Calculator,
   Server,
   X,
 } from "lucide-react";
@@ -45,6 +46,7 @@ const allNavItems: NavItem[] = [
   { href: "/invoices", label: "Invoices", icon: Receipt, roles: null },
   { href: "/contracts", label: "Contracts", icon: ScrollText, roles: null },
   { href: "/billing", label: "Billing", icon: IndianRupee, roles: null },
+  { href: "/accounting", label: "Accounting", icon: Calculator, roles: null },
   { href: "/spaces", label: "Spaces", icon: DoorOpen, roles: null },
   { href: "/bookings", label: "Bookings", icon: CalendarClock, roles: null },
   { href: "/documents", label: "Documents", icon: FolderOpen, roles: null },

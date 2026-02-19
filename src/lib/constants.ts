@@ -487,3 +487,75 @@ export const BOOKING_PAYMENT_RECORD_STATUS_COLORS: Record<string, string> = {
   verified: "bg-green-100 text-green-800",
   rejected: "bg-red-100 text-red-800",
 };
+
+// ==========================================
+// Accounting Module Constants
+// ==========================================
+
+export const ACCOUNTING_PERIOD_STATUSES = ["open", "locked"] as const;
+
+export const ACCOUNTING_PERIOD_STATUS_LABELS: Record<string, string> = {
+  open: "Open",
+  locked: "Locked",
+};
+
+export const ACCOUNTING_PERIOD_STATUS_COLORS: Record<string, string> = {
+  open: "bg-green-100 text-green-800",
+  locked: "bg-red-100 text-red-800",
+};
+
+export const CASH_HANDOVER_STATUSES = ["pending_handover", "handed_over"] as const;
+
+export const CASH_HANDOVER_STATUS_LABELS: Record<string, string> = {
+  pending_handover: "Pending Handover",
+  handed_over: "Handed Over",
+};
+
+export const CASH_HANDOVER_STATUS_COLORS: Record<string, string> = {
+  pending_handover: "bg-yellow-100 text-yellow-800",
+  handed_over: "bg-green-100 text-green-800",
+};
+
+export const CONTRACT_PAYMENT_MODES = ["cash", "upi", "card", "bank_transfer", "razorpay"] as const;
+
+export const CONTRACT_PAYMENT_MODE_LABELS: Record<string, string> = {
+  cash: "Cash",
+  upi: "UPI",
+  card: "Card",
+  bank_transfer: "Bank Transfer",
+  razorpay: "Razorpay",
+};
+
+export const CONTRACT_PAYMENT_STATUSES = ["pending", "verified", "rejected"] as const;
+
+export const CONTRACT_PAYMENT_STATUS_LABELS: Record<string, string> = {
+  pending: "Pending",
+  verified: "Verified",
+  rejected: "Rejected",
+};
+
+export const CONTRACT_PAYMENT_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-yellow-100 text-yellow-800",
+  verified: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+};
+
+export const GST_INVOICE_STATUSES = [null, "invoiced", "sent"] as const;
+
+export const GST_INVOICE_STATUS_LABELS: Record<string, string> = {
+  "": "No Invoice",
+  invoiced: "Invoiced",
+  sent: "Sent",
+};
+
+export const GST_INVOICE_STATUS_COLORS: Record<string, string> = {
+  "": "bg-gray-100 text-gray-800",
+  invoiced: "bg-blue-100 text-blue-800",
+  sent: "bg-green-100 text-green-800",
+};
+
+export const MONTH_NAMES = [
+  "January", "February", "March", "April",
+  "May", "June", "July", "August",
+  "September", "October", "November", "December",
+] as const;

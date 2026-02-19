@@ -285,3 +285,47 @@ export const createBookingSchema = z.object({
 }, { message: "Contract ID required for guest bookings", path: ["contract_id"] });
 
 export type CreateBookingInput = z.input<typeof createBookingSchema>;
+
+// ==========================================
+// Accounting Module Validations
+// ==========================================
+export const createContractFacilitySchema = z.object({
+  contract_id: z.string().uuid("Invalid contract ID"),
+  name: z.string().min(1, "Facility name is required"),
+  unit: z.string().min(1, "Unit is required"),
+  cost_per_unit: z.number().min(0, "Cost must be non-negative"),
+  free_quota: z.number().min(0, "Free quota must be non-negative"),
+});
+
+export type CreateContractFacilityInput = z.infer<typeof createContractFacilitySchema>;
+
+export const createFacilityUsageSchema = z.object({
+  accounting_period_id: z.string().uuid("Invalid period ID"),
+  contract_id: z.string().uuid("Invalid contract ID"),
+  contract_facility_id: z.string().uuid("Invalid facility ID"),
+  quantity_used: z.number().min(0, "Quantity must be non-negative"),
+  notes: z.string().optional(),
+});
+
+export type CreateFacilityUsageInput = z.infer<typeof createFacilityUsageSchema>;
+
+export const createContractPaymentSchema = z.object({
+  contract_id: z.string().uuid("Invalid contract ID"),
+  accounting_period_id: z.string().uuid("Invalid period ID").optional(),
+  amount: z.number().positive("Amount must be positive"),
+  payment_mode: z.enum(["cash", "upi", "card", "bank_transfer", "razorpay"]),
+  payment_reference: z.string().optional(),
+  payment_date: z.string().min(1, "Payment date is required"),
+  notes: z.string().optional(),
+});
+
+export type CreateContractPaymentInput = z.infer<typeof createContractPaymentSchema>;
+
+export const lockAccountingPeriodSchema = z.object({
+  year: z.number().int().min(2020).max(2100),
+  month: z.number().int().min(1).max(12),
+});
+
+export const updateGstInvoiceSchema = z.object({
+  gst_invoice_number: z.string().min(1, "GST invoice number is required"),
+});

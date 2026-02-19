@@ -84,16 +84,26 @@ export async function POST(request: NextRequest) {
   // Determine initial status based on payment mode
   const status = (payment_mode === "cash" || payment_mode === "card") ? "verified" : "pending";
 
+  // Build payment record with cash handover tracking
+  const paymentRecord: Record<string, unknown> = {
+    booking_id,
+    amount,
+    payment_mode,
+    payment_reference: payment_reference?.trim() || null,
+    status,
+    created_by: dbUser.id,
+  };
+
+  // Cash handover tracking
+  if (payment_mode === "cash") {
+    paymentRecord.cash_handover_status = "pending_handover";
+    paymentRecord.collected_by = dbUser.id;
+    paymentRecord.collected_at = new Date().toISOString();
+  }
+
   const { data: payment, error } = await supabase
     .from("booking_payments")
-    .insert({
-      booking_id,
-      amount,
-      payment_mode,
-      payment_reference: payment_reference?.trim() || null,
-      status,
-      created_by: dbUser.id,
-    })
+    .insert(paymentRecord)
     .select(PAYMENT_SELECT)
     .single();
 
