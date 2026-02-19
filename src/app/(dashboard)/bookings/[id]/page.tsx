@@ -15,6 +15,7 @@ import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { RecordPaymentDialog } from "@/components/bookings/record-payment-dialog";
 import { NoShowRefundDialog } from "@/components/bookings/no-show-refund-dialog";
+import { CheckoutFeedbackDialog } from "@/components/bookings/checkout-feedback-dialog";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import {
   BOOKING_STATUS_LABELS, BOOKING_STATUS_COLORS,
@@ -40,6 +41,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [actionLoading, setActionLoading] = useState(false);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [refundDialogOpen, setRefundDialogOpen] = useState(false);
+  const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false);
 
   const fetchBooking = useCallback(async () => {
     setLoading(true);
@@ -75,13 +77,14 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
       );
       fetchBooking();
 
-      // On checkout, send cleaning alert
+      // On checkout, send cleaning alert and open feedback dialog
       if (action === "check_out") {
         fetch(`/api/bookings/${id}/email`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ type: "cleaning" }),
         }).catch(() => {});
+        setFeedbackDialogOpen(true);
       }
     } else {
       const err = await res.json().catch(() => null);
@@ -453,6 +456,15 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         bookingId={booking.id}
         bookingNumber={booking.booking_number || ""}
         totalAmount={booking.total_amount}
+        customerName={customerName}
+        onSuccess={fetchBooking}
+      />
+
+      <CheckoutFeedbackDialog
+        open={feedbackDialogOpen}
+        onOpenChange={setFeedbackDialogOpen}
+        bookingId={booking.id}
+        bookingNumber={booking.booking_number || ""}
         customerName={customerName}
         onSuccess={fetchBooking}
       />

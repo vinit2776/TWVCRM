@@ -42,6 +42,7 @@ import { LeadProposalsTab } from "@/components/leads/lead-proposals-tab";
 import { LeadContractsTab } from "@/components/leads/lead-contracts-tab";
 import { LeadDocumentsTab } from "@/components/leads/lead-documents-tab";
 import { LeadTasksTab } from "@/components/leads/lead-tasks-tab";
+import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
 
 export default function LeadDetailPage({
   params,
@@ -141,6 +142,7 @@ export default function LeadDetailPage({
           <TabsTrigger value="proposals">Proposals</TabsTrigger>
           <TabsTrigger value="contracts">Contracts</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
+          <TabsTrigger value="feedback">Feedback</TabsTrigger>
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6 mt-4">
@@ -452,6 +454,10 @@ export default function LeadDetailPage({
 
         <TabsContent value="documents" className="mt-4">
           <LeadDocumentsTab leadId={id} />
+        </TabsContent>
+
+        <TabsContent value="feedback" className="mt-4">
+          <LeadFeedbacksTab leadId={id} />
         </TabsContent>
       </Tabs>
 

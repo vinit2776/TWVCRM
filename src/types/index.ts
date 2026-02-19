@@ -624,6 +624,28 @@ export interface BookingFacility {
 }
 
 // ==========================================
+// Booking Feedback Types
+// ==========================================
+export interface BookingFeedback {
+  id: string;
+  booking_id: string;
+  lead_id: string;
+  space_etiquette: number | null;
+  payment_discipline: number | null;
+  community_behavior: number | null;
+  guest_management: number | null;
+  resource_usage: number | null;
+  renewal_likelihood: number | null;
+  overall_rating: number | null;
+  notes?: string;
+  rated_by?: string;
+  rater?: User;
+  booking?: Booking;
+  created_at: string;
+  updated_at: string;
+}
+
+// ==========================================
 // API Response Types
 // ==========================================
 export interface ApiResponse<T> {

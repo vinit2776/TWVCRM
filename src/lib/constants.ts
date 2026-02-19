@@ -439,6 +439,18 @@ export const PAYMENT_MODE_LABELS: Record<string, string> = {
   online: "Online",
 };
 
+// ==========================================
+// Booking Feedback Dimensions
+// ==========================================
+export const FEEDBACK_DIMENSIONS = [
+  { key: "space_etiquette", label: "Space Etiquette", description: "Noise levels, cleanliness, respecting quiet zones" },
+  { key: "payment_discipline", label: "Payment Discipline", description: "On-time payments, no bounced transactions" },
+  { key: "community_behavior", label: "Community Behavior", description: "Respectful to other members, positive participation" },
+  { key: "guest_management", label: "Guest Management", description: "Follows visitor policies, no overcrowding" },
+  { key: "resource_usage", label: "Resource Usage", description: "Fair use of meeting rooms and amenities" },
+  { key: "renewal_likelihood", label: "Renewal Likelihood", description: "Gut feel on retention probability" },
+] as const;
+
 export const DEFAULT_FACILITIES = [
   "Projector",
   "Whiteboard",
