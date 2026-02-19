@@ -150,6 +150,21 @@ export async function PATCH(
     updates.payment_reference = body.payment_reference;
   }
 
+  // Refund updates (for no-show exceptions)
+  if (body.refund_status) {
+    updates.refund_status = body.refund_status;
+  }
+  if (body.refund_amount !== undefined) {
+    updates.refund_amount = body.refund_amount;
+  }
+  if (body.refund_reason) {
+    updates.refund_reason = body.refund_reason;
+  }
+  if (body.refund_status === "approved") {
+    updates.refund_approved_by = dbUser.id;
+    updates.refund_approved_at = new Date().toISOString();
+  }
+
   if (Object.keys(updates).length === 0) {
     return NextResponse.json({ error: "No valid updates provided" }, { status: 400 });
   }

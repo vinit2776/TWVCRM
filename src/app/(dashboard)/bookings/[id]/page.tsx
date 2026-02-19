@@ -6,6 +6,7 @@ import Link from "next/link";
 import {
   ArrowLeft, LogIn, LogOut, XCircle, Mail, Loader2,
   Clock, Users as UsersIcon, IndianRupee, Wifi,
+  Phone, AlertTriangle, ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -13,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { RecordPaymentDialog } from "@/components/bookings/record-payment-dialog";
+import { NoShowRefundDialog } from "@/components/bookings/no-show-refund-dialog";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import {
   BOOKING_STATUS_LABELS, BOOKING_STATUS_COLORS,
@@ -37,6 +39,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
+  const [refundDialogOpen, setRefundDialogOpen] = useState(false);
 
   const fetchBooking = useCallback(async () => {
     setLoading(true);
@@ -181,6 +184,16 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <IndianRupee className="mr-1 h-4 w-4" />Record Payment
             </Button>
           )}
+          {booking.status === "no_show" && !booking.refund_status && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setRefundDialogOpen(true)}
+              className="border-orange-300 text-orange-700 hover:bg-orange-50"
+            >
+              <ShieldCheck className="mr-1 h-4 w-4" />Request Refund Exception
+            </Button>
+          )}
           {actionLoading && <Loader2 className="h-4 w-4 animate-spin self-center" />}
         </div>
       </div>
@@ -249,6 +262,18 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <div className="flex justify-between">
                 <span className="text-muted-foreground">Phone</span>
                 <span>{customerPhone}</span>
+              </div>
+            )}
+            {booking.booker_phone && booking.booker_phone !== customerPhone && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground flex items-center gap-1"><Phone className="h-3 w-3" />Booker Phone</span>
+                <span>{booking.booker_phone}</span>
+              </div>
+            )}
+            {booking.booker_phone && !customerPhone && (
+              <div className="flex justify-between">
+                <span className="text-muted-foreground flex items-center gap-1"><Phone className="h-3 w-3" />Phone</span>
+                <span>{booking.booker_phone}</span>
               </div>
             )}
             {(booking.guest_company || booking.lead?.company) && (
@@ -323,6 +348,56 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           </Card>
         )}
 
+        {/* Refund Info (No-Show Exception) */}
+        {booking.status === "no_show" && booking.refund_status && (
+          <Card className="border-orange-200">
+            <CardHeader>
+              <CardTitle className="text-sm flex items-center gap-2">
+                <ShieldCheck className="h-4 w-4 text-orange-600" />
+                Refund Exception
+                <Badge variant="secondary" className="bg-orange-100 text-orange-800 text-xs">
+                  {booking.refund_status === "approved" ? "Approved" : booking.refund_status === "processed" ? "Processed" : "Requested"}
+                </Badge>
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-2 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Refund Amount</span>
+                <span className="font-bold text-orange-700">{formatCurrency(booking.refund_amount || 0)}</span>
+              </div>
+              {booking.refund_reason && (
+                <div>
+                  <span className="text-muted-foreground text-xs">Reason</span>
+                  <p className="text-sm mt-0.5">{booking.refund_reason}</p>
+                </div>
+              )}
+              {booking.refund_approved_at && (
+                <div className="flex justify-between text-xs text-muted-foreground pt-1 border-t">
+                  <span>Approved at</span>
+                  <span>{formatDateTime(booking.refund_approved_at)}</span>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+        )}
+
+        {/* No-Show without refund */}
+        {booking.status === "no_show" && !booking.refund_status && (
+          <Card className="border-amber-200 bg-amber-50/50">
+            <CardContent className="py-4">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="h-5 w-5 text-amber-600 mt-0.5 shrink-0" />
+                <div className="text-sm">
+                  <p className="font-medium text-amber-800">No-Show — No Refund</p>
+                  <p className="text-amber-700 text-xs mt-1">
+                    Standard policy applied. If an exception is needed, use the &ldquo;Request Refund Exception&rdquo; button above.
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         {/* Voucher */}
         {activeVoucher && (
           <Card>
@@ -369,6 +444,16 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         onOpenChange={setPaymentDialogOpen}
         bookingId={booking.id}
         amount={booking.total_amount}
+        onSuccess={fetchBooking}
+      />
+
+      <NoShowRefundDialog
+        open={refundDialogOpen}
+        onOpenChange={setRefundDialogOpen}
+        bookingId={booking.id}
+        bookingNumber={booking.booking_number || ""}
+        totalAmount={booking.total_amount}
+        customerName={customerName}
         onSuccess={fetchBooking}
       />
     </div>

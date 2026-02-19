@@ -45,7 +45,11 @@ export async function GET(request: NextRequest) {
   if (bookingDate) query = query.eq("booking_date", bookingDate);
   if (dateFrom) query = query.gte("booking_date", dateFrom);
   if (dateTo) query = query.lte("booking_date", dateTo);
-  if (search?.trim()) query = query.ilike("booking_number", `%${search.trim()}%`);
+  if (search?.trim()) {
+    const s = search.trim();
+    // Search by booking number, booker phone, guest name, or guest phone
+    query = query.or(`booking_number.ilike.%${s}%,booker_phone.ilike.%${s}%,guest_name.ilike.%${s}%,guest_phone.ilike.%${s}%`);
+  }
 
   query = query.order("booking_date", { ascending: false }).order("start_time", { ascending: true }).range(offset, offset + limit - 1);
 
@@ -238,6 +242,7 @@ export async function POST(request: NextRequest) {
       customer_type: input.customer_type,
       contract_id: contractId,
       lead_id: leadId,
+      booker_phone: input.booker_phone,
       guest_name: input.guest_name,
       guest_email: input.guest_email || null,
       guest_phone: input.guest_phone,

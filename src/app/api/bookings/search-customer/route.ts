@@ -1,0 +1,131 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+/**
+ * GET /api/bookings/search-customer?q=<phone_or_name>
+ * Searches across leads (phone/mobile/name), past bookings (booker_phone/guest_name/guest_phone),
+ * and voucher issuances (seat_occupant_email) to find repeat customers.
+ * Returns a unified list of customer suggestions with their details.
+ */
+export async function GET(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { searchParams } = new URL(request.url);
+  const q = searchParams.get("q")?.trim();
+
+  if (!q || q.length < 3) {
+    return NextResponse.json({ data: [] });
+  }
+
+  // 1. Search leads by phone, mobile, or name
+  const { data: leads } = await supabase
+    .from("leads")
+    .select("id, first_name, last_name, company, email, phone, mobile")
+    .or(`phone.ilike.%${q}%,mobile.ilike.%${q}%,first_name.ilike.%${q}%,last_name.ilike.%${q}%`)
+    .limit(10);
+
+  // 2. Search past bookings for repeat walk-in / guest customers by phone or name
+  const { data: pastBookings } = await supabase
+    .from("bookings")
+    .select("booker_phone, guest_name, guest_email, guest_phone, guest_company, customer_type, lead_id")
+    .or(`booker_phone.ilike.%${q}%,guest_phone.ilike.%${q}%,guest_name.ilike.%${q}%`)
+    .is("lead_id", null)
+    .order("created_at", { ascending: false })
+    .limit(20);
+
+  // 3. Search contracts for members by phone (via lead join)
+  const { data: contracts } = await supabase
+    .from("contracts")
+    .select("id, contract_number, status, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)")
+    .eq("status", "active")
+    .limit(20);
+
+  // Filter contracts that match the search by lead phone/mobile/name
+  const matchingContracts = (contracts || []).filter(c => {
+    const lead = c.lead as unknown as { first_name: string; last_name: string; phone?: string; mobile?: string } | null;
+    if (!lead) return false;
+    const lowerQ = q.toLowerCase();
+    return (
+      (lead.phone || "").toLowerCase().includes(lowerQ) ||
+      (lead.mobile || "").toLowerCase().includes(lowerQ) ||
+      (lead.first_name || "").toLowerCase().includes(lowerQ) ||
+      (lead.last_name || "").toLowerCase().includes(lowerQ)
+    );
+  });
+
+  // Build unified results
+  type CustomerSuggestion = {
+    type: "lead" | "past_guest" | "contract";
+    id?: string;
+    name: string;
+    phone?: string;
+    email?: string;
+    company?: string;
+    contract_id?: string;
+    contract_number?: string;
+    lead_id?: string;
+  };
+
+  const results: CustomerSuggestion[] = [];
+  const seen = new Set<string>(); // dedupe by phone
+
+  // Add leads
+  for (const l of leads || []) {
+    const phone = l.mobile || l.phone || "";
+    const key = `lead-${l.id}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      results.push({
+        type: "lead",
+        id: l.id,
+        lead_id: l.id,
+        name: `${l.first_name} ${l.last_name}`,
+        phone,
+        email: l.email || undefined,
+        company: l.company || undefined,
+      });
+    }
+  }
+
+  // Add matching contracts
+  for (const c of matchingContracts) {
+    const lead = c.lead as unknown as { id: string; first_name: string; last_name: string; company?: string; email?: string; phone?: string; mobile?: string } | null;
+    if (!lead) continue;
+    const key = `contract-${c.id}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      results.push({
+        type: "contract",
+        id: c.id,
+        contract_id: c.id,
+        contract_number: c.contract_number,
+        lead_id: lead.id,
+        name: `${lead.first_name} ${lead.last_name}`,
+        phone: lead.mobile || lead.phone || undefined,
+        email: lead.email || undefined,
+        company: lead.company || undefined,
+      });
+    }
+  }
+
+  // Add past guests (no lead association)
+  for (const b of pastBookings || []) {
+    if (!b.guest_name) continue;
+    const phone = b.booker_phone || b.guest_phone || "";
+    const key = `guest-${phone}-${b.guest_name}`;
+    if (!seen.has(key)) {
+      seen.add(key);
+      results.push({
+        type: "past_guest",
+        name: b.guest_name,
+        phone,
+        email: b.guest_email || undefined,
+        company: b.guest_company || undefined,
+      });
+    }
+  }
+
+  return NextResponse.json({ data: results.slice(0, 20) });
+}

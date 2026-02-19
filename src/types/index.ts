@@ -568,6 +568,8 @@ export type BookingStatus = "confirmed" | "checked_in" | "checked_out" | "cancel
 export type BookingCustomerType = "contract_holder" | "walk_in" | "guest";
 export type BookingPaymentStatus = "pending" | "paid" | "waived" | "posted_to_bill";
 
+export type BookingRefundStatus = "requested" | "approved" | "processed";
+
 export interface Booking {
   id: string;
   booking_number: string;
@@ -584,6 +586,7 @@ export interface Booking {
   contract?: Contract;
   lead_id?: string;
   lead?: Lead;
+  booker_phone?: string;
   guest_name?: string;
   guest_email?: string;
   guest_phone?: string;
@@ -599,6 +602,11 @@ export interface Booking {
   checked_in_by?: string;
   checked_out_by?: string;
   usage_charge_id?: string;
+  refund_status?: BookingRefundStatus;
+  refund_amount?: number;
+  refund_reason?: string;
+  refund_approved_by?: string;
+  refund_approved_at?: string;
   notes?: string;
   created_by?: string;
   created_at: string;

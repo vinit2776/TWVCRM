@@ -262,6 +262,7 @@ export const createBookingSchema = z.object({
   customer_type: z.enum(["contract_holder", "walk_in", "guest"]),
   contract_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   lead_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  booker_phone: z.string().min(1, "Mobile number of the person booking is required"),
   guest_name: z.string().optional(),
   guest_email: z.string().email("Invalid email").optional().or(z.literal("")),
   guest_phone: z.string().optional(),
