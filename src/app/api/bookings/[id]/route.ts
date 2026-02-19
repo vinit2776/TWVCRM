@@ -28,7 +28,14 @@ export async function GET(
     .eq("booking_id", id)
     .eq("is_active", true);
 
-  return NextResponse.json({ data: { ...data, voucher_issuances: vouchers || [] } });
+  // Fetch feedback for this booking (if any)
+  const { data: feedback } = await supabase
+    .from("booking_feedbacks")
+    .select("*, rater:users!booking_feedbacks_rated_by_fkey(id, full_name)")
+    .eq("booking_id", id)
+    .maybeSingle();
+
+  return NextResponse.json({ data: { ...data, voucher_issuances: vouchers || [], feedback: feedback || null } });
 }
 
 export async function PATCH(

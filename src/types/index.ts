@@ -612,6 +612,7 @@ export interface Booking {
   created_at: string;
   updated_at: string;
   facilities?: BookingFacility[];
+  feedback?: BookingFeedback | BookingFeedback[] | null;
 }
 
 export interface BookingFacility {

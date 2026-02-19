@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   ArrowLeft, LogIn, LogOut, XCircle, Mail, Loader2,
   Clock, Users as UsersIcon, IndianRupee, Wifi,
-  Phone, AlertTriangle, ShieldCheck,
+  Phone, AlertTriangle, ShieldCheck, Star,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,7 +22,9 @@ import {
   BOOKING_CUSTOMER_TYPE_LABELS, BOOKING_CUSTOMER_TYPE_COLORS,
   BOOKING_PAYMENT_STATUS_LABELS, BOOKING_PAYMENT_STATUS_COLORS,
   PAYMENT_MODE_LABELS,
+  FEEDBACK_DIMENSIONS,
 } from "@/lib/constants";
+import type { BookingFeedback } from "@/types";
 import { toast } from "sonner";
 import type { Booking } from "@/types";
 
@@ -195,6 +197,11 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               className="border-orange-300 text-orange-700 hover:bg-orange-50"
             >
               <ShieldCheck className="mr-1 h-4 w-4" />Request Refund Exception
+            </Button>
+          )}
+          {booking.status === "checked_out" && !booking.feedback && (
+            <Button variant="outline" size="sm" onClick={() => setFeedbackDialogOpen(true)}>
+              <Star className="mr-1 h-4 w-4 text-amber-500" />Give Feedback
             </Button>
           )}
           {actionLoading && <Loader2 className="h-4 w-4 animate-spin self-center" />}
@@ -432,6 +439,11 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             </CardContent>
           </Card>
         )}
+
+        {/* Customer Feedback */}
+        {booking.feedback && !Array.isArray(booking.feedback) && (
+          <FeedbackCard feedback={booking.feedback} />
+        )}
       </div>
 
       {/* Notes */}
@@ -469,5 +481,67 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         onSuccess={fetchBooking}
       />
     </div>
+  );
+}
+
+function FeedbackCard({ feedback }: { feedback: BookingFeedback }) {
+  const overallColor =
+    (feedback.overall_rating ?? 0) >= 4
+      ? "bg-green-100 text-green-800"
+      : (feedback.overall_rating ?? 0) >= 3
+        ? "bg-amber-100 text-amber-800"
+        : "bg-red-100 text-red-800";
+
+  return (
+    <Card className="border-amber-200">
+      <CardHeader>
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Star className="h-4 w-4 text-amber-500" />
+          Customer Feedback
+          {feedback.overall_rating != null && (
+            <Badge variant="secondary" className={overallColor}>
+              {feedback.overall_rating.toFixed(1)} / 5
+            </Badge>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2.5 text-sm">
+        {FEEDBACK_DIMENSIONS.map((dim) => {
+          const val = feedback[dim.key as keyof BookingFeedback] as number | null;
+          if (val == null) return null;
+          return (
+            <div key={dim.key} className="flex items-center justify-between">
+              <span className="text-muted-foreground">{dim.label}</span>
+              <div className="flex gap-0.5">
+                {[1, 2, 3, 4, 5].map((s) => (
+                  <Star
+                    key={s}
+                    className={`h-3.5 w-3.5 ${
+                      s <= val
+                        ? "fill-amber-400 text-amber-400"
+                        : "fill-none text-gray-300"
+                    }`}
+                  />
+                ))}
+              </div>
+            </div>
+          );
+        })}
+        {feedback.notes && (
+          <>
+            <Separator />
+            <div>
+              <span className="text-muted-foreground text-xs">Notes</span>
+              <p className="mt-0.5 whitespace-pre-wrap">{feedback.notes}</p>
+            </div>
+          </>
+        )}
+        {feedback.rater && (
+          <div className="text-xs text-muted-foreground pt-1 border-t">
+            Rated by {feedback.rater.full_name} on {formatDate(feedback.created_at)}
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }

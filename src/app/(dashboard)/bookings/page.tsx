@@ -6,6 +6,7 @@ import Link from "next/link";
 import {
   Plus, CalendarClock, Search, X, ChevronLeft, ChevronRight,
   LogIn, LogOut, XCircle, MoreHorizontal, Mail, AlertTriangle, Phone,
+  Star, MessageSquareWarning,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -158,9 +159,16 @@ function BookingTable({
                       </Badge>
                     </td>
                     <td className="px-4 py-2.5">
-                      <Badge variant="secondary" className={`text-[10px] ${BOOKING_STATUS_COLORS[b.status]}`}>
-                        {BOOKING_STATUS_LABELS[b.status]}
-                      </Badge>
+                      <div className="flex items-center gap-1">
+                        <Badge variant="secondary" className={`text-[10px] ${BOOKING_STATUS_COLORS[b.status]}`}>
+                          {BOOKING_STATUS_LABELS[b.status]}
+                        </Badge>
+                        {b.status === "checked_out" && (
+                          Array.isArray(b.feedback) && b.feedback.length > 0
+                            ? <span title="Feedback submitted"><Star className="h-3 w-3 fill-green-500 text-green-500" /></span>
+                            : <span title="Feedback pending"><MessageSquareWarning className="h-3 w-3 text-amber-500" /></span>
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
                       <DropdownMenu>
@@ -503,9 +511,16 @@ export default function BookingsPage() {
                         </td>
                         <td className="px-4 py-3 text-right font-medium hidden sm:table-cell text-xs">{formatCurrency(b.total_amount)}</td>
                         <td className="px-4 py-3">
-                          <Badge variant="secondary" className={`text-[10px] ${BOOKING_STATUS_COLORS[b.status]}`}>
-                            {BOOKING_STATUS_LABELS[b.status]}
-                          </Badge>
+                          <div className="flex items-center gap-1">
+                            <Badge variant="secondary" className={`text-[10px] ${BOOKING_STATUS_COLORS[b.status]}`}>
+                              {BOOKING_STATUS_LABELS[b.status]}
+                            </Badge>
+                            {b.status === "checked_out" && (
+                              Array.isArray(b.feedback) && b.feedback.length > 0
+                                ? <span title="Feedback submitted"><Star className="h-3 w-3 fill-green-500 text-green-500" /></span>
+                                : <span title="Feedback pending"><MessageSquareWarning className="h-3 w-3 text-amber-500" /></span>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
                           <DropdownMenu>
