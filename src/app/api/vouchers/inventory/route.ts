@@ -11,13 +11,34 @@ export async function GET(request: NextRequest) {
 
   const locationId = request.nextUrl.searchParams.get("location_id");
 
-  // Fetch all vouchers and group in JS (simple, no RPC needed)
-  let query = supabase
-    .from("voucher_repository")
-    .select("validity_days, status");
-  if (locationId) query = query.eq("location_id", locationId);
+  // Fetch ALL vouchers in pages of 1000 (Supabase default limit is 1000)
+  const PAGE_SIZE = 1000;
+  let allVouchers: Array<{ validity_days: number | null; status: string }> = [];
+  let offset = 0;
+  let fetchError: { message: string } | null = null;
 
-  const { data: allVouchers, error: fetchError } = await query;
+  while (true) {
+    let query = supabase
+      .from("voucher_repository")
+      .select("validity_days, status")
+      .range(offset, offset + PAGE_SIZE - 1);
+    if (locationId) query = query.eq("location_id", locationId);
+
+    const { data, error } = await query;
+
+    if (error) {
+      fetchError = error;
+      break;
+    }
+
+    if (data && data.length > 0) {
+      allVouchers = allVouchers.concat(data);
+      offset += data.length;
+      if (data.length < PAGE_SIZE) break;
+    } else {
+      break;
+    }
+  }
 
   if (fetchError) {
     return NextResponse.json({ error: fetchError.message }, { status: 500 });
