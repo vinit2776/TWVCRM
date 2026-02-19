@@ -172,12 +172,13 @@ export const INVOICE_STATUS_LABELS: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-export const USER_ROLES = ["admin", "manager", "sales_rep"] as const;
+export const USER_ROLES = ["admin", "manager", "sales_rep", "floor_manager"] as const;
 
 export const USER_ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
   manager: "Manager",
   sales_rep: "Sales Rep",
+  floor_manager: "Floor Manager",
 };
 
 export const RATINGS = ["none", "hot", "warm", "cold"] as const;
@@ -361,3 +362,89 @@ export const DOCUMENT_CATEGORIES = [
 ] as const;
 
 export const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+
+// ==========================================
+// Booking Constants
+// ==========================================
+export const BOOKING_STATUSES = [
+  "confirmed",
+  "checked_in",
+  "checked_out",
+  "cancelled",
+  "no_show",
+] as const;
+
+export const BOOKING_STATUS_LABELS: Record<string, string> = {
+  confirmed: "Confirmed",
+  checked_in: "Checked In",
+  checked_out: "Checked Out",
+  cancelled: "Cancelled",
+  no_show: "No Show",
+};
+
+export const BOOKING_STATUS_COLORS: Record<string, string> = {
+  confirmed: "bg-blue-100 text-blue-800",
+  checked_in: "bg-green-100 text-green-800",
+  checked_out: "bg-gray-100 text-gray-800",
+  cancelled: "bg-red-100 text-red-800",
+  no_show: "bg-orange-100 text-orange-800",
+};
+
+export const BOOKING_CUSTOMER_TYPES = [
+  "contract_holder",
+  "walk_in",
+  "guest",
+] as const;
+
+export const BOOKING_CUSTOMER_TYPE_LABELS: Record<string, string> = {
+  contract_holder: "Contract Holder",
+  walk_in: "Walk-in",
+  guest: "Guest",
+};
+
+export const BOOKING_CUSTOMER_TYPE_COLORS: Record<string, string> = {
+  contract_holder: "bg-emerald-100 text-emerald-800",
+  walk_in: "bg-purple-100 text-purple-800",
+  guest: "bg-cyan-100 text-cyan-800",
+};
+
+export const BOOKING_PAYMENT_STATUSES = [
+  "pending",
+  "paid",
+  "waived",
+  "posted_to_bill",
+] as const;
+
+export const BOOKING_PAYMENT_STATUS_LABELS: Record<string, string> = {
+  pending: "Pending",
+  paid: "Paid",
+  waived: "Waived",
+  posted_to_bill: "Posted to Bill",
+};
+
+export const BOOKING_PAYMENT_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-yellow-100 text-yellow-800",
+  paid: "bg-green-100 text-green-800",
+  waived: "bg-gray-100 text-gray-800",
+  posted_to_bill: "bg-blue-100 text-blue-800",
+};
+
+export const PAYMENT_MODES = ["upi", "cash", "card", "online"] as const;
+
+export const PAYMENT_MODE_LABELS: Record<string, string> = {
+  upi: "UPI",
+  cash: "Cash",
+  card: "Card",
+  online: "Online",
+};
+
+export const DEFAULT_FACILITIES = [
+  "Projector",
+  "Whiteboard",
+  "Video Conferencing",
+  "Stationery",
+  "Printer Access",
+  "Coffee/Tea",
+  "Water",
+  "WiFi",
+] as const;

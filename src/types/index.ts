@@ -16,7 +16,7 @@ export interface Location {
 // ==========================================
 // User Types
 // ==========================================
-export type UserRole = "admin" | "manager" | "sales_rep";
+export type UserRole = "admin" | "manager" | "sales_rep" | "floor_manager";
 
 export interface User {
   id: string;
@@ -411,8 +411,9 @@ export interface VoucherInventoryGroup {
 
 export interface VoucherIssuance {
   id: string;
-  contract_id: string;
+  contract_id?: string;
   voucher_id: string;
+  booking_id?: string;
   voucher?: VoucherRepository;
   lead_id: string;
   seat_number: number;
@@ -505,7 +506,9 @@ export type AuditEntityType =
   | "contract"
   | "voucher"
   | "usage_charge"
-  | "billing_statement";
+  | "billing_statement"
+  | "space"
+  | "booking";
 
 export interface AuditLog {
   id: string;
@@ -515,6 +518,100 @@ export interface AuditLog {
   changes: Record<string, { old: unknown; new: unknown }>;
   performed_by?: string;
   performer?: User;
+  created_at: string;
+}
+
+// ==========================================
+// Space Types
+// ==========================================
+export interface SpaceOperatingDay {
+  open: string;
+  close: string;
+  is_open: boolean;
+}
+
+export type SpaceOperatingHours = Record<string, SpaceOperatingDay>;
+
+export interface Space {
+  id: string;
+  name: string;
+  location_id: string;
+  location?: Location;
+  capacity: number;
+  hourly_rate: number;
+  description?: string;
+  operating_hours: SpaceOperatingHours;
+  max_advance_booking_days: number;
+  min_booking_minutes: number;
+  cancellation_policy?: string;
+  is_active: boolean;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+  facilities?: SpaceFacility[];
+}
+
+export interface SpaceFacility {
+  id: string;
+  space_id: string;
+  name: string;
+  is_complimentary: boolean;
+  charge_per_use: number;
+  is_available: boolean;
+  created_at: string;
+}
+
+// ==========================================
+// Booking Types
+// ==========================================
+export type BookingStatus = "confirmed" | "checked_in" | "checked_out" | "cancelled" | "no_show";
+export type BookingCustomerType = "contract_holder" | "walk_in" | "guest";
+export type BookingPaymentStatus = "pending" | "paid" | "waived" | "posted_to_bill";
+
+export interface Booking {
+  id: string;
+  booking_number: string;
+  space_id: string;
+  space?: Space;
+  location_id: string;
+  location?: Location;
+  booking_date: string;
+  start_time: string;
+  end_time: string;
+  duration_hours: number;
+  customer_type: BookingCustomerType;
+  contract_id?: string;
+  contract?: Contract;
+  lead_id?: string;
+  lead?: Lead;
+  guest_name?: string;
+  guest_email?: string;
+  guest_phone?: string;
+  guest_company?: string;
+  hourly_rate: number;
+  total_amount: number;
+  payment_status: BookingPaymentStatus;
+  payment_mode?: string;
+  payment_reference?: string;
+  status: BookingStatus;
+  check_in_at?: string;
+  check_out_at?: string;
+  checked_in_by?: string;
+  checked_out_by?: string;
+  usage_charge_id?: string;
+  notes?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+  facilities?: BookingFacility[];
+}
+
+export interface BookingFacility {
+  id: string;
+  booking_id: string;
+  facility_name: string;
+  is_complimentary: boolean;
+  charge: number;
   created_at: string;
 }
 

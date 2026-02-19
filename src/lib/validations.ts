@@ -220,3 +220,67 @@ export const generateBillingStatementSchema = z.object({
   period_end: z.string().min(1, "Period end is required"),
   notes: z.string().optional(),
 });
+
+// ==========================================
+// Space Validations
+// ==========================================
+const operatingDaySchema = z.object({
+  open: z.string().regex(/^\d{2}:\d{2}$/, "Time format must be HH:MM"),
+  close: z.string().regex(/^\d{2}:\d{2}$/, "Time format must be HH:MM"),
+  is_open: z.boolean(),
+});
+
+export const createSpaceSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  location_id: z.string().uuid("Invalid location ID"),
+  capacity: z.number().int().positive("Capacity must be positive"),
+  hourly_rate: z.number().positive("Hourly rate must be positive"),
+  description: z.string().optional(),
+  operating_hours: z.record(z.string(), operatingDaySchema).optional(),
+  max_advance_booking_days: z.number().int().positive().default(30),
+  min_booking_minutes: z.number().int().min(30).default(60),
+  cancellation_policy: z.string().optional(),
+  facilities: z.array(z.object({
+    name: z.string().min(1, "Facility name is required"),
+    is_complimentary: z.boolean().default(true),
+    charge_per_use: z.number().min(0).default(0),
+  })).optional(),
+});
+
+export const updateSpaceSchema = createSpaceSchema.partial();
+
+export type CreateSpaceInput = z.input<typeof createSpaceSchema>;
+
+// ==========================================
+// Booking Validations
+// ==========================================
+export const createBookingSchema = z.object({
+  space_id: z.string().uuid("Invalid space ID"),
+  booking_date: z.string().min(1, "Booking date is required"),
+  start_time: z.string().regex(/^\d{2}:\d{2}$/, "Start time required (HH:MM)"),
+  end_time: z.string().regex(/^\d{2}:\d{2}$/, "End time required (HH:MM)"),
+  customer_type: z.enum(["contract_holder", "walk_in", "guest"]),
+  contract_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  lead_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  guest_name: z.string().optional(),
+  guest_email: z.string().email("Invalid email").optional().or(z.literal("")),
+  guest_phone: z.string().optional(),
+  guest_company: z.string().optional(),
+  facility_ids: z.array(z.string()).optional(),
+  payment_mode: z.string().optional(),
+  payment_reference: z.string().optional(),
+  notes: z.string().optional(),
+}).refine(data => {
+  if (data.customer_type === "contract_holder" && !data.contract_id) return false;
+  return true;
+}, { message: "Contract ID required for contract holders", path: ["contract_id"] })
+.refine(data => {
+  if (data.customer_type === "walk_in" && !data.lead_id && !data.guest_name) return false;
+  return true;
+}, { message: "Either lead or guest name required for walk-ins", path: ["guest_name"] })
+.refine(data => {
+  if (data.customer_type === "guest" && !data.contract_id) return false;
+  return true;
+}, { message: "Contract ID required for guest bookings", path: ["contract_id"] });
+
+export type CreateBookingInput = z.input<typeof createBookingSchema>;

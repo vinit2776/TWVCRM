@@ -19,23 +19,27 @@ import {
   Wifi,
   IndianRupee,
   MapPin,
+  DoorOpen,
+  CalendarClock,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
 import { createClient } from "@/lib/supabase/client";
 
-const navItems = [
-  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
-  { href: "/leads", label: "Leads", icon: Users },
-  { href: "/pipeline", label: "Pipeline", icon: GitBranch },
-  { href: "/activities", label: "Activities", icon: Activity },
-  { href: "/tasks", label: "Tasks", icon: CheckSquare },
-  { href: "/proposals", label: "Proposals", icon: FileText },
-  { href: "/invoices", label: "Invoices", icon: Receipt },
-  { href: "/contracts", label: "Contracts", icon: ScrollText },
-  { href: "/billing", label: "Billing", icon: IndianRupee },
-  { href: "/documents", label: "Documents", icon: FolderOpen },
+const allNavItems = [
+  { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
+  { href: "/leads", label: "Leads", icon: Users, roles: ["admin", "manager", "sales_rep"] },
+  { href: "/pipeline", label: "Pipeline", icon: GitBranch, roles: ["admin", "manager", "sales_rep"] },
+  { href: "/activities", label: "Activities", icon: Activity, roles: ["admin", "manager", "sales_rep"] },
+  { href: "/tasks", label: "Tasks", icon: CheckSquare, roles: ["admin", "manager", "sales_rep"] },
+  { href: "/proposals", label: "Proposals", icon: FileText, roles: ["admin", "manager", "sales_rep"] },
+  { href: "/invoices", label: "Invoices", icon: Receipt, roles: ["admin", "manager", "sales_rep"] },
+  { href: "/contracts", label: "Contracts", icon: ScrollText, roles: ["admin", "manager", "sales_rep"] },
+  { href: "/billing", label: "Billing", icon: IndianRupee, roles: ["admin", "manager", "sales_rep"] },
+  { href: "/spaces", label: "Spaces", icon: DoorOpen, roles: null },
+  { href: "/bookings", label: "Bookings", icon: CalendarClock, roles: null },
+  { href: "/documents", label: "Documents", icon: FolderOpen, roles: ["admin", "manager", "sales_rep"] },
 ];
 
 const bottomNavItems = [
@@ -46,7 +50,7 @@ const bottomNavItems = [
 export function Sidebar() {
   const pathname = usePathname();
   const { sidebarOpen, setSidebarOpen } = useUiStore();
-  const [isAdmin, setIsAdmin] = useState(false);
+  const [userRole, setUserRole] = useState<string | null>(null);
 
   useEffect(() => {
     const supabase = createClient();
@@ -57,10 +61,17 @@ export function Sidebar() {
           .select("role")
           .eq("auth_id", user.id)
           .single();
-        setIsAdmin(data?.role === "admin");
+        setUserRole(data?.role || "sales_rep");
       }
     });
   }, []);
+
+  const isAdmin = userRole === "admin";
+
+  // Filter nav items based on role (null = visible to all roles)
+  const visibleNavItems = allNavItems.filter(
+    (item) => item.roles === null || (userRole && item.roles.includes(userRole))
+  );
 
   return (
     <>
@@ -94,7 +105,7 @@ export function Sidebar() {
 
         {/* Nav items */}
         <nav className="flex-1 space-y-1 px-3 py-4">
-          {navItems.map((item) => {
+          {visibleNavItems.map((item) => {
             const isActive =
               pathname === item.href || pathname.startsWith(item.href + "/");
             return (
@@ -164,6 +175,8 @@ export function Sidebar() {
             </Link>
           )}
           {bottomNavItems.map((item) => {
+            // Floor managers only see Settings, not Team
+            if (userRole === "floor_manager" && item.href === "/team") return null;
             const isActive =
               pathname === item.href || pathname.startsWith(item.href + "/");
             return (

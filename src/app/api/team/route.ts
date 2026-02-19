@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const validRoles = ["admin", "manager", "sales_rep"];
+  const validRoles = ["admin", "manager", "sales_rep", "floor_manager"];
   const userRole = validRoles.includes(role) ? role : "sales_rep";
 
   // Use admin client to create auth user

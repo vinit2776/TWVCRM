@@ -568,6 +568,7 @@ export default function TeamPage() {
                   <SelectItem value="admin">Admin</SelectItem>
                   <SelectItem value="manager">Manager</SelectItem>
                   <SelectItem value="sales_rep">Sales Rep</SelectItem>
+                  <SelectItem value="floor_manager">Floor Manager</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -701,6 +702,7 @@ export default function TeamPage() {
                   <SelectItem value="admin">Admin</SelectItem>
                   <SelectItem value="manager">Manager</SelectItem>
                   <SelectItem value="sales_rep">Sales Rep</SelectItem>
+                  <SelectItem value="floor_manager">Floor Manager</SelectItem>
                 </SelectContent>
               </Select>
             </div>
