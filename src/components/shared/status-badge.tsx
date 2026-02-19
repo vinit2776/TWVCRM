@@ -46,7 +46,7 @@ const RATING_COLORS: Record<string, string> = {
 };
 
 export function RatingBadge({ rating, className }: RatingBadgeProps) {
-  if (rating === "none") return null;
+  if (!rating || rating === "none") return null;
   return (
     <Badge
       variant="secondary"

@@ -350,14 +350,14 @@ export default function LeadDetailPage({
               </Card>
 
               {/* Tags */}
-              {lead.tags.length > 0 && (
+              {(lead.tags ?? []).length > 0 && (
                 <Card>
                   <CardHeader>
                     <CardTitle className="text-base">Tags</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <div className="flex flex-wrap gap-1">
-                      {lead.tags.map((tag) => (
+                      {(lead.tags ?? []).map((tag) => (
                         <span
                           key={tag}
                           className="px-2 py-0.5 bg-muted rounded text-xs"

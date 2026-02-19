@@ -27,6 +27,9 @@ export async function GET(
     return NextResponse.json({ error: error.message }, { status: 404 });
   }
 
+  // Ensure tags is always an array (DB default is '{}' but could be null)
+  if (data) data.tags = data.tags ?? [];
+
   return NextResponse.json({ data });
 }
 
