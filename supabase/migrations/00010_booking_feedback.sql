@@ -8,7 +8,7 @@
 CREATE TABLE booking_feedbacks (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   booking_id UUID NOT NULL REFERENCES bookings(id) ON DELETE CASCADE,
-  lead_id UUID NOT NULL REFERENCES leads(id) ON DELETE CASCADE,
+  lead_id UUID REFERENCES leads(id) ON DELETE CASCADE,
 
   -- 6 rating dimensions (1–5 scale, null = not rated for that dimension)
   space_etiquette SMALLINT CHECK (space_etiquette BETWEEN 1 AND 5),
@@ -49,6 +49,11 @@ RETURNS TRIGGER AS $$
 DECLARE
   avg_rating NUMERIC;
 BEGIN
+  -- Skip if no lead linked (walk-in / guest bookings)
+  IF NEW.lead_id IS NULL THEN
+    RETURN NEW;
+  END IF;
+
   SELECT AVG(overall_rating) INTO avg_rating
   FROM booking_feedbacks
   WHERE lead_id = NEW.lead_id AND overall_rating IS NOT NULL;

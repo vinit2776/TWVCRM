@@ -52,9 +52,7 @@ export async function POST(
   if (booking.status !== "checked_out") {
     return NextResponse.json({ error: "Feedback can only be submitted for checked-out bookings" }, { status: 400 });
   }
-  if (!booking.lead_id) {
-    return NextResponse.json({ error: "Booking has no linked customer" }, { status: 400 });
-  }
+  // lead_id is optional — walk-in / guest bookings may not have one
 
   // Check if feedback already exists
   const { data: existing } = await supabase
@@ -96,29 +94,33 @@ export async function POST(
   // Compute overall rating as average of non-null dimensions
   const overallRating = parseFloat((ratingSum / ratedCount).toFixed(2));
 
+  const row: Record<string, unknown> = {
+    booking_id: id,
+    ...ratings,
+    overall_rating: overallRating,
+    notes: body.notes?.trim() || null,
+    rated_by: dbUser.id,
+  };
+  if (booking.lead_id) row.lead_id = booking.lead_id;
+
   const { data: feedback, error } = await supabase
     .from("booking_feedbacks")
-    .insert({
-      booking_id: id,
-      lead_id: booking.lead_id,
-      ...ratings,
-      overall_rating: overallRating,
-      notes: body.notes?.trim() || null,
-      rated_by: dbUser.id,
-    })
+    .insert(row)
     .select("*, rater:users!booking_feedbacks_rated_by_fkey(id, full_name)")
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Log activity on lead timeline
-  await supabase.from("activities").insert({
-    lead_id: booking.lead_id,
-    type: "note",
-    subject: `Customer Feedback — ${booking.booking_number}`,
-    description: `Rated ${overallRating.toFixed(1)}/5 overall after booking #${booking.booking_number}. ${ratedCount} dimension(s) rated.${body.notes?.trim() ? ` Note: ${body.notes.trim()}` : ""}`,
-    created_by: dbUser.id,
-  });
+  // Log activity on lead timeline (only if booking has a linked lead)
+  if (booking.lead_id) {
+    await supabase.from("activities").insert({
+      lead_id: booking.lead_id,
+      type: "note",
+      subject: `Customer Feedback — ${booking.booking_number}`,
+      description: `Rated ${overallRating.toFixed(1)}/5 overall after booking #${booking.booking_number}. ${ratedCount} dimension(s) rated.${body.notes?.trim() ? ` Note: ${body.notes.trim()}` : ""}`,
+      created_by: dbUser.id,
+    });
+  }
 
   return NextResponse.json({ data: feedback }, { status: 201 });
 }
