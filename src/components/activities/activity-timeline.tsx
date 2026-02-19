@@ -131,7 +131,7 @@ interface ActivityTimelineProps {
 }
 
 export function ActivityTimeline({ leadId }: ActivityTimelineProps) {
-  const { data: activities, loading } = useActivities(leadId);
+  const { data: activities, loading, error } = useActivities(leadId);
 
   if (loading) {
     return (
@@ -149,7 +149,15 @@ export function ActivityTimeline({ leadId }: ActivityTimelineProps) {
     );
   }
 
-  if (activities.length === 0) {
+  if (error) {
+    return (
+      <p className="text-sm text-destructive text-center py-8">
+        Failed to load activities. Please try again.
+      </p>
+    );
+  }
+
+  if (!activities || activities.length === 0) {
     return (
       <p className="text-sm text-muted-foreground text-center py-8">
         No activities yet. Log your first interaction.
@@ -159,7 +167,7 @@ export function ActivityTimeline({ leadId }: ActivityTimelineProps) {
 
   return (
     <div>
-      {activities.map((activity) => (
+      {(activities ?? []).map((activity) => (
         <ActivityItem key={activity.id} activity={activity} />
       ))}
     </div>
