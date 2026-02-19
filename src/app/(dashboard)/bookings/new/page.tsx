@@ -127,7 +127,7 @@ function NewBookingForm() {
       const res = await fetch(`/api/spaces/${spaceId}/availability?date=${bookingDate}`);
       if (res.ok) {
         const json = await res.json();
-        setAvailableSlots(json.available_slots || []);
+        setAvailableSlots(json.data?.available_slots || []);
       }
     } catch { /* ignore */ }
     setAvailLoading(false);
