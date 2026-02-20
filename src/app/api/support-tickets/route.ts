@@ -57,19 +57,15 @@ export async function POST(request: NextRequest) {
   const adminSupabase = await createAdminClient();
 
   // Get current user record
-  const { data: currentUser, error: userError } = await adminSupabase
+  const { data: currentUser } = await adminSupabase
     .from("users")
-    .select("id, location_id")
+    .select("id")
     .eq("auth_id", user.id)
     .single();
 
-  console.log("[support-tickets POST] auth user id:", user.id);
-  console.log("[support-tickets POST] currentUser:", currentUser);
-  console.log("[support-tickets POST] userError:", userError);
-
   if (!currentUser) {
     return NextResponse.json(
-      { error: "User not found", debug: { auth_id: user.id, userError: userError?.message } },
+      { error: "User not found" },
       { status: 404 }
     );
   }
@@ -95,7 +91,6 @@ export async function POST(request: NextRequest) {
       user_agent: parsed.data.user_agent || null,
       screen_resolution: parsed.data.screen_resolution || null,
       reported_by: currentUser.id,
-      location_id: currentUser.location_id || null,
     })
     .select("*")
     .single();
