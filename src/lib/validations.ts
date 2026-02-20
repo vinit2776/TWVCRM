@@ -329,3 +329,68 @@ export const lockAccountingPeriodSchema = z.object({
 export const updateGstInvoiceSchema = z.object({
   gst_invoice_number: z.string().min(1, "GST invoice number is required"),
 });
+
+// ==========================================
+// Recurring Booking Validations
+// ==========================================
+export const createRecurringSeriesSchema = z.object({
+  space_id: z.string().uuid("Invalid space ID"),
+  customer_type: z.enum(["contract_holder", "walk_in", "guest"]),
+  contract_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  lead_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  booker_phone: z.string().min(1, "Booker phone is required"),
+  guest_name: z.string().optional(),
+  guest_email: z.string().email("Invalid email").optional().or(z.literal("")),
+  guest_phone: z.string().optional(),
+  guest_company: z.string().optional(),
+  start_time: z.string().regex(/^\d{2}:\d{2}$/, "Start time required (HH:MM)"),
+  end_time: z.string().regex(/^\d{2}:\d{2}$/, "End time required (HH:MM)"),
+  frequency: z.enum(["daily", "weekly", "biweekly", "monthly"]),
+  day_of_week: z.number().int().min(0).max(6).optional(),
+  day_of_month: z.number().int().min(1).max(31).optional(),
+  series_start: z.string().min(1, "Series start date is required"),
+  series_end: z.string().min(1, "Series end date is required"),
+  facility_ids: z.array(z.string()).optional(),
+  notes: z.string().optional(),
+});
+
+export type CreateRecurringSeriesInput = z.input<typeof createRecurringSeriesSchema>;
+
+// ==========================================
+// Waitlist Validations
+// ==========================================
+export const createWaitlistEntrySchema = z.object({
+  space_id: z.string().uuid("Invalid space ID"),
+  booking_date: z.string().min(1, "Booking date is required"),
+  start_time: z.string().regex(/^\d{2}:\d{2}$/, "Start time required (HH:MM)"),
+  end_time: z.string().regex(/^\d{2}:\d{2}$/, "End time required (HH:MM)"),
+  customer_type: z.enum(["contract_holder", "walk_in", "guest"]),
+  contract_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  lead_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  guest_name: z.string().optional(),
+  guest_phone: z.string().optional(),
+  booker_phone: z.string().min(1, "Booker phone is required"),
+  notes: z.string().optional(),
+});
+
+export type CreateWaitlistEntryInput = z.input<typeof createWaitlistEntrySchema>;
+
+// ==========================================
+// Reschedule Booking Validation
+// ==========================================
+export const rescheduleBookingSchema = z.object({
+  new_date: z.string().min(1, "New date is required"),
+  new_start_time: z.string().regex(/^\d{2}:\d{2}$/, "New start time required (HH:MM)"),
+  new_end_time: z.string().regex(/^\d{2}:\d{2}$/, "New end time required (HH:MM)"),
+});
+
+export type RescheduleBookingInput = z.infer<typeof rescheduleBookingSchema>;
+
+// ==========================================
+// Extend Booking Validation
+// ==========================================
+export const extendBookingSchema = z.object({
+  new_end_time: z.string().regex(/^\d{2}:\d{2}$/, "New end time required (HH:MM)"),
+});
+
+export type ExtendBookingInput = z.infer<typeof extendBookingSchema>;

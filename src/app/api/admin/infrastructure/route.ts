@@ -1,6 +1,8 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+export const dynamic = "force-dynamic";
+
 const SUPABASE_URL = process.env.NEXT_PUBLIC_SUPABASE_URL!;
 const SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY!;
 const SUPABASE_REF = SUPABASE_URL.replace("https://", "").replace(".supabase.co", "");
@@ -213,6 +215,31 @@ export async function GET() {
   const usersRow = tableCounts.find((t) => t.name === "users");
   const authUserCount = usersRow?.row_count || 0;
 
+  // ── 5. Fetch Resend Email Stats ──
+  let emailsSentToday = 0;
+  let emailsSentThisMonth = 0;
+  const RESEND_API_KEY = process.env.RESEND_API_KEY;
+  if (RESEND_API_KEY && RESEND_API_KEY !== "re_placeholder") {
+    try {
+      const resendRes = await fetch("https://api.resend.com/emails", {
+        headers: { Authorization: `Bearer ${RESEND_API_KEY}` },
+        cache: "no-store",
+      });
+      if (resendRes.ok) {
+        const resendData = await resendRes.json();
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const emails: any[] = resendData.data || [];
+        const now = new Date();
+        const todayStr = now.toISOString().split("T")[0];
+        const monthStr = todayStr.substring(0, 7); // "2025-06"
+        emailsSentToday = emails.filter((e) => e.created_at?.startsWith(todayStr)).length;
+        emailsSentThisMonth = emails.filter((e) => e.created_at?.startsWith(monthStr)).length;
+      }
+    } catch {
+      // Resend API unavailable — continue with zero counts
+    }
+  }
+
   // ── Build Response ──
   return NextResponse.json({
     fetched_at: new Date().toISOString(),
@@ -262,7 +289,13 @@ export async function GET() {
         daily_emails: 100,
         monthly_emails: 3000,
       },
+      usage: {
+        sent_today: emailsSentToday,
+        sent_this_month: emailsSentThisMonth,
+      },
       dashboard_url: "https://resend.com/overview",
     },
+  }, {
+    headers: { "Cache-Control": "no-store, max-age=0" },
   });
 }

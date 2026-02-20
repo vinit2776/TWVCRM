@@ -559,3 +559,56 @@ export const MONTH_NAMES = [
   "May", "June", "July", "August",
   "September", "October", "November", "December",
 ] as const;
+
+// ==========================================
+// Recurring Booking Constants
+// ==========================================
+export const RECURRENCE_FREQUENCIES = [
+  { value: "daily", label: "Daily" },
+  { value: "weekly", label: "Weekly" },
+  { value: "biweekly", label: "Bi-Weekly" },
+  { value: "monthly", label: "Monthly" },
+] as const;
+
+// ==========================================
+// Waitlist Constants
+// ==========================================
+export const WAITLIST_STATUSES = ["waiting", "offered", "booked", "expired", "cancelled"] as const;
+
+export const WAITLIST_STATUS_LABELS: Record<string, string> = {
+  waiting: "Waiting",
+  offered: "Slot Offered",
+  booked: "Converted to Booking",
+  expired: "Expired",
+  cancelled: "Cancelled",
+};
+
+export const WAITLIST_STATUS_COLORS: Record<string, string> = {
+  waiting: "bg-yellow-100 text-yellow-800",
+  offered: "bg-blue-100 text-blue-800",
+  booked: "bg-green-100 text-green-800",
+  expired: "bg-gray-100 text-gray-800",
+  cancelled: "bg-red-100 text-red-800",
+};
+
+// ==========================================
+// Booking Notes Templates
+// ==========================================
+export const BOOKING_NOTE_TEMPLATES = [
+  "Extra chairs requested",
+  "Projector setup needed",
+  "Catering ordered",
+  "VIP client — ensure room is spotless",
+  "Late arrival expected",
+  "External guests attending",
+] as const;
+
+// ==========================================
+// Customer Segmentation
+// ==========================================
+export const CUSTOMER_SEGMENTS = {
+  frequent: { label: "Frequent Visitors", threshold: 5, description: "5+ bookings in last 90 days" },
+  lapsed: { label: "Lapsed Customers", days: 60, description: "No bookings in 60+ days" },
+  high_spender: { label: "High Spenders", description: "Top 20% by total spend" },
+  low_feedback: { label: "Low Feedback", threshold: 2.5, description: "Average rating below 2.5" },
+} as const;

@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Loader2, Clock, IndianRupee, Search, Phone, User2, Building2, Banknote, CreditCard, Smartphone } from "lucide-react";
+import { ArrowLeft, Loader2, Clock, IndianRupee, Search, Phone, User2, Building2, Banknote, CreditCard, Smartphone, Repeat, ListOrdered } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -14,9 +14,13 @@ import {
 } from "@/components/ui/select";
 import { useLocations } from "@/hooks/use-locations";
 import { formatCurrency } from "@/lib/utils";
-import { BOOKING_CUSTOMER_TYPE_LABELS, PAYMENT_MODES, PAYMENT_MODE_LABELS, BOOKING_PAYMENT_MODES, BOOKING_PAYMENT_MODE_LABELS } from "@/lib/constants";
+import { BOOKING_CUSTOMER_TYPE_LABELS, PAYMENT_MODES, PAYMENT_MODE_LABELS, BOOKING_PAYMENT_MODES, BOOKING_PAYMENT_MODE_LABELS, RECURRENCE_FREQUENCIES } from "@/lib/constants";
 import { toast } from "sonner";
 import type { Space, SpaceFacility } from "@/types";
+import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
+import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
+import { WaitlistDialog } from "@/components/bookings/waitlist-dialog";
+import { CreateRecurringDialog } from "@/components/bookings/create-recurring-dialog";
 
 interface AvailableSlot {
   start_time: string;
@@ -45,6 +49,7 @@ function NewBookingForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const preselectedSpaceId = searchParams.get("space_id") || "";
+  const preselectedCustomerType = searchParams.get("customer_type") || "";
 
   const { locations } = useLocations();
   const [saving, setSaving] = useState(false);
@@ -71,7 +76,9 @@ function NewBookingForm() {
   const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
   const suggestionsRef = useRef<HTMLDivElement>(null);
 
-  const [customerType, setCustomerType] = useState<"contract_holder" | "walk_in" | "guest">("walk_in");
+  const [customerType, setCustomerType] = useState<"contract_holder" | "walk_in" | "guest">(
+    (preselectedCustomerType as "contract_holder" | "walk_in" | "guest") || "walk_in"
+  );
   const [contractId, setContractId] = useState("");
   const [leadId, setLeadId] = useState("");
   const [guestName, setGuestName] = useState("");
@@ -94,6 +101,14 @@ function NewBookingForm() {
   const [advancePaymentMode, setAdvancePaymentMode] = useState<string>("cash");
   const [advancePaymentReference, setAdvancePaymentReference] = useState("");
   const [advancePaymentAmount, setAdvancePaymentAmount] = useState("");
+
+  // Recurring booking
+  const [isRecurring, setIsRecurring] = useState(false);
+  const [recurringDialogOpen, setRecurringDialogOpen] = useState(false);
+
+  // Waitlist
+  const [waitlistDialogOpen, setWaitlistDialogOpen] = useState(false);
+  const [slotConflict, setSlotConflict] = useState(false);
 
   // --- Customer Search ---
   const searchCustomers = useCallback(async (q: string) => {
@@ -205,6 +220,7 @@ function NewBookingForm() {
   const fetchAvailability = useCallback(async () => {
     if (!spaceId || !bookingDate) return;
     setAvailLoading(true);
+    setSlotConflict(false);
     try {
       const res = await fetch(`/api/spaces/${spaceId}/availability?date=${bookingDate}`);
       if (res.ok) {
@@ -216,6 +232,19 @@ function NewBookingForm() {
   }, [spaceId, bookingDate]);
 
   useEffect(() => { fetchAvailability(); }, [fetchAvailability]);
+
+  // Check for slot conflicts when start/end time changes
+  useEffect(() => {
+    if (!startTime || !endTime || !spaceId || !bookingDate) {
+      setSlotConflict(false);
+      return;
+    }
+    // Check if the selected time falls within available slots
+    const isAvailable = availableSlots.some(slot =>
+      startTime >= slot.start_time && endTime <= slot.end_time
+    );
+    setSlotConflict(!isAvailable && availableSlots.length > 0);
+  }, [startTime, endTime, availableSlots, spaceId, bookingDate]);
 
   // Fetch contracts for dropdown
   useEffect(() => {
@@ -245,6 +274,27 @@ function NewBookingForm() {
     : 0;
   const totalAmount = roomCost + facilityCost;
 
+  // Merge adjacent 30-min slots into continuous availability windows
+  const availabilityWindows = (() => {
+    if (availableSlots.length === 0) return [];
+    const sorted = [...availableSlots].sort((a, b) => a.start_time.localeCompare(b.start_time));
+    const windows: { start_time: string; end_time: string }[] = [];
+    let current = { ...sorted[0] };
+
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i].start_time === current.end_time) {
+        // Adjacent slot — extend the window
+        current.end_time = sorted[i].end_time;
+      } else {
+        // Gap — push current window and start new one
+        windows.push(current);
+        current = { ...sorted[i] };
+      }
+    }
+    windows.push(current);
+    return windows;
+  })();
+
   // Build time dropdown options from available slots
   const timeOptions = (() => {
     const times = new Set<string>();
@@ -255,9 +305,18 @@ function NewBookingForm() {
     return Array.from(times).sort();
   })();
 
+  const minBookingMin = selectedSpace?.min_booking_minutes || 60;
+
   const endTimeOptions = (() => {
     if (!startTime) return [];
-    return timeOptions.filter(t => t > startTime);
+    const [sh, sm] = startTime.split(":").map(Number);
+    const startMin = sh * 60 + sm;
+    const minEndMin = startMin + minBookingMin; // Enforce minimum booking duration
+    return timeOptions.filter(t => {
+      const [h, m] = t.split(":").map(Number);
+      const tMin = h * 60 + m;
+      return tMin >= minEndMin;
+    });
   })();
 
   const handleSubmit = async () => {
@@ -434,14 +493,39 @@ function NewBookingForm() {
               {availableSlots.length === 0 ? (
                 <p className="text-sm text-muted-foreground">{availLoading ? "Loading..." : "No slots available or room is closed on this day."}</p>
               ) : (
-                <div className="flex flex-wrap gap-1.5">
-                  {availableSlots.map((slot, i) => (
-                    <Badge key={i} variant="outline" className="text-xs bg-green-50 text-green-700 cursor-pointer hover:bg-green-100"
-                      onClick={() => { setStartTime(slot.start_time); setEndTime(slot.end_time); }}
-                    >
-                      {formatTime12(slot.start_time)} – {formatTime12(slot.end_time)}
-                    </Badge>
-                  ))}
+                <div className="space-y-2">
+                  <div className="flex flex-wrap gap-1.5">
+                    {availabilityWindows.map((window, i) => {
+                      // Calculate window duration in minutes
+                      const [ws, wm] = window.start_time.split(":").map(Number);
+                      const [we, wme] = window.end_time.split(":").map(Number);
+                      const windowDuration = (we * 60 + wme) - (ws * 60 + wm);
+                      const durationLabel = windowDuration >= 60
+                        ? `${(windowDuration / 60).toFixed(windowDuration % 60 ? 1 : 0)}hr`
+                        : `${windowDuration}min`;
+
+                      return (
+                        <Badge
+                          key={i}
+                          variant="outline"
+                          className="text-xs bg-green-50 text-green-700 cursor-pointer hover:bg-green-100"
+                          onClick={() => {
+                            setStartTime(window.start_time);
+                            // Auto-set end time to start + min booking duration, capped at window end
+                            const autoEndMin = Math.min(ws * 60 + wm + minBookingMin, we * 60 + wme);
+                            const autoEndH = Math.floor(autoEndMin / 60);
+                            const autoEndM = autoEndMin % 60;
+                            setEndTime(`${String(autoEndH).padStart(2, "0")}:${String(autoEndM).padStart(2, "0")}`);
+                          }}
+                        >
+                          {formatTime12(window.start_time)} – {formatTime12(window.end_time)} ({durationLabel})
+                        </Badge>
+                      );
+                    })}
+                  </div>
+                  <p className="text-xs text-muted-foreground">
+                    Min booking: {minBookingMin} min, then 30-min increments. Click a window to auto-fill times.
+                  </p>
                 </div>
               )}
             </div>
@@ -480,6 +564,30 @@ function NewBookingForm() {
               </div>
             </div>
           </div>
+
+          {/* Slot conflict — Waitlist prompt */}
+          {slotConflict && (
+            <div className="bg-amber-50 border border-amber-200 rounded-lg p-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <ListOrdered className="h-4 w-4 text-amber-600" />
+                  <p className="text-sm text-amber-800 font-medium">This time slot is not available</p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="text-amber-700 border-amber-300 hover:bg-amber-100"
+                  onClick={() => setWaitlistDialogOpen(true)}
+                  disabled={!bookerPhone.trim()}
+                >
+                  Join Waitlist
+                </Button>
+              </div>
+              <p className="text-xs text-amber-700 mt-1">
+                You can join the waitlist and be notified when the slot becomes available.
+              </p>
+            </div>
+          )}
         </CardContent>
       </Card>
 
@@ -686,6 +794,11 @@ function NewBookingForm() {
         </CardContent>
       </Card>
 
+      {/* Customer History */}
+      {bookerPhone && bookerPhone.length >= 10 && (
+        <CustomerHistoryCard phone={bookerPhone} leadId={leadId || undefined} />
+      )}
+
       {/* Facilities */}
       {selectedSpace?.facilities && selectedSpace.facilities.length > 0 && (
         <Card>
@@ -813,11 +926,45 @@ function NewBookingForm() {
         </Card>
       )}
 
-      {/* Notes */}
+      {/* Notes with templates */}
       <Card>
         <CardHeader><CardTitle className="text-base">Notes</CardTitle></CardHeader>
-        <CardContent>
+        <CardContent className="space-y-3">
           <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} placeholder="Any special requirements..." rows={3} />
+          <BookingNotesTemplates
+            onInsert={(text) => {
+              setNotes(prev => prev ? `${prev}\n${text}` : text);
+            }}
+          />
+        </CardContent>
+      </Card>
+
+      {/* Make Recurring */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base flex items-center gap-2">
+            <Repeat className="h-4 w-4" />
+            Recurring Booking
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm">Want to book this room on a recurring schedule?</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Set up daily, weekly, bi-weekly, or monthly bookings
+              </p>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setRecurringDialogOpen(true)}
+              disabled={!spaceId || !startTime || !endTime || !locationId}
+            >
+              <Repeat className="mr-1 h-4 w-4" />
+              Set Up Recurring
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
@@ -879,6 +1026,50 @@ function NewBookingForm() {
           </Button>
         </CardContent>
       </Card>
+
+      {/* Dialogs */}
+      {spaceId && startTime && endTime && locationId && (
+        <CreateRecurringDialog
+          open={recurringDialogOpen}
+          onOpenChange={setRecurringDialogOpen}
+          prefill={{
+            space_id: spaceId,
+            customer_type: customerType,
+            contract_id: contractId || undefined,
+            lead_id: leadId || undefined,
+            booker_phone: bookerPhone,
+            guest_name: guestName || undefined,
+            guest_email: guestEmail || undefined,
+            guest_phone: guestPhone || undefined,
+            guest_company: guestCompany || undefined,
+            start_time: startTime,
+            end_time: endTime,
+          }}
+          onCreated={() => {
+            router.push("/bookings");
+          }}
+        />
+      )}
+
+      {spaceId && startTime && endTime && (
+        <WaitlistDialog
+          open={waitlistDialogOpen}
+          onOpenChange={setWaitlistDialogOpen}
+          spaceId={spaceId}
+          bookingDate={bookingDate}
+          startTime={startTime}
+          endTime={endTime}
+          customerType={customerType}
+          contractId={contractId || undefined}
+          leadId={leadId || undefined}
+          guestName={guestName || undefined}
+          guestPhone={guestPhone || undefined}
+          bookerPhone={bookerPhone}
+          onAdded={() => {
+            toast.success("Added to waitlist");
+          }}
+        />
+      )}
     </div>
   );
 }

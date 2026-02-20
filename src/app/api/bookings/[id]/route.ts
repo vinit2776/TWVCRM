@@ -66,6 +66,126 @@ export async function PATCH(
   const body = await request.json();
   const updates: Record<string, unknown> = {};
 
+  // ── Reschedule action ──
+  if (body.action === "reschedule") {
+    if (booking.status !== "confirmed") {
+      return NextResponse.json({ error: "Can only reschedule confirmed bookings" }, { status: 400 });
+    }
+    const { new_date, new_start_time, new_end_time } = body;
+    if (!new_date || !new_start_time || !new_end_time) {
+      return NextResponse.json({ error: "new_date, new_start_time, new_end_time required" }, { status: 400 });
+    }
+
+    // Check availability
+    const { data: conflicts } = await supabase
+      .from("bookings")
+      .select("id")
+      .eq("space_id", booking.space_id)
+      .eq("booking_date", new_date)
+      .not("status", "in", "(cancelled,no_show)")
+      .neq("id", id)
+      .lt("start_time", new_end_time)
+      .gt("end_time", new_start_time);
+
+    if (conflicts && conflicts.length > 0) {
+      return NextResponse.json({ error: "New slot is not available" }, { status: 409 });
+    }
+
+    const [rsh, rsm] = new_start_time.split(":").map(Number);
+    const [reh, rem] = new_end_time.split(":").map(Number);
+    const newDuration = (reh * 60 + rem - rsh * 60 - rsm) / 60;
+    const newTotal = Number(booking.hourly_rate) * newDuration;
+
+    updates.booking_date = new_date;
+    updates.start_time = new_start_time;
+    updates.end_time = new_end_time;
+    updates.duration_hours = newDuration;
+    updates.total_amount = newTotal;
+    updates.reschedule_count = (booking.reschedule_count || 0) + 1;
+    if (!booking.original_booking_date) {
+      updates.original_booking_date = booking.booking_date;
+      updates.original_start_time = booking.start_time;
+      updates.original_end_time = booking.end_time;
+    }
+  }
+
+  // ── Extend action (for checked-in bookings) ──
+  if (body.action === "extend") {
+    if (booking.status !== "checked_in") {
+      return NextResponse.json({ error: "Can only extend checked-in bookings" }, { status: 400 });
+    }
+    const { new_end_time } = body;
+    if (!new_end_time) {
+      return NextResponse.json({ error: "new_end_time required" }, { status: 400 });
+    }
+
+    if (new_end_time <= booking.end_time.slice(0, 5)) {
+      return NextResponse.json({ error: "New end time must be after current end time" }, { status: 400 });
+    }
+
+    // Check no conflicts with next booking
+    const { data: extConflicts } = await supabase
+      .from("bookings")
+      .select("id")
+      .eq("space_id", booking.space_id)
+      .eq("booking_date", booking.booking_date)
+      .not("status", "in", "(cancelled,no_show)")
+      .neq("id", id)
+      .lt("start_time", new_end_time)
+      .gt("end_time", booking.end_time.slice(0, 5));
+
+    if (extConflicts && extConflicts.length > 0) {
+      return NextResponse.json({ error: "Cannot extend — next booking conflict" }, { status: 409 });
+    }
+
+    const [esh, esm] = booking.start_time.split(":").map(Number);
+    const [eeh, eem] = new_end_time.split(":").map(Number);
+    const extDuration = (eeh * 60 + eem - esh * 60 - esm) / 60;
+    const extTotal = Number(booking.hourly_rate) * extDuration;
+    const priceDiff = extTotal - Number(booking.total_amount);
+
+    updates.end_time = new_end_time;
+    updates.duration_hours = extDuration;
+    updates.total_amount = extTotal;
+
+    const { data: extUpdated, error: extError } = await supabase
+      .from("bookings")
+      .update(updates)
+      .eq("id", id)
+      .select(BOOKING_SELECT)
+      .single();
+
+    if (extError) return NextResponse.json({ error: extError.message }, { status: 500 });
+
+    logAudit(supabase, {
+      entityType: "booking",
+      entityId: id,
+      action: "update",
+      performedBy: dbUser.id,
+      changes: {
+        end_time: { old: booking.end_time, new: new_end_time },
+        duration_hours: { old: booking.duration_hours, new: extDuration },
+        total_amount: { old: booking.total_amount, new: extTotal },
+      },
+    });
+
+    return NextResponse.json({
+      data: extUpdated,
+      extension: {
+        old_end_time: booking.end_time.slice(0, 5),
+        new_end_time,
+        old_duration: booking.duration_hours,
+        new_duration: extDuration,
+        price_difference: Math.round(priceDiff),
+      },
+    });
+  }
+
+  // ── Notes update ──
+  if (body.notes !== undefined && !body.status && !body.action) {
+    updates.notes = body.notes;
+  }
+
   // Status transitions
   if (body.status) {
     const { status: newStatus } = body;
@@ -150,6 +270,25 @@ export async function PATCH(
         // Waive usage charge if contract holder or guest
         if (booking.usage_charge_id) {
           await supabase.from("usage_charges").update({ status: "waived" }).eq("id", booking.usage_charge_id);
+        }
+
+        // Auto-offer to waitlisted customers
+        const { data: waitlistEntries } = await supabase
+          .from("booking_waitlist")
+          .select("id")
+          .eq("space_id", booking.space_id)
+          .eq("booking_date", booking.booking_date)
+          .eq("status", "waiting")
+          .lt("start_time", booking.end_time)
+          .gt("end_time", booking.start_time)
+          .order("created_at", { ascending: true })
+          .limit(1);
+
+        if (waitlistEntries && waitlistEntries.length > 0) {
+          await supabase
+            .from("booking_waitlist")
+            .update({ status: "offered", notified_at: new Date().toISOString(), expires_at: new Date(Date.now() + 2 * 3600000).toISOString() })
+            .eq("id", waitlistEntries[0].id);
         }
         break;
       }

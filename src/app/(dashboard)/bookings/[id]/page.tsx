@@ -7,7 +7,9 @@ import {
   ArrowLeft, LogIn, LogOut, XCircle, Mail, Loader2,
   Clock, Users as UsersIcon, IndianRupee, Wifi,
   Phone, AlertTriangle, ShieldCheck, Star,
-  Banknote, CheckCircle,
+  Banknote, CheckCircle, Calendar, Timer, Copy,
+  Link2, Download, MessageCircle, Repeat, RotateCcw,
+  StickyNote,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -17,6 +19,10 @@ import { Skeleton } from "@/components/shared/loading-skeleton";
 import { CollectPaymentDialog } from "@/components/bookings/collect-payment-dialog";
 import { NoShowRefundDialog } from "@/components/bookings/no-show-refund-dialog";
 import { CheckoutFeedbackDialog } from "@/components/bookings/checkout-feedback-dialog";
+import { RescheduleDialog } from "@/components/bookings/reschedule-dialog";
+import { ExtendBookingDialog } from "@/components/bookings/extend-booking-dialog";
+import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
+import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import {
   BOOKING_STATUS_LABELS, BOOKING_STATUS_COLORS,
@@ -49,6 +55,8 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [paymentDialogOpen, setPaymentDialogOpen] = useState(false);
   const [refundDialogOpen, setRefundDialogOpen] = useState(false);
   const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false);
+  const [rescheduleDialogOpen, setRescheduleDialogOpen] = useState(false);
+  const [extendDialogOpen, setExtendDialogOpen] = useState(false);
 
   // Payment records + gateway config
   const [existingPayments, setExistingPayments] = useState<BookingPayment[]>([]);
@@ -117,6 +125,15 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
       );
       fetchBooking();
 
+      // On check-in, send floor manager alert
+      if (action === "check_in") {
+        fetch(`/api/bookings/${id}/email`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ type: "check_in_alert" }),
+        }).catch(() => {});
+      }
+
       // On checkout, send cleaning alert and open feedback dialog
       if (action === "check_out") {
         fetch(`/api/bookings/${id}/email`, {
@@ -153,6 +170,113 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || "Failed to send email");
+    }
+  };
+
+  const handleCopyFeedbackLink = () => {
+    if (!booking?.feedback_token) { toast.error("No feedback token"); return; }
+    const url = `${window.location.origin}/feedback/${booking.feedback_token}`;
+    navigator.clipboard.writeText(url).then(() => toast.success("Feedback link copied")).catch(() => toast.error("Failed to copy"));
+  };
+
+  const handleSendFeedbackLink = async () => {
+    const res = await fetch(`/api/bookings/${id}/email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "feedback_link" }),
+    });
+    if (res.ok) {
+      toast.success("Feedback link sent to customer");
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to send");
+    }
+  };
+
+  const handleSendPaymentLink = async () => {
+    const res = await fetch(`/api/bookings/${id}/email`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ type: "payment_link" }),
+    });
+    if (res.ok) {
+      toast.success("Payment link sent to customer");
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to send");
+    }
+  };
+
+  const handleCopyPaymentLink = () => {
+    if (!booking?.payment_token) { toast.error("No payment token"); return; }
+    const url = `${window.location.origin}/pay/${booking.payment_token}`;
+    navigator.clipboard.writeText(url).then(() => toast.success("Payment link copied")).catch(() => toast.error("Failed to copy"));
+  };
+
+  const handleDownloadReceipt = async () => {
+    try {
+      const res = await fetch(`/api/bookings/${id}/receipt`);
+      if (!res.ok) { toast.error("Failed to generate receipt"); return; }
+      const json = await res.json();
+      // Open receipt data in new tab for print/save
+      const receiptData = json.data;
+      const win = window.open("", "_blank");
+      if (!win) { toast.error("Popup blocked"); return; }
+      win.document.write(`
+        <html><head><title>Receipt - ${receiptData.booking.booking_number}</title>
+        <style>
+          body { font-family: Arial, sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
+          h1 { color: #015E65; font-size: 24px; } h2 { font-size: 16px; margin-top: 24px; color: #333; }
+          table { width: 100%; border-collapse: collapse; margin: 12px 0; }
+          td { padding: 6px 0; } .label { color: #666; } .amount { text-align: right; font-weight: bold; }
+          .total { border-top: 2px solid #015E65; font-size: 18px; padding-top: 12px; }
+          .footer { margin-top: 40px; text-align: center; color: #999; font-size: 12px; }
+          @media print { body { margin: 0; } }
+        </style></head><body>
+        <h1>The WorkVilla</h1>
+        <p style="color:#00AE6C;font-size:14px;">Booking Receipt</p>
+        <hr/>
+        <h2>Booking Details</h2>
+        <table>
+          <tr><td class="label">Booking #</td><td>${receiptData.booking.booking_number}</td></tr>
+          <tr><td class="label">Space</td><td>${receiptData.booking.space_name}</td></tr>
+          <tr><td class="label">Date</td><td>${receiptData.booking.booking_date}</td></tr>
+          <tr><td class="label">Time</td><td>${receiptData.booking.start_time} - ${receiptData.booking.end_time}</td></tr>
+          <tr><td class="label">Duration</td><td>${receiptData.booking.duration_hours} hour(s)</td></tr>
+          <tr><td class="label">Customer</td><td>${receiptData.booking.customer_name}</td></tr>
+        </table>
+        <h2>Payment Summary</h2>
+        <table>
+          <tr><td class="label">Total Amount</td><td class="amount">₹${receiptData.booking.total_amount?.toLocaleString("en-IN")}</td></tr>
+          ${receiptData.payments.map((p: { amount: number; payment_mode: string; status: string }) =>
+            `<tr><td class="label">${p.payment_mode} (${p.status})</td><td class="amount">₹${p.amount.toLocaleString("en-IN")}</td></tr>`
+          ).join("")}
+        </table>
+        ${receiptData.voucher ? `<p><strong>WiFi Voucher:</strong> ${receiptData.voucher.voucher_code}</p>` : ""}
+        <div class="footer">
+          <p>${receiptData.company.name}</p>
+          <p>${receiptData.company.address}</p>
+        </div>
+        <script>window.print();</script>
+        </body></html>
+      `);
+      win.document.close();
+    } catch {
+      toast.error("Failed to generate receipt");
+    }
+  };
+
+  const handleNotesUpdate = async (newNotes: string) => {
+    const res = await fetch(`/api/bookings/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notes: newNotes }),
+    });
+    if (res.ok) {
+      toast.success("Notes updated");
+      fetchBooking();
+    } else {
+      toast.error("Failed to update notes");
     }
   };
 
@@ -201,6 +325,16 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <Badge variant="outline" className={BOOKING_CUSTOMER_TYPE_COLORS[booking.customer_type]}>
                 {BOOKING_CUSTOMER_TYPE_LABELS[booking.customer_type]}
               </Badge>
+              {booking.series_id && (
+                <Badge variant="outline" className="bg-indigo-50 text-indigo-700 text-[10px]">
+                  <Repeat className="h-3 w-3 mr-1" />Recurring
+                </Badge>
+              )}
+              {booking.reschedule_count && booking.reschedule_count > 0 && (
+                <Badge variant="outline" className="bg-amber-50 text-amber-700 text-[10px]">
+                  Rescheduled x{booking.reschedule_count}
+                </Badge>
+              )}
             </div>
             <p className="text-sm text-muted-foreground">
               {booking.space?.name} &middot; {formatDate(booking.booking_date)}
@@ -215,6 +349,9 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <Button size="sm" onClick={() => handleStatusAction("check_in")} disabled={actionLoading}>
                 <LogIn className="mr-1 h-4 w-4" />Check In
               </Button>
+              <Button variant="outline" size="sm" onClick={() => setRescheduleDialogOpen(true)}>
+                <Calendar className="mr-1 h-4 w-4" />Reschedule
+              </Button>
               <Button variant="outline" size="sm" onClick={handleResendEmail}>
                 <Mail className="mr-1 h-4 w-4" />Resend Email
               </Button>
@@ -227,9 +364,14 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             </>
           )}
           {booking.status === "checked_in" && (
-            <Button size="sm" onClick={() => handleStatusAction("check_out")} disabled={actionLoading}>
-              <LogOut className="mr-1 h-4 w-4" />Check Out
-            </Button>
+            <>
+              <Button size="sm" onClick={() => handleStatusAction("check_out")} disabled={actionLoading}>
+                <LogOut className="mr-1 h-4 w-4" />Check Out
+              </Button>
+              <Button variant="outline" size="sm" onClick={() => setExtendDialogOpen(true)}>
+                <Timer className="mr-1 h-4 w-4" />Extend
+              </Button>
+            </>
           )}
           {booking.customer_type === "walk_in" && booking.payment_status !== "paid" && (
             <Button variant="outline" size="sm" onClick={() => setPaymentDialogOpen(true)}>
@@ -253,6 +395,33 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           )}
           {actionLoading && <Loader2 className="h-4 w-4 animate-spin self-center" />}
         </div>
+      </div>
+
+      {/* Quick Action Links */}
+      <div className="flex flex-wrap gap-2">
+        <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleDownloadReceipt}>
+          <Download className="mr-1 h-3.5 w-3.5" />Download Receipt
+        </Button>
+        {booking.status === "checked_out" && booking.feedback_token && (
+          <>
+            <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleCopyFeedbackLink}>
+              <Copy className="mr-1 h-3.5 w-3.5" />Copy Feedback Link
+            </Button>
+            <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleSendFeedbackLink}>
+              <MessageCircle className="mr-1 h-3.5 w-3.5" />Send Feedback Link
+            </Button>
+          </>
+        )}
+        {booking.payment_status !== "paid" && booking.payment_token && (
+          <>
+            <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleCopyPaymentLink}>
+              <Link2 className="mr-1 h-3.5 w-3.5" />Copy Payment Link
+            </Button>
+            <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleSendPaymentLink}>
+              <Mail className="mr-1 h-3.5 w-3.5" />Send Payment Link
+            </Button>
+          </>
+        )}
       </div>
 
       {/* Details Grid */}
@@ -294,6 +463,22 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <span className="text-muted-foreground">Duration</span>
               <span>{booking.duration_hours} hour(s)</span>
             </div>
+            {booking.original_booking_date && (
+              <>
+                <Separator />
+                <p className="text-xs text-muted-foreground font-medium">Original Schedule</p>
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>Date</span>
+                  <span>{formatDate(booking.original_booking_date)}</span>
+                </div>
+                {booking.original_start_time && booking.original_end_time && (
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Time</span>
+                    <span>{formatTime12(booking.original_start_time)} – {formatTime12(booking.original_end_time)}</span>
+                  </div>
+                )}
+              </>
+            )}
           </CardContent>
         </Card>
 
@@ -462,6 +647,12 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                   <span>{formatDateTime(booking.check_out_at)}</span>
                 </div>
               )}
+              {booking.no_show_detected_at && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">No-Show Detected</span>
+                  <span>{formatDateTime(booking.no_show_detected_at)}</span>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}
@@ -554,14 +745,36 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         )}
       </div>
 
-      {/* Notes */}
-      {booking.notes && (
-        <Card>
-          <CardHeader><CardTitle className="text-sm">Notes</CardTitle></CardHeader>
-          <CardContent className="text-sm whitespace-pre-wrap">{booking.notes}</CardContent>
-        </Card>
+      {/* Customer History */}
+      {(booking.booker_phone || booking.lead?.phone || booking.guest_phone) && (
+        <CustomerHistoryCard
+          phone={booking.booker_phone || booking.lead?.phone || booking.guest_phone || ""}
+          leadId={booking.lead?.id}
+        />
       )}
 
+      {/* Notes with Templates */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-sm flex items-center gap-2">
+            <StickyNote className="h-4 w-4" />
+            Notes
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {booking.notes && (
+            <p className="text-sm whitespace-pre-wrap bg-muted/30 rounded p-3">{booking.notes}</p>
+          )}
+          <BookingNotesTemplates
+            onInsert={(text) => {
+              const updated = booking.notes ? `${booking.notes}\n${text}` : text;
+              handleNotesUpdate(updated);
+            }}
+          />
+        </CardContent>
+      </Card>
+
+      {/* Dialogs */}
       <CollectPaymentDialog
         open={paymentDialogOpen}
         onOpenChange={setPaymentDialogOpen}
@@ -591,6 +804,25 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         bookingNumber={booking.booking_number || ""}
         customerName={customerName}
         onSuccess={fetchBooking}
+      />
+
+      <RescheduleDialog
+        open={rescheduleDialogOpen}
+        onOpenChange={setRescheduleDialogOpen}
+        bookingId={booking.id}
+        currentDate={booking.booking_date}
+        currentStart={booking.start_time}
+        currentEnd={booking.end_time}
+        onRescheduled={fetchBooking}
+      />
+
+      <ExtendBookingDialog
+        open={extendDialogOpen}
+        onOpenChange={setExtendDialogOpen}
+        bookingId={booking.id}
+        currentEnd={booking.end_time}
+        hourlyRate={booking.hourly_rate}
+        onExtended={fetchBooking}
       />
     </div>
   );

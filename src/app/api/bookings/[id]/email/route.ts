@@ -34,7 +34,7 @@ export async function POST(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const body = await request.json();
-  const emailType = body.type || "confirmation"; // "confirmation" | "cleaning"
+  const emailType = body.type || "confirmation"; // "confirmation" | "cleaning" | "check_in_alert" | "feedback_link" | "payment_link"
 
   // Fetch booking with all joins
   const { data: booking, error } = await supabase
@@ -70,6 +70,113 @@ export async function POST(
   const locationName = booking.location?.name || "";
   const locationAddress = [booking.location?.address, booking.location?.city, booking.location?.state].filter(Boolean).join(", ");
   const facilityList = (booking.facilities || []).map((f: { facility_name: string }) => f.facility_name).join(", ");
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+
+  // ── Check-in alert to floor managers ──
+  if (emailType === "check_in_alert") {
+    const { data: managers } = await supabase
+      .from("users")
+      .select("email, full_name")
+      .in("role", ["admin", "manager", "floor_manager"])
+      .eq("is_active", true);
+
+    if (!managers || managers.length === 0) {
+      return NextResponse.json({ error: "No floor managers found" }, { status: 400 });
+    }
+
+    const alertHtml = `
+      <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+        <div style="background:#015E65;padding:20px;text-align:center;">
+          <h1 style="color:white;margin:0;font-size:20px;">Customer Checked In</h1>
+        </div>
+        <div style="padding:20px;">
+          <p>A customer has just checked in:</p>
+          <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Room</td><td style="padding:8px;border:1px solid #ddd;">${spaceName}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Customer</td><td style="padding:8px;border:1px solid #ddd;">${customerName}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Check-in Time</td><td style="padding:8px;border:1px solid #ddd;">${new Date().toLocaleString("en-IN")}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Booking</td><td style="padding:8px;border:1px solid #ddd;">${booking.booking_number}</td></tr>
+          </table>
+        </div>
+      </div>`;
+
+    for (const mgr of managers) {
+      try {
+        await resend.emails.send({
+          from: EMAIL_FROM,
+          to: mgr.email,
+          subject: `Check-In: ${customerName} at ${spaceName} - The WorkVilla`,
+          html: alertHtml,
+        });
+      } catch (e) {
+        console.error(`Failed to send check-in alert to ${mgr.email}:`, e);
+      }
+    }
+    return NextResponse.json({ message: `Check-in alert sent to ${managers.length} manager(s)` });
+  }
+
+  // ── Feedback link email to customer ──
+  if (emailType === "feedback_link") {
+    if (!customerEmail) return NextResponse.json({ error: "No customer email available" }, { status: 400 });
+    const feedbackUrl = `${appUrl}/feedback/${booking.feedback_token}`;
+
+    await resend.emails.send({
+      from: EMAIL_FROM,
+      to: customerEmail,
+      subject: `How was your experience? - ${booking.booking_number} - The WorkVilla`,
+      html: `
+        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#015E65;padding:20px;text-align:center;">
+            <h1 style="color:white;margin:0;font-size:20px;">We'd Love Your Feedback</h1>
+          </div>
+          <div style="padding:20px;">
+            <p>Dear ${customerName},</p>
+            <p>Thank you for using The WorkVilla. We'd love to hear about your experience.</p>
+            <div style="text-align:center;margin:24px 0;">
+              <a href="${feedbackUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;">Share Your Feedback</a>
+            </div>
+            <p style="color:#666;font-size:13px;">Booking: ${booking.booking_number} | Room: ${spaceName}</p>
+            <hr style="margin:20px 0;border:none;border-top:1px solid #eee;" />
+            <p style="color:#999;font-size:12px;text-align:center;">The WorkVilla | Prakash Presidium, 110 MG Road, Nungambakkam, Chennai 600034</p>
+          </div>
+        </div>`,
+    });
+    return NextResponse.json({ message: "Feedback link sent" });
+  }
+
+  // ── Payment link email to customer ──
+  if (emailType === "payment_link") {
+    if (!customerEmail) return NextResponse.json({ error: "No customer email available" }, { status: 400 });
+    const paymentUrl = `${appUrl}/pay/${booking.payment_token}`;
+
+    await resend.emails.send({
+      from: EMAIL_FROM,
+      to: customerEmail,
+      subject: `Payment Link - ${booking.booking_number} - ₹${Number(booking.total_amount).toLocaleString("en-IN")} - The WorkVilla`,
+      html: `
+        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
+          <div style="background:#015E65;padding:20px;text-align:center;">
+            <h1 style="color:white;margin:0;font-size:20px;">Complete Your Payment</h1>
+          </div>
+          <div style="padding:20px;">
+            <p>Dear ${customerName},</p>
+            <p>Please complete the payment for your booking at The WorkVilla.</p>
+            <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+              <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Booking</td><td style="padding:8px;border:1px solid #ddd;">${booking.booking_number}</td></tr>
+              <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Room</td><td style="padding:8px;border:1px solid #ddd;">${spaceName}</td></tr>
+              <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Amount</td><td style="padding:8px;border:1px solid #ddd;font-weight:bold;color:#015E65;">₹${Number(booking.total_amount).toLocaleString("en-IN")}</td></tr>
+            </table>
+            <div style="text-align:center;margin:24px 0;">
+              <a href="${paymentUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;">Pay Now</a>
+            </div>
+            <hr style="margin:20px 0;border:none;border-top:1px solid #eee;" />
+            <p style="color:#999;font-size:12px;text-align:center;">The WorkVilla | Prakash Presidium, 110 MG Road, Nungambakkam, Chennai 600034</p>
+          </div>
+        </div>`,
+    });
+    return NextResponse.json({ message: "Payment link sent" });
+  }
 
   if (emailType === "cleaning") {
     // Send cleaning alert to floor managers

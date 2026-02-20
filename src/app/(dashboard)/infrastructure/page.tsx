@@ -47,6 +47,7 @@ interface InfraData {
   resend: {
     plan: string;
     limits: { daily_emails: number; monthly_emails: number };
+    usage?: { sent_today: number; sent_this_month: number };
     dashboard_url: string;
   };
 }
@@ -158,6 +159,7 @@ const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
 export default function InfrastructurePage() {
   const [data, setData] = useState<InfraData | null>(null);
   const [loading, setLoading] = useState(true);
+  const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
 
   const fetchData = useCallback(async (force = false) => {
@@ -178,7 +180,12 @@ export default function InfrastructurePage() {
       }
     }
 
-    setLoading(true);
+    // On refresh (force=true with existing data), show spinner on button instead of full skeleton
+    if (force && data) {
+      setRefreshing(true);
+    } else {
+      setLoading(true);
+    }
     setError("");
     try {
       const res = await fetch("/api/admin/infrastructure");
@@ -186,6 +193,7 @@ export default function InfrastructurePage() {
         const err = await res.json().catch(() => null);
         setError(err?.error || "Failed to fetch infrastructure data");
         setLoading(false);
+        setRefreshing(false);
         return;
       }
       const json = await res.json();
@@ -195,7 +203,8 @@ export default function InfrastructurePage() {
       setError("Failed to connect to API");
     }
     setLoading(false);
-  }, []);
+    setRefreshing(false);
+  }, [data]);
 
   useEffect(() => {
     fetchData();
@@ -263,10 +272,10 @@ export default function InfrastructurePage() {
           variant="outline"
           size="sm"
           onClick={() => fetchData(true)}
-          disabled={loading}
+          disabled={refreshing}
         >
-          <RefreshCw className={`mr-2 h-4 w-4 ${loading ? "animate-spin" : ""}`} />
-          Refresh
+          <RefreshCw className={`mr-2 h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+          {refreshing ? "Refreshing…" : "Refresh"}
         </Button>
       </div>
 
@@ -343,11 +352,14 @@ export default function InfrastructurePage() {
                 <span>{data.vercel.limits.serverless_function_timeout_sec}s</span>
               </div>
             </div>
+            <p className="text-xs text-muted-foreground mt-2 italic">
+              Plan limits shown — view dashboard for live usage
+            </p>
             <a
               href={data.vercel.dashboard_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-3"
+              className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1"
             >
               View Usage <ExternalLink className="h-3 w-3" />
             </a>
@@ -366,27 +378,74 @@ export default function InfrastructurePage() {
             </Badge>
           </CardHeader>
           <CardContent>
-            <div className="space-y-1 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Daily Limit</span>
-                <span>{data.resend.limits.daily_emails} emails</span>
+            <div className="space-y-2.5 text-sm">
+              {/* Today usage */}
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span className="text-muted-foreground">Today</span>
+                  <span className="font-medium">
+                    {data.resend.usage?.sent_today ?? "—"} / {data.resend.limits.daily_emails}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${getUsageColor(
+                      data.resend.usage
+                        ? (data.resend.usage.sent_today / data.resend.limits.daily_emails) * 100
+                        : 0
+                    )}`}
+                    style={{
+                      width: `${Math.min(
+                        data.resend.usage
+                          ? (data.resend.usage.sent_today / data.resend.limits.daily_emails) * 100
+                          : 0,
+                        100
+                      )}%`,
+                    }}
+                  />
+                </div>
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Monthly Limit</span>
-                <span>{formatNumber(data.resend.limits.monthly_emails)} emails</span>
+              {/* Monthly usage */}
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span className="text-muted-foreground">This Month</span>
+                  <span className="font-medium">
+                    {data.resend.usage?.sent_this_month != null
+                      ? `~${data.resend.usage.sent_this_month}`
+                      : "—"}{" "}
+                    / {formatNumber(data.resend.limits.monthly_emails)}
+                  </span>
+                </div>
+                <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
+                  <div
+                    className={`h-full rounded-full transition-all ${getUsageColor(
+                      data.resend.usage
+                        ? (data.resend.usage.sent_this_month / data.resend.limits.monthly_emails) * 100
+                        : 0
+                    )}`}
+                    style={{
+                      width: `${Math.min(
+                        data.resend.usage
+                          ? (data.resend.usage.sent_this_month / data.resend.limits.monthly_emails) * 100
+                          : 0,
+                        100
+                      )}%`,
+                    }}
+                  />
+                </div>
               </div>
             </div>
             <div className="mt-2 p-2 rounded-md bg-muted/50 text-xs text-muted-foreground flex items-center gap-1.5">
               <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-              Used for OTPs, invoices, proposals, booking confirmations, voucher emails
+              OTPs, invoices, proposals, booking confirmations, vouchers
             </div>
             <a
               href={data.resend.dashboard_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-3"
+              className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-2"
             >
-              View Usage <ExternalLink className="h-3 w-3" />
+              View Exact Usage <ExternalLink className="h-3 w-3" />
             </a>
           </CardContent>
         </Card>
@@ -544,7 +603,7 @@ export default function InfrastructurePage() {
       {/* ── Footer Note ── */}
       <p className="text-xs text-muted-foreground text-center pb-4">
         Data is cached locally for 24 hours. Click &quot;Refresh&quot; to fetch live metrics.
-        Vercel and Resend usage must be checked on their respective dashboards.
+        Vercel usage must be checked on their dashboard. Resend monthly counts are approximate (last 100 emails).
       </p>
     </div>
   );

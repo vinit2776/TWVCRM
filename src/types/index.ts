@@ -550,6 +550,7 @@ export interface Space {
   max_advance_booking_days: number;
   min_booking_minutes: number;
   cancellation_policy?: string;
+  no_show_grace_minutes: number;
   is_active: boolean;
   created_by?: string;
   created_at: string;
@@ -613,6 +614,20 @@ export interface Booking {
   refund_reason?: string;
   refund_approved_by?: string;
   refund_approved_at?: string;
+  // Recurring booking
+  series_id?: string;
+  series?: RecurringBookingSeries;
+  // Reschedule tracking
+  rescheduled_from_id?: string;
+  reschedule_count: number;
+  original_booking_date?: string;
+  original_start_time?: string;
+  original_end_time?: string;
+  // Tokens for public pages
+  feedback_token?: string;
+  payment_token?: string;
+  // No-show detection
+  no_show_detected_at?: string;
   notes?: string;
   created_by?: string;
   created_at: string;
@@ -858,4 +873,114 @@ export interface MonthlyAccountingSummary {
     total_cash_pending_handover: number;
     total_carried_forward: number;
   };
+}
+
+// ==========================================
+// Recurring Booking Series
+// ==========================================
+export type RecurringFrequency = "daily" | "weekly" | "biweekly" | "monthly";
+
+export interface RecurringBookingSeries {
+  id: string;
+  space_id: string;
+  space?: Space;
+  location_id: string;
+  location?: Location;
+  customer_type: BookingCustomerType;
+  contract_id?: string;
+  contract?: Contract;
+  lead_id?: string;
+  lead?: Lead;
+  guest_name?: string;
+  guest_phone?: string;
+  guest_email?: string;
+  guest_company?: string;
+  booker_phone?: string;
+  start_time: string;
+  end_time: string;
+  duration_hours: number;
+  frequency: RecurringFrequency;
+  day_of_week?: number;
+  day_of_month?: number;
+  series_start: string;
+  series_end: string;
+  facility_ids?: string[];
+  notes?: string;
+  is_active: boolean;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+  bookings?: Booking[];
+}
+
+// ==========================================
+// Booking Waitlist
+// ==========================================
+export type WaitlistStatus = "waiting" | "offered" | "booked" | "expired" | "cancelled";
+
+export interface BookingWaitlistEntry {
+  id: string;
+  space_id: string;
+  space?: Space;
+  location_id: string;
+  booking_date: string;
+  start_time: string;
+  end_time: string;
+  customer_type: BookingCustomerType;
+  contract_id?: string;
+  lead_id?: string;
+  lead?: Lead;
+  guest_name?: string;
+  guest_phone?: string;
+  booker_phone?: string;
+  status: WaitlistStatus;
+  notified_at?: string;
+  expires_at?: string;
+  notes?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// ==========================================
+// Booking Analytics Types
+// ==========================================
+export interface RoomUtilization {
+  space_id: string;
+  space_name: string;
+  location_name: string;
+  available_hours: number;
+  booked_hours: number;
+  utilization_pct: number;
+  revenue: number;
+  total_bookings: number;
+  peak_hours: { hour: number; count: number }[];
+}
+
+export interface RevenueReport {
+  period: string;
+  total_revenue: number;
+  by_payment_mode: { mode: string; amount: number }[];
+  by_customer_type: { type: string; amount: number; count: number }[];
+  by_space: { space_name: string; amount: number; count: number }[];
+  cancellation_rate: number;
+  no_show_rate: number;
+  trend: { month: string; revenue: number; bookings: number }[];
+}
+
+export interface CustomerSegment {
+  segment: string;
+  label: string;
+  description: string;
+  count: number;
+  customers: {
+    lead_id?: string;
+    name: string;
+    company?: string;
+    phone?: string;
+    total_bookings: number;
+    total_spent: number;
+    last_visit?: string;
+    avg_feedback?: number;
+  }[];
 }

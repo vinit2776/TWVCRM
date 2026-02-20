@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   Plus, CalendarClock, Search, X, ChevronLeft, ChevronRight,
   LogIn, LogOut, XCircle, MoreHorizontal, Mail, AlertTriangle, Phone,
-  Star, MessageSquareWarning,
+  Star, MessageSquareWarning, Calendar, BarChart3, List, Copy, RotateCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -15,7 +15,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
-  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger,
+  DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -29,6 +29,12 @@ import {
 } from "@/lib/constants";
 import { toast } from "sonner";
 import type { Booking } from "@/types";
+import { CalendarView } from "@/components/bookings/calendar-view";
+import { BookingCountdown } from "@/components/bookings/booking-countdown";
+import { BulkActionsBar } from "@/components/bookings/bulk-actions-bar";
+import { UtilizationDashboard } from "@/components/bookings/utilization-dashboard";
+import { RevenueReport } from "@/components/bookings/revenue-report";
+import { CustomerSegments } from "@/components/bookings/customer-segments";
 
 function formatTime12(timeStr: string): string {
   const [h, m] = timeStr.slice(0, 5).split(":").map(Number);
@@ -45,6 +51,8 @@ function isBookingPastStartTime(b: Booking): boolean {
   return now.getHours() * 60 + now.getMinutes() > bh * 60 + bm;
 }
 
+type TabType = "list" | "calendar" | "analytics";
+
 interface BookingTableProps {
   bookings: Booking[];
   title: string;
@@ -57,11 +65,15 @@ interface BookingTableProps {
   router: ReturnType<typeof useRouter>;
   emptyMessage: string;
   blinkUncheckedIn?: boolean;
+  selectedIds: Set<string>;
+  onToggleSelect: (id: string) => void;
+  onSelectAll: (ids: string[]) => void;
 }
 
 function BookingTable({
   bookings, title, icon, search, setSearch, searchPlaceholder,
   onStatusAction, onResendEmail, router, emptyMessage, blinkUncheckedIn,
+  selectedIds, onToggleSelect, onSelectAll,
 }: BookingTableProps) {
   // Filter by phone / name search
   const filtered = bookings.filter(b => {
@@ -74,6 +86,35 @@ function BookingTable({
     const bookingNum = (b.booking_number || "").toLowerCase();
     return customerName.includes(q) || phone.includes(q) || bookingNum.includes(q);
   });
+
+  const allSelected = filtered.length > 0 && filtered.every(b => selectedIds.has(b.id));
+
+  const handleReBook = async (bookingId: string) => {
+    try {
+      const res = await fetch(`/api/bookings/${bookingId}/rebook-data`);
+      if (res.ok) {
+        const json = await res.json();
+        const d = json.data;
+        const params = new URLSearchParams();
+        if (d.space_id) params.set("space_id", d.space_id);
+        if (d.customer_type) params.set("customer_type", d.customer_type);
+        router.push(`/bookings/new?${params}`);
+      } else {
+        toast.error("Failed to load booking data");
+      }
+    } catch {
+      toast.error("Failed to load booking data");
+    }
+  };
+
+  const handleCopyLink = (bookingId: string) => {
+    const url = `${window.location.origin}/bookings/${bookingId}`;
+    navigator.clipboard.writeText(url).then(() => {
+      toast.success("Booking link copied to clipboard");
+    }).catch(() => {
+      toast.error("Failed to copy link");
+    });
+  };
 
   return (
     <Card>
@@ -102,6 +143,20 @@ function BookingTable({
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead><tr className="border-t border-b bg-muted/50">
+                <th className="px-2 py-2.5 w-8">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={() => {
+                      if (allSelected) {
+                        filtered.forEach(b => selectedIds.has(b.id) && onToggleSelect(b.id));
+                      } else {
+                        onSelectAll(filtered.map(b => b.id));
+                      }
+                    }}
+                    className="h-3.5 w-3.5 rounded border-gray-300"
+                  />
+                </th>
                 <th className="px-4 py-2.5 text-left font-medium text-xs">Booking #</th>
                 <th className="px-4 py-2.5 text-left font-medium text-xs hidden md:table-cell">Space</th>
                 <th className="px-4 py-2.5 text-left font-medium text-xs">Time</th>
@@ -125,9 +180,17 @@ function BookingTable({
                     key={b.id}
                     className={`border-b hover:bg-muted/30 transition-colors cursor-pointer ${
                       shouldBlink ? "animate-pulse bg-amber-50" : ""
-                    }`}
+                    } ${selectedIds.has(b.id) ? "bg-blue-50/50" : ""}`}
                     onClick={() => router.push(`/bookings/${b.id}`)}
                   >
+                    <td className="px-2 py-2.5" onClick={(e) => e.stopPropagation()}>
+                      <input
+                        type="checkbox"
+                        checked={selectedIds.has(b.id)}
+                        onChange={() => onToggleSelect(b.id)}
+                        className="h-3.5 w-3.5 rounded border-gray-300"
+                      />
+                    </td>
                     <td className="px-4 py-2.5">
                       <div className="flex items-center gap-1.5">
                         {shouldBlink && <AlertTriangle className="h-3.5 w-3.5 text-amber-600 shrink-0" />}
@@ -197,6 +260,13 @@ function BookingTable({
                               <LogOut className="mr-2 h-4 w-4" />Check Out
                             </DropdownMenuItem>
                           )}
+                          <DropdownMenuSeparator />
+                          <DropdownMenuItem onClick={() => handleReBook(b.id)}>
+                            <RotateCcw className="mr-2 h-4 w-4" />Book Again
+                          </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => handleCopyLink(b.id)}>
+                            <Copy className="mr-2 h-4 w-4" />Copy Link
+                          </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </td>
@@ -217,11 +287,15 @@ export default function BookingsPage() {
   const [allBookings, setAllBookings] = useState<Booking[]>([]);
   const [loading, setLoading] = useState(true);
   const [locationFilter, setLocationFilter] = useState("");
+  const [activeTab, setActiveTab] = useState<TabType>("list");
 
   // Per-table search states
   const [todayUpcomingSearch, setTodayUpcomingSearch] = useState("");
   const [todayCompletedSearch, setTodayCompletedSearch] = useState("");
   const [futureSearch, setFutureSearch] = useState("");
+
+  // Bulk selection
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
 
   // For the "All Bookings" fallback section
   const [page, setPage] = useState(1);
@@ -236,6 +310,22 @@ export default function BookingsPage() {
   const [showAllBookings, setShowAllBookings] = useState(false);
 
   const today = new Date().toISOString().split("T")[0];
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const selectAll = (ids: string[]) => {
+    setSelectedIds(prev => {
+      const next = new Set(prev);
+      ids.forEach(id => next.add(id));
+      return next;
+    });
+  };
 
   // Fetch today and future bookings (all at once for the dashboard view)
   const fetchDashboardBookings = useCallback(async () => {
@@ -338,6 +428,12 @@ export default function BookingsPage() {
     }
   };
 
+  const handleBulkComplete = () => {
+    setSelectedIds(new Set());
+    fetchDashboardBookings();
+    if (showAllBookings) fetchAllBookings();
+  };
+
   return (
     <div className="space-y-4">
       {/* Header */}
@@ -365,212 +461,309 @@ export default function BookingsPage() {
         </div>
       </div>
 
-      {loading ? <TableSkeleton rows={4} /> : (
-        <div className="space-y-6">
-          {/* Today — Upcoming / Active */}
-          <BookingTable
-            bookings={todayUpcoming}
-            title="Today — Upcoming & Active"
-            icon={<CalendarClock className="h-4 w-4 text-blue-600" />}
-            search={todayUpcomingSearch}
-            setSearch={setTodayUpcomingSearch}
-            searchPlaceholder="Search by phone or name..."
-            onStatusAction={handleStatusAction}
-            onResendEmail={handleResendEmail}
-            router={router}
-            emptyMessage="No upcoming bookings for today."
-            blinkUncheckedIn
-          />
+      {/* Tab navigation */}
+      <div className="flex items-center gap-1 border-b">
+        <button
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === "list"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+          onClick={() => setActiveTab("list")}
+        >
+          <List className="inline h-4 w-4 mr-1.5 -mt-0.5" />
+          List View
+        </button>
+        <button
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === "calendar"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+          onClick={() => setActiveTab("calendar")}
+        >
+          <Calendar className="inline h-4 w-4 mr-1.5 -mt-0.5" />
+          Calendar
+        </button>
+        <button
+          className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === "analytics"
+              ? "border-primary text-primary"
+              : "border-transparent text-muted-foreground hover:text-foreground"
+          }`}
+          onClick={() => setActiveTab("analytics")}
+        >
+          <BarChart3 className="inline h-4 w-4 mr-1.5 -mt-0.5" />
+          Analytics
+        </button>
+      </div>
 
-          {/* Today — Completed */}
-          <BookingTable
-            bookings={todayCompleted}
-            title="Today — Completed / Closed"
-            icon={<CalendarClock className="h-4 w-4 text-gray-500" />}
-            search={todayCompletedSearch}
-            setSearch={setTodayCompletedSearch}
-            searchPlaceholder="Search by phone or name..."
-            onStatusAction={handleStatusAction}
-            onResendEmail={handleResendEmail}
-            router={router}
-            emptyMessage="No completed bookings today."
-          />
+      {/* Calendar Tab */}
+      {activeTab === "calendar" && (
+        <CalendarView
+          locations={locations.map(l => ({ id: l.id, name: l.name }))}
+          onBookingClick={(id) => router.push(`/bookings/${id}`)}
+          onSlotClick={(spaceId, date, time) =>
+            router.push(`/bookings/new?space_id=${spaceId}&date=${date}&time=${time}`)
+          }
+        />
+      )}
 
-          {/* Future Bookings */}
-          <BookingTable
-            bookings={futureBookings}
-            title="Future Bookings"
-            icon={<CalendarClock className="h-4 w-4 text-emerald-600" />}
-            search={futureSearch}
-            setSearch={setFutureSearch}
-            searchPlaceholder="Search by phone or name..."
-            onStatusAction={handleStatusAction}
-            onResendEmail={handleResendEmail}
-            router={router}
-            emptyMessage="No future bookings."
-          />
+      {/* Analytics Tab */}
+      {activeTab === "analytics" && (
+        <div className="space-y-8">
+          <div>
+            <h2 className="text-lg font-semibold mb-4">Room Utilization</h2>
+            <UtilizationDashboard locationId={locationFilter || undefined} />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold mb-4">Revenue Reports</h2>
+            <RevenueReport locationId={locationFilter || undefined} />
+          </div>
+          <div>
+            <h2 className="text-lg font-semibold mb-4">Customer Segments</h2>
+            <CustomerSegments locationId={locationFilter || undefined} />
+          </div>
         </div>
       )}
 
-      {/* Toggle for all bookings history */}
-      <div className="border-t pt-4">
-        <Button
-          variant="outline"
-          onClick={() => setShowAllBookings(!showAllBookings)}
-          className="w-full"
-        >
-          {showAllBookings ? "Hide" : "Show"} All Bookings (History)
-        </Button>
-      </div>
+      {/* List Tab */}
+      {activeTab === "list" && (
+        <>
+          {/* Countdown timer for next booking */}
+          {todayUpcoming.length > 0 && todayUpcoming[0] && (
+            <BookingCountdown
+              bookingDate={todayUpcoming[0].booking_date}
+              startTime={todayUpcoming[0].start_time}
+            />
+          )}
 
-      {/* All Bookings (with full filters + pagination) */}
-      {showAllBookings && (
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">All Bookings</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {/* Filters */}
-            <div className="flex flex-wrap items-center gap-2">
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <Input
-                  placeholder="Search by phone, name, or booking #..."
-                  value={allSearch}
-                  onChange={(e) => { setAllSearch(e.target.value); setPage(1); }}
-                  className="pl-9 w-[220px]"
-                />
-              </div>
-              <Select value={statusFilter} onValueChange={(val) => { setStatusFilter(val === "all" ? "" : val); setPage(1); }}>
-                <SelectTrigger className="w-[150px]"><SelectValue placeholder="All Statuses" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
-                  {BOOKING_STATUSES.map(s => <SelectItem key={s} value={s}>{BOOKING_STATUS_LABELS[s]}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <Select value={customerTypeFilter} onValueChange={(val) => { setCustomerTypeFilter(val === "all" ? "" : val); setPage(1); }}>
-                <SelectTrigger className="w-[160px]"><SelectValue placeholder="All Types" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Types</SelectItem>
-                  {BOOKING_CUSTOMER_TYPES.map(t => <SelectItem key={t} value={t}>{BOOKING_CUSTOMER_TYPE_LABELS[t]}</SelectItem>)}
-                </SelectContent>
-              </Select>
-              <Input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} className="w-[150px]" />
-              <Input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} className="w-[150px]" />
-              {(allSearch || statusFilter || customerTypeFilter || dateFrom || dateTo) && (
-                <Button variant="ghost" size="sm" onClick={() => { setAllSearch(""); setStatusFilter(""); setCustomerTypeFilter(""); setDateFrom(""); setDateTo(""); setPage(1); }}>
-                  <X className="mr-1 h-4 w-4" />Clear
-                </Button>
-              )}
+          {loading ? <TableSkeleton rows={4} /> : (
+            <div className="space-y-6">
+              {/* Today — Upcoming / Active */}
+              <BookingTable
+                bookings={todayUpcoming}
+                title="Today — Upcoming & Active"
+                icon={<CalendarClock className="h-4 w-4 text-blue-600" />}
+                search={todayUpcomingSearch}
+                setSearch={setTodayUpcomingSearch}
+                searchPlaceholder="Search by phone or name..."
+                onStatusAction={handleStatusAction}
+                onResendEmail={handleResendEmail}
+                router={router}
+                emptyMessage="No upcoming bookings for today."
+                blinkUncheckedIn
+                selectedIds={selectedIds}
+                onToggleSelect={toggleSelect}
+                onSelectAll={selectAll}
+              />
+
+              {/* Today — Completed */}
+              <BookingTable
+                bookings={todayCompleted}
+                title="Today — Completed / Closed"
+                icon={<CalendarClock className="h-4 w-4 text-gray-500" />}
+                search={todayCompletedSearch}
+                setSearch={setTodayCompletedSearch}
+                searchPlaceholder="Search by phone or name..."
+                onStatusAction={handleStatusAction}
+                onResendEmail={handleResendEmail}
+                router={router}
+                emptyMessage="No completed bookings today."
+                selectedIds={selectedIds}
+                onToggleSelect={toggleSelect}
+                onSelectAll={selectAll}
+              />
+
+              {/* Future Bookings */}
+              <BookingTable
+                bookings={futureBookings}
+                title="Future Bookings"
+                icon={<CalendarClock className="h-4 w-4 text-emerald-600" />}
+                search={futureSearch}
+                setSearch={setFutureSearch}
+                searchPlaceholder="Search by phone or name..."
+                onStatusAction={handleStatusAction}
+                onResendEmail={handleResendEmail}
+                router={router}
+                emptyMessage="No future bookings."
+                selectedIds={selectedIds}
+                onToggleSelect={toggleSelect}
+                onSelectAll={selectAll}
+              />
             </div>
+          )}
 
-            {/* Table */}
-            {allLoading ? <TableSkeleton rows={6} /> : allBookingsList.length === 0 ? (
-              <div className="p-6 text-center text-sm text-muted-foreground">No bookings found.</div>
-            ) : (
-              <div className="rounded-md border overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead><tr className="border-b bg-muted/50">
-                    <th className="px-4 py-3 text-left font-medium">Booking #</th>
-                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Space</th>
-                    <th className="px-4 py-3 text-left font-medium">Date & Time</th>
-                    <th className="px-4 py-3 text-left font-medium">Customer</th>
-                    <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Phone</th>
-                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Type</th>
-                    <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Amount</th>
-                    <th className="px-4 py-3 text-left font-medium">Status</th>
-                    <th className="px-4 py-3 text-right font-medium">Actions</th>
-                  </tr></thead>
-                  <tbody>{allBookingsList.map((b) => {
-                    const customerName = b.lead
-                      ? `${b.lead.first_name} ${b.lead.last_name}`
-                      : b.guest_name || "Guest";
-                    const customerPhone = b.booker_phone || b.guest_phone || b.lead?.phone || "";
-                    return (
-                      <tr
-                        key={b.id}
-                        className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
-                        onClick={() => router.push(`/bookings/${b.id}`)}
-                      >
-                        <td className="px-4 py-3 font-mono text-xs">{b.booking_number}</td>
-                        <td className="px-4 py-3 hidden md:table-cell text-xs">{b.space?.name || "—"}</td>
-                        <td className="px-4 py-3">
-                          <div className="text-xs">{formatDate(b.booking_date)}</div>
-                          <div className="text-xs text-muted-foreground">
-                            {formatTime12(b.start_time)} – {formatTime12(b.end_time)}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-xs">{customerName}</td>
-                        <td className="px-4 py-3 hidden lg:table-cell">
-                          {customerPhone && <span className="flex items-center gap-1 text-xs text-muted-foreground"><Phone className="h-3 w-3" />{customerPhone}</span>}
-                        </td>
-                        <td className="px-4 py-3 hidden md:table-cell">
-                          <Badge variant="outline" className={`text-[10px] ${BOOKING_CUSTOMER_TYPE_COLORS[b.customer_type]}`}>
-                            {BOOKING_CUSTOMER_TYPE_LABELS[b.customer_type]}
-                          </Badge>
-                        </td>
-                        <td className="px-4 py-3 text-right font-medium hidden sm:table-cell text-xs">{formatCurrency(b.total_amount)}</td>
-                        <td className="px-4 py-3">
-                          <div className="flex items-center gap-1">
-                            <Badge variant="secondary" className={`text-[10px] ${BOOKING_STATUS_COLORS[b.status]}`}>
-                              {BOOKING_STATUS_LABELS[b.status]}
-                            </Badge>
-                            {b.status === "checked_out" && (
-                              Array.isArray(b.feedback) && b.feedback.length > 0
-                                ? <span title="Feedback submitted"><Star className="h-3 w-3 fill-green-500 text-green-500" /></span>
-                                : <span title="Feedback pending"><MessageSquareWarning className="h-3 w-3 text-amber-500" /></span>
-                            )}
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
-                          <DropdownMenu>
-                            <DropdownMenuTrigger asChild>
-                              <Button variant="ghost" size="sm" className="h-7 w-7 p-0"><MoreHorizontal className="h-4 w-4" /></Button>
-                            </DropdownMenuTrigger>
-                            <DropdownMenuContent align="end">
-                              {b.status === "confirmed" && (
-                                <>
-                                  <DropdownMenuItem onClick={() => handleStatusAction(b.id, "check_in")}>
-                                    <LogIn className="mr-2 h-4 w-4" />Check In
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => handleStatusAction(b.id, "no_show")}>
-                                    <AlertTriangle className="mr-2 h-4 w-4" />No Show
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => handleStatusAction(b.id, "cancel")} className="text-destructive">
-                                    <XCircle className="mr-2 h-4 w-4" />Cancel
-                                  </DropdownMenuItem>
-                                  <DropdownMenuItem onClick={() => handleResendEmail(b.id)}>
-                                    <Mail className="mr-2 h-4 w-4" />Resend Email
-                                  </DropdownMenuItem>
-                                </>
-                              )}
-                              {b.status === "checked_in" && (
-                                <DropdownMenuItem onClick={() => handleStatusAction(b.id, "check_out")}>
-                                  <LogOut className="mr-2 h-4 w-4" />Check Out
-                                </DropdownMenuItem>
-                              )}
-                            </DropdownMenuContent>
-                          </DropdownMenu>
-                        </td>
-                      </tr>
-                    );
-                  })}</tbody>
-                </table>
-              </div>
-            )}
+          {/* Toggle for all bookings history */}
+          <div className="border-t pt-4">
+            <Button
+              variant="outline"
+              onClick={() => setShowAllBookings(!showAllBookings)}
+              className="w-full"
+            >
+              {showAllBookings ? "Hide" : "Show"} All Bookings (History)
+            </Button>
+          </div>
 
-            {/* Pagination */}
-            {allPagination.totalPages > 1 && (
-              <div className="flex items-center justify-between">
-                <p className="text-sm text-muted-foreground">Page {allPagination.page} of {allPagination.totalPages} ({allPagination.total} total)</p>
-                <div className="flex gap-2">
-                  <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}><ChevronLeft className="h-4 w-4" /></Button>
-                  <Button variant="outline" size="sm" disabled={page >= allPagination.totalPages} onClick={() => setPage(page + 1)}><ChevronRight className="h-4 w-4" /></Button>
+          {/* All Bookings (with full filters + pagination) */}
+          {showAllBookings && (
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">All Bookings</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                {/* Filters */}
+                <div className="flex flex-wrap items-center gap-2">
+                  <div className="relative">
+                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                    <Input
+                      placeholder="Search by phone, name, or booking #..."
+                      value={allSearch}
+                      onChange={(e) => { setAllSearch(e.target.value); setPage(1); }}
+                      className="pl-9 w-[220px]"
+                    />
+                  </div>
+                  <Select value={statusFilter} onValueChange={(val) => { setStatusFilter(val === "all" ? "" : val); setPage(1); }}>
+                    <SelectTrigger className="w-[150px]"><SelectValue placeholder="All Statuses" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Statuses</SelectItem>
+                      {BOOKING_STATUSES.map(s => <SelectItem key={s} value={s}>{BOOKING_STATUS_LABELS[s]}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Select value={customerTypeFilter} onValueChange={(val) => { setCustomerTypeFilter(val === "all" ? "" : val); setPage(1); }}>
+                    <SelectTrigger className="w-[160px]"><SelectValue placeholder="All Types" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="all">All Types</SelectItem>
+                      {BOOKING_CUSTOMER_TYPES.map(t => <SelectItem key={t} value={t}>{BOOKING_CUSTOMER_TYPE_LABELS[t]}</SelectItem>)}
+                    </SelectContent>
+                  </Select>
+                  <Input type="date" value={dateFrom} onChange={(e) => { setDateFrom(e.target.value); setPage(1); }} className="w-[150px]" />
+                  <Input type="date" value={dateTo} onChange={(e) => { setDateTo(e.target.value); setPage(1); }} className="w-[150px]" />
+                  {(allSearch || statusFilter || customerTypeFilter || dateFrom || dateTo) && (
+                    <Button variant="ghost" size="sm" onClick={() => { setAllSearch(""); setStatusFilter(""); setCustomerTypeFilter(""); setDateFrom(""); setDateTo(""); setPage(1); }}>
+                      <X className="mr-1 h-4 w-4" />Clear
+                    </Button>
+                  )}
                 </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
+
+                {/* Table */}
+                {allLoading ? <TableSkeleton rows={6} /> : allBookingsList.length === 0 ? (
+                  <div className="p-6 text-center text-sm text-muted-foreground">No bookings found.</div>
+                ) : (
+                  <div className="rounded-md border overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead><tr className="border-b bg-muted/50">
+                        <th className="px-4 py-3 text-left font-medium">Booking #</th>
+                        <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Space</th>
+                        <th className="px-4 py-3 text-left font-medium">Date & Time</th>
+                        <th className="px-4 py-3 text-left font-medium">Customer</th>
+                        <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Phone</th>
+                        <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Type</th>
+                        <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Amount</th>
+                        <th className="px-4 py-3 text-left font-medium">Status</th>
+                        <th className="px-4 py-3 text-right font-medium">Actions</th>
+                      </tr></thead>
+                      <tbody>{allBookingsList.map((b) => {
+                        const customerName = b.lead
+                          ? `${b.lead.first_name} ${b.lead.last_name}`
+                          : b.guest_name || "Guest";
+                        const customerPhone = b.booker_phone || b.guest_phone || b.lead?.phone || "";
+                        return (
+                          <tr
+                            key={b.id}
+                            className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
+                            onClick={() => router.push(`/bookings/${b.id}`)}
+                          >
+                            <td className="px-4 py-3 font-mono text-xs">{b.booking_number}</td>
+                            <td className="px-4 py-3 hidden md:table-cell text-xs">{b.space?.name || "—"}</td>
+                            <td className="px-4 py-3">
+                              <div className="text-xs">{formatDate(b.booking_date)}</div>
+                              <div className="text-xs text-muted-foreground">
+                                {formatTime12(b.start_time)} – {formatTime12(b.end_time)}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-xs">{customerName}</td>
+                            <td className="px-4 py-3 hidden lg:table-cell">
+                              {customerPhone && <span className="flex items-center gap-1 text-xs text-muted-foreground"><Phone className="h-3 w-3" />{customerPhone}</span>}
+                            </td>
+                            <td className="px-4 py-3 hidden md:table-cell">
+                              <Badge variant="outline" className={`text-[10px] ${BOOKING_CUSTOMER_TYPE_COLORS[b.customer_type]}`}>
+                                {BOOKING_CUSTOMER_TYPE_LABELS[b.customer_type]}
+                              </Badge>
+                            </td>
+                            <td className="px-4 py-3 text-right font-medium hidden sm:table-cell text-xs">{formatCurrency(b.total_amount)}</td>
+                            <td className="px-4 py-3">
+                              <div className="flex items-center gap-1">
+                                <Badge variant="secondary" className={`text-[10px] ${BOOKING_STATUS_COLORS[b.status]}`}>
+                                  {BOOKING_STATUS_LABELS[b.status]}
+                                </Badge>
+                                {b.status === "checked_out" && (
+                                  Array.isArray(b.feedback) && b.feedback.length > 0
+                                    ? <span title="Feedback submitted"><Star className="h-3 w-3 fill-green-500 text-green-500" /></span>
+                                    : <span title="Feedback pending"><MessageSquareWarning className="h-3 w-3 text-amber-500" /></span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3 text-right" onClick={(e) => e.stopPropagation()}>
+                              <DropdownMenu>
+                                <DropdownMenuTrigger asChild>
+                                  <Button variant="ghost" size="sm" className="h-7 w-7 p-0"><MoreHorizontal className="h-4 w-4" /></Button>
+                                </DropdownMenuTrigger>
+                                <DropdownMenuContent align="end">
+                                  {b.status === "confirmed" && (
+                                    <>
+                                      <DropdownMenuItem onClick={() => handleStatusAction(b.id, "check_in")}>
+                                        <LogIn className="mr-2 h-4 w-4" />Check In
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem onClick={() => handleStatusAction(b.id, "no_show")}>
+                                        <AlertTriangle className="mr-2 h-4 w-4" />No Show
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem onClick={() => handleStatusAction(b.id, "cancel")} className="text-destructive">
+                                        <XCircle className="mr-2 h-4 w-4" />Cancel
+                                      </DropdownMenuItem>
+                                      <DropdownMenuItem onClick={() => handleResendEmail(b.id)}>
+                                        <Mail className="mr-2 h-4 w-4" />Resend Email
+                                      </DropdownMenuItem>
+                                    </>
+                                  )}
+                                  {b.status === "checked_in" && (
+                                    <DropdownMenuItem onClick={() => handleStatusAction(b.id, "check_out")}>
+                                      <LogOut className="mr-2 h-4 w-4" />Check Out
+                                    </DropdownMenuItem>
+                                  )}
+                                </DropdownMenuContent>
+                              </DropdownMenu>
+                            </td>
+                          </tr>
+                        );
+                      })}</tbody>
+                    </table>
+                  </div>
+                )}
+
+                {/* Pagination */}
+                {allPagination.totalPages > 1 && (
+                  <div className="flex items-center justify-between">
+                    <p className="text-sm text-muted-foreground">Page {allPagination.page} of {allPagination.totalPages} ({allPagination.total} total)</p>
+                    <div className="flex gap-2">
+                      <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(page - 1)}><ChevronLeft className="h-4 w-4" /></Button>
+                      <Button variant="outline" size="sm" disabled={page >= allPagination.totalPages} onClick={() => setPage(page + 1)}><ChevronRight className="h-4 w-4" /></Button>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Bulk Actions Bar */}
+          {selectedIds.size > 0 && (
+            <BulkActionsBar
+              selectedIds={Array.from(selectedIds)}
+              onActionComplete={handleBulkComplete}
+              onClear={() => setSelectedIds(new Set())}
+            />
+          )}
+        </>
       )}
     </div>
   );
