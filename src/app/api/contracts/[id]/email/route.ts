@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { resend, EMAIL_FROM } from "@/lib/resend";
+import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/resend";
 import { logEmailActivity } from "@/lib/audit";
 
 export async function POST(
@@ -47,6 +47,7 @@ export async function POST(
 
     const { data: emailResult, error: emailError } = await resend.emails.send({
       from: EMAIL_FROM,
+      replyTo: EMAIL_REPLY_TO,
       to: recipients,
       subject: `Membership Agreement ${contract.contract_number} - ${contract.title}`,
       html: `
@@ -57,14 +58,15 @@ export async function POST(
           </div>
           <div style="padding: 32px;">
             <p style="color: #1a1b1e; font-size: 15px;">Dear ${contract.lead?.first_name || "Client"},</p>
-            <p style="color: #333; font-size: 14px;">Please find attached your Membership Agreement <strong>${contract.contract_number}</strong> for <strong>${contract.title}</strong>.</p>
+            <p style="color: #333; font-size: 14px;">We are pleased to share your Membership Agreement for The WorkVilla. Please find the agreement <strong>${contract.contract_number}</strong> for <strong>${contract.title}</strong> attached to this email.</p>
+            <p style="color: #333; font-size: 14px;">Here is a summary of your membership details:</p>
             <table style="border-collapse: collapse; margin: 20px 0; width: 100%; background: #f0faf5; border-radius: 6px;">
               <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Agreement:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">${contract.contract_number}</td></tr>
               <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Monthly Fee:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">₹${Number(contract.total_amount).toLocaleString("en-IN")}</td></tr>
               <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Start Date:</td><td style="padding: 10px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">${new Date(contract.start_date).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}</td></tr>
               <tr><td style="padding: 10px 16px; color: #666;">Tenure:</td><td style="padding: 10px 16px; color: #333;">${contract.tenure_months} months</td></tr>
             </table>
-            <p style="color: #333; font-size: 14px;">Please review the attached agreement. Upon your acceptance, we will proceed with activation of your workspace membership.</p>
+            <p style="color: #333; font-size: 14px;">Please review the attached agreement carefully. Upon your acceptance, we will proceed with activation of your workspace membership.</p>
             <p style="color: #015E65; font-size: 13px; font-weight: bold; margin: 20px 0 8px;">Bank Details</p>
             <table style="border-collapse: collapse; width: 100%; background: #f0faf5; border-radius: 6px; margin-bottom: 20px;">
               <tr><td style="padding: 8px 16px; color: #666; border-bottom: 1px solid #e5e7eb; width: 40%;">Account Name</td><td style="padding: 8px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">Sree Design Infrastructure Private Limited</td></tr>
@@ -73,7 +75,9 @@ export async function POST(
               <tr><td style="padding: 8px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Bank</td><td style="padding: 8px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">ICICI Bank Ltd</td></tr>
               <tr><td style="padding: 8px 16px; color: #666;">Branch</td><td style="padding: 8px 16px; color: #333;">Nungambakkam</td></tr>
             </table>
-            <p style="color: #333; font-size: 14px;">Best regards,<br/><strong>${senderName}</strong><br/>The WorkVilla</p>
+            <p style="color: #333; font-size: 14px;">We look forward to having you at The WorkVilla.</p>
+            <p style="color: #333; font-size: 14px;">Warm regards,<br/><strong>${senderName}</strong><br/>The WorkVilla</p>
+            <p style="color: #666; font-size: 12px; margin-top: 16px;">For any queries, write to us at <a href="mailto:contact@theworkvilla.com" style="color: #015E65;">contact@theworkvilla.com</a> or call <strong>+91 97910 97900</strong>.</p>
           </div>
           <div style="background-color: #015E65; padding: 16px 32px; text-align: center;">
             <p style="color: #ffffff; margin: 0; font-size: 11px;">SREE DESIGN INFRASTRUCTURE PVT LTD</p>

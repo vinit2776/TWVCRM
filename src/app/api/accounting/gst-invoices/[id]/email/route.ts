@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { resend, EMAIL_FROM } from "@/lib/resend";
+import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/resend";
 import { logAudit, logEmailActivity } from "@/lib/audit";
 
 // POST — Email GST invoice PDF to selected recipients
@@ -73,6 +73,7 @@ export async function POST(
   try {
     const { data: emailResult, error: emailError } = await resend.emails.send({
       from: EMAIL_FROM,
+      replyTo: EMAIL_REPLY_TO,
       to: recipients,
       subject: `GST Invoice ${paymentData.gst_invoice_number || ""} — ${paymentData.contract?.contract_number || "Contract"}`,
       html: `
@@ -83,15 +84,16 @@ export async function POST(
           </div>
           <div style="padding: 32px;">
             <p style="color: #1a1b1e; font-size: 15px;">Dear ${lead?.first_name || "Client"},</p>
-            <p style="color: #333; font-size: 14px;">Please find attached the GST invoice for your membership at The WorkVilla.</p>
+            <p style="color: #333; font-size: 14px;">Please find attached the GST invoice for your membership at The WorkVilla. Below is a summary:</p>
             <table style="border-collapse: collapse; margin: 20px 0; width: 100%; background: #f0faf5; border-radius: 6px;">
               <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Invoice Number:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">${paymentData.gst_invoice_number || "—"}</td></tr>
               <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Contract:</td><td style="padding: 10px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">${paymentData.contract?.contract_number || ""}</td></tr>
               <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Company:</td><td style="padding: 10px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">${customerName}</td></tr>
               <tr><td style="padding: 10px 16px; color: #666;">Amount:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65;">₹${Number(paymentData.amount).toLocaleString("en-IN")}</td></tr>
             </table>
-            <p style="color: #333; font-size: 14px;">If you have any questions regarding this invoice, please don't hesitate to reach out.</p>
-            <p style="color: #333; font-size: 14px;">Best regards,<br/><strong>${senderName}</strong><br/>The WorkVilla</p>
+            <p style="color: #333; font-size: 14px;">Please retain this invoice for your tax records. If you have any questions regarding this invoice, feel free to reach out to us.</p>
+            <p style="color: #333; font-size: 14px;">Warm regards,<br/><strong>${senderName}</strong><br/>The WorkVilla</p>
+            <p style="color: #666; font-size: 12px; margin-top: 16px;">For any queries, write to us at <a href="mailto:contact@theworkvilla.com" style="color: #015E65;">contact@theworkvilla.com</a> or call <strong>+91 97910 97900</strong>.</p>
           </div>
           <div style="background-color: #015E65; padding: 16px 32px; text-align: center;">
             <p style="color: #ffffff; margin: 0; font-size: 11px;">SREE DESIGN INFRASTRUCTURE PVT LTD</p>

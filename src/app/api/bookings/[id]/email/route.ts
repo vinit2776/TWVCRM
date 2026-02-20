@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { resend, EMAIL_FROM } from "@/lib/resend";
+import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/resend";
 import { generateICS } from "@/lib/ics-generator";
 import { BOOKING_CUSTOMER_TYPE_LABELS } from "@/lib/constants";
 import { logEmailActivity } from "@/lib/audit";
@@ -129,24 +129,33 @@ export async function POST(
     if (!customerEmail) return NextResponse.json({ error: "No customer email available" }, { status: 400 });
     const feedbackUrl = `${appUrl}/feedback/${booking.feedback_token}`;
 
+    const senderName = sender?.full_name || "TWV Team";
     await resend.emails.send({
       from: EMAIL_FROM,
+      replyTo: EMAIL_REPLY_TO,
       to: customerEmail,
       subject: `How was your experience? - ${booking.booking_number} - The WorkVilla`,
       html: `
-        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
-          <div style="background:#015E65;padding:20px;text-align:center;">
-            <h1 style="color:white;margin:0;font-size:20px;">We'd Love Your Feedback</h1>
+        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+          <div style="background:#015E65;padding:20px 32px;">
+            <h1 style="color:white;margin:0;font-size:20px;">The WorkVilla</h1>
+            <p style="color:#00AE6C;margin:4px 0 0;font-size:12px;">Empower your business with flexible workspaces</p>
           </div>
-          <div style="padding:20px;">
-            <p>Dear ${customerName},</p>
-            <p>Thank you for using The WorkVilla. We'd love to hear about your experience.</p>
+          <div style="padding:32px;">
+            <p style="color:#1a1b1e;font-size:15px;">Dear ${customerName},</p>
+            <p style="color:#333;font-size:14px;">Thank you for choosing The WorkVilla for your recent booking. We hope you had a great experience using our workspace.</p>
+            <p style="color:#333;font-size:14px;">Your feedback helps us improve our services and deliver a better experience to you every time. We would greatly appreciate it if you could take a moment to share your thoughts.</p>
             <div style="text-align:center;margin:24px 0;">
-              <a href="${feedbackUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;">Share Your Feedback</a>
+              <a href="${feedbackUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Share Your Feedback</a>
             </div>
             <p style="color:#666;font-size:13px;">Booking: ${booking.booking_number} | Room: ${spaceName}</p>
-            <hr style="margin:20px 0;border:none;border-top:1px solid #eee;" />
-            <p style="color:#999;font-size:12px;text-align:center;">The WorkVilla | Prakash Presidium, 110 MG Road, Nungambakkam, Chennai 600034</p>
+            <p style="color:#333;font-size:14px;margin-top:20px;">Warm regards,<br/><strong>${senderName}</strong><br/>The WorkVilla</p>
+            <p style="color:#666;font-size:12px;margin-top:16px;">For any queries, write to us at <a href="mailto:contact@theworkvilla.com" style="color:#015E65;">contact@theworkvilla.com</a> or call <strong>+91 97910 97900</strong>.</p>
+          </div>
+          <div style="background:#015E65;padding:16px 32px;text-align:center;">
+            <p style="color:#fff;margin:0;font-size:11px;">SREE DESIGN INFRASTRUCTURE PVT LTD</p>
+            <p style="color:rgba(255,255,255,0.7);margin:4px 0 0;font-size:10px;">Prakash Presidium, 110, MG Road, Nungambakkam, Chennai - 600034 | +91 97910 97900</p>
+            <p style="color:#00AE6C;margin:4px 0 0;font-size:10px;">www.theworkvilla.com</p>
           </div>
         </div>`,
     });
@@ -183,29 +192,37 @@ export async function POST(
     const balanceDue = Math.max(0, Number(booking.total_amount) - totalPaid);
     const displayAmount = balanceDue > 0 ? balanceDue : Number(booking.total_amount);
 
+    const paymentSenderName = sender?.full_name || "TWV Team";
     await resend.emails.send({
       from: EMAIL_FROM,
+      replyTo: EMAIL_REPLY_TO,
       to: customerEmail,
       subject: `Payment Link - ${booking.booking_number} - ₹${displayAmount.toLocaleString("en-IN")} - The WorkVilla`,
       html: `
-        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
-          <div style="background:#015E65;padding:20px;text-align:center;">
-            <h1 style="color:white;margin:0;font-size:20px;">Complete Your Payment</h1>
+        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+          <div style="background:#015E65;padding:20px 32px;">
+            <h1 style="color:white;margin:0;font-size:20px;">The WorkVilla</h1>
+            <p style="color:#00AE6C;margin:4px 0 0;font-size:12px;">Empower your business with flexible workspaces</p>
           </div>
-          <div style="padding:20px;">
-            <p>Dear ${customerName},</p>
-            <p>Please complete the payment for your booking at The WorkVilla.</p>
-            <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-              <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Booking</td><td style="padding:8px;border:1px solid #ddd;">${booking.booking_number}</td></tr>
-              <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Room</td><td style="padding:8px;border:1px solid #ddd;">${spaceName}</td></tr>
-              <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Amount Due</td><td style="padding:8px;border:1px solid #ddd;font-weight:bold;color:#015E65;">₹${displayAmount.toLocaleString("en-IN")}</td></tr>
+          <div style="padding:32px;">
+            <p style="color:#1a1b1e;font-size:15px;">Dear ${customerName},</p>
+            <p style="color:#333;font-size:14px;">Thank you for your booking at The WorkVilla. Please complete the payment using the link below.</p>
+            <table style="width:100%;border-collapse:collapse;margin:16px 0;background:#f0faf5;border-radius:6px;">
+              <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Booking</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${booking.booking_number}</td></tr>
+              <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Room</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${spaceName}</td></tr>
+              <tr><td style="padding:10px 16px;color:#666;">Amount Due</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;">₹${displayAmount.toLocaleString("en-IN")}</td></tr>
             </table>
             <div style="text-align:center;margin:24px 0;">
-              <a href="${paymentUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;">Pay Now</a>
+              <a href="${paymentUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Pay Now</a>
             </div>
             ${isRazorpayLink ? '<p style="color:#666;font-size:13px;text-align:center;">Powered by Razorpay — secure payments via UPI, cards, net banking & more.</p>' : ""}
-            <hr style="margin:20px 0;border:none;border-top:1px solid #eee;" />
-            <p style="color:#999;font-size:12px;text-align:center;">The WorkVilla | Prakash Presidium, 110 MG Road, Nungambakkam, Chennai 600034</p>
+            <p style="color:#333;font-size:14px;margin-top:20px;">Warm regards,<br/><strong>${paymentSenderName}</strong><br/>The WorkVilla</p>
+            <p style="color:#666;font-size:12px;margin-top:16px;">For any queries, write to us at <a href="mailto:contact@theworkvilla.com" style="color:#015E65;">contact@theworkvilla.com</a> or call <strong>+91 97910 97900</strong>.</p>
+          </div>
+          <div style="background:#015E65;padding:16px 32px;text-align:center;">
+            <p style="color:#fff;margin:0;font-size:11px;">SREE DESIGN INFRASTRUCTURE PVT LTD</p>
+            <p style="color:rgba(255,255,255,0.7);margin:4px 0 0;font-size:10px;">Prakash Presidium, 110, MG Road, Nungambakkam, Chennai - 600034 | +91 97910 97900</p>
+            <p style="color:#00AE6C;margin:4px 0 0;font-size:10px;">www.theworkvilla.com</p>
           </div>
         </div>`,
     });
@@ -309,35 +326,44 @@ export async function POST(
       </div>`
     : "";
 
+  const confirmSenderName = sender?.full_name || "TWV Team";
   const confirmationHtml = `
-    <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
-      <div style="background:#015E65;padding:20px;text-align:center;">
-        <h1 style="color:white;margin:0;font-size:20px;">Booking Confirmation</h1>
+    <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+      <div style="background:#015E65;padding:20px 32px;">
+        <h1 style="color:white;margin:0;font-size:20px;">The WorkVilla</h1>
+        <p style="color:#00AE6C;margin:4px 0 0;font-size:12px;">Empower your business with flexible workspaces</p>
       </div>
-      <div style="padding:20px;">
-        <p>Dear ${customerName},</p>
-        <p>Your meeting room booking has been confirmed. Here are the details:</p>
-        <table style="width:100%;border-collapse:collapse;margin:16px 0;">
-          <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;width:40%;">Booking #</td><td style="padding:8px;border:1px solid #ddd;">${booking.booking_number}</td></tr>
-          <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Room</td><td style="padding:8px;border:1px solid #ddd;">${spaceName}</td></tr>
-          <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Location</td><td style="padding:8px;border:1px solid #ddd;">${locationName}</td></tr>
-          <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Date</td><td style="padding:8px;border:1px solid #ddd;">${formatDate(booking.booking_date)}</td></tr>
-          <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Time</td><td style="padding:8px;border:1px solid #ddd;">${startTime} - ${endTime}</td></tr>
-          <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Duration</td><td style="padding:8px;border:1px solid #ddd;">${booking.duration_hours} hour(s)</td></tr>
-          ${facilityList ? `<tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Facilities</td><td style="padding:8px;border:1px solid #ddd;">${facilityList}</td></tr>` : ""}
-          <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Amount</td><td style="padding:8px;border:1px solid #ddd;">${formatCurrency(booking.total_amount)}</td></tr>
-          <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Customer Type</td><td style="padding:8px;border:1px solid #ddd;">${BOOKING_CUSTOMER_TYPE_LABELS[booking.customer_type] || booking.customer_type}</td></tr>
+      <div style="padding:32px;">
+        <p style="color:#1a1b1e;font-size:15px;">Dear ${customerName},</p>
+        <p style="color:#333;font-size:14px;">Thank you for choosing The WorkVilla! Your meeting room booking has been confirmed. Here are the details:</p>
+        <table style="width:100%;border-collapse:collapse;margin:16px 0;background:#f0faf5;border-radius:6px;">
+          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;width:40%;">Booking #</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;">${booking.booking_number}</td></tr>
+          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Room</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${spaceName}</td></tr>
+          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Location</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${locationName}</td></tr>
+          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Date</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${formatDate(booking.booking_date)}</td></tr>
+          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Time</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${startTime} - ${endTime}</td></tr>
+          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Duration</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${booking.duration_hours} hour(s)</td></tr>
+          ${facilityList ? `<tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Facilities</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${facilityList}</td></tr>` : ""}
+          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Amount</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;">${formatCurrency(booking.total_amount)}</td></tr>
+          <tr><td style="padding:10px 16px;color:#666;">Customer Type</td><td style="padding:10px 16px;color:#333;">${BOOKING_CUSTOMER_TYPE_LABELS[booking.customer_type] || booking.customer_type}</td></tr>
         </table>
         ${voucherSection}
-        <p style="color:#666;font-size:14px;">Please arrive 5 minutes before your scheduled time.</p>
-        <hr style="margin:20px 0;border:none;border-top:1px solid #eee;" />
-        <p style="color:#999;font-size:12px;text-align:center;">The WorkVilla | Prakash Presidium, 110 MG Road, Nungambakkam, Chennai 600034</p>
+        <p style="color:#333;font-size:14px;">Please arrive 5 minutes before your scheduled time. A calendar invite (.ics) is attached for your convenience.</p>
+        <p style="color:#333;font-size:14px;">We look forward to hosting you!</p>
+        <p style="color:#333;font-size:14px;">Warm regards,<br/><strong>${confirmSenderName}</strong><br/>The WorkVilla</p>
+        <p style="color:#666;font-size:12px;margin-top:16px;">For any queries, write to us at <a href="mailto:contact@theworkvilla.com" style="color:#015E65;">contact@theworkvilla.com</a> or call <strong>+91 97910 97900</strong>.</p>
+      </div>
+      <div style="background:#015E65;padding:16px 32px;text-align:center;">
+        <p style="color:#fff;margin:0;font-size:11px;">SREE DESIGN INFRASTRUCTURE PVT LTD</p>
+        <p style="color:rgba(255,255,255,0.7);margin:4px 0 0;font-size:10px;">Prakash Presidium, 110, MG Road, Nungambakkam, Chennai - 600034 | +91 97910 97900</p>
+        <p style="color:#00AE6C;margin:4px 0 0;font-size:10px;">www.theworkvilla.com</p>
       </div>
     </div>`;
 
   try {
     await resend.emails.send({
       from: EMAIL_FROM,
+      replyTo: EMAIL_REPLY_TO,
       to: customerEmail,
       subject: `Booking Confirmation - ${booking.booking_number} - The WorkVilla`,
       html: confirmationHtml,

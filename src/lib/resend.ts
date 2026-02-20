@@ -20,3 +20,9 @@ export const resend = new Resend((process.env.RESEND_API_KEY || "re_placeholder"
  */
 export const EMAIL_FROM =
   (process.env.RESEND_FROM_EMAIL || "The WorkVilla <onboarding@resend.dev>").trim();
+
+/**
+ * Reply-to address for all outgoing emails.
+ * Recipients who hit "Reply" will reach this inbox.
+ */
+export const EMAIL_REPLY_TO = "contact@theworkvilla.com";
