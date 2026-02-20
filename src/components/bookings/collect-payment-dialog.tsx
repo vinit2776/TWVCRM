@@ -13,7 +13,7 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Loader2, Upload, CheckCircle, XCircle, Eye,
-  Banknote, Smartphone, CreditCard, Globe, ImageIcon,
+  Banknote, Smartphone, CreditCard, Globe, ImageIcon, Maximize2, X,
 } from "lucide-react";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -65,8 +65,9 @@ export function CollectPaymentDialog({
   const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // QR code signed URL
+  // QR code signed URL & lightbox
   const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
+  const [qrZoomed, setQrZoomed] = useState(false);
 
   // Verification dialog state
   const [verifyingPayment, setVerifyingPayment] = useState<BookingPayment | null>(null);
@@ -459,19 +460,30 @@ export function CollectPaymentDialog({
 
                     {/* UPI */}
                     <TabsContent value="upi" className="mt-3 space-y-4">
-                      {/* QR Code — large, centered, scannable */}
+                      {/* QR Code — click to enlarge */}
                       {upiQrCodePath && (
                         <div className="flex flex-col items-center">
-                          <div className="border-2 border-muted rounded-xl p-3 bg-white shadow-sm">
+                          <div
+                            className="relative border-2 border-muted rounded-xl p-3 bg-white shadow-sm cursor-pointer group hover:border-primary/40 transition-colors"
+                            onClick={() => qrCodeUrl && setQrZoomed(true)}
+                          >
                             {qrCodeUrl ? (
-                              /* eslint-disable-next-line @next/next/no-img-element */
-                              <img
-                                src={qrCodeUrl}
-                                alt="UPI QR Code"
-                                className="w-56 h-56 object-contain"
-                              />
+                              <>
+                                {/* eslint-disable-next-line @next/next/no-img-element */}
+                                <img
+                                  src={qrCodeUrl}
+                                  alt="UPI QR Code"
+                                  className="w-48 h-48 object-contain"
+                                />
+                                <div className="absolute inset-0 rounded-xl bg-black/0 group-hover:bg-black/5 transition-colors flex items-center justify-center">
+                                  <div className="opacity-0 group-hover:opacity-100 transition-opacity bg-black/60 text-white text-xs px-2.5 py-1 rounded-full flex items-center gap-1">
+                                    <Maximize2 className="h-3 w-3" />
+                                    Tap to enlarge
+                                  </div>
+                                </div>
+                              </>
                             ) : (
-                              <div className="w-56 h-56 flex items-center justify-center">
+                              <div className="w-48 h-48 flex items-center justify-center">
                                 <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
                               </div>
                             )}
@@ -628,6 +640,31 @@ export function CollectPaymentDialog({
           )}
         </DialogContent>
       </Dialog>
+
+      {/* QR Code Lightbox */}
+      {qrZoomed && qrCodeUrl && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/80 flex flex-col items-center justify-center p-6 cursor-pointer"
+          onClick={() => setQrZoomed(false)}
+        >
+          <button
+            className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors"
+            onClick={() => setQrZoomed(false)}
+          >
+            <X className="h-8 w-8" />
+          </button>
+          <div className="bg-white rounded-2xl p-5 shadow-2xl max-w-[90vw] max-h-[80vh]" onClick={(e) => e.stopPropagation()}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={qrCodeUrl}
+              alt="UPI QR Code"
+              className="w-[75vmin] h-[75vmin] max-w-[400px] max-h-[400px] object-contain"
+            />
+          </div>
+          <p className="text-white/70 text-sm mt-4">Scan to pay {formatCurrency(parseFloat(amount) || 0)}</p>
+          <p className="text-white/40 text-xs mt-1">Tap anywhere to close</p>
+        </div>
+      )}
 
       {/* Verification Sub-Dialog */}
       {verifyingPayment && (
