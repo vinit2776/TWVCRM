@@ -11,7 +11,6 @@ import {
   CheckSquare,
   FileText,
   Receipt,
-  FolderOpen,
   UserPlus,
   Settings,
   ClipboardList,
@@ -19,11 +18,11 @@ import {
   Wifi,
   IndianRupee,
   MapPin,
-  DoorOpen,
   CalendarClock,
   Calculator,
   Server,
   HelpCircle,
+  LifeBuoy,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -48,9 +47,7 @@ const allNavItems: NavItem[] = [
   { href: "/contracts", label: "Contracts", icon: ScrollText, roles: null },
   { href: "/billing", label: "Billing", icon: IndianRupee, roles: null },
   { href: "/accounting", label: "Accounting", icon: Calculator, roles: null },
-  { href: "/spaces", label: "Spaces", icon: DoorOpen, roles: null },
   { href: "/bookings", label: "Bookings", icon: CalendarClock, roles: null },
-  { href: "/documents", label: "Documents", icon: FolderOpen, roles: null },
   { href: "/vouchers", label: "Vouchers", icon: Wifi, roles: null },
 ];
 
@@ -58,6 +55,7 @@ const adminNavItems = [
   { href: "/locations", label: "Locations", icon: MapPin, roles: ["admin", "manager"] },
   { href: "/audit-logs", label: "Audit Logs", icon: ClipboardList, roles: ["admin", "manager"] },
   { href: "/infrastructure", label: "Infrastructure", icon: Server, roles: ["admin"] },
+  { href: "/support", label: "Support", icon: LifeBuoy, roles: ["admin"] },
   { href: "/settings", label: "Settings", icon: Settings, roles: ["admin"] },
   { href: "/team", label: "Team", icon: UserPlus, roles: ["admin", "manager", "sales_rep"] },
 ];

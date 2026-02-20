@@ -394,3 +394,32 @@ export const extendBookingSchema = z.object({
 });
 
 export type ExtendBookingInput = z.infer<typeof extendBookingSchema>;
+
+// ==========================================
+// Support Ticket Validations
+// ==========================================
+export const createSupportTicketSchema = z.object({
+  subject: z.string().min(1, "Subject is required").max(200, "Subject must be under 200 characters"),
+  description: z.string().optional(),
+  type: z.enum(["bug", "feature_request", "feedback", "question"]),
+  priority: z.enum(["low", "medium", "high", "urgent"]),
+  page_url: z.string().optional(),
+  user_agent: z.string().optional(),
+  screen_resolution: z.string().optional(),
+});
+
+export type CreateSupportTicketInput = z.infer<typeof createSupportTicketSchema>;
+
+export const updateSupportTicketSchema = z.object({
+  status: z.enum(["open", "in_progress", "resolved", "closed"]).optional(),
+  priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
+  assigned_to: z.string().uuid().optional().or(z.literal("")).transform(v => v || null),
+});
+
+export type UpdateSupportTicketInput = z.input<typeof updateSupportTicketSchema>;
+
+export const createTicketNoteSchema = z.object({
+  note: z.string().min(1, "Note is required"),
+});
+
+export type CreateTicketNoteInput = z.infer<typeof createTicketNoteSchema>;

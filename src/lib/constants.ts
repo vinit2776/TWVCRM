@@ -612,3 +612,38 @@ export const CUSTOMER_SEGMENTS = {
   high_spender: { label: "High Spenders", description: "Top 20% by total spend" },
   low_feedback: { label: "Low Feedback", threshold: 2.5, description: "Average rating below 2.5" },
 } as const;
+
+// ==========================================
+// Support Ticket Constants
+// ==========================================
+export const TICKET_TYPES = ["bug", "feature_request", "feedback", "question"] as const;
+
+export const TICKET_TYPE_LABELS: Record<string, string> = {
+  bug: "Bug Report",
+  feature_request: "Feature Request",
+  feedback: "Feedback",
+  question: "Question",
+};
+
+export const TICKET_TYPE_COLORS: Record<string, string> = {
+  bug: "bg-red-100 text-red-800",
+  feature_request: "bg-purple-100 text-purple-800",
+  feedback: "bg-blue-100 text-blue-800",
+  question: "bg-cyan-100 text-cyan-800",
+};
+
+export const TICKET_STATUSES = ["open", "in_progress", "resolved", "closed"] as const;
+
+export const TICKET_STATUS_LABELS: Record<string, string> = {
+  open: "Open",
+  in_progress: "In Progress",
+  resolved: "Resolved",
+  closed: "Closed",
+};
+
+export const TICKET_STATUS_COLORS: Record<string, string> = {
+  open: "bg-yellow-100 text-yellow-800",
+  in_progress: "bg-blue-100 text-blue-800",
+  resolved: "bg-green-100 text-green-800",
+  closed: "bg-gray-100 text-gray-800",
+};

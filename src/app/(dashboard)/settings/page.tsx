@@ -11,8 +11,9 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClient } from "@/lib/supabase/client";
 import { getInitials } from "@/lib/utils";
 import { toast } from "sonner";
-import { User, Mail, Phone, Shield, CreditCard } from "lucide-react";
+import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight } from "lucide-react";
 import { PaymentGatewaySettings } from "@/components/settings/payment-gateway-settings";
+import Link from "next/link";
 
 export default function SettingsPage() {
   const [loading, setLoading] = useState(true);
@@ -111,6 +112,16 @@ export default function SettingsPage() {
           {profile.role === "admin" && (
             <TabsTrigger value="payment-gateway" className="flex items-center gap-1.5">
               <CreditCard className="h-3.5 w-3.5" />Payment Gateway
+            </TabsTrigger>
+          )}
+          {profile.role === "admin" && (
+            <TabsTrigger value="spaces" className="flex items-center gap-1.5">
+              <DoorOpen className="h-3.5 w-3.5" />Spaces
+            </TabsTrigger>
+          )}
+          {profile.role === "admin" && (
+            <TabsTrigger value="documents" className="flex items-center gap-1.5">
+              <FolderOpen className="h-3.5 w-3.5" />Documents
             </TabsTrigger>
           )}
         </TabsList>
@@ -214,6 +225,56 @@ export default function SettingsPage() {
         {profile.role === "admin" && (
           <TabsContent value="payment-gateway" className="mt-6">
             <PaymentGatewaySettings />
+          </TabsContent>
+        )}
+
+        {profile.role === "admin" && (
+          <TabsContent value="spaces" className="mt-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <DoorOpen className="h-4 w-4" />
+                  Spaces Management
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Manage coworking spaces, meeting rooms, and their configurations including
+                  capacity, hourly rates, operating hours, and facilities.
+                </p>
+                <Button asChild>
+                  <Link href="/spaces">
+                    Go to Spaces
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </Link>
+                </Button>
+              </CardContent>
+            </Card>
+          </TabsContent>
+        )}
+
+        {profile.role === "admin" && (
+          <TabsContent value="documents" className="mt-6">
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <FolderOpen className="h-4 w-4" />
+                  Documents Management
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Upload, organize, and manage documents including contracts, identity proofs,
+                  proposals, invoices, and general files.
+                </p>
+                <Button asChild>
+                  <Link href="/documents">
+                    Go to Documents
+                    <ArrowRight className="ml-2 h-4 w-4" />
+                  </Link>
+                </Button>
+              </CardContent>
+            </Card>
           </TabsContent>
         )}
       </Tabs>

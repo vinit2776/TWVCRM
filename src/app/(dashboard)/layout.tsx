@@ -2,6 +2,7 @@ import { Sidebar } from "@/components/dashboard/sidebar";
 import { Header } from "@/components/dashboard/header";
 import { MobileNav } from "@/components/shared/mobile-nav";
 import { CommandPalette } from "@/components/shared/command-palette";
+import { ReportIssueButton } from "@/components/support/report-issue-button";
 
 export default function DashboardLayout({
   children,
@@ -19,6 +20,7 @@ export default function DashboardLayout({
       </div>
       <MobileNav />
       <CommandPalette />
+      <ReportIssueButton />
     </div>
   );
 }
