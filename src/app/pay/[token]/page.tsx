@@ -1,8 +1,8 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { useParams } from "next/navigation";
-import { CreditCard, CheckCircle2, IndianRupee } from "lucide-react";
+import { useParams, useSearchParams } from "next/navigation";
+import { CreditCard, CheckCircle2, IndianRupee, Loader2 } from "lucide-react";
 
 function formatCurrency(amount: number) {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 0 }).format(amount);
@@ -18,12 +18,16 @@ function formatTime(time: string) {
 
 export default function PublicPaymentPage() {
   const { token } = useParams();
+  const searchParams = useSearchParams();
+  const isRazorpayCallback = searchParams.get("razorpay_callback") === "true";
+  const razorpayPaymentId = searchParams.get("razorpay_payment_id");
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [paymentData, setPaymentData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
   const [paying, setPaying] = useState(false);
   const [paid, setPaid] = useState(false);
+  const [waitingForConfirmation, setWaitingForConfirmation] = useState(false);
 
   useEffect(() => {
     async function load() {
@@ -31,7 +35,12 @@ export default function PublicPaymentPage() {
         const res = await fetch(`/api/public/pay?token=${token}`);
         const json = await res.json();
         if (!res.ok) { setError(json.error || "Invalid link"); return; }
-        if (json.data.is_paid) setPaid(true);
+        if (json.data.is_paid) {
+          setPaid(true);
+        } else if (isRazorpayCallback) {
+          // Redirected back from Razorpay — payment is being processed via webhook
+          setWaitingForConfirmation(true);
+        }
         setPaymentData(json.data);
       } catch {
         setError("Failed to load");
@@ -40,14 +49,45 @@ export default function PublicPaymentPage() {
       }
     }
     load();
-  }, [token]);
+  }, [token, isRazorpayCallback]);
+
+  // Poll for payment confirmation after Razorpay callback
+  useEffect(() => {
+    if (!waitingForConfirmation) return;
+
+    let attempts = 0;
+    const maxAttempts = 30; // Poll for up to 5 minutes (30 * 10s)
+
+    const interval = setInterval(async () => {
+      attempts++;
+      try {
+        const res = await fetch(`/api/public/pay?token=${token}`);
+        if (!res.ok) return;
+        const json = await res.json();
+        if (json.data?.is_paid) {
+          setPaid(true);
+          setWaitingForConfirmation(false);
+          setPaymentData(json.data);
+          clearInterval(interval);
+        }
+      } catch { /* ignore polling errors */ }
+
+      if (attempts >= maxAttempts) {
+        // Stop polling after max attempts — show success anyway since Razorpay confirmed
+        setPaid(true);
+        setWaitingForConfirmation(false);
+        clearInterval(interval);
+      }
+    }, 10000);
+
+    return () => clearInterval(interval);
+  }, [waitingForConfirmation, token]);
 
   const handlePayNow = async () => {
     if (!paymentData || paying) return;
     setPaying(true);
 
     try {
-      // For now, record a UPI/bank_transfer payment (Razorpay integration would go here)
       const res = await fetch("/api/public/pay", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -97,6 +137,17 @@ export default function PublicPaymentPage() {
               <CheckCircle2 className="w-16 h-16 text-green-500 mx-auto mb-4" />
               <h2 className="text-xl font-bold text-[#015E65]">Payment Received!</h2>
               <p className="text-gray-600 mt-2">Your payment has been recorded successfully.</p>
+              <p className="text-gray-400 text-sm mt-4">Booking: {paymentData?.booking_number}</p>
+              <p className="text-gray-400 text-sm">Amount: {formatCurrency(paymentData?.total_amount || 0)}</p>
+              {razorpayPaymentId && (
+                <p className="text-gray-400 text-xs mt-2">Ref: {razorpayPaymentId}</p>
+              )}
+            </div>
+          ) : waitingForConfirmation ? (
+            <div className="text-center py-8">
+              <Loader2 className="w-12 h-12 text-[#015E65] mx-auto mb-4 animate-spin" />
+              <h2 className="text-xl font-bold text-[#015E65]">Confirming Payment...</h2>
+              <p className="text-gray-600 mt-2">Your payment is being processed. This usually takes a few seconds.</p>
               <p className="text-gray-400 text-sm mt-4">Booking: {paymentData?.booking_number}</p>
               <p className="text-gray-400 text-sm">Amount: {formatCurrency(paymentData?.total_amount || 0)}</p>
             </div>

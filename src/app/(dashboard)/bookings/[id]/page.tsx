@@ -96,6 +96,36 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
 
   useEffect(() => { fetchBooking(); }, [fetchBooking]);
 
+  // Poll for payment updates when a Razorpay payment link is active and payment is pending
+  useEffect(() => {
+    if (!booking) return;
+    if (booking.payment_status === "paid") return;
+    if (!booking.razorpay_payment_link_id) return;
+
+    const interval = setInterval(async () => {
+      const res = await fetch(`/api/bookings/${id}`);
+      if (!res.ok) return;
+      const json = await res.json();
+      const updated = json.data;
+      if (!updated) return;
+
+      // Payment status changed — update and notify
+      if (updated.payment_status === "paid" && booking.payment_status !== "paid") {
+        setBooking(updated);
+        // Also refresh payment records
+        const pRes = await fetch(`/api/booking-payments?booking_id=${id}`);
+        if (pRes.ok) {
+          const pJson = await pRes.json();
+          setExistingPayments(pJson.data || []);
+        }
+        toast.success("Payment collected successfully via Razorpay!");
+        clearInterval(interval);
+      }
+    }, 10000); // Poll every 10 seconds
+
+    return () => clearInterval(interval);
+  }, [booking?.payment_status, booking?.razorpay_payment_link_id, id, booking]);
+
   // Auto-open collect payment dialog if redirected from booking creation
   useEffect(() => {
     if (searchParams.get("collect_payment") === "true" && !loading && booking) {
@@ -436,6 +466,27 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           {actionLoading && <Loader2 className="h-4 w-4 animate-spin self-center" />}
         </div>
       </div>
+
+      {/* Payment Collected Success Banner */}
+      {booking.payment_status === "paid" && (
+        <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-center gap-3">
+          <div className="flex-shrink-0 w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+            <CheckCircle className="h-7 w-7 text-green-600" />
+          </div>
+          <div className="flex-1">
+            <p className="font-semibold text-green-800">Payment Collected Successfully</p>
+            <p className="text-sm text-green-600">
+              {formatCurrency(booking.total_amount)} paid via {(booking.payment_mode && PAYMENT_MODE_LABELS[booking.payment_mode]) || booking.payment_mode || "online payment"}
+              {booking.status === "confirmed" && " — Ready for check-in"}
+            </p>
+          </div>
+          {booking.status === "confirmed" && (
+            <Button size="sm" onClick={() => handleStatusAction("check_in")} disabled={actionLoading}>
+              <LogIn className="mr-1 h-4 w-4" />Check In Now
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* Quick Action Links */}
       <div className="flex flex-wrap gap-2">
