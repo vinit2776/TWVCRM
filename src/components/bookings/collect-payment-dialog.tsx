@@ -458,49 +458,51 @@ export function CollectPaymentDialog({
                     </TabsContent>
 
                     {/* UPI */}
-                    <TabsContent value="upi" className="mt-3 space-y-3">
-                      {/* QR Code display */}
-                      <div className="grid grid-cols-2 gap-3">
-                        {upiQrCodePath && (
-                          <div className="text-center">
-                            <p className="text-xs text-muted-foreground mb-1">Scan QR Code</p>
-                            <div className="border rounded-md p-2 bg-white inline-block">
-                              {qrCodeUrl ? (
-                                /* eslint-disable-next-line @next/next/no-img-element */
-                                <img
-                                  src={qrCodeUrl}
-                                  alt="UPI QR Code"
-                                  className="h-32 w-32 object-contain"
-                                />
-                              ) : (
-                                <div className="h-32 w-32 flex items-center justify-center">
-                                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-                                </div>
-                              )}
-                            </div>
-                          </div>
-                        )}
-                        {upiId && (
-                          <div className="text-center">
-                            <p className="text-xs text-muted-foreground mb-1">UPI ID</p>
-                            <code className="text-sm font-mono bg-muted px-2 py-1 rounded">{upiId}</code>
-                            {upiPayLink && (
-                              <a
-                                href={upiPayLink}
-                                className="block mt-2 text-xs text-primary hover:underline"
-                                target="_blank"
-                                rel="noopener noreferrer"
-                              >
-                                Open UPI App →
-                              </a>
+                    <TabsContent value="upi" className="mt-3 space-y-4">
+                      {/* QR Code — large, centered, scannable */}
+                      {upiQrCodePath && (
+                        <div className="flex flex-col items-center">
+                          <div className="border-2 border-muted rounded-xl p-3 bg-white shadow-sm">
+                            {qrCodeUrl ? (
+                              /* eslint-disable-next-line @next/next/no-img-element */
+                              <img
+                                src={qrCodeUrl}
+                                alt="UPI QR Code"
+                                className="w-56 h-56 object-contain"
+                              />
+                            ) : (
+                              <div className="w-56 h-56 flex items-center justify-center">
+                                <Loader2 className="h-8 w-8 animate-spin text-muted-foreground" />
+                              </div>
                             )}
                           </div>
-                        )}
-                      </div>
+                          <p className="text-xs text-muted-foreground mt-2">Scan to pay {formatCurrency(parseFloat(amount) || 0)}</p>
+                        </div>
+                      )}
+
+                      {/* UPI ID + Pay link */}
+                      {upiId && (
+                        <div className="flex items-center justify-between rounded-lg bg-muted/50 px-3 py-2.5">
+                          <div className="min-w-0">
+                            <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">UPI ID</p>
+                            <code className="text-sm font-mono block truncate">{upiId}</code>
+                          </div>
+                          {upiPayLink && (
+                            <a
+                              href={upiPayLink}
+                              className="shrink-0 ml-3 text-xs font-medium text-primary hover:underline"
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              Open UPI App →
+                            </a>
+                          )}
+                        </div>
+                      )}
 
                       {/* Payment reference */}
-                      <div className="space-y-2">
-                        <Label>UPI Transaction Reference</Label>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">UPI Transaction Reference</Label>
                         <Input
                           value={paymentReference}
                           onChange={(e) => setPaymentReference(e.target.value)}
@@ -509,15 +511,15 @@ export function CollectPaymentDialog({
                       </div>
 
                       {/* Screenshot upload */}
-                      <div className="space-y-2">
-                        <Label>Payment Screenshot</Label>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Payment Screenshot</Label>
                         {screenshotPreview ? (
                           <div className="relative border rounded-md p-2">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
                             <img
                               src={screenshotPreview}
                               alt="Payment screenshot"
-                              className="max-h-48 mx-auto rounded"
+                              className="max-h-40 mx-auto rounded"
                             />
                             <Button
                               variant="ghost"
@@ -533,7 +535,7 @@ export function CollectPaymentDialog({
                           </div>
                         ) : (
                           <div
-                            className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:border-primary/50 transition-colors"
+                            className="border-2 border-dashed rounded-lg p-3 text-center cursor-pointer hover:border-primary/50 transition-colors"
                             onClick={() => fileInputRef.current?.click()}
                             onDrop={(e) => {
                               e.preventDefault();
@@ -542,7 +544,7 @@ export function CollectPaymentDialog({
                             }}
                             onDragOver={(e) => e.preventDefault()}
                           >
-                            <Upload className="h-6 w-6 mx-auto text-muted-foreground mb-1" />
+                            <Upload className="h-5 w-5 mx-auto text-muted-foreground mb-1" />
                             <p className="text-xs text-muted-foreground">Click or drag payment screenshot</p>
                           </div>
                         )}
@@ -557,7 +559,7 @@ export function CollectPaymentDialog({
                             e.target.value = "";
                           }}
                         />
-                        <p className="text-xs text-muted-foreground">
+                        <p className="text-[11px] text-muted-foreground">
                           Upload screenshot for verification. Payment will be pending until verified by a manager.
                         </p>
                       </div>
