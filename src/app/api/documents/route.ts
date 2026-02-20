@@ -53,6 +53,7 @@ export async function POST(request: NextRequest) {
   const folderId = formData.get("folder_id") as string | null;
   const category = formData.get("category") as string | null;
   const leadId = formData.get("lead_id") as string | null;
+  const customPath = formData.get("path") as string | null;
 
   if (!file) {
     return NextResponse.json({ error: "No file provided" }, { status: 400 });
@@ -68,7 +69,7 @@ export async function POST(request: NextRequest) {
 
   // Upload to Supabase Storage
   const fileName = `${Date.now()}-${file.name}`;
-  const filePath = `documents/${fileName}`;
+  const filePath = customPath ? `${customPath}/${fileName}` : `documents/${fileName}`;
 
   const { error: uploadError } = await supabase.storage
     .from("crm-documents")

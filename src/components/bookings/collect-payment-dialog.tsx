@@ -16,6 +16,7 @@ import {
   Banknote, Smartphone, CreditCard, Globe, ImageIcon,
 } from "lucide-react";
 import { toast } from "sonner";
+import { createClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
 import {
   BOOKING_PAYMENT_RECORD_STATUS_LABELS,
@@ -64,6 +65,9 @@ export function CollectPaymentDialog({
   const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // QR code signed URL
+  const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
+
   // Verification dialog state
   const [verifyingPayment, setVerifyingPayment] = useState<BookingPayment | null>(null);
   const [verifyNotes, setVerifyNotes] = useState("");
@@ -87,6 +91,28 @@ export function CollectPaymentDialog({
       fetchPayments();
     }
   }, [open, fetchPayments]);
+
+  // Fetch signed URL for QR code image
+  useEffect(() => {
+    if (!open || !upiQrCodePath) {
+      setQrCodeUrl(null);
+      return;
+    }
+    const fetchQrUrl = async () => {
+      try {
+        const supabase = createClient();
+        const { data } = await supabase.storage
+          .from("crm-documents")
+          .createSignedUrl(upiQrCodePath, 3600); // 1 hour validity
+        if (data?.signedUrl) {
+          setQrCodeUrl(data.signedUrl);
+        }
+      } catch {
+        console.error("Failed to load QR code image");
+      }
+    };
+    fetchQrUrl();
+  }, [open, upiQrCodePath]);
 
   const verifiedTotal = payments
     .filter((p) => p.status === "verified")
@@ -439,7 +465,18 @@ export function CollectPaymentDialog({
                           <div className="text-center">
                             <p className="text-xs text-muted-foreground mb-1">Scan QR Code</p>
                             <div className="border rounded-md p-2 bg-white inline-block">
-                              <ImageIcon className="h-24 w-24 text-muted-foreground/30" />
+                              {qrCodeUrl ? (
+                                /* eslint-disable-next-line @next/next/no-img-element */
+                                <img
+                                  src={qrCodeUrl}
+                                  alt="UPI QR Code"
+                                  className="h-32 w-32 object-contain"
+                                />
+                              ) : (
+                                <div className="h-32 w-32 flex items-center justify-center">
+                                  <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+                                </div>
+                              )}
                             </div>
                           </div>
                         )}
