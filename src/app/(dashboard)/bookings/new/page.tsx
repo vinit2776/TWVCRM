@@ -233,18 +233,38 @@ function NewBookingForm() {
 
   useEffect(() => { fetchAvailability(); }, [fetchAvailability]);
 
+  // Merge adjacent 30-min slots into continuous availability windows
+  const availabilityWindows = (() => {
+    if (availableSlots.length === 0) return [];
+    const sorted = [...availableSlots].sort((a, b) => a.start_time.localeCompare(b.start_time));
+    const windows: { start_time: string; end_time: string }[] = [];
+    let current = { ...sorted[0] };
+
+    for (let i = 1; i < sorted.length; i++) {
+      if (sorted[i].start_time === current.end_time) {
+        current.end_time = sorted[i].end_time;
+      } else {
+        windows.push(current);
+        current = { ...sorted[i] };
+      }
+    }
+    windows.push(current);
+    return windows;
+  })();
+
   // Check for slot conflicts when start/end time changes
+  // Uses merged availability windows so multi-slot bookings don't false-positive
   useEffect(() => {
     if (!startTime || !endTime || !spaceId || !bookingDate) {
       setSlotConflict(false);
       return;
     }
-    // Check if the selected time falls within available slots
-    const isAvailable = availableSlots.some(slot =>
-      startTime >= slot.start_time && endTime <= slot.end_time
+    // Check if the selected time falls within a continuous availability window
+    const isAvailable = availabilityWindows.some(window =>
+      startTime >= window.start_time && endTime <= window.end_time
     );
     setSlotConflict(!isAvailable && availableSlots.length > 0);
-  }, [startTime, endTime, availableSlots, spaceId, bookingDate]);
+  }, [startTime, endTime, availabilityWindows, availableSlots, spaceId, bookingDate]);
 
   // Fetch contracts for dropdown
   useEffect(() => {
@@ -273,27 +293,6 @@ function NewBookingForm() {
         .reduce((sum, f) => sum + f.charge_per_use, 0)
     : 0;
   const totalAmount = roomCost + facilityCost;
-
-  // Merge adjacent 30-min slots into continuous availability windows
-  const availabilityWindows = (() => {
-    if (availableSlots.length === 0) return [];
-    const sorted = [...availableSlots].sort((a, b) => a.start_time.localeCompare(b.start_time));
-    const windows: { start_time: string; end_time: string }[] = [];
-    let current = { ...sorted[0] };
-
-    for (let i = 1; i < sorted.length; i++) {
-      if (sorted[i].start_time === current.end_time) {
-        // Adjacent slot — extend the window
-        current.end_time = sorted[i].end_time;
-      } else {
-        // Gap — push current window and start new one
-        windows.push(current);
-        current = { ...sorted[i] };
-      }
-    }
-    windows.push(current);
-    return windows;
-  })();
 
   // Build time dropdown options from available slots
   const timeOptions = (() => {
