@@ -1,28 +1,102 @@
-import { Resend } from "resend";
+import nodemailer from "nodemailer";
 
-if (!process.env.RESEND_API_KEY) {
-  console.warn("RESEND_API_KEY is not set — email sending will fail.");
+/**
+ * Email transport using Google Workspace SMTP.
+ *
+ * Required env vars on Vercel:
+ *   SMTP_HOST=smtp.gmail.com
+ *   SMTP_PORT=465
+ *   SMTP_USER=contact@theworkvilla.com      (your Google Workspace email)
+ *   SMTP_PASS=xxxx xxxx xxxx xxxx           (Google App Password — NOT your login password)
+ *
+ * To generate an App Password:
+ *   1. Go to https://myaccount.google.com/apppasswords
+ *   2. Select "Mail" and "Other (Custom name)" → name it "TWV CRM"
+ *   3. Copy the 16-character password and set it as SMTP_PASS
+ *   4. 2-Step Verification must be enabled on the Google Workspace account
+ */
+
+const smtpHost = (process.env.SMTP_HOST || "smtp.gmail.com").trim();
+const smtpPort = parseInt((process.env.SMTP_PORT || "465").trim(), 10);
+const smtpUser = (process.env.SMTP_USER || "").trim();
+const smtpPass = (process.env.SMTP_PASS || "").trim();
+
+if (!smtpUser || !smtpPass) {
+  console.warn("SMTP_USER or SMTP_PASS is not set — email sending will fail.");
 }
 
-// Use a placeholder key during build to prevent Resend from throwing at construction time.
-// Actual email sends will still fail gracefully without a real key.
-// Note: .trim() is critical — env vars on Vercel can have trailing newlines
-export const resend = new Resend((process.env.RESEND_API_KEY || "re_placeholder").trim());
+const transporter = nodemailer.createTransport({
+  host: smtpHost,
+  port: smtpPort,
+  secure: smtpPort === 465, // true for 465, false for 587
+  auth: {
+    user: smtpUser,
+    pass: smtpPass,
+  },
+});
 
 /**
  * Centralized "from" address for all outgoing emails.
- *
- * Set RESEND_FROM_EMAIL in your env to use a verified custom domain, e.g.:
- *   RESEND_FROM_EMAIL="The WorkVilla <noreply@theworkvilla.com>"
- *
- * If not set, falls back to the Resend test address which can ONLY
- * deliver to the Resend account owner's email.
  */
 export const EMAIL_FROM =
-  (process.env.RESEND_FROM_EMAIL || "The WorkVilla <onboarding@resend.dev>").trim();
+  (process.env.RESEND_FROM_EMAIL || `The WorkVilla <${smtpUser || "noreply@theworkvilla.com"}>`).trim();
 
 /**
  * Reply-to address for all outgoing emails.
  * Recipients who hit "Reply" will reach this inbox.
  */
 export const EMAIL_REPLY_TO = "contact@theworkvilla.com";
+
+/**
+ * Drop-in replacement for the Resend SDK.
+ *
+ * All existing routes call: resend.emails.send({ from, to, subject, html, replyTo, attachments })
+ * This wrapper translates that to nodemailer format and returns { data, error }
+ * matching the Resend SDK response shape.
+ */
+export const resend = {
+  emails: {
+    send: async (params: {
+      from: string;
+      to: string | string[];
+      subject: string;
+      html: string;
+      replyTo?: string;
+      attachments?: Array<{
+        filename: string;
+        content: Buffer | string;
+        contentType?: string;
+      }>;
+    }): Promise<{ data: { id: string } | null; error: { message: string; name: string } | null }> => {
+      try {
+        const mailOptions: nodemailer.SendMailOptions = {
+          from: params.from,
+          to: Array.isArray(params.to) ? params.to.join(", ") : params.to,
+          subject: params.subject,
+          html: params.html,
+          replyTo: params.replyTo,
+          attachments: params.attachments?.map((att) => ({
+            filename: att.filename,
+            content: att.content,
+            contentType: att.contentType,
+          })),
+        };
+
+        const info = await transporter.sendMail(mailOptions);
+        console.log("Email sent via SMTP:", info.messageId, "to:", params.to);
+
+        return {
+          data: { id: info.messageId },
+          error: null,
+        };
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : "Unknown SMTP error";
+        console.error("SMTP email error:", message);
+        return {
+          data: null,
+          error: { message, name: "smtp_error" },
+        };
+      }
+    },
+  },
+};
