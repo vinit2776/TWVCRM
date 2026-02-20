@@ -37,9 +37,10 @@ const transporter = nodemailer.createTransport({
 
 /**
  * Centralized "from" address for all outgoing emails.
+ * MUST match the SMTP_USER (authenticated Google Workspace account)
+ * otherwise Gmail will rewrite or reject the message.
  */
-export const EMAIL_FROM =
-  (process.env.RESEND_FROM_EMAIL || `The WorkVilla <${smtpUser || "noreply@theworkvilla.com"}>`).trim();
+export const EMAIL_FROM = `The WorkVilla <${smtpUser || "contact@theworkvilla.com"}>`;
 
 /**
  * Reply-to address for all outgoing emails.
