@@ -468,25 +468,39 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
       </div>
 
       {/* Payment Collected Success Banner */}
-      {booking.payment_status === "paid" && (
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-center gap-3">
-          <div className="flex-shrink-0 w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
-            <CheckCircle className="h-7 w-7 text-green-600" />
+      {booking.payment_status === "paid" && (() => {
+        const razorpayPayment = existingPayments.find(p => p.payment_mode === "razorpay" && p.status === "verified");
+        return (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-start gap-3">
+            <div className="flex-shrink-0 w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+              <CheckCircle className="h-7 w-7 text-green-600" />
+            </div>
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-green-800">Payment Collected Successfully</p>
+              <p className="text-sm text-green-600">
+                {formatCurrency(booking.total_amount)} paid via {(booking.payment_mode && PAYMENT_MODE_LABELS[booking.payment_mode]) || booking.payment_mode || "online payment"}
+                {booking.status === "confirmed" && " — Ready for check-in"}
+              </p>
+              {razorpayPayment && (
+                <div className="mt-2 text-xs text-green-700 space-y-0.5">
+                  {razorpayPayment.razorpay_payment_id && (
+                    <p>Razorpay Payment ID: <span className="font-mono">{razorpayPayment.razorpay_payment_id}</span></p>
+                  )}
+                  {razorpayPayment.razorpay_order_id && (
+                    <p>Order ID: <span className="font-mono">{razorpayPayment.razorpay_order_id}</span></p>
+                  )}
+                  <p>Confirmed: {formatDateTime(razorpayPayment.created_at)}</p>
+                </div>
+              )}
+            </div>
+            {booking.status === "confirmed" && (
+              <Button size="sm" className="flex-shrink-0" onClick={() => handleStatusAction("check_in")} disabled={actionLoading}>
+                <LogIn className="mr-1 h-4 w-4" />Check In Now
+              </Button>
+            )}
           </div>
-          <div className="flex-1">
-            <p className="font-semibold text-green-800">Payment Collected Successfully</p>
-            <p className="text-sm text-green-600">
-              {formatCurrency(booking.total_amount)} paid via {(booking.payment_mode && PAYMENT_MODE_LABELS[booking.payment_mode]) || booking.payment_mode || "online payment"}
-              {booking.status === "confirmed" && " — Ready for check-in"}
-            </p>
-          </div>
-          {booking.status === "confirmed" && (
-            <Button size="sm" onClick={() => handleStatusAction("check_in")} disabled={actionLoading}>
-              <LogIn className="mr-1 h-4 w-4" />Check In Now
-            </Button>
-          )}
-        </div>
-      )}
+        );
+      })()}
 
       {/* Quick Action Links */}
       <div className="flex flex-wrap gap-2">
@@ -701,18 +715,52 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <>
                 <Separator />
                 <p className="text-xs text-muted-foreground font-medium">Payment Records</p>
-                <div className="space-y-1.5">
+                <div className="space-y-2">
                   {existingPayments.map((p) => (
-                    <div key={p.id} className="flex items-center justify-between text-xs bg-muted/30 rounded px-2.5 py-1.5">
-                      <div className="flex items-center gap-2">
-                        <span className="font-medium">{formatCurrency(p.amount)}</span>
-                        <span className="text-muted-foreground">
-                          {BOOKING_PAYMENT_MODE_LABELS[p.payment_mode] || p.payment_mode}
-                        </span>
+                    <div key={p.id} className="text-xs bg-muted/30 rounded px-2.5 py-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">{formatCurrency(p.amount)}</span>
+                          <span className="text-muted-foreground">
+                            {BOOKING_PAYMENT_MODE_LABELS[p.payment_mode] || p.payment_mode}
+                          </span>
+                        </div>
+                        <Badge variant="secondary" className={`text-[10px] ${BOOKING_PAYMENT_RECORD_STATUS_COLORS[p.status]}`}>
+                          {BOOKING_PAYMENT_RECORD_STATUS_LABELS[p.status]}
+                        </Badge>
                       </div>
-                      <Badge variant="secondary" className={`text-[10px] ${BOOKING_PAYMENT_RECORD_STATUS_COLORS[p.status]}`}>
-                        {BOOKING_PAYMENT_RECORD_STATUS_LABELS[p.status]}
-                      </Badge>
+                      {/* Razorpay confirmation details */}
+                      {p.payment_mode === "razorpay" && (p.razorpay_payment_id || p.razorpay_order_id) && (
+                        <div className="mt-1.5 pt-1.5 border-t border-muted/50 text-[11px] text-muted-foreground space-y-0.5">
+                          {p.razorpay_payment_id && (
+                            <div className="flex justify-between">
+                              <span>Payment ID</span>
+                              <span className="font-mono">{p.razorpay_payment_id}</span>
+                            </div>
+                          )}
+                          {p.razorpay_order_id && (
+                            <div className="flex justify-between">
+                              <span>Order ID</span>
+                              <span className="font-mono">{p.razorpay_order_id}</span>
+                            </div>
+                          )}
+                          {p.payment_reference && p.payment_reference !== p.razorpay_payment_id && (
+                            <div className="flex justify-between">
+                              <span>Reference</span>
+                              <span className="font-mono">{p.payment_reference}</span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                      {/* Non-Razorpay reference */}
+                      {p.payment_mode !== "razorpay" && p.payment_reference && (
+                        <div className="mt-1 text-[11px] text-muted-foreground">
+                          Ref: <span className="font-mono">{p.payment_reference}</span>
+                        </div>
+                      )}
+                      <div className="mt-1 text-[10px] text-muted-foreground/70">
+                        {formatDateTime(p.created_at)}
+                      </div>
                     </div>
                   ))}
                 </div>
