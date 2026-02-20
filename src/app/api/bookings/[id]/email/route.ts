@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/resend";
 import { generateICS } from "@/lib/ics-generator";
 import { BOOKING_CUSTOMER_TYPE_LABELS } from "@/lib/constants";
+import { logEmailActivity } from "@/lib/audit";
 
 function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 0 }).format(amount);
@@ -32,6 +33,13 @@ export async function POST(
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // Get sender info for activity logging
+  const { data: sender } = await supabase
+    .from("users")
+    .select("id, full_name")
+    .eq("auth_id", user.id)
+    .single();
 
   const body = await request.json();
   const emailType = body.type || "confirmation"; // "confirmation" | "cleaning" | "check_in_alert" | "feedback_link" | "payment_link"
@@ -142,6 +150,17 @@ export async function POST(
           </div>
         </div>`,
     });
+
+    // Log email activity for the lead
+    if (booking.lead_id && sender?.id) {
+      logEmailActivity(supabase, {
+        leadId: booking.lead_id,
+        subject: `Feedback link sent for ${booking.booking_number}`,
+        description: `Feedback link for booking ${booking.booking_number} (${spaceName}) emailed to ${customerEmail}`,
+        createdBy: sender.id,
+      });
+    }
+
     return NextResponse.json({ message: "Feedback link sent" });
   }
 
@@ -190,6 +209,17 @@ export async function POST(
           </div>
         </div>`,
     });
+
+    // Log email activity for the lead
+    if (booking.lead_id && sender?.id) {
+      logEmailActivity(supabase, {
+        leadId: booking.lead_id,
+        subject: `Payment link sent for ${booking.booking_number}`,
+        description: `Payment link for booking ${booking.booking_number} (${spaceName}, ₹${displayAmount.toLocaleString("en-IN")}) emailed to ${customerEmail}`,
+        createdBy: sender.id,
+      });
+    }
+
     return NextResponse.json({ message: "Payment link sent" });
   }
 
@@ -322,6 +352,16 @@ export async function POST(
   } catch (e: unknown) {
     const msg = e instanceof Error ? e.message : "Unknown error";
     return NextResponse.json({ error: `Failed to send confirmation email: ${msg}` }, { status: 500 });
+  }
+
+  // Log email activity for the lead
+  if (booking.lead_id && sender?.id) {
+    logEmailActivity(supabase, {
+      leadId: booking.lead_id,
+      subject: `Booking confirmation sent for ${booking.booking_number}`,
+      description: `Booking confirmation for ${booking.booking_number} (${spaceName}, ${formatDate(booking.booking_date)} ${startTime}–${endTime}) emailed to ${customerEmail}`,
+      createdBy: sender.id,
+    });
   }
 
   // Also notify floor managers

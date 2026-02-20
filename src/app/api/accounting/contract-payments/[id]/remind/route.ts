@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/resend";
-import { logAudit } from "@/lib/audit";
+import { logAudit, logEmailActivity } from "@/lib/audit";
 
 // POST — send payment reminder email
 export async function POST(
@@ -32,7 +32,7 @@ export async function POST(
   const { data: payment, error: fetchError } = await supabase
     .from("contract_payments")
     .select(
-      "*, contract:contracts!contract_payments_contract_id_fkey(id, contract_number, title, monthly_membership_fee, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company))"
+      "*, contract:contracts!contract_payments_contract_id_fkey(id, contract_number, title, lead_id, monthly_membership_fee, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company))"
     )
     .eq("id", id)
     .single();
@@ -112,6 +112,16 @@ export async function POST(
       performedBy: dbUser.id,
       changes: { reminder_sent_at: { old: paymentData.reminder_sent_at, new: new Date().toISOString() } },
     });
+
+    // Log email activity for the lead
+    if (paymentData.contract?.lead_id) {
+      logEmailActivity(supabase, {
+        leadId: paymentData.contract.lead_id,
+        subject: `Payment reminder sent`,
+        description: `Payment reminder for ${paymentData.contract?.contract_number || "contract"} (₹${Number(paymentData.amount).toLocaleString("en-IN")}) emailed to ${recipients.join(", ")}`,
+        createdBy: dbUser.id,
+      });
+    }
 
     return NextResponse.json({ message: "Reminder sent successfully" });
   } catch (error) {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/resend";
+import { logEmailActivity } from "@/lib/audit";
 
 export async function POST(
   request: NextRequest,
@@ -35,7 +36,7 @@ export async function POST(
   // Get sender info
   const { data: sender } = await supabase
     .from("users")
-    .select("full_name")
+    .select("id, full_name")
     .eq("auth_id", user.id)
     .single();
 
@@ -107,6 +108,16 @@ export async function POST(
       .from("contracts")
       .update({ status: "sent", sent_at: new Date().toISOString() })
       .eq("id", id);
+
+    // Log email activity for the lead
+    if (contract.lead_id && sender?.id) {
+      logEmailActivity(supabase, {
+        leadId: contract.lead_id,
+        subject: `Agreement ${contract.contract_number} sent`,
+        description: `Membership Agreement "${contract.title}" (${contract.contract_number}) emailed to ${recipients.join(", ")}`,
+        createdBy: sender.id,
+      });
+    }
 
     return NextResponse.json({ message: "Email sent successfully" });
   } catch (error) {
