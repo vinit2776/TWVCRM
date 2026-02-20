@@ -119,6 +119,78 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ status: "ok" });
   }
 
+  // Handle payment_link.paid event (Razorpay Payment Links)
+  if (event === "payment_link.paid") {
+    const paymentLinkEntity = payload.payload?.payment_link?.entity;
+    const paymentEntity = payload.payload?.payment?.entity;
+
+    if (!paymentLinkEntity) {
+      return NextResponse.json({ error: "Invalid payment_link payload" }, { status: 400 });
+    }
+
+    const paymentLinkId = paymentLinkEntity.id;
+    const amountPaid = paymentLinkEntity.amount_paid
+      ? paymentLinkEntity.amount_paid / 100
+      : paymentEntity?.amount
+        ? paymentEntity.amount / 100
+        : 0;
+    const razorpayPaymentId = paymentEntity?.id || null;
+
+    // Find the booking by razorpay_payment_link_id
+    const { data: booking } = await supabase
+      .from("bookings")
+      .select("id, total_amount")
+      .eq("razorpay_payment_link_id", paymentLinkId)
+      .single();
+
+    if (!booking) {
+      return NextResponse.json({ status: "ignored", reason: "No matching booking for payment link" });
+    }
+
+    // Check if we already recorded this payment (idempotency)
+    if (razorpayPaymentId) {
+      const { data: existing } = await supabase
+        .from("booking_payments")
+        .select("id")
+        .eq("razorpay_payment_id", razorpayPaymentId)
+        .maybeSingle();
+
+      if (existing) {
+        return NextResponse.json({ status: "ok", reason: "Payment already recorded" });
+      }
+    }
+
+    // Create a verified payment record
+    await supabase
+      .from("booking_payments")
+      .insert({
+        booking_id: booking.id,
+        amount: amountPaid,
+        payment_mode: "razorpay",
+        status: "verified",
+        razorpay_payment_id: razorpayPaymentId,
+        payment_reference: razorpayPaymentId || paymentLinkId,
+      });
+
+    // Check if booking is now fully paid
+    const { data: verifiedPayments } = await supabase
+      .from("booking_payments")
+      .select("amount")
+      .eq("booking_id", booking.id)
+      .eq("status", "verified");
+
+    const totalPaid = (verifiedPayments || []).reduce((sum, p) => sum + Number(p.amount), 0);
+
+    if (totalPaid >= Number(booking.total_amount)) {
+      await supabase
+        .from("bookings")
+        .update({ payment_status: "paid", payment_mode: "razorpay" })
+        .eq("id", booking.id);
+    }
+
+    return NextResponse.json({ status: "ok" });
+  }
+
   // Other events — acknowledge but don't process
   return NextResponse.json({ status: "ok", event });
 }

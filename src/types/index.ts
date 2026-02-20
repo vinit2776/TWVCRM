@@ -628,6 +628,9 @@ export interface Booking {
   payment_token?: string;
   // No-show detection
   no_show_detected_at?: string;
+  // Razorpay Payment Links
+  razorpay_payment_link_id?: string;
+  razorpay_payment_link_url?: string;
   notes?: string;
   created_by?: string;
   created_at: string;

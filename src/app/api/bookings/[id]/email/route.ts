@@ -148,12 +148,26 @@ export async function POST(
   // ── Payment link email to customer ──
   if (emailType === "payment_link") {
     if (!customerEmail) return NextResponse.json({ error: "No customer email available" }, { status: 400 });
-    const paymentUrl = `${appUrl}/pay/${booking.payment_token}`;
+
+    // Use Razorpay payment link URL if provided, otherwise fall back to internal link
+    const razorpayPaymentLinkUrl = body.razorpay_payment_link_url || booking.razorpay_payment_link_url;
+    const paymentUrl = razorpayPaymentLinkUrl || `${appUrl}/pay/${booking.payment_token}`;
+    const isRazorpayLink = !!razorpayPaymentLinkUrl;
+
+    // Calculate balance due for the email
+    const { data: verifiedPayments } = await supabase
+      .from("booking_payments")
+      .select("amount")
+      .eq("booking_id", id)
+      .eq("status", "verified");
+    const totalPaid = (verifiedPayments || []).reduce((s, p) => s + Number(p.amount), 0);
+    const balanceDue = Math.max(0, Number(booking.total_amount) - totalPaid);
+    const displayAmount = balanceDue > 0 ? balanceDue : Number(booking.total_amount);
 
     await resend.emails.send({
       from: EMAIL_FROM,
       to: customerEmail,
-      subject: `Payment Link - ${booking.booking_number} - ₹${Number(booking.total_amount).toLocaleString("en-IN")} - The WorkVilla`,
+      subject: `Payment Link - ${booking.booking_number} - ₹${displayAmount.toLocaleString("en-IN")} - The WorkVilla`,
       html: `
         <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
           <div style="background:#015E65;padding:20px;text-align:center;">
@@ -165,11 +179,12 @@ export async function POST(
             <table style="width:100%;border-collapse:collapse;margin:16px 0;">
               <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Booking</td><td style="padding:8px;border:1px solid #ddd;">${booking.booking_number}</td></tr>
               <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Room</td><td style="padding:8px;border:1px solid #ddd;">${spaceName}</td></tr>
-              <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Amount</td><td style="padding:8px;border:1px solid #ddd;font-weight:bold;color:#015E65;">₹${Number(booking.total_amount).toLocaleString("en-IN")}</td></tr>
+              <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Amount Due</td><td style="padding:8px;border:1px solid #ddd;font-weight:bold;color:#015E65;">₹${displayAmount.toLocaleString("en-IN")}</td></tr>
             </table>
             <div style="text-align:center;margin:24px 0;">
               <a href="${paymentUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;">Pay Now</a>
             </div>
+            ${isRazorpayLink ? '<p style="color:#666;font-size:13px;text-align:center;">Powered by Razorpay — secure payments via UPI, cards, net banking & more.</p>' : ""}
             <hr style="margin:20px 0;border:none;border-top:1px solid #eee;" />
             <p style="color:#999;font-size:12px;text-align:center;">The WorkVilla | Prakash Presidium, 110 MG Road, Nungambakkam, Chennai 600034</p>
           </div>

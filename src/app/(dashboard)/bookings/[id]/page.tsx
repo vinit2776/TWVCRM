@@ -193,11 +193,45 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     }
   };
 
+  const ensureRazorpayPaymentLink = async (): Promise<string | null> => {
+    // If we already have a Razorpay payment link URL, return it
+    if (booking?.razorpay_payment_link_url) {
+      return booking.razorpay_payment_link_url;
+    }
+
+    // Create a Razorpay Payment Link via API
+    try {
+      const res = await fetch("/api/payments/create-payment-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ booking_id: id }),
+      });
+      const json = await res.json();
+      if (res.ok && json.data?.payment_link_url) {
+        // Update local booking state with the new link
+        setBooking((prev) => prev ? { ...prev, razorpay_payment_link_url: json.data.payment_link_url, razorpay_payment_link_id: json.data.payment_link_id } : prev);
+        return json.data.payment_link_url;
+      } else {
+        // Razorpay not enabled or failed — fall back to internal link
+        console.warn("Razorpay payment link failed, falling back to internal link:", json.error);
+        return null;
+      }
+    } catch {
+      return null;
+    }
+  };
+
   const handleSendPaymentLink = async () => {
+    // Try to create Razorpay payment link first
+    const razorpayUrl = await ensureRazorpayPaymentLink();
+
     const res = await fetch(`/api/bookings/${id}/email`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ type: "payment_link" }),
+      body: JSON.stringify({
+        type: "payment_link",
+        razorpay_payment_link_url: razorpayUrl || undefined,
+      }),
     });
     if (res.ok) {
       toast.success("Payment link sent to customer");
@@ -207,10 +241,16 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     }
   };
 
-  const handleCopyPaymentLink = () => {
+  const handleCopyPaymentLink = async () => {
     if (!booking?.payment_token) { toast.error("No payment token"); return; }
-    const url = `${window.location.origin}/pay/${booking.payment_token}`;
-    navigator.clipboard.writeText(url).then(() => toast.success("Payment link copied")).catch(() => toast.error("Failed to copy"));
+
+    // Try to get Razorpay payment link first
+    const razorpayUrl = await ensureRazorpayPaymentLink();
+    const url = razorpayUrl || `${window.location.origin}/pay/${booking.payment_token}`;
+
+    navigator.clipboard.writeText(url)
+      .then(() => toast.success(razorpayUrl ? "Razorpay payment link copied" : "Payment link copied"))
+      .catch(() => toast.error("Failed to copy"));
   };
 
   const handleDownloadReceipt = async () => {
