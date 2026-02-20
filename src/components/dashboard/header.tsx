@@ -1,6 +1,7 @@
 "use client";
 
-import { Menu, Search, LogOut } from "lucide-react";
+import { Menu, Search, LogOut, HelpCircle } from "lucide-react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
@@ -78,6 +79,13 @@ export function Header() {
             </AvatarFallback>
           </Avatar>
         </div>
+
+        {/* Help */}
+        <Button variant="ghost" size="icon" asChild title="Help & User Manual">
+          <Link href="/help">
+            <HelpCircle className="h-4 w-4" />
+          </Link>
+        </Button>
 
         {/* Sign out */}
         <Button variant="ghost" size="icon" onClick={handleSignOut} title="Sign out">
