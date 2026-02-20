@@ -23,6 +23,7 @@ import {
   CalendarClock,
   Calculator,
   Server,
+  HelpCircle,
   X,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -168,6 +169,23 @@ export function Sidebar() {
             })}
           </div>
         )}
+
+        {/* Help — visible to all roles */}
+        <div className="border-t border-sidebar-accent px-3 py-4">
+          <Link
+            href="/help"
+            onClick={() => setSidebarOpen(false)}
+            className={cn(
+              "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+              pathname === "/help" || pathname.startsWith("/help/")
+                ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+            )}
+          >
+            <HelpCircle className="h-5 w-5 shrink-0" />
+            Help
+          </Link>
+        </div>
       </aside>
     </>
   );

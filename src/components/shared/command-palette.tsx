@@ -14,6 +14,7 @@ import {
   FolderOpen,
   UserPlus,
   Settings,
+  HelpCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
@@ -37,6 +38,7 @@ const QUICK_LINKS: SearchResult[] = [
   { id: "documents", label: "Documents", href: "/documents", icon: FolderOpen, category: "Pages" },
   { id: "team", label: "Team", href: "/team", icon: UserPlus, category: "Pages" },
   { id: "settings", label: "Settings", href: "/settings", icon: Settings, category: "Pages" },
+  { id: "help", label: "Help & User Manual", href: "/help", icon: HelpCircle, category: "Pages" },
   { id: "new-lead", label: "Create New Lead", href: "/leads/new", icon: Users, category: "Actions" },
 ];
 
