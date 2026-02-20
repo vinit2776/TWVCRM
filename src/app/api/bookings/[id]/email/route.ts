@@ -71,7 +71,7 @@ export async function POST(
   const locationAddress = [booking.location?.address, booking.location?.city, booking.location?.state].filter(Boolean).join(", ");
   const facilityList = (booking.facilities || []).map((f: { facility_name: string }) => f.facility_name).join(", ");
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").trim();
 
   // ── Check-in alert to floor managers ──
   if (emailType === "check_in_alert") {
