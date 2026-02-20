@@ -111,8 +111,15 @@ export async function POST(request: NextRequest) {
   // Razorpay requires callback_url for payment links
   const appUrl = process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL || "twv-crm.vercel.app"}`;
   const token = (booking as Record<string, unknown>).payment_token;
-  payload.callback_url = `${appUrl}/pay/${token || booking_id}?razorpay_callback=true`;
+  const callbackUrl = `${appUrl}/pay/${token || booking_id}?razorpay_callback=true`;
+  payload.callback_url = callbackUrl;
   payload.callback_method = "get";
+
+  console.log("[RZP Debug] callback_url:", callbackUrl);
+  console.log("[RZP Debug] NEXT_PUBLIC_APP_URL:", process.env.NEXT_PUBLIC_APP_URL);
+  console.log("[RZP Debug] VERCEL_URL:", process.env.VERCEL_URL);
+  console.log("[RZP Debug] payment_token:", token);
+  console.log("[RZP Debug] Full payload:", JSON.stringify(payload, null, 2));
 
   // Add customer details if available
   if (customerName || customerEmail || customerPhone) {
@@ -141,8 +148,14 @@ export async function POST(request: NextRequest) {
     if (!rzpRes.ok) {
       const rzpErr = await rzpRes.json().catch(() => null);
       console.error("Razorpay Payment Link error:", rzpErr);
+      console.error("Razorpay full error response:", JSON.stringify(rzpErr));
       return NextResponse.json({
         error: rzpErr?.error?.description || "Failed to create Razorpay payment link",
+        debug: {
+          razorpay_error: rzpErr?.error,
+          callback_url: payload.callback_url,
+          app_url: appUrl,
+        },
       }, { status: 500 });
     }
 
