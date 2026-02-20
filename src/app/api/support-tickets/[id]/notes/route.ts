@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createTicketNoteSchema } from "@/lib/validations";
 
 // GET — list notes for a ticket (admin only)
@@ -14,8 +14,10 @@ export async function GET(
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const adminSupabase = await createAdminClient();
+
   // Check admin role
-  const { data: currentUser } = await supabase
+  const { data: currentUser } = await adminSupabase
     .from("users")
     .select("id, role")
     .eq("auth_id", user.id)
@@ -25,7 +27,7 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { data: notes, error } = await supabase
+  const { data: notes, error } = await adminSupabase
     .from("support_ticket_notes")
     .select(`*, author:created_by(id, full_name, email)`)
     .eq("ticket_id", id)
@@ -50,8 +52,10 @@ export async function POST(
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const adminSupabase = await createAdminClient();
+
   // Check admin role
-  const { data: currentUser } = await supabase
+  const { data: currentUser } = await adminSupabase
     .from("users")
     .select("id, role")
     .eq("auth_id", user.id)
@@ -62,7 +66,7 @@ export async function POST(
   }
 
   // Verify ticket exists
-  const { data: ticket } = await supabase
+  const { data: ticket } = await adminSupabase
     .from("support_tickets")
     .select("id")
     .eq("id", id)
@@ -82,7 +86,7 @@ export async function POST(
     );
   }
 
-  const { data: note, error } = await supabase
+  const { data: note, error } = await adminSupabase
     .from("support_ticket_notes")
     .insert({
       ticket_id: id,
@@ -97,7 +101,7 @@ export async function POST(
   }
 
   // Update ticket updated_at
-  await supabase
+  await adminSupabase
     .from("support_tickets")
     .update({ updated_at: new Date().toISOString() })
     .eq("id", id);

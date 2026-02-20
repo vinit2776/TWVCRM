@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createSupportTicketSchema } from "@/lib/validations";
 
 // GET — list all tickets (admin only)
@@ -10,8 +10,10 @@ export async function GET(request: NextRequest) {
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const adminSupabase = await createAdminClient();
+
   // Check admin role
-  const { data: currentUser } = await supabase
+  const { data: currentUser } = await adminSupabase
     .from("users")
     .select("id, role")
     .eq("auth_id", user.id)
@@ -25,7 +27,7 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get("status");
   const type = searchParams.get("type");
 
-  let query = supabase
+  let query = adminSupabase
     .from("support_tickets")
     .select(
       `*, reporter:reported_by(id, full_name, email, role), assignee:assigned_to(id, full_name, email)`
@@ -52,8 +54,10 @@ export async function POST(request: NextRequest) {
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const adminSupabase = await createAdminClient();
+
   // Get current user record
-  const { data: currentUser } = await supabase
+  const { data: currentUser } = await adminSupabase
     .from("users")
     .select("id, location_id")
     .eq("auth_id", user.id)
@@ -73,7 +77,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { data: ticket, error } = await supabase
+  const { data: ticket, error } = await adminSupabase
     .from("support_tickets")
     .insert({
       subject: parsed.data.subject,

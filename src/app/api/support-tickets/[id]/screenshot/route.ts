@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 // POST — upload screenshot for a ticket (any authenticated user)
 export async function POST(
@@ -13,8 +13,10 @@ export async function POST(
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const adminSupabase = await createAdminClient();
+
   // Verify ticket exists
-  const { data: ticket } = await supabase
+  const { data: ticket } = await adminSupabase
     .from("support_tickets")
     .select("id")
     .eq("id", id)
@@ -51,7 +53,7 @@ export async function POST(
   const ext = file.name.split(".").pop() || "png";
   const filePath = `support-screenshots/${id}-${Date.now()}.${ext}`;
 
-  const { error: uploadError } = await supabase.storage
+  const { error: uploadError } = await adminSupabase.storage
     .from("crm-documents")
     .upload(filePath, file, { contentType: file.type });
 
@@ -63,7 +65,7 @@ export async function POST(
   }
 
   // Update ticket record with screenshot path
-  const { data: updated, error: updateError } = await supabase
+  const { data: updated, error: updateError } = await adminSupabase
     .from("support_tickets")
     .update({ screenshot_path: filePath })
     .eq("id", id)

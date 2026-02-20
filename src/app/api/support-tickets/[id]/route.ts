@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { updateSupportTicketSchema } from "@/lib/validations";
 
 // GET — single ticket with notes (admin only)
@@ -14,8 +14,10 @@ export async function GET(
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const adminSupabase = await createAdminClient();
+
   // Check admin role
-  const { data: currentUser } = await supabase
+  const { data: currentUser } = await adminSupabase
     .from("users")
     .select("id, role")
     .eq("auth_id", user.id)
@@ -25,7 +27,7 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { data: ticket, error } = await supabase
+  const { data: ticket, error } = await adminSupabase
     .from("support_tickets")
     .select(
       `*, reporter:reported_by(id, full_name, email, role), assignee:assigned_to(id, full_name, email)`
@@ -38,7 +40,7 @@ export async function GET(
   }
 
   // Get notes
-  const { data: notes } = await supabase
+  const { data: notes } = await adminSupabase
     .from("support_ticket_notes")
     .select(`*, author:created_by(id, full_name, email)`)
     .eq("ticket_id", id)
@@ -47,7 +49,7 @@ export async function GET(
   // Get screenshot signed URL if present
   let screenshotUrl = null;
   if (ticket.screenshot_path) {
-    const { data: urlData } = await supabase.storage
+    const { data: urlData } = await adminSupabase.storage
       .from("crm-documents")
       .createSignedUrl(ticket.screenshot_path, 3600);
     screenshotUrl = urlData?.signedUrl || null;
@@ -70,8 +72,10 @@ export async function PATCH(
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const adminSupabase = await createAdminClient();
+
   // Check admin role
-  const { data: currentUser } = await supabase
+  const { data: currentUser } = await adminSupabase
     .from("users")
     .select("id, role")
     .eq("auth_id", user.id)
@@ -108,7 +112,7 @@ export async function PATCH(
     updates.assigned_to = parsed.data.assigned_to;
   }
 
-  const { data: ticket, error } = await supabase
+  const { data: ticket, error } = await adminSupabase
     .from("support_tickets")
     .update(updates)
     .eq("id", id)
