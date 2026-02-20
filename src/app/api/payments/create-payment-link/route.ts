@@ -108,13 +108,11 @@ export async function POST(request: NextRequest) {
     },
   };
 
-  // Add callback_url only if a proper HTTPS app URL is configured
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
-  if (appUrl && appUrl.startsWith("https://")) {
-    const token = (booking as Record<string, unknown>).payment_token;
-    payload.callback_url = `${appUrl}/pay/${token || booking_id}?razorpay_callback=true`;
-    payload.callback_method = "get";
-  }
+  // Razorpay requires callback_url for payment links
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL || "twv-crm.vercel.app"}`;
+  const token = (booking as Record<string, unknown>).payment_token;
+  payload.callback_url = `${appUrl}/pay/${token || booking_id}?razorpay_callback=true`;
+  payload.callback_method = "get";
 
   // Add customer details if available
   if (customerName || customerEmail || customerPhone) {
