@@ -34,7 +34,7 @@ export async function POST(request: NextRequest) {
   // Fetch the booking with customer details
   const { data: booking } = await supabase
     .from("bookings")
-    .select("id, booking_number, booking_date, start_time, end_time, total_amount, payment_status, customer_type, razorpay_payment_link_id, razorpay_payment_link_url, space:spaces!bookings_space_id_fkey(name), lead:leads!bookings_lead_id_fkey(first_name, last_name, email, phone), guest_name, guest_email, guest_phone, status")
+    .select("id, booking_number, booking_date, start_time, end_time, total_amount, payment_status, payment_token, customer_type, razorpay_payment_link_id, razorpay_payment_link_url, space:spaces!bookings_space_id_fkey(name), lead:leads!bookings_lead_id_fkey(first_name, last_name, email, phone), guest_name, guest_email, guest_phone, status")
     .eq("id", booking_id)
     .single();
 
@@ -87,9 +87,6 @@ export async function POST(request: NextRequest) {
   // Expire link in 7 days
   const expireBy = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
 
-  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
-  const callbackUrl = `${appUrl}/pay/${booking_id}?razorpay_callback=true`;
-
   // Build Razorpay Payment Link payload
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const payload: Record<string, any> = {
@@ -103,8 +100,6 @@ export async function POST(request: NextRequest) {
       email: !!customerEmail,
     },
     reminder_enable: true,
-    callback_url: callbackUrl,
-    callback_method: "get",
     notes: {
       booking_id: booking_id,
       booking_number: booking.booking_number,
@@ -112,6 +107,14 @@ export async function POST(request: NextRequest) {
       customer_name: customerName,
     },
   };
+
+  // Add callback_url only if a proper HTTPS app URL is configured
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL;
+  if (appUrl && appUrl.startsWith("https://")) {
+    const token = (booking as Record<string, unknown>).payment_token;
+    payload.callback_url = `${appUrl}/pay/${token || booking_id}?razorpay_callback=true`;
+    payload.callback_method = "get";
+  }
 
   // Add customer details if available
   if (customerName || customerEmail || customerPhone) {
