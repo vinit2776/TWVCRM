@@ -63,7 +63,7 @@ export async function POST(
     // Convert base64 to Buffer
     const pdfBuffer = Buffer.from(pdfBase64, "base64");
 
-    await resend.emails.send({
+    const { data: emailResult, error: emailError } = await resend.emails.send({
       from: EMAIL_FROM,
       to: recipients,
       subject: `Proposal ${proposal.proposal_number} - ${proposal.title}`,
@@ -108,6 +108,17 @@ export async function POST(
         },
       ],
     });
+
+    // Resend SDK returns { data, error } — does NOT throw on failure
+    if (emailError) {
+      console.error("Resend email error:", emailError);
+      return NextResponse.json(
+        { error: emailError.message || "Resend failed to send email" },
+        { status: 502 }
+      );
+    }
+
+    console.log("Proposal email sent:", emailResult?.id, "to:", recipients);
 
     // Update proposal status to "sent" and set sent_at
     await supabase

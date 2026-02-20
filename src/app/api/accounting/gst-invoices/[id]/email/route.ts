@@ -71,7 +71,7 @@ export async function POST(
   const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Client";
 
   try {
-    await resend.emails.send({
+    const { data: emailResult, error: emailError } = await resend.emails.send({
       from: EMAIL_FROM,
       to: recipients,
       subject: `GST Invoice ${paymentData.gst_invoice_number || ""} — ${paymentData.contract?.contract_number || "Contract"}`,
@@ -109,6 +109,17 @@ export async function POST(
         },
       ],
     });
+
+    // Resend SDK returns { data, error } — does NOT throw on failure
+    if (emailError) {
+      console.error("Resend email error:", emailError);
+      return NextResponse.json(
+        { error: emailError.message || "Resend failed to send GST invoice email" },
+        { status: 502 }
+      );
+    }
+
+    console.log("GST invoice email sent:", emailResult?.id, "to:", recipients);
 
     // Update payment: mark as sent
     await supabase

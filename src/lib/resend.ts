@@ -6,7 +6,8 @@ if (!process.env.RESEND_API_KEY) {
 
 // Use a placeholder key during build to prevent Resend from throwing at construction time.
 // Actual email sends will still fail gracefully without a real key.
-export const resend = new Resend(process.env.RESEND_API_KEY || "re_placeholder");
+// Note: .trim() is critical — env vars on Vercel can have trailing newlines
+export const resend = new Resend((process.env.RESEND_API_KEY || "re_placeholder").trim());
 
 /**
  * Centralized "from" address for all outgoing emails.
@@ -18,4 +19,4 @@ export const resend = new Resend(process.env.RESEND_API_KEY || "re_placeholder")
  * deliver to the Resend account owner's email.
  */
 export const EMAIL_FROM =
-  process.env.RESEND_FROM_EMAIL || "The WorkVilla <onboarding@resend.dev>";
+  (process.env.RESEND_FROM_EMAIL || "The WorkVilla <onboarding@resend.dev>").trim();

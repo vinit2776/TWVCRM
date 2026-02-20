@@ -48,7 +48,7 @@ export async function POST(
   const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Client";
 
   try {
-    await resend.emails.send({
+    const { data: emailResult, error: emailError } = await resend.emails.send({
       from: EMAIL_FROM,
       to: recipients,
       subject: `Payment Reminder — ${paymentData.contract?.contract_number || "Contract"} — ₹${Number(paymentData.amount).toLocaleString("en-IN")}`,
@@ -87,6 +87,17 @@ export async function POST(
         </div>
       `,
     });
+
+    // Resend SDK returns { data, error } — does NOT throw on failure
+    if (emailError) {
+      console.error("Resend email error:", emailError);
+      return NextResponse.json(
+        { error: emailError.message || "Resend failed to send reminder email" },
+        { status: 502 }
+      );
+    }
+
+    console.log("Payment reminder sent:", emailResult?.id, "to:", recipients);
 
     // Update reminder_sent_at on the payment
     await supabase

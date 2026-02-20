@@ -44,7 +44,7 @@ export async function POST(
   try {
     const pdfBuffer = Buffer.from(pdfBase64, "base64");
 
-    await resend.emails.send({
+    const { data: emailResult, error: emailError } = await resend.emails.send({
       from: EMAIL_FROM,
       to: recipients,
       subject: `Membership Agreement ${contract.contract_number} - ${contract.title}`,
@@ -90,6 +90,17 @@ export async function POST(
         },
       ],
     });
+
+    // Resend SDK returns { data, error } — does NOT throw on failure
+    if (emailError) {
+      console.error("Resend email error:", emailError);
+      return NextResponse.json(
+        { error: emailError.message || "Resend failed to send email" },
+        { status: 502 }
+      );
+    }
+
+    console.log("Contract email sent:", emailResult?.id, "to:", recipients);
 
     // Update contract status to "sent" and set sent_at
     await supabase
