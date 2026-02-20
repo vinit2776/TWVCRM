@@ -352,12 +352,15 @@ export function TicketDetailDialog({
                   </div>
                   <div className="space-y-1">
                     <Label className="text-xs">Assigned To</Label>
-                    <Select value={assignedTo} onValueChange={setAssignedTo}>
+                    <Select
+                      value={assignedTo || "unassigned"}
+                      onValueChange={(v) => setAssignedTo(v === "unassigned" ? "" : v)}
+                    >
                       <SelectTrigger className="h-8 text-xs">
                         <SelectValue placeholder="Unassigned" />
                       </SelectTrigger>
                       <SelectContent>
-                        <SelectItem value="">Unassigned</SelectItem>
+                        <SelectItem value="unassigned">Unassigned</SelectItem>
                         {teamMembers.map((m) => (
                           <SelectItem key={m.id} value={m.id}>
                             {m.full_name}
