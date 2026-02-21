@@ -510,7 +510,7 @@ export default function TeamPage() {
                 onChange={(e) =>
                   setCreateForm({ ...createForm, email: e.target.value })
                 }
-                placeholder="john@twv.co.in"
+                placeholder="john@theworkvilla.com"
               />
             </div>
             <div className="space-y-2">
