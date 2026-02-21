@@ -380,32 +380,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
         </div>
       </section>
 
-      {/* Links */}
-      <section>
-        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">
-          Links
-        </h3>
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          <div className="space-y-2">
-            <Label htmlFor="enquiry_form_google">
-              Enquiry Form - Google
-            </Label>
-            <Input
-              id="enquiry_form_google"
-              {...register("enquiry_form_google")}
-            />
-          </div>
-          <div className="space-y-2">
-            <Label htmlFor="enquiry_form_direct">
-              Enquiry Form - Direct/Walk-in
-            </Label>
-            <Input
-              id="enquiry_form_direct"
-              {...register("enquiry_form_direct")}
-            />
-          </div>
-        </div>
-      </section>
+      {/* Links — hidden for now */}
 
       {/* Description */}
       <section>
