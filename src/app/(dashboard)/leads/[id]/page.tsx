@@ -26,6 +26,7 @@ import { toast } from "sonner";
 import {
   LEAD_SOURCE_LABELS,
   WORKSPACE_TYPE_LABELS,
+  LEAD_SCORE_SHORT_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import {
@@ -202,7 +203,7 @@ export default function LeadDetailPage({
                     <InfoRow
                       icon={Star}
                       label="Score"
-                      value={`${lead.score}/100`}
+                      value={LEAD_SCORE_SHORT_LABELS[lead.score] || `${lead.score}/100`}
                     />
                     <InfoRow
                       label="Aggregator Contact"

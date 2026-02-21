@@ -190,6 +190,24 @@ export const RATING_LABELS: Record<string, string> = {
   cold: "Cold",
 };
 
+export const LEAD_SCORES = [0, 25, 50, 75, 100] as const;
+
+export const LEAD_SCORE_LABELS: Record<number, string> = {
+  0: "Not Scored",
+  25: "Cold — Low interest / early stage",
+  50: "Warm — Some interest shown",
+  75: "Hot — Strong interest, likely to convert",
+  100: "Very Hot — Ready to close",
+};
+
+export const LEAD_SCORE_SHORT_LABELS: Record<number, string> = {
+  0: "Not Scored",
+  25: "Cold",
+  50: "Warm",
+  75: "Hot",
+  100: "Very Hot",
+};
+
 // ==========================================
 // Contract Constants
 // ==========================================

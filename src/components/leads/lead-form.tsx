@@ -23,6 +23,8 @@ import {
   WORKSPACE_TYPE_LABELS,
   RATINGS,
   RATING_LABELS,
+  LEAD_SCORES,
+  LEAD_SCORE_LABELS,
 } from "@/lib/constants";
 import type { Lead } from "@/types";
 import { useState } from "react";
@@ -85,6 +87,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
   const status = watch("status");
   const source = watch("source");
   const rating = watch("rating");
+  const score = watch("score");
   const workspaceType = watch("workspace_type");
 
   const onFormSubmit = async (data: CreateLeadInput) => {
@@ -253,14 +256,22 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             </Select>
           </div>
           <div className="space-y-2">
-            <Label htmlFor="score">Score (0-100)</Label>
-            <Input
-              id="score"
-              type="number"
-              min={0}
-              max={100}
-              {...register("score", { setValueAs: (v: string) => v === "" ? 0 : Number(v) })}
-            />
+            <Label>Lead Score</Label>
+            <Select
+              value={String(score ?? 0)}
+              onValueChange={(val) => setValue("score", Number(val))}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {LEAD_SCORES.map((s) => (
+                  <SelectItem key={s} value={String(s)}>
+                    {LEAD_SCORE_LABELS[s]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
           <div className="space-y-2">
             <Label htmlFor="industry">Industry</Label>
