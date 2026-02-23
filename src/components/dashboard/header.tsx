@@ -9,6 +9,7 @@ import { useUiStore } from "@/stores/ui-store";
 import { createClient } from "@/lib/supabase/client";
 import { getInitials } from "@/lib/utils";
 import { useState, useEffect } from "react";
+import { NotificationBell } from "@/components/dashboard/notification-bell";
 
 export function Header() {
   const { toggleSidebar } = useUiStore();
@@ -79,6 +80,9 @@ export function Header() {
             </AvatarFallback>
           </Avatar>
         </div>
+
+        {/* Enquiry notifications */}
+        <NotificationBell />
 
         {/* Help */}
         <Button variant="ghost" size="icon" asChild title="Help & User Manual">
