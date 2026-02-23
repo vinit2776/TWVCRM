@@ -99,7 +99,7 @@ export function useEnquiryNotifications() {
       });
 
       const activityItems: EnquiryNotificationItem[] = (recentActivities ?? []).map((a) => {
-        const lead = a.lead as { id: string; first_name: string; last_name: string } | null;
+        const lead = a.lead as unknown as { id: string; first_name: string; last_name: string } | null;
         // Extract source from subject: "Re-enquiry via Google Ads form" → "Google Ads"
         const sourceMatch = (a.subject as string).match(/Re-enquiry via (.+?) form/);
         return {
