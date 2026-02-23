@@ -39,7 +39,13 @@ export async function updateSession(request: NextRequest) {
     request.nextUrl.pathname.startsWith("/forgot-password");
 
   const isApiRoute = request.nextUrl.pathname.startsWith("/api");
-  const isPublicRoute = request.nextUrl.pathname === "/";
+  const isPublicRoute =
+    request.nextUrl.pathname === "/" ||
+    request.nextUrl.pathname.startsWith("/enquire") ||
+    request.nextUrl.pathname.startsWith("/meta") ||
+    request.nextUrl.pathname.startsWith("/walkin") ||
+    request.nextUrl.pathname.startsWith("/feedback") ||
+    request.nextUrl.pathname.startsWith("/pay");
 
   // If user is not signed in and trying to access protected routes
   if (!user && !isAuthRoute && !isApiRoute && !isPublicRoute) {
