@@ -24,6 +24,8 @@ import {
   HelpCircle,
   LifeBuoy,
   X,
+  Handshake,
+  Briefcase,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -49,6 +51,8 @@ const allNavItems: NavItem[] = [
   { href: "/accounting", label: "Accounting", icon: Calculator, roles: null },
   { href: "/bookings", label: "Bookings", icon: CalendarClock, roles: null },
   { href: "/vouchers", label: "Vouchers", icon: Wifi, roles: null },
+  { href: "/aggregators", label: "Aggregators", icon: Handshake, roles: null },
+  { href: "/cases", label: "Cases", icon: Briefcase, roles: null },
 ];
 
 const adminNavItems = [

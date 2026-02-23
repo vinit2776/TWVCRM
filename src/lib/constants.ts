@@ -632,6 +632,436 @@ export const CUSTOMER_SEGMENTS = {
 } as const;
 
 // ==========================================
+// Aggregator Constants
+// ==========================================
+export const AGGREGATOR_STATUSES = ["active", "inactive", "suspended"] as const;
+
+export const AGGREGATOR_STATUS_LABELS: Record<string, string> = {
+  active: "Active",
+  inactive: "Inactive",
+  suspended: "Suspended",
+};
+
+export const AGGREGATOR_STATUS_COLORS: Record<string, string> = {
+  active: "bg-green-100 text-green-800",
+  inactive: "bg-gray-100 text-gray-800",
+  suspended: "bg-red-100 text-red-800",
+};
+
+// ==========================================
+// Virtual Office Purpose Constants
+// ==========================================
+export const VO_PURPOSES = [
+  "gst_registration", "mca_registration", "branch_office",
+  "mail_handling", "business_address",
+] as const;
+
+export const VO_PURPOSE_LABELS: Record<string, string> = {
+  gst_registration: "GST Registration",
+  mca_registration: "MCA/Company Registration",
+  branch_office: "Branch Office",
+  mail_handling: "Mail Handling",
+  business_address: "Business Address",
+};
+
+export const VO_PURPOSE_COLORS: Record<string, string> = {
+  gst_registration: "bg-blue-100 text-blue-800",
+  mca_registration: "bg-purple-100 text-purple-800",
+  branch_office: "bg-indigo-100 text-indigo-800",
+  mail_handling: "bg-cyan-100 text-cyan-800",
+  business_address: "bg-teal-100 text-teal-800",
+};
+
+// ==========================================
+// Entity Type Constants
+// ==========================================
+export const ENTITY_TYPES = [
+  "individual", "proprietorship", "partnership", "llp",
+  "pvt_ltd", "public_ltd", "trust", "society", "huf", "other",
+] as const;
+
+export const ENTITY_TYPE_LABELS: Record<string, string> = {
+  individual: "Individual",
+  proprietorship: "Proprietorship",
+  partnership: "Partnership Firm",
+  llp: "LLP",
+  pvt_ltd: "Private Limited",
+  public_ltd: "Public Limited",
+  trust: "Trust",
+  society: "Society",
+  huf: "HUF",
+  other: "Other",
+};
+
+// ==========================================
+// Case Status Constants
+// ==========================================
+export const CASE_STATUSES = [
+  "intake_received", "docs_requested", "docs_received", "under_review",
+  "compliance_check", "internal_approved", "sent_for_client_approval",
+  "client_approved", "signing_in_progress", "executed",
+  "invoiced", "active", "renewal_due", "renewed", "lapsed",
+] as const;
+
+export const CASE_STATUS_LABELS: Record<string, string> = {
+  intake_received: "Intake Received",
+  docs_requested: "Docs Requested",
+  docs_received: "Docs Received",
+  under_review: "Under Review",
+  compliance_check: "Compliance Check",
+  internal_approved: "Internally Approved",
+  sent_for_client_approval: "Sent for Client Approval",
+  client_approved: "Client Approved",
+  signing_in_progress: "Signing in Progress",
+  executed: "Executed",
+  invoiced: "Invoiced",
+  active: "Active",
+  renewal_due: "Renewal Due",
+  renewed: "Renewed",
+  lapsed: "Lapsed",
+};
+
+export const CASE_STATUS_COLORS: Record<string, string> = {
+  intake_received: "bg-gray-100 text-gray-800",
+  docs_requested: "bg-yellow-100 text-yellow-800",
+  docs_received: "bg-blue-100 text-blue-800",
+  under_review: "bg-indigo-100 text-indigo-800",
+  compliance_check: "bg-purple-100 text-purple-800",
+  internal_approved: "bg-emerald-100 text-emerald-800",
+  sent_for_client_approval: "bg-cyan-100 text-cyan-800",
+  client_approved: "bg-teal-100 text-teal-800",
+  signing_in_progress: "bg-orange-100 text-orange-800",
+  executed: "bg-green-100 text-green-800",
+  invoiced: "bg-lime-100 text-lime-800",
+  active: "bg-green-200 text-green-900",
+  renewal_due: "bg-amber-100 text-amber-800",
+  renewed: "bg-blue-100 text-blue-800",
+  lapsed: "bg-red-100 text-red-800",
+};
+
+// Valid status transitions for the case state machine
+export const CASE_STATUS_TRANSITIONS: Record<string, string[]> = {
+  intake_received: ["docs_requested"],
+  docs_requested: ["docs_received"],
+  docs_received: ["under_review"],
+  under_review: ["compliance_check", "docs_requested"],
+  compliance_check: ["internal_approved", "under_review"],
+  internal_approved: ["sent_for_client_approval"],
+  sent_for_client_approval: ["client_approved", "internal_approved"],
+  client_approved: ["signing_in_progress"],
+  signing_in_progress: ["executed"],
+  executed: ["invoiced"],
+  invoiced: ["active"],
+  active: ["renewal_due", "lapsed"],
+  renewal_due: ["renewed", "lapsed"],
+  renewed: ["active"],
+  lapsed: [],
+};
+
+// Group statuses for Kanban view
+export const CASE_STATUS_GROUPS: Record<string, { label: string; statuses: string[] }> = {
+  intake: { label: "Intake", statuses: ["intake_received", "docs_requested", "docs_received"] },
+  processing: { label: "Processing", statuses: ["under_review", "compliance_check"] },
+  approval: { label: "Approval", statuses: ["internal_approved", "sent_for_client_approval", "client_approved"] },
+  execution: { label: "Execution", statuses: ["signing_in_progress", "executed", "invoiced"] },
+  active: { label: "Active", statuses: ["active", "renewal_due"] },
+  closed: { label: "Closed", statuses: ["renewed", "lapsed"] },
+};
+
+// ==========================================
+// Case Document Status Constants
+// ==========================================
+export const CASE_DOC_STATUSES = ["pending", "uploaded", "approved", "rejected"] as const;
+
+export const CASE_DOC_STATUS_LABELS: Record<string, string> = {
+  pending: "Pending Upload",
+  uploaded: "Uploaded",
+  approved: "Approved",
+  rejected: "Rejected",
+};
+
+export const CASE_DOC_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-gray-100 text-gray-800",
+  uploaded: "bg-blue-100 text-blue-800",
+  approved: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+};
+
+// ==========================================
+// Compliance Check Status Constants
+// ==========================================
+export const COMPLIANCE_STATUSES = ["pending", "passed", "failed", "waived"] as const;
+
+export const COMPLIANCE_STATUS_LABELS: Record<string, string> = {
+  pending: "Pending",
+  passed: "Passed",
+  failed: "Failed",
+  waived: "Waived",
+};
+
+export const COMPLIANCE_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-gray-100 text-gray-800",
+  passed: "bg-green-100 text-green-800",
+  failed: "bg-red-100 text-red-800",
+  waived: "bg-yellow-100 text-yellow-800",
+};
+
+// ==========================================
+// Agreement Status Constants
+// ==========================================
+export const AGREEMENT_STATUSES = [
+  "draft", "pending_internal_approval", "internally_approved",
+  "sent_to_client", "client_approved", "signing", "executed", "expired",
+] as const;
+
+export const AGREEMENT_STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  pending_internal_approval: "Pending Internal Approval",
+  internally_approved: "Internally Approved",
+  sent_to_client: "Sent to Client",
+  client_approved: "Client Approved",
+  signing: "Signing in Progress",
+  executed: "Executed",
+  expired: "Expired",
+};
+
+export const AGREEMENT_STATUS_COLORS: Record<string, string> = {
+  draft: "bg-gray-100 text-gray-800",
+  pending_internal_approval: "bg-yellow-100 text-yellow-800",
+  internally_approved: "bg-blue-100 text-blue-800",
+  sent_to_client: "bg-cyan-100 text-cyan-800",
+  client_approved: "bg-teal-100 text-teal-800",
+  signing: "bg-orange-100 text-orange-800",
+  executed: "bg-green-100 text-green-800",
+  expired: "bg-red-100 text-red-800",
+};
+
+// ==========================================
+// Purpose-based Document Checklists
+// ==========================================
+export const DOCUMENT_CHECKLISTS: Record<string, Record<string, { type: string; label: string; required: boolean }[]>> = {
+  gst_registration: {
+    individual: [
+      { type: "pan_card", label: "PAN Card", required: true },
+      { type: "aadhaar_card", label: "Aadhaar Card", required: true },
+      { type: "photograph", label: "Passport Size Photo", required: true },
+      { type: "cancelled_cheque", label: "Cancelled Cheque / Bank Statement", required: true },
+    ],
+    proprietorship: [
+      { type: "pan_card", label: "Proprietor PAN Card", required: true },
+      { type: "aadhaar_card", label: "Proprietor Aadhaar Card", required: true },
+      { type: "photograph", label: "Passport Size Photo", required: true },
+      { type: "cancelled_cheque", label: "Cancelled Cheque / Bank Statement", required: true },
+      { type: "trade_license", label: "Trade License / Shop Establishment", required: false },
+    ],
+    partnership: [
+      { type: "partnership_deed", label: "Partnership Deed", required: true },
+      { type: "pan_card_firm", label: "Firm PAN Card", required: true },
+      { type: "partner_pan", label: "All Partners PAN Cards", required: true },
+      { type: "partner_aadhaar", label: "All Partners Aadhaar Cards", required: true },
+      { type: "cancelled_cheque", label: "Cancelled Cheque / Bank Statement", required: true },
+    ],
+    llp: [
+      { type: "llp_agreement", label: "LLP Agreement", required: true },
+      { type: "coi", label: "Certificate of Incorporation", required: true },
+      { type: "pan_card_llp", label: "LLP PAN Card", required: true },
+      { type: "partner_pan", label: "Designated Partners PAN Cards", required: true },
+      { type: "partner_aadhaar", label: "Designated Partners Aadhaar Cards", required: true },
+      { type: "cancelled_cheque", label: "Cancelled Cheque / Bank Statement", required: true },
+    ],
+    pvt_ltd: [
+      { type: "coi", label: "Certificate of Incorporation", required: true },
+      { type: "moa", label: "MOA", required: true },
+      { type: "aoa", label: "AOA", required: true },
+      { type: "pan_card_company", label: "Company PAN Card", required: true },
+      { type: "board_resolution", label: "Board Resolution for Address", required: true },
+      { type: "director_pan", label: "All Directors PAN Cards", required: true },
+      { type: "director_aadhaar", label: "All Directors Aadhaar Cards", required: true },
+      { type: "cancelled_cheque", label: "Cancelled Cheque / Bank Statement", required: true },
+    ],
+    public_ltd: [
+      { type: "coi", label: "Certificate of Incorporation", required: true },
+      { type: "moa", label: "MOA", required: true },
+      { type: "aoa", label: "AOA", required: true },
+      { type: "pan_card_company", label: "Company PAN Card", required: true },
+      { type: "board_resolution", label: "Board Resolution for Address", required: true },
+      { type: "director_pan", label: "All Directors PAN Cards", required: true },
+      { type: "director_aadhaar", label: "All Directors Aadhaar Cards", required: true },
+      { type: "cancelled_cheque", label: "Cancelled Cheque / Bank Statement", required: true },
+    ],
+    trust: [
+      { type: "trust_deed", label: "Trust Deed", required: true },
+      { type: "pan_card_trust", label: "Trust PAN Card", required: true },
+      { type: "trustee_pan", label: "Trustees PAN Cards", required: true },
+      { type: "trustee_aadhaar", label: "Trustees Aadhaar Cards", required: true },
+      { type: "cancelled_cheque", label: "Cancelled Cheque / Bank Statement", required: true },
+    ],
+    society: [
+      { type: "registration_certificate", label: "Society Registration Certificate", required: true },
+      { type: "pan_card_society", label: "Society PAN Card", required: true },
+      { type: "member_pan", label: "Office Bearers PAN Cards", required: true },
+      { type: "member_aadhaar", label: "Office Bearers Aadhaar Cards", required: true },
+      { type: "cancelled_cheque", label: "Cancelled Cheque / Bank Statement", required: true },
+    ],
+    huf: [
+      { type: "huf_deed", label: "HUF Deed", required: true },
+      { type: "pan_card_huf", label: "HUF PAN Card", required: true },
+      { type: "karta_pan", label: "Karta PAN Card", required: true },
+      { type: "karta_aadhaar", label: "Karta Aadhaar Card", required: true },
+      { type: "cancelled_cheque", label: "Cancelled Cheque / Bank Statement", required: true },
+    ],
+    other: [
+      { type: "pan_card", label: "PAN Card", required: true },
+      { type: "aadhaar_card", label: "Aadhaar Card", required: true },
+      { type: "cancelled_cheque", label: "Cancelled Cheque / Bank Statement", required: true },
+    ],
+  },
+  mca_registration: {
+    pvt_ltd: [
+      { type: "coi", label: "Certificate of Incorporation", required: true },
+      { type: "moa", label: "MOA", required: true },
+      { type: "aoa", label: "AOA", required: true },
+      { type: "pan_card_company", label: "Company PAN Card", required: true },
+      { type: "board_resolution", label: "Board Resolution for Registered Office", required: true },
+      { type: "director_pan", label: "All Directors PAN Cards", required: true },
+      { type: "director_aadhaar", label: "All Directors Aadhaar Cards", required: true },
+      { type: "director_din", label: "Director DIN Details", required: true },
+    ],
+    llp: [
+      { type: "llp_agreement", label: "LLP Agreement", required: true },
+      { type: "coi", label: "Certificate of Incorporation", required: true },
+      { type: "pan_card_llp", label: "LLP PAN Card", required: true },
+      { type: "partner_pan", label: "Designated Partners PAN Cards", required: true },
+      { type: "partner_aadhaar", label: "Designated Partners Aadhaar Cards", required: true },
+      { type: "partner_dpin", label: "Partners DPIN Details", required: true },
+    ],
+    public_ltd: [
+      { type: "coi", label: "Certificate of Incorporation", required: true },
+      { type: "moa", label: "MOA", required: true },
+      { type: "aoa", label: "AOA", required: true },
+      { type: "pan_card_company", label: "Company PAN Card", required: true },
+      { type: "board_resolution", label: "Board Resolution for Registered Office", required: true },
+      { type: "director_pan", label: "All Directors PAN Cards", required: true },
+      { type: "director_aadhaar", label: "All Directors Aadhaar Cards", required: true },
+      { type: "director_din", label: "Director DIN Details", required: true },
+    ],
+  },
+  branch_office: {
+    pvt_ltd: [
+      { type: "coi", label: "Certificate of Incorporation", required: true },
+      { type: "pan_card_company", label: "Company PAN Card", required: true },
+      { type: "board_resolution", label: "Board Resolution for Branch Office", required: true },
+      { type: "gst_certificate", label: "Main Office GST Certificate", required: true },
+      { type: "authorized_signatory_id", label: "Authorized Signatory ID Proof", required: true },
+    ],
+    llp: [
+      { type: "coi", label: "Certificate of Incorporation", required: true },
+      { type: "pan_card_llp", label: "LLP PAN Card", required: true },
+      { type: "partner_authorization", label: "Partner Authorization Letter", required: true },
+      { type: "gst_certificate", label: "Main Office GST Certificate", required: true },
+      { type: "authorized_signatory_id", label: "Authorized Signatory ID Proof", required: true },
+    ],
+  },
+  mail_handling: {
+    individual: [
+      { type: "pan_card", label: "PAN Card", required: true },
+      { type: "aadhaar_card", label: "Aadhaar Card", required: true },
+    ],
+    proprietorship: [
+      { type: "pan_card", label: "Proprietor PAN Card", required: true },
+      { type: "aadhaar_card", label: "Proprietor Aadhaar Card", required: true },
+    ],
+    pvt_ltd: [
+      { type: "coi", label: "Certificate of Incorporation", required: true },
+      { type: "pan_card_company", label: "Company PAN Card", required: true },
+      { type: "authorized_signatory_id", label: "Authorized Signatory ID Proof", required: true },
+    ],
+  },
+  business_address: {
+    individual: [
+      { type: "pan_card", label: "PAN Card", required: true },
+      { type: "aadhaar_card", label: "Aadhaar Card", required: true },
+      { type: "photograph", label: "Passport Size Photo", required: true },
+    ],
+    proprietorship: [
+      { type: "pan_card", label: "Proprietor PAN Card", required: true },
+      { type: "aadhaar_card", label: "Proprietor Aadhaar Card", required: true },
+    ],
+    pvt_ltd: [
+      { type: "coi", label: "Certificate of Incorporation", required: true },
+      { type: "pan_card_company", label: "Company PAN Card", required: true },
+      { type: "board_resolution", label: "Board Resolution", required: true },
+      { type: "authorized_signatory_id", label: "Authorized Signatory ID Proof", required: true },
+    ],
+  },
+};
+
+// ==========================================
+// Purpose-based Compliance Checklists
+// ==========================================
+export const COMPLIANCE_CHECKLISTS: Record<string, { check_name: string; check_category: string; sort_order: number }[]> = {
+  gst_registration: [
+    { check_name: "PAN number format verified", check_category: "identity", sort_order: 1 },
+    { check_name: "Aadhaar linked to mobile (OTP capable)", check_category: "identity", sort_order: 2 },
+    { check_name: "Entity name matches PAN records", check_category: "identity", sort_order: 3 },
+    { check_name: "Address proof matches state of registration", check_category: "address", sort_order: 4 },
+    { check_name: "No blacklist match on entity or directors", check_category: "legal", sort_order: 5 },
+    { check_name: "Address unit available at requested location", check_category: "address", sort_order: 6 },
+    { check_name: "All required documents approved", check_category: "documents", sort_order: 7 },
+  ],
+  mca_registration: [
+    { check_name: "CIN format verified (if existing company)", check_category: "identity", sort_order: 1 },
+    { check_name: "Director DIN status is active", check_category: "identity", sort_order: 2 },
+    { check_name: "Entity name matches MCA records", check_category: "identity", sort_order: 3 },
+    { check_name: "MOA/AOA consistent with registration purpose", check_category: "legal", sort_order: 4 },
+    { check_name: "Board resolution authorizes address change", check_category: "legal", sort_order: 5 },
+    { check_name: "No blacklist match on entity or directors", check_category: "legal", sort_order: 6 },
+    { check_name: "Address unit available at requested location", check_category: "address", sort_order: 7 },
+    { check_name: "All required documents approved", check_category: "documents", sort_order: 8 },
+  ],
+  branch_office: [
+    { check_name: "Main office GST certificate verified", check_category: "tax", sort_order: 1 },
+    { check_name: "Board resolution authorizes branch setup", check_category: "legal", sort_order: 2 },
+    { check_name: "Authorized signatory identity verified", check_category: "identity", sort_order: 3 },
+    { check_name: "No blacklist match on entity", check_category: "legal", sort_order: 4 },
+    { check_name: "Address unit available at requested location", check_category: "address", sort_order: 5 },
+    { check_name: "All required documents approved", check_category: "documents", sort_order: 6 },
+  ],
+  mail_handling: [
+    { check_name: "Identity documents verified", check_category: "identity", sort_order: 1 },
+    { check_name: "Address unit available at requested location", check_category: "address", sort_order: 2 },
+    { check_name: "All required documents approved", check_category: "documents", sort_order: 3 },
+  ],
+  business_address: [
+    { check_name: "Identity documents verified", check_category: "identity", sort_order: 1 },
+    { check_name: "Entity type and purpose consistent", check_category: "legal", sort_order: 2 },
+    { check_name: "Address unit available at requested location", check_category: "address", sort_order: 3 },
+    { check_name: "All required documents approved", check_category: "documents", sort_order: 4 },
+  ],
+};
+
+// ==========================================
+// Aggregator Invoice Constants
+// ==========================================
+export const AGG_INVOICE_STATUSES = ["draft", "sent", "paid", "overdue", "cancelled"] as const;
+
+export const AGG_INVOICE_STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  sent: "Sent",
+  paid: "Paid",
+  overdue: "Overdue",
+  cancelled: "Cancelled",
+};
+
+export const AGG_INVOICE_STATUS_COLORS: Record<string, string> = {
+  draft: "bg-gray-100 text-gray-800",
+  sent: "bg-blue-100 text-blue-800",
+  paid: "bg-green-100 text-green-800",
+  overdue: "bg-red-100 text-red-800",
+  cancelled: "bg-gray-100 text-gray-600",
+};
+
+// ==========================================
 // Support Ticket Constants
 // ==========================================
 export const TICKET_TYPES = ["bug", "feature_request", "feedback", "question"] as const;

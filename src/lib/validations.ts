@@ -423,3 +423,113 @@ export const createTicketNoteSchema = z.object({
 });
 
 export type CreateTicketNoteInput = z.infer<typeof createTicketNoteSchema>;
+
+// ==========================================
+// Aggregator Validations
+// ==========================================
+export const createAggregatorSchema = z.object({
+  name: z.string().min(1, "Name is required"),
+  company_name: z.string().optional(),
+  gst_number: z.string().max(20).optional(),
+  pan_number: z.string().max(15).optional(),
+  email_domain: z.string().optional(),
+  primary_email: z.string().email("Invalid email").optional().or(z.literal("")),
+  primary_phone: z.string().optional(),
+  billing_address: z.string().optional(),
+  billing_city: z.string().optional(),
+  billing_state: z.string().optional(),
+  billing_pincode: z.string().optional(),
+  same_state_as_twv: z.boolean().default(false),
+  commission_percentage: z.number().min(0).max(100).default(0),
+  default_rate_card: z.record(z.string(), z.number()).default({}),
+  notes: z.string().optional(),
+  tags: z.array(z.string()).default([]),
+  contacts: z.array(z.object({
+    name: z.string().min(1, "Contact name is required"),
+    email: z.string().email().optional().or(z.literal("")),
+    phone: z.string().optional(),
+    designation: z.string().optional(),
+    is_primary: z.boolean().default(false),
+  })).optional(),
+});
+
+export const updateAggregatorSchema = createAggregatorSchema.partial();
+export type CreateAggregatorInput = z.input<typeof createAggregatorSchema>;
+export type UpdateAggregatorInput = z.input<typeof updateAggregatorSchema>;
+
+// ==========================================
+// Case (Virtual Office) Validations
+// ==========================================
+export const createCaseSchema = z.object({
+  aggregator_id: z.string().uuid("Invalid aggregator ID"),
+  aggregator_contact_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  purpose: z.enum(["gst_registration", "mca_registration", "branch_office", "mail_handling", "business_address"]),
+  is_renewal: z.boolean().default(false),
+  parent_case_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+  client_name: z.string().min(1, "Client name is required"),
+  client_entity_type: z.enum(["individual", "proprietorship", "partnership", "llp", "pvt_ltd", "public_ltd", "trust", "society", "huf", "other"]),
+  client_company_name: z.string().optional(),
+  client_gst_number: z.string().max(20).optional(),
+  client_pan_number: z.string().max(15).optional(),
+  client_cin_number: z.string().max(25).optional(),
+  client_email: z.string().email("Invalid email").optional().or(z.literal("")).transform(v => v || undefined),
+  client_phone: z.string().optional(),
+  client_address: z.string().optional(),
+  client_city: z.string().optional(),
+  client_state: z.string().optional(),
+  client_pincode: z.string().optional(),
+  rate: z.number().positive("Rate must be positive").optional(),
+  tenure_months: z.number().int().positive().default(12),
+  start_date: z.string().optional(),
+  security_deposit: z.number().min(0).default(0),
+  notes: z.string().optional(),
+  tags: z.array(z.string()).default([]),
+  assigned_to: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
+});
+
+export const updateCaseSchema = createCaseSchema.partial();
+export type CreateCaseInput = z.input<typeof createCaseSchema>;
+export type UpdateCaseInput = z.input<typeof updateCaseSchema>;
+
+// ==========================================
+// Case Comment Validations
+// ==========================================
+export const createCaseCommentSchema = z.object({
+  comment: z.string().min(1, "Comment is required"),
+  is_internal: z.boolean().default(true),
+});
+export type CreateCaseCommentInput = z.infer<typeof createCaseCommentSchema>;
+
+// ==========================================
+// Case Document Review Validations
+// ==========================================
+export const reviewCaseDocumentSchema = z.object({
+  status: z.enum(["approved", "rejected"]),
+  rejection_reason: z.string().optional(),
+  notes: z.string().optional(),
+});
+export type ReviewCaseDocumentInput = z.infer<typeof reviewCaseDocumentSchema>;
+
+// ==========================================
+// Compliance Check Validations
+// ==========================================
+export const updateComplianceCheckSchema = z.object({
+  status: z.enum(["passed", "failed", "waived"]),
+  notes: z.string().optional(),
+});
+export type UpdateComplianceCheckInput = z.infer<typeof updateComplianceCheckSchema>;
+
+// ==========================================
+// Case Status Transition Validation
+// ==========================================
+export const transitionCaseStatusSchema = z.object({
+  status: z.enum([
+    "intake_received", "docs_requested", "docs_received", "under_review",
+    "compliance_check", "internal_approved", "sent_for_client_approval",
+    "client_approved", "signing_in_progress", "executed",
+    "invoiced", "active", "renewal_due", "renewed", "lapsed",
+  ]),
+  notes: z.string().optional(),
+});
+export type TransitionCaseStatusInput = z.infer<typeof transitionCaseStatusSchema>;

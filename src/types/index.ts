@@ -514,7 +514,12 @@ export type AuditEntityType =
   | "contract_facility"
   | "accounting_period"
   | "facility_usage_record"
-  | "contract_payment";
+  | "contract_payment"
+  | "aggregator"
+  | "case"
+  | "case_document"
+  | "case_agreement"
+  | "aggregator_invoice";
 
 export interface AuditLog {
   id: string;
@@ -986,4 +991,288 @@ export interface CustomerSegment {
     last_visit?: string;
     avg_feedback?: number;
   }[];
+}
+
+// ==========================================
+// Aggregator Types
+// ==========================================
+export type AggregatorStatus = "active" | "inactive" | "suspended";
+
+export type VoPurpose = "gst_registration" | "mca_registration" | "branch_office" | "mail_handling" | "business_address";
+
+export type EntityType = "individual" | "proprietorship" | "partnership" | "llp" | "pvt_ltd" | "public_ltd" | "trust" | "society" | "huf" | "other";
+
+export interface Aggregator {
+  id: string;
+  name: string;
+  code: string;
+  status: AggregatorStatus;
+  company_name?: string;
+  gst_number?: string;
+  pan_number?: string;
+  email_domain?: string;
+  primary_email?: string;
+  primary_phone?: string;
+  billing_address?: string;
+  billing_city?: string;
+  billing_state?: string;
+  billing_pincode?: string;
+  same_state_as_twv: boolean;
+  commission_percentage: number;
+  default_rate_card: Record<string, number>;
+  kyc_verified: boolean;
+  kyc_verified_at?: string;
+  agreement_signed: boolean;
+  agreement_document_id?: string;
+  notes?: string;
+  tags: string[];
+  contacts?: AggregatorContact[];
+  rate_cards?: AggregatorRateCard[];
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AggregatorContact {
+  id: string;
+  aggregator_id: string;
+  name: string;
+  email?: string;
+  phone?: string;
+  designation?: string;
+  is_primary: boolean;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AggregatorRateCard {
+  id: string;
+  aggregator_id: string;
+  purpose: VoPurpose;
+  location_id?: string;
+  location?: Location;
+  rate: number;
+  tenure_months: number;
+  description?: string;
+  is_active: boolean;
+  effective_from: string;
+  effective_until?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+// ==========================================
+// Case (Virtual Office) Types
+// ==========================================
+export type CaseStatus =
+  | "intake_received" | "docs_requested" | "docs_received" | "under_review"
+  | "compliance_check" | "internal_approved" | "sent_for_client_approval"
+  | "client_approved" | "signing_in_progress" | "executed"
+  | "invoiced" | "active" | "renewal_due" | "renewed" | "lapsed";
+
+export type CaseDocStatus = "pending" | "uploaded" | "approved" | "rejected";
+
+export type ComplianceCheckStatus = "pending" | "passed" | "failed" | "waived";
+
+export type AgreementStatus =
+  | "draft" | "pending_internal_approval" | "internally_approved"
+  | "sent_to_client" | "client_approved" | "signing" | "executed" | "expired";
+
+export type EmailDirection = "inbound" | "outbound";
+
+export type AggInvoiceStatus = "draft" | "sent" | "paid" | "overdue" | "cancelled";
+
+export interface VoCase {
+  id: string;
+  case_number: string;
+  aggregator_id: string;
+  aggregator?: Aggregator;
+  aggregator_contact_id?: string;
+  aggregator_contact?: AggregatorContact;
+  location_id?: string;
+  location?: Location;
+  status: CaseStatus;
+  purpose: VoPurpose;
+  is_renewal: boolean;
+  parent_case_id?: string;
+  // End-client
+  client_name: string;
+  client_entity_type: EntityType;
+  client_company_name?: string;
+  client_gst_number?: string;
+  client_pan_number?: string;
+  client_cin_number?: string;
+  client_email?: string;
+  client_phone?: string;
+  client_address?: string;
+  client_city?: string;
+  client_state?: string;
+  client_pincode?: string;
+  // Financials
+  rate?: number;
+  tenure_months: number;
+  start_date?: string;
+  end_date?: string;
+  security_deposit: number;
+  // Agreement & Compliance
+  agreement_id?: string;
+  agreement_status?: AgreementStatus;
+  compliance_passed: boolean;
+  compliance_passed_at?: string;
+  // Timestamps
+  docs_requested_at?: string;
+  docs_received_at?: string;
+  review_started_at?: string;
+  internal_approved_at?: string;
+  internal_approved_by?: string;
+  sent_for_client_approval_at?: string;
+  client_approved_at?: string;
+  signing_started_at?: string;
+  executed_at?: string;
+  invoiced_at?: string;
+  activated_at?: string;
+  renewal_due_at?: string;
+  renewed_at?: string;
+  lapsed_at?: string;
+  // Email
+  source_email_id?: string;
+  email_thread_id?: string;
+  // Meta
+  assigned_to?: string;
+  assignee?: User;
+  notes?: string;
+  tags: string[];
+  metadata: Record<string, unknown>;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CaseDocument {
+  id: string;
+  case_id: string;
+  document_id?: string;
+  document?: CrmDocument;
+  document_type: string;
+  label: string;
+  is_required: boolean;
+  status: CaseDocStatus;
+  reviewed_by?: string;
+  reviewer?: User;
+  reviewed_at?: string;
+  rejection_reason?: string;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CaseComment {
+  id: string;
+  case_id: string;
+  comment: string;
+  is_internal: boolean;
+  attachment_id?: string;
+  attachment?: CrmDocument;
+  created_by?: string;
+  creator?: User;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CaseComplianceCheck {
+  id: string;
+  case_id: string;
+  check_name: string;
+  check_category?: string;
+  status: ComplianceCheckStatus;
+  checked_by?: string;
+  checker?: User;
+  checked_at?: string;
+  notes?: string;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CaseAgreement {
+  id: string;
+  case_id: string;
+  agreement_number: string;
+  template_key: string;
+  status: AgreementStatus;
+  variables: Record<string, unknown>;
+  generated_document_id?: string;
+  generated_document?: CrmDocument;
+  signed_document_id?: string;
+  signed_document?: CrmDocument;
+  internal_approved_by?: string;
+  internal_approved_at?: string;
+  sent_to_client_at?: string;
+  sent_to_email?: string;
+  client_approved_at?: string;
+  digio_document_id?: string;
+  digio_sign_url?: string;
+  digio_status?: string;
+  signed_at?: string;
+  valid_from?: string;
+  valid_until?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CaseEmail {
+  id: string;
+  case_id: string;
+  direction: EmailDirection;
+  gmail_message_id?: string;
+  gmail_thread_id?: string;
+  from_email?: string;
+  to_emails: string[];
+  cc_emails: string[];
+  subject?: string;
+  body_preview?: string;
+  has_attachments: boolean;
+  parsed_data: Record<string, unknown>;
+  processed_at?: string;
+  created_at: string;
+}
+
+export interface AggregatorInvoice {
+  id: string;
+  invoice_number: string;
+  aggregator_id: string;
+  aggregator?: Aggregator;
+  period_month: number;
+  period_year: number;
+  status: AggInvoiceStatus;
+  items: AggregatorInvoiceLineItem[];
+  subtotal: number;
+  cgst_amount: number;
+  sgst_amount: number;
+  igst_amount: number;
+  total_amount: number;
+  is_interstate: boolean;
+  tax_percentage: number;
+  sent_at?: string;
+  sent_to?: string;
+  paid_at?: string;
+  payment_reference?: string;
+  due_date?: string;
+  notes?: string;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AggregatorInvoiceLineItem {
+  case_id: string;
+  case_number: string;
+  client_name: string;
+  purpose: VoPurpose;
+  rate: number;
+  pro_rated_days?: number;
+  total_days?: number;
+  amount: number;
 }
