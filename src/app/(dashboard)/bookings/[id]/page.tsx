@@ -77,9 +77,11 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const fetchBooking = useCallback(async () => {
     setLoading(true);
     const res = await fetch(`/api/bookings/${id}`);
+    let leadId: string | null = null;
     if (res.ok) {
       const json = await res.json();
       setBooking(json.data || null);
+      leadId = json.data?.lead_id ?? null;
     }
 
     // Fetch existing payment records
@@ -90,9 +92,9 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     }
 
     // Fetch outstanding booking charges for this customer (from other bookings)
-    if (json.data?.lead_id) {
+    if (leadId) {
       const ocRes = await fetch(
-        `/api/usage-charges?lead_id=${json.data.lead_id}&status=pending&limit=50`
+        `/api/usage-charges?lead_id=${leadId}&status=pending&limit=50`
       );
       if (ocRes.ok) {
         const ocJson = await ocRes.json();
