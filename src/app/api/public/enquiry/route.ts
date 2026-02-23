@@ -1,9 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 
-/** Normalise a phone number: strip spaces, dashes, dots; keep leading + */
+/** Normalise a phone number to a canonical 10-digit Indian mobile number.
+ *  Strips all non-digit characters, then removes a leading country code
+ *  (+91 / 91) or STD zero if present, so both "9876543210" and
+ *  "+91 98765 43210" normalise to the same "9876543210".
+ */
 function normalisePhone(raw: string): string {
-  return raw.replace(/[\s\-.()\[\]]/g, "").trim();
+  let digits = raw.replace(/\D/g, "");
+  if (digits.length === 12 && digits.startsWith("91")) digits = digits.slice(2);
+  if (digits.length === 11 && digits.startsWith("0"))  digits = digits.slice(1);
+  return digits;
 }
 
 const ALLOWED_SOURCES = ["google_ads", "meta_ads", "direct_walkin"] as const;
@@ -60,6 +67,15 @@ export async function POST(request: NextRequest) {
   const lastName = nameParts.length > 1 ? nameParts.slice(1).join(" ") : "-";
 
   const normalisedMobile = normalisePhone(mobile);
+
+  // Validate: must be a 10-digit Indian mobile number (starts with 6–9)
+  if (!/^[6-9]\d{9}$/.test(normalisedMobile)) {
+    return NextResponse.json(
+      { error: "Please enter a valid 10-digit mobile number." },
+      { status: 400 }
+    );
+  }
+
   const normalisedEmail = email ? email.trim().toLowerCase() : null;
 
   const supabase = await createAdminClient();

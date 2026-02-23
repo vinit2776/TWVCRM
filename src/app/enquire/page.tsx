@@ -56,7 +56,7 @@ export default function EnquirePage() {
     }
 
     if (!name.trim()) { setError("Please enter your full name."); return; }
-    if (!mobile.trim()) { setError("Please enter your mobile number."); return; }
+    if (!/^[6-9]\d{9}$/.test(mobile)) { setError("Please enter a valid 10-digit mobile number."); return; }
 
     setSubmitting(true);
     try {
@@ -175,8 +175,8 @@ export default function EnquirePage() {
                     <input
                       type="tel"
                       value={mobile}
-                      onChange={(e) => setMobile(e.target.value)}
-                      placeholder="+91 98765 43210"
+                      onChange={(e) => setMobile(e.target.value.replace(/\D/g, "").slice(0, 10))}
+                      placeholder="9876543210"
                       className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#015E65] focus:border-transparent"
                       required
                     />
