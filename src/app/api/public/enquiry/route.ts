@@ -21,7 +21,15 @@ export async function POST(request: NextRequest) {
     working_hours,
     description,
     hp_field, // honeypot — bots fill this, humans don't
+    source: rawSource,
   } = body;
+
+  // Whitelist allowed sources; default to google_ads
+  const ALLOWED_SOURCES = ["google_ads", "meta_ads"] as const;
+  type AllowedSource = (typeof ALLOWED_SOURCES)[number];
+  const source: AllowedSource = ALLOWED_SOURCES.includes(rawSource) ? rawSource : "google_ads";
+  const sourceLabel = source === "meta_ads" ? "Meta Ads" : "Google Ads";
+  const sourceTag = source === "meta_ads" ? "meta-ads-form" : "google-ads-form";
 
   // Honeypot check — silently succeed without touching DB
   if (hp_field) {
@@ -83,14 +91,14 @@ export async function POST(request: NextRequest) {
     await supabase.from("activities").insert({
       lead_id: existing.id,
       type: "note",
-      subject: "Re-enquiry via Google Ads form",
+      subject: `Re-enquiry via ${sourceLabel} form`,
       description: enquirySummary,
     });
 
     return NextResponse.json({ success: true, returning: true });
   }
 
-  // New lead — create with source = google_ads
+  // New lead — create with the resolved source
   const { error: insertError } = await supabase.from("leads").insert({
     first_name: firstName,
     last_name: lastName,
@@ -103,11 +111,11 @@ export async function POST(request: NextRequest) {
     preferred_location: preferred_location?.trim() || null,
     working_hours: working_hours?.trim() || null,
     description: description?.trim() || null,
-    source: "google_ads",
+    source,
     status: "new",
     rating: "none",
     score: 0,
-    tags: ["google-ads-form"],
+    tags: [sourceTag],
   });
 
   if (insertError) {
