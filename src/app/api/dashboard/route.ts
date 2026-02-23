@@ -8,7 +8,7 @@ export async function GET(request: NextRequest) {
 
   const locationId = request.nextUrl.searchParams.get("location_id");
 
-  // If filtering by location, get lead IDs for that location first
+  // If filtering by location, get lead IDs first — all remaining queries depend on this
   let locationLeadIds: string[] | null = null;
   if (locationId) {
     const { data: locationLeads } = await supabase
@@ -18,33 +18,21 @@ export async function GET(request: NextRequest) {
     locationLeadIds = (locationLeads || []).map((l) => l.id);
   }
 
-  // Pipeline counts
+  const today = new Date().toISOString().split("T")[0];
+
+  // Build all query objects (no await yet)
   let pipelineQuery = supabase.from("leads").select("status");
   if (locationId) pipelineQuery = pipelineQuery.eq("location_id", locationId);
-  const { data: pipelineData } = await pipelineQuery;
 
-  const pipelineCounts: Record<string, number> = {};
-  pipelineData?.forEach((l) => {
-    pipelineCounts[l.status] = (pipelineCounts[l.status] || 0) + 1;
-  });
-  const pipeline = Object.entries(pipelineCounts).map(([status, count]) => ({ status, count }));
-
-  // Total leads
   let totalQuery = supabase.from("leads").select("*", { count: "exact", head: true });
   if (locationId) totalQuery = totalQuery.eq("location_id", locationId);
-  const { count: totalLeads } = await totalQuery;
 
-  // Won/lost counts
   let wonQuery = supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "won");
   if (locationId) wonQuery = wonQuery.eq("location_id", locationId);
-  const { count: wonCount } = await wonQuery;
 
   let lostQuery = supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "lost");
   if (locationId) lostQuery = lostQuery.eq("location_id", locationId);
-  const { count: lostCount } = await lostQuery;
 
-  // Tasks due today — filter by lead_id if location is set
-  const today = new Date().toISOString().split("T")[0];
   let tasksDueTodayQuery = supabase
     .from("tasks")
     .select("*", { count: "exact", head: true })
@@ -53,12 +41,9 @@ export async function GET(request: NextRequest) {
   if (locationId && locationLeadIds && locationLeadIds.length > 0) {
     tasksDueTodayQuery = tasksDueTodayQuery.in("lead_id", locationLeadIds);
   } else if (locationId) {
-    // No leads for this location, so 0 tasks
     tasksDueTodayQuery = tasksDueTodayQuery.eq("lead_id", "00000000-0000-0000-0000-000000000000");
   }
-  const { count: tasksDueToday } = await tasksDueTodayQuery;
 
-  // Tasks overdue
   let tasksOverdueQuery = supabase
     .from("tasks")
     .select("*", { count: "exact", head: true })
@@ -69,9 +54,7 @@ export async function GET(request: NextRequest) {
   } else if (locationId) {
     tasksOverdueQuery = tasksOverdueQuery.eq("lead_id", "00000000-0000-0000-0000-000000000000");
   }
-  const { count: tasksOverdue } = await tasksOverdueQuery;
 
-  // Recent activities — filter by lead_id if location is set
   let activitiesQuery = supabase
     .from("activities")
     .select("*, creator:users!activities_created_by_fkey(full_name), lead:leads!activities_lead_id_fkey(first_name, last_name)")
@@ -82,9 +65,7 @@ export async function GET(request: NextRequest) {
   } else if (locationId) {
     activitiesQuery = activitiesQuery.eq("lead_id", "00000000-0000-0000-0000-000000000000");
   }
-  const { data: recentActivities } = await activitiesQuery;
 
-  // Recent notes — type='note', with lead name, last 20
   let notesQuery = supabase
     .from("activities")
     .select("id, lead_id, subject, created_at, lead:leads!activities_lead_id_fkey(first_name, last_name)")
@@ -96,9 +77,7 @@ export async function GET(request: NextRequest) {
   } else if (locationId) {
     notesQuery = notesQuery.eq("lead_id", "00000000-0000-0000-0000-000000000000");
   }
-  const { data: recentNotes } = await notesQuery;
 
-  // Pending follow-ups
   let followUpsQuery = supabase
     .from("activities")
     .select("*", { count: "exact", head: true })
@@ -109,7 +88,35 @@ export async function GET(request: NextRequest) {
   } else if (locationId) {
     followUpsQuery = followUpsQuery.eq("lead_id", "00000000-0000-0000-0000-000000000000");
   }
-  const { count: pendingFollowUps } = await followUpsQuery;
+
+  // Fire all 9 queries in parallel
+  const [
+    { data: pipelineData },
+    { count: totalLeads },
+    { count: wonCount },
+    { count: lostCount },
+    { count: tasksDueToday },
+    { count: tasksOverdue },
+    { data: recentActivities },
+    { data: recentNotes },
+    { count: pendingFollowUps },
+  ] = await Promise.all([
+    pipelineQuery,
+    totalQuery,
+    wonQuery,
+    lostQuery,
+    tasksDueTodayQuery,
+    tasksOverdueQuery,
+    activitiesQuery,
+    notesQuery,
+    followUpsQuery,
+  ]);
+
+  const pipelineCounts: Record<string, number> = {};
+  pipelineData?.forEach((l) => {
+    pipelineCounts[l.status] = (pipelineCounts[l.status] || 0) + 1;
+  });
+  const pipeline = Object.entries(pipelineCounts).map(([status, count]) => ({ status, count }));
 
   const total = totalLeads || 0;
   const won = wonCount || 0;

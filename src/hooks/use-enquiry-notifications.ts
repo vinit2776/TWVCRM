@@ -50,42 +50,44 @@ export function useEnquiryNotifications() {
     const lastSeen = getLastSeen();
 
     async function loadInitialData() {
-      // 1. Count unactioned new leads from public forms
-      const { count: leadCount } = await supabase
-        .from("leads")
-        .select("id", { count: "exact", head: true })
-        .eq("status", "new")
-        .overlaps("tags", FORM_TAGS);
+      // Fire all 4 queries in parallel
+      const [
+        { count: leadCount },
+        { count: activityCount },
+        { data: recentLeads },
+        { data: recentActivities },
+      ] = await Promise.all([
+        // 1. Count unactioned new leads from public forms
+        supabase
+          .from("leads")
+          .select("id", { count: "exact", head: true })
+          .eq("status", "new")
+          .overlaps("tags", FORM_TAGS),
+        // 2. Count unseen re-enquiry activities
+        supabase
+          .from("activities")
+          .select("id", { count: "exact", head: true })
+          .like("subject", "Re-enquiry via%")
+          .gt("created_at", lastSeen),
+        // 3. Recent new enquiry leads for dropdown (last 5)
+        supabase
+          .from("leads")
+          .select("id, first_name, last_name, tags, created_at")
+          .eq("status", "new")
+          .overlaps("tags", FORM_TAGS)
+          .order("created_at", { ascending: false })
+          .limit(5),
+        // 4. Recent re-enquiry activities for dropdown (last 5)
+        supabase
+          .from("activities")
+          .select("id, subject, created_at, lead:leads!activities_lead_id_fkey(id, first_name, last_name)")
+          .like("subject", "Re-enquiry via%")
+          .order("created_at", { ascending: false })
+          .limit(5),
+      ]);
 
       setNewLeadCount(leadCount ?? 0);
-
-      // 2. Count unseen re-enquiry activities
-      const { count: activityCount } = await supabase
-        .from("activities")
-        .select("id", { count: "exact", head: true })
-        .like("subject", "Re-enquiry via%")
-        .gt("created_at", lastSeen);
-
       setReEnquiryCount(activityCount ?? 0);
-
-      // 3. Recent new enquiry leads for dropdown (last 5)
-      const { data: recentLeads } = await supabase
-        .from("leads")
-        .select("id, first_name, last_name, tags, created_at")
-        .eq("status", "new")
-        .overlaps("tags", FORM_TAGS)
-        .order("created_at", { ascending: false })
-        .limit(5);
-
-      // 4. Recent re-enquiry activities for dropdown (last 5)
-      const { data: recentActivities } = await supabase
-        .from("activities")
-        .select(
-          "id, subject, created_at, lead:leads!activities_lead_id_fkey(id, first_name, last_name)"
-        )
-        .like("subject", "Re-enquiry via%")
-        .order("created_at", { ascending: false })
-        .limit(5);
 
       const leadItems: EnquiryNotificationItem[] = (recentLeads ?? []).map((l) => {
         const matchingTag = (l.tags as string[]).find((t) => FORM_TAGS.includes(t)) ?? "";

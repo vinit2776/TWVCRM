@@ -21,7 +21,8 @@ export async function GET(
     .from("activities")
     .select("*, creator:users!activities_created_by_fkey(*)")
     .eq("lead_id", id)
-    .order("created_at", { ascending: false });
+    .order("created_at", { ascending: false })
+    .limit(200);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });

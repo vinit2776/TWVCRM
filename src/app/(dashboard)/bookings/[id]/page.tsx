@@ -109,8 +109,8 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
       const updated = json.data;
       if (!updated) return;
 
-      // Payment status changed — update and notify
-      if (updated.payment_status === "paid" && booking.payment_status !== "paid") {
+      // Payment confirmed — use fresh data directly, no stale closure comparison needed
+      if (updated.payment_status === "paid") {
         setBooking(updated);
         // Also refresh payment records
         const pRes = await fetch(`/api/booking-payments?booking_id=${id}`);
@@ -119,12 +119,12 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           setExistingPayments(pJson.data || []);
         }
         toast.success("Payment collected successfully via Razorpay!");
-        clearInterval(interval);
+        // No clearInterval here — effect cleanup fires when payment_status dep changes to "paid"
       }
     }, 10000); // Poll every 10 seconds
 
     return () => clearInterval(interval);
-  }, [booking?.payment_status, booking?.razorpay_payment_link_id, id, booking]);
+  }, [booking?.payment_status, booking?.razorpay_payment_link_id, id]); // `booking` removed — prevented interval from restarting on every poll
 
   // Auto-open collect payment dialog if redirected from booking creation
   useEffect(() => {
