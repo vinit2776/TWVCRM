@@ -27,6 +27,11 @@ import {
 import { formatDate } from "@/lib/utils";
 import { ImportLeadsDialog } from "@/components/leads/import-leads-dialog";
 
+const FORM_TAGS = ["google-ads-form", "meta-ads-form", "walkin-form"];
+function isUnreadFormLead(lead: { status: string; tags: string[] }) {
+  return lead.status === "new" && lead.tags?.some((t) => FORM_TAGS.includes(t));
+}
+
 export default function LeadsPage() {
   const router = useRouter();
   const [page, setPage] = useState(1);
@@ -188,13 +193,21 @@ export default function LeadsPage() {
                   onClick={() => router.push(`/leads/${lead.id}`)}
                 >
                   <td className="px-4 py-3">
-                    <Link
-                      href={`/leads/${lead.id}`}
-                      className="font-medium text-primary hover:underline"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {lead.first_name} {lead.last_name}
-                    </Link>
+                    <div className="flex items-center gap-2">
+                      {isUnreadFormLead(lead) && (
+                        <span className="relative flex h-2 w-2 shrink-0">
+                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                        </span>
+                      )}
+                      <Link
+                        href={`/leads/${lead.id}`}
+                        className="font-medium text-primary hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {lead.first_name} {lead.last_name}
+                      </Link>
+                    </div>
                   </td>
                   <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
                     {lead.company || "-"}
