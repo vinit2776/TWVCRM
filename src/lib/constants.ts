@@ -35,6 +35,7 @@ export const LEAD_STATUS_COLORS: Record<string, string> = {
 
 export const LEAD_SOURCES = [
   "meta_ads",
+  "google_ads",
   "direct_walkin",
   "online_form",
   "referral",
@@ -48,6 +49,7 @@ export const LEAD_SOURCES = [
 
 export const LEAD_SOURCE_LABELS: Record<string, string> = {
   meta_ads: "Meta Ads",
+  google_ads: "Google Ads",
   direct_walkin: "Direct/Walk-in",
   online_form: "Online Form",
   referral: "Referral",

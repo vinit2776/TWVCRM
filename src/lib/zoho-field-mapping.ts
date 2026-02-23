@@ -26,7 +26,7 @@ const ZOHO_SOURCE_MAP: Record<string, LeadSource> = {
   "walk in": "direct_walkin",
   "agreegator": "partner",
   "inbound call": "cold_call",
-  "google ads": "advertisement",
+  "google ads": "google_ads",
   "sales email alias": "other",
   "chat": "online_form",
   "advertisement": "advertisement",

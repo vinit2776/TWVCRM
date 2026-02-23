@@ -47,6 +47,7 @@ export type LeadStatus =
 
 export type LeadSource =
   | "meta_ads"
+  | "google_ads"
   | "direct_walkin"
   | "online_form"
   | "referral"

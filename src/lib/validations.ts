@@ -26,6 +26,7 @@ export const createLeadSchema = z.object({
   ]),
   source: z.enum([
     "meta_ads",
+    "google_ads",
     "direct_walkin",
     "online_form",
     "referral",
@@ -88,7 +89,7 @@ export const importLeadSchema = z.object({
     "proposal_sent", "negotiating", "won", "lost",
   ]).default("new"),
   source: z.enum([
-    "meta_ads", "direct_walkin", "online_form", "referral",
+    "meta_ads", "google_ads", "direct_walkin", "online_form", "referral",
     "social_media", "advertisement", "cold_call", "event", "partner", "other",
   ]).default("other"),
   industry: z.string().optional(),
