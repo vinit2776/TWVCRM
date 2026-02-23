@@ -58,6 +58,21 @@ const ZOHO_RATING_MAP: Record<string, Rating> = {
 
 // --- Numeric parsers ---
 
+/** Sanitize a URL — prepend https:// if missing a scheme, return undefined if not a URL */
+function sanitizeUrl(raw: string): string | undefined {
+  if (!raw) return undefined;
+  const trimmed = raw.trim();
+  if (!trimmed) return undefined;
+  // Add https:// if no scheme present
+  const withScheme = /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+  try {
+    new URL(withScheme);
+    return withScheme;
+  } catch {
+    return undefined;
+  }
+}
+
 /** Extract a number from messy strings like "6000 plus gst", "5k", "5,500" */
 function parseNumeric(raw: string): number | undefined {
   if (!raw) return undefined;
@@ -210,15 +225,21 @@ export function transformZohoRow(row: ZohoLeadRow, rowIndex: number): TransformR
   const empRaw = (row["No. of Employees"] || "").trim();
   const noOfEmployees = empRaw ? parseInt(empRaw, 10) : undefined;
 
+  // Truncate phone/mobile to VARCHAR(20) DB limit, strip formatting chars
+  const truncatePhone = (raw: string) => {
+    const cleaned = raw.trim().replace(/\s+/g, "");
+    return cleaned.slice(0, 20) || undefined;
+  };
+
   const lead: TransformedLead = {
     first_name: firstName || lastName, // Copy last name if first is empty
     last_name: lastName,
     company: (row["Company"] || "").trim() || undefined,
     aggregator_contact_name: (row["Aggregator Contact Person Name"] || "").trim() || undefined,
     email: (row["Email"] || "").trim() || undefined,
-    phone: (row["Phone"] || "").trim() || undefined,
-    mobile: (row["Mobile"] || "").trim() || undefined,
-    website: (row["Website"] || "").trim() || undefined,
+    phone: truncatePhone(row["Phone"] || ""),
+    mobile: truncatePhone(row["Mobile"] || ""),
+    website: sanitizeUrl(row["Website"] || ""),
     title: (row["Title"] || "").trim() || undefined,
     secondary_email: (row["Secondary Email"] || "").trim() || undefined,
     status: mapStatus(row["Lead Status"] || ""),

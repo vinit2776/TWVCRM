@@ -80,7 +80,7 @@ export const importLeadSchema = z.object({
   email: z.string().email("Invalid email").optional().or(z.literal("")),
   phone: z.string().optional(),
   mobile: z.string().optional(),
-  website: z.string().url("Invalid URL").optional().or(z.literal("")),
+  website: z.string().optional(),
   title: z.string().optional(),
   secondary_email: z.string().email("Invalid email").optional().or(z.literal("")),
   status: z.enum([

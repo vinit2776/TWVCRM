@@ -162,7 +162,7 @@ export async function POST(request: NextRequest) {
     newLeads.push(lead);
   }
 
-  // Bulk insert in batches
+  // Bulk insert in batches; fall back to row-by-row on batch failure
   let importedCount = 0;
 
   for (let i = 0; i < newLeads.length; i += BATCH_SIZE) {
@@ -173,10 +173,22 @@ export async function POST(request: NextRequest) {
       .select("id");
 
     if (insertError) {
-      errors.push({
-        row: 0,
-        message: `Batch insert error (rows ${i + 1}-${i + batch.length}): ${insertError.message}`,
-      });
+      // Retry one-by-one so only the bad rows are skipped
+      for (let j = 0; j < batch.length; j++) {
+        const { data: single, error: singleError } = await adminSupabase
+          .from("leads")
+          .insert(batch[j])
+          .select("id")
+          .single();
+        if (singleError) {
+          errors.push({
+            row: i + j + 2,
+            message: singleError.message,
+          });
+        } else if (single) {
+          importedCount++;
+        }
+      }
     } else {
       importedCount += inserted?.length || 0;
     }
