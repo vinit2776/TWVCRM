@@ -97,8 +97,9 @@ export default function EnquirePage() {
       <div className="bg-[#015E65] text-white py-5 px-6 shadow-md">
         <div className="max-w-3xl mx-auto flex items-center gap-3">
           <div className="flex-1">
-            <h1 className="text-xl font-bold tracking-tight">The WorkVilla</h1>
-            <p className="text-[#7fd8c2] text-sm mt-0.5">Premium Coworking Spaces in Chennai</p>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img src="/logo-white.png" alt="The WorkVilla" className="h-9" />
+            <p className="text-[#7fd8c2] text-sm mt-1">Premium Coworking Spaces in Chennai</p>
           </div>
           <span className="hidden sm:inline-block text-xs bg-[#014a50] px-3 py-1.5 rounded-full font-medium">
             Get a Free Seat Trial
@@ -127,8 +128,13 @@ export default function EnquirePage() {
         ) : (
           <>
             <div className="mb-6">
-              <h2 className="text-2xl font-bold text-gray-900">Enquire Now</h2>
-              <p className="text-gray-500 mt-1 text-sm">
+              <div className="flex items-center gap-2 mb-2">
+                <h2 className="text-2xl font-bold text-gray-900">Enquire Now</h2>
+                <span className="text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200 px-2 py-0.5 rounded-full">
+                  Google Ads
+                </span>
+              </div>
+              <p className="text-gray-500 text-sm">
                 Tell us what you&apos;re looking for and we&apos;ll get back to you shortly.
               </p>
             </div>
