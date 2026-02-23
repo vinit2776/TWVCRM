@@ -84,6 +84,20 @@ export async function GET(request: NextRequest) {
   }
   const { data: recentActivities } = await activitiesQuery;
 
+  // Recent notes — type='note', with lead name, last 20
+  let notesQuery = supabase
+    .from("activities")
+    .select("id, lead_id, subject, created_at, lead:leads!activities_lead_id_fkey(first_name, last_name)")
+    .eq("type", "note")
+    .order("created_at", { ascending: false })
+    .limit(20);
+  if (locationId && locationLeadIds && locationLeadIds.length > 0) {
+    notesQuery = notesQuery.in("lead_id", locationLeadIds);
+  } else if (locationId) {
+    notesQuery = notesQuery.eq("lead_id", "00000000-0000-0000-0000-000000000000");
+  }
+  const { data: recentNotes } = await notesQuery;
+
   // Pending follow-ups
   let followUpsQuery = supabase
     .from("activities")
@@ -108,6 +122,7 @@ export async function GET(request: NextRequest) {
       tasks_due_today: tasksDueToday || 0,
       tasks_overdue: tasksOverdue || 0,
       recent_activities: recentActivities || [],
+      recent_notes: recentNotes || [],
       conversion: { total_leads: total, won, lost, rate },
       pending_follow_ups: pendingFollowUps || 0,
     },

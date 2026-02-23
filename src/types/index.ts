@@ -737,11 +737,20 @@ export interface PaginatedResponse<T> {
 // ==========================================
 // Dashboard Types
 // ==========================================
+export interface DashboardNote {
+  id: string;
+  lead_id: string;
+  subject?: string;
+  created_at: string;
+  lead?: { first_name: string; last_name: string };
+}
+
 export interface DashboardStats {
   pipeline: { status: LeadStatus; count: number }[];
   tasks_due_today: number;
   tasks_overdue: number;
   recent_activities: Activity[];
+  recent_notes: DashboardNote[];
   conversion: { total_leads: number; won: number; lost: number; rate: number };
   pending_follow_ups: number;
 }
