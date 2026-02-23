@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { transporter } from "@/lib/resend";
 
 export const dynamic = "force-dynamic";
 
@@ -215,29 +216,14 @@ export async function GET() {
   const usersRow = tableCounts.find((t) => t.name === "users");
   const authUserCount = usersRow?.row_count || 0;
 
-  // ── 5. Fetch Resend Email Stats ──
-  let emailsSentToday = 0;
-  let emailsSentThisMonth = 0;
-  const RESEND_API_KEY = process.env.RESEND_API_KEY;
-  if (RESEND_API_KEY && RESEND_API_KEY !== "re_placeholder") {
-    try {
-      const resendRes = await fetch("https://api.resend.com/emails", {
-        headers: { Authorization: `Bearer ${RESEND_API_KEY}` },
-        cache: "no-store",
-      });
-      if (resendRes.ok) {
-        const resendData = await resendRes.json();
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const emails: any[] = resendData.data || [];
-        const now = new Date();
-        const todayStr = now.toISOString().split("T")[0];
-        const monthStr = todayStr.substring(0, 7); // "2025-06"
-        emailsSentToday = emails.filter((e) => e.created_at?.startsWith(todayStr)).length;
-        emailsSentThisMonth = emails.filter((e) => e.created_at?.startsWith(monthStr)).length;
-      }
-    } catch {
-      // Resend API unavailable — continue with zero counts
-    }
+  // ── 5. Test Google Workspace SMTP Connection ──
+  let smtpConnected = false;
+  const smtpUser = (process.env.SMTP_USER || "").trim();
+  try {
+    await transporter.verify();
+    smtpConnected = true;
+  } catch {
+    smtpConnected = false;
   }
 
   // ── Build Response ──
@@ -283,17 +269,11 @@ export async function GET() {
       },
       dashboard_url: "https://vercel.com/dashboard/usage",
     },
-    resend: {
-      plan: "Free",
-      limits: {
-        daily_emails: 100,
-        monthly_emails: 3000,
-      },
-      usage: {
-        sent_today: emailsSentToday,
-        sent_this_month: emailsSentThisMonth,
-      },
-      dashboard_url: "https://resend.com/overview",
+    google_workspace: {
+      smtp_user: smtpUser || "Not configured",
+      connected: smtpConnected,
+      daily_limit: 2000,
+      dashboard_url: "https://admin.google.com",
     },
   }, {
     headers: { "Cache-Control": "no-store, max-age=0" },

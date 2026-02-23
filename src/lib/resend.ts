@@ -25,7 +25,7 @@ if (!smtpUser || !smtpPass) {
   console.warn("SMTP_USER or SMTP_PASS is not set — email sending will fail.");
 }
 
-const transporter = nodemailer.createTransport({
+export const transporter = nodemailer.createTransport({
   host: smtpHost,
   port: smtpPort,
   secure: smtpPort === 465, // true for 465, false for 587

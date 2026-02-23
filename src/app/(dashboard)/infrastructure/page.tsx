@@ -44,10 +44,10 @@ interface InfraData {
     limits: Record<string, number>;
     dashboard_url: string;
   };
-  resend: {
-    plan: string;
-    limits: { daily_emails: number; monthly_emails: number };
-    usage?: { sent_today: number; sent_this_month: number };
+  google_workspace: {
+    smtp_user: string;
+    connected: boolean;
+    daily_limit: number;
     dashboard_url: string;
   };
 }
@@ -366,86 +366,48 @@ export default function InfrastructurePage() {
           </CardContent>
         </Card>
 
-        {/* Resend */}
+        {/* Google Workspace Email */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Mail className="h-4 w-4 text-purple-600" />
-              Resend
+              <Mail className="h-4 w-4 text-blue-600" />
+              Google Workspace
             </CardTitle>
-            <Badge variant="secondary" className="text-xs">
-              {data.resend.plan}
+            <Badge
+              variant="secondary"
+              className={`text-xs ${data.google_workspace.connected ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}
+            >
+              {data.google_workspace.connected ? "Connected" : "Disconnected"}
             </Badge>
           </CardHeader>
           <CardContent>
-            <div className="space-y-2.5 text-sm">
-              {/* Today usage */}
-              <div>
-                <div className="flex justify-between mb-1">
-                  <span className="text-muted-foreground">Today</span>
-                  <span className="font-medium">
-                    {data.resend.usage?.sent_today ?? "—"} / {data.resend.limits.daily_emails}
-                  </span>
-                </div>
-                <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${getUsageColor(
-                      data.resend.usage
-                        ? (data.resend.usage.sent_today / data.resend.limits.daily_emails) * 100
-                        : 0
-                    )}`}
-                    style={{
-                      width: `${Math.min(
-                        data.resend.usage
-                          ? (data.resend.usage.sent_today / data.resend.limits.daily_emails) * 100
-                          : 0,
-                        100
-                      )}%`,
-                    }}
-                  />
-                </div>
+            <div className="space-y-2 text-sm">
+              <div className="flex items-center gap-2">
+                <div className={`h-2.5 w-2.5 rounded-full shrink-0 ${data.google_workspace.connected ? "bg-emerald-500" : "bg-red-500"}`} />
+                <span className="text-muted-foreground truncate">
+                  {data.google_workspace.smtp_user}
+                </span>
               </div>
-              {/* Monthly usage */}
-              <div>
-                <div className="flex justify-between mb-1">
-                  <span className="text-muted-foreground">This Month</span>
-                  <span className="font-medium">
-                    {data.resend.usage?.sent_this_month != null
-                      ? `~${data.resend.usage.sent_this_month}`
-                      : "—"}{" "}
-                    / {formatNumber(data.resend.limits.monthly_emails)}
-                  </span>
-                </div>
-                <div className="h-1.5 w-full rounded-full bg-muted overflow-hidden">
-                  <div
-                    className={`h-full rounded-full transition-all ${getUsageColor(
-                      data.resend.usage
-                        ? (data.resend.usage.sent_this_month / data.resend.limits.monthly_emails) * 100
-                        : 0
-                    )}`}
-                    style={{
-                      width: `${Math.min(
-                        data.resend.usage
-                          ? (data.resend.usage.sent_this_month / data.resend.limits.monthly_emails) * 100
-                          : 0,
-                        100
-                      )}%`,
-                    }}
-                  />
-                </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Daily limit</span>
+                <span className="font-medium">{formatNumber(data.google_workspace.daily_limit)} emails</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Protocol</span>
+                <span className="font-medium">SMTP / TLS 465</span>
               </div>
             </div>
-            <div className="mt-2 p-2 rounded-md bg-muted/50 text-xs text-muted-foreground flex items-center gap-1.5">
+            <div className="mt-3 p-2 rounded-md bg-muted/50 text-xs text-muted-foreground flex items-center gap-1.5">
               <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-              OTPs, invoices, proposals, booking confirmations, vouchers
+              OTPs, invoices, proposals, booking confirmations, vouchers, enquiry alerts
             </div>
             <a
-              href={data.resend.dashboard_url}
+              href={data.google_workspace.dashboard_url}
               target="_blank"
               rel="noopener noreferrer"
               className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-2"
             >
-              View Exact Usage <ExternalLink className="h-3 w-3" />
+              Admin Console <ExternalLink className="h-3 w-3" />
             </a>
           </CardContent>
         </Card>
@@ -603,7 +565,7 @@ export default function InfrastructurePage() {
       {/* ── Footer Note ── */}
       <p className="text-xs text-muted-foreground text-center pb-4">
         Data is cached locally for 24 hours. Click &quot;Refresh&quot; to fetch live metrics.
-        Vercel usage must be checked on their dashboard. Resend monthly counts are approximate (last 100 emails).
+        Vercel usage must be checked on their dashboard. Email volume can be viewed in the Google Workspace Admin Console.
       </p>
     </div>
   );
