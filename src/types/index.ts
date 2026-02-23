@@ -146,6 +146,7 @@ export interface Activity {
   is_follow_up_done: boolean;
   created_by?: string;
   creator?: User;
+  lead?: { first_name: string; last_name: string };
   created_at: string;
   updated_at: string;
   attendees?: MeetingAttendee[];

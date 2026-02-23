@@ -181,12 +181,22 @@ export default function DashboardPage() {
                         <Icon className="h-3 w-3" />
                       </div>
                       <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          <Badge variant="outline" className="text-xs">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <Badge variant="outline" className="text-xs shrink-0">
                             {ACTIVITY_TYPE_LABELS[activity.type]}
                           </Badge>
+                          {activity.lead && (
+                            <Link
+                              href={`/leads/${activity.lead_id}`}
+                              className="text-sm font-medium hover:underline underline-offset-2 truncate"
+                            >
+                              {activity.lead.first_name} {activity.lead.last_name}
+                            </Link>
+                          )}
                           {activity.subject && (
-                            <span className="text-sm truncate">{activity.subject}</span>
+                            <span className="text-xs text-muted-foreground truncate">
+                              — {activity.subject}
+                            </span>
                           )}
                         </div>
                         <p className="text-xs text-muted-foreground mt-0.5">
