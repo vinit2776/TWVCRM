@@ -219,11 +219,21 @@ export async function GET() {
   // ── 5. Test Google Workspace SMTP Connection ──
   let smtpConnected = false;
   const smtpUser = (process.env.SMTP_USER || "").trim();
-  try {
-    await transporter.verify();
-    smtpConnected = true;
-  } catch {
-    smtpConnected = false;
+  const smtpPass = (process.env.SMTP_PASS || "").trim();
+
+  if (smtpUser && smtpPass) {
+    try {
+      // Race against a 5-second timeout — Vercel serverless can't afford an open TCP hang
+      await Promise.race([
+        transporter.verify(),
+        new Promise<never>((_, reject) =>
+          setTimeout(() => reject(new Error("SMTP verify timeout")), 5000)
+        ),
+      ]);
+      smtpConnected = true;
+    } catch {
+      smtpConnected = false;
+    }
   }
 
   // ── Build Response ──
