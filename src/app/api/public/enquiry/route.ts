@@ -6,6 +6,15 @@ function normalisePhone(raw: string): string {
   return raw.replace(/[\s\-.()\[\]]/g, "").trim();
 }
 
+const ALLOWED_SOURCES = ["google_ads", "meta_ads", "direct_walkin"] as const;
+type AllowedSource = (typeof ALLOWED_SOURCES)[number];
+
+const SOURCE_META: Record<AllowedSource, { label: string; tag: string }> = {
+  google_ads:    { label: "Google Ads",     tag: "google-ads-form" },
+  meta_ads:      { label: "Meta Ads",       tag: "meta-ads-form"   },
+  direct_walkin: { label: "Direct Walk-in", tag: "walkin-form"     },
+};
+
 export async function POST(request: NextRequest) {
   const body = await request.json();
 
@@ -20,16 +29,17 @@ export async function POST(request: NextRequest) {
     preferred_location,
     working_hours,
     description,
-    hp_field, // honeypot — bots fill this, humans don't
+    start_date,               // walk-in specific
+    conference_room_location, // walk-in specific (when workspace_type = conference_room)
+    hp_field,                 // honeypot — bots fill this, humans don't
     source: rawSource,
   } = body;
 
-  // Whitelist allowed sources; default to google_ads
-  const ALLOWED_SOURCES = ["google_ads", "meta_ads"] as const;
-  type AllowedSource = (typeof ALLOWED_SOURCES)[number];
-  const source: AllowedSource = ALLOWED_SOURCES.includes(rawSource) ? rawSource : "google_ads";
-  const sourceLabel = source === "meta_ads" ? "Meta Ads" : "Google Ads";
-  const sourceTag = source === "meta_ads" ? "meta-ads-form" : "google-ads-form";
+  // Resolve source — whitelist only; default to google_ads
+  const source: AllowedSource = ALLOWED_SOURCES.includes(rawSource as AllowedSource)
+    ? (rawSource as AllowedSource)
+    : "google_ads";
+  const { label: sourceLabel, tag: sourceTag } = SOURCE_META[source];
 
   // Honeypot check — silently succeed without touching DB
   if (hp_field) {
@@ -71,23 +81,26 @@ export async function POST(request: NextRequest) {
 
   const { data: existing } = await dupQuery.limit(1).maybeSingle();
 
+  // Build a human-readable summary of the submission
+  const enquirySummary = [
+    `Name: ${name}`,
+    `Mobile: ${mobile}`,
+    normalisedEmail               ? `Email: ${normalisedEmail}`                         : null,
+    company                       ? `Company: ${company}`                               : null,
+    workspace_type                ? `Looking for: ${workspace_type}`                    : null,
+    conference_room_location      ? `Conference room: ${conference_room_location}`      : null,
+    seat_capacity                 ? `Seats: ${seat_capacity}`                           : null,
+    budget_per_seat               ? `Budget/seat: ₹${budget_per_seat}`                  : null,
+    preferred_location            ? `Preferred location: ${preferred_location}`         : null,
+    start_date                    ? `Start date: ${start_date}`                         : null,
+    working_hours                 ? `Working hours: ${working_hours}`                   : null,
+    description                   ? `Requirement: ${description}`                       : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
   if (existing) {
     // Returning enquiry — add a note activity to the existing lead
-    const enquirySummary = [
-      `Name: ${name}`,
-      `Mobile: ${mobile}`,
-      normalisedEmail ? `Email: ${normalisedEmail}` : null,
-      company ? `Company: ${company}` : null,
-      workspace_type ? `Looking for: ${workspace_type}` : null,
-      seat_capacity ? `Seats: ${seat_capacity}` : null,
-      budget_per_seat ? `Budget/seat: ₹${budget_per_seat}` : null,
-      preferred_location ? `Preferred location: ${preferred_location}` : null,
-      working_hours ? `Working hours: ${working_hours}` : null,
-      description ? `Requirement: ${description}` : null,
-    ]
-      .filter(Boolean)
-      .join("\n");
-
     await supabase.from("activities").insert({
       lead_id: existing.id,
       type: "note",
@@ -97,6 +110,19 @@ export async function POST(request: NextRequest) {
 
     return NextResponse.json({ success: true, returning: true });
   }
+
+  // Build the description field: combine free-text with structured extra fields
+  const extraDetails = [
+    conference_room_location ? `Conference room: ${conference_room_location}` : null,
+    start_date               ? `Start date: ${start_date}`                    : null,
+  ]
+    .filter(Boolean)
+    .join("\n");
+
+  const fullDescription = [description?.trim(), extraDetails]
+    .filter(Boolean)
+    .join("\n")
+    || null;
 
   // New lead — create with the resolved source
   const { error: insertError } = await supabase.from("leads").insert({
@@ -110,7 +136,7 @@ export async function POST(request: NextRequest) {
     budget_per_seat: budget_per_seat ? parseFloat(budget_per_seat) : null,
     preferred_location: preferred_location?.trim() || null,
     working_hours: working_hours?.trim() || null,
-    description: description?.trim() || null,
+    description: fullDescription,
     source,
     status: "new",
     rating: "none",
