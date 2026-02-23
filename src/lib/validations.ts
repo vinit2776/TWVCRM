@@ -71,6 +71,51 @@ export const createLeadSchema = z.object({
 
 export const updateLeadSchema = createLeadSchema.partial();
 
+// Relaxed schema for CSV imports — status/source/rating/score/tags have defaults
+export const importLeadSchema = z.object({
+  first_name: z.string().min(1, "First name is required"),
+  last_name: z.string().min(1, "Last name is required"),
+  company: z.string().optional(),
+  aggregator_contact_name: z.string().optional(),
+  email: z.string().email("Invalid email").optional().or(z.literal("")),
+  phone: z.string().optional(),
+  mobile: z.string().optional(),
+  website: z.string().url("Invalid URL").optional().or(z.literal("")),
+  title: z.string().optional(),
+  secondary_email: z.string().email("Invalid email").optional().or(z.literal("")),
+  status: z.enum([
+    "new", "contacted", "tour_scheduled", "tour_completed",
+    "proposal_sent", "negotiating", "won", "lost",
+  ]).default("new"),
+  source: z.enum([
+    "meta_ads", "direct_walkin", "online_form", "referral",
+    "social_media", "advertisement", "cold_call", "event", "partner", "other",
+  ]).default("other"),
+  industry: z.string().optional(),
+  no_of_employees: z.number().int().positive().optional(),
+  rating: z.enum(["none", "hot", "warm", "cold"]).default("none"),
+  score: z.number().int().min(0).max(100).default(0),
+  workspace_type: z.enum([
+    "hot_desk", "dedicated_desk", "private_office",
+    "meeting_room", "conference_room", "virtual_office",
+  ]).optional(),
+  seat_capacity: z.number().int().positive().optional(),
+  preferred_location: z.string().optional(),
+  working_hours: z.string().optional(),
+  budget_per_seat: z.number().positive().optional(),
+  street: z.string().optional(),
+  city: z.string().optional(),
+  state: z.string().optional(),
+  zip_code: z.string().optional(),
+  country: z.string().optional(),
+  enquiry_form_google: z.string().optional(),
+  enquiry_form_direct: z.string().optional(),
+  description: z.string().optional(),
+  tags: z.array(z.string()).default([]),
+});
+
+export type ImportLeadInput = z.infer<typeof importLeadSchema>;
+
 export type CreateLeadInput = z.input<typeof createLeadSchema>;
 export type UpdateLeadInput = z.input<typeof updateLeadSchema>;
 

@@ -3,7 +3,7 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Plus, Search, ChevronLeft, ChevronRight, Users } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -25,6 +25,7 @@ import {
   LEAD_SOURCE_LABELS,
 } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
+import { ImportLeadsDialog } from "@/components/leads/import-leads-dialog";
 
 export default function LeadsPage() {
   const router = useRouter();
@@ -34,8 +35,9 @@ export default function LeadsPage() {
   const [sourceFilter, setSourceFilter] = useState<string>("");
   const [locationFilter, setLocationFilter] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState("");
+  const [importOpen, setImportOpen] = useState(false);
 
-  const { data: leads, pagination, loading } = useLeads({
+  const { data: leads, pagination, loading, refetch } = useLeads({
     page,
     search,
     status: statusFilter || undefined,
@@ -58,10 +60,16 @@ export default function LeadsPage() {
             {pagination.total} total leads
           </p>
         </div>
-        <Button onClick={() => router.push("/leads/new")}>
-          <Plus className="mr-2 h-4 w-4" />
-          Create Lead
-        </Button>
+        <div className="flex gap-2">
+          <Button variant="outline" onClick={() => setImportOpen(true)}>
+            <Upload className="mr-2 h-4 w-4" />
+            Import CSV
+          </Button>
+          <Button onClick={() => router.push("/leads/new")}>
+            <Plus className="mr-2 h-4 w-4" />
+            Create Lead
+          </Button>
+        </div>
       </div>
 
       {/* Filters */}
@@ -247,6 +255,13 @@ export default function LeadsPage() {
           </div>
         </div>
       )}
+
+      {/* Import Leads Dialog */}
+      <ImportLeadsDialog
+        open={importOpen}
+        onOpenChange={setImportOpen}
+        onSuccess={refetch}
+      />
     </div>
   );
 }
