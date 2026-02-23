@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/resend";
+import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logEmailActivity } from "@/lib/audit";
 
 export async function POST(
@@ -127,7 +127,7 @@ export async function POST(
   } catch (error) {
     console.error("Email send error:", error);
     return NextResponse.json(
-      { error: "Failed to send email. Check RESEND_API_KEY configuration." },
+      { error: "Failed to send email. Check SMTP_USER/SMTP_PASS configuration." },
       { status: 500 }
     );
   }

@@ -6,8 +6,8 @@ import nodemailer from "nodemailer";
  * Required env vars on Vercel:
  *   SMTP_HOST=smtp.gmail.com
  *   SMTP_PORT=465
- *   SMTP_USER=contact@theworkvilla.com      (your Google Workspace email)
- *   SMTP_PASS=xxxx xxxx xxxx xxxx           (Google App Password — NOT your login password)
+ *   SMTP_USER=space@theworkvilla.com      (your Google Workspace email)
+ *   SMTP_PASS=xxxx xxxx xxxx xxxx         (Google App Password — NOT your login password)
  *
  * To generate an App Password:
  *   1. Go to https://myaccount.google.com/apppasswords
@@ -40,20 +40,19 @@ export const transporter = nodemailer.createTransport({
  * MUST match the SMTP_USER (authenticated Google Workspace account)
  * otherwise Gmail will rewrite or reject the message.
  */
-export const EMAIL_FROM = `The WorkVilla <${smtpUser || "contact@theworkvilla.com"}>`;
+export const EMAIL_FROM = `The WorkVilla <${smtpUser || "space@theworkvilla.com"}>`;
 
 /**
  * Reply-to address for all outgoing emails.
  * Recipients who hit "Reply" will reach this inbox.
  */
-export const EMAIL_REPLY_TO = "contact@theworkvilla.com";
+export const EMAIL_REPLY_TO = "space@theworkvilla.com";
 
 /**
- * Drop-in replacement for the Resend SDK.
+ * Centralized email send function.
  *
- * All existing routes call: resend.emails.send({ from, to, subject, html, replyTo, attachments })
- * This wrapper translates that to nodemailer format and returns { data, error }
- * matching the Resend SDK response shape.
+ * All routes call: sendEmail({ from, to, subject, html, replyTo, attachments })
+ * Returns { data, error } for consistent error handling.
  */
 export const resend = {
   emails: {

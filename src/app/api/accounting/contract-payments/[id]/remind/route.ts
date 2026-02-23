@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/resend";
+import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit, logEmailActivity } from "@/lib/audit";
 
 // POST — send payment reminder email
@@ -130,7 +130,7 @@ export async function POST(
   } catch (error) {
     console.error("Payment reminder email error:", error);
     return NextResponse.json(
-      { error: "Failed to send reminder email. Check RESEND_API_KEY configuration." },
+      { error: "Failed to send reminder email. Check SMTP_USER/SMTP_PASS configuration." },
       { status: 500 }
     );
   }

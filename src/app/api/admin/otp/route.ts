@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { resend, EMAIL_FROM } from "@/lib/resend";
+import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { OTP_EXPIRY_MINUTES, OTP_MAX_ATTEMPTS } from "@/lib/constants";
 
 /**

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
-import { resend, EMAIL_FROM } from "@/lib/resend";
+import { resend, EMAIL_FROM } from "@/lib/mailer";
 
 /** Normalise a phone number to a canonical 10-digit Indian mobile number.
  *  Strips all non-digit characters, then removes a leading country code

@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/resend";
+import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateICS } from "@/lib/ics-generator";
 import { BOOKING_CUSTOMER_TYPE_LABELS } from "@/lib/constants";
 import { logEmailActivity } from "@/lib/audit";

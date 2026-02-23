@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { resend, EMAIL_FROM } from "@/lib/resend";
+import { resend, EMAIL_FROM } from "@/lib/mailer";
 
 export async function POST(
   request: NextRequest,
@@ -125,7 +125,7 @@ export async function POST(
     } catch (error) {
       console.error("Per-seat email error:", error);
       return NextResponse.json(
-        { error: "Failed to send email. Check RESEND_API_KEY and domain configuration." },
+        { error: "Failed to send email. Check SMTP_USER/SMTP_PASS and domain configuration." },
         { status: 500 }
       );
     }
@@ -306,7 +306,7 @@ export async function POST(
   } catch (error) {
     console.error("Email send error:", error);
     return NextResponse.json(
-      { error: "Failed to send email. Check RESEND_API_KEY configuration." },
+      { error: "Failed to send email. Check SMTP_USER/SMTP_PASS configuration." },
       { status: 500 }
     );
   }

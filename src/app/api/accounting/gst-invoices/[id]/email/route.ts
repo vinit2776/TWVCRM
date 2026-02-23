@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/resend";
+import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit, logEmailActivity } from "@/lib/audit";
 
 // POST — Email GST invoice PDF to selected recipients
@@ -158,7 +158,7 @@ export async function POST(
   } catch (error) {
     console.error("GST invoice email error:", error);
     return NextResponse.json(
-      { error: "Failed to send GST invoice email. Check RESEND_API_KEY configuration." },
+      { error: "Failed to send GST invoice email. Check SMTP_USER/SMTP_PASS configuration." },
       { status: 500 }
     );
   }

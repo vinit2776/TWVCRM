@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { transporter } from "@/lib/resend";
+import { transporter } from "@/lib/mailer";
 
 export const dynamic = "force-dynamic";
 
