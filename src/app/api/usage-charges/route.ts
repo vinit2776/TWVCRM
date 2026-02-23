@@ -12,6 +12,7 @@ export async function GET(request: NextRequest) {
   const page = parseInt(searchParams.get("page") || "1");
   const limit = parseInt(searchParams.get("limit") || "25");
   const contractId = searchParams.get("contract_id");
+  const bookingId = searchParams.get("booking_id");
   const leadId = searchParams.get("lead_id");
   const status = searchParams.get("status");
   const dateFrom = searchParams.get("date_from");
@@ -22,11 +23,12 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("usage_charges")
     .select(
-      "*, contract:contracts!usage_charges_contract_id_fkey(id, contract_number), lead:leads!usage_charges_lead_id_fkey(id, first_name, last_name, company)",
+      "*, contract:contracts!usage_charges_contract_id_fkey(id, contract_number), booking:bookings!usage_charges_booking_id_fkey(id, booking_number, booking_date, lead_id, guest_name, guest_email), lead:leads!usage_charges_lead_id_fkey(id, first_name, last_name, company)",
       { count: "exact" }
     );
 
   if (contractId) query = query.eq("contract_id", contractId);
+  if (bookingId) query = query.eq("booking_id", bookingId);
   if (leadId) query = query.eq("lead_id", leadId);
   if (status) query = query.eq("status", status);
   if (dateFrom) query = query.gte("charge_date", dateFrom);
@@ -54,27 +56,51 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Validation failed", details: result.error.issues }, { status: 400 });
   }
 
-  // Fetch contract — must exist and be active
-  const { data: contract, error: contractError } = await supabase
-    .from("contracts")
-    .select("id, lead_id, status")
-    .eq("id", result.data.contract_id)
-    .single();
-
-  if (contractError || !contract) {
-    return NextResponse.json({ error: "Contract not found" }, { status: 404 });
-  }
-  if (contract.status !== "active") {
-    return NextResponse.json({ error: "Contract is not active" }, { status: 400 });
-  }
-
   const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+
+  let leadId: string | null = null;
+
+  if (result.data.contract_id) {
+    // Contract-based charge — must exist and be active
+    const { data: contract, error: contractError } = await supabase
+      .from("contracts")
+      .select("id, lead_id, status")
+      .eq("id", result.data.contract_id)
+      .single();
+
+    if (contractError || !contract) {
+      return NextResponse.json({ error: "Contract not found" }, { status: 404 });
+    }
+    if (contract.status !== "active") {
+      return NextResponse.json({ error: "Contract is not active" }, { status: 400 });
+    }
+    leadId = contract.lead_id;
+  } else if (result.data.booking_id) {
+    // Booking-based charge — booking must exist
+    const { data: booking, error: bookingError } = await supabase
+      .from("bookings")
+      .select("id, lead_id, status")
+      .eq("id", result.data.booking_id)
+      .single();
+
+    if (bookingError || !booking) {
+      return NextResponse.json({ error: "Booking not found" }, { status: 404 });
+    }
+    leadId = booking.lead_id ?? null;
+  }
 
   const { data, error } = await supabase
     .from("usage_charges")
     .insert({
-      ...result.data,
-      lead_id: contract.lead_id,
+      contract_id: result.data.contract_id ?? null,
+      booking_id: result.data.booking_id ?? null,
+      description: result.data.description,
+      quantity: result.data.quantity,
+      unit_price: result.data.unit_price,
+      total: result.data.total,
+      charge_date: result.data.charge_date,
+      notes: result.data.notes,
+      lead_id: leadId,
       status: "pending",
       created_by: dbUser?.id,
     })

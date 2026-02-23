@@ -9,7 +9,7 @@ import {
   Phone, AlertTriangle, ShieldCheck, Star,
   Banknote, CheckCircle, Calendar, Timer, Copy,
   Link2, Download, MessageCircle, Repeat, RotateCcw,
-  StickyNote,
+  StickyNote, Receipt,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +23,7 @@ import { RescheduleDialog } from "@/components/bookings/reschedule-dialog";
 import { ExtendBookingDialog } from "@/components/bookings/extend-booking-dialog";
 import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
+import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import {
   BOOKING_STATUS_LABELS, BOOKING_STATUS_COLORS,
@@ -57,6 +58,14 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false);
   const [rescheduleDialogOpen, setRescheduleDialogOpen] = useState(false);
   const [extendDialogOpen, setExtendDialogOpen] = useState(false);
+  const [logChargeOpen, setLogChargeOpen] = useState(false);
+  const [outstandingCharges, setOutstandingCharges] = useState<Array<{
+    id: string;
+    description: string;
+    total: number;
+    charge_date: string;
+    booking?: { booking_number: string; booking_date: string } | null;
+  }>>([]);
 
   // Payment records + gateway config
   const [existingPayments, setExistingPayments] = useState<BookingPayment[]>([]);
@@ -78,6 +87,22 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     if (paymentsRes.ok) {
       const pJson = await paymentsRes.json();
       setExistingPayments(pJson.data || []);
+    }
+
+    // Fetch outstanding booking charges for this customer (from other bookings)
+    if (json.data?.lead_id) {
+      const ocRes = await fetch(
+        `/api/usage-charges?lead_id=${json.data.lead_id}&status=pending&limit=50`
+      );
+      if (ocRes.ok) {
+        const ocJson = await ocRes.json();
+        // Only show charges linked to a booking (not contract), excluding the current booking
+        const bookingCharges = (ocJson.data || []).filter(
+          (c: { booking_id?: string | null }) =>
+            c.booking_id && c.booking_id !== id
+        );
+        setOutstandingCharges(bookingCharges);
+      }
     }
 
     // Fetch public gateway settings
@@ -377,6 +402,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const customerEmail = booking.lead?.email || booking.guest_email;
   const customerPhone = booking.lead?.phone || booking.guest_phone;
   const activeVoucher = booking.voucher_issuances?.find(v => v.is_active);
+  const outstandingTotal = outstandingCharges.reduce((s, c) => s + c.total, 0);
 
   return (
     <div className="space-y-6">
@@ -463,9 +489,47 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <Star className="mr-1 h-4 w-4 text-amber-500" />Give Feedback
             </Button>
           )}
+          {/* Log Charge — available for checked-out and no-show bookings */}
+          {(booking.status === "checked_out" || booking.status === "no_show") && (
+            <Button variant="outline" size="sm" onClick={() => setLogChargeOpen(true)}>
+              <Receipt className="mr-1 h-4 w-4" />Log Charge
+            </Button>
+          )}
           {actionLoading && <Loader2 className="h-4 w-4 animate-spin self-center" />}
         </div>
       </div>
+
+      {/* Outstanding charges from previous bookings */}
+      {outstandingCharges.length > 0 && (
+        <div className="bg-amber-50 border border-amber-200 rounded-lg p-4 flex items-start gap-3">
+          <div className="flex-shrink-0 w-10 h-10 bg-amber-100 rounded-full flex items-center justify-center">
+            <AlertTriangle className="h-5 w-5 text-amber-600" />
+          </div>
+          <div className="flex-1 min-w-0">
+            <p className="font-semibold text-amber-800">
+              Outstanding charges from previous visits — {formatCurrency(outstandingTotal)}
+            </p>
+            <p className="text-sm text-amber-700 mb-2">
+              {customerName} has {outstandingCharges.length} unpaid charge{outstandingCharges.length > 1 ? "s" : ""} logged against past bookings.
+            </p>
+            <div className="space-y-1">
+              {outstandingCharges.map((c) => (
+                <div key={c.id} className="flex items-center justify-between text-sm bg-white/70 rounded px-3 py-1.5 border border-amber-100">
+                  <span className="text-amber-900">{c.description}</span>
+                  <div className="flex items-center gap-3 shrink-0 ml-4">
+                    {c.booking && (
+                      <span className="text-xs text-amber-600 font-mono">
+                        {c.booking.booking_number} · {formatDate(c.booking.booking_date)}
+                      </span>
+                    )}
+                    <span className="font-semibold text-amber-800">{formatCurrency(c.total)}</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Payment Collected Success Banner */}
       {booking.payment_status === "paid" && (() => {
@@ -962,6 +1026,13 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         currentEnd={booking.end_time}
         hourlyRate={booking.hourly_rate}
         onExtended={fetchBooking}
+      />
+
+      <AddUsageChargeDialog
+        open={logChargeOpen}
+        onOpenChange={setLogChargeOpen}
+        onSuccess={fetchBooking}
+        bookingId={booking.id}
       />
     </div>
   );

@@ -75,8 +75,11 @@ interface Contract {
 interface UsageCharge {
   id: string;
   description: string;
-  contract_id: string;
-  contract?: { contract_number: string };
+  contract_id?: string | null;
+  contract?: { contract_number: string } | null;
+  booking_id?: string | null;
+  booking?: { booking_number: string; booking_date: string } | null;
+  lead?: { first_name: string; last_name: string; company?: string } | null;
   quantity: number;
   unit_price: number;
   total: number;
@@ -416,7 +419,7 @@ export default function BillingPage() {
                       Description
                     </th>
                     <th className="px-4 py-3 text-left font-medium hidden md:table-cell">
-                      Contract #
+                      Reference
                     </th>
                     <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">
                       Quantity
@@ -444,7 +447,15 @@ export default function BillingPage() {
                         {charge.description}
                       </td>
                       <td className="px-4 py-3 font-mono text-xs hidden md:table-cell">
-                        {charge.contract?.contract_number || "-"}
+                        {charge.contract?.contract_number ? (
+                          <span title="Contract">{charge.contract.contract_number}</span>
+                        ) : charge.booking?.booking_number ? (
+                          <span className="text-blue-600" title={`Booking — ${formatDate(charge.booking.booking_date)}`}>
+                            {charge.booking.booking_number}
+                          </span>
+                        ) : (
+                          "-"
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right hidden sm:table-cell">
                         {charge.quantity}

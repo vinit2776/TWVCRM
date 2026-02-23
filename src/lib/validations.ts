@@ -246,14 +246,18 @@ export type CreateContractInput = z.input<typeof createContractSchema>;
 // Usage Charge Validations
 // ==========================================
 export const createUsageChargeSchema = z.object({
-  contract_id: z.string().uuid("Invalid contract ID"),
+  contract_id: z.string().uuid("Invalid contract ID").optional(),
+  booking_id: z.string().uuid("Invalid booking ID").optional(),
   description: z.string().min(1, "Description is required"),
   quantity: z.number().positive("Quantity must be positive"),
   unit_price: z.number().min(0, "Price must be non-negative"),
   total: z.number(),
   charge_date: z.string().min(1, "Charge date is required"),
   notes: z.string().optional(),
-});
+}).refine(
+  (data) => data.contract_id || data.booking_id,
+  { message: "Either contract_id or booking_id is required" }
+);
 
 export type CreateUsageChargeInput = z.infer<typeof createUsageChargeSchema>;
 
