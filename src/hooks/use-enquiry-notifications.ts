@@ -140,7 +140,7 @@ export function useEnquiryNotifications() {
 
           setNewLeadCount((c) => c + 1);
           setRecentItems((prev) => [
-            { type: "lead", leadId: lead.id, name, source: sourceLabel, time: lead.created_at },
+            { type: "lead" as const, leadId: lead.id, name, source: sourceLabel, time: lead.created_at },
             ...prev,
           ].slice(0, 10));
 
@@ -177,7 +177,7 @@ export function useEnquiryNotifications() {
           setReEnquiryCount((c) => c + 1);
           setRecentItems((prev) => [
             {
-              type: "activity",
+              type: "activity" as const,
               leadId: act.lead_id,
               name,
               source: sourceLabel,
