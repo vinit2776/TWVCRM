@@ -321,6 +321,7 @@ export const createBookingSchema = z.object({
   payment_mode: z.string().optional(),
   payment_reference: z.string().optional(),
   notes: z.string().optional(),
+  hourly_rate: z.number().min(0).optional(),
 }).refine(data => {
   if (data.customer_type === "contract_holder" && !data.contract_id) return false;
   return true;

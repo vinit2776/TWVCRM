@@ -62,6 +62,7 @@ function NewBookingForm() {
   const [bookingDate, setBookingDate] = useState(() => new Date().toISOString().split("T")[0]);
   const [availableSlots, setAvailableSlots] = useState<AvailableSlot[]>([]);
   const [availLoading, setAvailLoading] = useState(false);
+  const [customRate, setCustomRate] = useState<string>("");
 
   // Step 2: Time
   const [startTime, setStartTime] = useState("");
@@ -216,6 +217,11 @@ function NewBookingForm() {
     }
   }, [spaceId, spaces, preselectedSpaceId]);
 
+  // Sync customRate when selected space changes
+  useEffect(() => {
+    setCustomRate(selectedSpace ? selectedSpace.hourly_rate.toFixed(2) : "");
+  }, [selectedSpace]);
+
   // Fetch availability
   const fetchAvailability = useCallback(async () => {
     if (!spaceId || !bookingDate) return;
@@ -286,7 +292,11 @@ function NewBookingForm() {
     return Math.max(0, (eh * 60 + em - sh * 60 - sm) / 60);
   })();
 
-  const roomCost = selectedSpace ? durationHours * selectedSpace.hourly_rate : 0;
+  const parsedCustomRate = parseFloat(customRate);
+  const effectiveRate = selectedSpace
+    ? (!isNaN(parsedCustomRate) && parsedCustomRate >= 0 ? parsedCustomRate : selectedSpace.hourly_rate)
+    : 0;
+  const roomCost = selectedSpace ? durationHours * effectiveRate : 0;
   const facilityCost = selectedSpace?.facilities
     ? selectedSpace.facilities
         .filter(f => selectedFacilities.includes(f.id) && !f.is_complimentary)
@@ -376,6 +386,7 @@ function NewBookingForm() {
         payment_mode: paymentMode || undefined,
         payment_reference: paymentReference.trim() || undefined,
         notes: notes.trim() || undefined,
+        hourly_rate: effectiveRate,
         advance_payment: advancePayment,
       };
 
@@ -992,8 +1003,23 @@ function NewBookingForm() {
             </div>
           </div>
           <div className="border-t pt-3 space-y-1">
+            {selectedSpace && (
+              <div className="flex justify-between text-sm items-center">
+                <span className="text-muted-foreground">Hourly Rate</span>
+                <div className="flex items-center gap-1">
+                  <span className="text-muted-foreground text-xs">₹</span>
+                  <Input
+                    type="number" min="0" step="0.01"
+                    value={customRate}
+                    onChange={(e) => setCustomRate(e.target.value)}
+                    className="h-6 w-20 text-right text-xs px-1"
+                  />
+                  <span className="text-muted-foreground text-xs">/hr</span>
+                </div>
+              </div>
+            )}
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Room ({durationHours}h x {selectedSpace ? formatCurrency(selectedSpace.hourly_rate) : "—"})</span>
+              <span className="text-muted-foreground">Room ({durationHours}h)</span>
               <span>{formatCurrency(roomCost)}</span>
             </div>
             {facilityCost > 0 && (

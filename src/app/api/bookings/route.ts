@@ -215,7 +215,10 @@ export async function POST(request: NextRequest) {
 
   // 3. Calculate pricing
   const durationHours = durationMinutes / 60;
-  let totalAmount = durationHours * space.hourly_rate;
+  const effectiveRate = (input.hourly_rate !== undefined && input.hourly_rate >= 0)
+    ? input.hourly_rate
+    : space.hourly_rate;
+  let totalAmount = durationHours * effectiveRate;
 
   // Add facility charges
   const requestedFacilities: { facility_name: string; is_complimentary: boolean; charge: number }[] = [];
@@ -266,7 +269,7 @@ export async function POST(request: NextRequest) {
         lead_id: contract.lead_id,
         description: `Conference Room: ${space.name} (${input.start_time}-${input.end_time}, ${input.booking_date})`,
         quantity: durationHours,
-        unit_price: space.hourly_rate,
+        unit_price: effectiveRate,
         total: totalAmount,
         charge_date: input.booking_date,
         status: "pending",
@@ -336,7 +339,7 @@ export async function POST(request: NextRequest) {
       guest_email: input.guest_email || null,
       guest_phone: input.guest_phone,
       guest_company: input.guest_company,
-      hourly_rate: space.hourly_rate,
+      hourly_rate: effectiveRate,
       total_amount: totalAmount,
       payment_status: paymentStatus,
       payment_mode: input.payment_mode,
