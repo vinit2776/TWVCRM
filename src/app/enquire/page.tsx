@@ -1,49 +1,17 @@
 "use client";
 
-import { useEffect, useState } from "react";
-
-const WORKSPACE_TYPES = [
-  { value: "hot_desk", label: "Hot Desk" },
-  { value: "dedicated_desk", label: "Dedicated Desk" },
-  { value: "private_office", label: "Private Office / Cabin" },
-  { value: "meeting_room", label: "Meeting Room" },
-  { value: "conference_room", label: "Conference Room" },
-  { value: "virtual_office", label: "Virtual Office" },
-];
-
-interface Location {
-  id: string;
-  name: string;
-}
+import { useState } from "react";
 
 export default function EnquirePage() {
-  const [locations, setLocations] = useState<Location[]>([]);
-
-  // Form state
+  // Form state — only fields shown on this form
   const [name, setName] = useState("");
   const [mobile, setMobile] = useState("");
   const [email, setEmail] = useState("");
-  const [company, setCompany] = useState("");
-  const [workspaceType, setWorkspaceType] = useState("");
-  const [seatCapacity, setSeatCapacity] = useState("");
-  const [budgetPerSeat, setBudgetPerSeat] = useState("");
-  const [preferredLocation, setPreferredLocation] = useState("");
-  const [workingHours, setWorkingHours] = useState("");
-  const [description, setDescription] = useState("");
   const [hpField, setHpField] = useState(""); // honeypot
 
   const [submitting, setSubmitting] = useState(false);
   const [submitted, setSubmitted] = useState(false);
   const [error, setError] = useState("");
-
-  useEffect(() => {
-    fetch("/api/public/locations")
-      .then((r) => r.json())
-      .then((json) => {
-        if (json.data) setLocations(json.data);
-      })
-      .catch(() => {});
-  }, []);
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,6 +23,7 @@ export default function EnquirePage() {
       return;
     }
 
+    // Validate only the displayed fields
     if (!name.trim()) { setError("Please enter your full name."); return; }
     if (!/^[6-9]\d{9}$/.test(mobile)) { setError("Please enter a valid 10-digit mobile number."); return; }
 
@@ -67,14 +36,8 @@ export default function EnquirePage() {
           name: name.trim(),
           mobile: mobile.trim(),
           email: email.trim() || undefined,
-          company: company.trim() || undefined,
-          workspace_type: workspaceType || undefined,
-          seat_capacity: seatCapacity ? seatCapacity : undefined,
-          budget_per_seat: budgetPerSeat ? budgetPerSeat : undefined,
-          preferred_location: preferredLocation || undefined,
-          working_hours: workingHours.trim() || undefined,
-          description: description.trim() || undefined,
           hp_field: hpField,
+          source: "google_ads",
         }),
       });
 
@@ -165,7 +128,6 @@ export default function EnquirePage() {
                       onChange={(e) => setName(e.target.value)}
                       placeholder="Rahul Sharma"
                       className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#015E65] focus:border-transparent"
-                      required
                     />
                   </div>
                   <div>
@@ -178,142 +140,21 @@ export default function EnquirePage() {
                       onChange={(e) => setMobile(e.target.value.replace(/\D/g, "").slice(0, 10))}
                       placeholder="9876543210"
                       className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#015E65] focus:border-transparent"
-                      required
                     />
                   </div>
                 </div>
 
-                {/* Row 2: Email + Company */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Email Address
-                    </label>
-                    <input
-                      type="email"
-                      value={email}
-                      onChange={(e) => setEmail(e.target.value)}
-                      placeholder="rahul@company.com"
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#015E65] focus:border-transparent"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Company Name
-                    </label>
-                    <input
-                      type="text"
-                      value={company}
-                      onChange={(e) => setCompany(e.target.value)}
-                      placeholder="Acme Pvt. Ltd."
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#015E65] focus:border-transparent"
-                    />
-                  </div>
-                </div>
-
-                {/* Row 3: Workspace Type + Seats */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      I&apos;m Looking For
-                    </label>
-                    <select
-                      value={workspaceType}
-                      onChange={(e) => setWorkspaceType(e.target.value)}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#015E65] focus:border-transparent bg-white"
-                    >
-                      <option value="">Select workspace type</option>
-                      {WORKSPACE_TYPES.map((wt) => (
-                        <option key={wt.value} value={wt.value}>
-                          {wt.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Number of Seats
-                    </label>
-                    <input
-                      type="number"
-                      value={seatCapacity}
-                      onChange={(e) => setSeatCapacity(e.target.value)}
-                      placeholder="e.g. 5"
-                      min={1}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#015E65] focus:border-transparent"
-                    />
-                  </div>
-                </div>
-
-                {/* Row 4: Budget + Location */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Monthly Budget / Seat (₹)
-                    </label>
-                    <input
-                      type="number"
-                      value={budgetPerSeat}
-                      onChange={(e) => setBudgetPerSeat(e.target.value)}
-                      placeholder="e.g. 7000"
-                      min={1}
-                      className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#015E65] focus:border-transparent"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      Preferred Location
-                    </label>
-                    {locations.length > 0 ? (
-                      <select
-                        value={preferredLocation}
-                        onChange={(e) => setPreferredLocation(e.target.value)}
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#015E65] focus:border-transparent bg-white"
-                      >
-                        <option value="">Any location</option>
-                        {locations.map((loc) => (
-                          <option key={loc.id} value={loc.name}>
-                            {loc.name}
-                          </option>
-                        ))}
-                      </select>
-                    ) : (
-                      <input
-                        type="text"
-                        value={preferredLocation}
-                        onChange={(e) => setPreferredLocation(e.target.value)}
-                        placeholder="e.g. Nungambakkam"
-                        className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#015E65] focus:border-transparent"
-                      />
-                    )}
-                  </div>
-                </div>
-
-                {/* Row 5: Working Hours (full width) */}
+                {/* Row 2: Email (full width) */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Working Hours / Shift Timings
+                    Email Address
                   </label>
                   <input
-                    type="text"
-                    value={workingHours}
-                    onChange={(e) => setWorkingHours(e.target.value)}
-                    placeholder="e.g. Mon–Fri, 9 AM to 6 PM"
+                    type="email"
+                    value={email}
+                    onChange={(e) => setEmail(e.target.value)}
+                    placeholder="rahul@company.com"
                     className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#015E65] focus:border-transparent"
-                  />
-                </div>
-
-                {/* Row 6: Description */}
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">
-                    Tell Us Your Requirement
-                  </label>
-                  <textarea
-                    value={description}
-                    onChange={(e) => setDescription(e.target.value)}
-                    rows={3}
-                    placeholder="Any specific requirements, questions, or details about your workspace needs..."
-                    className="w-full border border-gray-300 rounded-lg px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-[#015E65] focus:border-transparent resize-none"
                   />
                 </div>
 
