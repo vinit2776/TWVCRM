@@ -66,6 +66,27 @@ export async function PATCH(
   const body = await request.json();
   const updates: Record<string, unknown> = {};
 
+  // ── Update pricing ──
+  if (body.action === "update_pricing") {
+    if (booking.status === "cancelled") {
+      return NextResponse.json({ error: "Cannot update pricing on a cancelled booking" }, { status: 400 });
+    }
+    const newRate = Number(body.hourly_rate);
+    const newTotal = Number(body.total_amount);
+    if (isNaN(newRate) || newRate < 0)
+      return NextResponse.json({ error: "hourly_rate must be 0 or greater" }, { status: 400 });
+    if (isNaN(newTotal) || newTotal < 0)
+      return NextResponse.json({ error: "total_amount must be 0 or greater" }, { status: 400 });
+    const { data: updated, error: updateErr } = await supabase
+      .from("bookings")
+      .update({ hourly_rate: newRate, total_amount: newTotal })
+      .eq("id", id)
+      .select(BOOKING_SELECT)
+      .single();
+    if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
+    return NextResponse.json({ data: updated });
+  }
+
   // ── Reschedule action ──
   if (body.action === "reschedule") {
     if (booking.status !== "confirmed") {

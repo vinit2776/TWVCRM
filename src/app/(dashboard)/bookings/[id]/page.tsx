@@ -9,9 +9,10 @@ import {
   Phone, AlertTriangle, ShieldCheck, Star,
   Banknote, CheckCircle, Calendar, Timer, Copy,
   Link2, Download, MessageCircle, Repeat, RotateCcw,
-  StickyNote, Receipt,
+  StickyNote, Receipt, Pencil, Check, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
@@ -66,6 +67,12 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     charge_date: string;
     booking?: { booking_number: string; booking_date: string } | null;
   }>>([]);
+
+  // Pricing inline-edit state
+  const [editingPricing, setEditingPricing] = useState(false);
+  const [draftRate, setDraftRate] = useState("");
+  const [draftTotal, setDraftTotal] = useState("");
+  const [pricingSaving, setPricingSaving] = useState(false);
 
   // Payment records + gateway config
   const [existingPayments, setExistingPayments] = useState<BookingPayment[]>([]);
@@ -122,6 +129,29 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   }, [id]);
 
   useEffect(() => { fetchBooking(); }, [fetchBooking]);
+
+  const handlePricingSave = async () => {
+    const newRate = parseFloat(draftRate);
+    const newTotal = parseFloat(draftTotal);
+    if (isNaN(newRate) || newRate < 0) { toast.error("Hourly rate must be 0 or greater"); return; }
+    if (isNaN(newTotal) || newTotal < 0) { toast.error("Total amount must be 0 or greater"); return; }
+    setPricingSaving(true);
+    const res = await fetch(`/api/bookings/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "update_pricing", hourly_rate: newRate, total_amount: newTotal }),
+    });
+    if (res.ok) {
+      const json = await res.json();
+      setBooking(json.data);
+      setEditingPricing(false);
+      toast.success("Pricing updated");
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to update pricing");
+    }
+    setPricingSaving(false);
+  };
 
   // Poll for payment updates when a Razorpay payment link is active and payment is pending
   useEffect(() => {
@@ -405,6 +435,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const customerPhone = booking.lead?.phone || booking.guest_phone;
   const activeVoucher = booking.voucher_issuances?.find(v => v.is_active);
   const outstandingTotal = outstandingCharges.reduce((s, c) => s + c.total, 0);
+  const canEditPricing = booking.status !== "cancelled";
 
   return (
     <div className="space-y-6">
@@ -710,14 +741,92 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         <Card>
           <CardHeader><CardTitle className="text-sm">Financials</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm">
-            <div className="flex justify-between">
+            {/* Hourly Rate — inline editable */}
+            <div className="flex justify-between items-center">
               <span className="text-muted-foreground">Hourly Rate</span>
-              <span>{formatCurrency(booking.hourly_rate)}</span>
+              {editingPricing ? (
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={draftRate}
+                  onChange={(e) => {
+                    setDraftRate(e.target.value);
+                    const newRate = parseFloat(e.target.value);
+                    if (!isNaN(newRate) && newRate >= 0) {
+                      const facilityCharges =
+                        Number(booking.total_amount) -
+                        Number(booking.hourly_rate) * Number(booking.duration_hours);
+                      setDraftTotal((newRate * Number(booking.duration_hours) + facilityCharges).toFixed(2));
+                    }
+                  }}
+                  className="h-7 w-28 text-right text-sm"
+                  disabled={pricingSaving}
+                  autoFocus
+                />
+              ) : (
+                <div className="flex items-center gap-1">
+                  <span>{formatCurrency(booking.hourly_rate)}</span>
+                  {canEditPricing && (
+                    <button
+                      onClick={() => {
+                        setDraftRate(Number(booking.hourly_rate).toFixed(2));
+                        setDraftTotal(Number(booking.total_amount).toFixed(2));
+                        setEditingPricing(true);
+                      }}
+                      className="text-muted-foreground hover:text-foreground ml-1"
+                      title="Edit pricing"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
-            <div className="flex justify-between font-medium">
+
+            {/* Total Amount — auto-recalculated or direct override */}
+            <div className="flex justify-between items-center font-medium">
               <span className="text-muted-foreground">Total Amount</span>
-              <span>{formatCurrency(booking.total_amount)}</span>
+              {editingPricing ? (
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  value={draftTotal}
+                  onChange={(e) => setDraftTotal(e.target.value)}
+                  className="h-7 w-28 text-right text-sm"
+                  disabled={pricingSaving}
+                />
+              ) : (
+                <span>{formatCurrency(booking.total_amount)}</span>
+              )}
             </div>
+
+            {/* Save / Cancel — only visible during edit */}
+            {editingPricing && (
+              <div className="flex justify-end gap-2 pt-1">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  className="h-7 px-2 text-xs"
+                  onClick={() => setEditingPricing(false)}
+                  disabled={pricingSaving}
+                >
+                  <X className="h-3 w-3 mr-1" />Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  className="h-7 px-2 text-xs bg-teal-600 hover:bg-teal-700 text-white"
+                  onClick={handlePricingSave}
+                  disabled={pricingSaving}
+                >
+                  {pricingSaving
+                    ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                    : <Check className="h-3 w-3 mr-1" />}
+                  Save
+                </Button>
+              </div>
+            )}
 
             {/* Payment summary from booking_payments */}
             {(() => {
