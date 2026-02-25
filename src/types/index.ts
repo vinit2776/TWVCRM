@@ -1435,6 +1435,25 @@ export interface VendorBill {
   purchase_orders?: Pick<PurchaseOrder, "id" | "po_number"> | null;
 }
 
+export interface ItemHistoryEntry {
+  id: string;
+  quantity_ordered: number;
+  quantity_received: number;
+  unit: string;
+  unit_price?: number;
+  total_amount?: number;
+  purchase_orders: {
+    id: string;
+    po_number: string;
+    status: string;
+    created_at: string;
+    expected_delivery_date?: string;
+    actual_delivery_date?: string;
+    procurement_vendors?: { id: string; name: string } | null;
+    locations?: { id: string; name: string } | null;
+  };
+}
+
 export interface ProcurementDashboardStats {
   pending_approval_count: number;
   monthly_spend_by_dept: { department: ProcurementDepartment; total: number }[];

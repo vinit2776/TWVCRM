@@ -16,6 +16,7 @@ import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
+import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog";
 import {
   PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS,
   ITEM_UNITS,
@@ -304,6 +305,7 @@ export default function NewPurchaseRequestPage() {
                   <Badge variant="secondary" className="bg-blue-50 text-blue-700 text-xs">
                     From catalog
                   </Badge>
+                  <ItemHistoryDialog itemId={li.item_id} itemName={li.item_name} />
                   <button
                     className="text-xs text-muted-foreground hover:text-foreground underline"
                     onClick={() => clearItemCatalogLink(li.id)}

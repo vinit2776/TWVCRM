@@ -16,6 +16,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
+import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog";
 import {
   PR_STATUS_LABELS, PR_STATUS_COLORS,
   PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_COLORS,
@@ -376,9 +377,14 @@ export default function PurchaseRequestDetailPage() {
                             <p className="text-xs text-muted-foreground mt-0.5">{item.notes}</p>
                           )}
                           {item.procurement_items && (
-                            <Badge variant="secondary" className="text-xs mt-0.5 bg-blue-50 text-blue-700">
-                              Catalog
-                            </Badge>
+                            <div className="flex items-center gap-2 mt-0.5">
+                              <Badge variant="secondary" className="text-xs bg-blue-50 text-blue-700">
+                                Catalog
+                              </Badge>
+                              {item.item_id && (
+                                <ItemHistoryDialog itemId={item.item_id} itemName={item.item_name} />
+                              )}
+                            </div>
                           )}
                         </div>
                       </td>
