@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ChevronLeft, CheckCircle, XCircle, RefreshCcw, Loader2,
-  Building2, MapPin, User, Calendar, FileText, PackageOpen, ShoppingCart,
+  Building2, MapPin, User, Calendar, FileText, PackageOpen, ShoppingCart, ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -231,6 +231,11 @@ export default function PurchaseRequestDetailPage() {
                 By {pr.approver.full_name ?? pr.approver.email}
                 {pr.approved_at ? ` on ${formatDate(pr.approved_at)}` : ""}
               </p>
+              {pr.approval_code && (
+                <p className="text-xs text-green-700 mt-1 font-mono font-medium">
+                  Approval Ref: {pr.approval_code}
+                </p>
+              )}
             </div>
           </CardContent>
         </Card>
@@ -291,6 +296,15 @@ export default function PurchaseRequestDetailPage() {
                 {formatDate(pr.created_at)}
               </span>
             </div>
+            {pr.approval_code && (
+              <div className="flex items-center gap-2.5">
+                <ShieldCheck className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                <span className="text-sm">
+                  <span className="text-muted-foreground">Approval Code: </span>
+                  <span className="font-mono font-medium">{pr.approval_code}</span>
+                </span>
+              </div>
+            )}
             {pr.notes && (
               <div className="flex items-start gap-2.5">
                 <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-0.5" />

@@ -5,8 +5,9 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ChevronLeft, Loader2, Truck, MapPin, User, Calendar,
-  FileText, PackageOpen, Receipt,
+  FileText, PackageOpen, Receipt, Download,
 } from "lucide-react";
+import { generatePurchaseOrderPDF } from "@/lib/po-pdf-generator";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -114,6 +115,18 @@ export default function PurchaseOrderDetailPage() {
 
         {/* Action buttons */}
         <div className="flex gap-2 flex-wrap justify-end">
+          {po.status !== "cancelled" && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const pdf = generatePurchaseOrderPDF(po as Parameters<typeof generatePurchaseOrderPDF>[0]);
+                pdf.save(`${po.po_number}.pdf`);
+              }}
+            >
+              <Download className="h-4 w-4 mr-1" /> Download PO
+            </Button>
+          )}
           {po.status === "pending" && (
             <Button
               size="sm"

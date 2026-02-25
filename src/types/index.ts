@@ -1346,6 +1346,9 @@ export interface PurchaseRequestItem {
   notes?: string;
   created_at: string;
   procurement_items?: ProcurementItem | null;
+  // Computed by API — not DB columns
+  already_ordered_qty?: number;
+  remaining_qty?: number;
 }
 
 export interface PurchaseRequest {
@@ -1357,6 +1360,7 @@ export interface PurchaseRequest {
   requested_by: string;
   approved_by?: string;
   approved_at?: string;
+  approval_code?: string;
   rejection_reason?: string;
   notes?: string;
   total_estimated_amount: number;
@@ -1402,7 +1406,9 @@ export interface PurchaseOrder {
   procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
   locations?: { id: string; name: string } | null;
   orderer?: { id: string; full_name?: string; email?: string } | null;
-  purchase_requests?: Pick<PurchaseRequest, "id" | "pr_number" | "department"> | null;
+  purchase_requests?: (Pick<PurchaseRequest, "id" | "pr_number" | "department" | "approval_code" | "approved_at"> & {
+    approver?: { id: string; full_name?: string; email?: string } | null;
+  }) | null;
   purchase_order_items?: PurchaseOrderItem[];
 }
 

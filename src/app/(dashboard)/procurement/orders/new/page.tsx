@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Plus, Trash2, ChevronLeft, Loader2 } from "lucide-react";
+import { Plus, Trash2, ChevronLeft, Loader2, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -26,6 +26,12 @@ interface LineItem {
   unit: ItemUnit;
   unit_price: string;
   notes: string;
+  // Ceiling info from PR (display only — not sent in API)
+  approved_qty?: number;
+  already_ordered_qty?: number;
+  remaining_qty?: number;
+  estimated_price?: number;
+  fully_ordered?: boolean;
 }
 
 function generateLocalId() {
@@ -60,6 +66,71 @@ function NewPurchaseOrderForm() {
   const [prData, setPrData] = useState<PurchaseRequest | null>(null);
   const [loadingPr, setLoadingPr] = useState(false);
 
+  // ── Show redirect screen when no pr_id is provided ──────────────────────────
+  if (!prId) {
+    return (
+      <div className="space-y-6 max-w-2xl mx-auto">
+        <div className="flex items-center gap-3">
+          <Button variant="ghost" size="icon" onClick={() => router.back()}>
+            <ChevronLeft className="h-5 w-5" />
+          </Button>
+          <h1 className="text-2xl font-bold">New Purchase Order</h1>
+        </div>
+        <Card className="border-amber-200 bg-amber-50/50">
+          <CardContent className="pt-6 flex gap-3">
+            <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="font-medium text-amber-800">Purchase Request Required</p>
+              <p className="text-sm text-amber-700 mt-1">
+                Purchase Orders can only be created from an approved Purchase Request. Please select an
+                approved request first, then use the &ldquo;Create PO&rdquo; button.
+              </p>
+              <Button
+                size="sm"
+                className="mt-3 bg-amber-700 hover:bg-amber-800"
+                onClick={() => router.push("/procurement/requests?status=approved")}
+              >
+                Browse Approved Requests
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
+  return <NewPurchaseOrderFormWithPr prId={prId} vendors={vendors} setVendors={setVendors}
+    locations={locations} setLocations={setLocations} prData={prData} setPrData={setPrData}
+    loadingPr={loadingPr} setLoadingPr={setLoadingPr} vendorId={vendorId} setVendorId={setVendorId}
+    locationId={locationId} setLocationId={setLocationId} expectedDeliveryDate={expectedDeliveryDate}
+    setExpectedDeliveryDate={setExpectedDeliveryDate} notes={notes} setNotes={setNotes}
+    items={items} setItems={setItems} submitting={submitting} setSubmitting={setSubmitting}
+    router={router} />;
+}
+
+// Separate component to keep hooks after early return
+function NewPurchaseOrderFormWithPr({
+  prId, vendors, setVendors, locations, setLocations,
+  prData, setPrData, loadingPr, setLoadingPr,
+  vendorId, setVendorId, locationId, setLocationId,
+  expectedDeliveryDate, setExpectedDeliveryDate,
+  notes, setNotes, items, setItems, submitting, setSubmitting,
+  router,
+}: {
+  prId: string;
+  vendors: ProcurementVendor[]; setVendors: (v: ProcurementVendor[]) => void;
+  locations: Location[]; setLocations: (l: Location[]) => void;
+  prData: PurchaseRequest | null; setPrData: (p: PurchaseRequest | null) => void;
+  loadingPr: boolean; setLoadingPr: (v: boolean) => void;
+  vendorId: string; setVendorId: (v: string) => void;
+  locationId: string; setLocationId: (v: string) => void;
+  expectedDeliveryDate: string; setExpectedDeliveryDate: (v: string) => void;
+  notes: string; setNotes: (v: string) => void;
+  items: LineItem[]; setItems: (v: LineItem[]) => void;
+  submitting: boolean; setSubmitting: (v: boolean) => void;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  router: any;
+}) {
   // Fetch vendors and locations on mount
   useEffect(() => {
     Promise.all([
@@ -69,11 +140,10 @@ function NewPurchaseOrderForm() {
       setVendors(v.data || []);
       setLocations(l.data || []);
     });
-  }, []);
+  }, [setVendors, setLocations]);
 
-  // Pre-populate from PR if pr_id given
+  // Pre-populate from PR
   useEffect(() => {
-    if (!prId) return;
     setLoadingPr(true);
     fetch(`/api/procurement/requests/${prId}`)
       .then((r) => r.json())
@@ -92,37 +162,50 @@ function NewPurchaseOrderForm() {
               unit: ItemUnit;
               estimated_price?: number | null;
               notes?: string | null;
-            }) => ({
-              id: generateLocalId(),
-              pr_item_id: i.id,
-              item_id: i.item_id ?? null,
-              item_name: i.item_name,
-              quantity_ordered: String(i.quantity),
-              unit: i.unit,
-              unit_price: i.estimated_price ? String(i.estimated_price) : "",
-              notes: i.notes ?? "",
-            }))
+              already_ordered_qty?: number;
+              remaining_qty?: number;
+            }) => {
+              const remainingQty = i.remaining_qty ?? i.quantity;
+              const fullyOrdered = remainingQty <= 0;
+              return {
+                id: generateLocalId(),
+                pr_item_id: i.id,
+                item_id: i.item_id ?? null,
+                item_name: i.item_name,
+                quantity_ordered: fullyOrdered ? "0" : String(Math.min(i.quantity, remainingQty)),
+                unit: i.unit,
+                unit_price: i.estimated_price ? String(i.estimated_price) : "",
+                notes: i.notes ?? "",
+                approved_qty: i.quantity,
+                already_ordered_qty: i.already_ordered_qty ?? 0,
+                remaining_qty: remainingQty,
+                estimated_price: i.estimated_price ?? undefined,
+                fully_ordered: fullyOrdered,
+              };
+            })
           );
         }
       })
       .finally(() => setLoadingPr(false));
-  }, [prId]);
+  }, [prId, setPrData, setLocationId, setItems, setLoadingPr]);
 
   const updateItem = (localId: string, field: keyof LineItem, value: string) => {
-    setItems((prev) =>
-      prev.map((li) => (li.id === localId ? { ...li, [field]: value } : li))
+    setItems(
+      items.map((li) => (li.id === localId ? { ...li, [field]: value } : li))
     );
   };
 
   const removeItem = (localId: string) => {
-    if (items.length <= 1) {
+    if (items.filter(li => !li.fully_ordered).length <= 1) {
       toast.error("At least one item is required");
       return;
     }
-    setItems((prev) => prev.filter((li) => li.id !== localId));
+    setItems(items.filter((li) => li.id !== localId));
   };
 
-  const totalOrdered = items.reduce((sum, li) => {
+  const activeItems = items.filter((li) => !li.fully_ordered);
+
+  const totalOrdered = activeItems.reduce((sum, li) => {
     const q = parseFloat(li.quantity_ordered);
     const p = parseFloat(li.unit_price);
     if (!isNaN(q) && !isNaN(p)) return sum + q * p;
@@ -131,10 +214,25 @@ function NewPurchaseOrderForm() {
 
   const validate = (): string | null => {
     if (!vendorId) return "Please select a vendor";
-    for (const li of items) {
+    const orderable = activeItems.filter(li => parseFloat(li.quantity_ordered) > 0);
+    if (orderable.length === 0) return "At least one item must have a quantity greater than 0";
+    for (const li of orderable) {
       if (!li.item_name.trim()) return "All items must have a name";
       if (!li.quantity_ordered || isNaN(parseFloat(li.quantity_ordered)) || parseFloat(li.quantity_ordered) <= 0) {
         return "All items must have a valid quantity";
+      }
+      // Client-side ceiling checks
+      if (li.remaining_qty !== undefined) {
+        const qty = parseFloat(li.quantity_ordered);
+        if (qty > li.remaining_qty) {
+          return `"${li.item_name}": quantity (${qty}) exceeds remaining approved quantity (${li.remaining_qty})`;
+        }
+      }
+      if (li.estimated_price && li.unit_price) {
+        const price = parseFloat(li.unit_price);
+        if (!isNaN(price) && price > li.estimated_price) {
+          return `"${li.item_name}": unit price exceeds approved estimated price (₹${li.estimated_price})`;
+        }
       }
     }
     return null;
@@ -146,13 +244,15 @@ function NewPurchaseOrderForm() {
 
     setSubmitting(true);
     try {
+      // Only send items that have a positive quantity and are not fully ordered
+      const orderable = activeItems.filter(li => parseFloat(li.quantity_ordered) > 0);
       const payload = {
-        pr_id: prId ?? null,
+        pr_id: prId,
         vendor_id: vendorId,
         location_id: locationId || null,
         expected_delivery_date: expectedDeliveryDate || null,
         notes: notes.trim() || null,
-        items: items.map((li) => ({
+        items: orderable.map((li) => ({
           pr_item_id: li.pr_item_id ?? null,
           item_id: li.item_id ?? null,
           item_name: li.item_name.trim(),
@@ -188,6 +288,8 @@ function NewPurchaseOrderForm() {
     );
   }
 
+  const allItemsFullyOrdered = items.length > 0 && items.every((li) => li.fully_ordered);
+
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
       {/* Header */}
@@ -206,7 +308,18 @@ function NewPurchaseOrderForm() {
       {/* PR context banner */}
       {prData && (
         <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-3 text-sm text-blue-800">
-          Items pre-populated from <strong>{prData.pr_number}</strong>. You can adjust quantities and add unit prices.
+          Items pre-populated from <strong>{prData.pr_number}</strong>. Quantities and prices cannot exceed approved values.
+          {prData.approval_code && (
+            <span className="ml-2 font-mono text-xs">Approval: {prData.approval_code}</span>
+          )}
+        </div>
+      )}
+
+      {/* All items fully ordered warning */}
+      {allItemsFullyOrdered && (
+        <div className="rounded-lg border border-amber-200 bg-amber-50/50 px-4 py-3 text-sm text-amber-800 flex items-center gap-2">
+          <AlertTriangle className="h-4 w-4 flex-shrink-0" />
+          All items from this Purchase Request have already been fully ordered. No additional POs are needed.
         </div>
       )}
 
@@ -273,26 +386,36 @@ function NewPurchaseOrderForm() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-3">
           <CardTitle className="text-base">Items <span className="text-red-500">*</span></CardTitle>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setItems((prev) => [...prev, emptyItem()])}
-          >
-            <Plus className="h-4 w-4 mr-1" /> Add Item
-          </Button>
+          {!prId && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setItems([...items, emptyItem()])}
+            >
+              <Plus className="h-4 w-4 mr-1" /> Add Item
+            </Button>
+          )}
         </CardHeader>
         <CardContent className="space-y-4">
           {items.map((li, idx) => (
-            <div key={li.id} className="border rounded-lg p-4 space-y-3">
+            <div
+              key={li.id}
+              className={`border rounded-lg p-4 space-y-3 ${li.fully_ordered ? "bg-muted/40 opacity-70" : ""}`}
+            >
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-muted-foreground">Item {idx + 1}</span>
                 <div className="flex items-center gap-2">
-                  {li.pr_item_id && (
+                  {li.fully_ordered && (
+                    <Badge variant="secondary" className="bg-slate-100 text-slate-600 text-xs">
+                      Fully Ordered
+                    </Badge>
+                  )}
+                  {li.pr_item_id && !li.fully_ordered && (
                     <Badge variant="secondary" className="bg-blue-50 text-blue-700 text-xs">
                       From PR
                     </Badge>
                   )}
-                  {items.length > 1 && (
+                  {!li.pr_item_id && items.length > 1 && (
                     <Button
                       variant="ghost"
                       size="icon"
@@ -305,80 +428,104 @@ function NewPurchaseOrderForm() {
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div className="space-y-1">
-                  <Label className="text-xs">Item Name <span className="text-red-500">*</span></Label>
-                  <Input
-                    placeholder="e.g. Premium Coffee Beans"
-                    value={li.item_name}
-                    onChange={(e) => updateItem(li.id, "item_name", e.target.value)}
-                    readOnly={!!li.pr_item_id}
-                    className={li.pr_item_id ? "bg-muted/50" : ""}
-                  />
-                </div>
-
-                <div className="grid grid-cols-2 gap-2">
+              {li.fully_ordered ? (
+                // Fully ordered — show read-only summary
+                <p className="text-xs text-muted-foreground">
+                  {li.item_name} — Approved: {li.approved_qty} {li.unit} · Already ordered: {li.already_ordered_qty} {li.unit} · Remaining: 0
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                   <div className="space-y-1">
-                    <Label className="text-xs">Qty Ordered <span className="text-red-500">*</span></Label>
+                    <Label className="text-xs">Item Name <span className="text-red-500">*</span></Label>
                     <Input
-                      type="number"
-                      min="0.01"
-                      step="0.01"
-                      placeholder="0"
-                      value={li.quantity_ordered}
-                      onChange={(e) => updateItem(li.id, "quantity_ordered", e.target.value)}
+                      placeholder="e.g. Premium Coffee Beans"
+                      value={li.item_name}
+                      onChange={(e) => updateItem(li.id, "item_name", e.target.value)}
+                      readOnly={!!li.pr_item_id}
+                      className={li.pr_item_id ? "bg-muted/50" : ""}
                     />
                   </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="space-y-1">
+                      <Label className="text-xs">Qty Ordered <span className="text-red-500">*</span></Label>
+                      <Input
+                        type="number"
+                        min="0.01"
+                        step="0.01"
+                        placeholder="0"
+                        value={li.quantity_ordered}
+                        max={li.remaining_qty !== undefined ? li.remaining_qty : undefined}
+                        onChange={(e) => updateItem(li.id, "quantity_ordered", e.target.value)}
+                      />
+                      {li.pr_item_id && li.remaining_qty !== undefined && (
+                        <p className="text-xs text-muted-foreground">
+                          Approved: {li.approved_qty}{" "}
+                          {li.already_ordered_qty ? `· Ordered: ${li.already_ordered_qty} · ` : "· "}
+                          <span className={parseFloat(li.quantity_ordered) > (li.remaining_qty ?? Infinity) ? "text-red-600 font-medium" : ""}>
+                            Remaining: {li.remaining_qty}
+                          </span>
+                        </p>
+                      )}
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">Unit</Label>
+                      <Select
+                        value={li.unit}
+                        onValueChange={(v) => updateItem(li.id, "unit", v)}
+                        disabled={!!li.pr_item_id}
+                      >
+                        <SelectTrigger className={`h-9 ${li.pr_item_id ? "bg-muted/50" : ""}`}>
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          {ITEM_UNITS.map((u) => (
+                            <SelectItem key={u} value={u}>{u}</SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+
                   <div className="space-y-1">
-                    <Label className="text-xs">Unit</Label>
-                    <Select
-                      value={li.unit}
-                      onValueChange={(v) => updateItem(li.id, "unit", v)}
-                    >
-                      <SelectTrigger className="h-9">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        {ITEM_UNITS.map((u) => (
-                          <SelectItem key={u} value={u}>{u}</SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
+                    <Label className="text-xs">Unit Price (₹)</Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00 (optional)"
+                      value={li.unit_price}
+                      max={li.estimated_price !== undefined ? li.estimated_price : undefined}
+                      onChange={(e) => updateItem(li.id, "unit_price", e.target.value)}
+                    />
+                    {li.estimated_price !== undefined && (
+                      <p className={`text-xs ${li.unit_price && parseFloat(li.unit_price) > li.estimated_price ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
+                        Max approved: ₹{li.estimated_price}
+                      </p>
+                    )}
+                  </div>
+
+                  {li.unit_price && li.quantity_ordered && (
+                    <div className="flex items-end pb-0.5">
+                      <p className="text-sm text-muted-foreground">
+                        Line total:{" "}
+                        <span className="font-medium text-foreground">
+                          {formatCurrency(parseFloat(li.quantity_ordered || "0") * parseFloat(li.unit_price || "0"))}
+                        </span>
+                      </p>
+                    </div>
+                  )}
+
+                  <div className="space-y-1 sm:col-span-2">
+                    <Label className="text-xs">Notes (optional)</Label>
+                    <Input
+                      placeholder="Special instructions, delivery notes..."
+                      value={li.notes}
+                      onChange={(e) => updateItem(li.id, "notes", e.target.value)}
+                    />
                   </div>
                 </div>
-
-                <div className="space-y-1">
-                  <Label className="text-xs">Unit Price (₹)</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    placeholder="0.00 (optional)"
-                    value={li.unit_price}
-                    onChange={(e) => updateItem(li.id, "unit_price", e.target.value)}
-                  />
-                </div>
-
-                {li.unit_price && li.quantity_ordered && (
-                  <div className="flex items-end pb-0.5">
-                    <p className="text-sm text-muted-foreground">
-                      Line total:{" "}
-                      <span className="font-medium text-foreground">
-                        {formatCurrency(parseFloat(li.quantity_ordered || "0") * parseFloat(li.unit_price || "0"))}
-                      </span>
-                    </p>
-                  </div>
-                )}
-
-                <div className="space-y-1 sm:col-span-2">
-                  <Label className="text-xs">Notes (optional)</Label>
-                  <Input
-                    placeholder="Special instructions, delivery notes..."
-                    value={li.notes}
-                    onChange={(e) => updateItem(li.id, "notes", e.target.value)}
-                  />
-                </div>
-              </div>
+              )}
             </div>
           ))}
         </CardContent>
@@ -396,9 +543,11 @@ function NewPurchaseOrderForm() {
               (Only items with unit price contribute to total)
             </p>
           </div>
-          <Button onClick={handleSubmit} disabled={submitting} size="lg">
+          <Button onClick={handleSubmit} disabled={submitting || allItemsFullyOrdered} size="lg">
             {submitting ? (
               <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Creating…</>
+            ) : allItemsFullyOrdered ? (
+              "All Items Already Ordered"
             ) : (
               "Create Purchase Order"
             )}

@@ -62,7 +62,7 @@ export default function PurchaseOrdersPage() {
               ))}
             </SelectContent>
           </Select>
-          <Button onClick={() => router.push("/procurement/orders/new")}>
+          <Button onClick={() => router.push("/procurement/requests?status=approved")}>
             <Plus className="h-4 w-4 mr-1" /> New Order
           </Button>
         </div>
@@ -76,7 +76,7 @@ export default function PurchaseOrdersPage() {
           title="No purchase orders"
           description="Create your first purchase order to get started."
           actionLabel="New Order"
-          onAction={() => router.push("/procurement/orders/new")}
+          onAction={() => router.push("/procurement/requests?status=approved")}
         />
       ) : (
         <div className="rounded-md border overflow-x-auto">

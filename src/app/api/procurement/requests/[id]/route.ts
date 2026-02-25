@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { logAudit } from "@/lib/audit";
+import { logAudit, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 import { PROCUREMENT_APPROVAL_THRESHOLDS } from "@/lib/constants";
 
@@ -34,6 +34,19 @@ async function getApprovalThreshold(supabase: Awaited<ReturnType<typeof createCl
   return PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE;
 }
 
+/** Generate next approval code: APR-YYMM-NNN */
+async function generateApprovalCode(supabase: Awaited<ReturnType<typeof createClient>>): Promise<string> {
+  const { count } = await supabase
+    .from("purchase_requests")
+    .select("*", { count: "exact", head: true })
+    .not("approval_code", "is", null);
+  const now = new Date();
+  const yy = String(now.getFullYear()).slice(-2);
+  const mm = String(now.getMonth() + 1).padStart(2, "0");
+  const seq = String((count ?? 0) + 1).padStart(3, "0");
+  return `APR-${yy}${mm}-${seq}`;
+}
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -62,6 +75,28 @@ export async function GET(
   // Non-manager/admin can only view their own PRs
   if (!["admin", "manager"].includes(dbUser.role) && data.requested_by !== dbUser.id) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
+
+  // Compute already_ordered_qty and remaining_qty per PR item
+  const prItemIds = (data.purchase_request_items ?? []).map((i: { id: string }) => i.id);
+  if (prItemIds.length > 0) {
+    const { data: orderedRows } = await supabase
+      .from("purchase_order_items")
+      .select("pr_item_id, quantity_ordered")
+      .in("pr_item_id", prItemIds);
+
+    const orderedMap: Record<string, number> = {};
+    for (const row of (orderedRows ?? [])) {
+      orderedMap[row.pr_item_id] = (orderedMap[row.pr_item_id] ?? 0) + Number(row.quantity_ordered);
+    }
+
+    data.purchase_request_items = data.purchase_request_items!.map(
+      (item: { id: string; quantity: number; [key: string]: unknown }) => ({
+        ...item,
+        already_ordered_qty: orderedMap[item.id] ?? 0,
+        remaining_qty: Number(item.quantity) - (orderedMap[item.id] ?? 0),
+      })
+    );
   }
 
   return NextResponse.json({ data, approval_threshold: approvalThreshold });
@@ -132,11 +167,13 @@ export async function PATCH(
       if (!["admin", "manager"].includes(dbUser.role)) {
         return NextResponse.json({ error: "Only managers and admins can approve PRs" }, { status: 403 });
       }
+      const approvalCode = await generateApprovalCode(supabase);
       updatePayload = {
         status: "approved",
         approved_by: dbUser.id,
         approved_at: new Date().toISOString(),
         rejection_reason: null,
+        approval_code: approvalCode,
       };
       break;
     }
@@ -188,6 +225,7 @@ export async function PATCH(
     entityId: id,
     action: "update",
     performedBy: dbUser.id,
+    changes: diffChanges(pr as Record<string, unknown>, { ...pr, ...updatePayload } as Record<string, unknown>),
   });
 
   return NextResponse.json({ data: updated });

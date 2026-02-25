@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { logAudit } from "@/lib/audit";
+import { logAudit, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 
 const patchPoSchema = z.discriminatedUnion("action", [
@@ -27,7 +27,7 @@ export async function GET(
   const { data, error } = await supabase
     .from("purchase_orders")
     .select(
-      `*, purchase_order_items(*), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), purchase_requests(id, pr_number, department)`
+      `*, purchase_order_items(*), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), purchase_requests(id, pr_number, department, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email))`
     )
     .eq("id", id)
     .single();
@@ -119,6 +119,7 @@ export async function PATCH(
     entityId: id,
     action: "update",
     performedBy: dbUser.id,
+    changes: diffChanges(po as Record<string, unknown>, { ...po, ...updatePayload } as Record<string, unknown>),
   });
 
   return NextResponse.json({ data: updated });

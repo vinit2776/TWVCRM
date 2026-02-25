@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { logAudit } from "@/lib/audit";
+import { logAudit, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 
 const patchBillSchema = z.discriminatedUnion("action", [
@@ -111,6 +111,7 @@ export async function PATCH(
     entityId: id,
     action: "update",
     performedBy: dbUser.id,
+    changes: diffChanges(bill as Record<string, unknown>, { ...bill, ...updatePayload } as Record<string, unknown>),
   });
 
   return NextResponse.json({ data: updated });

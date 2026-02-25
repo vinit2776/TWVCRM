@@ -1,0 +1,310 @@
+/**
+ * Purchase Order PDF Generator
+ *
+ * Generates branded PO PDFs using jsPDF + autoTable.
+ * Uses the same TWV brand identity as pdf-generator.ts but is a standalone
+ * module to keep concerns separated.
+ */
+
+import jsPDF from "jspdf";
+import autoTable from "jspdf-autotable";
+import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
+import type { PurchaseOrder } from "@/types";
+
+// ── TWV Brand Colors ──────────────────────────────────────────────────────────
+const BRAND_TEAL: [number, number, number] = [1, 94, 101];   // #015E65
+const BRAND_GREEN: [number, number, number] = [0, 174, 108]; // #00AE6C
+const BRAND_DARK: [number, number, number] = [26, 27, 30];   // #1A1B1E
+
+// ── Company Details ───────────────────────────────────────────────────────────
+const COMPANY_NAME = "SREE DESIGN INFRASTRUCTURE PVT LTD";
+const COMPANY_ADDRESS = [
+  "Prakash Presidium, 110, Mahatma Gandhi Road,",
+  "Nungambakkam, Chennai - 600034",
+];
+const COMPANY_PHONE = "+91 97910 97900";
+const COMPANY_EMAIL = "contact@theworkvilla.com";
+const COMPANY_GST = "GST: 33AAACU4245J1ZF";
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
+
+function formatCurrencyPDF(amount: number): string {
+  // Use "Rs." — jsPDF's Helvetica cannot render the ₹ symbol
+  return (
+    "Rs. " +
+    new Intl.NumberFormat("en-IN", {
+      minimumFractionDigits: 2,
+      maximumFractionDigits: 2,
+    }).format(amount)
+  );
+}
+
+function formatDatePDF(dateStr: string | null | undefined): string {
+  if (!dateStr) return "—";
+  return new Date(dateStr).toLocaleDateString("en-IN", {
+    year: "numeric",
+    month: "long",
+    day: "numeric",
+  });
+}
+
+/** Adds the TWV logo + company header. Returns the Y position after the header. */
+function addLogoToDoc(doc: jsPDF): number {
+  const pageWidth = doc.internal.pageSize.getWidth();
+
+  // Teal accent bar at the very top
+  doc.setFillColor(...BRAND_TEAL);
+  doc.rect(0, 0, pageWidth, 3, "F");
+
+  // Logo image (left side)
+  const logoW = 52;
+  const logoH = 13;
+  doc.addImage(TWV_LOGO_BASE64, "PNG", 14, 8, logoW, logoH);
+
+  // Company details (right-aligned)
+  doc.setFontSize(7.5);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(100, 100, 100);
+  doc.text(COMPANY_NAME, pageWidth - 14, 10, { align: "right" });
+  doc.text(COMPANY_ADDRESS[0], pageWidth - 14, 14, { align: "right" });
+  doc.text(COMPANY_ADDRESS[1], pageWidth - 14, 18, { align: "right" });
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text(`${COMPANY_PHONE}  |  ${COMPANY_EMAIL}`, pageWidth - 14, 22, { align: "right" });
+  doc.setTextColor(100, 100, 100);
+  doc.text(COMPANY_GST, pageWidth - 14, 26, { align: "right" });
+
+  return 32;
+}
+
+// ── Extended PO type for PDF ──────────────────────────────────────────────────
+type PoForPDF = PurchaseOrder & {
+  purchase_requests?: (Pick<import("@/types").PurchaseRequest, "id" | "pr_number" | "department" | "approval_code" | "approved_at"> & {
+    approver?: { id: string; full_name?: string; email?: string } | null;
+  }) | null;
+  procurement_vendors?: { id: string; name: string; contact_name?: string; contact_phone?: string; contact_email?: string } | null;
+  locations?: { id: string; name: string } | null;
+  orderer?: { id: string; full_name?: string; email?: string } | null;
+};
+
+// ── Main Export ───────────────────────────────────────────────────────────────
+
+export function generatePurchaseOrderPDF(po: PoForPDF): jsPDF {
+  const doc = new jsPDF();
+  const pageWidth = doc.internal.pageSize.getWidth();
+
+  // ── Header ──
+  let y = addLogoToDoc(doc);
+
+  // ── Divider ──
+  doc.setDrawColor(...BRAND_TEAL);
+  doc.setLineWidth(0.5);
+  doc.line(14, y, pageWidth - 14, y);
+  y += 8;
+
+  // ── Document Title & PO Number ──
+  doc.setFontSize(18);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_DARK);
+  doc.text("PURCHASE ORDER", 14, y);
+
+  doc.setFontSize(12);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text(po.po_number, pageWidth - 14, y, { align: "right" });
+
+  y += 6;
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(100, 100, 100);
+  doc.text(`Date: ${formatDatePDF(po.created_at)}`, pageWidth - 14, y, { align: "right" });
+
+  y += 10;
+
+  // ── Approval Reference Panel (light blue background) ──
+  if (po.purchase_requests) {
+    const pr = po.purchase_requests;
+    const panelH = 24;
+
+    doc.setFillColor(235, 245, 255);
+    doc.rect(14, y - 4, pageWidth - 28, panelH, "F");
+    doc.setDrawColor(180, 210, 240);
+    doc.setLineWidth(0.3);
+    doc.rect(14, y - 4, pageWidth - 28, panelH);
+
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...BRAND_TEAL);
+    doc.text("APPROVAL REFERENCE", 18, y);
+
+    y += 5;
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(50, 50, 50);
+
+    const col1x = 18;
+    const col2x = pageWidth / 2 + 10;
+
+    doc.setFont("helvetica", "bold");
+    doc.text("PR Number:", col1x, y);
+    doc.setFont("helvetica", "normal");
+    doc.text(pr.pr_number ?? "—", col1x + 28, y);
+
+    doc.setFont("helvetica", "bold");
+    doc.text("Approval Code:", col2x, y);
+    doc.setFont("helvetica", "normal");
+    doc.text(pr.approval_code ?? "N/A", col2x + 32, y);
+
+    y += 5;
+    doc.setFont("helvetica", "bold");
+    doc.text("Approved By:", col1x, y);
+    doc.setFont("helvetica", "normal");
+    doc.text(pr.approver?.full_name ?? pr.approver?.email ?? "—", col1x + 28, y);
+
+    doc.setFont("helvetica", "bold");
+    doc.text("Approved On:", col2x, y);
+    doc.setFont("helvetica", "normal");
+    doc.text(pr.approved_at ? formatDatePDF(pr.approved_at) : "—", col2x + 32, y);
+
+    y += 10;
+  }
+
+  // ── Two-column detail grid: Vendor | Order Details ──
+  const colLeft = 14;
+  const colRight = pageWidth / 2 + 5;
+  const sectionHeaderH = 6;
+
+  // Vendor section header
+  doc.setFillColor(240, 250, 245);
+  doc.rect(colLeft, y - 4, pageWidth / 2 - 19, sectionHeaderH, "F");
+  doc.setFontSize(9);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text("VENDOR", colLeft + 2, y);
+
+  // Order Details section header
+  doc.setFillColor(240, 250, 245);
+  doc.rect(colRight, y - 4, pageWidth / 2 - 5, sectionHeaderH, "F");
+  doc.text("ORDER DETAILS", colRight + 2, y);
+
+  y += 6;
+  doc.setFont("helvetica", "normal");
+  doc.setTextColor(...BRAND_DARK);
+  doc.setFontSize(9);
+
+  const vendor = po.procurement_vendors;
+  const location = po.locations;
+  const orderer = po.orderer;
+
+  // Vendor column
+  if (vendor?.name) {
+    doc.setFont("helvetica", "bold");
+    doc.text(vendor.name, colLeft + 2, y);
+    doc.setFont("helvetica", "normal");
+  }
+  if (vendor?.contact_name) {
+    y += 5;
+    doc.setTextColor(80, 80, 80);
+    doc.text(vendor.contact_name, colLeft + 2, y);
+  }
+  if (vendor?.contact_phone) {
+    y += 4;
+    doc.text(vendor.contact_phone, colLeft + 2, y);
+  }
+
+  // Order Details column (reset Y for right column)
+  const rightStartY = y - (vendor?.contact_name ? 9 : 0) - (vendor?.contact_phone ? 4 : 0);
+
+  let ry = rightStartY;
+  doc.setTextColor(...BRAND_DARK);
+
+  if (location?.name) {
+    doc.setFont("helvetica", "bold");
+    doc.text("Location:", colRight + 2, ry);
+    doc.setFont("helvetica", "normal");
+    doc.text(location.name, colRight + 22, ry);
+    ry += 5;
+  }
+  if (po.expected_delivery_date) {
+    doc.setFont("helvetica", "bold");
+    doc.text("Expected:", colRight + 2, ry);
+    doc.setFont("helvetica", "normal");
+    doc.text(formatDatePDF(po.expected_delivery_date), colRight + 22, ry);
+    ry += 5;
+  }
+  if (orderer) {
+    doc.setFont("helvetica", "bold");
+    doc.text("Ordered By:", colRight + 2, ry);
+    doc.setFont("helvetica", "normal");
+    doc.text(orderer.full_name ?? orderer.email ?? "—", colRight + 26, ry);
+  }
+
+  y = Math.max(y, ry) + 8;
+
+  // ── Line Items Table ──
+  const items = po.purchase_order_items ?? [];
+  const tableRows = items.map((item, i) => [
+    String(i + 1),
+    item.item_name,
+    item.unit,
+    String(item.quantity_ordered),
+    item.unit_price != null ? formatCurrencyPDF(item.unit_price) : "—",
+    item.total_amount != null ? formatCurrencyPDF(item.total_amount) : "—",
+  ]);
+
+  autoTable(doc, {
+    startY: y,
+    head: [["#", "Item", "Unit", "Qty", "Unit Price", "Total"]],
+    body: tableRows,
+    theme: "striped",
+    headStyles: {
+      fillColor: BRAND_TEAL,
+      textColor: [255, 255, 255],
+      fontSize: 9,
+      fontStyle: "bold",
+    },
+    bodyStyles: {
+      fontSize: 9,
+      textColor: BRAND_DARK,
+    },
+    columnStyles: {
+      0: { cellWidth: 10, halign: "center" },
+      1: { cellWidth: "auto" },
+      2: { cellWidth: 20 },
+      3: { cellWidth: 18, halign: "right" },
+      4: { cellWidth: 32, halign: "right" },
+      5: { cellWidth: 32, halign: "right" },
+    },
+    alternateRowStyles: { fillColor: [248, 250, 252] },
+    margin: { left: 14, right: 14 },
+  });
+
+  // ── Grand Total ──
+  const finalY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6;
+
+  const totalAmount = Number(po.total_ordered_amount);
+  if (totalAmount > 0) {
+    doc.setFontSize(11);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...BRAND_DARK);
+    doc.text("GRAND TOTAL:", pageWidth - 60, finalY);
+    doc.setTextColor(...BRAND_GREEN);
+    doc.text(formatCurrencyPDF(totalAmount), pageWidth - 14, finalY, { align: "right" });
+  }
+
+  // ── Footer ──
+  const footerY = finalY + 14;
+  doc.setDrawColor(...BRAND_TEAL);
+  doc.setLineWidth(0.3);
+  doc.line(14, footerY, pageWidth - 14, footerY);
+
+  doc.setFontSize(7.5);
+  doc.setFont("helvetica", "italic");
+  doc.setTextColor(120, 120, 120);
+  const approvalCode = po.purchase_requests?.approval_code;
+  doc.text(
+    `This is a computer-generated Purchase Order.${approvalCode ? ` Approval reference: ${approvalCode}.` : ""} Please retain for your records.`,
+    14,
+    footerY + 5
+  );
+
+  return doc;
+}

@@ -14,7 +14,7 @@ const createPoItemSchema = z.object({
 });
 
 const createPoSchema = z.object({
-  pr_id: z.string().uuid().nullish(),
+  pr_id: z.string().uuid("A linked Purchase Request is required"),
   vendor_id: z.string().uuid(),
   location_id: z.string().uuid().nullish(),
   expected_delivery_date: z.string().nullish(),
@@ -95,24 +95,80 @@ export async function POST(request: NextRequest) {
 
   const { items, ...poData } = parsed.data;
 
-  // Compute total ordered amount
+  // ── 1. Validate PR exists and is in an approvable state ──
+  const { data: pr, error: prFetchError } = await supabase
+    .from("purchase_requests")
+    .select("id, status, purchase_request_items(id, quantity, estimated_price)")
+    .eq("id", parsed.data.pr_id)
+    .single();
+
+  if (prFetchError || !pr) {
+    return NextResponse.json({ error: "Purchase request not found" }, { status: 404 });
+  }
+  if (!["approved", "po_created"].includes(pr.status)) {
+    return NextResponse.json({
+      error: "A Purchase Order can only be created from an approved Purchase Request"
+    }, { status: 422 });
+  }
+
+  // ── 2. Validate item qty / price ceilings ──
+  const prItemIds = items.filter(i => i.pr_item_id).map(i => i.pr_item_id!);
+  const alreadyOrderedMap: Record<string, number> = {};
+
+  if (prItemIds.length > 0) {
+    const { data: existingOrderItems } = await supabase
+      .from("purchase_order_items")
+      .select("pr_item_id, quantity_ordered")
+      .in("pr_item_id", prItemIds);
+
+    for (const row of (existingOrderItems ?? [])) {
+      alreadyOrderedMap[row.pr_item_id] =
+        (alreadyOrderedMap[row.pr_item_id] ?? 0) + Number(row.quantity_ordered);
+    }
+  }
+
+  const prItemMap = Object.fromEntries(
+    ((pr.purchase_request_items ?? []) as Array<{ id: string; quantity: number; estimated_price?: number }>)
+      .map(i => [i.id, i])
+  );
+
+  for (const item of items) {
+    if (!item.pr_item_id) continue;
+    const prItem = prItemMap[item.pr_item_id];
+    if (!prItem) continue;
+
+    const remaining = Number(prItem.quantity) - (alreadyOrderedMap[item.pr_item_id] ?? 0);
+
+    if (item.quantity_ordered > remaining) {
+      return NextResponse.json({
+        error: `"${item.item_name}": ordered quantity (${item.quantity_ordered}) exceeds remaining approved quantity (${remaining})`
+      }, { status: 422 });
+    }
+
+    if (prItem.estimated_price && item.unit_price != null && item.unit_price > Number(prItem.estimated_price)) {
+      return NextResponse.json({
+        error: `"${item.item_name}": unit price exceeds approved estimated price (Rs. ${prItem.estimated_price})`
+      }, { status: 422 });
+    }
+  }
+
+  // ── 3. Compute total and generate PO number ──
   const totalOrderedAmount = items.reduce((sum, item) => {
     return sum + item.quantity_ordered * (item.unit_price ?? 0);
   }, 0);
 
-  // Generate PO number
   const { count: existingCount } = await supabase
     .from("purchase_orders")
     .select("*", { count: "exact", head: true });
 
   const poNumber = generatePoNumber(existingCount ?? 0);
 
-  // Insert purchase order
+  // ── 4. Insert purchase order ──
   const { data: po, error: poError } = await supabase
     .from("purchase_orders")
     .insert({
       ...poData,
-      pr_id: poData.pr_id ?? null,
+      pr_id: poData.pr_id,
       location_id: poData.location_id ?? null,
       expected_delivery_date: poData.expected_delivery_date ?? null,
       notes: poData.notes ?? null,
@@ -126,7 +182,7 @@ export async function POST(request: NextRequest) {
 
   if (poError) return NextResponse.json({ error: poError.message }, { status: 500 });
 
-  // Batch insert purchase order items
+  // ── 5. Batch insert line items ──
   const lineItems = items.map((item) => ({
     po_id: po.id,
     pr_item_id: item.pr_item_id ?? null,
@@ -143,20 +199,26 @@ export async function POST(request: NextRequest) {
   const { error: itemsError } = await supabase.from("purchase_order_items").insert(lineItems);
   if (itemsError) return NextResponse.json({ error: itemsError.message }, { status: 500 });
 
-  // If pr_id provided, atomically update PR status to po_created (guarded by status check)
-  if (poData.pr_id) {
-    await supabase
-      .from("purchase_requests")
-      .update({ status: "po_created" })
-      .eq("id", poData.pr_id)
-      .eq("status", "approved");
-  }
+  // ── 6. Update PR status to po_created (guarded by status check) ──
+  await supabase
+    .from("purchase_requests")
+    .update({ status: "po_created" })
+    .eq("id", poData.pr_id)
+    .eq("status", "approved");
 
+  // ── 7. Audit log ──
   await logAudit(supabase, {
     entityType: "purchase_order",
     entityId: po.id,
     action: "create",
     performedBy: dbUser.id,
+    changes: {
+      po_number: { old: null, new: po.po_number },
+      pr_id: { old: null, new: poData.pr_id },
+      vendor_id: { old: null, new: poData.vendor_id },
+      total_ordered_amount: { old: null, new: totalOrderedAmount },
+      item_count: { old: null, new: items.length },
+    },
   });
 
   return NextResponse.json({ data: { id: po.id, po_number: po.po_number } }, { status: 201 });

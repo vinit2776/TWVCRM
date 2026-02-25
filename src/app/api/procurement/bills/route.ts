@@ -114,6 +114,12 @@ export async function POST(request: NextRequest) {
     entityId: bill.id,
     action: "create",
     performedBy: dbUser.id,
+    changes: {
+      bill_number: { old: null, new: bill.bill_number },
+      vendor_id: { old: null, new: parsed.data.vendor_id },
+      po_id: { old: null, new: parsed.data.po_id ?? null },
+      total_amount: { old: null, new: parsed.data.total_amount },
+    },
   });
 
   return NextResponse.json({ data: { id: bill.id, bill_number: bill.bill_number } }, { status: 201 });
