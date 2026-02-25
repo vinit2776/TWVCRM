@@ -20,6 +20,20 @@ const patchPrSchema = z.discriminatedUnion("action", [
   }),
 ]);
 
+/** Read approval threshold from app_settings, fall back to constant. */
+async function getApprovalThreshold(supabase: Awaited<ReturnType<typeof createClient>>): Promise<number> {
+  const { data } = await supabase
+    .from("app_settings")
+    .select("value")
+    .eq("key", "procurement_approval_threshold")
+    .maybeSingle();
+  if (data?.value) {
+    const parsed = parseInt(data.value, 10);
+    if (!isNaN(parsed)) return parsed;
+  }
+  return PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE;
+}
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -32,13 +46,16 @@ export async function GET(
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  const { data, error } = await supabase
-    .from("purchase_requests")
-    .select(
-      `*, locations(id, name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email), purchase_request_items(*, procurement_items(id, name, department, unit))`
-    )
-    .eq("id", id)
-    .single();
+  const [{ data, error }, approvalThreshold] = await Promise.all([
+    supabase
+      .from("purchase_requests")
+      .select(
+        `*, locations(id, name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email), purchase_request_items(*, procurement_items(id, name, department, unit))`
+      )
+      .eq("id", id)
+      .single(),
+    getApprovalThreshold(supabase),
+  ]);
 
   if (error || !data) return NextResponse.json({ error: "Request not found" }, { status: 404 });
 
@@ -47,7 +64,7 @@ export async function GET(
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
-  return NextResponse.json({ data });
+  return NextResponse.json({ data, approval_threshold: approvalThreshold });
 }
 
 export async function PATCH(
@@ -62,12 +79,11 @@ export async function PATCH(
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  // Fetch the current PR
-  const { data: pr, error: fetchError } = await supabase
-    .from("purchase_requests")
-    .select("*")
-    .eq("id", id)
-    .single();
+  // Fetch the current PR + threshold in parallel
+  const [{ data: pr, error: fetchError }, approvalThreshold] = await Promise.all([
+    supabase.from("purchase_requests").select("*").eq("id", id).single(),
+    getApprovalThreshold(supabase),
+  ]);
 
   if (fetchError || !pr) return NextResponse.json({ error: "Request not found" }, { status: 404 });
 
@@ -85,7 +101,6 @@ export async function PATCH(
       if (pr.status !== "draft") {
         return NextResponse.json({ error: "Only draft PRs can be submitted" }, { status: 422 });
       }
-      // Must be the requester
       if (pr.requested_by !== dbUser.id) {
         return NextResponse.json({ error: "Only the requester can submit this PR" }, { status: 403 });
       }
@@ -97,7 +112,6 @@ export async function PATCH(
       if (!["draft", "submitted"].includes(pr.status)) {
         return NextResponse.json({ error: "Only draft or submitted PRs can be cancelled" }, { status: 422 });
       }
-      // Requester or admin/manager can cancel
       if (pr.requested_by !== dbUser.id && !["admin", "manager"].includes(dbUser.role)) {
         return NextResponse.json({ error: "Access denied" }, { status: 403 });
       }
@@ -109,11 +123,10 @@ export async function PATCH(
       if (pr.status !== "submitted") {
         return NextResponse.json({ error: "Only submitted PRs can be approved" }, { status: 422 });
       }
-      // Check approval tier
-      const requiresAdmin = pr.total_estimated_amount > PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE;
+      const requiresAdmin = pr.total_estimated_amount > approvalThreshold;
       if (requiresAdmin && dbUser.role !== "admin") {
         return NextResponse.json({
-          error: `PRs above ₹${PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE.toLocaleString()} require admin approval`,
+          error: `PRs above ₹${approvalThreshold.toLocaleString()} require admin approval`,
         }, { status: 403 });
       }
       if (!["admin", "manager"].includes(dbUser.role)) {
