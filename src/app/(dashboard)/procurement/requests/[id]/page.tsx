@@ -2,9 +2,10 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
+import Link from "next/link";
 import {
   ChevronLeft, CheckCircle, XCircle, RefreshCcw, Loader2,
-  Building2, MapPin, User, Calendar, FileText, PackageOpen,
+  Building2, MapPin, User, Calendar, FileText, PackageOpen, ShoppingCart,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -131,6 +132,24 @@ export default function PurchaseRequestDetailPage() {
 
         {/* Action buttons */}
         <div className="flex gap-2 flex-wrap justify-end">
+          {pr.status === "approved" && (
+            <Button
+              size="sm"
+              className="bg-blue-600 hover:bg-blue-700"
+              onClick={() => router.push(`/procurement/orders/new?pr_id=${pr.id}`)}
+            >
+              <ShoppingCart className="h-4 w-4 mr-1" /> Create PO
+            </Button>
+          )}
+          {pr.status === "po_created" && (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => router.push(`/procurement/orders?pr_id=${pr.id}`)}
+            >
+              <ShoppingCart className="h-4 w-4 mr-1" /> View Orders
+            </Button>
+          )}
           {pr.status === "draft" && (
             <Button
               size="sm"
@@ -202,7 +221,7 @@ export default function PurchaseRequestDetailPage() {
       )}
 
       {/* Approval callout */}
-      {pr.status === "approved" && pr.approver && (
+      {(pr.status === "approved" || pr.status === "po_created") && pr.approver && (
         <Card className="border-green-200 bg-green-50/50">
           <CardContent className="pt-4 flex gap-3">
             <CheckCircle className="h-5 w-5 text-green-600 flex-shrink-0 mt-0.5" />
@@ -211,6 +230,24 @@ export default function PurchaseRequestDetailPage() {
               <p className="text-sm text-green-700 mt-0.5">
                 By {pr.approver.full_name ?? pr.approver.email}
                 {pr.approved_at ? ` on ${formatDate(pr.approved_at)}` : ""}
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* PO created callout */}
+      {pr.status === "po_created" && (
+        <Card className="border-blue-200 bg-blue-50/50">
+          <CardContent className="pt-4 flex gap-3">
+            <ShoppingCart className="h-5 w-5 text-blue-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-blue-800">Purchase Order Created</p>
+              <p className="text-sm text-blue-700 mt-0.5">
+                A purchase order has been raised for this request.{" "}
+                <Link href={`/procurement/orders?pr_id=${pr.id}`} className="underline font-medium">
+                  View Orders
+                </Link>
               </p>
             </div>
           </CardContent>
