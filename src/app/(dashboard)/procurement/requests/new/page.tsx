@@ -234,12 +234,12 @@ export default function NewPurchaseRequestPage() {
 
           <div className="space-y-1.5">
             <Label htmlFor="location">Location</Label>
-            <Select value={locationId} onValueChange={setLocationId}>
+            <Select value={locationId || "__none__"} onValueChange={(v) => setLocationId(v === "__none__" ? "" : v)}>
               <SelectTrigger id="location">
                 <SelectValue placeholder="Select location (optional)" />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="">No specific location</SelectItem>
+                <SelectItem value="__none__">No specific location</SelectItem>
                 {locations.map((loc) => (
                   <SelectItem key={loc.id} value={loc.id}>{loc.name}</SelectItem>
                 ))}
