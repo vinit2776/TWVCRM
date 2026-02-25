@@ -28,6 +28,12 @@ import {
   Handshake,
   Briefcase,
   ChevronDown,
+  ShoppingCart,
+  ClipboardList as ClipboardListIcon,
+  Package,
+  Receipt as ReceiptIcon,
+  Truck,
+  Archive,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -60,6 +66,14 @@ const virtualOfficeItems: NavItem[] = [
   { href: "/cases", label: "Cases", icon: Briefcase, roles: null },
 ];
 
+const procurementItems: NavItem[] = [
+  { href: "/procurement/requests", label: "Purchase Requests", icon: ClipboardListIcon, roles: null },
+  { href: "/procurement/orders", label: "Purchase Orders", icon: Package, roles: null },
+  { href: "/procurement/bills", label: "Vendor Bills", icon: ReceiptIcon, roles: ["admin", "manager"] },
+  { href: "/procurement/vendors", label: "Vendors", icon: Truck, roles: ["admin", "manager"] },
+  { href: "/procurement/catalog", label: "Item Catalog", icon: Archive, roles: ["admin"] },
+];
+
 const adminNavItems = [
   { href: "/locations", label: "Locations", icon: MapPin, roles: ["admin", "manager"] },
   { href: "/audit-logs", label: "Audit Logs", icon: ClipboardList, roles: ["admin", "manager"] },
@@ -75,6 +89,8 @@ export function Sidebar() {
   const [userRole, setUserRole] = useState<string | null>(null);
   const isVoActive = pathname.startsWith("/aggregators") || pathname.startsWith("/cases");
   const [voOpen, setVoOpen] = useState(isVoActive);
+  const isProcurementActive = pathname.startsWith("/procurement");
+  const [procOpen, setProcOpen] = useState(isProcurementActive);
 
   useEffect(() => {
     const supabase = createClient();
@@ -194,6 +210,54 @@ export function Sidebar() {
                     </Link>
                   );
                 })}
+              </div>
+            )}
+          </div>
+
+          {/* Procurement dropdown */}
+          <div>
+            <button
+              onClick={() => setProcOpen((o) => !o)}
+              className={cn(
+                "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                isProcurementActive
+                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+              )}
+            >
+              <ShoppingCart className="h-5 w-5 shrink-0" />
+              Procurement
+              <ChevronDown
+                className={cn(
+                  "ml-auto h-4 w-4 shrink-0 transition-transform duration-200",
+                  procOpen ? "rotate-0" : "-rotate-90"
+                )}
+              />
+            </button>
+            {procOpen && (
+              <div className="ml-4 mt-1 space-y-1 border-l border-sidebar-accent pl-3">
+                {procurementItems
+                  .filter((item) => item.roles === null || (userRole && item.roles.includes(userRole)))
+                  .map((item) => {
+                    const isActive =
+                      pathname === item.href || pathname.startsWith(item.href + "/");
+                    return (
+                      <Link
+                        key={item.href}
+                        href={item.href}
+                        onClick={() => setSidebarOpen(false)}
+                        className={cn(
+                          "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                          isActive
+                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                            : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                        )}
+                      >
+                        <item.icon className="h-4 w-4 shrink-0" />
+                        {item.label}
+                      </Link>
+                    );
+                  })}
               </div>
             )}
           </div>

@@ -521,7 +521,12 @@ export type AuditEntityType =
   | "case"
   | "case_document"
   | "case_agreement"
-  | "aggregator_invoice";
+  | "aggregator_invoice"
+  | "procurement_vendor"
+  | "procurement_item"
+  | "purchase_request"
+  | "purchase_order"
+  | "vendor_bill";
 
 export interface AuditLog {
   id: string;
@@ -1286,4 +1291,147 @@ export interface AggregatorInvoiceLineItem {
   pro_rated_days?: number;
   total_days?: number;
   amount: number;
+}
+
+// ==========================================
+// Procurement Module
+// ==========================================
+
+export type ProcurementDepartment = "pantry" | "maintenance" | "administration";
+export type VendorCategory = "pantry" | "maintenance" | "administration" | "general";
+export type ItemUnit = "kg" | "litre" | "packet" | "box" | "piece" | "roll" | "dozen" | "bottle" | "bag" | "set" | "pair";
+export type PrStatus = "draft" | "submitted" | "approved" | "rejected" | "po_created" | "cancelled";
+export type PoStatus = "pending" | "ordered" | "partially_received" | "received" | "cancelled";
+export type BillPaymentStatus = "unpaid" | "partially_paid" | "paid";
+
+export interface ProcurementVendor {
+  id: string;
+  name: string;
+  category: VendorCategory;
+  contact_name?: string;
+  contact_phone?: string;
+  contact_email?: string;
+  address?: string;
+  gstin?: string;
+  payment_terms?: string;
+  notes?: string;
+  is_active: boolean;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProcurementItem {
+  id: string;
+  name: string;
+  department: ProcurementDepartment;
+  unit: ItemUnit;
+  standard_price?: number;
+  description?: string;
+  is_active: boolean;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PurchaseRequestItem {
+  id: string;
+  pr_id: string;
+  item_id?: string;
+  item_name: string;
+  quantity: number;
+  unit: ItemUnit;
+  estimated_price?: number;
+  total_estimated?: number;
+  notes?: string;
+  created_at: string;
+  procurement_items?: ProcurementItem | null;
+}
+
+export interface PurchaseRequest {
+  id: string;
+  pr_number: string;
+  department: ProcurementDepartment;
+  location_id?: string;
+  status: PrStatus;
+  requested_by: string;
+  approved_by?: string;
+  approved_at?: string;
+  rejection_reason?: string;
+  notes?: string;
+  total_estimated_amount: number;
+  created_at: string;
+  updated_at: string;
+  // Joined fields
+  locations?: { id: string; name: string } | null;
+  requester?: { id: string; full_name?: string; email?: string } | null;
+  approver?: { id: string; full_name?: string; email?: string } | null;
+  purchase_request_items?: PurchaseRequestItem[];
+}
+
+export interface PurchaseOrderItem {
+  id: string;
+  po_id: string;
+  pr_item_id?: string;
+  item_id?: string;
+  item_name: string;
+  quantity_ordered: number;
+  quantity_received: number;
+  unit: ItemUnit;
+  unit_price?: number;
+  total_amount?: number;
+  notes?: string;
+  created_at: string;
+}
+
+export interface PurchaseOrder {
+  id: string;
+  po_number: string;
+  pr_id?: string;
+  vendor_id: string;
+  location_id?: string;
+  status: PoStatus;
+  ordered_by: string;
+  expected_delivery_date?: string;
+  actual_delivery_date?: string;
+  notes?: string;
+  total_ordered_amount: number;
+  created_at: string;
+  updated_at: string;
+  // Joined fields
+  procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
+  locations?: { id: string; name: string } | null;
+  orderer?: { id: string; full_name?: string; email?: string } | null;
+  purchase_requests?: Pick<PurchaseRequest, "id" | "pr_number" | "department"> | null;
+  purchase_order_items?: PurchaseOrderItem[];
+}
+
+export interface VendorBill {
+  id: string;
+  bill_number: string;
+  po_id?: string;
+  vendor_id: string;
+  invoice_number?: string;
+  invoice_date: string;
+  due_date?: string;
+  total_amount: number;
+  amount_paid: number;
+  payment_status: BillPaymentStatus;
+  payment_mode?: string;
+  payment_reference?: string;
+  payment_date?: string;
+  notes?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  // Joined fields
+  procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
+  purchase_orders?: Pick<PurchaseOrder, "id" | "po_number"> | null;
+}
+
+export interface ProcurementDashboardStats {
+  pending_approval_count: number;
+  monthly_spend_by_dept: { department: ProcurementDepartment; total: number }[];
+  overdue_bills_count: number;
+  recent_requests: Pick<PurchaseRequest, "id" | "pr_number" | "department" | "status" | "total_estimated_amount" | "created_at">[];
 }

@@ -1097,3 +1097,103 @@ export const TICKET_STATUS_COLORS: Record<string, string> = {
   resolved: "bg-green-100 text-green-800",
   closed: "bg-gray-100 text-gray-800",
 };
+
+// ==========================================
+// Procurement Module
+// ==========================================
+
+export const PROCUREMENT_APPROVAL_THRESHOLDS = {
+  ADMIN_REQUIRED_ABOVE: 25000, // INR — PRs above this amount require admin approval
+};
+
+export const PROCUREMENT_DEPARTMENTS = ["pantry", "maintenance", "administration"] as const;
+export type ProcurementDepartment = (typeof PROCUREMENT_DEPARTMENTS)[number];
+
+export const PROCUREMENT_DEPARTMENT_LABELS: Record<string, string> = {
+  pantry: "Pantry",
+  maintenance: "Maintenance",
+  administration: "Administration",
+};
+
+export const PROCUREMENT_DEPARTMENT_COLORS: Record<string, string> = {
+  pantry: "bg-orange-100 text-orange-800",
+  maintenance: "bg-blue-100 text-blue-800",
+  administration: "bg-purple-100 text-purple-800",
+};
+
+export const VENDOR_CATEGORIES = ["pantry", "maintenance", "administration", "general"] as const;
+export type VendorCategory = (typeof VENDOR_CATEGORIES)[number];
+
+export const VENDOR_CATEGORY_LABELS: Record<string, string> = {
+  pantry: "Pantry",
+  maintenance: "Maintenance",
+  administration: "Administration",
+  general: "General",
+};
+
+export const ITEM_UNITS = ["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair"] as const;
+export type ItemUnit = (typeof ITEM_UNITS)[number];
+
+export const PR_STATUSES = ["draft", "submitted", "approved", "rejected", "po_created", "cancelled"] as const;
+export type PrStatus = (typeof PR_STATUSES)[number];
+
+export const PR_STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  submitted: "Submitted",
+  approved: "Approved",
+  rejected: "Rejected",
+  po_created: "PO Created",
+  cancelled: "Cancelled",
+};
+
+export const PR_STATUS_COLORS: Record<string, string> = {
+  draft: "bg-gray-100 text-gray-700",
+  submitted: "bg-yellow-100 text-yellow-800",
+  approved: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+  po_created: "bg-blue-100 text-blue-800",
+  cancelled: "bg-gray-100 text-gray-500",
+};
+
+export const PO_STATUSES = ["pending", "ordered", "partially_received", "received", "cancelled"] as const;
+export type PoStatus = (typeof PO_STATUSES)[number];
+
+export const PO_STATUS_LABELS: Record<string, string> = {
+  pending: "Pending",
+  ordered: "Ordered",
+  partially_received: "Partially Received",
+  received: "Received",
+  cancelled: "Cancelled",
+};
+
+export const PO_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-yellow-100 text-yellow-800",
+  ordered: "bg-blue-100 text-blue-800",
+  partially_received: "bg-orange-100 text-orange-800",
+  received: "bg-green-100 text-green-800",
+  cancelled: "bg-gray-100 text-gray-500",
+};
+
+export const BILL_PAYMENT_STATUSES = ["unpaid", "partially_paid", "paid"] as const;
+export type BillPaymentStatus = (typeof BILL_PAYMENT_STATUSES)[number];
+
+export const BILL_PAYMENT_STATUS_LABELS: Record<string, string> = {
+  unpaid: "Unpaid",
+  partially_paid: "Partially Paid",
+  paid: "Paid",
+};
+
+export const BILL_PAYMENT_STATUS_COLORS: Record<string, string> = {
+  unpaid: "bg-red-100 text-red-800",
+  partially_paid: "bg-yellow-100 text-yellow-800",
+  paid: "bg-green-100 text-green-800",
+};
+
+export const BILL_PAYMENT_MODES = ["cash", "upi", "bank_transfer"] as const;
+export type BillPaymentMode = (typeof BILL_PAYMENT_MODES)[number];
+
+export const BILL_PAYMENT_MODE_LABELS: Record<string, string> = {
+  cash: "Cash",
+  upi: "UPI",
+  bank_transfer: "Bank Transfer",
+};
