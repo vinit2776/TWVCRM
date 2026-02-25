@@ -5,6 +5,7 @@ import { Truck, Plus, Search, Pencil, X, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -36,6 +37,7 @@ const emptyForm = {
   gstin: "",
   payment_terms: "",
   notes: "",
+  terms_and_conditions: "",
 };
 
 export default function VendorsPage() {
@@ -81,6 +83,7 @@ export default function VendorsPage() {
       gstin: vendor.gstin || "",
       payment_terms: vendor.payment_terms || "",
       notes: vendor.notes || "",
+      terms_and_conditions: vendor.terms_and_conditions || "",
     });
     setDialogOpen(true);
   }
@@ -324,10 +327,20 @@ export default function VendorsPage() {
               </div>
               <div className="col-span-2 space-y-1">
                 <Label>Notes</Label>
-                <Input
+                <Textarea
                   value={form.notes}
                   onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
                   placeholder="Any additional notes..."
+                  rows={2}
+                />
+              </div>
+              <div className="col-span-2 space-y-1">
+                <Label>Terms &amp; Conditions</Label>
+                <Textarea
+                  value={form.terms_and_conditions}
+                  onChange={(e) => setForm((f) => ({ ...f, terms_and_conditions: e.target.value }))}
+                  placeholder="Payment and contractual terms that apply to POs with this vendor..."
+                  rows={3}
                 />
               </div>
             </div>

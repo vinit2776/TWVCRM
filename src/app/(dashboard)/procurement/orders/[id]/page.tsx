@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ChevronLeft, Loader2, Truck, MapPin, User, Calendar,
-  FileText, PackageOpen, Receipt, Download,
+  FileText, PackageOpen, Receipt, Download, CreditCard,
 } from "lucide-react";
 import { generatePurchaseOrderPDF } from "@/lib/po-pdf-generator";
 import { Button } from "@/components/ui/button";
@@ -249,6 +249,15 @@ export default function PurchaseOrderDetailPage() {
                 </span>
               </div>
             )}
+            {po.payment_terms && (
+              <div className="flex items-start gap-2.5">
+                <CreditCard className="h-4 w-4 text-muted-foreground flex-shrink-0 mt-0.5" />
+                <span className="text-sm">
+                  <span className="text-muted-foreground">Payment Terms: </span>
+                  {po.payment_terms}
+                </span>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -274,6 +283,18 @@ export default function PurchaseOrderDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Terms & Conditions */}
+      {po.terms_and_conditions && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm font-medium text-muted-foreground">Terms &amp; Conditions</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-sm text-muted-foreground whitespace-pre-wrap">{po.terms_and_conditions}</p>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Line Items */}
       <Card>
@@ -306,6 +327,11 @@ export default function PurchaseOrderDetailPage() {
                       <td className="px-3 py-2.5 text-muted-foreground">{idx + 1}</td>
                       <td className="px-3 py-2.5">
                         <p className="font-medium">{item.item_name}</p>
+                        {item.procurement_items?.description && (
+                          <p className="text-xs text-blue-600 mt-0.5 italic">
+                            {item.procurement_items.description}
+                          </p>
+                        )}
                         {item.notes && (
                           <p className="text-xs text-muted-foreground mt-0.5">{item.notes}</p>
                         )}

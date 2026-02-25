@@ -1314,6 +1314,7 @@ export interface ProcurementVendor {
   address?: string;
   gstin?: string;
   payment_terms?: string;
+  terms_and_conditions?: string;
   notes?: string;
   is_active: boolean;
   created_by?: string;
@@ -1386,6 +1387,7 @@ export interface PurchaseOrderItem {
   total_amount?: number;
   notes?: string;
   created_at: string;
+  procurement_items?: { id: string; name: string; description?: string } | null;
 }
 
 export interface PurchaseOrder {
@@ -1399,6 +1401,8 @@ export interface PurchaseOrder {
   expected_delivery_date?: string;
   actual_delivery_date?: string;
   notes?: string;
+  payment_terms?: string;
+  terms_and_conditions?: string;
   total_ordered_amount: number;
   created_at: string;
   updated_at: string;

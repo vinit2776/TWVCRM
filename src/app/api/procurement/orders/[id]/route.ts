@@ -27,7 +27,7 @@ export async function GET(
   const { data, error } = await supabase
     .from("purchase_orders")
     .select(
-      `*, purchase_order_items(*), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), purchase_requests(id, pr_number, department, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email))`
+      `*, purchase_order_items(*, procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), purchase_requests(id, pr_number, department, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email))`
     )
     .eq("id", id)
     .single();

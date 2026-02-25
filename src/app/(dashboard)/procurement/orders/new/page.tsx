@@ -189,6 +189,24 @@ function NewPurchaseOrderFormWithPr({
       .finally(() => setLoadingPr(false));
   }, [prId, setPrData, setLocationId, setItems, setLoadingPr]);
 
+  const [paymentTerms, setPaymentTerms] = useState("");
+  const [termsAndConditions, setTermsAndConditions] = useState("");
+
+  const handleVendorChange = (newVendorId: string) => {
+    const actualId = newVendorId === "__none__" ? "" : newVendorId;
+    setVendorId(actualId);
+    if (actualId) {
+      const vendor = vendors.find((v) => v.id === actualId);
+      if (vendor) {
+        setPaymentTerms(vendor.payment_terms ?? "");
+        setTermsAndConditions(vendor.terms_and_conditions ?? "");
+      }
+    } else {
+      setPaymentTerms("");
+      setTermsAndConditions("");
+    }
+  };
+
   const updateItem = (localId: string, field: keyof LineItem, value: string) => {
     setItems(
       items.map((li) => (li.id === localId ? { ...li, [field]: value } : li))
@@ -252,6 +270,8 @@ function NewPurchaseOrderFormWithPr({
         location_id: locationId || null,
         expected_delivery_date: expectedDeliveryDate || null,
         notes: notes.trim() || null,
+        payment_terms: paymentTerms.trim() || null,
+        terms_and_conditions: termsAndConditions.trim() || null,
         items: orderable.map((li) => ({
           pr_item_id: li.pr_item_id ?? null,
           item_id: li.item_id ?? null,
@@ -331,7 +351,7 @@ function NewPurchaseOrderFormWithPr({
         <CardContent className="grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div className="space-y-1.5">
             <Label htmlFor="vendor">Vendor <span className="text-red-500">*</span></Label>
-            <Select value={vendorId || "__none__"} onValueChange={(v) => setVendorId(v === "__none__" ? "" : v)}>
+            <Select value={vendorId || "__none__"} onValueChange={handleVendorChange}>
               <SelectTrigger id="vendor">
                 <SelectValue placeholder="Select vendor" />
               </SelectTrigger>
@@ -377,6 +397,29 @@ function NewPurchaseOrderFormWithPr({
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={2}
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="payment_terms">Payment Terms</Label>
+            <input
+              id="payment_terms"
+              type="text"
+              className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm transition-colors placeholder:text-muted-foreground focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+              placeholder="e.g. Net 30, Immediate (pre-filled from vendor)"
+              value={paymentTerms}
+              onChange={(e) => setPaymentTerms(e.target.value)}
+            />
+          </div>
+
+          <div className="space-y-1.5 sm:col-span-2">
+            <Label htmlFor="terms_and_conditions">Terms &amp; Conditions</Label>
+            <Textarea
+              id="terms_and_conditions"
+              placeholder="Pre-filled from vendor profile. Edit if needed."
+              value={termsAndConditions}
+              onChange={(e) => setTermsAndConditions(e.target.value)}
+              rows={3}
             />
           </div>
         </CardContent>

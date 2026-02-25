@@ -457,6 +457,9 @@ export default function NewPurchaseRequestPage() {
                       Std. price: {formatCurrency(item.standard_price)}
                     </p>
                   )}
+                  {item.description && (
+                    <p className="text-xs text-muted-foreground/80 mt-0.5 italic">{item.description}</p>
+                  )}
                 </button>
               ))
             )}

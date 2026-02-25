@@ -182,7 +182,7 @@ export function generatePurchaseOrderPDF(po: PoForPDF): jsPDF {
 
   // Order Details section header
   doc.setFillColor(240, 250, 245);
-  doc.rect(colRight, y - 4, pageWidth / 2 - 5, sectionHeaderH, "F");
+  doc.rect(colRight, y - 4, pageWidth / 2 - 19, sectionHeaderH, "F");
   doc.text("ORDER DETAILS", colRight + 2, y);
 
   y += 6;
@@ -211,7 +211,7 @@ export function generatePurchaseOrderPDF(po: PoForPDF): jsPDF {
   }
 
   // Order Details column (reset Y for right column)
-  const rightStartY = y - (vendor?.contact_name ? 9 : 0) - (vendor?.contact_phone ? 4 : 0);
+  const rightStartY = y - (vendor?.contact_name ? 5 : 0) - (vendor?.contact_phone ? 4 : 0);
 
   let ry = rightStartY;
   doc.setTextColor(...BRAND_DARK);
@@ -230,11 +230,18 @@ export function generatePurchaseOrderPDF(po: PoForPDF): jsPDF {
     doc.text(formatDatePDF(po.expected_delivery_date), colRight + 22, ry);
     ry += 5;
   }
+  if (po.payment_terms) {
+    doc.setFont("helvetica", "bold");
+    doc.text("Payment:", colRight + 2, ry);
+    doc.setFont("helvetica", "normal");
+    doc.text(po.payment_terms, colRight + 22, ry);
+    ry += 5;
+  }
   if (orderer) {
     doc.setFont("helvetica", "bold");
     doc.text("Ordered By:", colRight + 2, ry);
     doc.setFont("helvetica", "normal");
-    doc.text(orderer.full_name ?? orderer.email ?? "—", colRight + 26, ry);
+    doc.text(orderer.full_name ?? orderer.email ?? "—", colRight + 22, ry);
   }
 
   y = Math.max(y, ry) + 8;
@@ -290,8 +297,28 @@ export function generatePurchaseOrderPDF(po: PoForPDF): jsPDF {
     doc.text(formatCurrencyPDF(totalAmount), pageWidth - 14, finalY, { align: "right" });
   }
 
+  // ── Terms & Conditions Section ──
+  let footerStartY = finalY + (totalAmount > 0 ? 18 : 8);
+  if (po.terms_and_conditions) {
+    const tcStartY = footerStartY;
+    doc.setFillColor(245, 247, 250);
+    doc.rect(14, tcStartY - 3, pageWidth - 28, 7, "F");
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...BRAND_DARK);
+    doc.text("TERMS & CONDITIONS", 17, tcStartY + 2);
+
+    doc.setFontSize(7.5);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(80, 80, 80);
+    const tcLines = doc.splitTextToSize(po.terms_and_conditions, pageWidth - 28);
+    doc.text(tcLines, 14, tcStartY + 10);
+    const lineCount = Array.isArray(tcLines) ? tcLines.length : 1;
+    footerStartY = tcStartY + 10 + lineCount * 4.5 + 6;
+  }
+
   // ── Footer ──
-  const footerY = finalY + 14;
+  const footerY = footerStartY;
   doc.setDrawColor(...BRAND_TEAL);
   doc.setLineWidth(0.3);
   doc.line(14, footerY, pageWidth - 14, footerY);

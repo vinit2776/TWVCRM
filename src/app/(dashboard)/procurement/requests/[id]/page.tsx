@@ -376,6 +376,11 @@ export default function PurchaseRequestDetailPage() {
                           {item.notes && (
                             <p className="text-xs text-muted-foreground mt-0.5">{item.notes}</p>
                           )}
+                          {item.procurement_items?.description && (
+                            <p className="text-xs text-blue-600 mt-0.5 italic">
+                              {item.procurement_items.description}
+                            </p>
+                          )}
                           {item.procurement_items && (
                             <div className="flex items-center gap-2 mt-0.5">
                               <Badge variant="secondary" className="text-xs bg-blue-50 text-blue-700">

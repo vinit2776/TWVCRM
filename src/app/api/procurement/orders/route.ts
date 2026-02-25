@@ -19,6 +19,8 @@ const createPoSchema = z.object({
   location_id: z.string().uuid().nullish(),
   expected_delivery_date: z.string().nullish(),
   notes: z.string().nullish(),
+  payment_terms: z.string().nullish(),
+  terms_and_conditions: z.string().nullish(),
   items: z.array(createPoItemSchema).min(1, "At least one item is required"),
 });
 
@@ -172,6 +174,8 @@ export async function POST(request: NextRequest) {
       location_id: poData.location_id ?? null,
       expected_delivery_date: poData.expected_delivery_date ?? null,
       notes: poData.notes ?? null,
+      payment_terms: poData.payment_terms ?? null,
+      terms_and_conditions: poData.terms_and_conditions ?? null,
       po_number: poNumber,
       ordered_by: dbUser.id,
       total_ordered_amount: totalOrderedAmount,

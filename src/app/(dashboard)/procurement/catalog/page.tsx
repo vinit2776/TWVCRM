@@ -5,6 +5,7 @@ import { Archive, Plus, X, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -269,11 +270,12 @@ export default function CatalogPage() {
               />
             </div>
             <div className="space-y-1">
-              <Label>Description</Label>
-              <Input
+              <Label>Item Notes</Label>
+              <Textarea
                 value={form.description}
                 onChange={(e) => setForm((f) => ({ ...f, description: e.target.value }))}
-                placeholder="Optional description..."
+                placeholder="Handling instructions, specifications, ordering notes..."
+                rows={2}
               />
             </div>
           </div>

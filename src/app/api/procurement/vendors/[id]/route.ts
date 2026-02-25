@@ -12,6 +12,7 @@ const updateVendorSchema = z.object({
   address: z.string().optional(),
   gstin: z.string().optional(),
   payment_terms: z.string().optional(),
+  terms_and_conditions: z.string().optional(),
   notes: z.string().optional(),
   is_active: z.boolean().optional(),
 });
