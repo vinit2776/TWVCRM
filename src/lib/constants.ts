@@ -1155,7 +1155,7 @@ export const PR_STATUS_COLORS: Record<string, string> = {
   cancelled: "bg-gray-100 text-gray-500",
 };
 
-export const PO_STATUSES = ["pending", "ordered", "partially_received", "received", "cancelled"] as const;
+export const PO_STATUSES = ["pending", "ordered", "partially_received", "received", "invoice_received", "cancelled"] as const;
 export type PoStatus = (typeof PO_STATUSES)[number];
 
 export const PO_STATUS_LABELS: Record<string, string> = {
@@ -1163,6 +1163,7 @@ export const PO_STATUS_LABELS: Record<string, string> = {
   ordered: "Ordered",
   partially_received: "Partially Received",
   received: "Received",
+  invoice_received: "Invoice Received",
   cancelled: "Cancelled",
 };
 
@@ -1171,6 +1172,7 @@ export const PO_STATUS_COLORS: Record<string, string> = {
   ordered: "bg-blue-100 text-blue-800",
   partially_received: "bg-orange-100 text-orange-800",
   received: "bg-green-100 text-green-800",
+  invoice_received: "bg-purple-100 text-purple-800",
   cancelled: "bg-gray-100 text-gray-500",
 };
 

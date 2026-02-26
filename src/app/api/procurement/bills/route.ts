@@ -11,6 +11,7 @@ const createBillSchema = z.object({
   due_date: z.string().nullish(),
   total_amount: z.number().positive("Total amount must be greater than 0"),
   notes: z.string().nullish(),
+  invoice_file_url: z.string().url().nullish(),
 });
 
 function generateBillNumber(count: number): string {
@@ -73,7 +74,7 @@ export async function POST(request: NextRequest) {
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
   if (!["admin", "manager"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Only managers and admins can create vendor bills" }, { status: 403 });
+    return NextResponse.json({ error: "Only managers and admins can create vendor invoices" }, { status: 403 });
   }
 
   const body = await request.json();
@@ -82,7 +83,38 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
-  // Generate bill number
+  // ── PO validation: amount ceiling + file requirement ──────────────────────
+  let poTotalAmount: number | null = null;
+  if (parsed.data.po_id) {
+    const { data: po } = await supabase
+      .from("purchase_orders")
+      .select("id, total_ordered_amount, status")
+      .eq("id", parsed.data.po_id)
+      .single();
+
+    if (!po) {
+      return NextResponse.json({ error: "Linked purchase order not found" }, { status: 404 });
+    }
+    if (["cancelled"].includes(po.status)) {
+      return NextResponse.json({ error: "Cannot create an invoice for a cancelled purchase order" }, { status: 422 });
+    }
+
+    poTotalAmount = Number(po.total_ordered_amount);
+
+    // Invoice file is mandatory when linked to a PO
+    if (!parsed.data.invoice_file_url) {
+      return NextResponse.json({ error: "Invoice file upload is required when linking to a purchase order" }, { status: 422 });
+    }
+
+    // Amount must not exceed PO value
+    if (poTotalAmount > 0 && parsed.data.total_amount > poTotalAmount) {
+      return NextResponse.json({
+        error: `Invoice amount (₹${parsed.data.total_amount.toLocaleString("en-IN")}) cannot exceed the PO value (₹${poTotalAmount.toLocaleString("en-IN")})`,
+      }, { status: 422 });
+    }
+  }
+
+  // ── Generate bill number ───────────────────────────────────────────────────
   const { count: existingCount } = await supabase
     .from("vendor_bills")
     .select("*", { count: "exact", head: true });
@@ -99,6 +131,7 @@ export async function POST(request: NextRequest) {
       due_date: parsed.data.due_date ?? null,
       total_amount: parsed.data.total_amount,
       notes: parsed.data.notes ?? null,
+      invoice_file_url: parsed.data.invoice_file_url ?? null,
       bill_number: billNumber,
       amount_paid: 0,
       payment_status: "unpaid",
@@ -108,6 +141,15 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (billError) return NextResponse.json({ error: billError.message }, { status: 500 });
+
+  // ── Update PO status to invoice_received ──────────────────────────────────
+  if (parsed.data.po_id && parsed.data.invoice_file_url) {
+    await supabase
+      .from("purchase_orders")
+      .update({ status: "invoice_received" })
+      .eq("id", parsed.data.po_id)
+      .not("status", "eq", "cancelled");
+  }
 
   await logAudit(supabase, {
     entityType: "vendor_bill",
@@ -119,6 +161,7 @@ export async function POST(request: NextRequest) {
       vendor_id: { old: null, new: parsed.data.vendor_id },
       po_id: { old: null, new: parsed.data.po_id ?? null },
       total_amount: { old: null, new: parsed.data.total_amount },
+      invoice_file_uploaded: { old: null, new: !!parsed.data.invoice_file_url },
     },
   });
 

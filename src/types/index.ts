@@ -1301,7 +1301,7 @@ export type ProcurementDepartment = "pantry" | "maintenance" | "administration";
 export type VendorCategory = "pantry" | "maintenance" | "administration" | "general";
 export type ItemUnit = "kg" | "litre" | "packet" | "box" | "piece" | "roll" | "dozen" | "bottle" | "bag" | "set" | "pair";
 export type PrStatus = "draft" | "submitted" | "approved" | "rejected" | "po_created" | "cancelled";
-export type PoStatus = "pending" | "ordered" | "partially_received" | "received" | "cancelled";
+export type PoStatus = "pending" | "ordered" | "partially_received" | "received" | "invoice_received" | "cancelled";
 export type BillPaymentStatus = "unpaid" | "partially_paid" | "paid";
 
 export interface ProcurementVendor {
@@ -1431,6 +1431,7 @@ export interface VendorBill {
   payment_reference?: string;
   payment_date?: string;
   notes?: string;
+  invoice_file_url?: string;
   created_by: string;
   created_at: string;
   updated_at: string;

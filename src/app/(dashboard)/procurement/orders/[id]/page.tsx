@@ -147,13 +147,13 @@ export default function PurchaseOrderDetailPage() {
               Mark as Received
             </Button>
           )}
-          {po.status !== "cancelled" && po.status !== "received" && (
+          {!["cancelled", "invoice_received"].includes(po.status) && (
             <Button
               size="sm"
               variant="outline"
               onClick={() => router.push(`/procurement/bills/new?po_id=${po.id}`)}
             >
-              <Receipt className="h-4 w-4 mr-1" /> Create Bill
+              <Receipt className="h-4 w-4 mr-1" /> Vendor Invoice
             </Button>
           )}
           {["pending", "ordered"].includes(po.status) && (

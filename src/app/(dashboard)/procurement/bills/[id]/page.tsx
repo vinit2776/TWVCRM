@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  ChevronLeft, Loader2, Truck, FileText, Calendar, CreditCard, Package,
+  ChevronLeft, Loader2, Truck, FileText, Calendar, CreditCard, Package, ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -205,6 +205,22 @@ export default function VendorBillDetailPage() {
                     {formatDate(bill.due_date)}
                     {bill.due_date < today && bill.payment_status !== "paid" && " (Overdue)"}
                   </span>
+                </span>
+              </div>
+            )}
+            {bill.invoice_file_url && (
+              <div className="flex items-center gap-2.5">
+                <FileText className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                <span className="text-sm">
+                  <span className="text-muted-foreground">Invoice File: </span>
+                  <a
+                    href={bill.invoice_file_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="text-primary hover:underline inline-flex items-center gap-1"
+                  >
+                    View Invoice <ExternalLink className="h-3 w-3" />
+                  </a>
                 </span>
               </div>
             )}

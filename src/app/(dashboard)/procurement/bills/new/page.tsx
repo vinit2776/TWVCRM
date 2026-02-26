@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, Suspense } from "react";
+import { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, Loader2 } from "lucide-react";
+import { ChevronLeft, Loader2, Paperclip, X, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -12,7 +12,12 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { createClient as createBrowserClient } from "@/lib/supabase/client";
+import { formatCurrency } from "@/lib/utils";
 import type { ProcurementVendor, PurchaseOrder } from "@/types";
+
+const ACCEPTED_TYPES = ["application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp"];
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
 function NewVendorBillForm() {
   const router = useRouter();
@@ -28,6 +33,10 @@ function NewVendorBillForm() {
   const [totalAmount, setTotalAmount] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // File upload state
+  const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [vendors, setVendors] = useState<ProcurementVendor[]>([]);
   const [poData, setPoData] = useState<PurchaseOrder | null>(null);
@@ -51,7 +60,6 @@ function NewVendorBillForm() {
         setPoData(po);
         setVendorId(po.vendor_id);
         setVendorLocked(true);
-        // Pre-fill total from PO if available
         if (po.total_ordered_amount > 0) {
           setTotalAmount(String(po.total_ordered_amount));
         }
@@ -59,11 +67,38 @@ function NewVendorBillForm() {
       .finally(() => setLoadingPo(false));
   }, [poId]);
 
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    if (!ACCEPTED_TYPES.includes(file.type)) {
+      toast.error("Only PDF, JPEG, PNG, or WebP files are accepted");
+      e.target.value = "";
+      return;
+    }
+    if (file.size > MAX_FILE_SIZE) {
+      toast.error("File size must be under 10 MB");
+      e.target.value = "";
+      return;
+    }
+    setInvoiceFile(file);
+  };
+
+  const removeFile = () => {
+    setInvoiceFile(null);
+    if (fileInputRef.current) fileInputRef.current.value = "";
+  };
+
   const validate = (): string | null => {
     if (!vendorId) return "Please select a vendor";
     if (!invoiceDate) return "Invoice date is required";
     const amount = parseFloat(totalAmount);
-    if (!totalAmount || isNaN(amount) || amount <= 0) return "Total amount must be greater than 0";
+    if (!totalAmount || isNaN(amount) || amount <= 0) return "Invoice amount must be greater than 0";
+    // File is mandatory when linked to a PO
+    if (poId && !invoiceFile) return "Please upload the vendor invoice file";
+    // Amount ceiling check
+    if (poData && poData.total_ordered_amount > 0 && amount > Number(poData.total_ordered_amount)) {
+      return `Invoice amount (${formatCurrency(amount)}) cannot exceed PO value (${formatCurrency(poData.total_ordered_amount)})`;
+    }
     return null;
   };
 
@@ -73,6 +108,28 @@ function NewVendorBillForm() {
 
     setSubmitting(true);
     try {
+      let invoiceFileUrl: string | null = null;
+
+      // Upload file to Supabase Storage if provided
+      if (invoiceFile) {
+        const supabase = createBrowserClient();
+        const ext = invoiceFile.name.split(".").pop() ?? "pdf";
+        const filePath = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+        const { error: uploadError } = await supabase.storage
+          .from("vendor-invoices")
+          .upload(filePath, invoiceFile);
+
+        if (uploadError) {
+          toast.error(`File upload failed: ${uploadError.message}`);
+          return;
+        }
+
+        const { data: urlData } = supabase.storage
+          .from("vendor-invoices")
+          .getPublicUrl(filePath);
+        invoiceFileUrl = urlData.publicUrl;
+      }
+
       const payload = {
         po_id: poId ?? null,
         vendor_id: vendorId,
@@ -81,6 +138,7 @@ function NewVendorBillForm() {
         due_date: dueDate || null,
         total_amount: parseFloat(totalAmount),
         notes: notes.trim() || null,
+        invoice_file_url: invoiceFileUrl,
       };
 
       const res = await fetch("/api/procurement/bills", {
@@ -90,10 +148,10 @@ function NewVendorBillForm() {
       });
       const json = await res.json();
       if (!res.ok) {
-        toast.error(typeof json.error === "string" ? json.error : "Failed to create bill");
+        toast.error(typeof json.error === "string" ? json.error : "Failed to create vendor invoice");
         return;
       }
-      toast.success(`Bill created — ${json.data.bill_number}`);
+      toast.success(`Vendor invoice recorded — ${json.data.bill_number}`);
       router.push(`/procurement/bills/${json.data.id}`);
     } finally {
       setSubmitting(false);
@@ -108,6 +166,8 @@ function NewVendorBillForm() {
     );
   }
 
+  const poAmount = poData ? Number(poData.total_ordered_amount) : null;
+
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
       {/* Header */}
@@ -116,9 +176,9 @@ function NewVendorBillForm() {
           <ChevronLeft className="h-5 w-5" />
         </Button>
         <div>
-          <h1 className="text-2xl font-bold">New Vendor Bill</h1>
+          <h1 className="text-2xl font-bold">Vendor Invoice</h1>
           <p className="text-sm text-muted-foreground">
-            {poData ? `Creating bill for ${poData.po_number}` : "Record a vendor invoice"}
+            {poData ? `Recording invoice for ${poData.po_number}` : "Record a vendor invoice"}
           </p>
         </div>
       </div>
@@ -126,15 +186,19 @@ function NewVendorBillForm() {
       {/* PO context banner */}
       {poData && (
         <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-3 text-sm text-blue-800">
-          Creating bill for PO <strong>{poData.po_number}</strong>. Vendor is pre-filled and locked.
+          Recording invoice for PO <strong>{poData.po_number}</strong>.
+          {poAmount && poAmount > 0 && (
+            <> PO value: <strong>{formatCurrency(poAmount)}</strong> — invoice must not exceed this amount.</>
+          )}
         </div>
       )}
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Bill Details</CardTitle>
+          <CardTitle className="text-base">Invoice Details</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          {/* Vendor */}
           <div className="space-y-1.5">
             <Label htmlFor="vendor">Vendor <span className="text-red-500">*</span></Label>
             <Select
@@ -169,16 +233,24 @@ function NewVendorBillForm() {
             </div>
 
             <div className="space-y-1.5">
-              <Label htmlFor="total_amount">Total Amount (₹) <span className="text-red-500">*</span></Label>
+              <Label htmlFor="total_amount">
+                Invoice Amount (₹) <span className="text-red-500">*</span>
+              </Label>
               <Input
                 id="total_amount"
                 type="number"
                 min="0.01"
+                max={poAmount ?? undefined}
                 step="0.01"
                 placeholder="0.00"
                 value={totalAmount}
                 onChange={(e) => setTotalAmount(e.target.value)}
               />
+              {poAmount && poAmount > 0 && (
+                <p className="text-xs text-muted-foreground">
+                  Max: {formatCurrency(poAmount)} (PO value)
+                </p>
+              )}
             </div>
 
             <div className="space-y-1.5">
@@ -202,6 +274,53 @@ function NewVendorBillForm() {
             </div>
           </div>
 
+          {/* Invoice File Upload */}
+          <div className="space-y-1.5">
+            <Label>
+              Invoice File{" "}
+              {poId ? (
+                <span className="text-red-500">*</span>
+              ) : (
+                <span className="text-muted-foreground text-xs">(optional)</span>
+              )}
+            </Label>
+            {invoiceFile ? (
+              <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2.5">
+                <FileText className="h-4 w-4 text-primary flex-shrink-0" />
+                <span className="text-sm flex-1 truncate">{invoiceFile.name}</span>
+                <span className="text-xs text-muted-foreground">
+                  {(invoiceFile.size / 1024).toFixed(0)} KB
+                </span>
+                <button
+                  type="button"
+                  onClick={removeFile}
+                  className="ml-1 text-muted-foreground hover:text-destructive"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ) : (
+              <div
+                className="flex items-center justify-center rounded-md border-2 border-dashed border-muted-foreground/25 px-4 py-6 cursor-pointer hover:border-muted-foreground/50 transition-colors"
+                onClick={() => fileInputRef.current?.click()}
+              >
+                <div className="text-center">
+                  <Paperclip className="h-6 w-6 text-muted-foreground mx-auto mb-1" />
+                  <p className="text-sm text-muted-foreground">
+                    Click to upload invoice (PDF, JPG, PNG — max 10 MB)
+                  </p>
+                </div>
+              </div>
+            )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept=".pdf,.jpg,.jpeg,.png,.webp"
+              className="sr-only"
+              onChange={handleFileChange}
+            />
+          </div>
+
           <div className="space-y-1.5">
             <Label htmlFor="notes">Notes</Label>
             <Textarea
@@ -218,9 +337,9 @@ function NewVendorBillForm() {
       <div className="flex justify-end">
         <Button onClick={handleSubmit} disabled={submitting} size="lg">
           {submitting ? (
-            <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Creating…</>
+            <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Saving…</>
           ) : (
-            "Create Bill"
+            "Save Vendor Invoice"
           )}
         </Button>
       </div>
