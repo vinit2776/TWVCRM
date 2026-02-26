@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ChevronLeft, Loader2, Truck, MapPin, User, Calendar,
   FileText, PackageOpen, Receipt, Download, CreditCard,
+  Clock, Paperclip, X, CheckCircle2, Package,
 } from "lucide-react";
 import { generatePurchaseOrderPDF } from "@/lib/po-pdf-generator";
 import { Button } from "@/components/ui/button";
@@ -13,6 +14,7 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -21,10 +23,210 @@ import {
   PO_STATUS_LABELS, PO_STATUS_COLORS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import type { PurchaseOrder } from "@/types";
+import { createClient as createBrowserClient } from "@/lib/supabase/client";
+import type { PurchaseOrder, AuditLog } from "@/types";
 
-type ActionType = "mark_ordered" | "mark_received" | "cancel" | "partial_cancel";
+const ACCEPTED_FILE_TYPES = ["application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp"];
+const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
 
+type ActionType =
+  | "mark_ordered"
+  | "mark_received"
+  | "cancel"
+  | "partial_cancel"
+  | "record_delivery"
+  | "add_invoice";
+
+// ─── Timeline helper ─────────────────────────────────────────────────────────
+interface TimelineItem {
+  id: string;
+  ts: string;
+  type: "created" | "ordered" | "delivery" | "invoice" | "status";
+  title: string;
+  subtitle: string;
+  fileUrl?: string | null;
+  fileLabel?: string;
+}
+
+function buildTimeline(
+  po: PurchaseOrder,
+  auditEvents: AuditLog[]
+): TimelineItem[] {
+  const items: TimelineItem[] = [];
+
+  // PO Created
+  items.push({
+    id: "created",
+    ts: po.created_at,
+    type: "created",
+    title: "PO Created",
+    subtitle: po.orderer?.full_name ?? po.orderer?.email ?? "—",
+  });
+
+  // Audit-driven events (mark_ordered, cancellations, etc.)
+  for (const ev of auditEvents) {
+    const changes = ev.changes as Record<string, { old: unknown; new: unknown }> | null;
+    const newStatus = changes?.status?.new as string | undefined;
+    if (!newStatus) continue;
+
+    if (newStatus === "ordered") {
+      const performer = (ev as unknown as { performer?: { full_name?: string } }).performer;
+      items.push({
+        id: ev.id,
+        ts: ev.created_at,
+        type: "ordered",
+        title: "Marked as Ordered",
+        subtitle: performer?.full_name ?? "—",
+      });
+    } else if (newStatus === "cancelled") {
+      const performer = (ev as unknown as { performer?: { full_name?: string } }).performer;
+      items.push({
+        id: ev.id,
+        ts: ev.created_at,
+        type: "status",
+        title: "Order Cancelled",
+        subtitle: performer?.full_name ?? "—",
+      });
+    } else if (newStatus === "partially_cancelled") {
+      const performer = (ev as unknown as { performer?: { full_name?: string } }).performer;
+      items.push({
+        id: ev.id,
+        ts: ev.created_at,
+        type: "status",
+        title: "Partially Cancelled",
+        subtitle: performer?.full_name ?? "—",
+      });
+    }
+  }
+
+  // Delivery receipts
+  for (const dr of po.po_delivery_receipts ?? []) {
+    items.push({
+      id: `dr-${dr.id}`,
+      ts: dr.received_at,
+      type: "delivery",
+      title: dr.dc_number
+        ? `Delivery Received — ${dr.dc_number}`
+        : "Delivery Received",
+      subtitle: dr.receiver?.full_name ?? "—",
+      fileUrl: dr.file_url,
+      fileLabel: "View Challan",
+    });
+  }
+
+  // Vendor bills / invoices
+  for (const bill of po.vendor_bills ?? []) {
+    items.push({
+      id: `bill-${bill.id}`,
+      ts: bill.created_at,
+      type: "invoice",
+      title: `Invoice — ${bill.bill_number}`,
+      subtitle: `${formatCurrency(bill.total_amount)}${bill.creator?.full_name ? ` · by ${bill.creator.full_name}` : ""}`,
+      fileUrl: bill.invoice_file_url,
+      fileLabel: "View Invoice",
+    });
+  }
+
+  // Sort chronologically
+  return items.sort((a, b) => new Date(a.ts).getTime() - new Date(b.ts).getTime());
+}
+
+const TIMELINE_DOT_COLORS: Record<TimelineItem["type"], string> = {
+  created: "bg-blue-500",
+  ordered: "bg-blue-600",
+  delivery: "bg-green-500",
+  invoice: "bg-purple-500",
+  status: "bg-gray-400",
+};
+
+// ─── File validation helper ───────────────────────────────────────────────────
+function validateFile(file: File): string | null {
+  if (!ACCEPTED_FILE_TYPES.includes(file.type)) {
+    return "Only PDF, JPEG, PNG, or WebP files are accepted";
+  }
+  if (file.size > MAX_FILE_SIZE) {
+    return "File size must be under 10 MB";
+  }
+  return null;
+}
+
+// ─── File upload helper ───────────────────────────────────────────────────────
+async function uploadFile(file: File, bucket: string): Promise<string> {
+  const supabase = createBrowserClient();
+  const ext = file.name.split(".").pop() ?? "pdf";
+  const filePath = `${Date.now()}-${Math.random().toString(36).slice(2)}.${ext}`;
+  const { error } = await supabase.storage.from(bucket).upload(filePath, file);
+  if (error) throw new Error(error.message);
+  const { data } = supabase.storage.from(bucket).getPublicUrl(filePath);
+  return data.publicUrl;
+}
+
+// ─── File attachment display ──────────────────────────────────────────────────
+function FileAttachment({
+  file,
+  onRemove,
+}: {
+  file: File;
+  onRemove: () => void;
+}) {
+  return (
+    <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2.5">
+      <FileText className="h-4 w-4 text-primary flex-shrink-0" />
+      <span className="text-sm flex-1 truncate">{file.name}</span>
+      <span className="text-xs text-muted-foreground">
+        {(file.size / 1024).toFixed(0)} KB
+      </span>
+      <button
+        type="button"
+        onClick={onRemove}
+        className="ml-1 text-muted-foreground hover:text-destructive"
+      >
+        <X className="h-4 w-4" />
+      </button>
+    </div>
+  );
+}
+
+function FileDropzone({
+  fileRef,
+  label,
+  required,
+  onChange,
+}: {
+  fileRef: React.RefObject<HTMLInputElement | null>;
+  label: string;
+  required?: boolean;
+  onChange: (file: File) => void;
+}) {
+  return (
+    <div
+      className="flex items-center justify-center rounded-md border-2 border-dashed border-muted-foreground/25 px-4 py-5 cursor-pointer hover:border-muted-foreground/50 transition-colors"
+      onClick={() => fileRef.current?.click()}
+    >
+      <div className="text-center">
+        <Paperclip className="h-5 w-5 text-muted-foreground mx-auto mb-1" />
+        <p className="text-sm text-muted-foreground">
+          {label}
+        </p>
+      </div>
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png,.webp"
+        className="sr-only"
+        onChange={(e) => {
+          const f = e.target.files?.[0];
+          if (!f) return;
+          const err = validateFile(f);
+          if (err) { toast.error(err); e.target.value = ""; return; }
+          onChange(f);
+        }}
+      />
+    </div>
+  );
+}
+
+// ─── Main page ────────────────────────────────────────────────────────────────
 export default function PurchaseOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -32,11 +234,38 @@ export default function PurchaseOrderDetailPage() {
   const [po, setPo] = useState<PurchaseOrder | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+  const [auditEvents, setAuditEvents] = useState<AuditLog[]>([]);
 
   const [actionDialog, setActionDialog] = useState<ActionType | null>(null);
-  const [actualDeliveryDate, setActualDeliveryDate] = useState("");
+
+  // Mark Ordered
+  // (no extra state needed)
+
+  // Cancel
+  // (no extra state needed)
+
+  // Partial Cancel
   const [partialCancelQtys, setPartialCancelQtys] = useState<Record<string, string>>({});
   const [hasBill, setHasBill] = useState(false);
+
+  // Record Delivery
+  const [dcNumber, setDcNumber] = useState("");
+  const [dcDate, setDcDate] = useState("");
+  const [dcFile, setDcFile] = useState<File | null>(null);
+  const [dcNotes, setDcNotes] = useState("");
+  const [dcQtys, setDcQtys] = useState<Record<string, string>>({});
+  const [dcUploading, setDcUploading] = useState(false);
+  const dcFileRef = useRef<HTMLInputElement>(null);
+
+  // Add Invoice
+  const [invNumber, setInvNumber] = useState("");
+  const [invDate, setInvDate] = useState("");
+  const [invDueDate, setInvDueDate] = useState("");
+  const [invAmount, setInvAmount] = useState("");
+  const [invFile, setInvFile] = useState<File | null>(null);
+  const [invNotes, setInvNotes] = useState("");
+  const [invUploading, setInvUploading] = useState(false);
+  const invFileRef = useRef<HTMLInputElement>(null);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -46,6 +275,7 @@ export default function PurchaseOrderDetailPage() {
     if (res.ok) {
       const json = await res.json();
       setPo(json.data);
+      setAuditEvents(json.audit_events ?? []);
     } else {
       toast.error("Failed to load purchase order");
       router.push("/procurement/orders");
@@ -65,6 +295,7 @@ export default function PurchaseOrderDetailPage() {
     }
   }, [po?.id, po?.status]);
 
+  // ── Simple PATCH actions (mark_ordered, cancel, partial_cancel) ────────────
   const performAction = async (
     action: ActionType,
     extra?: Record<string, unknown>
@@ -81,19 +312,138 @@ export default function PurchaseOrderDetailPage() {
         toast.error(json.error || "Action failed");
         return;
       }
-      const msgs: Record<ActionType, string> = {
+      const msgs: Partial<Record<ActionType, string>> = {
         mark_ordered: "Order marked as ordered",
-        mark_received: "Order marked as received",
         cancel: "Order cancelled",
         partial_cancel: "Order partially cancelled — remaining qty released back to PR",
       };
-      toast.success(msgs[action]);
+      toast.success(msgs[action] ?? "Done");
       setActionDialog(null);
-      setActualDeliveryDate("");
       setPartialCancelQtys({});
       await fetchPo();
     } finally {
       setActionLoading(false);
+    }
+  };
+
+  // ── Record Delivery ────────────────────────────────────────────────────────
+  const submitDelivery = async () => {
+    if (!dcDate) { toast.error("Delivery date is required"); return; }
+    if (!dcFile) { toast.error("Please upload the delivery challan file"); return; }
+
+    const items = (po?.purchase_order_items ?? []).map((item) => ({
+      po_item_id: item.id,
+      qty_received: parseFloat(dcQtys[item.id] || "0"),
+    }));
+
+    for (const i of items) {
+      if (isNaN(i.qty_received) || i.qty_received < 0) {
+        toast.error("All quantities must be valid non-negative numbers");
+        return;
+      }
+    }
+    if (items.every((i) => i.qty_received === 0)) {
+      toast.error("At least one item must have a quantity greater than 0");
+      return;
+    }
+
+    setDcUploading(true);
+    try {
+      let fileUrl: string;
+      try {
+        fileUrl = await uploadFile(dcFile, "delivery-challans");
+      } catch (err) {
+        toast.error(`File upload failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+        return;
+      }
+
+      const res = await fetch(`/api/procurement/orders/${id}/deliveries`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          dc_number: dcNumber.trim() || null,
+          dc_date: dcDate,
+          file_url: fileUrl,
+          notes: dcNotes.trim() || null,
+          items,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to record delivery");
+        return;
+      }
+
+      toast.success("Delivery recorded successfully");
+      setActionDialog(null);
+      setDcFile(null);
+      setDcQtys({});
+      setDcNumber("");
+      setDcNotes("");
+      setDcDate("");
+      if (dcFileRef.current) dcFileRef.current.value = "";
+      await fetchPo();
+    } finally {
+      setDcUploading(false);
+    }
+  };
+
+  // ── Add Invoice (inline) ───────────────────────────────────────────────────
+  const submitInvoice = async () => {
+    if (!invDate) { toast.error("Invoice date is required"); return; }
+    const amount = parseFloat(invAmount);
+    if (!invAmount || isNaN(amount) || amount <= 0) {
+      toast.error("Invoice amount must be greater than 0");
+      return;
+    }
+    if (!invFile) { toast.error("Please upload the vendor invoice file"); return; }
+    if (po && po.total_ordered_amount > 0 && amount > Number(po.total_ordered_amount)) {
+      toast.error(`Invoice amount cannot exceed PO value (${formatCurrency(po.total_ordered_amount)})`);
+      return;
+    }
+
+    setInvUploading(true);
+    try {
+      let fileUrl: string;
+      try {
+        fileUrl = await uploadFile(invFile, "vendor-invoices");
+      } catch (err) {
+        toast.error(`File upload failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+        return;
+      }
+
+      const res = await fetch("/api/procurement/bills", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          po_id: po?.id,
+          vendor_id: po?.vendor_id,
+          invoice_number: invNumber.trim() || null,
+          invoice_date: invDate,
+          due_date: invDueDate || null,
+          total_amount: amount,
+          notes: invNotes.trim() || null,
+          invoice_file_url: fileUrl,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(typeof json.error === "string" ? json.error : "Failed to create vendor invoice");
+        return;
+      }
+
+      toast.success(`Vendor invoice recorded — ${json.data.bill_number}`);
+      setActionDialog(null);
+      setInvFile(null);
+      setInvNumber("");
+      setInvDate("");
+      setInvDueDate("");
+      setInvAmount("");
+      setInvNotes("");
+      if (invFileRef.current) invFileRef.current.value = "";
+      await fetchPo();
+    } finally {
+      setInvUploading(false);
     }
   };
 
@@ -107,7 +457,12 @@ export default function PurchaseOrderDetailPage() {
 
   if (!po) return null;
 
-  const vendor = po.procurement_vendors as { id: string; name: string; contact_name?: string; contact_phone?: string; contact_email?: string } | null;
+  const vendor = po.procurement_vendors as {
+    id: string; name: string;
+    contact_name?: string; contact_phone?: string; contact_email?: string;
+  } | null;
+
+  const timelineItems = buildTimeline(po, auditEvents);
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -154,21 +509,31 @@ export default function PurchaseOrderDetailPage() {
               Mark as Ordered
             </Button>
           )}
-          {po.status === "ordered" && (
+          {["ordered", "partially_received"].includes(po.status) && (
             <Button
               size="sm"
               className="bg-green-600 hover:bg-green-700"
-              onClick={() => { setActualDeliveryDate(today); setActionDialog("mark_received"); }}
+              onClick={() => {
+                const initial: Record<string, string> = {};
+                for (const item of po.purchase_order_items ?? []) initial[item.id] = "";
+                setDcQtys(initial);
+                setDcDate(today);
+                setActionDialog("record_delivery");
+              }}
               disabled={actionLoading}
             >
-              Mark as Received
+              <Package className="h-4 w-4 mr-1" /> Record Delivery
             </Button>
           )}
           {!["cancelled", "partially_cancelled", "invoice_received"].includes(po.status) && (
             <Button
               size="sm"
               variant="outline"
-              onClick={() => router.push(`/procurement/bills/new?po_id=${po.id}`)}
+              onClick={() => {
+                setInvDate(today);
+                setInvAmount(String(po.total_ordered_amount || ""));
+                setActionDialog("add_invoice");
+              }}
             >
               <Receipt className="h-4 w-4 mr-1" /> Vendor Invoice
             </Button>
@@ -372,8 +737,21 @@ export default function PurchaseOrderDetailPage() {
                         )}
                       </td>
                       <td className="px-3 py-2.5 text-right">{item.quantity_ordered}</td>
-                      <td className="px-3 py-2.5 text-right hidden sm:table-cell text-muted-foreground">
-                        {item.quantity_received ?? 0}
+                      <td className="px-3 py-2.5 text-right hidden sm:table-cell">
+                        {Number(item.quantity_received) > 0 ? (
+                          <span className={
+                            Number(item.quantity_received) >= Number(item.quantity_ordered)
+                              ? "text-green-700 font-medium"
+                              : "text-amber-700 font-medium"
+                          }>
+                            {item.quantity_received}
+                            {Number(item.quantity_received) >= Number(item.quantity_ordered) && (
+                              <CheckCircle2 className="inline h-3.5 w-3.5 ml-1 text-green-600" />
+                            )}
+                          </span>
+                        ) : (
+                          <span className="text-muted-foreground">0</span>
+                        )}
                       </td>
                       <td className="px-3 py-2.5 text-muted-foreground">{item.unit}</td>
                       <td className="px-3 py-2.5 text-right hidden sm:table-cell">
@@ -391,7 +769,54 @@ export default function PurchaseOrderDetailPage() {
         </CardContent>
       </Card>
 
-      {/* Mark as Ordered dialog */}
+      {/* Activity Timeline */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div className="flex items-center gap-2">
+            <Clock className="h-4 w-4 text-muted-foreground" />
+            <CardTitle className="text-base">Activity</CardTitle>
+          </div>
+        </CardHeader>
+        <CardContent>
+          {timelineItems.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No activity recorded yet.</p>
+          ) : (
+            <div className="relative pl-5">
+              {/* Vertical line */}
+              <div className="absolute left-[7px] top-2 bottom-2 w-px bg-border" />
+              <div className="space-y-5">
+                {timelineItems.map((item) => (
+                  <div key={item.id} className="relative flex gap-3">
+                    {/* Dot */}
+                    <div
+                      className={`absolute -left-5 mt-1 h-3.5 w-3.5 rounded-full border-2 border-background flex-shrink-0 ${TIMELINE_DOT_COLORS[item.type]}`}
+                    />
+                    <div className="ml-1 min-w-0">
+                      <p className="text-sm font-medium leading-snug">{item.title}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        {formatDate(item.ts)} · {item.subtitle}
+                      </p>
+                      {item.fileUrl && (
+                        <a
+                          href={item.fileUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1"
+                        >
+                          <Paperclip className="h-3 w-3" />
+                          {item.fileLabel ?? "View Document"}
+                        </a>
+                      )}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* ── Mark as Ordered dialog ───────────────────────────────────────── */}
       <Dialog open={actionDialog === "mark_ordered"} onOpenChange={() => setActionDialog(null)}>
         <DialogContent>
           <DialogHeader>
@@ -414,40 +839,265 @@ export default function PurchaseOrderDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Mark as Received dialog */}
-      <Dialog open={actionDialog === "mark_received"} onOpenChange={() => { setActionDialog(null); setActualDeliveryDate(""); }}>
-        <DialogContent>
+      {/* ── Record Delivery dialog ───────────────────────────────────────── */}
+      <Dialog
+        open={actionDialog === "record_delivery"}
+        onOpenChange={() => {
+          setActionDialog(null);
+          setDcFile(null);
+          setDcQtys({});
+          setDcNumber("");
+          setDcNotes("");
+          setDcDate("");
+          if (dcFileRef.current) dcFileRef.current.value = "";
+        }}
+      >
+        <DialogContent className="max-w-lg">
           <DialogHeader>
-            <DialogTitle>Mark as Received</DialogTitle>
+            <DialogTitle>Record Delivery — {po?.po_number}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 py-2">
-            <p className="text-sm text-muted-foreground">
-              Confirm that items for <strong>{po.po_number}</strong> have been received.
-            </p>
+          <div className="space-y-4 py-2">
+            {/* DC Number + Date */}
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>DC Number</Label>
+                <Input
+                  placeholder="Challan no. (optional)"
+                  value={dcNumber}
+                  onChange={(e) => setDcNumber(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>DC Date <span className="text-red-500">*</span></Label>
+                <Input
+                  type="date"
+                  value={dcDate}
+                  onChange={(e) => setDcDate(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* DC File */}
             <div className="space-y-1.5">
-              <Label>Actual Delivery Date</Label>
+              <Label>Delivery Challan File <span className="text-red-500">*</span></Label>
+              {dcFile ? (
+                <FileAttachment file={dcFile} onRemove={() => { setDcFile(null); if (dcFileRef.current) dcFileRef.current.value = ""; }} />
+              ) : (
+                <FileDropzone
+                  fileRef={dcFileRef}
+                  label="Click to upload challan (PDF, JPG, PNG — max 10 MB)"
+                  required
+                  onChange={setDcFile}
+                />
+              )}
+            </div>
+
+            {/* Per-item qty table */}
+            <div>
+              <Label className="mb-2 block">Quantities Received <span className="text-red-500">*</span></Label>
+              <div className="rounded-md border overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="px-3 py-2 text-left font-medium">Item</th>
+                      <th className="px-3 py-2 text-right font-medium">Ordered</th>
+                      <th className="px-3 py-2 text-right font-medium">Received</th>
+                      <th className="px-3 py-2 text-right font-medium w-28">Receiving Now</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(po?.purchase_order_items ?? []).map((item) => {
+                      const alreadyReceived = Number(item.quantity_received ?? 0);
+                      const remaining = Number(item.quantity_ordered) - alreadyReceived;
+                      return (
+                        <tr key={item.id} className="border-b last:border-0">
+                          <td className="px-3 py-2">
+                            <p className="font-medium leading-snug">{item.item_name}</p>
+                            <p className="text-xs text-muted-foreground">{item.unit}</p>
+                          </td>
+                          <td className="px-3 py-2 text-right text-muted-foreground">
+                            {item.quantity_ordered}
+                          </td>
+                          <td className="px-3 py-2 text-right text-muted-foreground">
+                            {alreadyReceived}
+                          </td>
+                          <td className="px-3 py-2">
+                            <Input
+                              type="number"
+                              min="0"
+                              max={remaining}
+                              step="0.01"
+                              className="h-8 text-right"
+                              placeholder="0"
+                              value={dcQtys[item.id] ?? ""}
+                              onChange={(e) =>
+                                setDcQtys((prev) => ({ ...prev, [item.id]: e.target.value }))
+                              }
+                              disabled={remaining <= 0}
+                            />
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Notes */}
+            <div className="space-y-1.5">
+              <Label>Notes</Label>
               <Input
-                type="date"
-                value={actualDeliveryDate}
-                onChange={(e) => setActualDeliveryDate(e.target.value)}
+                placeholder="Optional notes..."
+                value={dcNotes}
+                onChange={(e) => setDcNotes(e.target.value)}
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setActionDialog(null); setActualDeliveryDate(""); }}>Cancel</Button>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setActionDialog(null);
+                setDcFile(null);
+                setDcQtys({});
+                setDcNumber("");
+                setDcNotes("");
+                setDcDate("");
+              }}
+            >
+              Cancel
+            </Button>
             <Button
               className="bg-green-600 hover:bg-green-700"
-              onClick={() => performAction("mark_received", { actual_delivery_date: actualDeliveryDate || null })}
-              disabled={actionLoading}
+              disabled={dcUploading || actionLoading}
+              onClick={submitDelivery}
             >
-              {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              Mark as Received
+              {(dcUploading || actionLoading) && (
+                <Loader2 className="h-4 w-4 animate-spin mr-1" />
+              )}
+              Record Delivery
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
-      {/* Cancel dialog */}
+      {/* ── Add Invoice dialog (inline) ──────────────────────────────────── */}
+      <Dialog
+        open={actionDialog === "add_invoice"}
+        onOpenChange={() => {
+          setActionDialog(null);
+          setInvFile(null);
+          setInvNumber("");
+          setInvDate("");
+          setInvDueDate("");
+          setInvAmount("");
+          setInvNotes("");
+          if (invFileRef.current) invFileRef.current.value = "";
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Vendor Invoice — {po?.po_number}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {po && Number(po.total_ordered_amount) > 0 && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2.5 text-sm text-blue-800">
+                PO value: <strong>{formatCurrency(po.total_ordered_amount)}</strong> — invoice must not exceed this amount.
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label>Invoice Number</Label>
+                <Input
+                  placeholder="Vendor's invoice #"
+                  value={invNumber}
+                  onChange={(e) => setInvNumber(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Invoice Amount (₹) <span className="text-red-500">*</span></Label>
+                <Input
+                  type="number"
+                  min="0.01"
+                  max={po?.total_ordered_amount ?? undefined}
+                  step="0.01"
+                  placeholder="0.00"
+                  value={invAmount}
+                  onChange={(e) => setInvAmount(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Invoice Date <span className="text-red-500">*</span></Label>
+                <Input
+                  type="date"
+                  value={invDate}
+                  onChange={(e) => setInvDate(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Due Date</Label>
+                <Input
+                  type="date"
+                  value={invDueDate}
+                  onChange={(e) => setInvDueDate(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* Invoice File Upload */}
+            <div className="space-y-1.5">
+              <Label>Invoice File <span className="text-red-500">*</span></Label>
+              {invFile ? (
+                <FileAttachment
+                  file={invFile}
+                  onRemove={() => { setInvFile(null); if (invFileRef.current) invFileRef.current.value = ""; }}
+                />
+              ) : (
+                <FileDropzone
+                  fileRef={invFileRef}
+                  label="Click to upload invoice (PDF, JPG, PNG — max 10 MB)"
+                  required
+                  onChange={setInvFile}
+                />
+              )}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Notes</Label>
+              <Textarea
+                placeholder="Any additional notes..."
+                value={invNotes}
+                onChange={(e) => setInvNotes(e.target.value)}
+                rows={2}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setActionDialog(null);
+                setInvFile(null);
+                setInvNumber("");
+                setInvDate("");
+                setInvDueDate("");
+                setInvAmount("");
+                setInvNotes("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button disabled={invUploading} onClick={submitInvoice}>
+              {invUploading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Save Invoice
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Cancel dialog ────────────────────────────────────────────────── */}
       <Dialog open={actionDialog === "cancel"} onOpenChange={() => setActionDialog(null)}>
         <DialogContent>
           <DialogHeader>
@@ -470,7 +1120,7 @@ export default function PurchaseOrderDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Partial Cancel dialog */}
+      {/* ── Partial Cancel dialog ─────────────────────────────────────────── */}
       <Dialog
         open={actionDialog === "partial_cancel"}
         onOpenChange={() => { setActionDialog(null); setPartialCancelQtys({}); }}

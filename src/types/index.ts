@@ -1390,6 +1390,38 @@ export interface PurchaseOrderItem {
   procurement_items?: { id: string; name: string; description?: string } | null;
 }
 
+export interface PoDeliveryReceiptItem {
+  id: string;
+  delivery_receipt_id: string;
+  po_item_id: string;
+  qty_received: number;
+}
+
+export interface PoDeliveryReceipt {
+  id: string;
+  po_id: string;
+  dc_number?: string | null;
+  dc_date?: string | null;
+  file_url?: string | null;
+  notes?: string | null;
+  received_by: string;
+  received_at: string;
+  created_at: string;
+  receiver?: { id: string; full_name?: string; email?: string } | null;
+  po_delivery_receipt_items?: PoDeliveryReceiptItem[];
+}
+
+export interface PoBillSummary {
+  id: string;
+  bill_number: string;
+  invoice_date: string;
+  invoice_file_url?: string | null;
+  total_amount: number;
+  payment_status: string;
+  created_at: string;
+  creator?: { id: string; full_name?: string } | null;
+}
+
 export interface PurchaseOrder {
   id: string;
   po_number: string;
@@ -1414,6 +1446,8 @@ export interface PurchaseOrder {
     approver?: { id: string; full_name?: string; email?: string } | null;
   }) | null;
   purchase_order_items?: PurchaseOrderItem[];
+  po_delivery_receipts?: PoDeliveryReceipt[];
+  vendor_bills?: PoBillSummary[];
 }
 
 export interface VendorBill {

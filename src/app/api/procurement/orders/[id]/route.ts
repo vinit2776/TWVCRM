@@ -35,14 +35,22 @@ export async function GET(
   const { data, error } = await supabase
     .from("purchase_orders")
     .select(
-      `*, purchase_order_items(*, procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), purchase_requests(id, pr_number, department, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email))`
+      `*, purchase_order_items(*, procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), purchase_requests(id, pr_number, department, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
     )
     .eq("id", id)
     .single();
 
   if (error || !data) return NextResponse.json({ error: "Purchase order not found" }, { status: 404 });
 
-  return NextResponse.json({ data });
+  // Fetch audit trail for this PO (for activity timeline)
+  const { data: auditEvents } = await supabase
+    .from("audit_trail")
+    .select("id, action, changes, performed_by, created_at, performer:users!audit_trail_performed_by_fkey(id, full_name)")
+    .eq("entity_type", "purchase_order")
+    .eq("entity_id", id)
+    .order("created_at", { ascending: true });
+
+  return NextResponse.json({ data, audit_events: auditEvents ?? [] });
 }
 
 export async function PATCH(
