@@ -21,9 +21,10 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { LocationSelector } from "@/components/shared/location-selector";
-import { LEAD_STATUS_LABELS, ACTIVITY_TYPE_LABELS } from "@/lib/constants";
+import { ACTIVITY_TYPE_LABELS } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
+import { FollowupsWidget } from "@/components/dashboard/followups-widget";
 import type { DashboardStats } from "@/types";
 
 const NOTES_LS_KEY = "twv_last_seen_notes";
@@ -288,36 +289,8 @@ export default function DashboardPage() {
       </div>
 
       <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-3">
-        {/* Pipeline */}
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Lead Pipeline</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {stats.pipeline.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No leads yet</p>
-            ) : (
-              <div className="space-y-3">
-                {stats.pipeline.map((item) => (
-                  <div key={item.status} className="flex items-center justify-between">
-                    <span className="text-sm">{LEAD_STATUS_LABELS[item.status] || item.status}</span>
-                    <div className="flex items-center gap-2">
-                      <div className="w-32 bg-muted rounded-full h-2">
-                        <div
-                          className="bg-primary rounded-full h-2"
-                          style={{
-                            width: `${Math.min(100, (item.count / Math.max(...stats.pipeline.map((p) => p.count), 1)) * 100)}%`,
-                          }}
-                        />
-                      </div>
-                      <span className="text-sm font-medium w-8 text-right">{item.count}</span>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            )}
-          </CardContent>
-        </Card>
+        {/* Follow-ups */}
+        <FollowupsWidget locationFilter={locationFilter} />
 
         {/* Recent Activities */}
         <Card>

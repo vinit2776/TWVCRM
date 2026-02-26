@@ -19,7 +19,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("activities")
-    .select("*, creator:users!activities_created_by_fkey(*)")
+    .select("*, creator:users!activities_created_by_fkey(*), follow_up_actor:users!activities_follow_up_actioned_by_fkey(*)")
     .eq("lead_id", id)
     .order("created_at", { ascending: false })
     .limit(200);

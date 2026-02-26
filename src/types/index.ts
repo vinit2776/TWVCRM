@@ -144,6 +144,9 @@ export interface Activity {
   follow_up_date?: string;
   follow_up_notes?: string;
   is_follow_up_done: boolean;
+  follow_up_actioned_by?: string;
+  follow_up_actor?: User;
+  follow_up_actioned_at?: string;
   created_by?: string;
   creator?: User;
   lead?: { first_name: string; last_name: string };

@@ -8,6 +8,7 @@ import {
   MapPin,
   Clock,
   CalendarCheck,
+  UserCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { useActivities } from "@/hooks/use-activities";
@@ -96,18 +97,32 @@ function ActivityItem({ activity }: { activity: Activity }) {
 
             {/* Follow-up info */}
             {activity.follow_up_date && (
-              <div className="flex items-center gap-1 mt-2 text-xs">
-                <CalendarCheck className="h-3 w-3" />
-                <span
-                  className={
-                    activity.is_follow_up_done
-                      ? "text-green-600"
-                      : "text-orange-600"
-                  }
-                >
-                  Follow-up: {formatDate(activity.follow_up_date)}
-                  {activity.is_follow_up_done ? " (Done)" : ""}
-                </span>
+              <div className="mt-2 space-y-0.5 text-xs">
+                <div className="flex items-center gap-1">
+                  <CalendarCheck className="h-3 w-3 shrink-0" />
+                  <span
+                    className={
+                      activity.is_follow_up_done
+                        ? "text-green-600"
+                        : "text-orange-600"
+                    }
+                  >
+                    Follow-up: {formatDate(activity.follow_up_date)}
+                    {activity.is_follow_up_done ? " (Done)" : ""}
+                  </span>
+                </div>
+                {activity.follow_up_actioned_at && activity.follow_up_actor && (
+                  <div className="flex items-center gap-1 text-muted-foreground pl-0.5">
+                    <UserCheck className="h-3 w-3 shrink-0" />
+                    <span>
+                      {activity.is_follow_up_done ? "Closed" : "Rescheduled"} by{" "}
+                      <span className="font-medium">
+                        {activity.follow_up_actor.full_name}
+                      </span>{" "}
+                      on {formatDate(activity.follow_up_actioned_at)}
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </div>
