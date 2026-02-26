@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import crypto from "crypto";
 import { logAudit } from "@/lib/audit";
 
@@ -24,8 +24,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing required fields" }, { status: 400 });
   }
 
-  // Fetch the key secret
-  const { data: secretSetting } = await supabase
+  // Fetch the key secret via service-role — secret must be accessible
+  // server-side regardless of the requesting user's role.
+  const adminSupabase = await createAdminClient();
+  const { data: secretSetting } = await adminSupabase
     .from("app_settings")
     .select("value")
     .eq("key", "razorpay_key_secret")

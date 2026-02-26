@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 // POST — create a Razorpay order for a booking payment
 export async function POST(request: NextRequest) {
@@ -22,8 +22,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "booking_id and positive amount are required" }, { status: 400 });
   }
 
-  // Fetch Razorpay settings
-  const { data: settings } = await supabase
+  // Fetch Razorpay settings via service-role — secrets must be accessible
+  // regardless of the requesting user's role (server-side only, never exposed to client).
+  const adminSupabase = await createAdminClient();
+  const { data: settings } = await adminSupabase
     .from("app_settings")
     .select("key, value")
     .in("key", ["razorpay_key_id", "razorpay_key_secret", "razorpay_enabled"]);
