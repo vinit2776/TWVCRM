@@ -38,8 +38,26 @@ export function CaseDocumentsTab({ caseId }: CaseDocumentsTabProps) {
   const [reviewAction, setReviewAction] = useState<"approved" | "rejected">("approved");
   const [rejectionReason, setRejectionReason] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [viewing, setViewing] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const [activeDocId, setActiveDocId] = useState<string | null>(null);
+
+  const handleView = async (docId: string) => {
+    setViewing(docId);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/documents/${docId}/view`);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to get document URL");
+      }
+      const { url } = await res.json();
+      window.open(url, "_blank");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to view document");
+    } finally {
+      setViewing(null);
+    }
+  };
 
   const handleUpload = async (docId: string, file: File) => {
     setUploading(docId);
@@ -146,6 +164,22 @@ export function CaseDocumentsTab({ caseId }: CaseDocumentsTabProps) {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {/* View button — visible for any doc with an uploaded file */}
+                    {doc.document_id && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={viewing === doc.id}
+                        onClick={() => handleView(doc.id)}
+                      >
+                        {viewing === doc.id ? (
+                          <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                        ) : (
+                          <Eye className="mr-2 h-4 w-4" />
+                        )}
+                        View
+                      </Button>
+                    )}
                     {(doc.status === "pending" || doc.status === "rejected") && (
                       <>
                         <input

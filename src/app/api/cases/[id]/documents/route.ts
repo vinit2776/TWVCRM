@@ -23,7 +23,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("case_documents")
-    .select("*")
+    .select("*, document:documents(id, file_name, file_path, mime_type, size_bytes)")
     .eq("case_id", id)
     .order("is_required", { ascending: false })
     .order("created_at", { ascending: true });
