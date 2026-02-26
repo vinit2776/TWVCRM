@@ -103,7 +103,7 @@ export async function POST(
   const storagePath = `case-agreements/${caseId}/${Date.now()}-agreement.pdf`;
 
   const { error: uploadError } = await supabase.storage
-    .from("documents")
+    .from("crm-documents")
     .upload(storagePath, pdfBuffer, {
       contentType: "application/pdf",
       upsert: true,

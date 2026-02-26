@@ -101,7 +101,7 @@ async function handleInitiate(
 
     if (doc?.file_path) {
       const { data: fileData } = await supabase.storage
-        .from("documents")
+        .from("crm-documents")
         .download(doc.file_path);
 
       if (fileData) {

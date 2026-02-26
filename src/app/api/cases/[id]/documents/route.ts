@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
 /**
@@ -49,6 +49,8 @@ export async function POST(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  const adminSupabase = await createAdminClient();
+
   const formData = await request.formData();
   const file = formData.get("file") as File | null;
   const documentId = formData.get("document_id") as string;
@@ -61,7 +63,7 @@ export async function POST(
   }
 
   // Verify the case document slot exists
-  const { data: docSlot, error: slotError } = await supabase
+  const { data: docSlot, error: slotError } = await adminSupabase
     .from("case_documents")
     .select("id, document_type, case_id")
     .eq("id", documentId)
@@ -81,8 +83,8 @@ export async function POST(
 
   const fileBuffer = Buffer.from(await file.arrayBuffer());
 
-  const { error: uploadError } = await supabase.storage
-    .from("documents")
+  const { error: uploadError } = await adminSupabase.storage
+    .from("crm-documents")
     .upload(storagePath, fileBuffer, {
       contentType: file.type,
       upsert: true,
@@ -96,13 +98,13 @@ export async function POST(
   }
 
   // Create a document record
-  const { data: dbUser } = await supabase
+  const { data: dbUser } = await adminSupabase
     .from("users")
     .select("id")
     .eq("auth_id", user.id)
     .single();
 
-  const { data: docRecord, error: docError } = await supabase
+  const { data: docRecord, error: docError } = await adminSupabase
     .from("documents")
     .insert({
       title: file.name,
@@ -124,7 +126,7 @@ export async function POST(
   }
 
   // Link the document to the case document slot and update status
-  const { data: updatedSlot, error: linkError } = await supabase
+  const { data: updatedSlot, error: linkError } = await adminSupabase
     .from("case_documents")
     .update({
       document_id: docRecord?.id,
@@ -142,7 +144,7 @@ export async function POST(
   }
 
   // Check if all required documents are now uploaded — auto-transition
-  const { data: allDocs } = await supabase
+  const { data: allDocs } = await adminSupabase
     .from("case_documents")
     .select("is_required, status")
     .eq("case_id", caseId);
@@ -153,14 +155,14 @@ export async function POST(
 
   if (allRequiredUploaded) {
     // Check if case is in docs_requested status — auto-advance
-    const { data: currentCase } = await supabase
+    const { data: currentCase } = await adminSupabase
       .from("cases")
       .select("status")
       .eq("id", caseId)
       .single();
 
     if (currentCase?.status === "docs_requested") {
-      await supabase
+      await adminSupabase
         .from("cases")
         .update({
           status: "docs_received",
@@ -172,7 +174,7 @@ export async function POST(
 
   // Audit log
   if (dbUser?.id) {
-    logAudit(supabase, {
+    logAudit(adminSupabase, {
       entityType: "case_document",
       entityId: documentId,
       action: "update",

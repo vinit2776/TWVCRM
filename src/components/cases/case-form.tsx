@@ -78,7 +78,18 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
 
   const entityType = watch("client_entity_type");
   const purpose = watch("purpose");
+  const startDate = watch("start_date");
+  const tenureMonths = watch("tenure_months");
   const showCompanyFields = entityType && !["individual", "proprietorship"].includes(entityType);
+
+  // Calculate end date from start date + tenure
+  const endDate = (() => {
+    if (!startDate || !tenureMonths) return "";
+    const d = new Date(startDate);
+    d.setMonth(d.getMonth() + tenureMonths);
+    d.setDate(d.getDate() - 1); // end date is last day of tenure
+    return d.toISOString().split("T")[0];
+  })();
 
   const onFormSubmit = async (data: CreateCaseInput) => {
     setSubmitting(true);
@@ -260,6 +271,11 @@ export function CaseForm({ caseData, onSubmit, onCancel }: CaseFormProps) {
             <div className="space-y-2">
               <Label>Start Date</Label>
               <Input type="date" {...register("start_date")} />
+            </div>
+            <div className="space-y-2">
+              <Label>End Date</Label>
+              <Input type="date" value={endDate} disabled className="bg-muted" />
+              <p className="text-xs text-muted-foreground">Auto-calculated from start date + tenure</p>
             </div>
             <div className="space-y-2">
               <Label>Security Deposit (INR)</Label>
