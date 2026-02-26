@@ -120,14 +120,6 @@ export default function NewPurchaseRequestPage() {
     setItems((prev) => prev.filter((li) => li.id !== localId));
   };
 
-  const clearItemCatalogLink = (localId: string) => {
-    setItems((prev) =>
-      prev.map((li) =>
-        li.id === localId ? { ...li, item_id: null } : li
-      )
-    );
-  };
-
   const totalEstimated = items.reduce((sum, li) => {
     const q = parseFloat(li.quantity);
     const p = parseFloat(li.estimated_price);
@@ -152,6 +144,7 @@ export default function NewPurchaseRequestPage() {
 
   const validate = (): string | null => {
     for (const li of items) {
+      if (!li.item_id) return "All items must be selected from the catalog";
       if (!li.item_name.trim()) return "All items must have a name";
       if (!li.quantity || isNaN(parseFloat(li.quantity)) || parseFloat(li.quantity) <= 0)
         return "All items must have a valid quantity";
@@ -268,7 +261,11 @@ export default function NewPurchaseRequestPage() {
           <Button
             variant="outline"
             size="sm"
-            onClick={() => setItems((prev) => [...prev, emptyItem()])}
+            onClick={() => {
+              const newItem = emptyItem();
+              setItems((prev) => [...prev, newItem]);
+              setTimeout(() => openCatalogForItem(newItem.id), 0);
+            }}
           >
             <Plus className="h-4 w-4 mr-1" /> Add Item
           </Button>
@@ -285,7 +282,7 @@ export default function NewPurchaseRequestPage() {
                     onClick={() => openCatalogForItem(li.id)}
                   >
                     <Package className="h-3.5 w-3.5 mr-1" />
-                    {li.item_id ? "Change" : "Pick from Catalog"}
+                    {li.item_id ? "Change Item" : "Select from Catalog"}
                   </Button>
                   {items.length > 1 && (
                     <Button
@@ -306,24 +303,23 @@ export default function NewPurchaseRequestPage() {
                     From catalog
                   </Badge>
                   <ItemHistoryDialog itemId={li.item_id} itemName={li.item_name} />
-                  <button
-                    className="text-xs text-muted-foreground hover:text-foreground underline"
-                    onClick={() => clearItemCatalogLink(li.id)}
-                  >
-                    Convert to free-text
-                  </button>
                 </div>
+              )}
+
+              {!li.item_id && (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                  Please select an item from the catalog using the button above.
+                </p>
               )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <Label className="text-xs">Item Name <span className="text-red-500">*</span></Label>
                   <Input
-                    placeholder="e.g. Premium Coffee Beans"
+                    placeholder="Select from catalog to set item name"
                     value={li.item_name}
-                    onChange={(e) => updateItem(li.id, "item_name", e.target.value)}
-                    readOnly={!!li.item_id}
-                    className={li.item_id ? "bg-muted/50" : ""}
+                    readOnly={true}
+                    className="bg-muted/50"
                   />
                 </div>
 
@@ -344,6 +340,7 @@ export default function NewPurchaseRequestPage() {
                     <Select
                       value={li.unit}
                       onValueChange={(v) => updateItem(li.id, "unit", v)}
+                      disabled={!!li.item_id}
                     >
                       <SelectTrigger className="h-9">
                         <SelectValue />
@@ -422,10 +419,24 @@ export default function NewPurchaseRequestPage() {
       </Card>
 
       {/* Catalog Picker Dialog */}
-      <Dialog open={catalogOpen} onOpenChange={setCatalogOpen}>
+      <Dialog
+        open={catalogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            setItems((prev) => {
+              const target = prev.find((li) => li.id === targetItemId);
+              if (target && !target.item_id && !target.item_name.trim() && prev.length > 1) {
+                return prev.filter((li) => li.id !== targetItemId);
+              }
+              return prev;
+            });
+            setCatalogOpen(false);
+          }
+        }}
+      >
         <DialogContent className="max-w-lg max-h-[80vh] flex flex-col">
           <DialogHeader>
-            <DialogTitle>Pick from Catalog — {PROCUREMENT_DEPARTMENT_LABELS[department]}</DialogTitle>
+            <DialogTitle>Select from Catalog — {PROCUREMENT_DEPARTMENT_LABELS[department]}</DialogTitle>
           </DialogHeader>
           <div className="relative">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -440,7 +451,7 @@ export default function NewPurchaseRequestPage() {
             {catalogLoading ? (
               <p className="text-sm text-muted-foreground text-center py-8">Loading...</p>
             ) : catalogItems.length === 0 ? (
-              <p className="text-sm text-muted-foreground text-center py-8">No items found</p>
+              <p className="text-sm text-muted-foreground text-center py-8">No items found in catalog for {PROCUREMENT_DEPARTMENT_LABELS[department]}</p>
             ) : (
               catalogItems.map((item) => (
                 <button
@@ -463,17 +474,6 @@ export default function NewPurchaseRequestPage() {
                 </button>
               ))
             )}
-          </div>
-          <div className="pt-3 border-t">
-            <p className="text-xs text-muted-foreground">
-              Can&apos;t find the item?{" "}
-              <button
-                className="underline text-foreground"
-                onClick={() => setCatalogOpen(false)}
-              >
-                Close and type manually
-              </button>
-            </p>
           </div>
         </DialogContent>
       </Dialog>

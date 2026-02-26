@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
+import { computeOrderedQtyMap, recalculatePrStatus } from "@/lib/procurement/pr-status";
 
 const createPoItemSchema = z.object({
   pr_item_id: z.string().uuid().nullish(),
@@ -107,25 +108,21 @@ export async function POST(request: NextRequest) {
   if (prFetchError || !pr) {
     return NextResponse.json({ error: "Purchase request not found" }, { status: 404 });
   }
-  if (!["approved", "po_created"].includes(pr.status)) {
+  if (!["approved", "partially_ordered"].includes(pr.status)) {
     return NextResponse.json({
-      error: "A Purchase Order can only be created from an approved Purchase Request"
+      error: "A Purchase Order can only be created from an approved or partially ordered Purchase Request"
     }, { status: 422 });
   }
 
   // ── 2. Validate item qty / price ceilings ──
+  // Use computeOrderedQtyMap so cancelled POs don't count against remaining qty
   const prItemIds = items.filter(i => i.pr_item_id).map(i => i.pr_item_id!);
   const alreadyOrderedMap: Record<string, number> = {};
 
   if (prItemIds.length > 0) {
-    const { data: existingOrderItems } = await supabase
-      .from("purchase_order_items")
-      .select("pr_item_id, quantity_ordered")
-      .in("pr_item_id", prItemIds);
-
-    for (const row of (existingOrderItems ?? [])) {
-      alreadyOrderedMap[row.pr_item_id] =
-        (alreadyOrderedMap[row.pr_item_id] ?? 0) + Number(row.quantity_ordered);
+    const existingMap = await computeOrderedQtyMap(supabase, prItemIds);
+    for (const [k, v] of Object.entries(existingMap)) {
+      alreadyOrderedMap[k] = v;
     }
   }
 
@@ -203,12 +200,8 @@ export async function POST(request: NextRequest) {
   const { error: itemsError } = await supabase.from("purchase_order_items").insert(lineItems);
   if (itemsError) return NextResponse.json({ error: itemsError.message }, { status: 500 });
 
-  // ── 6. Update PR status to po_created (guarded by status check) ──
-  await supabase
-    .from("purchase_requests")
-    .update({ status: "po_created" })
-    .eq("id", poData.pr_id)
-    .eq("status", "approved");
+  // ── 6. Recalculate PR status (approved / partially_ordered / po_created) ──
+  await recalculatePrStatus(supabase, poData.pr_id);
 
   // ── 7. Audit log ──
   await logAudit(supabase, {

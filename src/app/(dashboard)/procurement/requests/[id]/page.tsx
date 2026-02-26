@@ -102,6 +102,7 @@ export default function PurchaseRequestDetailPage() {
   if (!pr) return null;
 
   const isLargeAmount = pr.total_estimated_amount > PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE;
+  const showOrderedCols = ["approved", "partially_ordered", "po_created"].includes(pr.status);
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -133,7 +134,7 @@ export default function PurchaseRequestDetailPage() {
 
         {/* Action buttons */}
         <div className="flex gap-2 flex-wrap justify-end">
-          {pr.status === "approved" && (
+          {["approved", "partially_ordered"].includes(pr.status) && (
             <Button
               size="sm"
               className="bg-blue-600 hover:bg-blue-700"
@@ -142,7 +143,7 @@ export default function PurchaseRequestDetailPage() {
               <ShoppingCart className="h-4 w-4 mr-1" /> Create PO
             </Button>
           )}
-          {pr.status === "po_created" && (
+          {["partially_ordered", "po_created"].includes(pr.status) && (
             <Button
               size="sm"
               variant="outline"
@@ -222,7 +223,7 @@ export default function PurchaseRequestDetailPage() {
       )}
 
       {/* Approval callout */}
-      {(pr.status === "approved" || pr.status === "po_created") && pr.approver && (
+      {(["approved", "partially_ordered", "po_created"].includes(pr.status)) && pr.approver && (
         <Card className="border-green-200 bg-green-50/50">
           <CardContent className="pt-4 flex gap-3">
             <CheckCircle className="h-5 w-5 text-green-600 flex-shrink-0 mt-0.5" />
@@ -242,6 +243,24 @@ export default function PurchaseRequestDetailPage() {
         </Card>
       )}
 
+      {/* Partially Ordered callout */}
+      {pr.status === "partially_ordered" && (
+        <Card className="border-amber-200 bg-amber-50/50">
+          <CardContent className="pt-4 flex gap-3">
+            <ShoppingCart className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
+            <div>
+              <p className="text-sm font-medium text-amber-800">Partially Ordered</p>
+              <p className="text-sm text-amber-700 mt-0.5">
+                Some items have been ordered. Remaining approved quantities are available for additional purchase orders.{" "}
+                <Link href={`/procurement/orders?pr_id=${pr.id}`} className="underline font-medium">
+                  View existing orders
+                </Link>
+              </p>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* PO created callout */}
       {pr.status === "po_created" && (
         <Card className="border-blue-200 bg-blue-50/50">
@@ -250,7 +269,7 @@ export default function PurchaseRequestDetailPage() {
             <div>
               <p className="text-sm font-medium text-blue-800">Purchase Order Created</p>
               <p className="text-sm text-blue-700 mt-0.5">
-                A purchase order has been raised for this request.{" "}
+                All approved quantities have been ordered.{" "}
                 <Link href={`/procurement/orders?pr_id=${pr.id}`} className="underline font-medium">
                   View Orders
                 </Link>
@@ -364,6 +383,12 @@ export default function PurchaseRequestDetailPage() {
                     <th className="px-3 py-2.5 text-left font-medium">Unit</th>
                     <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">Est. Price</th>
                     <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">Line Total</th>
+                    {showOrderedCols && (
+                      <>
+                        <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">Ordered</th>
+                        <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">Remaining</th>
+                      </>
+                    )}
                   </tr>
                 </thead>
                 <tbody>
@@ -381,14 +406,12 @@ export default function PurchaseRequestDetailPage() {
                               {item.procurement_items.description}
                             </p>
                           )}
-                          {item.procurement_items && (
+                          {item.item_id && (
                             <div className="flex items-center gap-2 mt-0.5">
                               <Badge variant="secondary" className="text-xs bg-blue-50 text-blue-700">
                                 Catalog
                               </Badge>
-                              {item.item_id && (
-                                <ItemHistoryDialog itemId={item.item_id} itemName={item.item_name} />
-                              )}
+                              <ItemHistoryDialog itemId={item.item_id} itemName={item.item_name} />
                             </div>
                           )}
                         </div>
@@ -401,6 +424,18 @@ export default function PurchaseRequestDetailPage() {
                       <td className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">
                         {item.total_estimated ? formatCurrency(item.total_estimated) : "—"}
                       </td>
+                      {showOrderedCols && (
+                        <>
+                          <td className="px-3 py-2.5 text-right hidden sm:table-cell text-blue-700 font-medium">
+                            {item.already_ordered_qty ?? 0}
+                          </td>
+                          <td className="px-3 py-2.5 text-right hidden sm:table-cell">
+                            <span className={(item.remaining_qty ?? 0) <= 0 ? "text-muted-foreground" : "text-green-700 font-medium"}>
+                              {item.remaining_qty ?? 0}
+                            </span>
+                          </td>
+                        </>
+                      )}
                     </tr>
                   ))}
                 </tbody>
@@ -410,7 +445,7 @@ export default function PurchaseRequestDetailPage() {
                       <td colSpan={4} className="px-3 py-2.5 text-sm font-medium text-right hidden sm:table-cell">
                         Total
                       </td>
-                      <td colSpan={2} className="px-3 py-2.5 text-sm font-bold text-right hidden sm:table-cell">
+                      <td colSpan={showOrderedCols ? 4 : 2} className="px-3 py-2.5 text-sm font-bold text-right hidden sm:table-cell">
                         {formatCurrency(pr.total_estimated_amount)}
                       </td>
                     </tr>

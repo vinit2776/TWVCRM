@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { z } from "zod";
+import { recalculatePrStatus } from "@/lib/procurement/pr-status";
 
 const patchPoSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("mark_ordered") }),
@@ -10,6 +11,13 @@ const patchPoSchema = z.discriminatedUnion("action", [
     actual_delivery_date: z.string().nullish(),
   }),
   z.object({ action: z.literal("cancel") }),
+  z.object({
+    action: z.literal("partial_cancel"),
+    confirmed_items: z.array(z.object({
+      po_item_id: z.string().uuid(),
+      confirmed_qty: z.number().min(0),
+    })).min(1),
+  }),
 ]);
 
 export async function GET(
@@ -103,6 +111,54 @@ export async function PATCH(
       updatePayload = { status: "cancelled" };
       break;
     }
+
+    case "partial_cancel": {
+      if (po.status !== "invoice_received") {
+        return NextResponse.json({ error: "Only invoice_received POs can be partially cancelled" }, { status: 422 });
+      }
+      if (!["admin", "manager"].includes(dbUser.role)) {
+        return NextResponse.json({ error: "Only managers and admins can cancel purchase orders" }, { status: 403 });
+      }
+
+      const { confirmed_items } = parsed.data;
+
+      const { data: poItems } = await supabase
+        .from("purchase_order_items")
+        .select("id, quantity_ordered, unit_price")
+        .eq("po_id", id);
+
+      const poItemMap = Object.fromEntries((poItems ?? []).map((i) => [i.id, i]));
+
+      for (const ci of confirmed_items) {
+        const poItem = poItemMap[ci.po_item_id];
+        if (!poItem) {
+          return NextResponse.json({ error: `Item ${ci.po_item_id} not found` }, { status: 422 });
+        }
+        if (ci.confirmed_qty > Number(poItem.quantity_ordered)) {
+          return NextResponse.json({ error: "Confirmed qty exceeds ordered qty" }, { status: 422 });
+        }
+      }
+
+      // Reduce quantity_ordered to confirmed_qty on each item
+      for (const ci of confirmed_items) {
+        await supabase.from("purchase_order_items")
+          .update({ quantity_ordered: ci.confirmed_qty })
+          .eq("id", ci.po_item_id)
+          .eq("po_id", id);
+      }
+
+      // Recompute PO total
+      const { data: updatedItems } = await supabase
+        .from("purchase_order_items")
+        .select("quantity_ordered, unit_price")
+        .eq("po_id", id);
+      const newTotal = (updatedItems ?? []).reduce(
+        (s, i) => s + Number(i.quantity_ordered) * Number(i.unit_price ?? 0), 0
+      );
+
+      updatePayload = { status: "partially_cancelled", total_ordered_amount: newTotal };
+      break;
+    }
   }
 
   const { data: updated, error: updateError } = await supabase
@@ -113,6 +169,11 @@ export async function PATCH(
     .single();
 
   if (updateError) return NextResponse.json({ error: updateError.message }, { status: 500 });
+
+  // Recalculate PR status after any cancellation so remaining qty is freed
+  if (["cancel", "partial_cancel"].includes(action) && po.pr_id) {
+    await recalculatePrStatus(supabase, po.pr_id);
+  }
 
   await logAudit(supabase, {
     entityType: "purchase_order",

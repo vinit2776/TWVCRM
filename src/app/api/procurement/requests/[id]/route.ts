@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 import { PROCUREMENT_APPROVAL_THRESHOLDS } from "@/lib/constants";
+import { computeOrderedQtyMap } from "@/lib/procurement/pr-status";
 
 const patchPrSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("submit") }),
@@ -78,17 +79,10 @@ export async function GET(
   }
 
   // Compute already_ordered_qty and remaining_qty per PR item
+  // Uses computeOrderedQtyMap so that cancelled POs contribute 0 qty
   const prItemIds = (data.purchase_request_items ?? []).map((i: { id: string }) => i.id);
   if (prItemIds.length > 0) {
-    const { data: orderedRows } = await supabase
-      .from("purchase_order_items")
-      .select("pr_item_id, quantity_ordered")
-      .in("pr_item_id", prItemIds);
-
-    const orderedMap: Record<string, number> = {};
-    for (const row of (orderedRows ?? [])) {
-      orderedMap[row.pr_item_id] = (orderedMap[row.pr_item_id] ?? 0) + Number(row.quantity_ordered);
-    }
+    const orderedMap = await computeOrderedQtyMap(supabase, prItemIds);
 
     data.purchase_request_items = data.purchase_request_items!.map(
       (item: { id: string; quantity: number; [key: string]: unknown }) => ({

@@ -1134,7 +1134,10 @@ export const VENDOR_CATEGORY_LABELS: Record<string, string> = {
 export const ITEM_UNITS = ["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair"] as const;
 export type ItemUnit = (typeof ITEM_UNITS)[number];
 
-export const PR_STATUSES = ["draft", "submitted", "approved", "rejected", "po_created", "cancelled"] as const;
+export const PR_STATUSES = [
+  "draft", "submitted", "approved", "rejected",
+  "partially_ordered", "po_created", "cancelled",
+] as const;
 export type PrStatus = (typeof PR_STATUSES)[number];
 
 export const PR_STATUS_LABELS: Record<string, string> = {
@@ -1142,6 +1145,7 @@ export const PR_STATUS_LABELS: Record<string, string> = {
   submitted: "Submitted",
   approved: "Approved",
   rejected: "Rejected",
+  partially_ordered: "Partially Ordered",
   po_created: "PO Created",
   cancelled: "Cancelled",
 };
@@ -1151,11 +1155,15 @@ export const PR_STATUS_COLORS: Record<string, string> = {
   submitted: "bg-yellow-100 text-yellow-800",
   approved: "bg-green-100 text-green-800",
   rejected: "bg-red-100 text-red-800",
+  partially_ordered: "bg-amber-100 text-amber-800",
   po_created: "bg-blue-100 text-blue-800",
   cancelled: "bg-gray-100 text-gray-500",
 };
 
-export const PO_STATUSES = ["pending", "ordered", "partially_received", "received", "invoice_received", "cancelled"] as const;
+export const PO_STATUSES = [
+  "pending", "ordered", "partially_received", "received",
+  "invoice_received", "cancelled", "partially_cancelled",
+] as const;
 export type PoStatus = (typeof PO_STATUSES)[number];
 
 export const PO_STATUS_LABELS: Record<string, string> = {
@@ -1165,6 +1173,7 @@ export const PO_STATUS_LABELS: Record<string, string> = {
   received: "Received",
   invoice_received: "Invoice Received",
   cancelled: "Cancelled",
+  partially_cancelled: "Partially Cancelled",
 };
 
 export const PO_STATUS_COLORS: Record<string, string> = {
@@ -1174,6 +1183,7 @@ export const PO_STATUS_COLORS: Record<string, string> = {
   received: "bg-green-100 text-green-800",
   invoice_received: "bg-purple-100 text-purple-800",
   cancelled: "bg-gray-100 text-gray-500",
+  partially_cancelled: "bg-orange-100 text-orange-700",
 };
 
 export const BILL_PAYMENT_STATUSES = ["unpaid", "partially_paid", "paid"] as const;

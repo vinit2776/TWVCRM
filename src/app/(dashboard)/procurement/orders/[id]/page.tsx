@@ -23,7 +23,7 @@ import {
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { PurchaseOrder } from "@/types";
 
-type ActionType = "mark_ordered" | "mark_received" | "cancel";
+type ActionType = "mark_ordered" | "mark_received" | "cancel" | "partial_cancel";
 
 export default function PurchaseOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
@@ -35,6 +35,8 @@ export default function PurchaseOrderDetailPage() {
 
   const [actionDialog, setActionDialog] = useState<ActionType | null>(null);
   const [actualDeliveryDate, setActualDeliveryDate] = useState("");
+  const [partialCancelQtys, setPartialCancelQtys] = useState<Record<string, string>>({});
+  const [hasBill, setHasBill] = useState(false);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -53,7 +55,20 @@ export default function PurchaseOrderDetailPage() {
 
   useEffect(() => { fetchPo(); }, [fetchPo]);
 
-  const performAction = async (action: ActionType, extra?: Record<string, string | null>) => {
+  // Check if a vendor bill exists for this PO when status is invoice_received
+  useEffect(() => {
+    if (po?.status === "invoice_received" && po?.id) {
+      fetch(`/api/procurement/bills?po_id=${po.id}`)
+        .then((r) => r.json())
+        .then((j) => setHasBill((j.data?.length ?? 0) > 0))
+        .catch(() => setHasBill(false));
+    }
+  }, [po?.id, po?.status]);
+
+  const performAction = async (
+    action: ActionType,
+    extra?: Record<string, unknown>
+  ) => {
     setActionLoading(true);
     try {
       const res = await fetch(`/api/procurement/orders/${id}`, {
@@ -70,10 +85,12 @@ export default function PurchaseOrderDetailPage() {
         mark_ordered: "Order marked as ordered",
         mark_received: "Order marked as received",
         cancel: "Order cancelled",
+        partial_cancel: "Order partially cancelled — remaining qty released back to PR",
       };
       toast.success(msgs[action]);
       setActionDialog(null);
       setActualDeliveryDate("");
+      setPartialCancelQtys({});
       await fetchPo();
     } finally {
       setActionLoading(false);
@@ -115,7 +132,7 @@ export default function PurchaseOrderDetailPage() {
 
         {/* Action buttons */}
         <div className="flex gap-2 flex-wrap justify-end">
-          {po.status !== "cancelled" && (
+          {!["cancelled", "partially_cancelled"].includes(po.status) && (
             <Button
               variant="outline"
               size="sm"
@@ -147,13 +164,31 @@ export default function PurchaseOrderDetailPage() {
               Mark as Received
             </Button>
           )}
-          {!["cancelled", "invoice_received"].includes(po.status) && (
+          {!["cancelled", "partially_cancelled", "invoice_received"].includes(po.status) && (
             <Button
               size="sm"
               variant="outline"
               onClick={() => router.push(`/procurement/bills/new?po_id=${po.id}`)}
             >
               <Receipt className="h-4 w-4 mr-1" /> Vendor Invoice
+            </Button>
+          )}
+          {po.status === "invoice_received" && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="text-orange-600 hover:text-orange-700"
+              onClick={() => {
+                const initial: Record<string, string> = {};
+                for (const item of po.purchase_order_items ?? []) {
+                  initial[item.id] = String(item.quantity_ordered);
+                }
+                setPartialCancelQtys(initial);
+                setActionDialog("partial_cancel");
+              }}
+              disabled={actionLoading}
+            >
+              Partial Cancel
             </Button>
           )}
           {["pending", "ordered"].includes(po.status) && (
@@ -430,6 +465,92 @@ export default function PurchaseOrderDetailPage() {
             >
               {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Yes, Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Partial Cancel dialog */}
+      <Dialog
+        open={actionDialog === "partial_cancel"}
+        onOpenChange={() => { setActionDialog(null); setPartialCancelQtys({}); }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Partial Cancel — {po?.po_number}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Enter the quantity actually delivered. Undelivered quantities are released back to the PR.
+            </p>
+            {hasBill && (
+              <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                A vendor bill exists for this PO. Partial cancellation does not modify the bill — adjust it separately.
+              </p>
+            )}
+            <div className="rounded-md border overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="px-3 py-2 text-left font-medium">Item</th>
+                    <th className="px-3 py-2 text-right font-medium">Ordered</th>
+                    <th className="px-3 py-2 text-right font-medium w-32">Delivered</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(po?.purchase_order_items ?? []).map((item) => (
+                    <tr key={item.id} className="border-b last:border-0">
+                      <td className="px-3 py-2">
+                        <p className="font-medium">{item.item_name}</p>
+                        <p className="text-xs text-muted-foreground">{item.unit}</p>
+                      </td>
+                      <td className="px-3 py-2 text-right text-muted-foreground">{item.quantity_ordered}</td>
+                      <td className="px-3 py-2">
+                        <Input
+                          type="number"
+                          min="0"
+                          max={item.quantity_ordered}
+                          step="0.01"
+                          className="h-8 text-right"
+                          value={partialCancelQtys[item.id] ?? String(item.quantity_ordered)}
+                          onChange={(e) => setPartialCancelQtys((prev) => ({ ...prev, [item.id]: e.target.value }))}
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2 py-1.5">
+              Once partially cancelled, this PO cannot be reissued.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setActionDialog(null); setPartialCancelQtys({}); }}>Keep Order</Button>
+            <Button
+              variant="destructive"
+              disabled={actionLoading}
+              onClick={() => {
+                const confirmed_items = (po?.purchase_order_items ?? []).map((item) => ({
+                  po_item_id: item.id,
+                  confirmed_qty: parseFloat(partialCancelQtys[item.id] ?? String(item.quantity_ordered)),
+                }));
+                for (const ci of confirmed_items) {
+                  if (isNaN(ci.confirmed_qty) || ci.confirmed_qty < 0) {
+                    toast.error("All quantities must be valid non-negative numbers");
+                    return;
+                  }
+                  const orig = po?.purchase_order_items?.find((i) => i.id === ci.po_item_id);
+                  if (orig && ci.confirmed_qty > Number(orig.quantity_ordered)) {
+                    toast.error(`Confirmed qty for "${orig.item_name}" exceeds ordered qty`);
+                    return;
+                  }
+                }
+                performAction("partial_cancel", { confirmed_items });
+              }}
+            >
+              {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Confirm Partial Cancel
             </Button>
           </DialogFooter>
         </DialogContent>
