@@ -25,7 +25,13 @@ export default function ForgotPasswordPage() {
     });
 
     if (error) {
-      setError(error.message);
+      // Surface a friendlier message for transient network failures
+      const msg =
+        error.message === "Failed to fetch" ||
+        error.message.toLowerCase().includes("network")
+          ? "Unable to reach the server. Please check your connection and try again."
+          : error.message;
+      setError(msg);
       setLoading(false);
       return;
     }
