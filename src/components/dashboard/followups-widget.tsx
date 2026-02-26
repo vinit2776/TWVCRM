@@ -168,7 +168,7 @@ export function FollowupsWidget({ locationFilter }: FollowupsWidgetProps) {
                     <div className="flex-1 min-w-0">
                       {item.lead ? (
                         <Link
-                          href={`/leads/${item.lead_id}`}
+                          href={`/leads/${item.lead_id}?tab=activities&highlight=${item.id}`}
                           className="font-medium hover:underline underline-offset-2 truncate block"
                         >
                           {item.lead.first_name} {item.lead.last_name}

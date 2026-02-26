@@ -1,7 +1,7 @@
 "use client";
 
 import { use, useState, useCallback } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   Edit2,
@@ -52,6 +52,9 @@ export default function LeadDetailPage({
 }) {
   const { id } = use(params);
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const initialTab = searchParams.get("tab") ?? "overview";
+  const highlightActivityId = searchParams.get("highlight") ?? undefined;
   const { data: lead, loading } = useLead(id);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -135,7 +138,7 @@ export default function LeadDetailPage({
         </div>
       </div>
 
-      <Tabs defaultValue="overview">
+      <Tabs defaultValue={initialTab}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="activities">Activities</TabsTrigger>
@@ -427,7 +430,11 @@ export default function LeadDetailPage({
               </Button>
             </CardHeader>
             <CardContent>
-              <ActivityTimeline key={activityRefreshKey} leadId={id} />
+              <ActivityTimeline
+                key={activityRefreshKey}
+                leadId={id}
+                highlightId={highlightActivityId}
+              />
             </CardContent>
           </Card>
           <ActivityForm
