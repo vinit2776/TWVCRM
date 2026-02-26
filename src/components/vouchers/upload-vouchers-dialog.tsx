@@ -20,6 +20,7 @@ import {
 import { Loader2, Upload, FileText, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { VOUCHER_VALIDITY_OPTIONS, VOUCHER_VALIDITY_LABELS } from "@/lib/constants";
+import { getValidityLabel } from "@/lib/utils";
 import { LocationSelector } from "@/components/shared/location-selector";
 
 interface UploadVouchersDialogProps {
@@ -270,19 +271,19 @@ export function UploadVouchersDialog({
                 </div>
               )}
               <div className={`text-sm space-y-1 ${result.count > 0 ? "text-green-700" : "text-amber-700"}`}>
-                {result.detected_validity && (
+                {result.detected_validity != null && (
                   <p>
                     Detected validity:{" "}
                     <Badge variant="secondary" className="ml-1">
-                      {result.detected_validity}d
+                      {getValidityLabel(result.detected_validity)}
                     </Badge>
                   </p>
                 )}
-                {result.applied_validity && (
+                {result.applied_validity != null && (
                   <p>
                     Applied validity:{" "}
                     <Badge variant="secondary" className="ml-1">
-                      {result.applied_validity}d
+                      {getValidityLabel(result.applied_validity)}
                     </Badge>
                   </p>
                 )}

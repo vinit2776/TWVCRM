@@ -121,7 +121,9 @@ export function useEnquiryNotifications() {
       setRecentItems(merged);
     }
 
-    loadInitialData();
+    loadInitialData().catch((err) => {
+      console.error("[useEnquiryNotifications] loadInitialData failed:", err);
+    });
 
     // 5. Real-time subscription for new enquiries
     const channel = supabase

@@ -94,6 +94,10 @@ export function maskVoucherCode(code: string): string {
  */
 export function getValidityLabel(days: number | null | undefined): string {
   if (days == null) return "Unclassified";
+  if (days > 0 && days < 1) {
+    const hours = Math.round(days * 24);
+    return hours === 1 ? "1 Hour" : `${hours} Hours`;
+  }
   if (days === 1) return "1 Day";
   if (days === 7) return "7 Days";
   if (days % 365 === 0 && days >= 365) {

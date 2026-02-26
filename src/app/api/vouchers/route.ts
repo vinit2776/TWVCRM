@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
     if (validityDays === "unclassified") {
       query = query.is("validity_days", null);
     } else {
-      query = query.eq("validity_days", parseInt(validityDays));
+      query = query.eq("validity_days", parseFloat(validityDays));
     }
   }
   query = query.order("uploaded_at", { ascending: false }).range(offset, offset + limit - 1);
@@ -98,7 +98,7 @@ export async function POST(request: NextRequest) {
     }
 
     const validityDays = validityOverride
-      ? parseInt(validityOverride)
+      ? parseFloat(validityOverride)
       : parsed.detected_validity;
 
     const rows = parsed.vouchers.map((v) => ({

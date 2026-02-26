@@ -83,9 +83,10 @@ export async function parseVoucherPDF(
 
   // ── Detect validity period ──
   let detected_validity: number | null = null;
+
+  // Day-based: "valid for X days", "valid for Xd"
   const validityRegex = /valid\s+for\s+(\d+)\s*d/gi;
   const validityMatch = validityRegex.exec(text);
-
   if (validityMatch) {
     detected_validity = parseInt(validityMatch[1], 10);
   }
@@ -95,6 +96,27 @@ export async function parseVoucherPDF(
     const altMatch = altRegex.exec(text);
     if (altMatch) {
       detected_validity = parseInt(altMatch[1], 10);
+    }
+  }
+
+  // Hour-based (checked after days to avoid false positives on day-based PDFs):
+  // Matches: "valid for 3 hours", "valid for 3hr", "3 hours validity", "3hr access", "3hrs"
+  if (detected_validity === null) {
+    const hourRegex = /valid\s+for\s+(\d+)\s*h(?:r|rs|our|ours)?(?:\b|$)|(\d+)\s*h(?:r|rs|our|ours)\s+(?:validity|voucher|access)/gi;
+    const hourMatch = hourRegex.exec(text);
+    if (hourMatch) {
+      const hrs = parseInt(hourMatch[1] || hourMatch[2], 10);
+      detected_validity = hrs / 24; // store as fractional days (e.g. 3hrs → 0.125)
+    }
+  }
+
+  // Broader fallback: standalone "3hr" / "3hrs" anywhere in the PDF
+  if (detected_validity === null) {
+    const hrFallback = /\b(\d+)\s*hr(?:s)?\b/gi;
+    const hrMatch = hrFallback.exec(text);
+    if (hrMatch) {
+      const hrs = parseInt(hrMatch[1], 10);
+      detected_validity = hrs / 24;
     }
   }
 

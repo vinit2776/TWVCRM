@@ -294,9 +294,10 @@ export const VOUCHER_STATUS_COLORS: Record<string, string> = {
   revoked: "bg-red-100 text-red-800",
 };
 
-export const VOUCHER_VALIDITY_OPTIONS = [1, 7, 30, 60, 90, 180, 365] as const;
+export const VOUCHER_VALIDITY_OPTIONS = [0.125, 1, 7, 30, 60, 90, 180, 365] as const;
 
 export const VOUCHER_VALIDITY_LABELS: Record<number, string> = {
+  0.125: "3 Hours",
   1: "1 Day",
   7: "7 Days",
   30: "30 Days",

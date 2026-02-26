@@ -363,24 +363,50 @@ export async function POST(request: NextRequest) {
   }
 
   // 7. Issue voucher for walk-in or guest
+  // Smart matching: bookings ≤ 3 hrs → prefer a 3-hour WiFi voucher (validity_days = 0.125);
+  // bookings > 3 hrs → prefer a 1-day voucher. Falls back to the other type if preferred not available.
   if ((input.customer_type === "walk_in" || input.customer_type === "guest") && booking) {
-    const { data: voucher } = await supabase
+    const isShortBooking = durationHours <= 3;
+    const preferredValidity = isShortBooking ? 0.125 : 1; // 0.125d = 3 hrs
+    const fallbackValidity = isShortBooking ? 1 : null;   // 1-day fallback for short bookings only
+
+    // Try preferred validity first
+    let { data: voucher } = await supabase
       .from("voucher_repository")
-      .select("id, voucher_code")
+      .select("id, voucher_code, validity_days")
       .eq("status", "available")
-      .eq("validity_days", 1)
+      .eq("validity_days", preferredValidity)
       .eq("location_id", space.location_id)
       .limit(1)
-      .single();
+      .maybeSingle();
+
+    // Fallback: if no 3-hour voucher available for a short booking, try 1-day
+    if (!voucher && fallbackValidity) {
+      const { data: fallback } = await supabase
+        .from("voucher_repository")
+        .select("id, voucher_code, validity_days")
+        .eq("status", "available")
+        .eq("validity_days", fallbackValidity)
+        .eq("location_id", space.location_id)
+        .limit(1)
+        .maybeSingle();
+      if (fallback) voucher = fallback;
+    }
 
     if (voucher) {
+      // expires_at: for sub-day vouchers convert fractional days → ms; otherwise 24 hours
+      const validityDays: number = voucher.validity_days ?? 1;
+      const expiryMs = validityDays < 1
+        ? Math.round(validityDays * 24 * 60 * 60 * 1000) // e.g. 0.125 * 86400000 = 3 hrs
+        : 24 * 60 * 60 * 1000;                           // 1 day = 86400000 ms
+
       // Mark voucher as issued
       await supabase
         .from("voucher_repository")
         .update({
           status: "issued",
           issued_at: new Date().toISOString(),
-          expires_at: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+          expires_at: new Date(Date.now() + expiryMs).toISOString(),
         })
         .eq("id", voucher.id);
 
@@ -401,8 +427,8 @@ export async function POST(request: NextRequest) {
           seat_occupant_email: input.guest_email || null,
         });
     }
-    // Note: If no 1-day voucher is available, we still create the booking
-    // The voucher can be issued later from the booking detail page
+    // Note: If no suitable voucher is available, we still create the booking.
+    // The voucher can be issued later from the booking detail page.
   }
 
   // 7b. Handle advance payment (creates a booking_payments record)

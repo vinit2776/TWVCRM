@@ -5,6 +5,12 @@ import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { useUiStore } from "@/stores/ui-store";
 import { createClient } from "@/lib/supabase/client";
 import { getInitials } from "@/lib/utils";
@@ -16,12 +22,26 @@ export function Header() {
   const router = useRouter();
   const [userEmail, setUserEmail] = useState("");
   const [userName, setUserName] = useState("");
+  const [userRole, setUserRole] = useState("");
 
   useEffect(() => {
     const supabase = createClient();
-    supabase.auth.getUser().then(({ data: { user } }) => {
-      if (user) {
-        setUserEmail(user.email || "");
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      if (!user) return;
+      setUserEmail(user.email || "");
+
+      // Fetch full_name from the users table (auth metadata may not have it for email/password users)
+      const { data: dbUser } = await supabase
+        .from("users")
+        .select("full_name, role")
+        .eq("auth_id", user.id)
+        .single();
+
+      if (dbUser) {
+        setUserName(dbUser.full_name || user.email || "");
+        setUserRole(dbUser.role || "");
+      } else {
+        // Fallback to auth metadata
         setUserName(user.user_metadata?.full_name || user.email || "");
       }
     });
@@ -68,19 +88,6 @@ export function Header() {
       </button>
 
       <div className="flex items-center gap-3 ml-auto">
-        {/* User info */}
-        <div className="hidden sm:flex items-center gap-3">
-          <div className="text-right">
-            <p className="text-sm font-medium leading-none">{userName}</p>
-            <p className="text-xs text-muted-foreground">{userEmail}</p>
-          </div>
-          <Avatar className="h-8 w-8">
-            <AvatarFallback className="text-xs">
-              {getInitials(userName || "U")}
-            </AvatarFallback>
-          </Avatar>
-        </div>
-
         {/* Enquiry notifications */}
         <NotificationBell />
 
@@ -91,10 +98,40 @@ export function Header() {
           </Link>
         </Button>
 
-        {/* Sign out */}
-        <Button variant="ghost" size="icon" onClick={handleSignOut} title="Sign out">
-          <LogOut className="h-4 w-4" />
-        </Button>
+        {/* User menu — click name/avatar to get dropdown with logout */}
+        <DropdownMenu>
+          <DropdownMenuTrigger asChild>
+            <button className="hidden sm:flex items-center gap-3 rounded-md px-2 py-1.5 hover:bg-muted transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+              <div className="text-right">
+                <p className="text-sm font-medium leading-none">{userName || "—"}</p>
+                {userRole && (
+                  <p className="text-xs text-muted-foreground capitalize">{userRole.replace(/_/g, " ")}</p>
+                )}
+              </div>
+              <Avatar className="h-8 w-8">
+                <AvatarFallback className="text-xs">
+                  {getInitials(userName || "U")}
+                </AvatarFallback>
+              </Avatar>
+            </button>
+          </DropdownMenuTrigger>
+          <DropdownMenuContent align="end" className="w-56" sideOffset={8}>
+            {/* Profile info */}
+            <div className="px-3 py-2">
+              <p className="text-sm font-medium">{userName || "—"}</p>
+              <p className="text-xs text-muted-foreground truncate">{userEmail}</p>
+            </div>
+            <DropdownMenuSeparator />
+            {/* Logout */}
+            <button
+              onClick={handleSignOut}
+              className="flex w-full items-center gap-2 px-3 py-2 text-sm text-red-600 hover:bg-red-50 transition-colors rounded-sm"
+            >
+              <LogOut className="h-4 w-4" />
+              Sign out
+            </button>
+          </DropdownMenuContent>
+        </DropdownMenu>
       </div>
     </header>
   );
