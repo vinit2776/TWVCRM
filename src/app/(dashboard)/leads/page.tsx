@@ -1,9 +1,9 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload, Bell, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -26,10 +26,19 @@ import {
 } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
 import { ImportLeadsDialog } from "@/components/leads/import-leads-dialog";
+import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
 
 const FORM_TAGS = ["google-ads-form", "meta-ads-form", "walkin-form"];
 function isUnreadFormLead(lead: { status: string; tags: string[] }) {
   return lead.status === "new" && lead.tags?.some((t) => FORM_TAGS.includes(t));
+}
+
+function timeAgo(iso: string): string {
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
 }
 
 export default function LeadsPage() {
@@ -42,6 +51,18 @@ export default function LeadsPage() {
   const [searchInput, setSearchInput] = useState("");
   const [importOpen, setImportOpen] = useState(false);
 
+  // Live enquiry data from shared context (real-time)
+  const {
+    newLeadCount,
+    reEnquiryCount,
+    recentItems,
+    markReEnquiriesSeen,
+  } = useEnquiryNotifications();
+
+  const pinnedLeads = recentItems.filter((i) => i.type === "lead");
+  const pinnedReEnquiries = recentItems.filter((i) => i.type === "activity");
+  const hasPinned = pinnedLeads.length > 0 || pinnedReEnquiries.length > 0;
+
   const { data: leads, pagination, loading, refetch } = useLeads({
     page,
     search,
@@ -49,6 +70,15 @@ export default function LeadsPage() {
     source: sourceFilter || undefined,
     location_id: locationFilter || undefined,
   });
+
+  // Client-side: sort leads so new form leads appear first within the current page
+  const sortedLeads = useMemo(() => {
+    return [...leads].sort((a, b) => {
+      const aPin = isUnreadFormLead(a) ? 0 : 1;
+      const bPin = isUnreadFormLead(b) ? 0 : 1;
+      return aPin - bPin;
+    });
+  }, [leads]);
 
   const handleSearch = () => {
     setSearch(searchInput);
@@ -76,6 +106,109 @@ export default function LeadsPage() {
           </Button>
         </div>
       </div>
+
+      {/* ── Pinned: New Form Enquiries (real-time, always at top) ── */}
+      {hasPinned && (
+        <div className="rounded-lg border-2 border-emerald-400 bg-emerald-50/60 dark:bg-emerald-950/20 overflow-hidden">
+          {/* Section header */}
+          <div className="flex items-center justify-between px-4 py-2.5 bg-emerald-100/60 dark:bg-emerald-900/30 border-b border-emerald-300/60">
+            <div className="flex items-center gap-2">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+              </span>
+              <span className="text-xs font-semibold text-emerald-800 dark:text-emerald-200 uppercase tracking-wider">
+                New Form Enquiries Requiring Action
+              </span>
+              {(newLeadCount + reEnquiryCount) > 0 && (
+                <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-emerald-500 px-1.5 text-[10px] font-bold text-white">
+                  {newLeadCount + reEnquiryCount}
+                </span>
+              )}
+            </div>
+            <Link
+              href="/leads?status=new"
+              className="text-xs font-medium text-emerald-700 hover:underline underline-offset-2"
+            >
+              View all new →
+            </Link>
+          </div>
+
+          <div className="p-3 space-y-3">
+            {/* New Leads */}
+            {pinnedLeads.length > 0 && (
+              <div>
+                <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700 mb-1.5 flex items-center gap-1 px-1">
+                  <Bell className="h-3 w-3" />
+                  New Enquiries ({newLeadCount})
+                </p>
+                <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                  {pinnedLeads.map((item) => (
+                    <Link
+                      key={item.leadId}
+                      href={`/leads/${item.leadId}`}
+                      className="flex items-center justify-between rounded-md px-3 py-2 bg-white/90 hover:bg-white transition-colors border border-emerald-200 group shadow-sm"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold truncate group-hover:text-emerald-700 transition-colors">
+                          {item.name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {item.source} · {timeAgo(item.time)}
+                        </p>
+                      </div>
+                      <span className="shrink-0 ml-2 text-xs font-bold text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded">
+                        NEW
+                      </span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Re-Enquiries */}
+            {pinnedReEnquiries.length > 0 && (
+              <div className={pinnedLeads.length > 0 ? "border-t border-emerald-200 pt-3" : ""}>
+                <div className="flex items-center justify-between mb-1.5 px-1">
+                  <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-700 flex items-center gap-1">
+                    <RefreshCw className="h-3 w-3" />
+                    Re-Enquiries ({reEnquiryCount})
+                  </p>
+                  {reEnquiryCount > 0 && (
+                    <button
+                      onClick={markReEnquiriesSeen}
+                      className="text-[10px] text-muted-foreground hover:text-foreground transition-colors hover:underline underline-offset-2"
+                    >
+                      Mark seen
+                    </button>
+                  )}
+                </div>
+                <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
+                  {pinnedReEnquiries.map((item, idx) => (
+                    <Link
+                      key={item.leadId + "-" + idx}
+                      href={`/leads/${item.leadId}`}
+                      className="flex items-center justify-between rounded-md px-3 py-2 bg-amber-50/90 hover:bg-amber-50 transition-colors border border-amber-200 group shadow-sm"
+                    >
+                      <div className="min-w-0 flex-1">
+                        <p className="text-sm font-semibold truncate group-hover:text-amber-700 transition-colors">
+                          {item.name}
+                        </p>
+                        <p className="text-xs text-muted-foreground">
+                          {item.source} · {timeAgo(item.time)}
+                        </p>
+                      </div>
+                      <span className="shrink-0 ml-2 text-xs font-bold text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded">
+                        RE-ENQ
+                      </span>
+                    </Link>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-3">
@@ -147,7 +280,7 @@ export default function LeadsPage() {
       {/* Table */}
       {loading ? (
         <TableSkeleton rows={8} />
-      ) : leads.length === 0 ? (
+      ) : sortedLeads.length === 0 ? (
         <EmptyState
           icon={Users}
           title="No leads found"
@@ -186,55 +319,62 @@ export default function LeadsPage() {
               </tr>
             </thead>
             <tbody>
-              {leads.map((lead) => (
-                <tr
-                  key={lead.id}
-                  className="border-b hover:bg-muted/30 cursor-pointer transition-colors"
-                  onClick={() => router.push(`/leads/${lead.id}`)}
-                >
-                  <td className="px-4 py-3">
-                    <div className="flex items-center gap-2">
-                      {isUnreadFormLead(lead) && (
-                        <span className="relative flex h-2 w-2 shrink-0">
-                          <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
-                          <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
-                        </span>
-                      )}
-                      <Link
-                        href={`/leads/${lead.id}`}
-                        className="font-medium text-primary hover:underline"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {lead.first_name} {lead.last_name}
-                      </Link>
-                    </div>
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
-                    {lead.company || "-"}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
-                    {lead.email || "-"}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
-                    {lead.phone || lead.mobile || "-"}
-                  </td>
-                  <td className="px-4 py-3">
-                    <StatusBadge type="lead_status" value={lead.status} />
-                  </td>
-                  <td className="px-4 py-3 hidden md:table-cell">
-                    {LEAD_SOURCE_LABELS[lead.source] || lead.source}
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
-                    {lead.location?.name || "—"}
-                  </td>
-                  <td className="px-4 py-3 hidden xl:table-cell">
-                    <RatingBadge rating={lead.rating} />
-                  </td>
-                  <td className="px-4 py-3 text-muted-foreground hidden xl:table-cell">
-                    {formatDate(lead.created_at)}
-                  </td>
-                </tr>
-              ))}
+              {sortedLeads.map((lead) => {
+                const isFormLead = isUnreadFormLead(lead);
+                return (
+                  <tr
+                    key={lead.id}
+                    className={`border-b cursor-pointer transition-colors
+                      ${isFormLead
+                        ? "bg-emerald-50/40 hover:bg-emerald-50 dark:bg-emerald-950/10"
+                        : "hover:bg-muted/30"
+                      }`}
+                    onClick={() => router.push(`/leads/${lead.id}`)}
+                  >
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-2">
+                        {isFormLead && (
+                          <span className="relative flex h-2 w-2 shrink-0">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
+                          </span>
+                        )}
+                        <Link
+                          href={`/leads/${lead.id}`}
+                          className={`font-medium hover:underline ${isFormLead ? "text-emerald-700" : "text-primary"}`}
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {lead.first_name} {lead.last_name}
+                        </Link>
+                      </div>
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
+                      {lead.company || "-"}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
+                      {lead.email || "-"}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
+                      {lead.phone || lead.mobile || "-"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <StatusBadge type="lead_status" value={lead.status} />
+                    </td>
+                    <td className="px-4 py-3 hidden md:table-cell">
+                      {LEAD_SOURCE_LABELS[lead.source] || lead.source}
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
+                      {lead.location?.name || "—"}
+                    </td>
+                    <td className="px-4 py-3 hidden xl:table-cell">
+                      <RatingBadge rating={lead.rating} />
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground hidden xl:table-cell">
+                      {formatDate(lead.created_at)}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
           </table>
         </div>

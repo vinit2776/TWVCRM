@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
+import { sendPushToAll } from "@/lib/push";
 
 /** Normalise a phone number to a canonical 10-digit Indian mobile number.
  *  Strips all non-digit characters, then removes a leading country code
@@ -232,6 +233,22 @@ export async function POST(request: NextRequest) {
     start_date, description,
   };
 
+  // Resolve all active admin/manager email addresses to notify
+  const { data: staffRows } = await supabase
+    .from("users")
+    .select("email")
+    .in("role", ["admin", "manager"])
+    .eq("is_active", true);
+
+  const staffEmails = (staffRows ?? [])
+    .map((u: { email: string }) => u.email)
+    .filter(Boolean) as string[];
+
+  // Always include the shared inbox; deduplicate
+  const ALL_RECIPIENTS = Array.from(
+    new Set(["space@theworkvilla.com", ...staffEmails])
+  );
+
   if (existing) {
     // Returning enquiry — add a note activity to the existing lead
     await supabase.from("activities").insert({
@@ -241,13 +258,20 @@ export async function POST(request: NextRequest) {
       description: enquirySummary,
     });
 
-    // Fire-and-forget email alert — must not block the response
+    // Fire-and-forget email + push alert — must not block the response
     resend.emails.send({
       from: EMAIL_FROM,
-      to: "space@theworkvilla.com",
+      to: ALL_RECIPIENTS,
       subject: `🔁 Re-Enquiry — ${firstName} ${lastName} via ${sourceLabel}`,
       html: buildEnquiryEmailHtml({ ...emailParams, isReturning: true, leadId: existing.id }),
       replyTo: normalisedEmail || undefined,
+    }).catch(() => {});
+
+    sendPushToAll({
+      title: `🔁 Re-Enquiry — ${firstName} ${lastName}`,
+      body: `Enquiring again via ${sourceLabel}`,
+      url: `${APP_URL}/leads/${existing.id}`,
+      tag: `re-enquiry-${existing.id}`,
     }).catch(() => {});
 
     return NextResponse.json({ success: true, returning: true });
@@ -290,13 +314,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: insertError.message }, { status: 500 });
   }
 
-  // Fire-and-forget email alert — must not block the response
+  // Fire-and-forget email + push alert — must not block the response
   resend.emails.send({
     from: EMAIL_FROM,
-    to: "space@theworkvilla.com",
+    to: ALL_RECIPIENTS,
     subject: `🔔 New Enquiry — ${firstName} ${lastName} via ${sourceLabel}`,
     html: buildEnquiryEmailHtml({ ...emailParams, isReturning: false, leadId: newLead.id }),
     replyTo: normalisedEmail || undefined,
+  }).catch(() => {});
+
+  sendPushToAll({
+    title: `🔔 New Enquiry — ${firstName} ${lastName}`,
+    body: `New enquiry via ${sourceLabel}`,
+    url: `${APP_URL}/leads/${newLead.id}`,
+    tag: `new-enquiry-${newLead.id}`,
   }).catch(() => {});
 
   return NextResponse.json({ success: true, returning: false });

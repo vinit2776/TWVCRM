@@ -21,11 +21,64 @@ export interface EnquiryNotificationItem {
   time: string; // ISO timestamp
 }
 
-export function useEnquiryNotifications() {
+export interface EnquiryAlert {
+  alertId: string; // unique key for dismissal
+  type: "lead" | "activity";
+  leadId: string;
+  name: string;
+  source: string;
+}
+
+/** Two-tone chime using Web Audio API — no external file needed */
+function playChime() {
+  if (typeof window === "undefined") return;
+  try {
+    const AudioCtx =
+      window.AudioContext ||
+      (window as unknown as { webkitAudioContext: typeof AudioContext })
+        .webkitAudioContext;
+    if (!AudioCtx) return;
+    const ctx = new AudioCtx();
+
+    // First tone: 880 Hz
+    const osc1 = ctx.createOscillator();
+    const g1 = ctx.createGain();
+    osc1.connect(g1);
+    g1.connect(ctx.destination);
+    osc1.type = "sine";
+    osc1.frequency.value = 880;
+    g1.gain.setValueAtTime(0.22, ctx.currentTime);
+    g1.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.28);
+    osc1.start(ctx.currentTime);
+    osc1.stop(ctx.currentTime + 0.28);
+
+    // Second tone: 1320 Hz after 150 ms
+    const osc2 = ctx.createOscillator();
+    const g2 = ctx.createGain();
+    osc2.connect(g2);
+    g2.connect(ctx.destination);
+    osc2.type = "sine";
+    osc2.frequency.value = 1320;
+    g2.gain.setValueAtTime(0, ctx.currentTime + 0.15);
+    g2.gain.setValueAtTime(0.18, ctx.currentTime + 0.15);
+    g2.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+    osc2.start(ctx.currentTime + 0.15);
+    osc2.stop(ctx.currentTime + 0.5);
+  } catch {
+    /* ignore audio errors in restrictive environments */
+  }
+}
+
+/**
+ * Core hook — consumed via EnquiryNotificationsProvider to avoid
+ * duplicate Supabase subscriptions across multiple consumers.
+ */
+export function useEnquiryNotificationsCore() {
   const router = useRouter();
-  const [newLeadCount, setNewLeadCount]       = useState(0);
-  const [reEnquiryCount, setReEnquiryCount]   = useState(0);
-  const [recentItems, setRecentItems]         = useState<EnquiryNotificationItem[]>([]);
+  const [newLeadCount, setNewLeadCount]     = useState(0);
+  const [reEnquiryCount, setReEnquiryCount] = useState(0);
+  const [recentItems, setRecentItems]       = useState<EnquiryNotificationItem[]>([]);
+  const [alertQueue, setAlertQueue]         = useState<EnquiryAlert[]>([]);
 
   const totalCount = newLeadCount + reEnquiryCount;
 
@@ -45,12 +98,19 @@ export function useEnquiryNotifications() {
     setRecentItems((prev) => prev.filter((i) => i.type !== "activity"));
   }, []);
 
+  const dismissAlert = useCallback((alertId: string) => {
+    setAlertQueue((prev) => prev.filter((a) => a.alertId !== alertId));
+  }, []);
+
+  const dismissAllAlerts = useCallback(() => {
+    setAlertQueue([]);
+  }, []);
+
   useEffect(() => {
     const supabase = createClient();
     const lastSeen = getLastSeen();
 
     async function loadInitialData() {
-      // Fire all 4 queries in parallel
       const [
         { count: leadCount },
         { count: activityCount },
@@ -102,7 +162,6 @@ export function useEnquiryNotifications() {
 
       const activityItems: EnquiryNotificationItem[] = (recentActivities ?? []).map((a) => {
         const lead = a.lead as unknown as { id: string; first_name: string; last_name: string } | null;
-        // Extract source from subject: "Re-enquiry via Google Ads form" → "Google Ads"
         const sourceMatch = (a.subject as string).match(/Re-enquiry via (.+?) form/);
         return {
           type: "activity",
@@ -148,6 +207,14 @@ export function useEnquiryNotifications() {
             ...prev,
           ].slice(0, 10));
 
+          // Alert banner + audio chime
+          const alertId = `lead-${lead.id}-${Date.now()}`;
+          setAlertQueue((prev) => [
+            ...prev,
+            { alertId, type: "lead", leadId: lead.id, name, source: sourceLabel },
+          ]);
+          playChime();
+
           toast.success(`New enquiry — ${name} via ${sourceLabel}`, {
             duration: 6000,
             action: {
@@ -190,6 +257,14 @@ export function useEnquiryNotifications() {
             ...prev,
           ].slice(0, 10));
 
+          // Alert banner + audio chime
+          const alertId = `activity-${act.id}-${Date.now()}`;
+          setAlertQueue((prev) => [
+            ...prev,
+            { alertId, type: "activity", leadId: act.lead_id, name, source: sourceLabel },
+          ]);
+          playChime();
+
           toast(`Re-enquiry — ${name} is enquiring again`, {
             duration: 6000,
             action: {
@@ -206,5 +281,14 @@ export function useEnquiryNotifications() {
     };
   }, [router]);
 
-  return { totalCount, newLeadCount, reEnquiryCount, recentItems, markReEnquiriesSeen };
+  return {
+    totalCount,
+    newLeadCount,
+    reEnquiryCount,
+    recentItems,
+    markReEnquiriesSeen,
+    alertQueue,
+    dismissAlert,
+    dismissAllAlerts,
+  };
 }

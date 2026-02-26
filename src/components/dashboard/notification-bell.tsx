@@ -10,8 +10,8 @@ import {
   DropdownMenuContent,
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
-import { useEnquiryNotifications } from "@/hooks/use-enquiry-notifications";
-import type { EnquiryNotificationItem } from "@/hooks/use-enquiry-notifications";
+import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
+import type { EnquiryNotificationItem } from "@/providers/enquiry-notifications-provider";
 
 function timeAgo(iso: string): string {
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
