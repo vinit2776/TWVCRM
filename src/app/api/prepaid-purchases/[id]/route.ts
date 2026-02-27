@@ -16,7 +16,6 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
       package:prepaid_packages(id,name,credit_type,total_credits,workspace_type,validity_days,price),
       lead:leads(id,first_name,last_name,company,phone,email),
       location:locations(id,name),
-      seller:sold_by(id,full_name),
       redemptions:prepaid_redemptions(
         id, credits_deducted, redeemed_at,
         booking:bookings(id,booking_number,booking_date,start_time,end_time,duration_hours)
