@@ -20,7 +20,6 @@ export async function GET(request: NextRequest) {
       package:prepaid_packages(id,name,credit_type,total_credits,workspace_type,validity_days,price),
       lead:leads(id,first_name,last_name,company,phone,email),
       location:locations(id,name),
-      seller:sold_by(id,full_name),
       redemptions:prepaid_redemptions(id,credits_deducted,booking_id,redeemed_at)
     `)
     .order("created_at", { ascending: false });
