@@ -49,8 +49,8 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "name, credit_type, total_credits, price and validity_days are required" }, { status: 400 });
   }
 
-  if (!["hours", "days"].includes(credit_type)) {
-    return NextResponse.json({ error: "credit_type must be 'hours' or 'days'" }, { status: 400 });
+  if (!["hours", "days", "bookings"].includes(credit_type)) {
+    return NextResponse.json({ error: "credit_type must be 'hours', 'days', or 'bookings'" }, { status: 400 });
   }
 
   const { data, error } = await supabase

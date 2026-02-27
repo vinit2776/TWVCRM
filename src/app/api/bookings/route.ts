@@ -273,7 +273,7 @@ export async function POST(request: NextRequest) {
       const topupHours = durationHours - creditsToDeduct;
       prepaidTopupAmount = topupHours > 0 ? parseFloat((topupHours * effectiveRate).toFixed(2)) : 0;
     } else {
-      // Days pass: 1 credit per booking regardless of duration
+      // Days pass OR Booking Slots pass: 1 credit per booking regardless of duration
       prepaidCreditsUsed = Math.min(1, creditsRemaining);
       prepaidTopupAmount = 0;
     }

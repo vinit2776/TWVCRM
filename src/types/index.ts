@@ -1512,7 +1512,7 @@ export interface ProcurementDashboardStats {
 // ==========================================
 // Prepaid Package Types
 // ==========================================
-export type CreditType = "hours" | "days";
+export type CreditType = "hours" | "days" | "bookings";
 export type PrepaidPurchaseStatus = "active" | "exhausted" | "expired";
 
 export interface PrepaidPackage {

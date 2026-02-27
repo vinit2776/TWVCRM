@@ -1217,11 +1217,12 @@ export const BILL_PAYMENT_MODE_LABELS: Record<string, string> = {
 // ─────────────────────────────────────────────────────────────────────────────
 // Prepaid Package Constants
 // ─────────────────────────────────────────────────────────────────────────────
-export const CREDIT_TYPES = ["hours", "days"] as const;
+export const CREDIT_TYPES = ["hours", "days", "bookings"] as const;
 
 export const CREDIT_TYPE_LABELS: Record<string, string> = {
   hours: "Hours",
   days: "Days",
+  bookings: "Booking Slots",
 };
 
 export const PREPAID_PURCHASE_STATUSES = ["active", "exhausted", "expired"] as const;

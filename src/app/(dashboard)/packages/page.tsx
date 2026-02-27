@@ -155,6 +155,7 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
                 <SelectContent>
                   <SelectItem value="hours">Hours</SelectItem>
                   <SelectItem value="days">Days</SelectItem>
+                  <SelectItem value="bookings">Booking Slots</SelectItem>
                 </SelectContent>
               </Select>
             </div>

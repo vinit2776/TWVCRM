@@ -35,7 +35,7 @@ export function PrepaidBanner({
     topupHours = Math.max(0, durationHours - coveredHours);
     topupAmount = topupHours * effectiveRate;
   }
-  const isFullyCovered = creditType === "days" || (creditType === "hours" && topupAmount === 0);
+  const isFullyCovered = creditType === "days" || creditType === "bookings" || (creditType === "hours" && topupAmount === 0);
 
   const expiryDate = new Date(purchase.expires_at + "T00:00:00").toLocaleDateString("en-IN", {
     day: "numeric",
@@ -46,6 +46,8 @@ export function PrepaidBanner({
   const creditsLabel =
     creditType === "hours"
       ? `${creditsRemaining} hr${creditsRemaining !== 1 ? "s" : ""} remaining`
+      : creditType === "bookings"
+      ? `${creditsRemaining} booking slot${creditsRemaining !== 1 ? "s" : ""} remaining`
       : `${creditsRemaining} day pass${creditsRemaining !== 1 ? "es" : ""} remaining`;
 
   return (
@@ -80,6 +82,9 @@ export function PrepaidBanner({
           )}
           {usePrepaid && creditType === "days" && (
             <p className="text-xs mt-0.5 text-green-700">1 day pass will be deducted · Fully covered</p>
+          )}
+          {usePrepaid && creditType === "bookings" && (
+            <p className="text-xs mt-0.5 text-green-700">1 booking slot will be deducted · Fully covered</p>
           )}
         </div>
       </div>
