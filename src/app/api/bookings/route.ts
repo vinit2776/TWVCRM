@@ -237,6 +237,48 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // 3b. Prepaid purchase validation (if caller passes prepaid_purchase_id in body)
+  let prepaidPurchaseId: string | undefined;
+  let prepaidCreditsUsed: number | undefined;
+  let prepaidTopupAmount: number | undefined;
+
+  if (body.prepaid_purchase_id) {
+    const { data: prepaidPurchase, error: ppErr } = await supabase
+      .from("prepaid_purchases")
+      .select("id, status, expires_at, credit_type, total_credits, credits_used")
+      .eq("id", body.prepaid_purchase_id)
+      .single();
+
+    if (ppErr || !prepaidPurchase) {
+      return NextResponse.json({ error: "Prepaid purchase not found" }, { status: 404 });
+    }
+    if (prepaidPurchase.status !== "active") {
+      return NextResponse.json({ error: "Prepaid purchase is not active" }, { status: 400 });
+    }
+    const todayStr = new Date().toISOString().split("T")[0];
+    if (prepaidPurchase.expires_at < todayStr) {
+      return NextResponse.json({ error: "Prepaid purchase has expired" }, { status: 400 });
+    }
+
+    const creditsRemaining = Number(prepaidPurchase.total_credits) - Number(prepaidPurchase.credits_used);
+    if (creditsRemaining <= 0) {
+      return NextResponse.json({ error: "Prepaid purchase has no credits remaining" }, { status: 400 });
+    }
+
+    prepaidPurchaseId = prepaidPurchase.id;
+
+    if (prepaidPurchase.credit_type === "hours") {
+      const creditsToDeduct = Math.min(durationHours, creditsRemaining);
+      prepaidCreditsUsed = creditsToDeduct;
+      const topupHours = durationHours - creditsToDeduct;
+      prepaidTopupAmount = topupHours > 0 ? parseFloat((topupHours * effectiveRate).toFixed(2)) : 0;
+    } else {
+      // Days pass: 1 credit per booking regardless of duration
+      prepaidCreditsUsed = Math.min(1, creditsRemaining);
+      prepaidTopupAmount = 0;
+    }
+  }
+
   // 4. Customer-type-specific logic
   let contractId: string | undefined;
   let leadId: string | undefined;
@@ -304,6 +346,11 @@ export async function POST(request: NextRequest) {
     paymentStatus = "pending";
   }
 
+  // Override payment status when a prepaid purchase is applied
+  if (prepaidPurchaseId) {
+    paymentStatus = prepaidTopupAmount && prepaidTopupAmount > 0 ? "pending" : "prepaid";
+  }
+
   // For guest type, create/find lead for the guest person (separate from contract holder)
   if (input.customer_type === "guest") {
     const guestLeadId = await findOrCreateLeadForBooking(supabase, {
@@ -345,6 +392,9 @@ export async function POST(request: NextRequest) {
       payment_mode: input.payment_mode,
       payment_reference: input.payment_reference,
       usage_charge_id: usageChargeId,
+      prepaid_purchase_id: prepaidPurchaseId || null,
+      prepaid_credits_used: prepaidCreditsUsed || null,
+      prepaid_topup_amount: prepaidTopupAmount || null,
       notes: input.notes,
       created_by: dbUser.id,
     })
@@ -360,6 +410,38 @@ export async function POST(request: NextRequest) {
     await supabase.from("booking_facilities").insert(
       requestedFacilities.map((f) => ({ booking_id: booking.id, ...f }))
     );
+  }
+
+  // 6b. Handle prepaid redemption — deduct credits & log
+  if (prepaidPurchaseId && prepaidCreditsUsed && booking) {
+    // Fetch current credits_used (re-fetch to guard against concurrent updates)
+    const { data: freshPurchase } = await supabase
+      .from("prepaid_purchases")
+      .select("credits_used, total_credits")
+      .eq("id", prepaidPurchaseId)
+      .single();
+
+    if (freshPurchase) {
+      const newCreditsUsed = parseFloat(
+        (Number(freshPurchase.credits_used) + prepaidCreditsUsed).toFixed(2)
+      );
+      const isExhausted = newCreditsUsed >= Number(freshPurchase.total_credits);
+
+      await supabase
+        .from("prepaid_purchases")
+        .update({
+          credits_used: newCreditsUsed,
+          ...(isExhausted ? { status: "exhausted" } : {}),
+        })
+        .eq("id", prepaidPurchaseId);
+    }
+
+    await supabase.from("prepaid_redemptions").insert({
+      purchase_id: prepaidPurchaseId,
+      booking_id: booking.id,
+      credits_deducted: prepaidCreditsUsed,
+      redeemed_by: dbUser.id,
+    });
   }
 
   // 7. Issue voucher for walk-in or guest
@@ -457,11 +539,14 @@ export async function POST(request: NextRequest) {
 
   // 8. Log activity on lead timeline
   if (leadId && booking) {
+    const prepaidNote = prepaidPurchaseId
+      ? ` [Prepaid: ${prepaidCreditsUsed} credit(s) deducted${prepaidTopupAmount && prepaidTopupAmount > 0 ? `, top-up ₹${prepaidTopupAmount}` : ""}]`
+      : "";
     await supabase.from("activities").insert({
       lead_id: leadId,
       type: "meeting",
       subject: `Conference Room Booking — ${space.name}`,
-      description: `Booked ${space.name} on ${input.booking_date} from ${input.start_time}–${input.end_time} (${durationHours}hrs). Booking #${booking.booking_number}. Amount: ₹${totalAmount}`,
+      description: `Booked ${space.name} on ${input.booking_date} from ${input.start_time}–${input.end_time} (${durationHours}hrs). Booking #${booking.booking_number}. Amount: ₹${totalAmount}.${prepaidNote}`,
       created_by: dbUser.id,
     });
   }

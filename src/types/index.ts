@@ -562,6 +562,7 @@ export interface Space {
   capacity: number;
   hourly_rate: number;
   description?: string;
+  workspace_type?: WorkspaceType;
   operating_hours: SpaceOperatingHours;
   max_advance_booking_days: number;
   min_booking_minutes: number;
@@ -589,7 +590,7 @@ export interface SpaceFacility {
 // ==========================================
 export type BookingStatus = "confirmed" | "checked_in" | "checked_out" | "cancelled" | "no_show";
 export type BookingCustomerType = "contract_holder" | "walk_in" | "guest";
-export type BookingPaymentStatus = "pending" | "paid" | "waived" | "posted_to_bill";
+export type BookingPaymentStatus = "pending" | "paid" | "waived" | "posted_to_bill" | "prepaid";
 
 export type BookingRefundStatus = "requested" | "approved" | "processed";
 
@@ -647,6 +648,10 @@ export interface Booking {
   // Razorpay Payment Links
   razorpay_payment_link_id?: string;
   razorpay_payment_link_url?: string;
+  // Prepaid package redemption
+  prepaid_purchase_id?: string;
+  prepaid_credits_used?: number;
+  prepaid_topup_amount?: number;
   notes?: string;
   created_by?: string;
   created_at: string;
@@ -1502,4 +1507,68 @@ export interface ProcurementDashboardStats {
   monthly_spend_by_dept: { department: ProcurementDepartment; total: number }[];
   overdue_bills_count: number;
   recent_requests: Pick<PurchaseRequest, "id" | "pr_number" | "department" | "status" | "total_estimated_amount" | "created_at">[];
+}
+
+// ==========================================
+// Prepaid Package Types
+// ==========================================
+export type CreditType = "hours" | "days";
+export type PrepaidPurchaseStatus = "active" | "exhausted" | "expired";
+
+export interface PrepaidPackage {
+  id: string;
+  name: string;
+  description?: string;
+  location_id?: string;
+  location?: Location;
+  workspace_type?: WorkspaceType;
+  credit_type: CreditType;
+  total_credits: number;
+  price: number;
+  validity_days: number;
+  is_active: boolean;
+  created_by?: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PrepaidPurchase {
+  id: string;
+  package_id: string;
+  package?: PrepaidPackage;
+  location_id?: string;
+  location?: Location;
+  lead_id?: string;
+  lead?: Lead;
+  company_name?: string;
+  credit_type: CreditType;
+  total_credits: number;
+  credits_used: number;
+  credits_remaining: number;   // computed by API: total_credits - credits_used
+  price_paid: number;
+  payment_mode: string;
+  payment_reference?: string;
+  purchased_at: string;
+  expires_at: string;
+  status: PrepaidPurchaseStatus;
+  notes?: string;
+  sold_by?: string;
+  seller?: User;
+  extended_by?: string;
+  extended_at?: string;
+  extension_notes?: string;
+  created_at: string;
+  updated_at: string;
+  redemptions?: PrepaidRedemption[];
+}
+
+export interface PrepaidRedemption {
+  id: string;
+  purchase_id: string;
+  booking_id: string;
+  booking?: Booking;
+  credits_deducted: number;
+  redeemed_by?: string;
+  redeemer?: User;
+  redeemed_at: string;
 }

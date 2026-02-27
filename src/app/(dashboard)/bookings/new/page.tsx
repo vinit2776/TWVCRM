@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Loader2, Clock, IndianRupee, Search, Phone, User2, Building2, Banknote, CreditCard, Smartphone, Repeat, ListOrdered, Link2 } from "lucide-react";
+import { ArrowLeft, Loader2, Clock, IndianRupee, Search, Phone, User2, Building2, Banknote, CreditCard, Smartphone, Repeat, ListOrdered, Link2, TicketCheck } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -16,8 +16,9 @@ import { useLocations } from "@/hooks/use-locations";
 import { formatCurrency } from "@/lib/utils";
 import { BOOKING_CUSTOMER_TYPE_LABELS, PAYMENT_MODES, PAYMENT_MODE_LABELS, BOOKING_PAYMENT_MODES, BOOKING_PAYMENT_MODE_LABELS, RECURRENCE_FREQUENCIES } from "@/lib/constants";
 import { toast } from "sonner";
-import type { Space, SpaceFacility } from "@/types";
+import type { Space, SpaceFacility, PrepaidPurchase } from "@/types";
 import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
+import { PrepaidBanner } from "@/components/packages/prepaid-banner";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
 import { WaitlistDialog } from "@/components/bookings/waitlist-dialog";
 import { CreateRecurringDialog } from "@/components/bookings/create-recurring-dialog";
@@ -106,6 +107,11 @@ function NewBookingForm() {
   // Recurring booking
   const [isRecurring, setIsRecurring] = useState(false);
   const [recurringDialogOpen, setRecurringDialogOpen] = useState(false);
+
+  // Prepaid package detection
+  const [activePurchase, setActivePurchase] = useState<PrepaidPurchase | null>(null);
+  const [usePrepaid, setUsePrepaid] = useState(true);
+  const [prepaidChecking, setPrepaidChecking] = useState(false);
 
   // Waitlist
   const [waitlistDialogOpen, setWaitlistDialogOpen] = useState(false);
@@ -272,6 +278,31 @@ function NewBookingForm() {
     setSlotConflict(!isAvailable && availableSlots.length > 0);
   }, [startTime, endTime, availabilityWindows, availableSlots, spaceId, bookingDate]);
 
+  // Auto-detect prepaid purchase when customer + space are both selected
+  useEffect(() => {
+    const hasPrepaidTarget = (leadId || guestCompany) && spaceId;
+    if (!hasPrepaidTarget) {
+      setActivePurchase(null);
+      return;
+    }
+    let cancelled = false;
+    setPrepaidChecking(true);
+    const params = new URLSearchParams({ space_id: spaceId });
+    if (leadId) params.set("lead_id", leadId);
+    if (guestCompany) params.set("company_name", guestCompany);
+    fetch(`/api/prepaid-purchases/check?${params}`)
+      .then(r => r.json())
+      .then(json => {
+        if (!cancelled) {
+          setActivePurchase(json.data || null);
+          setUsePrepaid(!!json.data); // default to true when found
+        }
+      })
+      .catch(() => { if (!cancelled) setActivePurchase(null); })
+      .finally(() => { if (!cancelled) setPrepaidChecking(false); });
+    return () => { cancelled = true; };
+  }, [leadId, guestCompany, spaceId]);
+
   // Fetch contracts for dropdown
   useEffect(() => {
     if (customerType === "contract_holder" || customerType === "guest") {
@@ -388,6 +419,7 @@ function NewBookingForm() {
         notes: notes.trim() || undefined,
         hourly_rate: effectiveRate,
         advance_payment: advancePayment,
+        prepaid_purchase_id: (usePrepaid && activePurchase) ? activePurchase.id : undefined,
       };
 
       const res = await fetch("/api/bookings", {
@@ -463,6 +495,8 @@ function NewBookingForm() {
     setGuestEmail("");
     setGuestPhone("");
     setGuestCompany("");
+    setActivePurchase(null);
+    setUsePrepaid(true);
   };
 
   return (
@@ -825,6 +859,24 @@ function NewBookingForm() {
       {/* Customer History */}
       {bookerPhone && bookerPhone.length >= 10 && (
         <CustomerHistoryCard phone={bookerPhone} leadId={leadId || undefined} />
+      )}
+
+      {/* Prepaid Package Banner — auto-detected when customer + space are selected */}
+      {prepaidChecking && (
+        <div className="flex items-center gap-2 text-sm text-muted-foreground px-1">
+          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+          <TicketCheck className="h-3.5 w-3.5" />
+          Checking for active packages...
+        </div>
+      )}
+      {!prepaidChecking && activePurchase && (
+        <PrepaidBanner
+          purchase={activePurchase}
+          usePrepaid={usePrepaid}
+          onToggle={setUsePrepaid}
+          durationHours={durationHours}
+          effectiveRate={effectiveRate}
+        />
       )}
 
       {/* Facilities */}

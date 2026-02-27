@@ -34,6 +34,7 @@ import {
   Receipt as ReceiptIcon,
   Truck,
   Archive,
+  TicketCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -58,6 +59,7 @@ const allNavItems: NavItem[] = [
   { href: "/billing", label: "Billing", icon: IndianRupee, roles: null },
   { href: "/accounting", label: "Accounting", icon: Calculator, roles: null },
   { href: "/bookings", label: "Bookings", icon: CalendarClock, roles: null },
+  { href: "/packages", label: "Packages", icon: TicketCheck, roles: null },
   { href: "/vouchers", label: "Vouchers", icon: Wifi, roles: null },
 ];
 

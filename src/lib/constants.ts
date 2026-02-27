@@ -435,6 +435,7 @@ export const BOOKING_PAYMENT_STATUSES = [
   "paid",
   "waived",
   "posted_to_bill",
+  "prepaid",
 ] as const;
 
 export const BOOKING_PAYMENT_STATUS_LABELS: Record<string, string> = {
@@ -442,6 +443,7 @@ export const BOOKING_PAYMENT_STATUS_LABELS: Record<string, string> = {
   paid: "Paid",
   waived: "Waived",
   posted_to_bill: "Posted to Bill",
+  prepaid: "Prepaid",
 };
 
 export const BOOKING_PAYMENT_STATUS_COLORS: Record<string, string> = {
@@ -449,6 +451,7 @@ export const BOOKING_PAYMENT_STATUS_COLORS: Record<string, string> = {
   paid: "bg-green-100 text-green-800",
   waived: "bg-gray-100 text-gray-800",
   posted_to_bill: "bg-blue-100 text-blue-800",
+  prepaid: "bg-purple-100 text-purple-800",
 };
 
 export const PAYMENT_MODES = ["upi", "cash", "card", "online"] as const;
@@ -1209,4 +1212,28 @@ export const BILL_PAYMENT_MODE_LABELS: Record<string, string> = {
   cash: "Cash",
   upi: "UPI",
   bank_transfer: "Bank Transfer",
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Prepaid Package Constants
+// ─────────────────────────────────────────────────────────────────────────────
+export const CREDIT_TYPES = ["hours", "days"] as const;
+
+export const CREDIT_TYPE_LABELS: Record<string, string> = {
+  hours: "Hours",
+  days: "Days",
+};
+
+export const PREPAID_PURCHASE_STATUSES = ["active", "exhausted", "expired"] as const;
+
+export const PREPAID_PURCHASE_STATUS_LABELS: Record<string, string> = {
+  active: "Active",
+  exhausted: "Exhausted",
+  expired: "Expired",
+};
+
+export const PREPAID_PURCHASE_STATUS_COLORS: Record<string, string> = {
+  active: "bg-green-100 text-green-800",
+  exhausted: "bg-gray-100 text-gray-600",
+  expired: "bg-red-100 text-red-800",
 };

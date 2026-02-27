@@ -52,6 +52,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
 
   const [name, setName] = useState("");
   const [locationId, setLocationId] = useState("");
+  const [workspaceType, setWorkspaceType] = useState("");
   const [capacity, setCapacity] = useState(10);
   const [hourlyRate, setHourlyRate] = useState(500);
   const [description, setDescription] = useState("");
@@ -67,6 +68,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
     if (space) {
       setName(space.name);
       setLocationId(space.location_id);
+      setWorkspaceType(space.workspace_type || "");
       setCapacity(space.capacity);
       setHourlyRate(space.hourly_rate);
       setDescription(space.description || "");
@@ -84,6 +86,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
     } else {
       setName("");
       setLocationId("");
+      setWorkspaceType("");
       setCapacity(10);
       setHourlyRate(500);
       setDescription("");
@@ -133,6 +136,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
       const payload = {
         name: name.trim(),
         location_id: locationId,
+        workspace_type: workspaceType || undefined,
         capacity,
         hourly_rate: hourlyRate,
         description: description.trim() || undefined,
@@ -226,6 +230,22 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
                   onChange={(e) => setHourlyRate(Number(e.target.value))}
                 />
               </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="space-workspace-type">Space Type</Label>
+              <Select value={workspaceType} onValueChange={setWorkspaceType}>
+                <SelectTrigger id="space-workspace-type"><SelectValue placeholder="Select type (optional)" /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="">None</SelectItem>
+                  <SelectItem value="hot_desk">Hot Desk</SelectItem>
+                  <SelectItem value="dedicated_desk">Dedicated Desk</SelectItem>
+                  <SelectItem value="private_office">Private Office</SelectItem>
+                  <SelectItem value="meeting_room">Meeting Room</SelectItem>
+                  <SelectItem value="conference_room">Conference Room</SelectItem>
+                  <SelectItem value="virtual_office">Virtual Office</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             <div className="space-y-2">
