@@ -10,7 +10,7 @@ import {
   Clock,
   CalendarCheck,
   CalendarClock,
-  Check,
+  ClipboardList,
   UserCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +22,7 @@ import {
   CALL_OUTCOME_LABELS,
 } from "@/lib/constants";
 import type { Activity } from "@/types";
+import { ActivityForm } from "@/components/activities/activity-form";
 
 const ACTIVITY_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   call: Phone,
@@ -41,12 +42,13 @@ const ACTIVITY_COLORS: Record<string, string> = {
 
 interface ActivityItemProps {
   activity: Activity;
+  leadId: string;
   onActionComplete: () => void;
   /** When set to this activity's id, scroll to and briefly highlight the row */
   highlightId?: string;
 }
 
-function ActivityItem({ activity, onActionComplete, highlightId }: ActivityItemProps) {
+function ActivityItem({ activity, leadId, onActionComplete, highlightId }: ActivityItemProps) {
   const Icon = ACTIVITY_ICONS[activity.type] || FileText;
   const colorClass = ACTIVITY_COLORS[activity.type] || "bg-gray-100 text-gray-600";
 
@@ -54,6 +56,7 @@ function ActivityItem({ activity, onActionComplete, highlightId }: ActivityItemP
   const [isRescheduling, setIsRescheduling] = useState(false);
   const [newDate, setNewDate] = useState("");
   const [highlighted, setHighlighted] = useState(false);
+  const [logActivityOpen, setLogActivityOpen] = useState(false);
   const rowRef = useRef<HTMLDivElement>(null);
 
   // Scroll to & flash-highlight this row when the URL targets it
@@ -68,18 +71,19 @@ function ActivityItem({ activity, onActionComplete, highlightId }: ActivityItemP
 
   const hasPendingFollowUp = activity.follow_up_date && !activity.is_follow_up_done;
 
-  const handleClose = async () => {
-    setActing(true);
+  // Called after ActivityForm successfully logs the new activity —
+  // auto-closes the original follow-up and refreshes the timeline.
+  const handleLogAndClose = async () => {
     try {
       await fetch(`/api/activities/${activity.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ action: "close" }),
       });
-      onActionComplete();
-    } finally {
-      setActing(false);
+    } catch {
+      // Non-fatal — new activity was already logged successfully
     }
+    onActionComplete();
   };
 
   const handleReschedule = async () => {
@@ -183,15 +187,14 @@ function ActivityItem({ activity, onActionComplete, highlightId }: ActivityItemP
                   {/* Inline action buttons — only shown for pending follow-ups */}
                   {hasPendingFollowUp && (
                     <div className="flex items-center gap-1">
-                      {/* Close / Done */}
+                      {/* Log Activity — captures what was done and auto-closes the follow-up */}
                       <button
-                        onClick={handleClose}
-                        disabled={acting}
-                        className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-green-700 bg-green-50 border border-green-200 hover:bg-green-100 transition-colors disabled:opacity-40"
-                        title="Mark follow-up as done"
+                        onClick={() => setLogActivityOpen(true)}
+                        className="flex items-center gap-0.5 rounded px-1.5 py-0.5 text-[10px] font-medium text-green-700 bg-green-50 border border-green-200 hover:bg-green-100 transition-colors"
+                        title="Log what was done and close this follow-up"
                       >
-                        <Check className="h-2.5 w-2.5" />
-                        Done
+                        <ClipboardList className="h-2.5 w-2.5" />
+                        Log Activity
                       </button>
 
                       {/* Reschedule toggle */}
@@ -268,6 +271,14 @@ function ActivityItem({ activity, onActionComplete, highlightId }: ActivityItemP
           </div>
         </div>
       </div>
+
+      {/* Log Activity dialog — opened when rep acts on a pending follow-up */}
+      <ActivityForm
+        leadId={leadId}
+        open={logActivityOpen}
+        onOpenChange={setLogActivityOpen}
+        onSuccess={handleLogAndClose}
+      />
     </div>
   );
 }
@@ -320,6 +331,7 @@ export function ActivityTimeline({ leadId, highlightId }: ActivityTimelineProps)
         <ActivityItem
           key={activity.id}
           activity={activity}
+          leadId={leadId}
           onActionComplete={refetch}
           highlightId={highlightId}
         />
