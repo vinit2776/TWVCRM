@@ -462,7 +462,8 @@ export function CollectPaymentDialog({
                 <div className="space-y-2">
                   <Label>Payment Method</Label>
                   <Tabs value={paymentMode} onValueChange={setPaymentMode}>
-                    <TabsList className={`grid w-full ${razorpayEnabled ? "grid-cols-5" : "grid-cols-3"}`}>
+                    {/* "Send Link" is always shown — server handles "Razorpay not configured" error */}
+                    <TabsList className={`grid w-full ${razorpayEnabled ? "grid-cols-5" : "grid-cols-4"}`}>
                       <TabsTrigger value="cash" className="text-xs gap-1">
                         <Banknote className="h-3.5 w-3.5" />Cash
                       </TabsTrigger>
@@ -477,11 +478,9 @@ export function CollectPaymentDialog({
                           <Globe className="h-3.5 w-3.5" />Online
                         </TabsTrigger>
                       )}
-                      {razorpayEnabled && (
-                        <TabsTrigger value="send_link" className="text-xs gap-1">
-                          <Link2 className="h-3.5 w-3.5" />Send Link
-                        </TabsTrigger>
-                      )}
+                      <TabsTrigger value="send_link" className="text-xs gap-1">
+                        <Link2 className="h-3.5 w-3.5" />Send Link
+                      </TabsTrigger>
                     </TabsList>
 
                     {/* Cash */}
@@ -634,44 +633,42 @@ export function CollectPaymentDialog({
                       </TabsContent>
                     )}
 
-                    {/* Send Link */}
-                    {razorpayEnabled && (
-                      <TabsContent value="send_link" className="mt-3 space-y-3">
-                        {!linkUrl ? (
-                          <div className="rounded-md bg-blue-50 border border-blue-200 p-3 text-sm text-blue-800">
-                            <Link2 className="inline-block h-4 w-4 mr-1.5" />
-                            A Razorpay payment link for the full balance due ({formatCurrency(balanceDue)}) will be
-                            created and sent to the customer via SMS and email.
+                    {/* Send Link — always shown; server validates Razorpay credentials */}
+                    <TabsContent value="send_link" className="mt-3 space-y-3">
+                      {!linkUrl ? (
+                        <div className="rounded-md bg-blue-50 border border-blue-200 p-3 text-sm text-blue-800">
+                          <Link2 className="inline-block h-4 w-4 mr-1.5" />
+                          A Razorpay payment link for the full balance due ({formatCurrency(balanceDue)}) will be
+                          created and sent to the customer via SMS and email.
+                        </div>
+                      ) : (
+                        <div className="space-y-2">
+                          <div className="flex items-center gap-2 rounded-md bg-green-50 border border-green-200 px-3 py-2">
+                            <CheckCircle className="h-4 w-4 text-green-600 shrink-0" />
+                            <p className="text-sm text-green-800 flex-1">Link sent to customer via SMS &amp; email</p>
                           </div>
-                        ) : (
-                          <div className="space-y-2">
-                            <div className="flex items-center gap-2 rounded-md bg-green-50 border border-green-200 px-3 py-2">
-                              <CheckCircle className="h-4 w-4 text-green-600 shrink-0" />
-                              <p className="text-sm text-green-800 flex-1">Link sent to customer via SMS &amp; email</p>
-                            </div>
-                            <div className="flex items-center gap-2 rounded-md bg-muted/50 border px-3 py-2">
-                              <span className="flex-1 truncate text-xs font-mono">{linkUrl}</span>
-                              <button
-                                onClick={() => { navigator.clipboard.writeText(linkUrl); toast.success("Link copied"); }}
-                                title="Copy link"
-                                className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                              >
-                                <Copy className="h-3.5 w-3.5" />
-                              </button>
-                              <a
-                                href={linkUrl}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                title="Open link"
-                                className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                              >
-                                <ExternalLink className="h-3.5 w-3.5" />
-                              </a>
-                            </div>
+                          <div className="flex items-center gap-2 rounded-md bg-muted/50 border px-3 py-2">
+                            <span className="flex-1 truncate text-xs font-mono">{linkUrl}</span>
+                            <button
+                              onClick={() => { navigator.clipboard.writeText(linkUrl); toast.success("Link copied"); }}
+                              title="Copy link"
+                              className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </button>
+                            <a
+                              href={linkUrl}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              title="Open link"
+                              className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </a>
                           </div>
-                        )}
-                      </TabsContent>
-                    )}
+                        </div>
+                      )}
+                    </TabsContent>
                   </Tabs>
                 </div>
 
