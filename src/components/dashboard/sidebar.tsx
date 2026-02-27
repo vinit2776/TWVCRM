@@ -38,7 +38,6 @@ import {
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
-import { createClient } from "@/lib/supabase/client";
 
 type NavItem = {
   href: string;
@@ -95,17 +94,12 @@ export function Sidebar() {
   const [procOpen, setProcOpen] = useState(isProcurementActive);
 
   useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (user) {
-        const { data } = await supabase
-          .from("users")
-          .select("role")
-          .eq("auth_id", user.id)
-          .single();
-        setUserRole(data?.role || "sales_rep");
-      }
-    });
+    // Use same-origin API route to avoid browser extensions blocking
+    // direct cross-origin requests to supabase.co
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((json) => setUserRole(json.role || "sales_rep"))
+      .catch(() => setUserRole("sales_rep"));
   }, []);
 
   // Filter nav items based on role (null = visible to all roles)
