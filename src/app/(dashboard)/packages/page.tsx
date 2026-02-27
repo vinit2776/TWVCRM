@@ -52,8 +52,8 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
   const { locations } = useLocations();
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
-  const [locationId, setLocationId] = useState("");
-  const [workspaceType, setWorkspaceType] = useState("");
+  const [locationId, setLocationId] = useState("__none");
+  const [workspaceType, setWorkspaceType] = useState("__none");
   const [creditType, setCreditType] = useState("hours");
   const [totalCredits, setTotalCredits] = useState("");
   const [price, setPrice] = useState("");
@@ -64,14 +64,14 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
     if (pkg) {
       setName(pkg.name);
       setDescription(pkg.description || "");
-      setLocationId(pkg.location_id || "");
-      setWorkspaceType(pkg.workspace_type || "");
+      setLocationId(pkg.location_id || "__none");
+      setWorkspaceType(pkg.workspace_type || "__none");
       setCreditType(pkg.credit_type);
       setTotalCredits(String(pkg.total_credits));
       setPrice(String(pkg.price));
       setValidityDays(String(pkg.validity_days));
     } else {
-      setName(""); setDescription(""); setLocationId(""); setWorkspaceType("");
+      setName(""); setDescription(""); setLocationId("__none"); setWorkspaceType("__none");
       setCreditType("hours"); setTotalCredits(""); setPrice(""); setValidityDays("30");
     }
   }, [pkg, open]);
@@ -86,8 +86,8 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
       const body = {
         name: name.trim(),
         description: description.trim() || undefined,
-        location_id: locationId || undefined,
-        workspace_type: workspaceType || undefined,
+        location_id: (locationId && locationId !== "__none") ? locationId : undefined,
+        workspace_type: (workspaceType && workspaceType !== "__none") ? workspaceType : undefined,
         credit_type: creditType,
         total_credits: Number(totalCredits),
         price: Number(price),
@@ -131,7 +131,7 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
               <Select value={locationId} onValueChange={setLocationId}>
                 <SelectTrigger><SelectValue placeholder="All locations" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All locations</SelectItem>
+                  <SelectItem value="__none">All locations</SelectItem>
                   {locations.map(l => <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>)}
                 </SelectContent>
               </Select>
@@ -141,7 +141,7 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
               <Select value={workspaceType} onValueChange={setWorkspaceType}>
                 <SelectTrigger><SelectValue placeholder="All types" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">All types</SelectItem>
+                  <SelectItem value="__none">All types</SelectItem>
                   {WORKSPACE_TYPES.map(t => <SelectItem key={t} value={t}>{WORKSPACE_TYPE_LABELS[t]}</SelectItem>)}
                 </SelectContent>
               </Select>

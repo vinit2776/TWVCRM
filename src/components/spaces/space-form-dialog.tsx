@@ -52,7 +52,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
 
   const [name, setName] = useState("");
   const [locationId, setLocationId] = useState("");
-  const [workspaceType, setWorkspaceType] = useState("");
+  const [workspaceType, setWorkspaceType] = useState("__none");
   const [capacity, setCapacity] = useState(10);
   const [hourlyRate, setHourlyRate] = useState(500);
   const [description, setDescription] = useState("");
@@ -68,7 +68,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
     if (space) {
       setName(space.name);
       setLocationId(space.location_id);
-      setWorkspaceType(space.workspace_type || "");
+      setWorkspaceType(space.workspace_type || "__none");
       setCapacity(space.capacity);
       setHourlyRate(space.hourly_rate);
       setDescription(space.description || "");
@@ -86,7 +86,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
     } else {
       setName("");
       setLocationId("");
-      setWorkspaceType("");
+      setWorkspaceType("__none");
       setCapacity(10);
       setHourlyRate(500);
       setDescription("");
@@ -136,7 +136,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
       const payload = {
         name: name.trim(),
         location_id: locationId,
-        workspace_type: workspaceType || undefined,
+        workspace_type: (workspaceType && workspaceType !== "__none") ? workspaceType : undefined,
         capacity,
         hourly_rate: hourlyRate,
         description: description.trim() || undefined,
@@ -237,7 +237,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
               <Select value={workspaceType} onValueChange={setWorkspaceType}>
                 <SelectTrigger id="space-workspace-type"><SelectValue placeholder="Select type (optional)" /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="">None</SelectItem>
+                  <SelectItem value="__none">None</SelectItem>
                   <SelectItem value="hot_desk">Hot Desk</SelectItem>
                   <SelectItem value="dedicated_desk">Dedicated Desk</SelectItem>
                   <SelectItem value="private_office">Private Office</SelectItem>
