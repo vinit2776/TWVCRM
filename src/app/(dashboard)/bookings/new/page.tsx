@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Loader2, Clock, IndianRupee, Search, Phone, User2, Building2, Banknote, CreditCard, Smartphone, Repeat, ListOrdered } from "lucide-react";
+import { ArrowLeft, Loader2, Clock, IndianRupee, Search, Phone, User2, Building2, Banknote, CreditCard, Smartphone, Repeat, ListOrdered, Link2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -408,6 +408,24 @@ function NewBookingForm() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({ type: "confirmation" }),
           }).catch(() => {});
+        }
+
+        // If Send Link mode → auto-create payment link (fire-and-forget)
+        if (collectAdvancePayment && advancePaymentMode === "send_link" && bookingId) {
+          fetch("/api/payments/create-payment-link", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ booking_id: bookingId }),
+          })
+            .then((r) => r.json())
+            .then((json) => {
+              if (json.data?.payment_link_url) {
+                toast.success("Payment link sent to customer via SMS & email");
+              } else {
+                toast.error(json.error || "Failed to send payment link");
+              }
+            })
+            .catch(() => toast.error("Failed to send payment link"));
         }
 
         // If advance payment was UPI/Razorpay → redirect to detail page to complete
@@ -881,11 +899,12 @@ function NewBookingForm() {
                   </div>
                   <div className="space-y-2">
                     <Label>Payment Method</Label>
-                    <div className="flex gap-1.5">
+                    <div className="flex gap-1.5 flex-wrap">
                       {[
                         { mode: "cash", icon: Banknote, label: "Cash" },
                         { mode: "card", icon: CreditCard, label: "Card" },
                         { mode: "upi", icon: Smartphone, label: "UPI" },
+                        { mode: "send_link", icon: Link2, label: "Send Link" },
                       ].map(({ mode, icon: Icon, label }) => (
                         <Button
                           key={mode}
@@ -922,6 +941,12 @@ function NewBookingForm() {
                   <p className="text-xs text-amber-700 bg-amber-50 rounded px-2.5 py-1.5">
                     <Smartphone className="inline h-3.5 w-3.5 mr-1" />
                     After booking is created, you&apos;ll be redirected to complete UPI payment with QR code &amp; screenshot upload.
+                  </p>
+                )}
+                {advancePaymentMode === "send_link" && (
+                  <p className="text-xs text-blue-700 bg-blue-50 rounded px-2.5 py-1.5">
+                    <Link2 className="inline h-3.5 w-3.5 mr-1" />
+                    A Razorpay payment link will be sent to the customer via SMS and email after the booking is created.
                   </p>
                 )}
               </div>

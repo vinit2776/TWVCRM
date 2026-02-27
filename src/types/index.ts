@@ -219,6 +219,7 @@ export type ProposalStatus = "draft" | "sent" | "viewed" | "accepted" | "rejecte
 export interface LineItem {
   description: string;
   quantity: number;
+  unit?: string;
   unit_price: number;
   total: number;
 }

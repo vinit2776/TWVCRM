@@ -295,6 +295,7 @@ export default function ProposalDetailPage({
                         Description
                       </th>
                       <th className="px-4 py-3 text-right font-medium">Qty</th>
+                      <th className="px-4 py-3 text-right font-medium">Unit</th>
                       <th className="px-4 py-3 text-right font-medium">
                         Unit Price
                       </th>
@@ -309,6 +310,9 @@ export default function ProposalDetailPage({
                         <td className="px-4 py-3">{item.description}</td>
                         <td className="px-4 py-3 text-right">
                           {item.quantity}
+                        </td>
+                        <td className="px-4 py-3 text-right text-muted-foreground">
+                          {item.unit || "—"}
                         </td>
                         <td className="px-4 py-3 text-right">
                           {formatCurrency(item.unit_price)}

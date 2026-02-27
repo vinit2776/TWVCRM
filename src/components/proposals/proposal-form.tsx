@@ -87,6 +87,7 @@ export function ProposalForm({
       items: validItems.map((item) => ({
         description: item.description,
         quantity: Math.max(1, item.quantity),
+        unit: item.unit || undefined,
         unit_price: item.unit_price,
         total: Math.max(1, item.quantity) * item.unit_price,
       })),

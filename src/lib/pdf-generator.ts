@@ -197,13 +197,14 @@ function generatePDF(options: PDFOptions): jsPDF {
     String(i + 1),
     item.description,
     String(item.quantity),
+    item.unit || "",
     formatCurrencyPDF(item.unit_price),
     formatCurrencyPDF(item.total),
   ]);
 
   autoTable(doc, {
     startY: y,
-    head: [["#", "Description", "Qty", "Unit Price", "Total"]],
+    head: [["#", "Description", "Qty", "Unit", "Unit Price", "Total"]],
     body: tableRows,
     theme: "striped",
     headStyles: {

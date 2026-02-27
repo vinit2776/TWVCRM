@@ -8,6 +8,7 @@ import { formatCurrency } from "@/lib/utils";
 export interface LineItemData {
   description: string;
   quantity: number;
+  unit?: string;
   unit_price: number;
   total: number;
 }
@@ -30,7 +31,7 @@ export function LineItemsEditor({
   onDiscountChange,
 }: LineItemsEditorProps) {
   const addItem = () => {
-    onChange([...items, { description: "", quantity: 1, unit_price: 0, total: 0 }]);
+    onChange([...items, { description: "", quantity: 1, unit: "", unit_price: 0, total: 0 }]);
   };
 
   const removeItem = (index: number) => {
@@ -43,6 +44,8 @@ export function LineItemsEditor({
 
     if (field === "description") {
       item.description = value as string;
+    } else if (field === "unit") {
+      item.unit = value as string;
     } else if (field === "quantity") {
       item.quantity = Number(value) || 0;
       item.total = item.quantity * item.unit_price;
@@ -64,8 +67,9 @@ export function LineItemsEditor({
     <div className="space-y-4">
       {/* Header */}
       <div className="grid grid-cols-12 gap-2 text-xs font-medium text-muted-foreground px-1">
-        <div className="col-span-5">Description</div>
-        <div className="col-span-2">Qty</div>
+        <div className="col-span-4">Description</div>
+        <div className="col-span-1">Qty</div>
+        <div className="col-span-2">Unit</div>
         <div className="col-span-2">Unit Price</div>
         <div className="col-span-2 text-right">Total</div>
         <div className="col-span-1" />
@@ -74,19 +78,26 @@ export function LineItemsEditor({
       {/* Items */}
       {items.map((item, index) => (
         <div key={index} className="grid grid-cols-12 gap-2 items-center">
-          <div className="col-span-5">
+          <div className="col-span-4">
             <Input
               placeholder="Item description"
               value={item.description}
               onChange={(e) => updateItem(index, "description", e.target.value)}
             />
           </div>
-          <div className="col-span-2">
+          <div className="col-span-1">
             <Input
               type="number"
               min={1}
               value={item.quantity || ""}
               onChange={(e) => updateItem(index, "quantity", e.target.value)}
+            />
+          </div>
+          <div className="col-span-2">
+            <Input
+              placeholder="hrs, days…"
+              value={item.unit || ""}
+              onChange={(e) => updateItem(index, "unit", e.target.value)}
             />
           </div>
           <div className="col-span-2">
