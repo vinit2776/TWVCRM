@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 
-// POST — create a Razorpay Payment Link for a booking
+// POST — create a Razorpay Payment Link for a booking (or resend an existing one)
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -33,6 +33,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Razorpay credentials not configured" }, { status: 400 });
   }
 
+  // Build auth header early — needed in both the "already exists" and "new link" paths
+  const auth = Buffer.from(`${creds.razorpay_key_id}:${creds.razorpay_key_secret}`).toString("base64");
+
   // Fetch the booking with customer details
   const { data: booking } = await supabase
     .from("bookings")
@@ -46,13 +49,55 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Cannot create payment link for a cancelled booking" }, { status: 400 });
   }
 
-  // If a payment link already exists and is usable, return it
+  // Resolve customer contact details — needed whether we're creating or resending
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lead = booking.lead as any;
+  const customerName = lead?.first_name
+    ? `${lead.first_name} ${lead.last_name}`
+    : booking.guest_name || "Guest";
+  const customerEmail = lead?.email || booking.guest_email || undefined;
+  const customerPhone = (() => {
+    const raw = lead?.phone || booking.guest_phone;
+    if (!raw) return undefined;
+    let phone = String(raw).replace(/[\s-]/g, "");
+    if (phone.startsWith("+")) phone = phone.substring(1);
+    if (!phone.startsWith("91") && phone.length === 10) phone = "91" + phone;
+    return "+" + phone;
+  })();
+
+  const notifiedViaSms = !!customerPhone;
+  const notifiedViaEmail = !!customerEmail;
+
+  // If a payment link already exists, resend notifications via Razorpay's notify endpoints
+  // instead of silently returning the cached URL with no customer communication.
   if (booking.razorpay_payment_link_id && booking.razorpay_payment_link_url) {
+    const linkId = booking.razorpay_payment_link_id;
+    const rzpBase = `https://api.razorpay.com/v1/payment_links/${linkId}/notify`;
+    const headers = { Authorization: `Basic ${auth}` };
+
+    const notifyResults = await Promise.allSettled([
+      notifiedViaSms
+        ? fetch(`${rzpBase}/sms`, { method: "POST", headers })
+        : Promise.resolve(null),
+      notifiedViaEmail
+        ? fetch(`${rzpBase}/email`, { method: "POST", headers })
+        : Promise.resolve(null),
+    ]);
+
+    // Log any notify failures (non-fatal — we still return the link URL)
+    notifyResults.forEach((r, i) => {
+      if (r.status === "rejected") {
+        console.error(`Razorpay notify[${i === 0 ? "sms" : "email"}] failed:`, r.reason);
+      }
+    });
+
     return NextResponse.json({
       data: {
         payment_link_id: booking.razorpay_payment_link_id,
         payment_link_url: booking.razorpay_payment_link_url,
         already_exists: true,
+        notified_via_sms: notifiedViaSms,
+        notified_via_email: notifiedViaEmail,
       },
     });
   }
@@ -71,20 +116,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "No balance due for this booking" }, { status: 400 });
   }
 
-  // Prepare customer details
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const lead = booking.lead as any;
-  const customerName = lead?.first_name
-    ? `${lead.first_name} ${lead.last_name}`
-    : booking.guest_name || "Guest";
-  const customerEmail = lead?.email || booking.guest_email || undefined;
-  const customerPhone = lead?.phone || booking.guest_phone || undefined;
-
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const spaceName = (booking.space as any)?.name || "Conference Room";
 
   const amountInPaise = Math.round(balanceDue * 100);
-  const auth = Buffer.from(`${creds.razorpay_key_id}:${creds.razorpay_key_secret}`).toString("base64");
 
   // Expire link in 7 days
   const expireBy = Math.floor(Date.now() / 1000) + 7 * 24 * 60 * 60;
@@ -98,8 +133,8 @@ export async function POST(request: NextRequest) {
     reference_id: booking.booking_number || booking_id,
     expire_by: expireBy,
     notify: {
-      sms: !!customerPhone,
-      email: !!customerEmail,
+      sms: notifiedViaSms,
+      email: notifiedViaEmail,
     },
     reminder_enable: true,
     notes: {
@@ -117,18 +152,12 @@ export async function POST(request: NextRequest) {
   payload.callback_url = `${appUrl}/pay/${token || booking_id}?razorpay_callback=true`;
   payload.callback_method = "get";
 
-  // Add customer details if available
+  // Add customer contact details so Razorpay can send SMS/email
   if (customerName || customerEmail || customerPhone) {
     payload.customer = {};
     if (customerName) payload.customer.name = customerName;
     if (customerEmail) payload.customer.email = customerEmail;
-    if (customerPhone) {
-      // Razorpay expects phone in format "+91XXXXXXXXXX" or "91XXXXXXXXXX"
-      let phone = customerPhone.replace(/[\s-]/g, "");
-      if (phone.startsWith("+")) phone = phone.substring(1);
-      if (!phone.startsWith("91") && phone.length === 10) phone = "91" + phone;
-      payload.customer.contact = "+" + phone;
-    }
+    if (customerPhone) payload.customer.contact = customerPhone;
   }
 
   try {
@@ -166,6 +195,8 @@ export async function POST(request: NextRequest) {
         payment_link_url: linkData.short_url,
         amount: balanceDue,
         expires_at: new Date(expireBy * 1000).toISOString(),
+        notified_via_sms: notifiedViaSms,
+        notified_via_email: notifiedViaEmail,
       },
     });
   } catch (e) {

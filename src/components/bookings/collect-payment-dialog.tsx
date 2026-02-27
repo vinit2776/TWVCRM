@@ -69,6 +69,7 @@ export function CollectPaymentDialog({
   // Send Link tab state
   const [linkUrl, setLinkUrl] = useState<string | null>(null);
   const [linkSending, setLinkSending] = useState(false);
+  const [linkNotifiedVia, setLinkNotifiedVia] = useState<string | null>(null);
 
   // QR code signed URL & lightbox
   const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
@@ -97,6 +98,7 @@ export function CollectPaymentDialog({
       fetchPayments();
       setLinkUrl(null);
       setLinkSending(false);
+      setLinkNotifiedVia(null);
     }
   }, [open, fetchPayments]);
 
@@ -350,7 +352,23 @@ export function CollectPaymentDialog({
         return;
       }
       setLinkUrl(json.data?.payment_link_url);
-      toast.success(json.data?.already_exists ? "Existing link retrieved" : "Payment link sent to customer");
+
+      // Build toast based on what notifications were actually sent
+      const { notified_via_sms, notified_via_email } = json.data ?? {};
+      let notifiedVia: string | null = null;
+      if (notified_via_sms && notified_via_email) {
+        notifiedVia = "SMS & email";
+        toast.success("Payment link sent to customer via SMS & email");
+      } else if (notified_via_sms) {
+        notifiedVia = "SMS";
+        toast.success("Payment link sent to customer via SMS");
+      } else if (notified_via_email) {
+        notifiedVia = "email";
+        toast.success("Payment link sent to customer via email");
+      } else {
+        toast.success("Payment link created — share the link below with the customer");
+      }
+      setLinkNotifiedVia(notifiedVia);
     } finally {
       setLinkSending(false);
     }
@@ -645,7 +663,11 @@ export function CollectPaymentDialog({
                         <div className="space-y-2">
                           <div className="flex items-center gap-2 rounded-md bg-green-50 border border-green-200 px-3 py-2">
                             <CheckCircle className="h-4 w-4 text-green-600 shrink-0" />
-                            <p className="text-sm text-green-800 flex-1">Link sent to customer via SMS &amp; email</p>
+                            <p className="text-sm text-green-800 flex-1">
+                              {linkNotifiedVia
+                                ? `Link sent to customer via ${linkNotifiedVia}`
+                                : "Link created — share it with the customer"}
+                            </p>
                           </div>
                           <div className="flex items-center gap-2 rounded-md bg-muted/50 border px-3 py-2">
                             <span className="flex-1 truncate text-xs font-mono">{linkUrl}</span>
