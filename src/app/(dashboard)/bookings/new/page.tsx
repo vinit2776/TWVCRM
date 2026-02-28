@@ -1105,13 +1105,51 @@ function NewBookingForm() {
                 <span>{formatCurrency(facilityCost)}</span>
               </div>
             )}
-            <div className="flex justify-between font-bold text-base pt-1 border-t">
-              <span>Total</span>
-              <span className="flex items-center gap-1">
-                <IndianRupee className="h-4 w-4" />
-                {formatCurrency(totalAmount)}
-              </span>
-            </div>
+            {/* Gap 3: Prepaid-aware pricing rows */}
+            {usePrepaid && activePurchase && (() => {
+              const purchase = activePurchase;
+              const creditType = purchase.credit_type;
+              let coveredAmount = 0;
+              let coverageLabel = "";
+              if (creditType === "bookings" || creditType === "days") {
+                coveredAmount = roomCost;
+                coverageLabel = "Package applied";
+              } else {
+                const coveredHours = Math.min(purchase.credits_remaining, durationHours);
+                coveredAmount = coveredHours * effectiveRate;
+                coverageLabel = coveredHours < durationHours
+                  ? `Package covers (${coveredHours}h)`
+                  : "Package applied";
+              }
+              const topUpDue = Math.max(0, roomCost + facilityCost - coveredAmount);
+              return (
+                <>
+                  <div className="flex justify-between text-sm text-green-700">
+                    <span className="flex items-center gap-1">
+                      <TicketCheck className="h-3.5 w-3.5" />
+                      {coverageLabel}
+                    </span>
+                    <span>− {formatCurrency(coveredAmount)}</span>
+                  </div>
+                  <div className="flex justify-between font-bold text-base pt-1 border-t">
+                    <span>{topUpDue > 0 ? "Top-up due" : "Total due"}</span>
+                    <span className="flex items-center gap-1">
+                      <IndianRupee className="h-4 w-4" />
+                      {formatCurrency(topUpDue)}
+                    </span>
+                  </div>
+                </>
+              );
+            })()}
+            {!(usePrepaid && activePurchase) && (
+              <div className="flex justify-between font-bold text-base pt-1 border-t">
+                <span>Total</span>
+                <span className="flex items-center gap-1">
+                  <IndianRupee className="h-4 w-4" />
+                  {formatCurrency(totalAmount)}
+                </span>
+              </div>
+            )}
           </div>
 
           <Button
@@ -1122,6 +1160,8 @@ function NewBookingForm() {
           >
             {saving ? (
               <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Creating Booking...</>
+            ) : (usePrepaid && activePurchase) ? (
+              "Confirm & Apply Package"
             ) : (
               "Confirm Booking"
             )}

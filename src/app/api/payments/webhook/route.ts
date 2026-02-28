@@ -136,6 +136,21 @@ export async function POST(request: NextRequest) {
         : 0;
     const razorpayPaymentId = paymentEntity?.id || null;
 
+    // Gap 2: Check if this payment link belongs to a prepaid purchase first
+    const { data: purchase } = await supabase
+      .from("prepaid_purchases")
+      .select("id, payment_status")
+      .eq("razorpay_payment_link_id", paymentLinkId)
+      .maybeSingle();
+
+    if (purchase && purchase.payment_status !== "paid") {
+      await supabase
+        .from("prepaid_purchases")
+        .update({ payment_status: "paid", updated_at: new Date().toISOString() })
+        .eq("id", purchase.id);
+      return NextResponse.json({ status: "ok", entity: "prepaid_purchase" });
+    }
+
     // Find the booking by razorpay_payment_link_id
     const { data: booking } = await supabase
       .from("bookings")
@@ -144,7 +159,7 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (!booking) {
-      return NextResponse.json({ status: "ignored", reason: "No matching booking for payment link" });
+      return NextResponse.json({ status: "ignored", reason: "No matching booking or purchase for payment link" });
     }
 
     // Check if we already recorded this payment (idempotency)

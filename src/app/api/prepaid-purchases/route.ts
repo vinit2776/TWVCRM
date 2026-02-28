@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 // GET — list purchases (optionally filtered)
 export async function GET(request: NextRequest) {
@@ -61,6 +61,8 @@ export async function POST(request: NextRequest) {
     payment_mode,
     payment_reference,
     notes,
+    notify_sms,
+    notify_email,
   } = body;
 
   if (!package_id) return NextResponse.json({ error: "package_id is required" }, { status: 400 });
@@ -84,6 +86,9 @@ export async function POST(request: NextRequest) {
   expiresAt.setDate(expiresAt.getDate() + pkg.validity_days);
   const expiresAtStr = expiresAt.toISOString().split("T")[0]; // DATE only
 
+  // payment_link mode: purchase starts as pending_payment; others are immediately paid
+  const paymentStatus = payment_mode === "payment_link" ? "pending_payment" : "paid";
+
   const { data, error } = await supabase
     .from("prepaid_purchases")
     .insert({
@@ -96,6 +101,7 @@ export async function POST(request: NextRequest) {
       credits_used: 0,
       price_paid: pkg.price,
       payment_mode,
+      payment_status: paymentStatus,
       payment_reference: payment_reference?.trim() || null,
       expires_at: expiresAtStr,
       status: "active",
@@ -113,5 +119,92 @@ export async function POST(request: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const creditsRemaining = Number(data.total_credits) - Number(data.credits_used);
-  return NextResponse.json({ data: { ...data, credits_remaining: creditsRemaining } }, { status: 201 });
+  const result: Record<string, unknown> = { ...data, credits_remaining: creditsRemaining };
+
+  // For payment_link mode: create a Razorpay payment link
+  if (payment_mode === "payment_link") {
+    try {
+      const adminSupabase = await createAdminClient();
+      const { data: settings } = await adminSupabase
+        .from("app_settings")
+        .select("key, value")
+        .in("key", ["razorpay_key_id", "razorpay_key_secret", "razorpay_enabled"]);
+
+      const creds: Record<string, string> = {};
+      (settings || []).forEach((s: { key: string; value: string }) => { creds[s.key] = s.value; });
+
+      if (creds.razorpay_enabled === "true" && creds.razorpay_key_id && creds.razorpay_key_secret) {
+        const auth = Buffer.from(`${creds.razorpay_key_id}:${creds.razorpay_key_secret}`).toString("base64");
+        const amountInPaise = Math.round(Number(pkg.price) * 100);
+        const expireBy = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60; // 30 days
+
+        // Resolve lead contact details for notification
+        const lead = data.lead as Record<string, unknown> | null;
+        const customerName = lead?.first_name ? `${lead.first_name} ${lead.last_name}` : company_name || undefined;
+        const customerEmail = (lead?.email as string) || undefined;
+        const rawPhone = (lead?.phone as string) || undefined;
+        const customerPhone = (() => {
+          if (!rawPhone) return undefined;
+          let phone = String(rawPhone).replace(/[\s-]/g, "");
+          if (phone.startsWith("+")) phone = phone.substring(1);
+          if (!phone.startsWith("91") && phone.length === 10) phone = "91" + phone;
+          return "+" + phone;
+        })();
+
+        const rzpPayload: Record<string, unknown> = {
+          amount: amountInPaise,
+          currency: "INR",
+          description: `Package: ${pkg.name} — The WorkVilla`,
+          reference_id: data.id,
+          expire_by: expireBy,
+          notify: {
+            sms: notify_sms === true && !!customerPhone,
+            email: notify_email === true && !!customerEmail,
+          },
+          reminder_enable: true,
+          notes: {
+            purchase_id: data.id,
+            package_name: pkg.name,
+          },
+        };
+
+        if (customerName || customerEmail || customerPhone) {
+          rzpPayload.customer = {
+            ...(customerName ? { name: customerName } : {}),
+            ...(customerEmail ? { email: customerEmail } : {}),
+            ...(customerPhone ? { contact: customerPhone } : {}),
+          };
+        }
+
+        const rzpRes = await fetch("https://api.razorpay.com/v1/payment_links", {
+          method: "POST",
+          headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
+          body: JSON.stringify(rzpPayload),
+        });
+
+        if (rzpRes.ok) {
+          const linkData = await rzpRes.json();
+          await supabase
+            .from("prepaid_purchases")
+            .update({
+              razorpay_payment_link_id: linkData.id,
+              razorpay_payment_link_url: linkData.short_url,
+            })
+            .eq("id", data.id);
+          result.razorpay_payment_link_id = linkData.id;
+          result.razorpay_payment_link_url = linkData.short_url;
+          result.payment_link_url = linkData.short_url;
+        } else {
+          const rzpErr = await rzpRes.json().catch(() => null);
+          console.error("Razorpay payment link error:", rzpErr);
+          // Non-fatal: purchase is already created; return without link
+        }
+      }
+    } catch (e) {
+      console.error("Failed to create Razorpay link for purchase:", e);
+      // Non-fatal
+    }
+  }
+
+  return NextResponse.json({ data: result }, { status: 201 });
 }

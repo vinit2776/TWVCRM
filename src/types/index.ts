@@ -1522,6 +1522,8 @@ export interface PrepaidPackage {
   location_id?: string;
   location?: Location;
   workspace_type?: WorkspaceType;
+  space_id?: string;
+  space?: Space;
   credit_type: CreditType;
   total_credits: number;
   price: number;
@@ -1551,6 +1553,9 @@ export interface PrepaidPurchase {
   purchased_at: string;
   expires_at: string;
   status: PrepaidPurchaseStatus;
+  payment_status: 'pending_payment' | 'paid';
+  razorpay_payment_link_id?: string;
+  razorpay_payment_link_url?: string;
   notes?: string;
   sold_by?: string;
   seller?: User;

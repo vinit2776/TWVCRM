@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { Loader2, Search } from "lucide-react";
+import { Loader2, Search, Users, User, Link2 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -39,6 +39,7 @@ const PAYMENT_MODES = [
   { value: "cash", label: "Cash" },
   { value: "upi", label: "UPI" },
   { value: "card", label: "Card" },
+  { value: "payment_link", label: "Send Payment Link" },
 ];
 
 export function SellPackageDialog({
@@ -63,9 +64,20 @@ export function SellPackageDialog({
   const suggestionsRef = useRef<HTMLDivElement>(null);
   const searchTimeout = useRef<NodeJS.Timeout | null>(null);
 
+  // Gap 4: Scope — "individual" or "company"
+  const [scope, setScope] = useState<"individual" | "company">("individual");
   const [companyName, setCompanyName] = useState("");
+
+  // Gap 4: Contract lookup for informational note
+  const [contractNote, setContractNote] = useState<string | null>(null);
+
+  // Gap 2: Payment mode
   const [paymentMode, setPaymentMode] = useState("cash");
   const [paymentReference, setPaymentReference] = useState("");
+  // Payment link notify options
+  const [notifySms, setNotifySms] = useState(true);
+  const [notifyEmail, setNotifyEmail] = useState(true);
+
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
 
@@ -126,6 +138,9 @@ export function SellPackageDialog({
   const handleCustomerInput = (val: string) => {
     setCustomerQuery(val);
     setSelectedLead(null);
+    setContractNote(null);
+    setScope("individual");
+    setCompanyName("");
     if (searchTimeout.current) clearTimeout(searchTimeout.current);
     searchTimeout.current = setTimeout(() => searchLeads(val), 300);
   };
@@ -133,8 +148,27 @@ export function SellPackageDialog({
   const selectLead = (lead: LeadSuggestion) => {
     setSelectedLead(lead);
     setCustomerQuery(lead.phone ? `${lead.phone} — ${lead.name}` : lead.name);
-    setCompanyName(lead.company || "");
     setShowSuggestions(false);
+    // Default scope to individual; auto-fill company in case user switches
+    setScope("individual");
+    setCompanyName(lead.company || "");
+
+    // Gap 4: Check if a contract exists for this lead (informational only)
+    if (lead.id) {
+      fetch(`/api/contracts?lead_id=${lead.id}&limit=1`)
+        .then(r => r.json())
+        .then(json => {
+          const contract = (json.data || [])[0];
+          if (contract) {
+            setContractNote(
+              `Contract ${contract.contract_number} found for ${lead.company || lead.name}${contract.seats ? ` (${contract.seats} seats)` : ""} — team bookings will auto-detect this package.`
+            );
+          } else {
+            setContractNote(null);
+          }
+        })
+        .catch(() => setContractNote(null));
+    }
   };
 
   const handleSubmit = async () => {
@@ -145,6 +179,11 @@ export function SellPackageDialog({
     }
     if (!paymentMode) { toast.error("Please select a payment mode"); return; }
 
+    // Determine the company_name to send based on scope
+    const resolvedCompanyName = scope === "company"
+      ? (companyName.trim() || selectedLead?.company || undefined)
+      : undefined;
+
     setSaving(true);
     try {
       const res = await fetch("/api/prepaid-purchases", {
@@ -153,15 +192,26 @@ export function SellPackageDialog({
         body: JSON.stringify({
           package_id: packageId,
           lead_id: selectedLead?.id || undefined,
-          company_name: companyName.trim() || selectedLead?.company || undefined,
+          company_name: resolvedCompanyName,
           payment_mode: paymentMode,
           payment_reference: paymentReference.trim() || undefined,
           notes: notes.trim() || undefined,
+          notify_sms: paymentMode === "payment_link" ? notifySms : undefined,
+          notify_email: paymentMode === "payment_link" ? notifyEmail : undefined,
         }),
       });
       const json = await res.json();
       if (res.ok) {
-        toast.success(`Package sold — ${selectedPackage?.total_credits} ${CREDIT_TYPE_LABELS[selectedPackage?.credit_type || "hours"]} issued`);
+        if (paymentMode === "payment_link") {
+          const linkUrl = json.data?.payment_link_url || json.data?.razorpay_payment_link_url;
+          if (linkUrl) {
+            toast.success("Package created — payment link sent to customer");
+          } else {
+            toast.success("Package created — payment pending (no Razorpay link generated)");
+          }
+        } else {
+          toast.success(`Package sold — ${selectedPackage?.total_credits} ${CREDIT_TYPE_LABELS[selectedPackage?.credit_type || "hours"]} issued`);
+        }
         onSuccess();
         handleClose();
       } else {
@@ -180,16 +230,20 @@ export function SellPackageDialog({
     setCustomerQuery("");
     setSuggestions([]);
     setSelectedLead(null);
+    setScope("individual");
     setCompanyName("");
+    setContractNote(null);
     setPaymentMode("cash");
     setPaymentReference("");
+    setNotifySms(true);
+    setNotifyEmail(true);
     setNotes("");
     onOpenChange(false);
   };
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Sell Package</DialogTitle>
         </DialogHeader>
@@ -220,6 +274,7 @@ export function SellPackageDialog({
               <p className="text-xs text-muted-foreground">
                 Valid for {selectedPackage.validity_days} days from purchase
                 {selectedPackage.workspace_type && ` · ${selectedPackage.workspace_type.replace(/_/g, " ")}`}
+                {(selectedPackage.space as { name?: string } | undefined)?.name && ` · ${(selectedPackage.space as { name?: string }).name} only`}
               </p>
             )}
           </div>
@@ -259,29 +314,101 @@ export function SellPackageDialog({
             </div>
           </div>
 
-          {/* Company name — for corporate redemption */}
-          <div className="space-y-2">
-            <Label>Company Name <span className="text-muted-foreground text-xs">(for corporate redemption — any booking with this company can redeem)</span></Label>
-            <Input
-              value={companyName}
-              onChange={(e) => setCompanyName(e.target.value)}
-              placeholder="e.g. Acme Corp"
-            />
-          </div>
+          {/* Gap 4: Who can use this package? — only shown when a lead is selected */}
+          {selectedLead && (
+            <div className="space-y-2">
+              <Label>Who can use this package?</Label>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => setScope("individual")}
+                  className={`flex-1 flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors ${
+                    scope === "individual"
+                      ? "border-primary bg-primary/5 text-primary"
+                      : "border-border text-muted-foreground hover:bg-muted/30"
+                  }`}
+                >
+                  <User className="h-4 w-4 shrink-0" />
+                  <div className="text-left">
+                    <div className="font-medium">This customer only</div>
+                  </div>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setScope("company");
+                    if (!companyName && selectedLead.company) setCompanyName(selectedLead.company);
+                  }}
+                  className={`flex-1 flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors ${
+                    scope === "company"
+                      ? "border-primary bg-primary/5 text-primary"
+                      : "border-border text-muted-foreground hover:bg-muted/30"
+                  }`}
+                  disabled={!selectedLead.company}
+                >
+                  <Users className="h-4 w-4 shrink-0" />
+                  <div className="text-left">
+                    <div className="font-medium">Entire company &amp; team</div>
+                    {selectedLead.company && (
+                      <div className="text-xs opacity-70">{selectedLead.company}</div>
+                    )}
+                  </div>
+                </button>
+              </div>
+
+              {scope === "company" && companyName && (
+                <div className="rounded-md bg-blue-50 px-3 py-2 text-xs text-blue-700">
+                  Any booking by a <strong>{companyName}</strong> member will be able to redeem this package.
+                  {contractNote && (
+                    <div className="mt-1 text-blue-600">{contractNote}</div>
+                  )}
+                </div>
+              )}
+
+              {scope === "individual" && !selectedLead.company && (
+                <p className="text-xs text-muted-foreground">
+                  Company-wide redemption requires the lead to have a company name set.
+                </p>
+              )}
+            </div>
+          )}
+
+          {/* Fallback: company name (for anonymous corporate sales) */}
+          {!selectedLead && (
+            <div className="space-y-2">
+              <Label>Company Name <span className="text-muted-foreground text-xs">(for corporate redemption — any booking with this company can redeem)</span></Label>
+              <Input
+                value={companyName}
+                onChange={(e) => setCompanyName(e.target.value)}
+                placeholder="e.g. Acme Corp"
+              />
+            </div>
+          )}
 
           {/* Payment */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-2">
-              <Label>Payment Mode *</Label>
-              <Select value={paymentMode} onValueChange={setPaymentMode}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {PAYMENT_MODES.map(m => (
-                    <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+          <div className="space-y-2">
+            <Label>Payment Mode *</Label>
+            <div className="grid grid-cols-2 gap-2">
+              {PAYMENT_MODES.map(m => (
+                <button
+                  key={m.value}
+                  type="button"
+                  onClick={() => setPaymentMode(m.value)}
+                  className={`flex items-center gap-2 rounded-md border px-3 py-2 text-sm transition-colors ${
+                    paymentMode === m.value
+                      ? "border-primary bg-primary/5 text-primary font-medium"
+                      : "border-border text-muted-foreground hover:bg-muted/30"
+                  }`}
+                >
+                  {m.value === "payment_link" && <Link2 className="h-3.5 w-3.5" />}
+                  {m.label}
+                </button>
+              ))}
             </div>
+          </div>
+
+          {/* Payment reference — hidden for payment_link */}
+          {paymentMode !== "payment_link" && (
             <div className="space-y-2">
               <Label>Payment Reference</Label>
               <Input
@@ -290,7 +417,37 @@ export function SellPackageDialog({
                 placeholder="UPI ID / receipt no."
               />
             </div>
-          </div>
+          )}
+
+          {/* Payment link notify options */}
+          {paymentMode === "payment_link" && (
+            <div className="rounded-md bg-blue-50 border border-blue-100 px-3 py-3 space-y-2">
+              <p className="text-xs font-medium text-blue-800">Notify customer via:</p>
+              <div className="flex gap-4">
+                <label className="flex items-center gap-2 text-sm text-blue-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={notifySms}
+                    onChange={e => setNotifySms(e.target.checked)}
+                    className="h-4 w-4 rounded"
+                  />
+                  SMS (phone)
+                </label>
+                <label className="flex items-center gap-2 text-sm text-blue-700 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={notifyEmail}
+                    onChange={e => setNotifyEmail(e.target.checked)}
+                    className="h-4 w-4 rounded"
+                  />
+                  Email
+                </label>
+              </div>
+              <p className="text-xs text-blue-600">
+                Customer will receive a Razorpay payment link. Package activates on payment.
+              </p>
+            </div>
+          )}
 
           {/* Amount display */}
           {selectedPackage && (
@@ -316,7 +473,7 @@ export function SellPackageDialog({
             <Button variant="outline" onClick={handleClose} disabled={saving}>Cancel</Button>
             <Button onClick={handleSubmit} disabled={saving}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Sell Package
+              {paymentMode === "payment_link" ? "Send Payment Link" : "Sell Package"}
             </Button>
           </div>
         </div>

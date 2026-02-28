@@ -62,9 +62,10 @@ export async function GET(request: NextRequest) {
     .from("prepaid_purchases")
     .select(`
       *,
-      package:prepaid_packages(id, name, workspace_type, credit_type, total_credits)
+      package:prepaid_packages(id, name, workspace_type, space_id, credit_type, total_credits)
     `)
     .eq("status", "active")
+    .eq("payment_status", "paid")
     .gte("expires_at", today)
     .or(orFilters.join(","))
     .order("expires_at", { ascending: true }); // soonest to expire first (FIFO)
@@ -78,9 +79,13 @@ export async function GET(request: NextRequest) {
     const creditsRemaining = Number(p.total_credits) - Number(p.credits_used);
     if (creditsRemaining <= 0) return false;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const pkgWorkspaceType = (p.package as any)?.workspace_type;
+    const pkg = p.package as any;
+    const pkgWorkspaceType = pkg?.workspace_type;
     // Package applies if it has no workspace_type restriction OR matches the space's type
     if (pkgWorkspaceType && spaceWorkspaceType && pkgWorkspaceType !== spaceWorkspaceType) return false;
+    // Gap 1: if package is bound to a specific space, it must match exactly
+    const pkgSpaceId = pkg?.space_id;
+    if (pkgSpaceId && pkgSpaceId !== spaceId) return false;
     return true;
   });
 

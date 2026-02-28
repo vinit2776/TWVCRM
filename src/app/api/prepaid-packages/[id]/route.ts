@@ -11,7 +11,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const { data, error } = await supabase
     .from("prepaid_packages")
-    .select("*, location:locations(id,name)")
+    .select("*, location:locations(id,name), space:spaces(id,name,workspace_type)")
     .eq("id", id)
     .single();
 
@@ -38,12 +38,13 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   if (body.is_active !== undefined) updates.is_active = Boolean(body.is_active);
   if (body.workspace_type !== undefined) updates.workspace_type = body.workspace_type || null;
   if (body.location_id !== undefined) updates.location_id = body.location_id || null;
+  if (body.space_id !== undefined) updates.space_id = body.space_id || null;
 
   const { data, error } = await supabase
     .from("prepaid_packages")
     .update(updates)
     .eq("id", id)
-    .select("*, location:locations(id,name)")
+    .select("*, location:locations(id,name), space:spaces(id,name,workspace_type)")
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

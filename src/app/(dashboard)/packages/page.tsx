@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import {
-  Plus, Loader2, TicketCheck, Pencil, ToggleLeft, ToggleRight,
+  Plus, Loader2, TicketCheck, Pencil, ToggleLeft, ToggleRight, Copy, Send, Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -25,7 +25,7 @@ import {
   PREPAID_PURCHASE_STATUS_COLORS,
 } from "@/lib/constants";
 import { toast } from "sonner";
-import type { PrepaidPackage, PrepaidPurchase } from "@/types";
+import type { PrepaidPackage, PrepaidPurchase, Space } from "@/types";
 import { useLocations } from "@/hooks/use-locations";
 
 const WORKSPACE_TYPE_LABELS: Record<string, string> = {
@@ -54,11 +54,39 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
   const [description, setDescription] = useState("");
   const [locationId, setLocationId] = useState("__none");
   const [workspaceType, setWorkspaceType] = useState("__none");
+  const [spaceId, setSpaceId] = useState("__none");
+  const [spaces, setSpaces] = useState<Space[]>([]);
+  const [spacesLoading, setSpacesLoading] = useState(false);
   const [creditType, setCreditType] = useState("hours");
   const [totalCredits, setTotalCredits] = useState("");
   const [price, setPrice] = useState("");
   const [validityDays, setValidityDays] = useState("30");
   const [saving, setSaving] = useState(false);
+
+  // Load spaces when location changes
+  useEffect(() => {
+    if (!locationId || locationId === "__none") {
+      setSpaces([]);
+      setSpaceId("__none");
+      return;
+    }
+    setSpacesLoading(true);
+    fetch(`/api/spaces?location_id=${locationId}&is_active=true&limit=50`)
+      .then(r => r.json())
+      .then(json => setSpaces(json.data || []))
+      .catch(() => setSpaces([]))
+      .finally(() => setSpacesLoading(false));
+  }, [locationId]);
+
+  // When a specific space is chosen, auto-fill workspace_type from that space
+  useEffect(() => {
+    if (spaceId && spaceId !== "__none") {
+      const found = spaces.find(s => s.id === spaceId);
+      if (found?.workspace_type) {
+        setWorkspaceType(found.workspace_type);
+      }
+    }
+  }, [spaceId, spaces]);
 
   useEffect(() => {
     if (pkg) {
@@ -66,12 +94,14 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
       setDescription(pkg.description || "");
       setLocationId(pkg.location_id || "__none");
       setWorkspaceType(pkg.workspace_type || "__none");
+      setSpaceId(pkg.space_id || "__none");
       setCreditType(pkg.credit_type);
       setTotalCredits(String(pkg.total_credits));
       setPrice(String(pkg.price));
       setValidityDays(String(pkg.validity_days));
     } else {
       setName(""); setDescription(""); setLocationId("__none"); setWorkspaceType("__none");
+      setSpaceId("__none"); setSpaces([]);
       setCreditType("hours"); setTotalCredits(""); setPrice(""); setValidityDays("30");
     }
   }, [pkg, open]);
@@ -83,11 +113,22 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
 
     setSaving(true);
     try {
+      const resolvedSpaceId = spaceId && spaceId !== "__none" ? spaceId : undefined;
+      // When a specific space is selected, auto-derive workspace_type from it
+      const resolvedWorkspaceType = (() => {
+        if (resolvedSpaceId) {
+          const found = spaces.find(s => s.id === resolvedSpaceId);
+          return found?.workspace_type || (workspaceType !== "__none" ? workspaceType : undefined);
+        }
+        return (workspaceType && workspaceType !== "__none") ? workspaceType : undefined;
+      })();
+
       const body = {
         name: name.trim(),
         description: description.trim() || undefined,
         location_id: (locationId && locationId !== "__none") ? locationId : undefined,
-        workspace_type: (workspaceType && workspaceType !== "__none") ? workspaceType : undefined,
+        workspace_type: resolvedWorkspaceType,
+        space_id: resolvedSpaceId,
         credit_type: creditType,
         total_credits: Number(totalCredits),
         price: Number(price),
@@ -128,7 +169,7 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
               <Label>Location</Label>
-              <Select value={locationId} onValueChange={setLocationId}>
+              <Select value={locationId} onValueChange={v => { setLocationId(v); setSpaceId("__none"); }}>
                 <SelectTrigger><SelectValue placeholder="All locations" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none">All locations</SelectItem>
@@ -137,15 +178,48 @@ function PackageFormDialog({ open, onOpenChange, package: pkg, onSuccess }: Pack
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Space Type</Label>
-              <Select value={workspaceType} onValueChange={setWorkspaceType}>
-                <SelectTrigger><SelectValue placeholder="All types" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="__none">All types</SelectItem>
-                  {WORKSPACE_TYPES.map(t => <SelectItem key={t} value={t}>{WORKSPACE_TYPE_LABELS[t]}</SelectItem>)}
-                </SelectContent>
-              </Select>
+              <Label>
+                Specific Space <span className="text-muted-foreground text-xs">(optional)</span>
+              </Label>
+              {spacesLoading ? (
+                <div className="flex items-center h-9 text-xs text-muted-foreground gap-1 px-3 border rounded-md">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Loading...
+                </div>
+              ) : (
+                <Select
+                  value={spaceId}
+                  onValueChange={setSpaceId}
+                  disabled={!locationId || locationId === "__none"}
+                >
+                  <SelectTrigger><SelectValue placeholder="All spaces" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">All spaces</SelectItem>
+                    {spaces.map(s => (
+                      <SelectItem key={s.id} value={s.id}>{s.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
+          </div>
+          <div className="space-y-2">
+            <Label>
+              Space Type{" "}
+              <span className="text-muted-foreground text-xs">
+                (auto-filled when specific space is selected)
+              </span>
+            </Label>
+            <Select
+              value={workspaceType}
+              onValueChange={setWorkspaceType}
+              disabled={!!(spaceId && spaceId !== "__none")}
+            >
+              <SelectTrigger><SelectValue placeholder="All types" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none">All types</SelectItem>
+                {WORKSPACE_TYPES.map(t => <SelectItem key={t} value={t}>{WORKSPACE_TYPE_LABELS[t]}</SelectItem>)}
+              </SelectContent>
+            </Select>
           </div>
           <div className="grid grid-cols-3 gap-3">
             <div className="space-y-2">
@@ -267,6 +341,7 @@ export default function PackagesPage() {
   const [sellOpen, setSellOpen] = useState(false);
   const [extendOpen, setExtendOpen] = useState(false);
   const [extendingPurchase, setExtendingPurchase] = useState<PrepaidPurchase | null>(null);
+  const [resendingId, setResendingId] = useState<string | null>(null);
 
   const fetchPackages = useCallback(async () => {
     setPackagesLoading(true);
@@ -307,6 +382,49 @@ export default function PackagesPage() {
     } else {
       toast.error("Failed to update");
     }
+  };
+
+  const handleCopyLink = (url: string) => {
+    navigator.clipboard.writeText(url).then(() => {
+      toast.success("Payment link copied to clipboard");
+    }).catch(() => toast.error("Failed to copy"));
+  };
+
+  const handleResendLink = async (purchase: PrepaidPurchase) => {
+    setResendingId(purchase.id);
+    try {
+      const res = await fetch(`/api/prepaid-purchases/${purchase.id}/payment-link`, { method: "POST" });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success("Payment link sent to customer");
+        if (!purchase.razorpay_payment_link_url && json.data?.payment_link_url) {
+          fetchPurchases();
+        }
+      } else {
+        toast.error(json.error || "Failed to send payment link");
+      }
+    } catch { toast.error("Failed to send payment link"); }
+    finally { setResendingId(null); }
+  };
+
+  // Helper: show specific space name, workspace type, or "All types"
+  const renderSpaceType = (pkg: PrepaidPackage) => {
+    const space = pkg.space as { name?: string } | undefined;
+    if (space?.name) {
+      return (
+        <Badge variant="outline" className="text-xs bg-blue-50 text-blue-700">
+          {space.name}
+        </Badge>
+      );
+    }
+    if (pkg.workspace_type) {
+      return (
+        <Badge variant="outline" className="text-xs">
+          {WORKSPACE_TYPE_LABELS[pkg.workspace_type] || pkg.workspace_type}
+        </Badge>
+      );
+    }
+    return <span className="text-muted-foreground text-xs">All types</span>;
   };
 
   return (
@@ -355,7 +473,7 @@ export default function PackagesPage() {
                     <th className="px-4 py-3 text-left font-medium">Credits</th>
                     <th className="px-4 py-3 text-left font-medium">Price</th>
                     <th className="px-4 py-3 text-left font-medium">Validity</th>
-                    <th className="px-4 py-3 text-left font-medium">Space Type</th>
+                    <th className="px-4 py-3 text-left font-medium">Space/Type</th>
                     <th className="px-4 py-3 text-left font-medium">Status</th>
                     <th className="px-4 py-3 text-right font-medium">Actions</th>
                   </tr>
@@ -373,15 +491,7 @@ export default function PackagesPage() {
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap font-medium">{formatCurrency(pkg.price)}</td>
                       <td className="px-4 py-3 whitespace-nowrap">{pkg.validity_days} days</td>
-                      <td className="px-4 py-3">
-                        {pkg.workspace_type ? (
-                          <Badge variant="outline" className="text-xs">
-                            {WORKSPACE_TYPE_LABELS[pkg.workspace_type] || pkg.workspace_type}
-                          </Badge>
-                        ) : (
-                          <span className="text-muted-foreground text-xs">All types</span>
-                        )}
-                      </td>
+                      <td className="px-4 py-3">{renderSpaceType(pkg)}</td>
                       <td className="px-4 py-3">
                         <Badge variant={pkg.is_active ? "default" : "secondary"}>
                           {pkg.is_active ? "Active" : "Inactive"}
@@ -463,9 +573,10 @@ export default function PackagesPage() {
                     const pct = Number(p.total_credits) > 0 ? creditsRemaining / Number(p.total_credits) : 0;
                     const pkg = p.package as { name?: string } | undefined;
                     const lead = p.lead as { first_name?: string; last_name?: string } | undefined;
+                    const isPending = p.payment_status === "pending_payment";
 
                     return (
-                      <tr key={p.id} className="border-b hover:bg-muted/20">
+                      <tr key={p.id} className={`border-b hover:bg-muted/20 ${isPending ? "bg-amber-50/30" : ""}`}>
                         <td className="px-4 py-3">
                           {lead
                             ? <div className="font-medium">{lead.first_name} {lead.last_name}</div>
@@ -474,17 +585,21 @@ export default function PackagesPage() {
                         </td>
                         <td className="px-4 py-3">{pkg?.name || "—"}</td>
                         <td className="px-4 py-3">
-                          <div className="flex items-center gap-2">
-                            <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
-                              <div
-                                className={`h-full rounded-full ${pct < 0.2 ? "bg-amber-400" : "bg-green-500"}`}
-                                style={{ width: `${pct * 100}%` }}
-                              />
+                          {isPending ? (
+                            <span className="text-xs text-amber-600">Awaiting payment</span>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <div className="w-16 h-1.5 rounded-full bg-muted overflow-hidden">
+                                <div
+                                  className={`h-full rounded-full ${pct < 0.2 ? "bg-amber-400" : "bg-green-500"}`}
+                                  style={{ width: `${pct * 100}%` }}
+                                />
+                              </div>
+                              <span className="text-xs">
+                                {creditsRemaining}/{p.total_credits} {CREDIT_TYPE_LABELS[p.credit_type]}
+                              </span>
                             </div>
-                            <span className="text-xs">
-                              {creditsRemaining}/{p.total_credits} {CREDIT_TYPE_LABELS[p.credit_type]}
-                            </span>
-                          </div>
+                          )}
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap">{formatCurrency(p.price_paid)}</td>
                         <td className="px-4 py-3 whitespace-nowrap">
@@ -493,21 +608,57 @@ export default function PackagesPage() {
                           })}
                         </td>
                         <td className="px-4 py-3">
-                          <Badge className={`text-xs ${PREPAID_PURCHASE_STATUS_COLORS[p.status]}`} variant="outline">
-                            {PREPAID_PURCHASE_STATUS_LABELS[p.status]}
-                          </Badge>
+                          <div className="flex flex-col gap-1">
+                            <Badge className={`text-xs ${PREPAID_PURCHASE_STATUS_COLORS[p.status]}`} variant="outline">
+                              {PREPAID_PURCHASE_STATUS_LABELS[p.status]}
+                            </Badge>
+                            {isPending && (
+                              <Badge className="text-xs bg-amber-100 text-amber-700 border-amber-200" variant="outline">
+                                <Clock className="h-2.5 w-2.5 mr-1" />
+                                Payment Pending
+                              </Badge>
+                            )}
+                          </div>
                         </td>
                         <td className="px-4 py-3 text-right">
-                          {p.status !== "exhausted" && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              className="h-7 text-xs"
-                              onClick={() => { setExtendingPurchase(p); setExtendOpen(true); }}
-                            >
-                              Extend
-                            </Button>
-                          )}
+                          <div className="flex items-center justify-end gap-1.5">
+                            {isPending && p.razorpay_payment_link_url && (
+                              <Button
+                                variant="ghost"
+                                size="sm"
+                                className="h-7 px-2 text-xs"
+                                title="Copy payment link"
+                                onClick={() => handleCopyLink(p.razorpay_payment_link_url!)}
+                              >
+                                <Copy className="h-3.5 w-3.5" />
+                              </Button>
+                            )}
+                            {isPending && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs gap-1"
+                                onClick={() => handleResendLink(p)}
+                                disabled={resendingId === p.id}
+                              >
+                                {resendingId === p.id
+                                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                                  : <Send className="h-3 w-3" />
+                                }
+                                {p.razorpay_payment_link_url ? "Resend" : "Send Link"}
+                              </Button>
+                            )}
+                            {!isPending && p.status !== "exhausted" && (
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                className="h-7 text-xs"
+                                onClick={() => { setExtendingPurchase(p); setExtendOpen(true); }}
+                              >
+                                Extend
+                              </Button>
+                            )}
+                          </div>
                         </td>
                       </tr>
                     );

@@ -14,7 +14,7 @@ export async function GET(request: NextRequest) {
 
   let query = supabase
     .from("prepaid_packages")
-    .select("*, location:locations(id,name)")
+    .select("*, location:locations(id,name), space:spaces(id,name,workspace_type)")
     .order("created_at", { ascending: false });
 
   if (locationId) query = query.eq("location_id", locationId);
@@ -39,6 +39,7 @@ export async function POST(request: NextRequest) {
     description,
     location_id,
     workspace_type,
+    space_id,
     credit_type,
     total_credits,
     price,
@@ -60,6 +61,7 @@ export async function POST(request: NextRequest) {
       description: description?.trim() || null,
       location_id: location_id || null,
       workspace_type: workspace_type || null,
+      space_id: space_id || null,
       credit_type,
       total_credits: Number(total_credits),
       price: Number(price),
@@ -67,7 +69,7 @@ export async function POST(request: NextRequest) {
       is_active: true,
       created_by: user.id,
     })
-    .select("*, location:locations(id,name)")
+    .select("*, location:locations(id,name), space:spaces(id,name,workspace_type)")
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
