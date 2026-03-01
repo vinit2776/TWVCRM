@@ -14,7 +14,10 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const page = parseInt(searchParams.get("page") || "1");
   const limit = parseInt(searchParams.get("limit") || "25");
-  const type = searchParams.get("type");
+  const type     = searchParams.get("type");
+  const dateFrom = searchParams.get("date_from");
+  const dateTo   = searchParams.get("date_to");
+  const search   = searchParams.get("search");
 
   const offset = (page - 1) * limit;
 
@@ -25,7 +28,10 @@ export async function GET(request: NextRequest) {
       { count: "exact" }
     );
 
-  if (type) query = query.eq("type", type);
+  if (type)     query = query.eq("type", type);
+  if (dateFrom) query = query.gte("created_at", dateFrom);
+  if (dateTo)   query = query.lte("created_at", dateTo);
+  if (search)   query = query.ilike("subject", `%${search}%`);
 
   query = query
     .order("created_at", { ascending: false })

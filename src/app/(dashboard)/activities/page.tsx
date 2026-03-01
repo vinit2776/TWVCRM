@@ -10,9 +10,11 @@ import {
   MapPin,
   ChevronLeft,
   ChevronRight,
+  Search,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   Select,
   SelectContent,
@@ -41,6 +43,38 @@ const ACTIVITY_ICONS: Record<
   tour: MapPin,
 };
 
+type DatePreset = "today" | "week" | "month" | "all";
+
+const DATE_PRESET_LABELS: Record<DatePreset, string> = {
+  today: "Today",
+  week: "This Week",
+  month: "This Month",
+  all: "All Time",
+};
+
+function getDateRange(preset: DatePreset): { from: string | null; to: string | null } {
+  const now = new Date();
+  if (preset === "today") {
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    const end = new Date(now);
+    end.setHours(23, 59, 59, 999);
+    return { from: start.toISOString(), to: end.toISOString() };
+  }
+  if (preset === "week") {
+    const start = new Date(now);
+    // Monday of current week
+    start.setDate(now.getDate() - ((now.getDay() + 6) % 7));
+    start.setHours(0, 0, 0, 0);
+    return { from: start.toISOString(), to: null };
+  }
+  if (preset === "month") {
+    const start = new Date(now.getFullYear(), now.getMonth(), 1);
+    return { from: start.toISOString(), to: null };
+  }
+  return { from: null, to: null };
+}
+
 export default function ActivitiesPage() {
   const [activities, setActivities] = useState<(Activity & { lead?: { id: string; first_name: string; last_name: string; company?: string } })[]>([]);
   const [pagination, setPagination] = useState({
@@ -51,13 +85,21 @@ export default function ActivitiesPage() {
   });
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
+
+  // Filters — date preset is primary, default: This Month
+  const [datePreset, setDatePreset] = useState<DatePreset>("month");
   const [typeFilter, setTypeFilter] = useState("");
+  const [search, setSearch] = useState("");
 
   const fetchActivities = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams();
     params.set("page", String(page));
     if (typeFilter) params.set("type", typeFilter);
+    if (search.trim()) params.set("search", search.trim());
+    const { from, to } = getDateRange(datePreset);
+    if (from) params.set("date_from", from);
+    if (to) params.set("date_to", to);
 
     const res = await fetch(`/api/activities?${params.toString()}`);
     if (res.ok) {
@@ -66,49 +108,90 @@ export default function ActivitiesPage() {
       setPagination(json.pagination);
     }
     setLoading(false);
-  }, [page, typeFilter]);
+  }, [page, typeFilter, search, datePreset]);
 
   useEffect(() => {
     fetchActivities();
   }, [fetchActivities]);
 
+  // Reset to page 1 when filters change
+  useEffect(() => {
+    setPage(1);
+  }, [typeFilter, datePreset, search]);
+
   return (
     <div className="space-y-4">
-      <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-        <div>
-          <h1 className="text-2xl font-bold">Activities</h1>
-          <p className="text-sm text-muted-foreground">
-            {pagination.total} total activities
-          </p>
+      {/* Header + Filters */}
+      <div className="space-y-3">
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold">Activities</h1>
+            <p className="text-sm text-muted-foreground">
+              {pagination.total} {pagination.total === 1 ? "activity" : "activities"}
+            </p>
+          </div>
         </div>
-        <Select
-          value={typeFilter}
-          onValueChange={(val) => {
-            setTypeFilter(val === "all" ? "" : val);
-            setPage(1);
-          }}
-        >
-          <SelectTrigger className="w-[160px]">
-            <SelectValue placeholder="All Types" />
-          </SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Types</SelectItem>
-            {ACTIVITY_TYPES.map((t) => (
-              <SelectItem key={t} value={t}>
-                {ACTIVITY_TYPE_LABELS[t]}
-              </SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
+
+        {/* Filter bar */}
+        <div className="flex flex-wrap gap-2 items-center">
+          {/* Date preset pills */}
+          {(["today", "week", "month", "all"] as DatePreset[]).map((preset) => (
+            <Button
+              key={preset}
+              variant={datePreset === preset ? "default" : "outline"}
+              size="sm"
+              onClick={() => setDatePreset(preset)}
+            >
+              {DATE_PRESET_LABELS[preset]}
+            </Button>
+          ))}
+
+          {/* Vertical divider */}
+          <div className="h-6 w-px bg-border hidden sm:block mx-1" />
+
+          {/* Type filter */}
+          <Select
+            value={typeFilter || "all"}
+            onValueChange={(val) => setTypeFilter(val === "all" ? "" : val)}
+          >
+            <SelectTrigger className="w-[140px] h-8">
+              <SelectValue placeholder="All Types" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Types</SelectItem>
+              {ACTIVITY_TYPES.map((t) => (
+                <SelectItem key={t} value={t}>
+                  {ACTIVITY_TYPE_LABELS[t]}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+
+          {/* Subject search */}
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <Input
+              placeholder="Search subject…"
+              className="pl-8 h-8 w-[200px]"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+            />
+          </div>
+        </div>
       </div>
 
+      {/* Table */}
       {loading ? (
         <TableSkeleton rows={8} />
       ) : activities.length === 0 ? (
         <EmptyState
           icon={FileText}
           title="No activities found"
-          description="Log activities from lead detail pages."
+          description={
+            datePreset !== "all"
+              ? `No activities for ${DATE_PRESET_LABELS[datePreset].toLowerCase()}. Try expanding the date range.`
+              : "Log activities from lead detail pages."
+          }
         />
       ) : (
         <div className="rounded-md border overflow-x-auto">
@@ -192,6 +275,7 @@ export default function ActivitiesPage() {
         </div>
       )}
 
+      {/* Pagination */}
       {pagination.totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted-foreground">
