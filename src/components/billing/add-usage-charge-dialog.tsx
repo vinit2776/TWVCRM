@@ -113,7 +113,7 @@ export function AddUsageChargeDialog({
       if (bookingId) return; // pre-supplied; handled separately
       setLoadingBookings(true);
       const params = new URLSearchParams({
-        status: "checked_out,no_show",
+        status: "checked_out,no_show,cancelled",
         limit: "100",
         page: "1",
       });
