@@ -37,7 +37,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
-import { ActivityTimeline } from "@/components/activities/activity-timeline";
+import { LeadTimeline } from "@/components/activities/lead-timeline";
 import { ActivityForm } from "@/components/activities/activity-form";
 import { LeadProposalsTab } from "@/components/leads/lead-proposals-tab";
 import { LeadContractsTab } from "@/components/leads/lead-contracts-tab";
@@ -423,16 +423,17 @@ export default function LeadDetailPage({
         <TabsContent value="activities" className="mt-4">
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
-              <CardTitle className="text-base">Activity Timeline</CardTitle>
+              <CardTitle className="text-base">Lead Timeline</CardTitle>
               <Button size="sm" onClick={() => setActivityFormOpen(true)}>
                 <Plus className="mr-2 h-4 w-4" />
                 Log Activity
               </Button>
             </CardHeader>
             <CardContent>
-              <ActivityTimeline
+              <LeadTimeline
                 key={activityRefreshKey}
                 leadId={id}
+                lead={lead}
                 highlightId={highlightActivityId}
               />
             </CardContent>
