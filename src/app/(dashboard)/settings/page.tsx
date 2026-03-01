@@ -8,7 +8,7 @@ import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Avatar, AvatarFallback } from "@/components/ui/avatar";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { createClient } from "@/lib/supabase/client";
+import { createClient } from "@/lib/supabase/client"; // still needed for handleSave
 import { getInitials } from "@/lib/utils";
 import { toast } from "sonner";
 import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart } from "lucide-react";
@@ -27,28 +27,19 @@ export default function SettingsPage() {
   });
 
   useEffect(() => {
-    const fetchProfile = async () => {
-      const supabase = createClient();
-      const { data: { user } } = await supabase.auth.getUser();
-      if (!user) return;
-
-      const { data } = await supabase
-        .from("users")
-        .select("full_name, email, phone, role")
-        .eq("auth_id", user.id)
-        .single();
-
-      if (data) {
+    // Fetch profile via server-side API (bypasses browser extension blocks on supabase.co)
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((json) => {
         setProfile({
-          full_name: data.full_name || "",
-          email: data.email || "",
-          phone: data.phone || "",
-          role: data.role || "",
+          full_name: json.full_name || "",
+          email: json.email || "",
+          phone: json.phone || "",
+          role: json.role || "",
         });
-      }
-      setLoading(false);
-    };
-    fetchProfile();
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
   }, []);
 
   const handleSave = async () => {

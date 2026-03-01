@@ -40,7 +40,6 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { USER_ROLE_LABELS } from "@/lib/constants";
 import { getInitials, formatDate } from "@/lib/utils";
 import type { User as UserType } from "@/types";
-import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 
 const ROLE_ICONS: Record<string, React.ComponentType<{ className?: string }>> =
@@ -105,17 +104,11 @@ export default function TeamPage() {
 
   useEffect(() => {
     fetchUsers();
-    const supabase = createClient();
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (user) {
-        const { data } = await supabase
-          .from("users")
-          .select("role")
-          .eq("auth_id", user.id)
-          .single();
-        setCurrentUserRole(data?.role || null);
-      }
-    });
+    // Fetch current user role via server-side API (bypasses browser extension blocks on supabase.co)
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((json) => setCurrentUserRole(json.role || null))
+      .catch(() => setCurrentUserRole(null));
   }, [fetchUsers]);
 
   // Close menu on outside click

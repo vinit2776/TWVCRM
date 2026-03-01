@@ -25,7 +25,6 @@ import {
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { formatDateTime } from "@/lib/utils";
-import { createClient } from "@/lib/supabase/client";
 import type { AuditLog } from "@/types";
 
 const ENTITY_TYPE_LABELS: Record<string, string> = {
@@ -132,18 +131,11 @@ export default function AuditLogsPage() {
   }, [page, entityTypeFilter, actionFilter]);
 
   useEffect(() => {
-    // Check admin role
-    const supabase = createClient();
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (user) {
-        const { data } = await supabase
-          .from("users")
-          .select("role")
-          .eq("auth_id", user.id)
-          .single();
-        setIsAdmin(data?.role === "admin");
-      }
-    });
+    // Check admin role via server-side API (bypasses browser extension blocks)
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((json) => setIsAdmin(json.role === "admin"))
+      .catch(() => setIsAdmin(false));
   }, []);
 
   useEffect(() => {

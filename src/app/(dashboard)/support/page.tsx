@@ -20,7 +20,6 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import {
   LifeBuoy,
@@ -65,27 +64,21 @@ export default function SupportPage() {
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
 
-  // Check authorization
+  // Check authorization via server-side API (bypasses browser extension blocks on supabase.co)
   useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (!user) {
-        router.push("/login");
-        return;
-      }
-      const { data } = await supabase
-        .from("users")
-        .select("role")
-        .eq("auth_id", user.id)
-        .single();
-
-      if (data?.role !== "admin") {
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((json) => {
+        if (json.role !== "admin") {
+          router.push("/dashboard");
+          toast.error("Access denied. Admin only.");
+          return;
+        }
+        setAuthorized(true);
+      })
+      .catch(() => {
         router.push("/dashboard");
-        toast.error("Access denied. Admin only.");
-        return;
-      }
-      setAuthorized(true);
-    });
+      });
   }, [router]);
 
   const fetchTickets = useCallback(async () => {
