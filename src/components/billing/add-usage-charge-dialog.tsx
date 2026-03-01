@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import {
   Dialog,
   DialogContent,
@@ -104,6 +104,29 @@ export function AddUsageChargeDialog({
     }
   }, [open, chargeType, contractId]);
 
+  // Debounce timer for booking search
+  const bookingSearchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // Server-side booking fetch — called on open and on search change
+  const fetchBookings = useCallback(
+    (search: string) => {
+      if (bookingId) return; // pre-supplied; handled separately
+      setLoadingBookings(true);
+      const params = new URLSearchParams({
+        status: "checked_out,no_show",
+        limit: "100",
+        page: "1",
+      });
+      if (search.trim()) params.set("search", search.trim());
+      fetch(`/api/bookings?${params.toString()}`)
+        .then((res) => res.json())
+        .then((json) => setBookings(json.data || []))
+        .catch(() => setBookings([]))
+        .finally(() => setLoadingBookings(false));
+    },
+    [bookingId]
+  );
+
   // Fetch bookings when in booking mode
   useEffect(() => {
     if (open && chargeType === "booking") {
@@ -123,16 +146,23 @@ export function AddUsageChargeDialog({
           .catch(() => {})
           .finally(() => setLoadingBookings(false));
       } else {
-        // Load recent past bookings (checked_out / no_show)
-        setLoadingBookings(true);
-        fetch("/api/bookings?status=checked_out,no_show&limit=50&page=1")
-          .then((res) => res.json())
-          .then((json) => setBookings(json.data || []))
-          .catch(() => setBookings([]))
-          .finally(() => setLoadingBookings(false));
+        // Initial load — recent past bookings (server-side)
+        fetchBookings("");
       }
     }
-  }, [open, chargeType, bookingId]);
+  }, [open, chargeType, bookingId, fetchBookings]);
+
+  // Debounced server-side search as user types
+  useEffect(() => {
+    if (!open || chargeType !== "booking" || bookingId) return;
+    if (bookingSearchTimer.current) clearTimeout(bookingSearchTimer.current);
+    bookingSearchTimer.current = setTimeout(() => {
+      fetchBookings(bookingSearch);
+    }, 300);
+    return () => {
+      if (bookingSearchTimer.current) clearTimeout(bookingSearchTimer.current);
+    };
+  }, [bookingSearch, open, chargeType, bookingId, fetchBookings]);
 
   // Sync selected booking object when ID changes
   useEffect(() => {
@@ -144,21 +174,8 @@ export function AddUsageChargeDialog({
     }
   }, [selectedBookingId, bookings]);
 
-  // Booking search filter
-  const filteredBookings = bookingSearch.trim()
-    ? bookings.filter((b) => {
-        const q = bookingSearch.toLowerCase();
-        const customer =
-          b.guest_name ||
-          (b.lead
-            ? `${b.lead.first_name} ${b.lead.last_name} ${b.lead.company || ""}`
-            : "");
-        return (
-          b.booking_number.toLowerCase().includes(q) ||
-          customer.toLowerCase().includes(q)
-        );
-      })
-    : bookings;
+  // Search is server-side — show all loaded results
+  const filteredBookings = bookings;
 
   const resetForm = () => {
     setChargeType(bookingId ? "booking" : "contract");

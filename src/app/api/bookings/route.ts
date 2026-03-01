@@ -87,6 +87,7 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get("status");
   const customerType = searchParams.get("customer_type");
   const contractId = searchParams.get("contract_id");
+  const leadId = searchParams.get("lead_id");
   const dateFrom = searchParams.get("date_from");
   const dateTo = searchParams.get("date_to");
   const bookingDate = searchParams.get("booking_date");
@@ -103,16 +104,34 @@ export async function GET(request: NextRequest) {
 
   if (spaceId) query = query.eq("space_id", spaceId);
   if (locationId) query = query.eq("location_id", locationId);
-  if (status) query = query.eq("status", status);
+  if (status) {
+    // Support comma-separated statuses, e.g. "checked_out,no_show"
+    const parts = status.split(",").map((s) => s.trim()).filter(Boolean);
+    query = parts.length > 1 ? query.in("status", parts) : query.eq("status", parts[0]);
+  }
   if (customerType) query = query.eq("customer_type", customerType);
   if (contractId) query = query.eq("contract_id", contractId);
+  if (leadId) query = query.eq("lead_id", leadId);
   if (bookingDate) query = query.eq("booking_date", bookingDate);
   if (dateFrom) query = query.gte("booking_date", dateFrom);
   if (dateTo) query = query.lte("booking_date", dateTo);
   if (search?.trim()) {
     const s = search.trim();
-    // Search by booking number, booker phone, guest name, or guest phone
-    query = query.or(`booking_number.ilike.%${s}%,booker_phone.ilike.%${s}%,guest_name.ilike.%${s}%,guest_phone.ilike.%${s}%`);
+    // Also search by lead name (pre-query matching lead IDs)
+    const { data: matchingLeads } = await supabase
+      .from("leads")
+      .select("id")
+      .or(`first_name.ilike.%${s}%,last_name.ilike.%${s}%,company.ilike.%${s}%`);
+    const leadIds = (matchingLeads || []).map((l) => l.id);
+    const orClauses = [
+      `booking_number.ilike.%${s}%`,
+      `booker_phone.ilike.%${s}%`,
+      `guest_name.ilike.%${s}%`,
+      `guest_phone.ilike.%${s}%`,
+      `guest_company.ilike.%${s}%`,
+    ];
+    if (leadIds.length > 0) orClauses.push(`lead_id.in.(${leadIds.join(",")})`);
+    query = query.or(orClauses.join(","));
   }
 
   query = query.order("booking_date", { ascending: false }).order("start_time", { ascending: true }).range(offset, offset + limit - 1);
