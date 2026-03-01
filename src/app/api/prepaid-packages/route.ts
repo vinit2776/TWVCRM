@@ -66,7 +66,7 @@ export async function POST(request: NextRequest) {
       total_credits: Number(total_credits),
       price: Number(price),
       validity_days: Number(validity_days),
-      is_active: true,
+      is_active: false,
       created_by: user.id,
     })
     .select("*, location:locations(id,name), space:spaces(id,name,workspace_type)")

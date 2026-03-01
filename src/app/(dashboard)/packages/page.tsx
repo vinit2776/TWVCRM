@@ -342,6 +342,15 @@ export default function PackagesPage() {
   const [extendOpen, setExtendOpen] = useState(false);
   const [extendingPurchase, setExtendingPurchase] = useState<PrepaidPurchase | null>(null);
   const [resendingId, setResendingId] = useState<string | null>(null);
+  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
+
+  // Fetch current user role via server-side API (bypasses browser extension blocks)
+  useEffect(() => {
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((json) => setCurrentUserRole(json.role || null))
+      .catch(() => setCurrentUserRole(null));
+  }, []);
 
   const fetchPackages = useCallback(async () => {
     setPackagesLoading(true);
@@ -370,7 +379,13 @@ export default function PackagesPage() {
   useEffect(() => { fetchPackages(); }, [fetchPackages]);
   useEffect(() => { fetchPurchases(); }, [fetchPurchases]);
 
+  const canToggleActive = ["admin", "manager"].includes(currentUserRole ?? "");
+
   const handleToggleActive = async (pkg: PrepaidPackage) => {
+    if (!canToggleActive) {
+      toast.error("Contact your admin or manager to activate or deactivate packages.");
+      return;
+    }
     const res = await fetch(`/api/prepaid-packages/${pkg.id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
@@ -510,8 +525,9 @@ export default function PackagesPage() {
                           <Button
                             variant="ghost"
                             size="sm"
-                            className="h-7 px-2"
+                            className={`h-7 px-2${!canToggleActive ? " opacity-50 cursor-not-allowed" : ""}`}
                             onClick={() => handleToggleActive(pkg)}
+                            title={!canToggleActive ? "Contact admin or manager to activate / deactivate" : pkg.is_active ? "Deactivate package" : "Activate package"}
                           >
                             {pkg.is_active
                               ? <ToggleRight className="h-4 w-4 text-green-600" />

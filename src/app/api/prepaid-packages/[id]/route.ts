@@ -29,6 +29,21 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   const { id } = await params;
   const body = await request.json();
 
+  // Role-gate: only admin or manager can activate/deactivate packages
+  if (body.is_active !== undefined) {
+    const { data: currentUser } = await supabase
+      .from("users")
+      .select("role")
+      .eq("auth_id", user.id)
+      .single();
+    if (!currentUser || !["admin", "manager"].includes(currentUser.role)) {
+      return NextResponse.json(
+        { error: "Only admins and managers can activate or deactivate packages" },
+        { status: 403 }
+      );
+    }
+  }
+
   const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
 
   if (body.name !== undefined) updates.name = body.name.trim();
