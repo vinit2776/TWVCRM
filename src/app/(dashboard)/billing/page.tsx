@@ -35,6 +35,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
 import { GenerateStatementDialog } from "@/components/billing/generate-statement-dialog";
+import { ViewStatementDialog } from "@/components/billing/view-statement-dialog";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -91,11 +92,11 @@ interface UsageCharge {
 interface BillingStatement {
   id: string;
   statement_number: string;
-  contract_id: string;
-  contract?: {
-    contract_number: string;
-    lead?: { first_name: string; last_name: string; company?: string };
-  };
+  contract_id?: string | null;
+  booking_id?: string | null;
+  contract?: { contract_number: string } | null;
+  booking?: { booking_number: string; booking_date: string; guest_name?: string } | null;
+  lead?: { first_name: string; last_name: string; company?: string } | null;
   period_start: string;
   period_end: string;
   fixed_amount: number;
@@ -147,6 +148,7 @@ export default function BillingPage() {
   const [statementsContractFilter, setStatementsContractFilter] = useState("");
   const [statementsStatusFilter, setStatementsStatusFilter] = useState("");
   const [generateStatementOpen, setGenerateStatementOpen] = useState(false);
+  const [viewStatementId, setViewStatementId] = useState<string | null>(null);
 
   // Shared: contract list for filter dropdowns
   const [contracts, setContracts] = useState<Contract[]>([]);
@@ -257,8 +259,10 @@ export default function BillingPage() {
   // --- Statement actions ---
   const handleFinalizeStatement = async (id: string) => {
     try {
-      const res = await fetch(`/api/billing-statements/${id}/finalize`, {
+      const res = await fetch(`/api/billing-statements/${id}`, {
         method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "finalized" }),
       });
       if (res.ok) {
         toast.success("Statement finalized");
@@ -274,8 +278,10 @@ export default function BillingPage() {
 
   const handleExportStatement = async (id: string) => {
     try {
-      const res = await fetch(`/api/billing-statements/${id}/export`, {
+      const res = await fetch(`/api/billing-statements/${id}`, {
         method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "exported" }),
       });
       if (res.ok) {
         toast.success("Statement exported");
@@ -622,7 +628,7 @@ export default function BillingPage() {
                       Statement #
                     </th>
                     <th className="px-4 py-3 text-left font-medium hidden md:table-cell">
-                      Contract #
+                      Reference
                     </th>
                     <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">
                       Lead
@@ -653,13 +659,17 @@ export default function BillingPage() {
                         {stmt.statement_number}
                       </td>
                       <td className="px-4 py-3 font-mono text-xs hidden md:table-cell">
-                        {stmt.contract?.contract_number || "-"}
+                        {stmt.contract?.contract_number
+                          ? stmt.contract.contract_number
+                          : stmt.booking?.booking_number
+                          ? stmt.booking.booking_number
+                          : "-"}
                       </td>
                       <td className="px-4 py-3 hidden lg:table-cell">
-                        {stmt.contract?.lead
-                          ? stmt.contract.lead.company ||
-                            `${stmt.contract.lead.first_name} ${stmt.contract.lead.last_name}`
-                          : "-"}
+                        {stmt.lead
+                          ? stmt.lead.company ||
+                            `${stmt.lead.first_name} ${stmt.lead.last_name}`
+                          : stmt.booking?.guest_name || "-"}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
                         {formatDate(stmt.period_start)} -{" "}
@@ -692,7 +702,7 @@ export default function BillingPage() {
                             </Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem>
+                            <DropdownMenuItem onClick={() => setViewStatementId(stmt.id)}>
                               <Eye className="mr-2 h-4 w-4" />
                               View Detail
                             </DropdownMenuItem>
@@ -771,6 +781,12 @@ export default function BillingPage() {
         open={generateStatementOpen}
         onOpenChange={setGenerateStatementOpen}
         onSuccess={fetchStatements}
+      />
+      <ViewStatementDialog
+        statementId={viewStatementId}
+        open={!!viewStatementId}
+        onOpenChange={(v) => { if (!v) setViewStatementId(null); }}
+        onStatusChange={fetchStatements}
       />
     </div>
   );

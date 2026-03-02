@@ -265,10 +265,13 @@ export type CreateUsageChargeInput = z.infer<typeof createUsageChargeSchema>;
 // Billing Statement Validations
 // ==========================================
 export const generateBillingStatementSchema = z.object({
-  contract_id: z.string().uuid("Invalid contract ID"),
+  contract_id: z.string().uuid("Invalid contract ID").optional(),
+  booking_id: z.string().uuid("Invalid booking ID").optional(),
   period_start: z.string().min(1, "Period start is required"),
   period_end: z.string().min(1, "Period end is required"),
   notes: z.string().optional(),
+}).refine((d) => d.contract_id || d.booking_id, {
+  message: "Either contract_id or booking_id is required",
 });
 
 // ==========================================

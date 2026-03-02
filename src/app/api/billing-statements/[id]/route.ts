@@ -14,7 +14,7 @@ export async function GET(
   const { data: statement, error } = await supabase
     .from("billing_statements")
     .select(
-      "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company)"
+      "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company)"
     )
     .eq("id", id)
     .single();

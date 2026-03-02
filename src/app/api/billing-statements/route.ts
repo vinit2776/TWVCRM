@@ -3,6 +3,9 @@ import { createClient } from "@/lib/supabase/server";
 import { generateBillingStatementSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 
+const SELECT_FIELDS =
+  "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company)";
+
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -12,6 +15,7 @@ export async function GET(request: NextRequest) {
   const page = parseInt(searchParams.get("page") || "1");
   const limit = parseInt(searchParams.get("limit") || "25");
   const contractId = searchParams.get("contract_id");
+  const bookingId = searchParams.get("booking_id");
   const leadId = searchParams.get("lead_id");
   const status = searchParams.get("status");
 
@@ -19,12 +23,10 @@ export async function GET(request: NextRequest) {
 
   let query = supabase
     .from("billing_statements")
-    .select(
-      "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company)",
-      { count: "exact" }
-    );
+    .select(SELECT_FIELDS, { count: "exact" });
 
   if (contractId) query = query.eq("contract_id", contractId);
+  if (bookingId) query = query.eq("booking_id", bookingId);
   if (leadId) query = query.eq("lead_id", leadId);
   if (status) query = query.eq("status", status);
 
@@ -50,37 +52,64 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Validation failed", details: result.error.issues }, { status: 400 });
   }
 
-  // Fetch the contract — must exist
-  const { data: contract, error: contractError } = await supabase
-    .from("contracts")
-    .select("id, lead_id, total_amount, tax_percentage")
-    .eq("id", result.data.contract_id)
-    .single();
-
-  if (contractError || !contract) {
-    return NextResponse.json({ error: "Contract not found" }, { status: 404 });
-  }
-
   const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
 
-  // Fixed amount from the contract's recurring amount
-  const fixedAmount = contract.total_amount || 0;
+  let fixedAmount = 0;
+  let taxPercentage = 0;
+  let leadId: string | null = null;
 
-  // Fetch all pending usage charges for this contract within the billing period
-  const { data: usageCharges, error: usageError } = await supabase
+  if (result.data.contract_id) {
+    // Contract-based statement
+    const { data: contract, error: contractError } = await supabase
+      .from("contracts")
+      .select("id, lead_id, total_amount, tax_percentage")
+      .eq("id", result.data.contract_id)
+      .single();
+
+    if (contractError || !contract) {
+      return NextResponse.json({ error: "Contract not found" }, { status: 404 });
+    }
+
+    fixedAmount = contract.total_amount || 0;
+    taxPercentage = contract.tax_percentage || 0;
+    leadId = contract.lead_id;
+  } else if (result.data.booking_id) {
+    // Booking-based statement
+    const { data: booking, error: bookingError } = await supabase
+      .from("bookings")
+      .select("id, lead_id, total_amount, tax_percentage")
+      .eq("id", result.data.booking_id)
+      .single();
+
+    if (bookingError || !booking) {
+      return NextResponse.json({ error: "Booking not found" }, { status: 404 });
+    }
+
+    fixedAmount = booking.total_amount || 0;
+    taxPercentage = booking.tax_percentage || 0;
+    leadId = booking.lead_id ?? null;
+  }
+
+  // Fetch all pending usage charges for this contract or booking within the billing period
+  let usageQuery = supabase
     .from("usage_charges")
     .select("id, total")
-    .eq("contract_id", result.data.contract_id)
     .gte("charge_date", result.data.period_start)
     .lte("charge_date", result.data.period_end)
     .eq("status", "pending");
 
+  if (result.data.contract_id) {
+    usageQuery = usageQuery.eq("contract_id", result.data.contract_id);
+  } else if (result.data.booking_id) {
+    usageQuery = usageQuery.eq("booking_id", result.data.booking_id);
+  }
+
+  const { data: usageCharges, error: usageError } = await usageQuery;
   if (usageError) return NextResponse.json({ error: usageError.message }, { status: 500 });
 
   // Calculate totals
   const usageAmount = (usageCharges || []).reduce((sum, charge) => sum + (charge.total || 0), 0);
   const subtotal = fixedAmount + usageAmount;
-  const taxPercentage = contract.tax_percentage || 0;
   const taxAmount = subtotal * (taxPercentage / 100);
   const totalAmount = subtotal + taxAmount;
 
@@ -88,8 +117,9 @@ export async function POST(request: NextRequest) {
   const { data: statement, error: insertError } = await supabase
     .from("billing_statements")
     .insert({
-      contract_id: result.data.contract_id,
-      lead_id: contract.lead_id,
+      contract_id: result.data.contract_id ?? null,
+      booking_id: result.data.booking_id ?? null,
+      lead_id: leadId,
       period_start: result.data.period_start,
       period_end: result.data.period_end,
       fixed_amount: fixedAmount,
