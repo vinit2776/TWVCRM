@@ -53,7 +53,7 @@ const allNavItems: NavItem[] = [
   { href: "/activities", label: "Activities", icon: Activity, roles: null },
   { href: "/tasks", label: "Tasks", icon: CheckSquare, roles: null },
   { href: "/proposals", label: "Proposals", icon: FileText, roles: null },
-  { href: "/invoices", label: "Invoices", icon: Receipt, roles: null },
+  { href: "/invoices", label: "Proforma Invoices", icon: Receipt, roles: null },
   { href: "/contracts", label: "Contracts", icon: ScrollText, roles: null },
   { href: "/billing", label: "Billing", icon: IndianRupee, roles: null },
   { href: "/accounting", label: "Accounting", icon: Calculator, roles: null },
