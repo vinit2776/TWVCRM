@@ -99,7 +99,7 @@ export async function PATCH(
         .single();
 
       const phone = (lead?.mobile || lead?.phone) as string | null | undefined;
-      if (phone) {
+      if (lead && phone) {
         const customerName = lead.company
           ?? `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
         const amount = `₹${((data.total_amount as number) ?? 0).toLocaleString("en-IN")}`;
