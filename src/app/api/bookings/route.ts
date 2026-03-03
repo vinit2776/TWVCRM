@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createBookingSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
+import { messaging } from "@/lib/whatsapp";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const DAYS_OF_WEEK = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -579,7 +580,29 @@ export async function POST(request: NextRequest) {
     changes: { record: { old: null, new: booking } },
   });
 
-  // 10. Return full booking
+  // 10. WhatsApp/SMS confirmation to guest + booker — fire-and-forget
+  if (booking) {
+    const phones = [booking.guest_phone as string | null, booking.booker_phone as string | null]
+      .filter((p): p is string => !!p)
+      .filter((p, i, arr) => arr.indexOf(p) === i); // deduplicate
+
+    if (phones.length > 0) {
+      const bookingDate = new Date(booking.booking_date as string).toLocaleDateString("en-IN", {
+        day: "numeric", month: "short", year: "numeric",
+      });
+      phones.forEach((phone) => {
+        messaging.bookingConfirmation(
+          phone,
+          (booking.guest_name as string) ?? "Guest",
+          (booking.booking_number as string) ?? (booking.id as string).slice(0, 8),
+          bookingDate,
+          booking.id as string
+        ).catch(console.error);
+      });
+    }
+  }
+
+  // 11. Return full booking
   const { data: fullBooking } = await supabase
     .from("bookings")
     .select("*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate), location:locations!bookings_location_id_fkey(id, name, code), contract:contracts!bookings_contract_id_fkey(id, contract_number), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email), facilities:booking_facilities(*)")

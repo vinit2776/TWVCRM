@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createLeadSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
+import { messaging } from "@/lib/whatsapp";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -113,6 +114,26 @@ export async function POST(request: NextRequest) {
       performedBy: dbUser.id,
       changes: { record: { old: null, new: data } },
     });
+
+    // WhatsApp alert to all staff with a phone number — fire-and-forget
+    (async () => {
+      const { data: staffList } = await supabase
+        .from("users")
+        .select("phone")
+        .not("phone", "is", null)
+        .neq("phone", "");
+
+      const leadName = `${data.first_name} ${data.last_name}`.trim();
+      const company  = data.company ?? "—";
+      const source   = data.source  ?? "direct";
+
+      staffList?.forEach((staff) => {
+        if (staff.phone) {
+          messaging.internalNewLead(staff.phone, leadName, company, source, data.id)
+            .catch(console.error);
+        }
+      });
+    })();
   }
 
   return NextResponse.json({ data }, { status: 201 });

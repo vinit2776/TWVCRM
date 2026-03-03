@@ -1,42 +1,60 @@
 /**
- * WhatsApp Cloud API Webhook
+ * MSG91 Messaging Webhook
  *
- * GET  — Meta's verification handshake (called once when you register the webhook)
- * POST — Incoming messages + delivery status updates from Meta
+ * Receives delivery status callbacks for both WhatsApp and SMS sent via MSG91.
  *
- * Register this at:
- *   Meta Developer Portal → Your App → WhatsApp → Configuration → Webhook
- *   Callback URL:  https://<your-domain>/api/webhooks/whatsapp
- *   Verify Token:  <WHATSAPP_WEBHOOK_TOKEN env var>
- *   Subscriptions: messages
+ * GET  — Simple token verification (used when registering the webhook URL in MSG91)
+ * POST — Delivery status updates from MSG91
+ *
+ * Register at:
+ *   MSG91 Dashboard → Settings → Webhooks
+ *   Callback URL: https://<your-domain>/api/webhooks/whatsapp
+ *   Token:        <MSG91_WEBHOOK_TOKEN env var>
+ *
+ * MSG91 POST body (WhatsApp delivery report):
+ *   { "requestId": "...", "status": "DELIVERED"|"READ"|"FAILED", "to": "91...", "channel": "whatsapp" }
+ *
+ * MSG91 POST body (SMS delivery report):
+ *   { "requestId": "...", "status": "DELIVERED"|"FAILED", "to": "91...", "channel": "sms" }
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 
-const WEBHOOK_TOKEN = process.env.WHATSAPP_WEBHOOK_TOKEN;
+const WEBHOOK_TOKEN = process.env.MSG91_WEBHOOK_TOKEN;
+
+// Map MSG91 status strings → our DB status values
+const STATUS_MAP: Record<string, string> = {
+  DELIVERED:  "delivered",
+  READ:       "read",
+  FAILED:     "failed",
+  SENT:       "sent",
+  // lowercase variants (MSG91 can send either)
+  delivered:  "delivered",
+  read:       "read",
+  failed:     "failed",
+  sent:       "sent",
+};
 
 // ---------------------------------------------------------------------------
-// GET — Meta webhook verification challenge
+// GET — webhook URL verification
 // ---------------------------------------------------------------------------
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
+  const token = searchParams.get("token") ?? searchParams.get("hub.verify_token");
 
-  const mode      = searchParams.get("hub.mode");
-  const token     = searchParams.get("hub.verify_token");
-  const challenge = searchParams.get("hub.challenge");
-
-  if (mode === "subscribe" && token === WEBHOOK_TOKEN) {
-    console.log("[whatsapp webhook] Verified successfully");
-    return new Response(challenge, { status: 200 });
+  if (token && token === WEBHOOK_TOKEN) {
+    // Return the challenge if present (Meta-style) or just 200
+    const challenge = searchParams.get("hub.challenge");
+    return new Response(challenge ?? "ok", { status: 200 });
   }
 
-  console.warn("[whatsapp webhook] Verification failed — token mismatch");
+  console.warn("[messaging webhook] Verification failed — token mismatch");
   return new Response("Forbidden", { status: 403 });
 }
 
 // ---------------------------------------------------------------------------
-// POST — Incoming events from Meta
+// POST — delivery status updates + inbound messages
 // ---------------------------------------------------------------------------
 export async function POST(request: NextRequest) {
   let body: Record<string, unknown>;
@@ -47,53 +65,41 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  // Meta sends a top-level object with an "entry" array
-  const entry = (body.entry as Array<Record<string, unknown>>) ?? [];
-
   const supabase = await createAdminClient();
 
-  for (const e of entry) {
-    const changes = (e.changes as Array<Record<string, unknown>>) ?? [];
+  // MSG91 sends individual objects, not arrays
+  // Handle both single-event and batched array formats
+  const events: Array<Record<string, unknown>> = Array.isArray(body)
+    ? body as Array<Record<string, unknown>>
+    : [body];
 
-    for (const change of changes) {
-      if (change.field !== "messages") continue;
+  for (const event of events) {
+    const requestId = event.requestId as string | undefined;
+    const rawStatus = event.status as string | undefined;
+    const fromNumber = event.from as string | undefined;
+    const text = event.text as string | undefined;
 
-      const value = change.value as Record<string, unknown>;
+    const mappedStatus = rawStatus ? STATUS_MAP[rawStatus] : undefined;
 
-      // -----------------------------------------------------------------------
-      // Status updates (delivered / read / failed)
-      // -----------------------------------------------------------------------
-      const statuses = (value.statuses as Array<Record<string, unknown>>) ?? [];
-      for (const s of statuses) {
-        const waId   = s.id as string;
-        const status = s.status as string;
-
-        if (!waId || !["delivered", "read", "failed"].includes(status)) continue;
-
-        await supabase
-          .from("whatsapp_messages")
-          .update({ status, updated_at: new Date().toISOString() })
-          .eq("wa_message_id", waId);
-      }
-
-      // -----------------------------------------------------------------------
-      // Inbound messages — log them; extend here to trigger auto-replies
-      // -----------------------------------------------------------------------
-      const messages = (value.messages as Array<Record<string, unknown>>) ?? [];
-      for (const msg of messages) {
-        const from = msg.from as string;
-        const text = (msg.text as Record<string, string> | undefined)?.body ?? "";
-
-        await supabase.from("whatsapp_messages").insert({
-          direction:    "inbound",
-          from_number:  from,
-          message_body: text,
-          status:       "delivered",
-        });
-      }
+    if (requestId && mappedStatus && ["delivered", "read", "failed"].includes(mappedStatus)) {
+      // Update existing outbound message status
+      await supabase
+        .from("whatsapp_messages")
+        .update({ status: mappedStatus, updated_at: new Date().toISOString() })
+        .eq("wa_message_id", requestId);
+    } else if (fromNumber && text) {
+      // Inbound message — log it for potential future auto-reply handling
+      const channel = (event.channel as string | undefined) ?? "whatsapp";
+      await supabase.from("whatsapp_messages").insert({
+        direction:    "inbound",
+        channel:      channel === "sms" ? "sms" : "whatsapp",
+        from_number:  fromNumber,
+        message_body: text,
+        status:       "delivered",
+      });
     }
   }
 
-  // Always acknowledge with 200 — Meta retries on non-200 responses
+  // Always respond 200 — MSG91 retries on non-200
   return NextResponse.json({ status: "ok" });
 }

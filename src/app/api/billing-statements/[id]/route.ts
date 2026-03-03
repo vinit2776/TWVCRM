@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { messaging } from "@/lib/whatsapp";
 
 export async function GET(
   _request: NextRequest,
@@ -87,6 +88,31 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // WhatsApp/SMS notification when statement is finalized — fire-and-forget
+  if (body.status === "finalized" && oldStatement.lead_id && data) {
+    (async () => {
+      const { data: lead } = await supabase
+        .from("leads")
+        .select("first_name, last_name, company, phone, mobile")
+        .eq("id", oldStatement.lead_id)
+        .single();
+
+      const phone = (lead?.mobile || lead?.phone) as string | null | undefined;
+      if (phone) {
+        const customerName = lead.company
+          ?? `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
+        const amount = `₹${((data.total_amount as number) ?? 0).toLocaleString("en-IN")}`;
+        messaging.billingStatementReady(
+          phone,
+          customerName,
+          (data.statement_number as string) ?? id.slice(0, 8),
+          amount,
+          id
+        ).catch(console.error);
+      }
+    })();
+  }
 
   const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
   if (dbUser?.id && oldStatement) {
