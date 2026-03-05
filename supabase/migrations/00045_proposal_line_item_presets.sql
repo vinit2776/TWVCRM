@@ -3,7 +3,7 @@
 -- into a proposal's line items editor.
 
 CREATE TABLE proposal_line_item_presets (
-  id            UUID          PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id            UUID          PRIMARY KEY DEFAULT gen_random_uuid(),
   name          VARCHAR(255)  NOT NULL,           -- display label e.g. "Private Office 4-Seat/Month"
   description   TEXT          NOT NULL,           -- pre-fills the line item description field
   quantity      DECIMAL(10,2) NOT NULL DEFAULT 1,
@@ -23,4 +23,4 @@ CREATE INDEX idx_proposal_presets_category ON proposal_line_item_presets(categor
 -- Auto-update updated_at
 CREATE TRIGGER proposal_line_item_presets_updated_at
   BEFORE UPDATE ON proposal_line_item_presets
-  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at();
