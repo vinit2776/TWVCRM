@@ -832,7 +832,10 @@ export function generateMembershipAgreementPDF(
   doc.text("PARTY OF THE SECOND PART (Member):", marginLeft, y);
   y += 6;
 
-  const memberPartyText = `${memberName}, having its registered office at ${memberAddress} (PAN: ${panNumber}), hereinafter referred to as "Member" (which expression shall, unless repugnant to the context or meaning thereof, mean and include its successors and assigns).`;
+  const signatoryClause = contract.member_signatory_name
+    ? `, represented herein by ${contract.member_signatory_name}, ${contract.member_signatory_designation || "Authorised Signatory"}${contract.member_signatory_pan ? ` (PAN: ${contract.member_signatory_pan})` : ""}, duly authorised to execute this Agreement`
+    : "";
+  const memberPartyText = `${memberName}, a company having its registered office at ${memberAddress} (PAN: ${panNumber})${signatoryClause}, hereinafter referred to as "Member" (which expression shall, unless repugnant to the context or meaning thereof, mean and include its successors and assigns).`;
   addWrappedText(memberPartyText, marginLeft, contentWidth, 9, "normal", [50, 50, 50], 4.5);
   y += 4;
 

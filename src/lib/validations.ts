@@ -233,6 +233,7 @@ export const createContractSchema = z.object({
   notice_period_months: z.number().min(0).default(2.0),
   member_signatory_name: z.string().min(1, "Signatory name is required"),
   member_signatory_designation: z.string().min(1, "Signatory designation is required"),
+  member_signatory_pan: z.string().optional(),
   agreement_date: z.string().min(1, "Agreement date is required"),
   // Optional fields
   terms_and_conditions: z.string().optional(),

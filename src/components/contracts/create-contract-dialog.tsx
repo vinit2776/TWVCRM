@@ -74,6 +74,7 @@ export function CreateContractDialog({
   // Signatory
   const [signatoryName, setSignatoryName] = useState("");
   const [signatoryDesignation, setSignatoryDesignation] = useState("");
+  const [signatoryPan, setSignatoryPan] = useState("");
   const [agreementDate, setAgreementDate] = useState(
     new Date().toISOString().split("T")[0]
   );
@@ -164,6 +165,7 @@ export function CreateContractDialog({
     setNoticePeriodMonths(2.0);
     setSignatoryName("");
     setSignatoryDesignation("");
+    setSignatoryPan("");
     setAgreementDate(new Date().toISOString().split("T")[0]);
     setNotes("");
     setLead(null);
@@ -251,6 +253,7 @@ export function CreateContractDialog({
       notice_period_months: noticePeriodMonths,
       member_signatory_name: signatoryName.trim(),
       member_signatory_designation: signatoryDesignation.trim(),
+      member_signatory_pan: signatoryPan.trim() || undefined,
       agreement_date: agreementDate,
       notes: notes.trim() || undefined,
       pan_number: panNumber.trim() || undefined,
@@ -589,7 +592,7 @@ export function CreateContractDialog({
             <Label className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
               Member Signatory
             </Label>
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
               <div className="space-y-2">
                 <Label>
                   Authorized Signatory <span className="text-destructive">*</span>
@@ -608,6 +611,15 @@ export function CreateContractDialog({
                   value={signatoryDesignation}
                   onChange={(e) => setSignatoryDesignation(e.target.value)}
                   placeholder="e.g. Managing Director"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Signatory PAN</Label>
+                <Input
+                  value={signatoryPan}
+                  onChange={(e) => setSignatoryPan(e.target.value.toUpperCase())}
+                  placeholder="Personal PAN"
+                  maxLength={10}
                 />
               </div>
               <div className="space-y-2">
