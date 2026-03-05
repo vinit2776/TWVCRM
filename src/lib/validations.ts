@@ -174,6 +174,7 @@ export type UpdateTaskInput = z.infer<typeof updateTaskSchema>;
 const lineItemSchema = z.object({
   description: z.string().min(1, "Description is required"),
   quantity: z.number().positive("Quantity must be positive"),
+  unit: z.string().optional(),
   unit_price: z.number().min(0, "Price must be non-negative"),
   total: z.number(),
 });
