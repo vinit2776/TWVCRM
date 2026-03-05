@@ -1143,6 +1143,8 @@ export interface VoCase {
   // Agreement & Compliance
   agreement_id?: string;
   agreement_status?: AgreementStatus;
+  ll_agreement_id?: string;
+  ll_agreement_status?: AgreementStatus;
   compliance_passed: boolean;
   compliance_passed_at?: string;
   // Timestamps
@@ -1225,6 +1227,7 @@ export interface CaseAgreement {
   case_id: string;
   agreement_number: string;
   template_key: string;
+  type?: 'proposal' | 'leave_license';
   status: AgreementStatus;
   variables: Record<string, unknown>;
   generated_document_id?: string;
@@ -1239,6 +1242,10 @@ export interface CaseAgreement {
   digio_document_id?: string;
   digio_sign_url?: string;
   digio_status?: string;
+  leegality_document_id?: string;
+  leegality_sign_url?: string;
+  leegality_status?: string;
+  leegality_estamp_value?: number;
   signed_at?: string;
   valid_from?: string;
   valid_until?: string;

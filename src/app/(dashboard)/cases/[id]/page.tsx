@@ -22,6 +22,7 @@ import { CaseStatusPipeline } from "@/components/cases/case-status-pipeline";
 import { CaseDocumentsTab } from "@/components/cases/case-documents-tab";
 import { CaseComplianceTab } from "@/components/cases/case-compliance-tab";
 import { CaseAgreementTab } from "@/components/cases/case-agreement-tab";
+import { CaseLeaveAgreementTab } from "@/components/cases/case-leave-agreement-tab";
 import { CaseCommentsTab } from "@/components/cases/case-comments-tab";
 import { CaseEmailsTab } from "@/components/cases/case-emails-tab";
 import { CaseStatusTransitionDialog } from "@/components/cases/case-status-transition-dialog";
@@ -146,6 +147,7 @@ export default function CaseDetailPage({
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="compliance">Compliance</TabsTrigger>
+          <TabsTrigger value="proposal">Proposal</TabsTrigger>
           <TabsTrigger value="agreement">Agreement</TabsTrigger>
           <TabsTrigger value="comments">Comments</TabsTrigger>
           <TabsTrigger value="emails">Emails</TabsTrigger>
@@ -355,8 +357,12 @@ export default function CaseDetailPage({
           </Card>
         </TabsContent>
 
-        <TabsContent value="agreement" className="mt-4">
+        <TabsContent value="proposal" className="mt-4">
           <CaseAgreementTab caseId={id} />
+        </TabsContent>
+
+        <TabsContent value="agreement" className="mt-4">
+          <CaseLeaveAgreementTab caseId={id} />
         </TabsContent>
 
         <TabsContent value="comments" className="mt-4">

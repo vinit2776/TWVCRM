@@ -18,7 +18,7 @@ export async function GET(
   }
 
   // Fetch case with all related data
-  const [caseRes, docsRes, complianceRes, agreementRes, commentsRes] =
+  const [caseRes, docsRes, complianceRes, agreementRes, llAgreementRes, commentsRes] =
     await Promise.all([
       supabase
         .from("cases")
@@ -42,6 +42,14 @@ export async function GET(
         .from("case_agreements")
         .select("*")
         .eq("case_id", id)
+        .eq("type", "proposal")
+        .order("created_at", { ascending: false })
+        .limit(1),
+      supabase
+        .from("case_agreements")
+        .select("*")
+        .eq("case_id", id)
+        .eq("type", "leave_license")
         .order("created_at", { ascending: false })
         .limit(1),
       supabase
@@ -64,6 +72,7 @@ export async function GET(
       documents: docsRes.data || [],
       compliance_checks: complianceRes.data || [],
       agreement: agreementRes.data?.[0] || null,
+      ll_agreement: llAgreementRes.data?.[0] || null,
       comments: commentsRes.data || [],
     },
   });

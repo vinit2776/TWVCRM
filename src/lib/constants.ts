@@ -842,6 +842,11 @@ export const AGREEMENT_STATUS_COLORS: Record<string, string> = {
   expired: "bg-red-100 text-red-800",
 };
 
+export const AGREEMENT_TYPE_LABELS: Record<string, string> = {
+  proposal: "Proposal",
+  leave_license: "Leave & License Agreement",
+};
+
 // ==========================================
 // Purpose-based Document Checklists
 // ==========================================

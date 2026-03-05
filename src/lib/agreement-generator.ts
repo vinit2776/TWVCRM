@@ -1,42 +1,20 @@
 import Handlebars from "handlebars";
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
-import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
 import { VO_PURPOSE_LABELS, ENTITY_TYPE_LABELS } from "@/lib/constants";
+import {
+  BRAND_TEAL,
+  BRAND_DARK,
+  COMPANY_NAME,
+  BRAND_NAME,
+  COMPANY_ADDRESS,
+  formatCurrency,
+  formatDate,
+  addBrandHeader,
+  addFooter,
+  createPdfContext,
+} from "@/lib/pdf-utils";
 import type { VoPurpose, EntityType } from "@/types";
-
-// TWV Brand Colors
-const BRAND_TEAL: [number, number, number] = [1, 94, 101];
-const BRAND_GREEN: [number, number, number] = [0, 174, 108];
-const BRAND_DARK: [number, number, number] = [26, 27, 30];
-
-const COMPANY_NAME = "SREE DESIGN INFRASTRUCTURE PVT LTD";
-const BRAND_NAME = "The WorkVilla";
-const COMPANY_ADDRESS = [
-  "Prakash Presidium, 110, Mahatma Gandhi Road,",
-  "Nungambakkam, Chennai - 600034",
-];
-const COMPANY_PHONE = "+91 97910 97900";
-const COMPANY_WEBSITE = "www.theworkvilla.com";
-const COMPANY_GST = "GST: 33AAACU4245J1ZF";
-
-function formatCurrency(amount: number): string {
-  return (
-    "Rs. " +
-    new Intl.NumberFormat("en-IN", {
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 2,
-    }).format(amount)
-  );
-}
-
-function formatDate(date: string | Date): string {
-  return new Date(date).toLocaleDateString("en-IN", {
-    year: "numeric",
-    month: "long",
-    day: "numeric",
-  });
-}
 
 // ================================================================
 // Agreement Template Keys
@@ -330,85 +308,35 @@ export function generateAgreementPdf(
   variables: AgreementVariables
 ): jsPDF {
   const doc = new jsPDF();
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const marginLeft = 15;
-  const marginRight = 15;
-  const contentWidth = pageWidth - marginLeft - marginRight;
-  const maxY = pageHeight - 20;
-  let y = 0;
-
-  function checkPageBreak(needed: number): void {
-    if (y + needed > maxY) {
-      addFooter(doc);
-      doc.addPage();
-      y = 20;
-    }
-  }
-
-  function addWrappedText(
-    text: string,
-    x: number,
-    width: number,
-    fontSize: number,
-    style: string = "normal",
-    color: [number, number, number] = [50, 50, 50],
-    lineHeight: number = 5
-  ): void {
-    doc.setFontSize(fontSize);
-    doc.setFont("helvetica", style);
-    doc.setTextColor(...color);
-    const lines = doc.splitTextToSize(text, width);
-    for (const line of lines) {
-      checkPageBreak(lineHeight + 2);
-      doc.text(line, x, y);
-      y += lineHeight;
-    }
-  }
-
-  // ── Header ──
-  doc.setFillColor(...BRAND_TEAL);
-  doc.rect(0, 0, pageWidth, 25, "F");
-  doc.setFillColor(...BRAND_GREEN);
-  doc.rect(0, 25, pageWidth, 1.5, "F");
-
-  doc.addImage(TWV_LOGO_BASE64, "PNG", marginLeft, 5, 50, 12.5);
-
-  doc.setFontSize(7);
-  doc.setFont("helvetica", "normal");
-  doc.setTextColor(255, 255, 255);
-  doc.text(COMPANY_NAME, pageWidth - marginRight, 10, { align: "right" });
-  doc.text(COMPANY_ADDRESS.join(" "), pageWidth - marginRight, 14, { align: "right" });
-  doc.text(`${COMPANY_PHONE} | ${COMPANY_WEBSITE}`, pageWidth - marginRight, 18, { align: "right" });
-
-  y = 38;
+  const startY = addBrandHeader(doc);
+  const ctx = createPdfContext(doc, startY);
 
   // ── Title ──
   const titleText = `VIRTUAL OFFICE AGREEMENT`;
   doc.setFontSize(16);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_TEAL);
-  doc.text(titleText, pageWidth / 2, y, { align: "center" });
-  y += 3;
+  doc.text(titleText, ctx.pageWidth / 2, ctx.y, { align: "center" });
+  ctx.y += 3;
 
   const titleWidth = doc.getTextWidth(titleText);
   doc.setDrawColor(...BRAND_TEAL);
   doc.setLineWidth(0.5);
-  doc.line((pageWidth - titleWidth) / 2, y, (pageWidth + titleWidth) / 2, y);
-  y += 5;
+  doc.line((ctx.pageWidth - titleWidth) / 2, ctx.y, (ctx.pageWidth + titleWidth) / 2, ctx.y);
+  ctx.y += 5;
 
   // Subtitle with purpose
   doc.setFontSize(11);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(100, 100, 100);
-  doc.text(`For ${variables.purpose_label}`, pageWidth / 2, y, { align: "center" });
-  y += 8;
+  doc.text(`For ${variables.purpose_label}`, ctx.pageWidth / 2, ctx.y, { align: "center" });
+  ctx.y += 8;
 
   // ── Agreement number & date ──
   doc.setFontSize(10);
-  doc.text(`Ref: ${variables.agreement_number}`, marginLeft, y);
-  doc.text(`Date: ${variables.agreement_date}`, pageWidth - marginRight, y, { align: "right" });
-  y += 10;
+  doc.text(`Ref: ${variables.agreement_number}`, ctx.marginLeft, ctx.y);
+  doc.text(`Date: ${variables.agreement_date}`, ctx.pageWidth - ctx.marginRight, ctx.y, { align: "right" });
+  ctx.y += 10;
 
   // ── Render the agreement body ──
   const bodyText = renderAgreementText(templateKey, variables);
@@ -418,54 +346,54 @@ export function generateAgreementPdf(
     const trimmed = line.trim();
 
     if (trimmed.startsWith("PARTY") || trimmed.startsWith("PURPOSE:") || trimmed.startsWith("SCHEDULE:") || trimmed.startsWith("TERMS:")) {
-      y += 4;
-      addWrappedText(trimmed, marginLeft, contentWidth, 10, "bold", BRAND_TEAL, 5);
-      y += 2;
+      ctx.y += 4;
+      ctx.addWrappedText(trimmed, ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5);
+      ctx.y += 2;
     } else if (/^\d+\./.test(trimmed)) {
-      addWrappedText(trimmed, marginLeft + 4, contentWidth - 4, 9, "normal", [50, 50, 50], 4.5);
+      ctx.addWrappedText(trimmed, ctx.marginLeft + 4, ctx.contentWidth - 4, 9, "normal", [50, 50, 50], 4.5);
     } else if (trimmed.startsWith("-")) {
-      addWrappedText(trimmed, marginLeft + 4, contentWidth - 4, 9, "normal", [50, 50, 50], 4.5);
+      ctx.addWrappedText(trimmed, ctx.marginLeft + 4, ctx.contentWidth - 4, 9, "normal", [50, 50, 50], 4.5);
     } else {
-      addWrappedText(trimmed, marginLeft, contentWidth, 9, "normal", [50, 50, 50], 4.5);
+      ctx.addWrappedText(trimmed, ctx.marginLeft, ctx.contentWidth, 9, "normal", [50, 50, 50], 4.5);
     }
   }
 
   // ── Signature block ──
-  y += 10;
-  checkPageBreak(50);
+  ctx.y += 10;
+  ctx.checkPageBreak(50);
 
   doc.setFontSize(10);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_DARK);
-  doc.text("IN WITNESS WHEREOF, the parties have executed this Agreement.", marginLeft, y);
-  y += 15;
+  doc.text("IN WITNESS WHEREOF, the parties have executed this Agreement.", ctx.marginLeft, ctx.y);
+  ctx.y += 15;
 
-  const colWidth = (contentWidth - 20) / 2;
-  const col1X = marginLeft;
-  const col2X = marginLeft + colWidth + 20;
+  const colWidth = (ctx.contentWidth - 20) / 2;
+  const col1X = ctx.marginLeft;
+  const col2X = ctx.marginLeft + colWidth + 20;
 
   // Operator
   doc.setFontSize(9);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_TEAL);
-  doc.text("For " + BRAND_NAME, col1X, y);
-  doc.text("For " + (variables.client_company_name || variables.client_name), col2X, y);
-  y += 20;
+  doc.text("For " + BRAND_NAME, col1X, ctx.y);
+  doc.text("For " + (variables.client_company_name || variables.client_name), col2X, ctx.y);
+  ctx.y += 20;
 
   doc.setDrawColor(150, 150, 150);
   doc.setLineWidth(0.3);
-  doc.line(col1X, y, col1X + colWidth, y);
-  doc.line(col2X, y, col2X + colWidth, y);
-  y += 5;
+  doc.line(col1X, ctx.y, col1X + colWidth, ctx.y);
+  doc.line(col2X, ctx.y, col2X + colWidth, ctx.y);
+  ctx.y += 5;
 
   doc.setFontSize(8);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(80, 80, 80);
-  doc.text("Authorized Signatory", col1X, y);
-  doc.text("Authorized Signatory", col2X, y);
-  y += 5;
-  doc.text(`Date: ${variables.agreement_date}`, col1X, y);
-  doc.text(`Date: ${variables.agreement_date}`, col2X, y);
+  doc.text("Authorized Signatory", col1X, ctx.y);
+  doc.text("Authorized Signatory", col2X, ctx.y);
+  ctx.y += 5;
+  doc.text(`Date: ${variables.agreement_date}`, col1X, ctx.y);
+  doc.text(`Date: ${variables.agreement_date}`, col2X, ctx.y);
 
   // ── Footer on all pages ──
   const totalPages = doc.getNumberOfPages();
@@ -475,31 +403,6 @@ export function generateAgreementPdf(
   }
 
   return doc;
-}
-
-function addFooter(doc: jsPDF): void {
-  const pw = doc.internal.pageSize.getWidth();
-  const ph = doc.internal.pageSize.getHeight();
-
-  doc.setFillColor(...BRAND_TEAL);
-  doc.rect(0, ph - 14, pw, 14, "F");
-  doc.setFillColor(...BRAND_GREEN);
-  doc.rect(0, ph - 14, pw, 0.8, "F");
-
-  doc.setFontSize(6.5);
-  doc.setFont("helvetica", "bold");
-  doc.setTextColor(255, 255, 255);
-  doc.text(`${BRAND_NAME}  |  ${COMPANY_NAME}`, pw / 2, ph - 8, { align: "center" });
-
-  doc.setFont("helvetica", "normal");
-  doc.setFontSize(6);
-  doc.setTextColor(200, 230, 220);
-  doc.text(
-    `${COMPANY_ADDRESS.join(" ")}  |  ${COMPANY_PHONE}  |  ${COMPANY_WEBSITE}`,
-    pw / 2,
-    ph - 4,
-    { align: "center" }
-  );
 }
 
 // Suppress unused import warnings for autoTable — it attaches to jsPDF prototype
