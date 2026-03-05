@@ -202,8 +202,8 @@ export async function POST(request: NextRequest) {
     }, { status: 400 });
   }
 
-  if (durationMinutes % 30 !== 0) {
-    return NextResponse.json({ error: "Duration must be in multiples of 30 minutes" }, { status: 400 });
+  if (durationMinutes % 15 !== 0) {
+    return NextResponse.json({ error: "Duration must be in multiples of 15 minutes" }, { status: 400 });
   }
 
   // Check advance booking days

@@ -73,10 +73,10 @@ export async function GET(
     status: b.status,
   }));
 
-  // Compute available slots (30-min increments)
+  // Compute available slots (15-min increments)
   const openMin = timeToMinutes(dayHours.open);
   const closeMin = timeToMinutes(dayHours.close);
-  const slotSize = 30; // minutes
+  const slotSize = 15; // minutes
 
   const available: { start_time: string; end_time: string }[] = [];
   let cursor = openMin;

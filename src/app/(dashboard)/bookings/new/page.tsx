@@ -586,7 +586,7 @@ function NewBookingForm() {
                     })}
                   </div>
                   <p className="text-xs text-muted-foreground">
-                    Min booking: {minBookingMin} min, then 30-min increments. Click a window to auto-fill times.
+                    Min booking: {minBookingMin} min, then 15-min increments. Click a window to auto-fill times.
                   </p>
                 </div>
               )}
