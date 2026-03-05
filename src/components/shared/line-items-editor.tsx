@@ -1,9 +1,11 @@
 "use client";
 
-import { Plus, Trash2 } from "lucide-react";
+import { useState } from "react";
+import { Plus, Trash2, BookMarked } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
+import { PresetPickerDialog } from "@/components/proposals/preset-picker";
 
 export interface LineItemData {
   description: string;
@@ -30,6 +32,12 @@ export function LineItemsEditor({
   discountPercentage,
   onDiscountChange,
 }: LineItemsEditorProps) {
+  const [presetPickerOpen, setPresetPickerOpen] = useState(false);
+
+  const addFromPreset = (preset: LineItemData) => {
+    onChange([...items, preset]);
+  };
+
   const addItem = () => {
     onChange([...items, { description: "", quantity: 1, unit: "", unit_price: 0, total: 0 }]);
   };
@@ -126,10 +134,22 @@ export function LineItemsEditor({
         </div>
       ))}
 
-      <Button type="button" variant="outline" size="sm" onClick={addItem}>
-        <Plus className="mr-2 h-4 w-4" />
-        Add Item
-      </Button>
+      <div className="flex gap-2">
+        <Button type="button" variant="outline" size="sm" onClick={addItem}>
+          <Plus className="mr-2 h-4 w-4" />
+          Add Item
+        </Button>
+        <Button type="button" variant="outline" size="sm" onClick={() => setPresetPickerOpen(true)}>
+          <BookMarked className="mr-2 h-4 w-4" />
+          From Presets
+        </Button>
+      </div>
+
+      <PresetPickerDialog
+        open={presetPickerOpen}
+        onOpenChange={setPresetPickerOpen}
+        onAddItem={addFromPreset}
+      />
 
       {/* Totals */}
       <div className="border-t pt-4 space-y-2">
