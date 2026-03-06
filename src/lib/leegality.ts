@@ -205,14 +205,41 @@ export async function uploadForEStampAndSigning(params: {
   // Actual payload is inside raw.data
   const data = raw.data ?? raw;
 
-  // signUrl may be a string or array depending on API version/response
-  const signUrlRaw = data.signUrl ?? data.signing_url ?? data.sign_url;
-  const signUrls: string[] = Array.isArray(signUrlRaw)
-    ? signUrlRaw
-    : signUrlRaw
-      ? [signUrlRaw]
-      : [];
-  // Return the first invitee's (lessor's) sign URL so TWV can sign first
+  console.log("[Leegality] Parsed data keys:", Object.keys(data));
+
+  // Leegality v3 returns signing URLs per-invitee inside the invitees array.
+  // Try multiple known field names for the per-invitee signing URL.
+  const invitees: Record<string, unknown>[] = Array.isArray(data.invitees)
+    ? data.invitees
+    : [];
+
+  const inviteeSignUrls: string[] = invitees.map((inv) => {
+    return String(
+      inv.signingUrl ??
+        inv.signing_url ??
+        inv.signUrl ??
+        inv.sign_url ??
+        inv.url ??
+        ""
+    );
+  });
+
+  // Also check for a top-level signUrl (older API versions)
+  const topLevelUrl = String(
+    data.signUrl ?? data.signing_url ?? data.sign_url ?? ""
+  );
+
+  // Prefer per-invitee URLs; fall back to top-level URL for the first invitee
+  const signUrls: string[] =
+    inviteeSignUrls.length > 0 && inviteeSignUrls.some((u) => u)
+      ? inviteeSignUrls
+      : topLevelUrl
+        ? [topLevelUrl]
+        : [];
+
+  console.log("[Leegality] signUrls extracted:", signUrls);
+
+  // Return the first invitee's (lessor's) sign URL
   const signUrl = signUrls[0] ?? "";
 
   return {
