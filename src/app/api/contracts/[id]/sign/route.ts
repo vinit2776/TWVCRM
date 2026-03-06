@@ -88,23 +88,33 @@ export async function POST(
       const memberPhone = lead?.mobile ?? lead?.phone ?? "";
       const signatoryName = contract.member_signatory_name || memberName;
 
-      const result = await uploadForEStampAndSigning({
-        pdfBuffer,
-        documentName: `Membership Agreement - ${memberName}`,
-        stampState: "Tamil Nadu",
-        stampDutyValue: 300,
-        lessorSigner: {
-          name: "Naval Chordia",
-          email: "naval@theworkvilla.com",
-          phone: "+919791097900",
-        },
-        lesseeSigner: {
-          name: signatoryName,
-          email: memberEmail,
-          phone: memberPhone,
-          signMethod: "aadhaar_esign",
-        },
-      });
+      let result;
+      try {
+        result = await uploadForEStampAndSigning({
+          pdfBuffer,
+          documentName: `Membership Agreement - ${memberName}`,
+          stampState: "Tamil Nadu",
+          stampDutyValue: 300,
+          lessorSigner: {
+            name: "Naval Chordia",
+            email: "naval@theworkvilla.com",
+            phone: "+919791097900",
+          },
+          lesseeSigner: {
+            name: signatoryName,
+            email: memberEmail,
+            phone: memberPhone,
+            signMethod: "aadhaar_esign",
+          },
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error("[contract/sign] Leegality upload error:", message);
+        return NextResponse.json(
+          { error: `Leegality error: ${message}` },
+          { status: 502 }
+        );
+      }
 
       // Store Leegality details on the contract
       await supabase
@@ -147,7 +157,13 @@ export async function POST(
         );
       }
 
-      const status = await getSigningStatus(docId);
+      let status;
+      try {
+        status = await getSigningStatus(docId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return NextResponse.json({ error: `Leegality error: ${message}` }, { status: 502 });
+      }
 
       const update: Record<string, unknown> = { leegality_status: status.status };
       if (status.status === "COMPLETED") {

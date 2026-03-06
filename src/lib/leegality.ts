@@ -3,12 +3,20 @@
  *
  * Leegality is used for:
  * - E-stamp paper (via BharatStamp for Tamil Nadu and 30 other states)
- * - Aadhaar eSign / DSC-based digital signing
+ * - Aadhaar eSign / VirtualSign-based digital signing
  * - Multi-party signing workflows
  *
- * API Reference: https://docs.leegality.com
+ * API Reference: https://github.com/prakharmittal/leegality-apidocs/blob/master/api_3_0.json
+ * Endpoint: POST https://api.leegality.com/v3.0/sign/request
  * Auth: X-Auth-Token header
- * Base URL: LEEGALITY_API_URL env variable (defaults to https://api.leegality.com/v3)
+ *
+ * Key concepts:
+ *   - profileId: Workflow ID from Leegality Dashboard (REQUIRED, set via LEEGALITY_PROFILE_ID)
+ *   - inviteetype: signing method per invitee ("AADHAAR", "VIRTUAL", "DSC", "OFFLINE_SIGN")
+ *   - stampSeries: stamp series code from dashboard (set via LEEGALITY_STAMP_SERIES)
+ *   - stampValue: stamp duty amount as string e.g. "300"
+ *   - documentId + signUrl returned on successful upload
+ *
  * Webhook HMAC: LEEGALITY_PRIVATE_SALT — used to verify inbound webhook signatures
  */
 
@@ -21,12 +29,14 @@ import crypto from "crypto";
 export interface LeegalityUploadResponse {
   /** Leegality document ID */
   documentId: string;
-  /** URL for the signer to complete signing */
+  /** URL for the signer to complete signing (may be first invitee's URL) */
   signUrl: string;
+  /** All signing URLs indexed by invitee (raw array from API) */
+  signUrls: string[];
   /** Current status */
   status: "CREATED" | "IN_PROGRESS" | "COMPLETED" | "EXPIRED" | "CANCELLED";
-  /** E-stamp duty paid */
-  stampDutyPaid: number;
+  /** E-stamp duty paid (if returned by API) */
+  stampDutyPaid?: number;
   /** Expiry date of the signing request */
   expiresAt: string;
 }
@@ -67,9 +77,12 @@ export interface LeegalityDownloadResult {
 // Config
 // ================================================================
 
+// Leegality API v3.0 base URL — endpoint is /sign/request
 const BASE_URL =
-  process.env.LEEGALITY_API_URL || "https://api.leegality.com/v3";
+  process.env.LEEGALITY_API_URL || "https://api.leegality.com/v3.0";
 const API_KEY = process.env.LEEGALITY_API_KEY;
+const PROFILE_ID = process.env.LEEGALITY_PROFILE_ID;
+const STAMP_SERIES = process.env.LEEGALITY_STAMP_SERIES;
 const IS_SANDBOX = process.env.LEEGALITY_ENVIRONMENT !== "production";
 
 function getAuthHeaders() {
@@ -86,8 +99,11 @@ function getAuthHeaders() {
 /**
  * Upload a PDF to Leegality for e-stamping and signing.
  * Uses multi-party signing with sequential order:
- *   1. Lessor (TWV) — signs first (electronic/aadhaar)
- *   2. Lessee (client) — signs second (aadhaar eSign)
+ *   1. Lessor (TWV) — signs first (VirtualSign / electronic)
+ *   2. Lessee (client) — signs second (Aadhaar eSign)
+ *
+ * Requires LEEGALITY_PROFILE_ID env var — get this from your Leegality Dashboard
+ * under Settings → Workflows/Profiles.
  */
 export async function uploadForEStampAndSigning(params: {
   /** PDF file as Buffer */
@@ -119,49 +135,62 @@ export async function uploadForEStampAndSigning(params: {
     return createMockUploadResponse(params.documentName, params.stampDutyValue);
   }
 
-  const body = {
+  if (!PROFILE_ID) {
+    throw new Error(
+      "[Leegality] LEEGALITY_PROFILE_ID is not configured. " +
+        "Go to your Leegality Dashboard → Settings → Workflows, copy the Workflow ID, " +
+        "and add it as LEEGALITY_PROFILE_ID in your environment variables."
+    );
+  }
+
+  // Map signing method to Leegality inviteetype
+  const lesseeInviteeType =
+    params.lesseeSigner.signMethod === "dsc"
+      ? "OFFLINE_SIGN"
+      : params.lesseeSigner.signMethod === "electronic"
+        ? "VIRTUAL"
+        : "AADHAAR"; // default: Aadhaar eSign
+
+  const body: Record<string, unknown> = {
+    profileId: PROFILE_ID,
     file: {
       name: `${params.documentName}.pdf`,
-      data: params.pdfBuffer.toString("base64"),
+      // Leegality API expects base64 in the "file" field (not "data")
+      file: params.pdfBuffer.toString("base64"),
     },
-    stamp_paper: {
-      state: params.stampState,
-      stamp_duty_amount: params.stampDutyValue,
-      purchase_stamp_paper: true,
-    },
-    signers: [
+    invitees: [
       {
         name: params.lessorSigner.name,
         email: params.lessorSigner.email,
         phone: params.lessorSigner.phone,
-        // Lessor signs electronically (digital signature via Leegality account)
-        sign_type: "electronic",
-        order: 1,
+        // Lessor signs electronically (VirtualSign)
+        inviteetype: "VIRTUAL",
       },
       {
         name: params.lesseeSigner.name,
         email: params.lesseeSigner.email,
         phone: params.lesseeSigner.phone,
         // Lessee signs via Aadhaar OTP eSign by default
-        sign_type:
-          params.lesseeSigner.signMethod === "dsc"
-            ? "dsc"
-            : params.lesseeSigner.signMethod === "electronic"
-              ? "electronic"
-              : "aadhaar",
-        order: 2,
+        inviteetype: lesseeInviteeType,
       },
     ],
-    expire_in_days: params.expiryDays ?? 30,
-    // Webhook URL — Leegality will POST status updates here when signing completes/expires
-    ...(process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL
-      ? {
-          webhook_url: `${process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/leegality`,
-        }
-      : {}),
   };
 
-  const response = await fetch(`${BASE_URL}/document/upload`, {
+  // Add stamp paper config if series is configured
+  if (STAMP_SERIES) {
+    body.stampSeries = STAMP_SERIES;
+    body.stampValue = String(params.stampDutyValue);
+  } else {
+    console.warn(
+      "[Leegality] LEEGALITY_STAMP_SERIES not configured — e-stamp will use workflow defaults. " +
+        "Get the stamp series from Leegality Dashboard → Stamps."
+    );
+  }
+
+  // Optional: add internal reference number for traceability
+  body.irn = `TWV-${Date.now()}`;
+
+  const response = await fetch(`${BASE_URL}/sign/request`, {
     method: "POST",
     headers: getAuthHeaders(),
     body: JSON.stringify(body),
@@ -176,12 +205,29 @@ export async function uploadForEStampAndSigning(params: {
 
   const data = await response.json();
 
+  // signUrl may be a string or array depending on API version/response
+  const signUrlRaw = data.signUrl ?? data.signing_url ?? data.sign_url;
+  const signUrls: string[] = Array.isArray(signUrlRaw)
+    ? signUrlRaw
+    : signUrlRaw
+      ? [signUrlRaw]
+      : [];
+  // Return the first invitee's (lessor's) sign URL so TWV can sign first
+  const signUrl = signUrls[0] ?? "";
+
   return {
-    documentId: data.document_id ?? data.id,
-    signUrl: data.signing_url ?? data.sign_url ?? "",
-    status: normalizeStatus(data.status),
-    stampDutyPaid: data.stamp_duty_amount ?? params.stampDutyValue,
-    expiresAt: data.expires_at ?? data.expiry_date ?? new Date(Date.now() + 30 * 86400000).toISOString(),
+    documentId: data.documentId ?? data.document_id ?? data.id ?? "",
+    signUrl,
+    signUrls,
+    status: normalizeStatus(data.status ?? "CREATED"),
+    stampDutyPaid: data.stampValue ? Number(data.stampValue) : data.stamp_duty_amount ? Number(data.stamp_duty_amount) : undefined,
+    expiresAt:
+      data.expiresAt ??
+      data.expires_at ??
+      data.expiry_date ??
+      new Date(
+        Date.now() + (params.expiryDays ?? 30) * 86400000
+      ).toISOString(),
   };
 }
 
@@ -191,6 +237,7 @@ export async function uploadForEStampAndSigning(params: {
 
 /**
  * Get the current signing/stamping status of a Leegality document.
+ * Uses GET /v3.0/sign/request?documentId=...
  */
 export async function getSigningStatus(
   documentId: string
@@ -200,10 +247,13 @@ export async function getSigningStatus(
     return createMockSigningStatus(documentId);
   }
 
-  const response = await fetch(`${BASE_URL}/document/${documentId}/status`, {
-    method: "GET",
-    headers: getAuthHeaders(),
-  });
+  const response = await fetch(
+    `${BASE_URL}/sign/request?documentId=${encodeURIComponent(documentId)}`,
+    {
+      method: "GET",
+      headers: getAuthHeaders(),
+    }
+  );
 
   if (!response.ok) {
     const errText = await response.text();
@@ -215,31 +265,53 @@ export async function getSigningStatus(
   const data = await response.json();
 
   return {
-    documentId: data.document_id ?? data.id ?? documentId,
-    status: normalizeStatus(data.status),
-    signers: (data.signers ?? data.invitees ?? []).map(
+    documentId: data.documentId ?? data.document_id ?? data.id ?? documentId,
+    status: normalizeStatus(data.status ?? ""),
+    signers: (data.invitees ?? data.signers ?? data.inviteees ?? []).map(
       (s: Record<string, unknown>) => ({
         name: String(s.name ?? ""),
         email: String(s.email ?? ""),
         phone: s.phone ? String(s.phone) : undefined,
         status: normalizeSignerStatus(String(s.status ?? "")),
-        signedAt: s.signed_at ? String(s.signed_at) : undefined,
-        signMethod: s.sign_type ? mapSignType(String(s.sign_type)) : undefined,
+        signedAt: s.signedAt
+          ? String(s.signedAt)
+          : s.signed_at
+            ? String(s.signed_at)
+            : undefined,
+        signMethod: s.inviteetype
+          ? mapInviteeType(String(s.inviteetype))
+          : s.sign_type
+            ? mapSignType(String(s.sign_type))
+            : undefined,
       })
     ),
-    eStamp: data.stamp_paper
+    eStamp: (data.stampDetails ?? data.stamp_paper)
       ? {
-          state: String(data.stamp_paper.state ?? ""),
-          value: Number(data.stamp_paper.stamp_duty_amount ?? 0),
-          certificateNumber: data.stamp_paper.certificate_number
-            ? String(data.stamp_paper.certificate_number)
+          state: String(
+            (data.stampDetails ?? data.stamp_paper)?.state ?? ""
+          ),
+          value: Number(
+            (data.stampDetails ?? data.stamp_paper)?.stampValue ??
+              (data.stampDetails ?? data.stamp_paper)?.stamp_duty_amount ??
+              0
+          ),
+          certificateNumber: (data.stampDetails ?? data.stamp_paper)
+            ?.certificateNumber
+            ? String(
+                (data.stampDetails ?? data.stamp_paper).certificateNumber
+              )
             : undefined,
-          stampedAt: data.stamp_paper.stamped_at
-            ? String(data.stamp_paper.stamped_at)
+          stampedAt: (data.stampDetails ?? data.stamp_paper)?.stampedAt
+            ? String((data.stampDetails ?? data.stamp_paper).stampedAt)
             : undefined,
         }
       : undefined,
-    updatedAt: String(data.updated_at ?? data.modified_at ?? new Date().toISOString()),
+    updatedAt: String(
+      data.updatedAt ??
+        data.updated_at ??
+        data.modified_at ??
+        new Date().toISOString()
+    ),
   };
 }
 
@@ -262,13 +334,17 @@ export async function downloadStampedDocument(
     };
   }
 
-  const response = await fetch(`${BASE_URL}/document/${documentId}/download`, {
-    method: "GET",
-    headers: {
-      "X-Auth-Token": API_KEY,
-      Accept: "application/pdf",
-    },
-  });
+  // Try v3.0 download endpoint; fall back gracefully
+  const response = await fetch(
+    `${BASE_URL}/sign/request/document?documentId=${encodeURIComponent(documentId)}`,
+    {
+      method: "GET",
+      headers: {
+        "X-Auth-Token": API_KEY,
+        Accept: "application/pdf",
+      },
+    }
+  );
 
   if (!response.ok) {
     const errText = await response.text();
@@ -282,7 +358,7 @@ export async function downloadStampedDocument(
   // Leegality may return raw binary or JSON-wrapped base64
   if (contentType.includes("application/json")) {
     const data = await response.json();
-    const b64 = data.file_data ?? data.data ?? "";
+    const b64 = data.file_data ?? data.data ?? data.file ?? "";
     return {
       pdfBase64: b64,
       fileName: `stamped-signed-${documentId}.pdf`,
@@ -345,8 +421,20 @@ type LeegalityStatus = LeegalityUploadResponse["status"];
 function normalizeStatus(raw: string): LeegalityStatus {
   const upper = (raw ?? "").toUpperCase();
   if (upper === "CREATED") return "CREATED";
-  if (upper === "IN_PROGRESS" || upper === "INPROGRESS" || upper === "PENDING") return "IN_PROGRESS";
-  if (upper === "COMPLETED" || upper === "DONE" || upper === "SIGNED") return "COMPLETED";
+  if (
+    upper === "IN_PROGRESS" ||
+    upper === "INPROGRESS" ||
+    upper === "PENDING" ||
+    upper === "SENT"
+  )
+    return "IN_PROGRESS";
+  if (
+    upper === "COMPLETED" ||
+    upper === "DONE" ||
+    upper === "SIGNED" ||
+    upper === "COMPLETE"
+  )
+    return "COMPLETED";
   if (upper === "EXPIRED") return "EXPIRED";
   if (upper === "CANCELLED" || upper === "CANCELED") return "CANCELLED";
   return "IN_PROGRESS";
@@ -354,9 +442,17 @@ function normalizeStatus(raw: string): LeegalityStatus {
 
 function normalizeSignerStatus(raw: string): "PENDING" | "SIGNED" | "EXPIRED" {
   const upper = (raw ?? "").toUpperCase();
-  if (upper === "SIGNED" || upper === "COMPLETED" || upper === "DONE") return "SIGNED";
+  if (upper === "SIGNED" || upper === "COMPLETED" || upper === "DONE" || upper === "COMPLETE")
+    return "SIGNED";
   if (upper === "EXPIRED") return "EXPIRED";
   return "PENDING";
+}
+
+function mapInviteeType(raw: string): "aadhaar_esign" | "dsc" | "electronic" {
+  const upper = raw.toUpperCase();
+  if (upper === "AADHAAR" || upper === "AADHAAR_ESIGN") return "aadhaar_esign";
+  if (upper === "DSC" || upper === "OFFLINE_SIGN") return "dsc";
+  return "electronic";
 }
 
 function mapSignType(raw: string): "aadhaar_esign" | "dsc" | "electronic" {
@@ -376,14 +472,15 @@ function createMockUploadResponse(
   const mockId = `LEG${Date.now().toString(36).toUpperCase()}`;
   const expiresAt = new Date();
   expiresAt.setDate(expiresAt.getDate() + 30);
+  const mockSignUrl = IS_SANDBOX
+    ? `https://sandbox.leegality.com/sign/${mockId}`
+    : `https://app.leegality.com/sign/${mockId}`;
 
   return {
     documentId: mockId,
-    signUrl: IS_SANDBOX
-      ? `https://sandbox.leegality.com/sign/${mockId}`
-      : `https://app.leegality.com/sign/${mockId}`,
+    signUrl: mockSignUrl,
+    signUrls: [mockSignUrl],
     status: "CREATED",
-    stampDutyPaid: stampDutyValue,
     expiresAt: expiresAt.toISOString(),
   };
 }
@@ -409,7 +506,7 @@ function createMockSigningStatus(documentId: string): LeegalitySigningStatus {
     ],
     eStamp: {
       state: "Tamil Nadu",
-      value: 100,
+      value: 300,
       certificateNumber: `TN-MOCK-${documentId}`,
       stampedAt: new Date().toISOString(),
     },

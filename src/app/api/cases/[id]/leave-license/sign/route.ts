@@ -87,23 +87,33 @@ export async function POST(
       const vars = (agreement.variables || {}) as Record<string, string>;
 
       // Upload to Leegality
-      const result = await uploadForEStampAndSigning({
-        pdfBuffer,
-        documentName: `Leave & License - ${vars.client_name || "Client"}`,
-        stampState: "Tamil Nadu",
-        stampDutyValue: (agreement.leegality_estamp_value as number) || 100,
-        lessorSigner: {
-          name: "Naval Chordia",
-          email: "naval@theworkvilla.com",
-          phone: "+919791097900",
-        },
-        lesseeSigner: {
-          name: vars.lessee_signatory_name || vars.client_name || "Client",
-          email: vars.client_email || "",
-          phone: vars.client_phone || "",
-          signMethod: "aadhaar_esign",
-        },
-      });
+      let result;
+      try {
+        result = await uploadForEStampAndSigning({
+          pdfBuffer,
+          documentName: `Leave & License - ${vars.client_name || "Client"}`,
+          stampState: "Tamil Nadu",
+          stampDutyValue: (agreement.leegality_estamp_value as number) || 100,
+          lessorSigner: {
+            name: "Naval Chordia",
+            email: "naval@theworkvilla.com",
+            phone: "+919791097900",
+          },
+          lesseeSigner: {
+            name: vars.lessee_signatory_name || vars.client_name || "Client",
+            email: vars.client_email || "",
+            phone: vars.client_phone || "",
+            signMethod: "aadhaar_esign",
+          },
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        console.error("[ll-sign] Leegality upload error:", message);
+        return NextResponse.json(
+          { error: `Leegality error: ${message}` },
+          { status: 502 }
+        );
+      }
 
       // Update agreement with Leegality details
       await supabase
@@ -152,7 +162,13 @@ export async function POST(
         return NextResponse.json({ error: "No Leegality document ID found" }, { status: 400 });
       }
 
-      const status = await getSigningStatus(docId);
+      let status;
+      try {
+        status = await getSigningStatus(docId);
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        return NextResponse.json({ error: `Leegality error: ${message}` }, { status: 502 });
+      }
 
       // Update local status
       await supabase
