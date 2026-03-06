@@ -157,14 +157,18 @@ export async function uploadForEStampAndSigning(params: {
       {
         name: params.lessorSigner.name,
         email: params.lessorSigner.email,
-        phone: params.lessorSigner.phone,
+        // Leegality requires phone without leading "+"
+        phone: normalizePhone(params.lessorSigner.phone),
         // Lessor signs electronically (VirtualSign)
         inviteetype: "VIRTUAL",
       },
       {
         name: params.lesseeSigner.name,
         email: params.lesseeSigner.email,
-        phone: params.lesseeSigner.phone,
+        // Normalize phone; omit key if empty to avoid API validation error
+        ...(params.lesseeSigner.phone
+          ? { phone: normalizePhone(params.lesseeSigner.phone) }
+          : {}),
         // Lessee signs via Aadhaar OTP eSign by default
         inviteetype: lesseeInviteeType,
       },
@@ -411,6 +415,21 @@ export function verifyWebhookSignature(
 // ================================================================
 // Helpers
 // ================================================================
+
+/**
+ * Normalize a phone number for Leegality API.
+ * Leegality accepts 10-digit Indian mobile numbers without country code,
+ * or full E.164 format WITHOUT the leading "+".
+ *
+ * - "+919791097900" → "919791097900"
+ * - "9791097900"    → "9791097900"
+ * - ""              → ""  (handled upstream)
+ */
+function normalizePhone(phone: string): string {
+  if (!phone) return "";
+  // Strip leading "+" if present
+  return phone.startsWith("+") ? phone.slice(1) : phone;
+}
 
 type LeegalityStatus = LeegalityUploadResponse["status"];
 
