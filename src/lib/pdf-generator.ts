@@ -921,7 +921,7 @@ export function generateMembershipAgreementPDF(
   const scheduleData2: [string, string, string][] = [
     ["17", "Modifications & Additions", "Any modifications to the workspace layout or additional fit-outs requested by the Member shall be subject to prior written approval of the Operator and at the Member's cost."],
     ["18", "Auto-Renewal", `This Agreement shall automatically renew for successive terms of ${contract.tenure_months} months each upon expiry, unless either party provides written notice of non-renewal at least ${noticePeriod} month(s) prior to the end of the then-current term.`],
-    ["19", "Escalation", `The MMF shall be subject to an annual escalation of ${escalation}% effective from each anniversary of the Commencement Date.`],
+    ["19", "Escalation on monthly\nMembership Fees", `${escalation}% on Monthly Membership Fees and all products and services after expiry of ${commitmentTerm} months commencing from the Commencement Date.`],
   ];
 
   checkPageBreak(30);
@@ -953,6 +953,7 @@ export function generateMembershipAgreementPDF(
 
   // ================================================================
   // TERMS AND CONDITIONS (Clauses 20-36)
+  // Rendered as table to match reference document format
   // ================================================================
 
   doc.setFontSize(12);
@@ -963,37 +964,99 @@ export function generateMembershipAgreementPDF(
   y += 8;
 
   const clauses: [string, string, string][] = [
-    ["20", "Use of Premises", "The Member shall use the allocated workspace solely for lawful business purposes. The Member shall not use the premises for any illegal, immoral, or objectionable purpose. The Member shall comply with all applicable laws, rules, and regulations in the conduct of its business from the premises."],
-    ["21", "Maintenance & Housekeeping", "The Operator shall maintain the common areas and provide regular housekeeping services. The Member shall maintain its allocated workspace in a clean and orderly condition. Any damage caused by the Member or its invitees to the premises, furniture, fixtures, or equipment shall be repaired/replaced at the Member's cost."],
-    ["22", "Code of Conduct", "The Member and its employees, agents, and invitees shall observe and comply with the rules, regulations, and code of conduct prescribed by the Operator from time to time. The Operator reserves the right to deny entry to any person who does not comply with the same."],
-    ["23", "Termination", `Either party may terminate this Agreement by giving ${noticePeriod} month(s) written notice after the expiry of the Commitment Term. Early termination by the Member during the Commitment Term shall result in forfeiture of the IFRSD. The Operator may terminate this Agreement immediately upon: (a) breach of any material term by the Member; (b) default in payment for more than 15 days; (c) insolvency or winding up of the Member.`],
-    ["24", "Consequences of Termination", "Upon termination: (a) the Member shall vacate the premises and remove all its belongings within 7 days; (b) the IFRSD (or balance thereof) shall be refunded within 30 days after adjusting any outstanding dues; (c) any property left behind after 15 days of termination shall be deemed abandoned."],
-    ["25", "Security Deposit", `The IFRSD of ${formatCurrencyPDF(ifrsd)} shall be held by the Operator as security for the Member's obligations. No interest shall accrue on the IFRSD. The Operator may apply the IFRSD towards any outstanding dues upon termination.`],
-    ["26", "Late Payment", "A late payment charge of 2% per month (or part thereof) shall be levied on any amount outstanding beyond the due date. The Operator reserves the right to restrict access to the premises if payment is overdue by more than 15 days."],
-    ["27", "Insurance & Liability", "The Operator shall maintain adequate insurance for the building and common areas. The Member shall be responsible for insuring its own equipment, inventory, and belongings. The Operator shall not be liable for any loss, damage, or theft of the Member's property."],
-    ["28", "Company Details", `Operator: SREE DESIGN INFRASTRUCTURE PRIVATE LIMITED\nCIN: U74999TN2014PTC097266\nGST: 33AAACU4245J1ZF\nRegistered Office: ${COMPANY_ADDRESS.join(" ")}`],
-    ["29", "Bank Details", `Account Name: ${COMPANY_BANK_DETAILS.accountName}\nAccount No: ${COMPANY_BANK_DETAILS.accountNumber}\nIFSC: ${COMPANY_BANK_DETAILS.ifscCode}\nBank: ${COMPANY_BANK_DETAILS.bank}\nBranch: ${COMPANY_BANK_DETAILS.branch}`],
-    ["30", "Confidentiality", "Both parties shall maintain confidentiality of the terms of this Agreement and any proprietary or confidential information of the other party that comes to its knowledge during the term of this Agreement."],
-    ["31", "Force Majeure", "Neither party shall be liable for any failure or delay in performance due to circumstances beyond its reasonable control, including but not limited to natural disasters, war, epidemic/pandemic, government action, or failure of utilities."],
-    ["32", "Indemnity", "The Member shall indemnify and hold harmless the Operator against all claims, liabilities, damages, costs, and expenses arising from: (a) the Member's use of the premises; (b) any breach of this Agreement by the Member; (c) any act or omission of the Member or its employees, agents, or invitees."],
-    ["33", "Dispute Resolution", "Any dispute arising out of or in connection with this Agreement shall first be attempted to be resolved through mutual discussions. Failing which, the dispute shall be referred to arbitration under the Arbitration and Conciliation Act, 1996. The seat of arbitration shall be Chennai, Tamil Nadu."],
-    ["34", "Governing Law & Jurisdiction", "This Agreement shall be governed by and construed in accordance with the laws of India. The courts at Chennai shall have exclusive jurisdiction over any disputes arising hereunder."],
-    ["35", "Entire Agreement", "This Agreement constitutes the entire agreement between the parties with respect to the subject matter hereof and supersedes all prior agreements, understandings, negotiations, and discussions, whether oral or written."],
-    ["36", "Amendments", "No amendment, modification, or waiver of any provision of this Agreement shall be effective unless made in writing and signed by both parties."],
+    ["20", "Representation &\nwarranties",
+      "Member represents and warrants to the other Party that:\n" +
+      "\u2022 It is duly organized and validly existing and in good standing under the laws of the jurisdiction of its organization;\n" +
+      "\u2022 Authorized Signatories have complete legal authority and power to execute and perform under this Agreement and has full corporate power and is duly authorized to enter into, execute and deliver this Agreement, and to carry out and otherwise perform its obligations thereunder;\n" +
+      "\u2022 This Agreement is a legal, valid and binding obligation and is enforceable against it."],
+
+    ["21", "Force Majeure",
+      "In the event of force majeure or default by landlord, which prevents the Member from use and/or access of the Premises, the Membership Fees for such period shall stand abated in the manner prescribed by the Company and in proportion to the reduced liability (if any) of the Company with respect to the Premises including (without restriction) maintenance etc. The Member shall not be entitled to terminate the Agreement during Force Majeure period and/or make any claim on the Company."],
+
+    ["22", "Indemnification",
+      "Member hereby indemnifies the Company from and against any and all claims, including third party claims, liabilities, and expenses including reasonable attorneys' fees, resulting from any breach or alleged breach of this Agreement by the Member or its employee, agent guests, invitees or their actions or omissions, except to the extent a claim results from the gross negligence, willful misconduct or fraud of the Company. Member is also responsible and make good the loss resulting in the damage to the Premises/Work Spaces caused by it or their guests, employees etc. Member shall not make any settlement that requires a materially adverse act or admission by the Company or imposes any obligation upon any of the Company Parties unless Member has first obtained our or the relevant Company Party's written consent. None of the Company Parties shall be liable for any obligations arising out of a settlement made without its prior written consent."],
+
+    ["23", "Termination by the\nMember",
+      `Member may terminate this Agreement by delivering to the Company, a written notice of at least ${noticePeriod} month(s) ("Notice for Termination") after expiry of the Commitment Term.`],
+
+    ["24", "Termination or\nsuspension by the\nCompany",
+      "Company may terminate this Agreement by delivering to the Member, Notice for Termination after expiry of the Commitment Term to terminate this Agreement. Notwithstanding the Commitment Term, Company may withhold Services or immediately terminate this Agreement:\n" +
+      "\u2022 Upon default in monthly payment beyond 20th (Twenty) of English calendar month.\n" +
+      "\u2022 Upon breach of this Agreement;\n" +
+      "\u2022 loss of our rights in the Premises;\n" +
+      "\u2022 If any outstanding fees are still due after we provide notice;\n" +
+      "\u2022 If Member or any one claiming under it, fails to comply with the terms and conditions of Membership and House Rules, or any other policies or instructions provided by Company or applicable to Member; or"],
+
+    ["25", "Removal from\nProperty upon\nTermination",
+      "Prior to the termination or expiration of this Agreement, Member shall remove all its property from the Work Space and Premises. After providing with reasonable notice, Company will be entitled to dispose of any property remaining in or on the Work Space or Premises after the termination or expiration of this Agreement and will not have any obligation to store such property, and Member waives any claims or demands regarding such property or our handling of such property. Member shall be responsible for paying any fees reasonably incurred by Company regarding such removal. Following the termination or expiration of this Agreement, Company will not forward or hold mail or other packages delivered at the Premises."],
+
+    ["26", "Confidentiality",
+      "Each of the Parties agree to treat the negotiation and execution of this Agreement, the transactions contemplated herein and any information given to it by the other Party (which is not, on the date it is so given, already in the public domain) for the purpose of the negotiation or execution of this Agreement (\"Confidential Information\") as confidential. Each of the Parties agree that they shall not disclose any Confidential Information to any person except its employees, agents, shareholders and advisors on a strictly need-to-know basis."],
+
+    ["27", "Governing Law and\nDispute Resolution",
+      "Governed by Indian law. Disputes shall be resolved by arbitration in accordance with the Arbitration and Conciliation Act 1996 at Chennai only."],
+
+    ["28", "Company Details",
+      "SREE DESIGN INFRASTRUCTURE PRIVATE LIMITED\n" +
+      "CIN No: U74999TN2014PTC097266\n" +
+      "PAN No: AAACU4245J\n" +
+      "Goods and Service Tax No: 33AAACU4245J1ZF"],
+
+    ["29", "Bank Account Details",
+      `Account Name: ${COMPANY_BANK_DETAILS.accountName}\n` +
+      `Bank Name: ${COMPANY_BANK_DETAILS.bank}\n` +
+      `Current Account No: ${COMPANY_BANK_DETAILS.accountNumber}\n` +
+      `IFSC: ${COMPANY_BANK_DETAILS.ifscCode}\n` +
+      `Branch Address: ${COMPANY_BANK_DETAILS.branch}`],
+
+    ["30", "Use of Member\nCompany Name/Logo",
+      "Member consent to our non-exclusive, non-transferable use of Member's Company name and/or logo in connection with identifying Member as a member of the Company, alongside those of other Member Companies, on a public-facing \"Membership\". Member warrants that the logo do not infringe upon the rights of any third party and that Member has full authority to provide this consent. Member may terminate this consent at any time upon thirty (30) days' prior notice."],
+
+    ["31", "Severability",
+      "Each provision of this Agreement shall be considered separable. To the extent that any provision of this Agreement is prohibited, this Agreement shall be considered amended to the smallest degree possible in order to make the Agreement effective under applicable law."],
+
+    ["32", "Waiver of Claims",
+      "To the extent permitted by law, Member on its own behalf and on behalf of its employees, agents, guests and invitees, waive any and all claims and rights against Company and our landlords at the Premises and Company's affiliates, parents, and successors and employees, assignees, officers, agents and directors (collectively, the \"Company Parties\") resulting from injury or damage to, or destruction, theft, or loss of, any property, person, except to the extent caused by the gross negligence, willful misconduct or fraud of the Company Parties."],
+
+    ["33", "Limitation of\nLiability",
+      "To the extent permitted by law, the aggregate monetary liability of any of the Company Parties to Member and its employees, agents, guests or invitees for any reason and for all causes of action, will not exceed the total Membership Fees paid by Member to the Company under this Agreement in the last 2 (Two) months prior to the claim arising. None of the Company Parties will be liable under any cause of action, for any indirect, special, incidental, consequential, reliance or punitive damages, including loss of profits or business interruption."],
+
+    ["34", "Other Members",
+      "Company do not control and are not responsible for the actions of other member companies, members, or any other third parties. If a dispute arises between Member or their invitees or guests, Company shall have no responsibility or obligation to participate, mediate or indemnify any party."],
+
+    ["35", "Anti-Corruption\nLaw",
+      "Neither Member nor any of its employee, directors, officers, employees, agents, subcontractors, representatives or anyone acting on behalf of the Member, (i) has, directly or indirectly, offered, paid, given, promised, or authorized the payment of any money, gift or anything of value to: (A) any Government Official or any commercial party, (B) any person while knowing or having reason to know that all or a portion of such money, gift or thing of value will be offered, paid or given, directly or indirectly, to any Government Official or any commercial party, or (C) any employee or representative of the Company for the purpose of (1) influencing an act or decision of the Government Official or commercial party in his or her official capacity, (2) inducing the Government Official or commercial party to do or omit to do any act in violation of the lawful duty of such official, (3) securing an improper advantage or (4) securing the execution of this Agreement, (ii) will authorize or make any payments or gifts or any offers or promises of payments or gifts of any kind, directly or indirectly, in connection with this Agreement, the Services or the Office Space. For purposes this section, \"Government Official\" means any officer, employee or person acting in an official capacity for any government agency or instrumentality, including state-owned or controlled companies, and public international organizations, as well as a political party or official thereof or candidate for political office."],
+
+    ["36", "Other Terms and\nConditions",
+      "\u2022 The Member shall not engage any food vendor for food delivery and/or catering services on a continuing or permanent basis in the Premises. If the Member is desirous of availing food delivery and catering services, the Member shall inform the Company and avail such services through the Company only.\n" +
+      "\u2022 Member is barred from usage/installation/affixing whether permanent or temporarily any personal electrical/mechanical equipment/machine including but not restricted to television, toaster, printer, projector etc. anywhere in the Premises without seeking prior written approval from the Company.\n" +
+      "\u2022 This Agreement constitutes the entire agreement between the Member & the Company as to its subject matter and supersedes all prior and contemporaneous agreements, proposals or representations, written or oral, concerning its subject matter. No modification, amendment or waiver of any provision of this Agreement shall be effective unless in writing."],
   ];
 
-  for (const [num, title, body] of clauses) {
-    checkPageBreak(20);
+  autoTable(doc, {
+    startY: y,
+    body: clauses,
+    theme: "grid",
+    bodyStyles: {
+      fontSize: 8.5,
+      textColor: [50, 50, 50],
+      cellPadding: 3.5,
+      lineColor: [200, 200, 200],
+      lineWidth: 0.3,
+    },
+    alternateRowStyles: {
+      fillColor: [245, 250, 248],
+    },
+    columnStyles: {
+      0: { cellWidth: 12, halign: "center", fontStyle: "bold" },
+      1: { cellWidth: 48, fontStyle: "bold" },
+      2: { cellWidth: "auto" },
+    },
+    margin: { left: marginLeft, right: marginRight },
+  });
 
-    doc.setFontSize(9.5);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(...BRAND_TEAL);
-    doc.text(`${num}. ${title}`, marginLeft, y);
-    y += 5;
-
-    addWrappedText(body, marginLeft, contentWidth, 8.5, "normal", [50, 50, 50], 4);
-    y += 4;
-  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  y = (doc as any).lastAutoTable.finalY + 10;
 
   // ================================================================
   // SIGNATURE BLOCK
@@ -1057,40 +1120,102 @@ export function generateMembershipAgreementPDF(
   y += 12;
 
   // ================================================================
-  // ENCLOSURE: KYC REQUIREMENTS
+  // ENCLOSURE: KYC REQUIREMENTS (4-column table matching reference)
   // ================================================================
 
-  checkPageBreak(50);
+  checkPageBreak(20);
 
   doc.setFontSize(11);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_TEAL);
-  doc.text("ENCLOSURE: KYC Documents Required", marginLeft, y);
+  doc.text("Encl:", marginLeft, y);
   y += 8;
 
-  const kycItems = [
-    "Copy of PAN Card of the Company / LLP / Firm / Individual",
-    "Copy of GST Registration Certificate (if applicable)",
-    "Copy of Certificate of Incorporation / Partnership Deed",
-    "Copy of Board Resolution / Authorization Letter for the Authorized Signatory",
-    "Copy of PAN Card & Aadhaar Card of the Authorized Signatory",
-    "Passport-size photograph of the Authorized Signatory",
-    "List of employees / users who will be using the workspace (with photo ID)",
-    "Cancelled cheque or bank statement (for NEFT/RTGS payment setup)",
+  const kycTableData: string[][] = [
+    [
+      "Aadhaar Card",
+      "PAN Card for Company",
+      "Partnership Agreement / registration certificate (if Partnership is registered)",
+      "LLP Agreement / registration certificate (if LLP is registered)",
+    ],
+    [
+      "PAN Card",
+      "Certificate of Incorporation",
+      "Authority letter in favour of the person executing the membership agreement",
+      "LLP PAN Card",
+    ],
+    [
+      "Cancelled Cheque",
+      "Board Resolution in favour of the authorized Signatory executing the membership agreement",
+      "Cancelled Cheque",
+      "Cancelled Cheque",
+    ],
+    [
+      "",
+      "GST Certificate",
+      "KYC (PAN Card & Aadhaar Card) of the Partners",
+      "KYC (PAN Card & Aadhaar Card) of all the Partners",
+    ],
+    [
+      "",
+      "MOA & AOA",
+      "GST Certificate",
+      "GST Certificate",
+    ],
+    [
+      "",
+      "KYC (PAN Card & Aadhaar Card of all the Directors)",
+      "",
+      "",
+    ],
+    [
+      "",
+      "Cancelled Cheque",
+      "",
+      "",
+    ],
+    [
+      "",
+      "GST Certificate",
+      "",
+      "",
+    ],
   ];
 
-  doc.setFontSize(8.5);
-  doc.setFont("helvetica", "normal");
-  doc.setTextColor(50, 50, 50);
-
-  kycItems.forEach((item, i) => {
-    checkPageBreak(8);
-    doc.setDrawColor(150, 150, 150);
-    doc.setLineWidth(0.3);
-    doc.rect(marginLeft, y - 3, 3, 3);
-    doc.text(`${i + 1}. ${item}`, marginLeft + 6, y);
-    y += 6;
+  autoTable(doc, {
+    startY: y,
+    head: [["For Individual", "For Company", "For Partnership", "For LLP"]],
+    body: kycTableData,
+    theme: "grid",
+    headStyles: {
+      fillColor: BRAND_TEAL,
+      textColor: [255, 255, 255],
+      fontStyle: "bold",
+      fontSize: 8.5,
+      cellPadding: 3,
+      halign: "center",
+    },
+    bodyStyles: {
+      fontSize: 8,
+      textColor: [50, 50, 50],
+      cellPadding: 3,
+      lineColor: [200, 200, 200],
+      lineWidth: 0.3,
+    },
+    alternateRowStyles: {
+      fillColor: [245, 250, 248],
+    },
+    columnStyles: {
+      0: { cellWidth: "auto" },
+      1: { cellWidth: "auto" },
+      2: { cellWidth: "auto" },
+      3: { cellWidth: "auto" },
+    },
+    margin: { left: marginLeft, right: marginRight },
   });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  y = (doc as any).lastAutoTable.finalY + 8;
 
   // ================================================================
   // Add branded footer to all pages
