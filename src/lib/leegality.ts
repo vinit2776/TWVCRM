@@ -189,8 +189,17 @@ export async function uploadForEStampAndSigning(params: {
     );
   }
 
-  const data = await response.json();
-  console.log("[Leegality] Upload response:", JSON.stringify(data));
+  const raw = await response.json();
+  console.log("[Leegality] Upload response:", JSON.stringify(raw));
+
+  // Leegality API wraps all data inside raw.data and uses raw.status (1=success, 0=failure)
+  if (raw.status === 0) {
+    const msgs = (raw.messages ?? []).map((m: Record<string, unknown>) => m.message).join("; ");
+    throw new Error(`Leegality API error: ${msgs}`);
+  }
+
+  // Actual payload is inside raw.data
+  const data = raw.data ?? raw;
 
   // signUrl may be a string or array depending on API version/response
   const signUrlRaw = data.signUrl ?? data.signing_url ?? data.sign_url;
