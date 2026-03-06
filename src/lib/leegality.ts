@@ -153,6 +153,12 @@ export async function uploadForEStampAndSigning(params: {
       },
     ],
     expire_in_days: params.expiryDays ?? 30,
+    // Webhook URL — Leegality will POST status updates here when signing completes/expires
+    ...(process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL
+      ? {
+          webhook_url: `${process.env.APP_URL || process.env.NEXT_PUBLIC_APP_URL}/api/webhooks/leegality`,
+        }
+      : {}),
   };
 
   const response = await fetch(`${BASE_URL}/document/upload`, {
