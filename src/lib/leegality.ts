@@ -418,17 +418,22 @@ export function verifyWebhookSignature(
 
 /**
  * Normalize a phone number for Leegality API.
- * Leegality accepts 10-digit Indian mobile numbers without country code,
- * or full E.164 format WITHOUT the leading "+".
+ * Leegality accepts 10-digit Indian mobile numbers (no country code, no "+").
  *
- * - "+919791097900" → "919791097900"
+ * - "+919791097900" → "9791097900"
+ * - "919791097900"  → "9791097900"
  * - "9791097900"    → "9791097900"
  * - ""              → ""  (handled upstream)
  */
 function normalizePhone(phone: string): string {
   if (!phone) return "";
-  // Strip leading "+" if present
-  return phone.startsWith("+") ? phone.slice(1) : phone;
+  // Strip leading "+"
+  let num = phone.startsWith("+") ? phone.slice(1) : phone;
+  // Strip country code "91" if present and total length > 10
+  if (num.startsWith("91") && num.length === 12) {
+    num = num.slice(2);
+  }
+  return num;
 }
 
 type LeegalityStatus = LeegalityUploadResponse["status"];
