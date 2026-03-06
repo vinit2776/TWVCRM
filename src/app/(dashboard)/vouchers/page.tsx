@@ -14,6 +14,7 @@ import { Skeleton } from "@/components/shared/loading-skeleton";
 import { UploadVouchersDialog } from "@/components/vouchers/upload-vouchers-dialog";
 import { VoucherInventoryCard } from "@/components/vouchers/voucher-inventory-card";
 import { LowStockAlert } from "@/components/vouchers/low-stock-alert";
+import { ReclassifyVouchersDialog } from "@/components/vouchers/reclassify-vouchers-dialog";
 import { LocationSelector } from "@/components/shared/location-selector";
 import {
   VOUCHER_STATUSES,
@@ -62,6 +63,9 @@ export default function VouchersPage() {
   // Upload dialog
   const [uploadOpen, setUploadOpen] = useState(false);
   const [uploadPreselectedValidity, setUploadPreselectedValidity] = useState<number | undefined>();
+
+  // Reclassify dialog
+  const [reclassifyOpen, setReclassifyOpen] = useState(false);
 
   // Fetch inventory
   const fetchInventory = useCallback(async () => {
@@ -201,6 +205,7 @@ export default function VouchersPage() {
                   key={group.validity_days ?? "null"}
                   group={group}
                   onRefill={handleRefill}
+                  onReclassify={group.validity_days === null ? () => setReclassifyOpen(true) : undefined}
                 />
               ))}
             </div>
@@ -327,6 +332,18 @@ export default function VouchersPage() {
         onSuccess={handleUploadSuccess}
         preselectedValidity={uploadPreselectedValidity}
         preselectedLocationId={locationFilter || undefined}
+      />
+
+      {/* Reclassify Unclassified Vouchers Dialog */}
+      <ReclassifyVouchersDialog
+        open={reclassifyOpen}
+        onOpenChange={setReclassifyOpen}
+        count={inventory.find((g) => g.validity_days === null)?.available ?? 0}
+        locationId={locationFilter}
+        onSuccess={() => {
+          setReclassifyOpen(false);
+          fetchInventory();
+        }}
       />
     </div>
   );

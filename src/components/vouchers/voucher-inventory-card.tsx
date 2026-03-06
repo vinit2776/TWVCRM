@@ -3,7 +3,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Upload } from "lucide-react";
+import { Upload, Shuffle } from "lucide-react";
 import type { VoucherInventoryGroup } from "@/types";
 
 const STOCK_DOT_COLORS: Record<string, string> = {
@@ -21,14 +21,19 @@ const STOCK_BG_COLORS: Record<string, string> = {
 interface VoucherInventoryCardProps {
   group: VoucherInventoryGroup;
   onRefill?: (validityDays: number | null) => void;
+  /** Called when admin clicks "Set Validity" on the Unclassified card */
+  onReclassify?: () => void;
 }
 
 export function VoucherInventoryCard({
   group,
   onRefill,
+  onReclassify,
 }: VoucherInventoryCardProps) {
   const percentage =
     group.total > 0 ? Math.round((group.available / group.total) * 100) : 0;
+
+  const isUnclassified = group.validity_days === null;
 
   return (
     <Card className={`${STOCK_BG_COLORS[group.stock_level]} transition-colors`}>
@@ -42,17 +47,30 @@ export function VoucherInventoryCard({
               {group.label}
             </Badge>
           </div>
-          {onRefill && (
-            <Button
-              variant="ghost"
-              size="sm"
-              className="h-7 text-xs"
-              onClick={() => onRefill(group.validity_days)}
-            >
-              <Upload className="mr-1 h-3 w-3" />
-              Refill
-            </Button>
-          )}
+          <div className="flex items-center gap-1">
+            {isUnclassified && onReclassify && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs text-amber-600 hover:text-amber-700 hover:bg-amber-50"
+                onClick={onReclassify}
+              >
+                <Shuffle className="mr-1 h-3 w-3" />
+                Set Validity
+              </Button>
+            )}
+            {onRefill && (
+              <Button
+                variant="ghost"
+                size="sm"
+                className="h-7 text-xs"
+                onClick={() => onRefill(group.validity_days)}
+              >
+                <Upload className="mr-1 h-3 w-3" />
+                Refill
+              </Button>
+            )}
+          </div>
         </div>
 
         <div className="space-y-3">

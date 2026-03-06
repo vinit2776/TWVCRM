@@ -16,6 +16,9 @@ import {
   AlertTriangle,
   Mail,
   Send,
+  PenLine,
+  ExternalLink,
+  Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -60,6 +63,8 @@ export default function ContractDetailPage({
   const [terminationReason, setTerminationReason] = useState("");
   const [uploadingSignedDoc, setUploadingSignedDoc] = useState(false);
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+  const [initiatingSigning, setInitiatingSigning] = useState(false);
+  const [checkingSigningStatus, setCheckingSigningStatus] = useState(false);
 
   const fetchContract = useCallback(async () => {
     setLoading(true);
@@ -211,6 +216,60 @@ export default function ContractDetailPage({
     toast.error("Failed to get download URL");
   };
 
+  const handleInitiateSigning = async () => {
+    if (!contract) return;
+    setInitiatingSigning(true);
+
+    // Generate PDF client-side (jsPDF is browser-only)
+    const pdfBase64 = handleGeneratePDFBase64();
+    if (!pdfBase64) {
+      toast.error("Failed to generate PDF");
+      setInitiatingSigning(false);
+      return;
+    }
+
+    const res = await fetch(`/api/contracts/${id}/sign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "initiate", pdf_base64: pdfBase64 }),
+    });
+
+    if (res.ok) {
+      toast.success("Agreement sent for e-stamping and signing");
+      fetchContract();
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to initiate signing");
+    }
+    setInitiatingSigning(false);
+  };
+
+  const handleCheckSigningStatus = async () => {
+    if (!contract) return;
+    setCheckingSigningStatus(true);
+
+    const res = await fetch(`/api/contracts/${id}/sign`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action: "check_status" }),
+    });
+
+    if (res.ok) {
+      const json = await res.json();
+      const status = json.data?.status;
+      if (status === "COMPLETED") {
+        toast.success("Agreement fully signed!");
+      } else {
+        toast.info(`Signing status: ${status}`);
+      }
+      fetchContract();
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to check signing status");
+    }
+    setCheckingSigningStatus(false);
+  };
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -298,16 +357,32 @@ export default function ContractDetailPage({
             </>
           )}
           {contract.status === "accepted" && (
-            <Button onClick={() => handleStatusUpdate("active")} disabled={statusUpdating}>
-              {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-              Activate
-            </Button>
+            <>
+              <Button onClick={() => handleStatusUpdate("active")} disabled={statusUpdating}>
+                {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                Activate
+              </Button>
+              {!contract.leegality_document_id && (
+                <Button variant="outline" onClick={handleInitiateSigning} disabled={initiatingSigning}>
+                  {initiatingSigning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PenLine className="mr-2 h-4 w-4" />}
+                  Send for e-Signing
+                </Button>
+              )}
+            </>
           )}
           {contract.status === "active" && (
-            <Button variant="destructive" onClick={() => setTerminateOpen(true)}>
-              <XCircle className="mr-2 h-4 w-4" />
-              Terminate
-            </Button>
+            <>
+              {!contract.leegality_document_id && (
+                <Button variant="outline" onClick={handleInitiateSigning} disabled={initiatingSigning}>
+                  {initiatingSigning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PenLine className="mr-2 h-4 w-4" />}
+                  Send for e-Signing
+                </Button>
+              )}
+              <Button variant="destructive" onClick={() => setTerminateOpen(true)}>
+                <XCircle className="mr-2 h-4 w-4" />
+                Terminate
+              </Button>
+            </>
           )}
           {/* Email button for sent/viewed/accepted/rejected */}
           {["sent", "viewed", "accepted", "rejected"].includes(contract.status) && (
@@ -668,6 +743,99 @@ export default function ContractDetailPage({
             </CardContent>
           </Card>
 
+          {/* E-Signing Card — shown when Leegality signing has been initiated */}
+          {contract.leegality_document_id && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <PenLine className="h-4 w-4" />
+                  Digital Signing
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                <div className="flex items-center gap-2">
+                  {contract.leegality_status === "COMPLETED" ? (
+                    <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
+                  ) : contract.leegality_status === "EXPIRED" || contract.leegality_status === "CANCELLED" ? (
+                    <XCircle className="h-4 w-4 text-destructive shrink-0" />
+                  ) : (
+                    <Clock className="h-4 w-4 text-amber-500 shrink-0" />
+                  )}
+                  <span className="font-medium">
+                    {contract.leegality_status === "COMPLETED"
+                      ? "Fully Signed"
+                      : contract.leegality_status === "IN_PROGRESS"
+                        ? "Awaiting Signatures"
+                        : contract.leegality_status === "CREATED"
+                          ? "Sent for Signing"
+                          : contract.leegality_status === "EXPIRED"
+                            ? "Signing Expired"
+                            : contract.leegality_status === "CANCELLED"
+                              ? "Signing Cancelled"
+                              : contract.leegality_status ?? "In Progress"}
+                  </span>
+                </div>
+
+                {contract.signed_at && (
+                  <p className="text-xs text-muted-foreground">
+                    Signed on {formatDate(contract.signed_at)}
+                  </p>
+                )}
+
+                <p className="text-xs text-muted-foreground font-mono break-all">
+                  Doc: {contract.leegality_document_id}
+                </p>
+
+                {contract.leegality_sign_url && contract.leegality_status !== "COMPLETED" && (
+                  <a
+                    href={contract.leegality_sign_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                  >
+                    <ExternalLink className="h-3 w-3" />
+                    Open signing link
+                  </a>
+                )}
+
+                {contract.leegality_status !== "COMPLETED" && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={handleCheckSigningStatus}
+                    disabled={checkingSigningStatus}
+                  >
+                    {checkingSigningStatus ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Refresh Status
+                  </Button>
+                )}
+
+                {/* Re-initiate option if expired/cancelled */}
+                {(contract.leegality_status === "EXPIRED" || contract.leegality_status === "CANCELLED") && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full"
+                    onClick={handleInitiateSigning}
+                    disabled={initiatingSigning}
+                  >
+                    {initiatingSigning ? (
+                      <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <PenLine className="mr-1.5 h-3.5 w-3.5" />
+                    )}
+                    Resend for Signing
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {/* Timeline Card */}
           <Card>
             <CardHeader>
@@ -684,6 +852,15 @@ export default function ContractDetailPage({
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">Sent</span>
                     <span>{formatDate(contract.sent_at)}</span>
+                  </div>
+                </>
+              )}
+              {contract.signed_at && (
+                <>
+                  <Separator />
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">e-Signed</span>
+                    <span>{formatDate(contract.signed_at)}</span>
                   </div>
                 </>
               )}

@@ -7,10 +7,11 @@ import {
 } from "@/lib/leegality";
 
 /**
- * POST: Leegality e-stamp & e-sign operations
+ * POST: Leegality e-stamp & e-sign operations (user-triggered)
  *   action: 'initiate' — Upload PDF to Leegality for e-stamping + signing
  *   action: 'check_status' — Poll Leegality for current status
- *   action: 'webhook' — Handle Leegality callback (mark executed)
+ *
+ * Leegality webhook callbacks are handled by /api/webhooks/leegality
  */
 
 export async function POST(
@@ -179,33 +180,9 @@ export async function POST(
       return NextResponse.json({ data: status });
     }
 
-    case "webhook": {
-      // Handle Leegality webhook callback
-      const webhookStatus = body.status as string;
-      const webhookDocId = body.document_id as string;
-
-      if (webhookStatus === "COMPLETED" && webhookDocId === agreement.leegality_document_id) {
-        await supabase
-          .from("case_agreements")
-          .update({
-            status: "executed",
-            signed_at: new Date().toISOString(),
-            leegality_status: "COMPLETED",
-          })
-          .eq("id", agreementId);
-
-        await supabase
-          .from("cases")
-          .update({ ll_agreement_status: "executed" })
-          .eq("id", caseId);
-      }
-
-      return NextResponse.json({ success: true });
-    }
-
     default:
       return NextResponse.json(
-        { error: "Invalid action. Valid: initiate, check_status, webhook" },
+        { error: "Invalid action. Valid: initiate, check_status" },
         { status: 400 }
       );
   }

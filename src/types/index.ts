@@ -368,7 +368,13 @@ export interface Contract {
   notice_period_months?: number;
   member_signatory_name?: string;
   member_signatory_designation?: string;
+  member_signatory_pan?: string;
   agreement_date?: string;
+  // Leegality e-signing
+  leegality_document_id?: string;
+  leegality_sign_url?: string;
+  leegality_status?: string;
+  signed_at?: string;
   // Status timestamps
   sent_at?: string;
   viewed_at?: string;

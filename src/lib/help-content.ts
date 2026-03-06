@@ -21,6 +21,11 @@ import {
   Mail,
   CreditCard,
   Rocket,
+  TicketCheck,
+  LifeBuoy,
+  ShoppingCart,
+  Briefcase,
+  Handshake,
   type LucideIcon,
 } from "lucide-react";
 
@@ -134,26 +139,27 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Dashboard",
       icon: LayoutDashboard,
       overview:
-        "The Dashboard is your home screen. It shows key performance indicators (KPIs) like total leads, conversion rate, tasks due today, and pending follow-ups. It also displays a visual pipeline breakdown and recent team activities. Use the location filter to focus on a specific coworking center.",
+        "The Dashboard is your home screen. It shows key performance indicators (KPIs) like total leads, conversion rate, tasks due today, and pending follow-ups. A Follow-ups widget highlights overdue and upcoming follow-up actions so nothing slips through. Recent team activities are shown in a live feed. Use the location filter to focus on a specific coworking center.",
       workflows: [
         {
           title: "Reading Your Dashboard",
           steps: [
             { step: 1, title: "Review KPI cards", description: "At the top you will see four metric cards: Total Leads, Conversion Rate, Tasks Due Today, and Pending Follow-ups." },
-            { step: 2, title: "Check the pipeline", description: "Below the KPIs you will find the lead pipeline showing counts for each stage — New, Qualified, Proposal Sent, Negotiation, Won, and Lost." },
-            { step: 3, title: "View recent activities", description: "The Recent Activities widget shows the last 5 team actions (calls, emails, meetings) with who did what and when." },
+            { step: 2, title: "Check the Follow-ups widget", description: "The Follow-ups widget lists leads with overdue or upcoming follow-up actions — click any entry to open the lead directly." },
+            { step: 3, title: "View recent activities", description: "The Recent Activities feed shows the last team actions (calls, emails, meetings, notes) with who did what and when." },
             { step: 4, title: "Filter by location", description: "Use the location dropdown at the top to filter all dashboard metrics for a specific coworking center." },
           ],
         },
       ],
       tips: [
-        "Check the dashboard first thing each morning to see tasks due and pending follow-ups.",
-        "A declining conversion rate may indicate leads are stalling — check the pipeline for bottlenecks.",
-        "The pipeline bar chart shows the percentage of leads at each stage, helping identify where most deals are stuck.",
+        "Check the dashboard first thing each morning — the Follow-ups widget shows overdue actions that need immediate attention.",
+        "A declining conversion rate may indicate leads are stalling — review the Leads list for bottlenecks.",
+        "The Follow-ups widget is role-aware: Sales Reps see only their own follow-ups; Managers and Admins see all.",
       ],
       faqs: [
         { question: "Why are my dashboard numbers different from my colleague's?", answer: "If you are a Sales Rep, you only see leads and tasks assigned to you. Admins and Managers see data for all team members. Filter by location to narrow the view further." },
         { question: "How often does the dashboard refresh?", answer: "The dashboard fetches fresh data each time you visit the page or refresh your browser. There is no auto-refresh interval." },
+        { question: "What does the Follow-ups widget show?", answer: "It lists leads whose scheduled follow-up date has passed (overdue) or is coming up soon, sorted by urgency. Click any row to open the lead and take action." },
       ],
       roles: null,
     },
@@ -515,16 +521,25 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Bookings",
       icon: CalendarClock,
       overview:
-        "Bookings manage conference room and desk reservations. You can create bookings for contract members or walk-in guests. The module supports check-in/check-out workflows, payment collection via Razorpay, feedback collection, and post-visit analytics. View bookings in a list, calendar, or analytics dashboard.",
+        "Bookings manage conference room and desk reservations. You can create bookings for contract members, walk-in guests, or customers using prepaid packages (Booking Slots credits). The module supports recurring bookings, check-in/check-out workflows, payment collection via Razorpay, feedback collection, and post-visit analytics. View bookings in a list, calendar, or analytics dashboard.",
       workflows: [
         {
           title: "Creating a New Booking",
           steps: [
             { step: 1, title: "Click 'New Booking'", description: "Go to Bookings and click 'New Booking'." },
-            { step: 2, title: "Select customer type", description: "Choose 'Member' (for contract holders) or 'Walk-in' (for one-time guests)." },
+            { step: 2, title: "Select customer type", description: "Choose 'Member' (for contract holders), 'Walk-in' (for one-time guests), or select a prepaid package holder to deduct a Booking Slot credit." },
             { step: 3, title: "Fill in details", description: "Select the space, date, start time, end time, and enter guest information (name, phone, email)." },
-            { step: 4, title: "Set payment", description: "The amount is calculated based on duration and hourly rate. Choose the payment method." },
+            { step: 4, title: "Set payment", description: "The amount is calculated based on duration and hourly rate. Choose the payment method, or for prepaid customers, confirm the credit deduction." },
             { step: 5, title: "Confirm", description: "Save the booking. A confirmation email is sent automatically." },
+          ],
+        },
+        {
+          title: "Creating a Recurring Booking",
+          steps: [
+            { step: 1, title: "Start a new booking", description: "Click 'New Booking' and fill in all the standard details." },
+            { step: 2, title: "Enable recurrence", description: "Toggle the 'Recurring' option. Choose the frequency (daily, weekly, monthly) and end date or number of occurrences." },
+            { step: 3, title: "Review instances", description: "The system previews all generated booking dates. Adjust if needed." },
+            { step: 4, title: "Confirm", description: "Save to create all recurring instances at once. Each can be managed individually thereafter." },
           ],
         },
         {
@@ -552,10 +567,14 @@ export const HELP_CONTENT: HelpContentData = {
         "Walk-in bookings with pending payment show a 'Collect Payment' button with Razorpay integration.",
         "After payment is collected via Razorpay, the booking automatically shows a green 'Payment Collected' banner.",
         "Use the search bar to find bookings by guest phone number, name, or booking number.",
+        "Recurring bookings are ideal for members with regular weekly or monthly room reservations.",
+        "When a prepaid package holder books, one Booking Slot credit is deducted from their package balance automatically.",
       ],
       faqs: [
         { question: "What is the difference between Member and Walk-in bookings?", answer: "Member bookings are for existing contract holders — their details are pre-filled and billing may go through the contract. Walk-in bookings are for one-time guests who pay at the time of booking." },
         { question: "How does Razorpay payment collection work?", answer: "For walk-in bookings with pending payment, click 'Collect Payment' to generate a Razorpay payment link. You can send this link to the guest or process the payment on-site. Once paid, the status updates automatically." },
+        { question: "How do prepaid Booking Slots work?", answer: "If a customer has a prepaid package with Booking Slots credits, you can select their package when creating a booking. One slot is deducted from their balance. The remaining balance is shown on the package detail page." },
+        { question: "Can I cancel a recurring booking series?", answer: "Individual instances can be cancelled one at a time. There is no bulk-cancel for a full recurring series — cancel each occurrence as needed." },
         { question: "Can I cancel a booking?", answer: "Yes. Open the booking and click 'Cancel'. Cancelled bookings are preserved in history but marked as cancelled." },
         { question: "How does the feedback system work?", answer: "After a guest checks out, you can send them a feedback link via email. The guest rates their experience on a public page (no login required). Feedback scores appear in the booking details and analytics." },
       ],
@@ -602,24 +621,37 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Vouchers",
       icon: Wifi,
       overview:
-        "Vouchers are promotional codes (e.g., WiFi access passes, day passes) that can be issued to leads or customers. The Inventory view shows stock levels by validity period, and you can upload new voucher codes in bulk via PDF. Each voucher has a lifecycle: Available → Issued → Used/Expired/Revoked.",
+        "Vouchers are WiFi access codes that can be issued to leads, customers, or walk-in visitors. Available validity periods include 3 Hours, 1 Day, 7 Days, 30 Days, 60 Days, 90 Days, 180 Days, and 365 Days. The Inventory view shows stock levels grouped by validity period. New voucher codes are uploaded in bulk via PDF. Each voucher has a lifecycle: Available → Issued → Used/Expired/Revoked. Per-seat voucher issuance requires OTP authorization from the manager to control usage.",
       workflows: [
         {
           title: "Managing Voucher Inventory",
           steps: [
-            { step: 1, title: "Check stock", description: "Go to Vouchers and view the Inventory tab. Cards show available stock by validity period (7-day, 30-day, 90-day, etc.)." },
+            { step: 1, title: "Check stock", description: "Go to Vouchers and view the Inventory tab. Cards show available stock grouped by validity period (3 Hours, 1 Day, 7 Days, 30 Days, 60 Days, 90 Days, 180 Days, 365 Days)." },
             { step: 2, title: "Upload new vouchers", description: "Click 'Upload' to import new voucher codes from a PDF file. Set the validity period and location." },
             { step: 3, title: "Issue vouchers", description: "From a lead or contract, issue a voucher to the customer. The voucher status changes to 'Issued'." },
             { step: 4, title: "Track usage", description: "Use the All Vouchers tab to see all voucher codes, their status, and issue dates." },
           ],
         },
+        {
+          title: "Issuing a Per-Seat Voucher (OTP Authorization)",
+          steps: [
+            { step: 1, title: "Select the voucher type", description: "When issuing a per-seat voucher, the system triggers an OTP authorization flow." },
+            { step: 2, title: "Manager receives OTP", description: "An OTP is sent to the manager's registered phone number." },
+            { step: 3, title: "Enter OTP", description: "The manager enters the OTP in the CRM to authorize the issuance. This prevents unauthorized voucher handouts." },
+            { step: 4, title: "Voucher issued", description: "Once the OTP is verified, the voucher is issued and marked in the system." },
+          ],
+        },
       ],
       tips: [
         "Low stock is highlighted with visual warnings on the inventory cards.",
+        "The 3-hour voucher type is ideal for day-use visitors who need short-term WiFi access.",
         "Search by voucher code in the All Vouchers tab to quickly check a specific code's status.",
         "Expired vouchers are automatically marked but can be revoked manually if needed.",
+        "The OTP authorization for per-seat vouchers ensures accountability and prevents misuse.",
       ],
       faqs: [
+        { question: "What voucher validity periods are available?", answer: "Eight types: 3 Hours (short-term visitors), 1 Day, 7 Days, 30 Days, 60 Days, 90 Days, 180 Days, and 365 Days. Each type has its own inventory pool." },
+        { question: "Why is an OTP required for per-seat vouchers?", answer: "Per-seat vouchers are higher-value passes. The OTP authorization step ensures a manager approves each issuance, maintaining accountability and preventing unauthorized use." },
         { question: "How do I revoke an issued voucher?", answer: "Find the voucher in the All Vouchers list and change its status to 'Revoked'. This prevents the code from being used." },
         { question: "Can vouchers be emailed to customers?", answer: "Yes. Vouchers associated with contracts can be emailed to the client directly from the contract detail page." },
       ],
@@ -843,6 +875,260 @@ export const HELP_CONTENT: HelpContentData = {
       ],
       roles: null,
     },
+
+    /* ============================================================== */
+    /*  23. Prepaid Packages                                           */
+    /* ============================================================== */
+    {
+      id: "prepaid-packages",
+      title: "Prepaid Packages",
+      icon: TicketCheck,
+      overview:
+        "Prepaid Packages let customers purchase coworking credits in advance at a fixed price. Packages are defined by a credit type — Hours (conference room or desk time), Days (full-day access passes), or Booking Slots (conference room slots for walk-in prepaid members). Each package has a name, location, workspace type, total credits, price, and validity period. When a customer purchases a package, their credit balance is tracked and deducted as they use the space.",
+      workflows: [
+        {
+          title: "Creating a Prepaid Package",
+          steps: [
+            { step: 1, title: "Go to Prepaid Packages", description: "Navigate to Prepaid Packages from the sidebar." },
+            { step: 2, title: "Click 'New Package'", description: "Click the create button to define a new package." },
+            { step: 3, title: "Fill in details", description: "Enter the package name, description, location, workspace type, credit type (Hours/Days/Booking Slots), total credits, price, and validity period (in days)." },
+            { step: 4, title: "Save", description: "Save the package. It is now available to assign to customers." },
+          ],
+        },
+        {
+          title: "Selling a Package to a Customer",
+          steps: [
+            { step: 1, title: "Open a package", description: "Click on a package from the list to open its detail page." },
+            { step: 2, title: "Click 'New Purchase'", description: "Click the 'New Purchase' button to assign this package to a customer." },
+            { step: 3, title: "Select the customer", description: "Choose an existing lead from the system, or enter the customer's details." },
+            { step: 4, title: "Collect payment", description: "Record the payment method (cash, UPI, Razorpay link, etc.) and mark as paid." },
+            { step: 5, title: "Confirm purchase", description: "The purchase is created and the customer's credit balance is set. Credits begin counting from the purchase date." },
+          ],
+        },
+        {
+          title: "Tracking Credit Usage",
+          steps: [
+            { step: 1, title: "Open the purchase", description: "Find the customer's purchase in the package or purchases list." },
+            { step: 2, title: "View balance", description: "The purchase shows total credits, credits used, and remaining credits with a progress bar." },
+            { step: 3, title: "Credits deducted on use", description: "Each booking or check-in linked to this purchase automatically deducts from the balance." },
+          ],
+        },
+      ],
+      tips: [
+        "Use 'Booking Slots' credit type for walk-in prepaid members who pre-purchase a set number of conference room bookings.",
+        "Use 'Hours' credit type for customers who buy bulk hourly coworking time.",
+        "Use 'Days' credit type for customers purchasing multi-day access passes.",
+        "Set a validity period to ensure credits expire — this encourages timely usage.",
+        "The package detail page shows all purchases linked to that package.",
+      ],
+      faqs: [
+        { question: "What are the credit types?", answer: "Hours: credits represent hours of space usage. Days: credits represent full-day access passes. Booking Slots: credits represent individual conference room booking slots, ideal for walk-in prepaid members." },
+        { question: "What happens when credits expire?", answer: "Expired credits can no longer be used for new bookings. The purchase status shows as 'Expired'. Unused credits are not automatically refunded." },
+        { question: "Can I top up a customer's credits?", answer: "Yes. Create a new purchase for the same package. Each purchase has its own credit balance and expiry date." },
+        { question: "How do Booking Slots get deducted?", answer: "When you create a booking for a prepaid package customer and select their purchase, one Booking Slot is deducted from their balance automatically." },
+      ],
+      roles: null,
+    },
+
+    /* ============================================================== */
+    /*  24. Support Tickets                                            */
+    /* ============================================================== */
+    {
+      id: "support-tickets",
+      title: "Support Tickets",
+      icon: LifeBuoy,
+      overview:
+        "Support Tickets track internal issues, customer complaints, and maintenance requests. Any staff member can create a ticket. Each ticket is auto-numbered (TWV-T-XXXX) and has a subject, type, priority, status, reporter, and assignee. Admins and Managers triage and resolve tickets. This module keeps issues visible and accountable.",
+      workflows: [
+        {
+          title: "Creating a Support Ticket",
+          steps: [
+            { step: 1, title: "Go to Support", description: "Navigate to Support Tickets from the sidebar." },
+            { step: 2, title: "Click 'New Ticket'", description: "Click the create button to open the new ticket form." },
+            { step: 3, title: "Fill in details", description: "Enter a subject, select the ticket type (Maintenance, Customer Issue, IT, etc.), and set priority (Low, Medium, High, Urgent)." },
+            { step: 4, title: "Describe the issue", description: "Add a detailed description of the problem in the notes field." },
+            { step: 5, title: "Assign", description: "Optionally assign the ticket to a specific team member. Unassigned tickets appear in the triage queue." },
+            { step: 6, title: "Submit", description: "Save the ticket. It will appear in the ticket list with status 'Open'." },
+          ],
+        },
+        {
+          title: "Managing and Resolving Tickets",
+          steps: [
+            { step: 1, title: "Review the ticket list", description: "Filter tickets by status (Open, In Progress, Resolved, Closed), priority, or type." },
+            { step: 2, title: "Assign and update status", description: "Click a ticket to open it. Update the assignee and change the status to 'In Progress' when work begins." },
+            { step: 3, title: "Add notes", description: "Log progress updates and communications in the notes section." },
+            { step: 4, title: "Resolve or close", description: "Set status to 'Resolved' when fixed, then 'Closed' after confirmation from the reporter." },
+          ],
+        },
+      ],
+      tips: [
+        "Use 'Urgent' priority for issues affecting current customers or operations — these show at the top of the list.",
+        "Add detailed notes when closing a ticket so there is a record of how the issue was resolved.",
+        "Tickets are numbered sequentially (TWV-T-0001, TWV-T-0002, …) making them easy to reference in conversations.",
+        "Any team member can create tickets — encourage staff to report issues immediately rather than verbally.",
+      ],
+      faqs: [
+        { question: "Who can see support tickets?", answer: "All authenticated team members can view tickets. Any staff member can create one. Admins and Managers can assign, update, and close tickets." },
+        { question: "Can I link a ticket to a lead or booking?", answer: "Tickets can reference any context in their description. Direct linking to other entities is via ticket notes." },
+        { question: "What ticket types are available?", answer: "Common types include Maintenance, IT Issue, Customer Complaint, Billing Query, and General. The exact list may vary based on your configuration." },
+      ],
+      roles: null,
+    },
+
+    /* ============================================================== */
+    /*  25. Procurement                                                */
+    /* ============================================================== */
+    {
+      id: "procurement",
+      title: "Procurement",
+      icon: ShoppingCart,
+      overview:
+        "The Procurement module manages the full purchasing lifecycle for The WorkVilla — from vendor management and item catalogues through purchase requests, purchase orders, and vendor bills. It provides visibility into what is being ordered, from whom, and at what cost, enabling better control over operational expenses.",
+      workflows: [
+        {
+          title: "Adding a Vendor",
+          steps: [
+            { step: 1, title: "Go to Procurement → Vendors", description: "Navigate to Procurement from the sidebar and select the Vendors tab." },
+            { step: 2, title: "Click 'New Vendor'", description: "Click the create button and fill in the vendor name, contact details, category, and payment terms." },
+            { step: 3, title: "Save", description: "The vendor is now available when creating purchase orders and bills." },
+          ],
+        },
+        {
+          title: "Creating a Purchase Request",
+          steps: [
+            { step: 1, title: "Go to Purchase Requests", description: "Navigate to Procurement → Purchase Requests." },
+            { step: 2, title: "Click 'New Request'", description: "Describe the items needed, quantity, estimated cost, and the reason for the purchase." },
+            { step: 3, title: "Submit for approval", description: "Submit the request. A Manager or Admin reviews and approves or rejects it." },
+            { step: 4, title: "Approved request", description: "Once approved, a Purchase Order can be raised against the request." },
+          ],
+        },
+        {
+          title: "Raising a Purchase Order",
+          steps: [
+            { step: 1, title: "Go to Purchase Orders", description: "Navigate to Procurement → Purchase Orders." },
+            { step: 2, title: "Create from request", description: "Click 'New PO' and optionally link to an approved purchase request. Select the vendor and add line items." },
+            { step: 3, title: "Send to vendor", description: "Generate the PO document and send it to the vendor. The PO status moves to 'Sent'." },
+            { step: 4, title: "Receive goods", description: "When goods are received, mark the PO as 'Received'. This triggers the vendor bill flow." },
+          ],
+        },
+        {
+          title: "Recording a Vendor Bill",
+          steps: [
+            { step: 1, title: "Go to Vendor Bills", description: "Navigate to Procurement → Vendor Bills." },
+            { step: 2, title: "Create a bill", description: "Link the bill to a Purchase Order or add items manually. Enter the invoice number, date, and amount." },
+            { step: 3, title: "Track payment", description: "Mark the bill as 'Paid' once the vendor is paid. Outstanding bills appear in the pending list." },
+          ],
+        },
+      ],
+      tips: [
+        "Maintain an Item Catalogue with standard items and prices to speed up PO creation.",
+        "Purchase Requests create a paper trail for spending decisions — always use them for non-routine purchases.",
+        "Filter vendor bills by status to quickly see what payments are due.",
+        "Link Purchase Orders to approved requests for complete traceability from request to payment.",
+      ],
+      faqs: [
+        { question: "Who can approve purchase requests?", answer: "Managers and Admins can approve or reject purchase requests. Sales Reps and Floor Managers can create requests but cannot approve them." },
+        { question: "Can I create a PO without a purchase request?", answer: "Yes. For routine or emergency purchases, you can create a Purchase Order directly without linking to a request." },
+        { question: "What is the Item Catalogue?", answer: "A reusable list of standard items (cleaning supplies, stationery, furniture, etc.) with standard descriptions and prices. Using catalogue items speeds up PO and bill creation and ensures consistent item naming." },
+      ],
+      roles: ["admin", "manager"],
+    },
+
+    /* ============================================================== */
+    /*  26. Cases                                                      */
+    /* ============================================================== */
+    {
+      id: "cases",
+      title: "Cases",
+      icon: Briefcase,
+      overview:
+        "Cases manage Virtual Office and membership service workflows. Each case tracks a client service request from initiation to completion — including document collection, agreement signing, and service delivery milestones. Cases are managed in a Kanban board view, moving through stages as work progresses. Documents such as KYC files and signed agreements are attached directly to cases.",
+      workflows: [
+        {
+          title: "Creating a Case",
+          steps: [
+            { step: 1, title: "Go to Cases", description: "Navigate to Cases from the sidebar." },
+            { step: 2, title: "Click 'New Case'", description: "Click the create button and select the case type (e.g., Virtual Office, Membership)." },
+            { step: 3, title: "Link to a lead", description: "Select the lead this case is for. Their contact details are pre-filled." },
+            { step: 4, title: "Set stage and assignee", description: "Place the case in the appropriate stage and assign it to a team member." },
+            { step: 5, title: "Save", description: "The case appears on the Kanban board." },
+          ],
+        },
+        {
+          title: "Managing Cases on the Kanban Board",
+          steps: [
+            { step: 1, title: "View the board", description: "The Kanban board shows all cases in columns by stage (e.g., Application, Documents Pending, Agreement, Active, Closed)." },
+            { step: 2, title: "Drag to advance", description: "Drag a case card to the next column to move it to the next stage." },
+            { step: 3, title: "Open for details", description: "Click a case card to open the full case detail page where you can add notes and upload documents." },
+          ],
+        },
+        {
+          title: "Uploading Documents to a Case",
+          steps: [
+            { step: 1, title: "Open the case", description: "Click on the case from the Kanban board or case list." },
+            { step: 2, title: "Go to Documents tab", description: "Open the Documents tab within the case detail." },
+            { step: 3, title: "Upload files", description: "Upload KYC documents, agreements, or any supporting files. Common formats (PDF, images) are supported." },
+            { step: 4, title: "Mark as signed", description: "For agreement documents, mark them as signed once the client has returned the executed agreement." },
+          ],
+        },
+      ],
+      tips: [
+        "Use the Kanban board for daily case reviews — it gives a visual snapshot of all active Virtual Office and membership workflows.",
+        "Attach all client KYC documents directly to the case to keep everything in one place.",
+        "Add detailed notes when requesting documents or following up — these form the case history.",
+        "Cases linked to leads inherit contact information, saving data entry time.",
+      ],
+      faqs: [
+        { question: "What types of cases are available?", answer: "The primary case types are Virtual Office and Membership. Each represents a distinct service offering with its own workflow stages." },
+        { question: "Can I attach multiple documents to a single case?", answer: "Yes. The Documents tab within a case supports multiple file uploads. Each file can be categorized and marked with a status (Pending, Received, Signed)." },
+        { question: "How is a case different from a contract?", answer: "A Contract formalizes the ongoing billing relationship. A Case tracks the service delivery workflow — especially document collection and onboarding steps — that happens before and alongside the contract." },
+      ],
+      roles: null,
+    },
+
+    /* ============================================================== */
+    /*  27. Aggregators                                                */
+    /* ============================================================== */
+    {
+      id: "aggregators",
+      title: "Aggregators",
+      icon: Handshake,
+      overview:
+        "Aggregators are partner platforms or brokers (e.g., JustCoWork, Workinton, COWRKS) that send coworking bookings to The WorkVilla on behalf of their customers. The Aggregators module tracks each partner, their rate cards (special pricing agreements), key contacts, and booking history. This helps manage partner relationships and ensures correct billing for aggregator-sourced bookings.",
+      workflows: [
+        {
+          title: "Adding an Aggregator",
+          steps: [
+            { step: 1, title: "Go to Aggregators", description: "Navigate to Aggregators from the sidebar." },
+            { step: 2, title: "Click 'New Aggregator'", description: "Click the create button and enter the aggregator's name, website, and contact details." },
+            { step: 3, title: "Add contacts", description: "Add the primary contact person(s) at the aggregator with their name, email, and phone." },
+            { step: 4, title: "Set rate card", description: "Configure the agreed pricing or commission rate for this partner." },
+            { step: 5, title: "Save", description: "The aggregator is now available as a booking source." },
+          ],
+        },
+        {
+          title: "Managing Rate Cards",
+          steps: [
+            { step: 1, title: "Open the aggregator", description: "Click on an aggregator from the list to open their detail page." },
+            { step: 2, title: "Go to Rate Cards tab", description: "Switch to the Rate Cards tab to see the current pricing agreement." },
+            { step: 3, title: "Add or update rates", description: "Add rates per space type or day/hour. Rates can differ from the standard walk-in price." },
+            { step: 4, title: "Save", description: "Updated rates apply to new aggregator bookings." },
+          ],
+        },
+      ],
+      tips: [
+        "Keep rate cards current — expired or missing rates can cause billing errors on aggregator bookings.",
+        "Record all contacts at each aggregator so you always know who to reach for billing queries or disputes.",
+        "Track which bookings were sourced through an aggregator to measure partner performance.",
+        "Aggregators typically have different pricing from walk-in rates — always verify the rate card before confirming prices.",
+      ],
+      faqs: [
+        { question: "Who can manage aggregators?", answer: "Admins and Managers have full access to create and edit aggregators and rate cards. Sales Reps can view aggregator details but cannot modify them." },
+        { question: "How do aggregator bookings differ from regular walk-in bookings?", answer: "Aggregator bookings are sourced through a partner platform. The guest pays the aggregator, not The WorkVilla directly. The rate card determines the settlement amount The WorkVilla receives from the aggregator." },
+        { question: "Can I track bookings by aggregator?", answer: "Yes. Bookings can be tagged with an aggregator source. Filter the Bookings list by aggregator to see all partner-sourced bookings and their revenue." },
+      ],
+      roles: ["admin", "manager"],
+    },
   ],
 
   /* ================================================================ */
@@ -894,6 +1180,14 @@ export const HELP_CONTENT: HelpContentData = {
     { feature: "Bookings", admin: true, manager: true, sales_rep: true, floor_manager: true },
     { feature: "Documents", admin: true, manager: true, sales_rep: true, floor_manager: true },
     { feature: "Vouchers", admin: true, manager: true, sales_rep: true, floor_manager: true },
+    { feature: "Prepaid Packages (view/sell)", admin: true, manager: true, sales_rep: true, floor_manager: true },
+    { feature: "Prepaid Packages (create/edit)", admin: true, manager: true, sales_rep: false, floor_manager: false },
+    { feature: "Support Tickets (create)", admin: true, manager: true, sales_rep: true, floor_manager: true },
+    { feature: "Support Tickets (manage/close)", admin: true, manager: true, sales_rep: false, floor_manager: false },
+    { feature: "Procurement (view)", admin: true, manager: true, sales_rep: false, floor_manager: false },
+    { feature: "Procurement (approve/PO/bills)", admin: true, manager: true, sales_rep: false, floor_manager: false },
+    { feature: "Cases", admin: true, manager: true, sales_rep: true, floor_manager: true },
+    { feature: "Aggregators", admin: true, manager: true, sales_rep: false, floor_manager: false },
     { feature: "Locations", admin: true, manager: true, sales_rep: false, floor_manager: false },
     { feature: "Audit Logs", admin: true, manager: true, sales_rep: false, floor_manager: false },
     { feature: "Infrastructure", admin: true, manager: false, sales_rep: false, floor_manager: false },
