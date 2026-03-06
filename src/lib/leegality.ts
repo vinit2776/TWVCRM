@@ -205,41 +205,21 @@ export async function uploadForEStampAndSigning(params: {
   // Actual payload is inside raw.data
   const data = raw.data ?? raw;
 
-  console.log("[Leegality] Parsed data keys:", Object.keys(data));
-
-  // Leegality v3 returns signing URLs per-invitee inside the invitees array.
-  // Try multiple known field names for the per-invitee signing URL.
-  const invitees: Record<string, unknown>[] = Array.isArray(data.invitees)
-    ? data.invitees
+  // Leegality v3 response structure:
+  // data.requests[] — one entry per VIRTUAL signer with signUrl field.
+  // NOTE: AADHAAR-type invitees are NOT included in data.requests (they get
+  // the link via email directly from Leegality — no API-accessible URL).
+  const requests: Record<string, unknown>[] = Array.isArray(data.requests)
+    ? data.requests
     : [];
 
-  const inviteeSignUrls: string[] = invitees.map((inv) => {
-    return String(
-      inv.signingUrl ??
-        inv.signing_url ??
-        inv.signUrl ??
-        inv.sign_url ??
-        inv.url ??
-        ""
-    );
-  });
+  const signUrls: string[] = requests
+    .map((r) => String(r.signUrl ?? r.sign_url ?? r.signingUrl ?? ""))
+    .filter(Boolean);
 
-  // Also check for a top-level signUrl (older API versions)
-  const topLevelUrl = String(
-    data.signUrl ?? data.signing_url ?? data.sign_url ?? ""
-  );
+  console.log("[Leegality] requests count:", requests.length, "signUrls:", signUrls);
 
-  // Prefer per-invitee URLs; fall back to top-level URL for the first invitee
-  const signUrls: string[] =
-    inviteeSignUrls.length > 0 && inviteeSignUrls.some((u) => u)
-      ? inviteeSignUrls
-      : topLevelUrl
-        ? [topLevelUrl]
-        : [];
-
-  console.log("[Leegality] signUrls extracted:", signUrls);
-
-  // Return the first invitee's (lessor's) sign URL
+  // First sign URL belongs to the lessor (VIRTUAL signer)
   const signUrl = signUrls[0] ?? "";
 
   return {
@@ -289,17 +269,41 @@ export async function getSigningStatus(
     );
   }
 
-  const data = await response.json();
+  const raw = await response.json();
+  // Leegality wraps status response in raw.data (same as upload)
+  const data = raw.data ?? raw;
+
+  // data.requests[] is the authoritative list of signing requests.
+  // AADHAAR-type invitees may not appear here; they sign via email.
+  const requests: Record<string, unknown>[] = Array.isArray(data.requests)
+    ? data.requests
+    : (data.invitees ?? data.signers ?? []);
+
+  // Determine overall document status from requests
+  const allSigned = requests.length > 0 && requests.every((r) => r.signed === true);
+  const anyExpired = requests.some((r) => r.expired === true);
+  const anyRejected = requests.some((r) => r.rejected === true);
+  const docStatus = allSigned
+    ? "COMPLETED"
+    : anyExpired
+      ? "EXPIRED"
+      : anyRejected
+        ? "CANCELLED"
+        : normalizeStatus(data.status ?? "IN_PROGRESS");
 
   return {
     documentId: data.documentId ?? data.document_id ?? data.id ?? documentId,
-    status: normalizeStatus(data.status ?? ""),
-    signers: (data.invitees ?? data.signers ?? data.inviteees ?? []).map(
+    status: docStatus,
+    signers: requests.map(
       (s: Record<string, unknown>) => ({
         name: String(s.name ?? ""),
         email: String(s.email ?? ""),
         phone: s.phone ? String(s.phone) : undefined,
-        status: normalizeSignerStatus(String(s.status ?? "")),
+        status: s.signed === true
+          ? "SIGNED"
+          : s.expired === true
+            ? "EXPIRED"
+            : "PENDING",
         signedAt: s.signedAt
           ? String(s.signedAt)
           : s.signed_at
@@ -307,9 +311,9 @@ export async function getSigningStatus(
             : undefined,
         signMethod: s.inviteetype
           ? mapInviteeType(String(s.inviteetype))
-          : s.sign_type
-            ? mapSignType(String(s.sign_type))
-            : undefined,
+          : s.signType
+            ? mapSignType(String(s.signType))
+            : "electronic",
       })
     ),
     eStamp: (data.stampDetails ?? data.stamp_paper)

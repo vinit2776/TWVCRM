@@ -819,34 +819,45 @@ export default function ContractDetailPage({
                 )}
 
                 {/* Customer (Lessee) signing link */}
-                {contract.leegality_lessee_sign_url && contract.leegality_status !== "COMPLETED" && (
+                {contract.leegality_status !== "COMPLETED" && (
                   <div className="space-y-1.5">
-                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Customer Signing Link</p>
-                    <div className="flex items-center gap-2">
-                      <a
-                        href={contract.leegality_lessee_sign_url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="flex-1 text-xs text-primary hover:underline truncate font-mono bg-muted px-2 py-1.5 rounded"
-                      >
-                        {contract.leegality_lessee_sign_url}
-                      </a>
-                      <Button
-                        size="icon"
-                        variant="outline"
-                        className="h-7 w-7 shrink-0"
-                        onClick={() => copyToClipboard(contract.leegality_lessee_sign_url!, "lessee")}
-                        title="Copy customer signing link"
-                      >
-                        {copiedLessee ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
-                      </Button>
-                      <a href={contract.leegality_lessee_sign_url} target="_blank" rel="noopener noreferrer">
-                        <Button size="icon" variant="outline" className="h-7 w-7 shrink-0" title="Open in new tab">
-                          <ExternalLink className="h-3.5 w-3.5" />
-                        </Button>
-                      </a>
-                    </div>
-                    <p className="text-xs text-muted-foreground">Send this link to the customer to sign via Aadhaar eSign</p>
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Customer Signing</p>
+                    {contract.leegality_lessee_sign_url ? (
+                      <>
+                        <div className="flex items-center gap-2">
+                          <a
+                            href={contract.leegality_lessee_sign_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="flex-1 text-xs text-primary hover:underline truncate font-mono bg-muted px-2 py-1.5 rounded"
+                          >
+                            {contract.leegality_lessee_sign_url}
+                          </a>
+                          <Button
+                            size="icon"
+                            variant="outline"
+                            className="h-7 w-7 shrink-0"
+                            onClick={() => copyToClipboard(contract.leegality_lessee_sign_url!, "lessee")}
+                            title="Copy customer signing link"
+                          >
+                            {copiedLessee ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+                          </Button>
+                          <a href={contract.leegality_lessee_sign_url} target="_blank" rel="noopener noreferrer">
+                            <Button size="icon" variant="outline" className="h-7 w-7 shrink-0" title="Open in new tab">
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </Button>
+                          </a>
+                        </div>
+                        <p className="text-xs text-muted-foreground">Send this link to the customer to sign via Aadhaar eSign</p>
+                      </>
+                    ) : (
+                      <div className="flex items-center gap-2 bg-muted/50 rounded px-2.5 py-2">
+                        <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                        <p className="text-xs text-muted-foreground">
+                          Aadhaar eSign invitation sent to customer&apos;s email by Leegality
+                        </p>
+                      </div>
+                    )}
                   </div>
                 )}
 
