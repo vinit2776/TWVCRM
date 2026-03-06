@@ -75,6 +75,7 @@ export function CreateContractDialog({
   const [signatoryName, setSignatoryName] = useState("");
   const [signatoryDesignation, setSignatoryDesignation] = useState("");
   const [signatoryPan, setSignatoryPan] = useState("");
+  const [signatoryIdType, setSignatoryIdType] = useState<'pan' | 'aadhaar'>('pan');
   const [agreementDate, setAgreementDate] = useState(
     new Date().toISOString().split("T")[0]
   );
@@ -254,6 +255,7 @@ export function CreateContractDialog({
       member_signatory_name: signatoryName.trim(),
       member_signatory_designation: signatoryDesignation.trim(),
       member_signatory_pan: signatoryPan.trim() || undefined,
+      member_signatory_id_type: signatoryIdType,
       agreement_date: agreementDate,
       notes: notes.trim() || undefined,
       pan_number: panNumber.trim() || undefined,
@@ -614,12 +616,41 @@ export function CreateContractDialog({
                 />
               </div>
               <div className="space-y-2">
-                <Label>Signatory PAN</Label>
+                <Label>Signatory ID Type</Label>
+                <Select
+                  value={signatoryIdType}
+                  onValueChange={(v) => {
+                    setSignatoryIdType(v as 'pan' | 'aadhaar');
+                    setSignatoryPan(""); // clear on type switch
+                  }}
+                >
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="pan">PAN</SelectItem>
+                    <SelectItem value="aadhaar">Aadhaar</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>
+                  {signatoryIdType === 'aadhaar' ? 'Signatory Aadhaar' : 'Signatory PAN'}
+                </Label>
                 <Input
                   value={signatoryPan}
-                  onChange={(e) => setSignatoryPan(e.target.value.toUpperCase())}
-                  placeholder="Personal PAN"
-                  maxLength={10}
+                  onChange={(e) => {
+                    const val = e.target.value;
+                    if (signatoryIdType === 'aadhaar') {
+                      // Allow only digits for Aadhaar
+                      setSignatoryPan(val.replace(/\D/g, ""));
+                    } else {
+                      setSignatoryPan(val.toUpperCase());
+                    }
+                  }}
+                  placeholder={signatoryIdType === 'aadhaar' ? '12-digit Aadhaar number' : 'e.g. ABCDE1234F'}
+                  maxLength={signatoryIdType === 'aadhaar' ? 12 : 10}
+                  inputMode={signatoryIdType === 'aadhaar' ? 'numeric' : 'text'}
                 />
               </div>
               <div className="space-y-2">

@@ -134,6 +134,7 @@ export async function POST(request: NextRequest) {
       member_signatory_name: d.member_signatory_name,
       member_signatory_designation: d.member_signatory_designation,
       member_signatory_pan: d.member_signatory_pan ?? null,
+      member_signatory_id_type: d.member_signatory_id_type ?? 'pan',
       agreement_date: d.agreement_date,
       created_by: dbUser?.id,
     })

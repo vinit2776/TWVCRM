@@ -368,7 +368,10 @@ export interface Contract {
   notice_period_months?: number;
   member_signatory_name?: string;
   member_signatory_designation?: string;
+  /** The signatory's personal ID number — may be PAN or Aadhaar depending on member_signatory_id_type */
   member_signatory_pan?: string;
+  /** Type of personal ID provided: 'pan' (default) or 'aadhaar' */
+  member_signatory_id_type?: 'pan' | 'aadhaar';
   agreement_date?: string;
   // Leegality e-signing
   leegality_document_id?: string;
