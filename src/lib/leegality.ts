@@ -136,10 +136,9 @@ export async function uploadForEStampAndSigning(params: {
   }
 
   if (!PROFILE_ID) {
-    throw new Error(
-      "[Leegality] LEEGALITY_PROFILE_ID is not configured. " +
-        "Go to your Leegality Dashboard → Settings → Workflows, copy the Workflow ID, " +
-        "and add it as LEEGALITY_PROFILE_ID in your environment variables."
+    console.warn(
+      "[Leegality] LEEGALITY_PROFILE_ID is not configured — sending request without profileId. " +
+        "The API will use inline invitee configuration."
     );
   }
 
@@ -152,7 +151,7 @@ export async function uploadForEStampAndSigning(params: {
         : "AADHAAR"; // default: Aadhaar eSign
 
   const body: Record<string, unknown> = {
-    profileId: PROFILE_ID,
+    ...(PROFILE_ID ? { profileId: PROFILE_ID } : {}),
     file: {
       name: `${params.documentName}.pdf`,
       // Leegality API expects base64 in the "file" field (not "data")
