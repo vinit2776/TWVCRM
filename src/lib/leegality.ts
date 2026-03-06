@@ -110,10 +110,6 @@ export async function uploadForEStampAndSigning(params: {
   pdfBuffer: Buffer;
   /** Document title */
   documentName: string;
-  /** E-stamp state (e.g., "Tamil Nadu") */
-  stampState: string;
-  /** E-stamp duty value in INR */
-  stampDutyValue: number;
   /** Lessor (TWV) signer details */
   lessorSigner: {
     name: string;
@@ -132,7 +128,7 @@ export async function uploadForEStampAndSigning(params: {
 }): Promise<LeegalityUploadResponse> {
   if (!API_KEY) {
     console.warn("[Leegality] No API key configured — returning mock response.");
-    return createMockUploadResponse(params.documentName, params.stampDutyValue);
+    return createMockUploadResponse(params.documentName);
   }
 
   if (!PROFILE_ID) {
@@ -174,17 +170,6 @@ export async function uploadForEStampAndSigning(params: {
       },
     ],
   };
-
-  // Add stamp paper config if series is configured
-  if (STAMP_SERIES) {
-    body.stampSeries = STAMP_SERIES;
-    body.stampValue = String(params.stampDutyValue);
-  } else {
-    console.warn(
-      "[Leegality] LEEGALITY_STAMP_SERIES not configured — e-stamp will use workflow defaults. " +
-        "Get the stamp series from Leegality Dashboard → Stamps."
-    );
-  }
 
   // Optional: add internal reference number for traceability
   body.irn = `TWV-${Date.now()}`;
@@ -465,8 +450,7 @@ function mapSignType(raw: string): "aadhaar_esign" | "dsc" | "electronic" {
 // ================================================================
 
 function createMockUploadResponse(
-  documentName: string,
-  stampDutyValue: number
+  documentName: string
 ): LeegalityUploadResponse {
   const mockId = `LEG${Date.now().toString(36).toUpperCase()}`;
   const expiresAt = new Date();

@@ -93,8 +93,6 @@ export async function POST(
         result = await uploadForEStampAndSigning({
           pdfBuffer,
           documentName: `Membership Agreement - ${memberName}`,
-          stampState: "Tamil Nadu",
-          stampDutyValue: 300,
           lessorSigner: {
             name: "Naval Chordia",
             email: "naval@theworkvilla.com",
@@ -104,7 +102,7 @@ export async function POST(
             name: signatoryName,
             email: memberEmail,
             phone: memberPhone,
-            signMethod: "aadhaar_esign",
+            signMethod: "electronic",
           },
         });
       } catch (err) {

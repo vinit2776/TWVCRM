@@ -92,8 +92,6 @@ export async function POST(
         result = await uploadForEStampAndSigning({
           pdfBuffer,
           documentName: `Leave & License - ${vars.client_name || "Client"}`,
-          stampState: "Tamil Nadu",
-          stampDutyValue: (agreement.leegality_estamp_value as number) || 100,
           lessorSigner: {
             name: "Naval Chordia",
             email: "naval@theworkvilla.com",
@@ -103,7 +101,7 @@ export async function POST(
             name: vars.lessee_signatory_name || vars.client_name || "Client",
             email: vars.client_email || "",
             phone: vars.client_phone || "",
-            signMethod: "aadhaar_esign",
+            signMethod: "electronic",
           },
         });
       } catch (err) {
