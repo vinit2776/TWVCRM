@@ -102,7 +102,7 @@ export async function POST(
             name: signatoryName,
             email: memberEmail,
             phone: memberPhone,
-            signMethod: "electronic",
+            signMethod: "aadhaar_esign",
           },
         });
       } catch (err) {

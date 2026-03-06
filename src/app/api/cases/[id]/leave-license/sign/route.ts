@@ -101,7 +101,7 @@ export async function POST(
             name: vars.lessee_signatory_name || vars.client_name || "Client",
             email: vars.client_email || "",
             phone: vars.client_phone || "",
-            signMethod: "electronic",
+            signMethod: "aadhaar_esign",
           },
         });
       } catch (err) {
