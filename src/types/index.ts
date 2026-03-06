@@ -375,7 +375,8 @@ export interface Contract {
   agreement_date?: string;
   // Leegality e-signing
   leegality_document_id?: string;
-  leegality_sign_url?: string;
+  leegality_sign_url?: string;       // Lessor (TWV/Naval) signing URL
+  leegality_lessee_sign_url?: string; // Lessee (customer) signing URL
   leegality_status?: string;
   signed_at?: string;
   // Status timestamps

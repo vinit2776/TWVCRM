@@ -119,7 +119,8 @@ export async function POST(
         .from("contracts")
         .update({
           leegality_document_id: result.documentId,
-          leegality_sign_url: result.signUrl,
+          leegality_sign_url: result.signUrls[0] ?? result.signUrl,       // Lessor (Naval)
+          leegality_lessee_sign_url: result.signUrls[1] ?? null,          // Customer
           leegality_status: result.status,
         })
         .eq("id", contractId);

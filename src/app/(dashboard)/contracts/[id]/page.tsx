@@ -19,6 +19,8 @@ import {
   PenLine,
   ExternalLink,
   Clock,
+  Copy,
+  Check,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -65,6 +67,14 @@ export default function ContractDetailPage({
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
   const [initiatingSigning, setInitiatingSigning] = useState(false);
   const [checkingSigningStatus, setCheckingSigningStatus] = useState(false);
+  const [copiedLessor, setCopiedLessor] = useState(false);
+  const [copiedLessee, setCopiedLessee] = useState(false);
+
+  const copyToClipboard = (text: string, who: "lessor" | "lessee") => {
+    navigator.clipboard.writeText(text);
+    if (who === "lessor") { setCopiedLessor(true); setTimeout(() => setCopiedLessor(false), 2000); }
+    else { setCopiedLessee(true); setTimeout(() => setCopiedLessee(false), 2000); }
+  };
 
   const fetchContract = useCallback(async () => {
     setLoading(true);
@@ -744,56 +754,105 @@ export default function ContractDetailPage({
           {contract.leegality_document_id && (
             <Card>
               <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <PenLine className="h-4 w-4" />
-                  Digital Signing
+                <CardTitle className="text-base flex items-center justify-between">
+                  <span className="flex items-center gap-2">
+                    <PenLine className="h-4 w-4" />
+                    Digital Signing
+                  </span>
+                  {/* Status badge */}
+                  {contract.leegality_status === "COMPLETED" ? (
+                    <Badge className="bg-green-100 text-green-700 border-green-200">
+                      <CheckCircle2 className="h-3 w-3 mr-1" /> Fully Signed
+                    </Badge>
+                  ) : contract.leegality_status === "EXPIRED" ? (
+                    <Badge variant="destructive">
+                      <XCircle className="h-3 w-3 mr-1" /> Expired
+                    </Badge>
+                  ) : contract.leegality_status === "CANCELLED" ? (
+                    <Badge variant="destructive">
+                      <XCircle className="h-3 w-3 mr-1" /> Cancelled
+                    </Badge>
+                  ) : (
+                    <Badge className="bg-amber-100 text-amber-700 border-amber-200">
+                      <Clock className="h-3 w-3 mr-1" /> Awaiting Signatures
+                    </Badge>
+                  )}
                 </CardTitle>
               </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                <div className="flex items-center gap-2">
-                  {contract.leegality_status === "COMPLETED" ? (
-                    <CheckCircle2 className="h-4 w-4 text-green-600 shrink-0" />
-                  ) : contract.leegality_status === "EXPIRED" || contract.leegality_status === "CANCELLED" ? (
-                    <XCircle className="h-4 w-4 text-destructive shrink-0" />
-                  ) : (
-                    <Clock className="h-4 w-4 text-amber-500 shrink-0" />
-                  )}
-                  <span className="font-medium">
-                    {contract.leegality_status === "COMPLETED"
-                      ? "Fully Signed"
-                      : contract.leegality_status === "IN_PROGRESS"
-                        ? "Awaiting Signatures"
-                        : contract.leegality_status === "CREATED"
-                          ? "Sent for Signing"
-                          : contract.leegality_status === "EXPIRED"
-                            ? "Signing Expired"
-                            : contract.leegality_status === "CANCELLED"
-                              ? "Signing Cancelled"
-                              : contract.leegality_status ?? "In Progress"}
-                  </span>
-                </div>
+              <CardContent className="space-y-4 text-sm">
 
                 {contract.signed_at && (
-                  <p className="text-xs text-muted-foreground">
-                    Signed on {formatDate(contract.signed_at)}
+                  <p className="text-xs text-green-600 font-medium">
+                    ✓ Completed on {formatDate(contract.signed_at)}
                   </p>
                 )}
 
-                <p className="text-xs text-muted-foreground font-mono break-all">
-                  Doc: {contract.leegality_document_id}
-                </p>
-
+                {/* TWV (Lessor) signing link */}
                 {contract.leegality_sign_url && contract.leegality_status !== "COMPLETED" && (
-                  <a
-                    href={contract.leegality_sign_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                    className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
-                  >
-                    <ExternalLink className="h-3 w-3" />
-                    Open signing link
-                  </a>
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">TWV Signing Link</p>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={contract.leegality_sign_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 text-xs text-primary hover:underline truncate font-mono bg-muted px-2 py-1.5 rounded"
+                      >
+                        {contract.leegality_sign_url}
+                      </a>
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        className="h-7 w-7 shrink-0"
+                        onClick={() => copyToClipboard(contract.leegality_sign_url!, "lessor")}
+                        title="Copy TWV signing link"
+                      >
+                        {copiedLessor ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+                      </Button>
+                      <a href={contract.leegality_sign_url} target="_blank" rel="noopener noreferrer">
+                        <Button size="icon" variant="outline" className="h-7 w-7 shrink-0" title="Open in new tab">
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </Button>
+                      </a>
+                    </div>
+                  </div>
                 )}
+
+                {/* Customer (Lessee) signing link */}
+                {contract.leegality_lessee_sign_url && contract.leegality_status !== "COMPLETED" && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Customer Signing Link</p>
+                    <div className="flex items-center gap-2">
+                      <a
+                        href={contract.leegality_lessee_sign_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex-1 text-xs text-primary hover:underline truncate font-mono bg-muted px-2 py-1.5 rounded"
+                      >
+                        {contract.leegality_lessee_sign_url}
+                      </a>
+                      <Button
+                        size="icon"
+                        variant="outline"
+                        className="h-7 w-7 shrink-0"
+                        onClick={() => copyToClipboard(contract.leegality_lessee_sign_url!, "lessee")}
+                        title="Copy customer signing link"
+                      >
+                        {copiedLessee ? <Check className="h-3.5 w-3.5 text-green-600" /> : <Copy className="h-3.5 w-3.5" />}
+                      </Button>
+                      <a href={contract.leegality_lessee_sign_url} target="_blank" rel="noopener noreferrer">
+                        <Button size="icon" variant="outline" className="h-7 w-7 shrink-0" title="Open in new tab">
+                          <ExternalLink className="h-3.5 w-3.5" />
+                        </Button>
+                      </a>
+                    </div>
+                    <p className="text-xs text-muted-foreground">Send this link to the customer to sign via Aadhaar eSign</p>
+                  </div>
+                )}
+
+                <p className="text-xs text-muted-foreground font-mono">
+                  Ref: {contract.leegality_document_id}
+                </p>
 
                 {contract.leegality_status !== "COMPLETED" && (
                   <Button
@@ -808,7 +867,7 @@ export default function ContractDetailPage({
                     ) : (
                       <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
                     )}
-                    Refresh Status
+                    Refresh Signing Status
                   </Button>
                 )}
 
