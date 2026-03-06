@@ -864,19 +864,46 @@ export function generateMembershipAgreementPDF(
     ["1", "Location / Premises", `${locationName}\n${locationAddress}`],
     ["2", "Work Space Description", contract.workspace_description || "As per agreement"],
     ["3", "Parking Space", contract.parking_space || "Nil"],
-    ["4", "Inclusions", "Wi-Fi Broadband Internet, Electricity & Power Backup, Housekeeping, Drinking Water, Tea / Coffee (self-service), Common Area Maintenance"],
-    ["5", "Complimentary Services", contract.complimentary_services || "Nil"],
-    ["6", "Additional Paid Services", "Conference Room, Meeting Room, Printing/Scanning/Photocopying, Courier, Pantry Services (as per menu), Event Space -- all billed at prevailing rates"],
-    ["7", "Rack Rate", "As published by the Operator from time to time"],
+    ["4", "Inclusions",
+      "\u2022 Electricity & air conditioning consumed during office hours.\n" +
+      "\u2022 Wi-Fi and Internet as per fair usage Policy\n" +
+      "\u2022 Housekeeping, security and maintenance services\n" +
+      "\u2022 Hot tea & coffee from specified vending machine 36 cups per week."],
+    ["5", "Complimentary Services\n(subject to availability)", (contract.complimentary_services || "TBD") +
+      "\n\nThese Complimentary Services will not be rolled over from month to month. If these allocated Complimentary Services are exceeded, Member will be responsible for paying fees for such overages as per applicable rates at that time."],
+    ["6", "Additional Paid Services",
+      "\u2022 Conference Room beyond Complimentary Services (if any)\n" +
+      "\u2022 Printouts beyond Complimentary Services\n" +
+      "\u2022 Other Food & Beverages sales counters including Cafe / Vending Machine and others.\n" +
+      "\u2022 Other value-added member services as available.\n" +
+      "\u2022 Additional charges of Rs.2500/- per hour will be implemented after office hours and on Public Holidays."],
+    ["7", "Rack Rate of select paid services\n(subject to availability and revision\nwithout prior intimation by management)",
+      "\u2022 Conference Room @ INR 1000 per hour plus GST\n" +
+      "\u2022 Additional printouts - A4 - Color Rs.20 per sheet / B&W Rs. 5 per sheet. A3 - Color Rs.25 per sheet.\n" +
+      "\u2022 Coffee/Tea twice a day compliment, additional cups @ Rs.20/-\n" +
+      "\u2022 Additional Car & Bike parking slots - subject to availability."],
     ["8", "Monthly Membership Fees (MMF)", `${formatCurrencyPDF(monthlyFee)} + GST per month\n(${amountInWords(monthlyFee)})`],
     ["9", "Commencement Date", formatDatePDF(contract.start_date)],
     ["10", "Term", `${contract.tenure_months} months from the Commencement Date`],
-    ["11", "Commitment Term (Lock-in)", `${commitmentTerm} months from the Commencement Date`],
-    ["12", "Centre Timings", "Monday to Saturday: 9:00 AM to 7:00 PM\nSundays & National Holidays: Closed\n24/7 Access available for dedicated desk and private office members"],
-    ["13", "Interest Free Refundable\nSecurity Deposit (IFRSD)", `${securityDepositMonths} x MMF = ${formatCurrencyPDF(ifrsd)} + GST\n(${amountInWords(ifrsd)})`],
-    ["14", "Payment Due Upon Signing", `IFRSD + First Month's MMF (pro-rated if applicable) + Rs. 20,000 towards GST Registration (refundable upon providing own GST)`],
-    ["15", "Move-In Formalities", "Signed Agreement, KYC Documents (as per Enclosure), IFRSD & First Month's payment"],
-    ["16", "Payment Terms", "Monthly in advance, due on or before the 5th of every calendar month via NEFT/RTGS/Cheque"],
+    ["11", "Commitment Term",
+      `The Member & the Company shall not be entitled to terminate this Agreement or reduce the number of Work Space for a period of ${commitmentTerm}.0 Months and Notice for Termination (defined below) commencing from the Commencement Date.\n\n` +
+      `Member shall be liable to pay the Monthly Membership Fees for the unexpired Commitment Term along with the period for Notice for Termination, if in case this Agreement is terminated by the Member prior to the expiry of Commitment Term.`],
+    ["12", "Centre Timings",
+      "9 A.M. to 9 P.M from Monday to Saturday except public/national holidays.\n" +
+      "Support staff available between 9am to 6pm Monday to Saturday, except public/national holidays."],
+    ["13", "Interest Free Refundable\nSecurity Deposit (IFRSD)",
+      `${securityDepositMonths}.0 times of Monthly Membership Fees.\n\n` +
+      `Member will not be allowed to the use of the Work Spaces unless IFRSD has been fully paid.\n\n` +
+      `The Company will return the IFRSD or any balance thereof within 30 days from effective date of termination after deduction of dues/outstanding including but not limited to the damage to the Premises/Work Spaces and other costs due to the Company. However, Member shall not be entitled to adjust or seek adjustment of such dues to the Company from the IFRSD during or post termination of the Membership Agreement.`],
+    ["14", "Payment Due Upon Signing",
+      "\u2022 Interest Free Refundable Security Deposit\n" +
+      "\u2022 1st month's pro-rata Monthly Membership Fees\n" +
+      "\u2022 GST Registration fee of Rs. 20,000 plus GST"],
+    ["15", "Move In Formalities",
+      "\u2022 Signing of Membership Agreement\n" +
+      "\u2022 KYC of Member and its Employees/Agents/Representatives using the Work Space."],
+    ["16", "Monthly Membership Fees,\nDelay and Default in Payment",
+      `5th of every month. For payment beyond 7th of the month, INR 100 + taxes will be charged per day per seat. If Member fails to pay the Monthly Membership Fees beyond 20th (twenty) of the month, Company will have the option to terminate membership without any further grace period and adjust the IFRSD against outstanding liability. Upon such termination, the Member shall lose all the complimentary services and shall be liable to vacate the Premises immediately and shall not be allowed to enter the Premises. Any outstanding amount shall be first adjusted on receipt of funds from the Member. We may, in our sole discretion, withhold Services or terminate this Agreement, if any payments remain outstanding even after adjustment.`],
   ];
 
   autoTable(doc, {
@@ -919,9 +946,9 @@ export function generateMembershipAgreementPDF(
 
   // Continue schedule rows 17-19
   const scheduleData2: [string, string, string][] = [
-    ["17", "Modifications & Additions", "Any modifications to the workspace layout or additional fit-outs requested by the Member shall be subject to prior written approval of the Operator and at the Member's cost."],
-    ["18", "Auto-Renewal", `This Agreement shall automatically renew for successive terms of ${contract.tenure_months} months each upon expiry, unless either party provides written notice of non-renewal at least ${noticePeriod} month(s) prior to the end of the then-current term.`],
-    ["19", "Escalation on monthly\nMembership Fees", `${escalation}% on Monthly Membership Fees and all products and services after expiry of ${commitmentTerm} months commencing from the Commencement Date.`],
+    ["17", "Changes/Modifications\nbefore move-in date\n(to be charged on actuals)", "The layout, highlighting the changes/Modification is annexed as Annexure-A to this Agreement (If applicable)."],
+    ["18", "Auto-renewal", `In case Notice for Termination (as defined below) is not served before the expiry of the Initial Term, the Membership Agreement will be auto-renewed for another Term, having the same Commitment Term with escalation on Monthly Membership Fees & all other charges at ${escalation}.0 %.`],
+    ["19", "Escalation on monthly\nMembership Fees", `${escalation} % on Monthly Membership Fees and all products and services after expiry of ${commitmentTerm}.0 months commencing from the Commencement Date.`],
   ];
 
   checkPageBreak(30);
@@ -998,7 +1025,7 @@ export function generateMembershipAgreementPDF(
 
     ["28", "Company Details",
       "SREE DESIGN INFRASTRUCTURE PRIVATE LIMITED\n" +
-      "CIN No: U74999TN2014PTC097266\n" +
+      "CIN No: U45400TN1987PTC014408\n" +
       "PAN No: AAACU4245J\n" +
       "Goods and Service Tax No: 33AAACU4245J1ZF"],
 
