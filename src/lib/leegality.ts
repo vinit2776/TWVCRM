@@ -169,6 +169,8 @@ export async function uploadForEStampAndSigning(params: {
         inviteetype: lesseeInviteeType,
       },
     ],
+    // Both parties receive signing invitations simultaneously (not sequential)
+    sequential: false,
   };
 
   // Optional: add internal reference number for traceability
