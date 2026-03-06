@@ -59,12 +59,9 @@ export async function POST(
 
   switch (action) {
     case "initiate": {
-      if (!["accepted", "active"].includes(contract.status)) {
+      if (["rejected", "terminated", "completed"].includes(contract.status)) {
         return NextResponse.json(
-          {
-            error:
-              "Contract must be accepted or active before initiating e-signing",
-          },
+          { error: "Cannot initiate e-signing on a rejected, terminated, or completed contract" },
           { status: 400 }
         );
       }

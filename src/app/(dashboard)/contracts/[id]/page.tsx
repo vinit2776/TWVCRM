@@ -322,8 +322,21 @@ export default function ContractDetailPage({
         </div>
         <div className="flex flex-wrap gap-2">
           {/* Status-based action buttons */}
+          {/* Send for e-Signing — available on any pre-terminal status while signing hasn't started */}
+          {!contract.leegality_document_id &&
+            !["rejected", "terminated", "completed"].includes(contract.status) && (
+              <Button onClick={handleInitiateSigning} disabled={initiatingSigning}>
+                {initiatingSigning ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <PenLine className="mr-2 h-4 w-4" />
+                )}
+                Send for e-Signing
+              </Button>
+            )}
+
           {contract.status === "draft" && (
-            <Button onClick={() => setEmailDialogOpen(true)} disabled={statusUpdating}>
+            <Button variant="outline" onClick={() => setEmailDialogOpen(true)} disabled={statusUpdating}>
               <Send className="mr-2 h-4 w-4" />
               Send Agreement
             </Button>
@@ -334,7 +347,7 @@ export default function ContractDetailPage({
                 {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Eye className="mr-2 h-4 w-4" />}
                 Mark Viewed
               </Button>
-              <Button onClick={() => handleStatusUpdate("accepted")} disabled={statusUpdating}>
+              <Button variant="outline" onClick={() => handleStatusUpdate("accepted")} disabled={statusUpdating}>
                 {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
                 Accept
               </Button>
@@ -346,7 +359,7 @@ export default function ContractDetailPage({
           )}
           {contract.status === "viewed" && (
             <>
-              <Button onClick={() => handleStatusUpdate("accepted")} disabled={statusUpdating}>
+              <Button variant="outline" onClick={() => handleStatusUpdate("accepted")} disabled={statusUpdating}>
                 {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
                 Accept
               </Button>
@@ -357,32 +370,16 @@ export default function ContractDetailPage({
             </>
           )}
           {contract.status === "accepted" && (
-            <>
-              <Button onClick={() => handleStatusUpdate("active")} disabled={statusUpdating}>
-                {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-                Activate
-              </Button>
-              {!contract.leegality_document_id && (
-                <Button variant="outline" onClick={handleInitiateSigning} disabled={initiatingSigning}>
-                  {initiatingSigning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PenLine className="mr-2 h-4 w-4" />}
-                  Send for e-Signing
-                </Button>
-              )}
-            </>
+            <Button variant="outline" onClick={() => handleStatusUpdate("active")} disabled={statusUpdating}>
+              {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+              Activate
+            </Button>
           )}
           {contract.status === "active" && (
-            <>
-              {!contract.leegality_document_id && (
-                <Button variant="outline" onClick={handleInitiateSigning} disabled={initiatingSigning}>
-                  {initiatingSigning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <PenLine className="mr-2 h-4 w-4" />}
-                  Send for e-Signing
-                </Button>
-              )}
-              <Button variant="destructive" onClick={() => setTerminateOpen(true)}>
-                <XCircle className="mr-2 h-4 w-4" />
-                Terminate
-              </Button>
-            </>
+            <Button variant="destructive" onClick={() => setTerminateOpen(true)}>
+              <XCircle className="mr-2 h-4 w-4" />
+              Terminate
+            </Button>
           )}
           {/* Email button for sent/viewed/accepted/rejected */}
           {["sent", "viewed", "accepted", "rejected"].includes(contract.status) && (
