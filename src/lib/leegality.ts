@@ -188,6 +188,7 @@ export async function uploadForEStampAndSigning(params: {
   }
 
   const data = await response.json();
+  console.log("[Leegality] Upload response:", JSON.stringify(data));
 
   // signUrl may be a string or array depending on API version/response
   const signUrlRaw = data.signUrl ?? data.signing_url ?? data.sign_url;
@@ -402,8 +403,8 @@ export function verifyWebhookSignature(
 
 type LeegalityStatus = LeegalityUploadResponse["status"];
 
-function normalizeStatus(raw: string): LeegalityStatus {
-  const upper = (raw ?? "").toUpperCase();
+function normalizeStatus(raw: unknown): LeegalityStatus {
+  const upper = String(raw ?? "").toUpperCase();
   if (upper === "CREATED") return "CREATED";
   if (
     upper === "IN_PROGRESS" ||
@@ -424,24 +425,25 @@ function normalizeStatus(raw: string): LeegalityStatus {
   return "IN_PROGRESS";
 }
 
-function normalizeSignerStatus(raw: string): "PENDING" | "SIGNED" | "EXPIRED" {
-  const upper = (raw ?? "").toUpperCase();
+function normalizeSignerStatus(raw: unknown): "PENDING" | "SIGNED" | "EXPIRED" {
+  const upper = String(raw ?? "").toUpperCase();
   if (upper === "SIGNED" || upper === "COMPLETED" || upper === "DONE" || upper === "COMPLETE")
     return "SIGNED";
   if (upper === "EXPIRED") return "EXPIRED";
   return "PENDING";
 }
 
-function mapInviteeType(raw: string): "aadhaar_esign" | "dsc" | "electronic" {
-  const upper = raw.toUpperCase();
+function mapInviteeType(raw: unknown): "aadhaar_esign" | "dsc" | "electronic" {
+  const upper = String(raw ?? "").toUpperCase();
   if (upper === "AADHAAR" || upper === "AADHAAR_ESIGN") return "aadhaar_esign";
   if (upper === "DSC" || upper === "OFFLINE_SIGN") return "dsc";
   return "electronic";
 }
 
-function mapSignType(raw: string): "aadhaar_esign" | "dsc" | "electronic" {
-  if (raw === "aadhaar" || raw === "aadhaar_esign") return "aadhaar_esign";
-  if (raw === "dsc") return "dsc";
+function mapSignType(raw: unknown): "aadhaar_esign" | "dsc" | "electronic" {
+  const s = String(raw ?? "");
+  if (s === "aadhaar" || s === "aadhaar_esign") return "aadhaar_esign";
+  if (s === "dsc") return "dsc";
   return "electronic";
 }
 
