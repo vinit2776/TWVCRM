@@ -106,6 +106,11 @@ export function useEnquiryNotificationsCore() {
     setAlertQueue([]);
   }, []);
 
+  const dismissReEnquiryItem = useCallback((leadId: string) => {
+    setRecentItems((prev) => prev.filter((i) => !(i.type === "activity" && i.leadId === leadId)));
+    setReEnquiryCount((c) => Math.max(0, c - 1));
+  }, []);
+
   useEffect(() => {
     const supabase = createClient();
     const lastSeen = getLastSeen();
@@ -302,5 +307,6 @@ export function useEnquiryNotificationsCore() {
     alertQueue,
     dismissAlert,
     dismissAllAlerts,
+    dismissReEnquiryItem,
   };
 }

@@ -57,6 +57,7 @@ export default function LeadsPage() {
     reEnquiryCount,
     recentItems,
     markReEnquiriesSeen,
+    dismissReEnquiryItem,
   } = useEnquiryNotifications();
 
   const pinnedLeads = recentItems.filter((i) => i.type === "lead");
@@ -185,10 +186,10 @@ export default function LeadsPage() {
                 </div>
                 <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
                   {pinnedReEnquiries.map((item, idx) => (
-                    <Link
+                    <button
                       key={item.leadId + "-" + idx}
-                      href={`/leads/${item.leadId}`}
-                      className="flex items-center justify-between rounded-md px-3 py-2 bg-amber-50/90 hover:bg-amber-50 transition-colors border border-amber-200 group shadow-sm"
+                      onClick={() => { dismissReEnquiryItem(item.leadId); router.push(`/leads/${item.leadId}`); }}
+                      className="flex items-center justify-between rounded-md px-3 py-2 bg-amber-50/90 hover:bg-amber-50 transition-colors border border-amber-200 group shadow-sm text-left w-full"
                     >
                       <div className="min-w-0 flex-1">
                         <p className="text-sm font-semibold truncate group-hover:text-amber-700 transition-colors">
@@ -201,7 +202,7 @@ export default function LeadsPage() {
                       <span className="shrink-0 ml-2 text-xs font-bold text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded">
                         RE-ENQ
                       </span>
-                    </Link>
+                    </button>
                   ))}
                 </div>
               </div>

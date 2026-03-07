@@ -24,14 +24,17 @@ function timeAgo(iso: string): string {
 function NotificationRow({
   item,
   onClose,
+  onDismiss,
 }: {
   item: EnquiryNotificationItem;
   onClose: () => void;
+  onDismiss?: (leadId: string) => void;
 }) {
   const router = useRouter();
 
   function handleClick() {
     onClose();
+    onDismiss?.(item.leadId);
     router.push(`/leads/${item.leadId}`);
   }
 
@@ -53,7 +56,7 @@ function NotificationRow({
 
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
-  const { totalCount, newLeadCount, reEnquiryCount, recentItems, markReEnquiriesSeen } =
+  const { totalCount, newLeadCount, reEnquiryCount, recentItems, markReEnquiriesSeen, dismissReEnquiryItem } =
     useEnquiryNotifications();
 
   const newLeadItems = recentItems.filter((i) => i.type === "lead");
@@ -114,6 +117,7 @@ export function NotificationBell() {
                     key={item.leadId + "-activity-" + idx}
                     item={item}
                     onClose={handleClose}
+                    onDismiss={dismissReEnquiryItem}
                   />
                 ))}
               </div>
