@@ -2,9 +2,9 @@
   "version": "0.0.1",
   "configurations": [
     {
-      "name": "TWV CRM Dev",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "name": "TWV CRM",
+      "runtimeExecutable": "/bin/bash",
+      "runtimeArgs": ["-c", "PATH=/opt/homebrew/bin:$PATH npm run dev"],
       "port": 3000
     }
   ]

@@ -226,6 +226,18 @@ export function useEnquiryNotificationsCore() {
       )
       .on(
         "postgres_changes",
+        { event: "UPDATE", schema: "public", table: "leads" },
+        (payload) => {
+          const lead = payload.new as { id: string; status: string; tags: string[] };
+          // When a form lead's status changes away from "new", remove it from the pinned list
+          if (lead.status !== "new" && lead.tags?.some((t) => FORM_TAGS.includes(t))) {
+            setRecentItems((prev) => prev.filter((i) => i.leadId !== lead.id));
+            setNewLeadCount((c) => Math.max(0, c - 1));
+          }
+        }
+      )
+      .on(
+        "postgres_changes",
         { event: "INSERT", schema: "public", table: "activities" },
         async (payload) => {
           const act = payload.new as {

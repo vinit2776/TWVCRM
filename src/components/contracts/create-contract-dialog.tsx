@@ -67,9 +67,9 @@ export function CreateContractDialog({
   const [seats, setSeats] = useState<number>(1);
   const [startDate, setStartDate] = useState("");
   const [tenureMonths, setTenureMonths] = useState<number>(12);
+  const [lockInMonths, setLockInMonths] = useState<number>(10);
   const [securityDepositMonths, setSecurityDepositMonths] = useState<number>(3.0);
   const [escalationPercentage, setEscalationPercentage] = useState<number>(10.0);
-  const [noticePeriodMonths, setNoticePeriodMonths] = useState<number>(2.0);
 
   // Signatory
   const [signatoryName, setSignatoryName] = useState("");
@@ -137,7 +137,13 @@ export function CreateContractDialog({
   }, [startDate, tenureMonths]);
 
   const ifrsdAmount = monthlyFee * securityDepositMonths;
-  const commitmentTerm = Math.max(0, tenureMonths - noticePeriodMonths);
+  const noticePeriodMonths = Math.max(0, tenureMonths - lockInMonths);
+
+  const handleTenureChange = (val: string) => {
+    const t = parseInt(val);
+    setTenureMonths(t);
+    if (lockInMonths > t) setLockInMonths(t);
+  };
 
   const missingCompany = !company.trim();
   const missingAddress = !street.trim() && !city.trim();
@@ -161,9 +167,9 @@ export function CreateContractDialog({
     setSeats(1);
     setStartDate("");
     setTenureMonths(12);
+    setLockInMonths(10);
     setSecurityDepositMonths(3.0);
     setEscalationPercentage(10.0);
-    setNoticePeriodMonths(2.0);
     setSignatoryName("");
     setSignatoryDesignation("");
     setSignatoryPan("");
@@ -200,8 +206,8 @@ export function CreateContractDialog({
       toast.error("Please select a start date");
       return;
     }
-    if (tenureMonths <= 0) {
-      toast.error("Tenure must be a positive number");
+    if (!tenureMonths) {
+      toast.error("Please select a tenure");
       return;
     }
     if (seats <= 0) {
@@ -517,14 +523,37 @@ export function CreateContractDialog({
               </div>
               <div className="space-y-2">
                 <Label>
-                  Tenure (months) <span className="text-destructive">*</span>
+                  Tenure <span className="text-destructive">*</span>
                 </Label>
-                <Input
-                  type="number"
-                  min={1}
-                  value={tenureMonths}
-                  onChange={(e) => setTenureMonths(parseInt(e.target.value) || 0)}
-                />
+                <Select value={String(tenureMonths)} onValueChange={handleTenureChange}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {[6, 12, 18, 24, 36].map((m) => (
+                      <SelectItem key={m} value={String(m)}>
+                        {m} months
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>
+                  Lock-in Period <span className="text-destructive">*</span>
+                </Label>
+                <Select value={String(lockInMonths)} onValueChange={(v) => setLockInMonths(parseInt(v))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: tenureMonths }, (_, i) => i + 1).map((m) => (
+                      <SelectItem key={m} value={String(m)}>
+                        {m} month{m !== 1 ? "s" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-2">
                 <Label>Security Deposit (x Monthly Fee)</Label>
@@ -546,16 +575,6 @@ export function CreateContractDialog({
                   onChange={(e) => setEscalationPercentage(Number(e.target.value) || 0)}
                 />
               </div>
-              <div className="space-y-2">
-                <Label>Notice Period (months)</Label>
-                <Input
-                  type="number"
-                  min={0}
-                  step={0.5}
-                  value={noticePeriodMonths}
-                  onChange={(e) => setNoticePeriodMonths(Number(e.target.value) || 0)}
-                />
-              </div>
             </div>
 
             {/* Calculated summary */}
@@ -572,8 +591,12 @@ export function CreateContractDialog({
                   </p>
                 )}
                 <p>
-                  <span className="text-muted-foreground">Commitment Term:</span>{" "}
-                  <span className="font-medium">{commitmentTerm} months</span>
+                  <span className="text-muted-foreground">Lock-in / Commitment Term:</span>{" "}
+                  <span className="font-medium">{lockInMonths} months</span>
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Notice Period:</span>{" "}
+                  <span className="font-medium">{noticePeriodMonths} months</span>
                 </p>
                 <p>
                   <span className="text-muted-foreground">Security Deposit (IFRSD):</span>{" "}
