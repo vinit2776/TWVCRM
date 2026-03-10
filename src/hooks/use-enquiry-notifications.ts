@@ -118,9 +118,8 @@ export function useEnquiryNotificationsCore() {
       const lastSeen = getLastSeen();
       const [
         { count: leadCount },
-        { count: activityCount },
         { data: recentLeads },
-        { data: recentActivities },
+        { data: allReEnquiryActivities },
       ] = await Promise.all([
         // 1. Count unactioned new leads from public forms
         supabase
@@ -128,13 +127,7 @@ export function useEnquiryNotificationsCore() {
           .select("id", { count: "exact", head: true })
           .eq("status", "new")
           .overlaps("tags", FORM_TAGS),
-        // 2. Count unseen re-enquiry activities
-        supabase
-          .from("activities")
-          .select("id", { count: "exact", head: true })
-          .like("subject", "Re-enquiry via%")
-          .gt("created_at", lastSeen),
-        // 3. Recent new enquiry leads for dropdown (last 5)
+        // 2. Recent new enquiry leads for dropdown (last 5)
         supabase
           .from("leads")
           .select("id, first_name, last_name, tags, created_at")
@@ -142,17 +135,26 @@ export function useEnquiryNotificationsCore() {
           .overlaps("tags", FORM_TAGS)
           .order("created_at", { ascending: false })
           .limit(5),
-        // 4. Recent re-enquiry activities for dropdown (last 5)
+        // 3. Re-enquiry activities with lead status — filter in JS to only show
+        //    leads still in early pipeline stages (new / contacted)
         supabase
           .from("activities")
-          .select("id, subject, created_at, lead:leads!activities_lead_id_fkey(id, first_name, last_name)")
+          .select("id, subject, created_at, lead:leads!activities_lead_id_fkey(id, first_name, last_name, status)")
           .like("subject", "Re-enquiry via%")
+          .gt("created_at", lastSeen)
           .order("created_at", { ascending: false })
-          .limit(5),
+          .limit(100),
       ]);
 
+      // Only show re-enquiries for leads still in early pipeline stages
+      const EARLY_STATUSES = ["new", "contacted"];
+      const activeReEnquiries = (allReEnquiryActivities ?? []).filter((a) => {
+        const lead = a.lead as { status: string } | null;
+        return !lead || EARLY_STATUSES.includes(lead.status);
+      });
+
       setNewLeadCount(leadCount ?? 0);
-      setReEnquiryCount(activityCount ?? 0);
+      setReEnquiryCount(activeReEnquiries.length);
 
       const leadItems: EnquiryNotificationItem[] = (recentLeads ?? []).map((l) => {
         const matchingTag = (l.tags as string[]).find((t) => FORM_TAGS.includes(t)) ?? "";
@@ -165,7 +167,7 @@ export function useEnquiryNotificationsCore() {
         };
       });
 
-      const activityItems: EnquiryNotificationItem[] = (recentActivities ?? []).map((a) => {
+      const activityItems: EnquiryNotificationItem[] = activeReEnquiries.slice(0, 5).map((a) => {
         const lead = a.lead as unknown as { id: string; first_name: string; last_name: string } | null;
         const sourceMatch = (a.subject as string).match(/Re-enquiry via (.+?) form/);
         return {
@@ -246,10 +248,18 @@ export function useEnquiryNotificationsCore() {
         { event: "UPDATE", schema: "public", table: "leads" },
         (payload) => {
           const lead = payload.new as { id: string; status: string; tags: string[] };
-          // When a form lead's status changes away from "new", remove it from the pinned list
+          const earlyStatuses = new Set(["new", "contacted"]);
+
+          // Remove from new-lead alerts when a form lead's status changes away from "new"
           if (lead.status !== "new" && lead.tags?.some((t) => FORM_TAGS.includes(t))) {
-            setRecentItems((prev) => prev.filter((i) => i.leadId !== lead.id));
+            setRecentItems((prev) => prev.filter((i) => !(i.type === "lead" && i.leadId === lead.id)));
             setNewLeadCount((c) => Math.max(0, c - 1));
+          }
+
+          // Remove from re-enquiry alerts when lead advances beyond "contacted"
+          // (reEnquiryCount resyncs accurately on the next visibility-change revalidation)
+          if (!earlyStatuses.has(lead.status)) {
+            setRecentItems((prev) => prev.filter((i) => !(i.type === "activity" && i.leadId === lead.id)));
           }
         }
       )
