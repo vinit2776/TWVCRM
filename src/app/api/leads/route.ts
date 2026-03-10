@@ -39,9 +39,12 @@ export async function GET(request: NextRequest) {
   if (assigned_to) query = query.eq("assigned_to", assigned_to);
   if (rating) query = query.eq("rating", rating);
   if (location_id) query = query.eq("location_id", location_id);
-  if (search) query = query.or(
-    `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,company.ilike.%${search}%`
-  );
+  if (search) {
+    const searchTerm = search.startsWith("#") ? search.slice(1) : search;
+    query = query.or(
+      `first_name.ilike.%${searchTerm}%,last_name.ilike.%${searchTerm}%,email.ilike.%${searchTerm}%,phone.ilike.%${searchTerm}%,company.ilike.%${searchTerm}%,id.ilike.%${searchTerm}%`
+    );
+  }
 
   const ascending = sort_order === "asc";
   query = query

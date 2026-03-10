@@ -155,7 +155,7 @@ export default function LeadsPage() {
                           {item.name}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          {item.source} · {timeAgo(item.time)}
+                          <span className="font-mono">#{item.leadId.slice(0, 6)}</span> · {item.source} · {timeAgo(item.time)}
                         </p>
                       </div>
                       <span className="shrink-0 ml-2 text-xs font-bold text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded">
@@ -196,7 +196,7 @@ export default function LeadsPage() {
                           {item.name}
                         </p>
                         <p className="text-xs text-muted-foreground">
-                          {item.source} · {timeAgo(item.time)}
+                          <span className="font-mono">#{item.leadId.slice(0, 6)}</span> · {item.source} · {timeAgo(item.time)}
                         </p>
                       </div>
                       <span className="shrink-0 ml-2 text-xs font-bold text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded">
