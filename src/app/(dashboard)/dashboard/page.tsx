@@ -168,7 +168,7 @@ export default function DashboardPage() {
                             {item.name}
                           </p>
                           <p className="text-xs text-muted-foreground">
-                            {item.source} · {timeAgo(item.time)}
+                            <span className="font-mono">#{item.leadId.slice(0, 6)}</span> · {item.source} · {timeAgo(item.time)}
                           </p>
                         </div>
                         <span className="text-xs text-emerald-600 font-medium shrink-0 ml-2">→</span>
@@ -212,7 +212,7 @@ export default function DashboardPage() {
                             {item.name}
                           </p>
                           <p className="text-xs text-muted-foreground">
-                            {item.source} · {timeAgo(item.time)}
+                            <span className="font-mono">#{item.leadId.slice(0, 6)}</span> · {item.source} · {timeAgo(item.time)}
                           </p>
                         </div>
                         <span className="text-xs text-amber-600 font-medium shrink-0 ml-2">→</span>
