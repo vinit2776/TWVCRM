@@ -149,7 +149,7 @@ export function useEnquiryNotificationsCore() {
       // Only show re-enquiries for leads still in early pipeline stages
       const EARLY_STATUSES = ["new", "contacted"];
       const activeReEnquiries = (allReEnquiryActivities ?? []).filter((a) => {
-        const lead = a.lead as { status: string } | null;
+        const lead = a.lead as unknown as { status: string } | null;
         return !lead || EARLY_STATUSES.includes(lead.status);
       });
 
