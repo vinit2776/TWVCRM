@@ -113,9 +113,9 @@ export function useEnquiryNotificationsCore() {
 
   useEffect(() => {
     const supabase = createClient();
-    const lastSeen = getLastSeen();
 
     async function loadInitialData() {
+      const lastSeen = getLastSeen();
       const [
         { count: leadCount },
         { count: activityCount },
@@ -188,6 +188,18 @@ export function useEnquiryNotificationsCore() {
     loadInitialData().catch((err) => {
       console.error("[useEnquiryNotifications] loadInitialData failed:", err);
     });
+
+    // Re-validate when the user returns to this tab (self-healing for stale items)
+    let lastLoadTime = Date.now();
+    function handleVisibilityChange() {
+      if (document.visibilityState === "visible" && Date.now() - lastLoadTime > 120_000) {
+        lastLoadTime = Date.now();
+        loadInitialData().catch((err) =>
+          console.error("[useEnquiryNotifications] revalidation failed:", err)
+        );
+      }
+    }
+    document.addEventListener("visibilitychange", handleVisibilityChange);
 
     // 5. Real-time subscription for new enquiries
     const channel = supabase
@@ -295,6 +307,7 @@ export function useEnquiryNotificationsCore() {
 
     return () => {
       supabase.removeChannel(channel);
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [router]);
 
