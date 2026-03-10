@@ -146,8 +146,8 @@ export function useEnquiryNotificationsCore() {
           .limit(100),
       ]);
 
-      // Only show re-enquiries for leads still in early pipeline stages
-      const EARLY_STATUSES = ["new", "contacted"];
+      // Only show re-enquiries for leads still at "new" status
+      const EARLY_STATUSES = ["new"];
       const activeReEnquiries = (allReEnquiryActivities ?? []).filter((a) => {
         const lead = a.lead as unknown as { status: string } | null;
         return !lead || EARLY_STATUSES.includes(lead.status);
@@ -248,7 +248,7 @@ export function useEnquiryNotificationsCore() {
         { event: "UPDATE", schema: "public", table: "leads" },
         (payload) => {
           const lead = payload.new as { id: string; status: string; tags: string[] };
-          const earlyStatuses = new Set(["new", "contacted"]);
+          const earlyStatuses = new Set(["new"]);
 
           // Remove from new-lead alerts when a form lead's status changes away from "new"
           if (lead.status !== "new" && lead.tags?.some((t) => FORM_TAGS.includes(t))) {
