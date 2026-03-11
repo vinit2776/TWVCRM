@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { unstable_batchedUpdates } from "react-dom";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
@@ -220,18 +221,20 @@ export function useEnquiryNotificationsCore() {
           const sourceLabel = SOURCE_LABEL[matchingTag] ?? "";
           const name = `${lead.first_name} ${lead.last_name}`;
 
-          setNewLeadCount((c) => c + 1);
-          setRecentItems((prev) => [
-            { type: "lead" as const, leadId: lead.id, name, source: sourceLabel, time: lead.created_at },
-            ...prev,
-          ].slice(0, 10));
-
           // Alert banner + audio chime
           const alertId = `lead-${lead.id}-${Date.now()}`;
-          setAlertQueue((prev) => [
-            ...prev,
-            { alertId, type: "lead", leadId: lead.id, name, source: sourceLabel },
-          ]);
+          // Batch all state updates into a single render pass
+          unstable_batchedUpdates(() => {
+            setNewLeadCount((c) => c + 1);
+            setRecentItems((prev) => [
+              { type: "lead" as const, leadId: lead.id, name, source: sourceLabel, time: lead.created_at },
+              ...prev,
+            ].slice(0, 10));
+            setAlertQueue((prev) => [
+              ...prev,
+              { alertId, type: "lead", leadId: lead.id, name, source: sourceLabel },
+            ]);
+          });
           playChime();
 
           toast.success(`New enquiry — ${name} via ${sourceLabel}`, {
@@ -272,9 +275,8 @@ export function useEnquiryNotificationsCore() {
           };
           if (!act.subject?.startsWith("Re-enquiry via")) return;
 
-          // Fetch lead name
-          const supabaseCl = createClient();
-          const { data: lead } = await supabaseCl
+          // Fetch lead name — reuse the existing supabase client (no new client needed)
+          const { data: lead } = await supabase
             .from("leads")
             .select("id, first_name, last_name")
             .eq("id", act.lead_id)
@@ -284,24 +286,26 @@ export function useEnquiryNotificationsCore() {
           const sourceMatch = act.subject.match(/Re-enquiry via (.+?) form/);
           const sourceLabel = sourceMatch?.[1] ?? "Form";
 
-          setReEnquiryCount((c) => c + 1);
-          setRecentItems((prev) => [
-            {
-              type: "activity" as const,
-              leadId: act.lead_id,
-              name,
-              source: sourceLabel,
-              time: act.created_at,
-            },
-            ...prev,
-          ].slice(0, 10));
-
           // Alert banner + audio chime
           const alertId = `activity-${act.id}-${Date.now()}`;
-          setAlertQueue((prev) => [
-            ...prev,
-            { alertId, type: "activity", leadId: act.lead_id, name, source: sourceLabel },
-          ]);
+          // Batch all state updates into a single render pass
+          unstable_batchedUpdates(() => {
+            setReEnquiryCount((c) => c + 1);
+            setRecentItems((prev) => [
+              {
+                type: "activity" as const,
+                leadId: act.lead_id,
+                name,
+                source: sourceLabel,
+                time: act.created_at,
+              },
+              ...prev,
+            ].slice(0, 10));
+            setAlertQueue((prev) => [
+              ...prev,
+              { alertId, type: "activity", leadId: act.lead_id, name, source: sourceLabel },
+            ]);
+          });
           playChime();
 
           toast(`Re-enquiry — ${name} is enquiring again`, {

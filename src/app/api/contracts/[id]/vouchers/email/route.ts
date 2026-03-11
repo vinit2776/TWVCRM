@@ -155,24 +155,21 @@ export async function POST(
       );
     }
 
-    let sent = 0;
-    let failed = 0;
-    const details: { seat: number; email: string; status: string }[] = [];
     const now = new Date().toISOString();
+    const issuancesWithEmail = issuances.filter((i) => i.seat_occupant_email);
 
-    for (const issuance of issuances) {
-      const email = issuance.seat_occupant_email;
-      if (!email) continue;
+    // Send all per-seat emails in parallel instead of sequentially
+    const sendResults = await Promise.allSettled(
+      issuancesWithEmail.map(async (issuance) => {
+        const email = issuance.seat_occupant_email!;
+        const voucherCode = issuance.voucher?.voucher_code || "—";
+        const validFrom = issuance.valid_from
+          ? new Date(issuance.valid_from).toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" })
+          : "—";
+        const validUntil = issuance.valid_until
+          ? new Date(issuance.valid_until).toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" })
+          : "—";
 
-      const voucherCode = issuance.voucher?.voucher_code || "—";
-      const validFrom = issuance.valid_from
-        ? new Date(issuance.valid_from).toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" })
-        : "—";
-      const validUntil = issuance.valid_until
-        ? new Date(issuance.valid_until).toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" })
-        : "—";
-
-      try {
         await resend.emails.send({
           from: EMAIL_FROM,
           to: [email],
@@ -188,18 +185,26 @@ export async function POST(
           }),
         });
 
-        await supabase
-          .from("voucher_issuances")
-          .update({ emailed_at: now })
-          .eq("id", issuance.id);
+        return { id: issuance.id, seat: issuance.seat_number, email };
+      })
+    );
 
-        sent++;
-        details.push({ seat: issuance.seat_number, email, status: "sent" });
-      } catch {
-        failed++;
-        details.push({ seat: issuance.seat_number, email, status: "failed" });
-      }
+    // Batch-update emailed_at for all successful sends in a single query
+    const successIds = sendResults
+      .filter((r): r is PromiseFulfilledResult<{ id: string; seat: number; email: string }> => r.status === "fulfilled")
+      .map((r) => r.value.id);
+
+    if (successIds.length > 0) {
+      await supabase.from("voucher_issuances").update({ emailed_at: now }).in("id", successIds);
     }
+
+    const sent = successIds.length;
+    const failed = sendResults.length - sent;
+    const details = issuancesWithEmail.map((issuance, idx) => ({
+      seat: issuance.seat_number,
+      email: issuance.seat_occupant_email!,
+      status: sendResults[idx].status === "fulfilled" ? "sent" : "failed",
+    }));
 
     return NextResponse.json({ sent, failed, details });
   }

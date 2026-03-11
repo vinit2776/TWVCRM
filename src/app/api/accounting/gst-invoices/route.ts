@@ -50,10 +50,19 @@ export async function GET(request: NextRequest) {
         .in("contract_id", contractIds)
     : { data: [] };
 
+  // Group payments by contract_id once (O(n+m)) instead of scanning per contract (O(n×m))
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const paymentsByContract = new Map<string, any[]>();
+  (payments || []).forEach((p) => {
+    const list = paymentsByContract.get(p.contract_id) ?? [];
+    list.push(p);
+    paymentsByContract.set(p.contract_id, list);
+  });
+
   // Build per-contract GST status
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const entries = activeContracts.map((contract: any) => {
-    const contractPayments = (payments || []).filter((p) => p.contract_id === contract.id);
+    const contractPayments = paymentsByContract.get(contract.id) ?? [];
     const totalBillable = Number(contract.monthly_membership_fee);
     const totalPaid = contractPayments
       .filter((p) => p.status === "verified")
@@ -103,30 +112,33 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "At least one entry is required" }, { status: 400 });
   }
 
-  const results = [];
-  for (const entry of entries) {
-    const { data: updated, error } = await supabase
-      .from("contract_payments")
-      .update({
-        gst_invoice_number: entry.gst_invoice_number.trim(),
-        gst_invoice_status: entry.gst_invoice_number.trim() ? "invoiced" : null,
-      })
-      .eq("id", entry.payment_id)
-      .select("id, gst_invoice_number, gst_invoice_status")
-      .single();
+  // Update all entries in parallel instead of sequentially
+  const updateResults = await Promise.all(
+    entries.map(async (entry) => {
+      const { data: updated, error } = await supabase
+        .from("contract_payments")
+        .update({
+          gst_invoice_number: entry.gst_invoice_number.trim(),
+          gst_invoice_status: entry.gst_invoice_number.trim() ? "invoiced" : null,
+        })
+        .eq("id", entry.payment_id)
+        .select("id, gst_invoice_number, gst_invoice_status")
+        .single();
 
-    if (!error && updated) {
-      results.push(updated);
+      if (!error && updated) {
+        logAudit(supabase, {
+          entityType: "contract_payment",
+          entityId: entry.payment_id,
+          action: "update",
+          performedBy: dbUser.id,
+          changes: { gst_invoice_number: { old: null, new: entry.gst_invoice_number.trim() } },
+        });
+        return updated;
+      }
+      return null;
+    })
+  );
 
-      logAudit(supabase, {
-        entityType: "contract_payment",
-        entityId: entry.payment_id,
-        action: "update",
-        performedBy: dbUser.id,
-        changes: { gst_invoice_number: { old: null, new: entry.gst_invoice_number.trim() } },
-      });
-    }
-  }
-
+  const results = updateResults.filter(Boolean);
   return NextResponse.json({ data: results, updated_count: results.length });
 }

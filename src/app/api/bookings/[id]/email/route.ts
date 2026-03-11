@@ -109,18 +109,16 @@ export async function POST(
         </div>
       </div>`;
 
-    for (const mgr of managers) {
-      try {
-        await resend.emails.send({
+    await Promise.all(
+      managers.map((mgr) =>
+        resend.emails.send({
           from: EMAIL_FROM,
           to: mgr.email,
           subject: `Check-In: ${customerName} at ${spaceName} - The WorkVilla`,
           html: alertHtml,
-        });
-      } catch (e) {
-        console.error(`Failed to send check-in alert to ${mgr.email}:`, e);
-      }
-    }
+        }).catch((e) => console.error(`Failed to send check-in alert to ${mgr.email}:`, e))
+      )
+    );
     return NextResponse.json({ message: `Check-in alert sent to ${managers.length} manager(s)` });
   }
 
@@ -269,18 +267,16 @@ export async function POST(
         </div>
       </div>`;
 
-    for (const mgr of managers) {
-      try {
-        await resend.emails.send({
+    await Promise.all(
+      managers.map((mgr) =>
+        resend.emails.send({
           from: EMAIL_FROM,
           to: mgr.email,
           subject: `Cleaning Required - ${spaceName} - The WorkVilla`,
           html: cleaningHtml,
-        });
-      } catch (e) {
-        console.error(`Failed to send cleaning email to ${mgr.email}:`, e);
-      }
-    }
+        }).catch((e) => console.error(`Failed to send cleaning email to ${mgr.email}:`, e))
+      )
+    );
 
     return NextResponse.json({ message: `Cleaning alert sent to ${managers.length} manager(s)` });
   }
@@ -419,18 +415,16 @@ export async function POST(
         </div>
       </div>`;
 
-    for (const mgr of managers) {
-      try {
-        await resend.emails.send({
+    await Promise.all(
+      managers.map((mgr) =>
+        resend.emails.send({
           from: EMAIL_FROM,
           to: mgr.email,
           subject: `New Booking: ${spaceName} - ${formatDate(booking.booking_date)} ${startTime} - ${booking.booking_number}`,
           html: managerHtml,
-        });
-      } catch (e) {
-        console.error(`Failed to send manager notification to ${mgr.email}:`, e);
-      }
-    }
+        }).catch((e) => console.error(`Failed to send manager notification to ${mgr.email}:`, e))
+      )
+    );
   }
 
   return NextResponse.json({ message: "Confirmation email sent" });
