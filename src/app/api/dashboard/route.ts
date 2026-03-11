@@ -1,22 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
-/**
- * Performance note: if you have many leads, create this RPC once in the Supabase SQL editor
- * to avoid fetching every lead row just to count by status:
- *
- *   create or replace function get_pipeline_counts(p_location_id uuid default null)
- *   returns table(status text, count bigint) language sql as $$
- *     select status, count(*) from leads
- *     where (p_location_id is null or location_id = p_location_id)
- *     group by status;
- *   $$;
- *
- * Then replace the pipelineQuery in Promise.all below with:
- *   supabase.rpc("get_pipeline_counts", { p_location_id: locationId ?? null })
- * and remove the pipelineCounts aggregation block at the bottom.
- */
-
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -30,6 +14,7 @@ export async function GET(request: NextRequest) {
     // When filtering by location, we need lead IDs to filter tasks/activities.
     // Parallelise the location-ID fetch with all lead aggregate queries so we
     // only pay one extra round-trip instead of one blocking sequential await.
+    // The pipeline counts use a DB-side group-by function to avoid fetching every row.
     const [
       { data: pipelineData },
       { count: totalLeads },
@@ -37,7 +22,7 @@ export async function GET(request: NextRequest) {
       { count: lostCount },
       { data: locationLeads },
     ] = await Promise.all([
-      supabase.from("leads").select("status").eq("location_id", locationId),
+      supabase.rpc("get_pipeline_counts", { p_location_id: locationId }),
       supabase.from("leads").select("*", { count: "exact", head: true }).eq("location_id", locationId),
       supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "won").eq("location_id", locationId),
       supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "lost").eq("location_id", locationId),
@@ -83,11 +68,8 @@ export async function GET(request: NextRequest) {
       followUpsQ,
     ]);
 
-    const pipelineCounts: Record<string, number> = {};
-    pipelineData?.forEach((l) => {
-      pipelineCounts[l.status] = (pipelineCounts[l.status] || 0) + 1;
-    });
-    const pipeline = Object.entries(pipelineCounts).map(([status, count]) => ({ status, count }));
+    // RPC already returns [{status, count}] — no JS aggregation needed
+    const pipeline = (pipelineData || []) as { status: string; count: number }[];
 
     const total = totalLeads || 0;
     const won = wonCount || 0;
@@ -96,7 +78,7 @@ export async function GET(request: NextRequest) {
 
     return NextResponse.json({
       data: {
-        pipeline: pipeline || [],
+        pipeline,
         tasks_due_today: tasksDueToday || 0,
         tasks_overdue: tasksOverdue || 0,
         recent_activities: recentActivities || [],
@@ -107,7 +89,8 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  // No location filter — fire all 9 queries in one parallel batch
+  // No location filter — fire all queries in one parallel batch.
+  // Pipeline uses a DB-side group-by RPC to avoid fetching every lead row.
   const [
     { data: pipelineData },
     { count: totalLeads },
@@ -119,7 +102,7 @@ export async function GET(request: NextRequest) {
     { data: recentNotes },
     { count: pendingFollowUps },
   ] = await Promise.all([
-    supabase.from("leads").select("status"),
+    supabase.rpc("get_pipeline_counts", { p_location_id: null }),
     supabase.from("leads").select("*", { count: "exact", head: true }),
     supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "won"),
     supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "lost"),
@@ -140,11 +123,8 @@ export async function GET(request: NextRequest) {
       .not("follow_up_date", "is", null),
   ]);
 
-  const pipelineCounts: Record<string, number> = {};
-  pipelineData?.forEach((l) => {
-    pipelineCounts[l.status] = (pipelineCounts[l.status] || 0) + 1;
-  });
-  const pipeline = Object.entries(pipelineCounts).map(([status, count]) => ({ status, count }));
+  // RPC already returns [{status, count}] — no JS aggregation needed
+  const pipeline = (pipelineData || []) as { status: string; count: number }[];
 
   const total = totalLeads || 0;
   const won = wonCount || 0;
@@ -153,7 +133,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     data: {
-      pipeline: pipeline || [],
+      pipeline,
       tasks_due_today: tasksDueToday || 0,
       tasks_overdue: tasksOverdue || 0,
       recent_activities: recentActivities || [],
