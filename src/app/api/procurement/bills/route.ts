@@ -106,6 +106,16 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invoice file upload is required when linking to a purchase order" }, { status: 422 });
     }
 
+    // A delivery must be recorded before an invoice can be uploaded
+    const { count: deliveryCount } = await supabase
+      .from("po_delivery_receipts")
+      .select("*", { count: "exact", head: true })
+      .eq("po_id", parsed.data.po_id);
+
+    if (!deliveryCount) {
+      return NextResponse.json({ error: "A delivery must be recorded before uploading a vendor invoice" }, { status: 422 });
+    }
+
     // Amount must not exceed PO value
     if (poTotalAmount > 0 && parsed.data.total_amount > poTotalAmount) {
       return NextResponse.json({

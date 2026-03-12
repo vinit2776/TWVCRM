@@ -534,6 +534,8 @@ export default function PurchaseOrderDetailPage() {
                 setInvAmount(String(po.total_ordered_amount || ""));
                 setActionDialog("add_invoice");
               }}
+              disabled={!(po.po_delivery_receipts ?? []).length}
+              title={!(po.po_delivery_receipts ?? []).length ? "Record a delivery before uploading a vendor invoice" : undefined}
             >
               <Receipt className="h-4 w-4 mr-1" /> Vendor Invoice
             </Button>
