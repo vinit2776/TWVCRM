@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Archive, Plus, X, Check } from "lucide-react";
+import { Archive, Pencil, Plus, X, Check } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -40,6 +40,7 @@ export default function CatalogPage() {
   const [includeInactive, setIncludeInactive] = useState(false);
 
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editItem, setEditItem] = useState<ProcurementItem | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
 
@@ -55,28 +56,48 @@ export default function CatalogPage() {
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
 
-  async function handleCreate() {
+  function openEdit(item: ProcurementItem) {
+    setEditItem(item);
+    setForm({
+      name: item.name,
+      department: item.department,
+      unit: item.unit,
+      standard_price: item.standard_price != null ? String(item.standard_price) : "",
+      description: item.description || "",
+    });
+    setDialogOpen(true);
+  }
+
+  async function handleSave() {
     if (!form.name.trim()) { toast.error("Item name is required"); return; }
     setSaving(true);
-    const res = await fetch("/api/procurement/items", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        name: form.name.trim(),
-        department: form.department,
-        unit: form.unit,
-        standard_price: form.standard_price ? Number(form.standard_price) : undefined,
-        description: form.description || undefined,
-      }),
-    });
+    const body = {
+      name: form.name.trim(),
+      department: form.department,
+      unit: form.unit,
+      standard_price: form.standard_price ? Number(form.standard_price) : undefined,
+      description: form.description || undefined,
+    };
+    const res = editItem
+      ? await fetch(`/api/procurement/items/${editItem.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        })
+      : await fetch("/api/procurement/items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(body),
+        });
     if (res.ok) {
-      toast.success("Item added to catalog");
+      toast.success(editItem ? "Item updated" : "Item added to catalog");
       setDialogOpen(false);
+      setEditItem(null);
       setForm(emptyForm);
       fetchItems();
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to add item");
+      toast.error(err?.error || (editItem ? "Failed to update item" : "Failed to add item"));
     }
     setSaving(false);
   }
@@ -192,16 +213,26 @@ export default function CatalogPage() {
                               </Badge>
                             </td>
                             <td className="px-4 py-2.5">
-                              <Button
-                                size="sm"
-                                variant="ghost"
-                                onClick={() => toggleActive(item)}
-                                title={item.is_active ? "Deactivate" : "Reactivate"}
-                              >
-                                {item.is_active
-                                  ? <X className="h-3 w-3 text-red-500" />
-                                  : <Check className="h-3 w-3 text-green-600" />}
-                              </Button>
+                              <div className="flex items-center gap-1">
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => openEdit(item)}
+                                  title="Edit item"
+                                >
+                                  <Pencil className="h-3 w-3 text-muted-foreground" />
+                                </Button>
+                                <Button
+                                  size="sm"
+                                  variant="ghost"
+                                  onClick={() => toggleActive(item)}
+                                  title={item.is_active ? "Deactivate" : "Reactivate"}
+                                >
+                                  {item.is_active
+                                    ? <X className="h-3 w-3 text-red-500" />
+                                    : <Check className="h-3 w-3 text-green-600" />}
+                                </Button>
+                              </div>
                             </td>
                           </tr>
                         ))}
@@ -215,11 +246,17 @@ export default function CatalogPage() {
         </div>
       )}
 
-      {/* Add Item Dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      {/* Add / Edit Item Dialog */}
+      <Dialog
+        open={dialogOpen}
+        onOpenChange={(open) => {
+          if (!open) { setEditItem(null); setForm(emptyForm); }
+          setDialogOpen(open);
+        }}
+      >
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Add Item to Catalog</DialogTitle>
+            <DialogTitle>{editItem ? "Edit Item" : "Add Item to Catalog"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1">
@@ -281,8 +318,10 @@ export default function CatalogPage() {
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>Cancel</Button>
-            <Button onClick={handleCreate} disabled={saving}>
-              {saving ? "Adding..." : "Add Item"}
+            <Button onClick={handleSave} disabled={saving}>
+              {saving
+                ? (editItem ? "Saving..." : "Adding...")
+                : (editItem ? "Save Changes" : "Add Item")}
             </Button>
           </DialogFooter>
         </DialogContent>
