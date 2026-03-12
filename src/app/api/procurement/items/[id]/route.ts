@@ -6,7 +6,8 @@ import { z } from "zod";
 const updateItemSchema = z.object({
   name: z.string().min(1).optional(),
   department: z.enum(["pantry", "maintenance", "administration"]).optional(),
-  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair"]).optional(),
+  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year"]).optional(),
+  item_type: z.enum(["goods", "service"]).optional(),
   standard_price: z.number().min(0).optional().nullable(),
   description: z.string().optional(),
   is_active: z.boolean().optional(),

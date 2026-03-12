@@ -1140,7 +1140,7 @@ export const VENDOR_CATEGORY_LABELS: Record<string, string> = {
   general: "General",
 };
 
-export const ITEM_UNITS = ["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair"] as const;
+export const ITEM_UNITS = ["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year"] as const;
 export type ItemUnit = (typeof ITEM_UNITS)[number];
 
 export const PR_STATUSES = [
@@ -1218,6 +1218,18 @@ export const BILL_PAYMENT_MODE_LABELS: Record<string, string> = {
   upi: "UPI",
   bank_transfer: "Bank Transfer",
 };
+
+export const ITEM_TYPES = ["goods", "service"] as const;
+export type ItemType = (typeof ITEM_TYPES)[number];
+
+export const ITEM_TYPE_LABELS: Record<string, string> = {
+  goods: "Goods",
+  service: "Service",
+};
+
+// Service PO billing cycles (subset of contract BILLING_CYCLES — excludes half_yearly)
+export const SERVICE_PO_BILLING_CYCLES = ["monthly", "quarterly", "yearly"] as const;
+export type ServicePoBillingCycle = (typeof SERVICE_PO_BILLING_CYCLES)[number];
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Prepaid Package Constants

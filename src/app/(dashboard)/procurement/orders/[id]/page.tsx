@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   ChevronLeft, Loader2, Truck, MapPin, User, Calendar,
   FileText, PackageOpen, Receipt, Download, CreditCard,
-  Clock, Paperclip, X, CheckCircle2, Package,
+  Clock, Paperclip, X, CheckCircle2, Package, ClipboardList, Info,
 } from "lucide-react";
 import { generatePurchaseOrderPDF } from "@/lib/po-pdf-generator";
 import { Button } from "@/components/ui/button";
@@ -18,13 +18,16 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { toast } from "sonner";
 import {
-  PO_STATUS_LABELS, PO_STATUS_COLORS,
+  PO_STATUS_LABELS, PO_STATUS_COLORS, BILLING_CYCLE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
-import type { PurchaseOrder, AuditLog } from "@/types";
+import type { PurchaseOrder, AuditLog, PoServiceReport } from "@/types";
 
 const ACCEPTED_FILE_TYPES = ["application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -35,13 +38,14 @@ type ActionType =
   | "cancel"
   | "partial_cancel"
   | "record_delivery"
+  | "record_service_report"
   | "add_invoice";
 
 // ─── Timeline helper ─────────────────────────────────────────────────────────
 interface TimelineItem {
   id: string;
   ts: string;
-  type: "created" | "ordered" | "delivery" | "invoice" | "status";
+  type: "created" | "ordered" | "delivery" | "service_report" | "invoice" | "status";
   title: string;
   subtitle: string;
   fileUrl?: string | null;
@@ -114,6 +118,20 @@ function buildTimeline(
     });
   }
 
+  // Service reports
+  for (const sr of (po.po_service_reports as PoServiceReport[] | undefined) ?? []) {
+    const invoiced = (po.vendor_bills ?? []).some((b) => b.service_report_id === sr.id);
+    items.push({
+      id: `sr-${sr.id}`,
+      ts: sr.created_at,
+      type: "service_report",
+      title: `Service Report — Cycle ${sr.cycle_number}`,
+      subtitle: `${formatDate(sr.period_from)} – ${formatDate(sr.period_to)} · ${sr.recorder?.full_name ?? "—"}${invoiced ? " · Invoiced" : " · Pending invoice"}`,
+      fileUrl: sr.report_file_url,
+      fileLabel: "View Report",
+    });
+  }
+
   // Vendor bills / invoices
   for (const bill of po.vendor_bills ?? []) {
     items.push({
@@ -135,6 +153,7 @@ const TIMELINE_DOT_COLORS: Record<TimelineItem["type"], string> = {
   created: "bg-blue-500",
   ordered: "bg-blue-600",
   delivery: "bg-green-500",
+  service_report: "bg-teal-500",
   invoice: "bg-purple-500",
   status: "bg-gray-400",
 };
@@ -266,6 +285,17 @@ export default function PurchaseOrderDetailPage() {
   const [invNotes, setInvNotes] = useState("");
   const [invUploading, setInvUploading] = useState(false);
   const invFileRef = useRef<HTMLInputElement>(null);
+  // Service PO invoice: which service report this invoice covers
+  const [invServiceReportId, setInvServiceReportId] = useState("");
+
+  // Record Service Report
+  const [srCycleNumber, setSrCycleNumber] = useState("");
+  const [srPeriodFrom, setSrPeriodFrom] = useState("");
+  const [srPeriodTo, setSrPeriodTo] = useState("");
+  const [srFile, setSrFile] = useState<File | null>(null);
+  const [srNotes, setSrNotes] = useState("");
+  const [srUploading, setSrUploading] = useState(false);
+  const srFileRef = useRef<HTMLInputElement>(null);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -388,6 +418,58 @@ export default function PurchaseOrderDetailPage() {
     }
   };
 
+  // ── Record Service Report ──────────────────────────────────────────────────
+  const submitServiceReport = async () => {
+    const cycleNum = parseInt(srCycleNumber);
+    if (!srCycleNumber || isNaN(cycleNum) || cycleNum < 1) {
+      toast.error("Cycle number is required"); return;
+    }
+    if (!srPeriodFrom) { toast.error("Period start date is required"); return; }
+    if (!srPeriodTo) { toast.error("Period end date is required"); return; }
+    if (!srFile) { toast.error("Please upload the service report file"); return; }
+
+    setSrUploading(true);
+    try {
+      let fileUrl: string;
+      try {
+        fileUrl = await uploadFile(srFile, "service-reports");
+      } catch (err) {
+        toast.error(`File upload failed: ${err instanceof Error ? err.message : "Unknown error"}`);
+        return;
+      }
+
+      const res = await fetch("/api/procurement/service-reports", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          po_id: po?.id,
+          cycle_number: cycleNum,
+          period_from: srPeriodFrom,
+          period_to: srPeriodTo,
+          report_file_url: fileUrl,
+          notes: srNotes.trim() || null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(typeof json.error === "string" ? json.error : "Failed to record service report");
+        return;
+      }
+
+      toast.success(`Service report for Cycle ${cycleNum} recorded`);
+      setActionDialog(null);
+      setSrCycleNumber("");
+      setSrPeriodFrom("");
+      setSrPeriodTo("");
+      setSrFile(null);
+      setSrNotes("");
+      if (srFileRef.current) srFileRef.current.value = "";
+      await fetchPo();
+    } finally {
+      setSrUploading(false);
+    }
+  };
+
   // ── Add Invoice (inline) ───────────────────────────────────────────────────
   const submitInvoice = async () => {
     if (!invDate) { toast.error("Invoice date is required"); return; }
@@ -397,8 +479,15 @@ export default function PurchaseOrderDetailPage() {
       return;
     }
     if (!invFile) { toast.error("Please upload the vendor invoice file"); return; }
-    if (po && po.total_ordered_amount > 0 && amount > Number(po.total_ordered_amount)) {
-      toast.error(`Invoice amount cannot exceed PO value (${formatCurrency(po.total_ordered_amount)})`);
+    if (po?.po_type === "service" && !invServiceReportId) {
+      toast.error("Please select the service cycle this invoice covers");
+      return;
+    }
+    const ceiling = po?.po_type === "service" && po?.unit_cost_per_cycle
+      ? Number(po.unit_cost_per_cycle)
+      : Number(po?.total_ordered_amount ?? 0);
+    if (ceiling > 0 && amount > ceiling) {
+      toast.error(`Invoice amount cannot exceed ${po?.po_type === "service" ? "cycle cost" : "PO value"} (${formatCurrency(ceiling)})`);
       return;
     }
 
@@ -424,6 +513,7 @@ export default function PurchaseOrderDetailPage() {
           total_amount: amount,
           notes: invNotes.trim() || null,
           invoice_file_url: fileUrl,
+          service_report_id: invServiceReportId || null,
         }),
       });
       const json = await res.json();
@@ -440,6 +530,7 @@ export default function PurchaseOrderDetailPage() {
       setInvDueDate("");
       setInvAmount("");
       setInvNotes("");
+      setInvServiceReportId("");
       if (invFileRef.current) invFileRef.current.value = "";
       await fetchPo();
     } finally {
@@ -509,7 +600,7 @@ export default function PurchaseOrderDetailPage() {
               Mark as Ordered
             </Button>
           )}
-          {["ordered", "partially_received"].includes(po.status) && (
+          {["ordered", "partially_received"].includes(po.status) && po.po_type !== "service" && (
             <Button
               size="sm"
               className="bg-green-600 hover:bg-green-700"
@@ -525,7 +616,23 @@ export default function PurchaseOrderDetailPage() {
               <Package className="h-4 w-4 mr-1" /> Record Delivery
             </Button>
           )}
-          {!["cancelled", "partially_cancelled", "invoice_received"].includes(po.status) && (
+          {po.po_type === "service" && po.status === "ordered" && (
+            <Button
+              size="sm"
+              className="bg-teal-600 hover:bg-teal-700"
+              onClick={() => {
+                const nextCycle = (po.po_service_reports?.length ?? 0) + 1;
+                setSrCycleNumber(String(nextCycle));
+                setSrPeriodFrom("");
+                setSrPeriodTo("");
+                setActionDialog("record_service_report");
+              }}
+              disabled={actionLoading}
+            >
+              <ClipboardList className="h-4 w-4 mr-1" /> Record Service Report
+            </Button>
+          )}
+          {po.po_type !== "service" && !["cancelled", "partially_cancelled", "invoice_received"].includes(po.status) && (
             <Button
               size="sm"
               variant="outline"
@@ -540,6 +647,25 @@ export default function PurchaseOrderDetailPage() {
               <Receipt className="h-4 w-4 mr-1" /> Vendor Invoice
             </Button>
           )}
+          {po.po_type === "service" && po.status === "ordered" && (() => {
+            const invoicedIds = new Set((po.vendor_bills ?? []).map((b) => b.service_report_id).filter(Boolean));
+            const uninvoiced = (po.po_service_reports ?? []).filter((sr) => !invoicedIds.has(sr.id));
+            return (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => {
+                  setInvDate(today);
+                  setInvAmount(String(po.unit_cost_per_cycle || ""));
+                  setActionDialog("add_invoice");
+                }}
+                disabled={uninvoiced.length === 0}
+                title={uninvoiced.length === 0 ? "Record a service report before uploading an invoice" : undefined}
+              >
+                <Receipt className="h-4 w-4 mr-1" /> Vendor Invoice
+              </Button>
+            );
+          })()}
           {po.status === "invoice_received" && (
             <Button
               size="sm"
@@ -686,6 +812,54 @@ export default function PurchaseOrderDetailPage() {
         </Card>
       </div>
 
+      {/* Service Contract Info */}
+      {po.po_type === "service" && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center gap-2">
+              <ClipboardList className="h-4 w-4 text-muted-foreground" />
+              <CardTitle className="text-base">Service Contract</CardTitle>
+            </div>
+          </CardHeader>
+          <CardContent>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+              <div>
+                <p className="text-muted-foreground mb-0.5">Service</p>
+                <p className="font-medium">{po.purchase_order_items?.[0]?.item_name ?? "—"}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground mb-0.5">Start Date</p>
+                <p className="font-medium">{po.service_start_date ? formatDate(po.service_start_date) : "—"}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground mb-0.5">Billing Cycle</p>
+                <p className="font-medium">{po.billing_cycle ? BILLING_CYCLE_LABELS[po.billing_cycle] : "—"}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground mb-0.5">Total Cycles</p>
+                <p className="font-medium">{po.cycle_count ?? "—"}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground mb-0.5">Cost per Cycle</p>
+                <p className="font-medium">{po.unit_cost_per_cycle ? formatCurrency(po.unit_cost_per_cycle) : "—"}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground mb-0.5">Total Contract Value</p>
+                <p className="font-medium">{po.total_ordered_amount > 0 ? formatCurrency(po.total_ordered_amount) : "—"}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground mb-0.5">Reports Filed</p>
+                <p className="font-medium">{po.po_service_reports?.length ?? 0} / {po.cycle_count ?? "?"}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground mb-0.5">Invoices Filed</p>
+                <p className="font-medium">{po.vendor_bills?.length ?? 0} / {po.cycle_count ?? "?"}</p>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Terms & Conditions */}
       {po.terms_and_conditions && (
         <Card>
@@ -694,6 +868,88 @@ export default function PurchaseOrderDetailPage() {
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground whitespace-pre-wrap">{po.terms_and_conditions}</p>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Service Reports */}
+      {po.po_type === "service" && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <ClipboardList className="h-4 w-4 text-muted-foreground" />
+                <CardTitle className="text-base">Service Reports</CardTitle>
+              </div>
+              {po.status === "ordered" && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => {
+                    const nextCycle = (po.po_service_reports?.length ?? 0) + 1;
+                    setSrCycleNumber(String(nextCycle));
+                    setSrPeriodFrom("");
+                    setSrPeriodTo("");
+                    setActionDialog("record_service_report");
+                  }}
+                >
+                  <ClipboardList className="h-4 w-4 mr-1" /> Record Report
+                </Button>
+              )}
+            </div>
+          </CardHeader>
+          <CardContent>
+            {!(po.po_service_reports?.length) ? (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                <Info className="h-4 w-4 flex-shrink-0" />
+                No service reports filed yet. Record a report at the end of each cycle to unlock vendor invoicing.
+              </div>
+            ) : (
+              <div className="rounded-md border overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="px-3 py-2.5 text-left font-medium">Cycle</th>
+                      <th className="px-3 py-2.5 text-left font-medium">Period</th>
+                      <th className="px-3 py-2.5 text-left font-medium hidden sm:table-cell">Recorded by</th>
+                      <th className="px-3 py-2.5 text-center font-medium">Report</th>
+                      <th className="px-3 py-2.5 text-center font-medium">Invoice</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {(po.po_service_reports as PoServiceReport[]).map((sr) => {
+                      const bill = (po.vendor_bills ?? []).find((b) => b.service_report_id === sr.id);
+                      return (
+                        <tr key={sr.id} className="border-b last:border-0">
+                          <td className="px-3 py-2.5 font-medium">Cycle {sr.cycle_number}</td>
+                          <td className="px-3 py-2.5 text-muted-foreground text-xs">
+                            {formatDate(sr.period_from)} – {formatDate(sr.period_to)}
+                          </td>
+                          <td className="px-3 py-2.5 text-muted-foreground hidden sm:table-cell">
+                            {sr.recorder?.full_name ?? "—"}
+                          </td>
+                          <td className="px-3 py-2.5 text-center">
+                            {sr.report_file_url ? (
+                              <a href={sr.report_file_url} target="_blank" rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                                <Paperclip className="h-3 w-3" /> View
+                              </a>
+                            ) : "—"}
+                          </td>
+                          <td className="px-3 py-2.5 text-center">
+                            {bill ? (
+                              <Badge variant="secondary" className="text-xs font-mono">{bill.bill_number}</Badge>
+                            ) : (
+                              <span className="text-xs text-amber-600">Pending</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -817,6 +1073,101 @@ export default function PurchaseOrderDetailPage() {
           )}
         </CardContent>
       </Card>
+
+      {/* ── Record Service Report dialog ─────────────────────────────────── */}
+      <Dialog
+        open={actionDialog === "record_service_report"}
+        onOpenChange={() => {
+          setActionDialog(null);
+          setSrFile(null);
+          setSrCycleNumber("");
+          setSrPeriodFrom("");
+          setSrPeriodTo("");
+          setSrNotes("");
+          if (srFileRef.current) srFileRef.current.value = "";
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle>Record Service Report — {po?.po_number}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-3 gap-3">
+              <div className="space-y-1.5">
+                <Label>Cycle # <span className="text-red-500">*</span></Label>
+                <Input
+                  type="number"
+                  min="1"
+                  placeholder="e.g. 1"
+                  value={srCycleNumber}
+                  onChange={(e) => setSrCycleNumber(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Period From <span className="text-red-500">*</span></Label>
+                <Input
+                  type="date"
+                  value={srPeriodFrom}
+                  onChange={(e) => setSrPeriodFrom(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label>Period To <span className="text-red-500">*</span></Label>
+                <Input
+                  type="date"
+                  value={srPeriodTo}
+                  onChange={(e) => setSrPeriodTo(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Service Report File <span className="text-red-500">*</span></Label>
+              {srFile ? (
+                <FileAttachment file={srFile} onRemove={() => { setSrFile(null); if (srFileRef.current) srFileRef.current.value = ""; }} />
+              ) : (
+                <FileDropzone
+                  fileRef={srFileRef}
+                  label="Click to upload service report (PDF, JPG, PNG — max 10 MB)"
+                  required
+                  onChange={setSrFile}
+                />
+              )}
+            </div>
+            <div className="space-y-1.5">
+              <Label>Notes</Label>
+              <Textarea
+                placeholder="Optional notes about this service cycle..."
+                value={srNotes}
+                onChange={(e) => setSrNotes(e.target.value)}
+                rows={2}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => {
+                setActionDialog(null);
+                setSrFile(null);
+                setSrCycleNumber("");
+                setSrPeriodFrom("");
+                setSrPeriodTo("");
+                setSrNotes("");
+              }}
+            >
+              Cancel
+            </Button>
+            <Button
+              className="bg-teal-600 hover:bg-teal-700"
+              disabled={srUploading}
+              onClick={submitServiceReport}
+            >
+              {srUploading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Record Report
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Mark as Ordered dialog ───────────────────────────────────────── */}
       <Dialog open={actionDialog === "mark_ordered"} onOpenChange={() => setActionDialog(null)}>
@@ -995,6 +1346,7 @@ export default function PurchaseOrderDetailPage() {
           setInvDueDate("");
           setInvAmount("");
           setInvNotes("");
+          setInvServiceReportId("");
           if (invFileRef.current) invFileRef.current.value = "";
         }}
       >
@@ -1003,11 +1355,38 @@ export default function PurchaseOrderDetailPage() {
             <DialogTitle>Vendor Invoice — {po?.po_number}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            {po && Number(po.total_ordered_amount) > 0 && (
+            {po && (po.po_type === "service" ? Number(po.unit_cost_per_cycle) > 0 : Number(po.total_ordered_amount) > 0) && (
               <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2.5 text-sm text-blue-800">
-                PO value: <strong>{formatCurrency(po.total_ordered_amount)}</strong> — invoice must not exceed this amount.
+                {po.po_type === "service"
+                  ? <>Cycle cost: <strong>{formatCurrency(po.unit_cost_per_cycle ?? 0)}</strong> — invoice must not exceed this amount.</>
+                  : <>PO value: <strong>{formatCurrency(po.total_ordered_amount)}</strong> — invoice must not exceed this amount.</>}
               </div>
             )}
+
+            {po?.po_type === "service" && (() => {
+              const invoicedIds = new Set((po.vendor_bills ?? []).map((b) => b.service_report_id).filter(Boolean));
+              const uninvoiced = (po.po_service_reports as PoServiceReport[] | undefined ?? []).filter((sr) => !invoicedIds.has(sr.id));
+              return (
+                <div className="space-y-1.5">
+                  <Label>Service Cycle <span className="text-red-500">*</span></Label>
+                  <Select value={invServiceReportId} onValueChange={(v) => {
+                    setInvServiceReportId(v);
+                    if (po.unit_cost_per_cycle) setInvAmount(String(po.unit_cost_per_cycle));
+                  }}>
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select the cycle this invoice covers" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {uninvoiced.map((sr) => (
+                        <SelectItem key={sr.id} value={sr.id}>
+                          Cycle {sr.cycle_number} ({formatDate(sr.period_from)} – {formatDate(sr.period_to)})
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              );
+            })()}
 
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
@@ -1087,6 +1466,7 @@ export default function PurchaseOrderDetailPage() {
                 setInvDueDate("");
                 setInvAmount("");
                 setInvNotes("");
+                setInvServiceReportId("");
               }}
             >
               Cancel

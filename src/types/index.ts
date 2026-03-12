@@ -1348,17 +1348,34 @@ export interface ProcurementVendor {
   updated_at: string;
 }
 
+export type ItemType = "goods" | "service";
+export type ServicePoBillingCycle = "monthly" | "quarterly" | "yearly";
+
 export interface ProcurementItem {
   id: string;
   name: string;
   department: ProcurementDepartment;
   unit: ItemUnit;
+  item_type: ItemType;
   standard_price?: number;
   description?: string;
   is_active: boolean;
   created_by?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface PoServiceReport {
+  id: string;
+  po_id: string;
+  cycle_number: number;
+  period_from: string;
+  period_to: string;
+  report_file_url?: string | null;
+  notes?: string | null;
+  recorded_by?: string | null;
+  created_at: string;
+  recorder?: { id: string; full_name?: string } | null;
 }
 
 export interface PurchaseRequestItem {
@@ -1445,12 +1462,14 @@ export interface PoBillSummary {
   total_amount: number;
   payment_status: string;
   created_at: string;
+  service_report_id?: string | null;
   creator?: { id: string; full_name?: string } | null;
 }
 
 export interface PurchaseOrder {
   id: string;
   po_number: string;
+  po_type: "goods" | "service";
   pr_id?: string;
   vendor_id: string;
   location_id?: string;
@@ -1458,6 +1477,11 @@ export interface PurchaseOrder {
   ordered_by: string;
   expected_delivery_date?: string;
   actual_delivery_date?: string;
+  // Service PO fields
+  service_start_date?: string | null;
+  billing_cycle?: ServicePoBillingCycle | null;
+  cycle_count?: number | null;
+  unit_cost_per_cycle?: number | null;
   notes?: string;
   payment_terms?: string;
   terms_and_conditions?: string;
@@ -1473,6 +1497,7 @@ export interface PurchaseOrder {
   }) | null;
   purchase_order_items?: PurchaseOrderItem[];
   po_delivery_receipts?: PoDeliveryReceipt[];
+  po_service_reports?: PoServiceReport[];
   vendor_bills?: PoBillSummary[];
 }
 
@@ -1492,6 +1517,7 @@ export interface VendorBill {
   payment_date?: string;
   notes?: string;
   invoice_file_url?: string;
+  service_report_id?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;

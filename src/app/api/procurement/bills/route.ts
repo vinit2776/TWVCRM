@@ -12,6 +12,7 @@ const createBillSchema = z.object({
   total_amount: z.number().positive("Total amount must be greater than 0"),
   notes: z.string().nullish(),
   invoice_file_url: z.string().url().nullish(),
+  service_report_id: z.string().uuid().nullish(),
 });
 
 function generateBillNumber(count: number): string {
@@ -83,12 +84,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
-  // ── PO validation: amount ceiling + file requirement ──────────────────────
+  // ── PO validation ──────────────────────────────────────────────────────────
   let poTotalAmount: number | null = null;
   if (parsed.data.po_id) {
     const { data: po } = await supabase
       .from("purchase_orders")
-      .select("id, total_ordered_amount, status")
+      .select("id, po_type, total_ordered_amount, status, unit_cost_per_cycle")
       .eq("id", parsed.data.po_id)
       .single();
 
@@ -106,20 +107,47 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invoice file upload is required when linking to a purchase order" }, { status: 422 });
     }
 
-    // A delivery must be recorded before an invoice can be uploaded
-    const { count: deliveryCount } = await supabase
-      .from("po_delivery_receipts")
-      .select("*", { count: "exact", head: true })
-      .eq("po_id", parsed.data.po_id);
-
-    if (!deliveryCount) {
-      return NextResponse.json({ error: "A delivery must be recorded before uploading a vendor invoice" }, { status: 422 });
+    if (po.po_type === "service") {
+      // ── Service PO: must have a service_report_id ─────────────────────────
+      if (!parsed.data.service_report_id) {
+        return NextResponse.json({ error: "A service report must be selected before uploading an invoice" }, { status: 422 });
+      }
+      // Validate service report belongs to this PO
+      const { data: sr } = await supabase
+        .from("po_service_reports")
+        .select("id")
+        .eq("id", parsed.data.service_report_id)
+        .eq("po_id", parsed.data.po_id)
+        .single();
+      if (!sr) {
+        return NextResponse.json({ error: "Service report not found for this purchase order" }, { status: 404 });
+      }
+      // Ensure no existing bill is linked to this service report
+      const { count: existingBillCount } = await supabase
+        .from("vendor_bills")
+        .select("*", { count: "exact", head: true })
+        .eq("service_report_id", parsed.data.service_report_id);
+      if (existingBillCount && existingBillCount > 0) {
+        return NextResponse.json({ error: "An invoice has already been uploaded for this service report cycle" }, { status: 422 });
+      }
+    } else {
+      // ── Goods PO: must have a delivery receipt ────────────────────────────
+      const { count: deliveryCount } = await supabase
+        .from("po_delivery_receipts")
+        .select("*", { count: "exact", head: true })
+        .eq("po_id", parsed.data.po_id);
+      if (!deliveryCount) {
+        return NextResponse.json({ error: "A delivery must be recorded before uploading a vendor invoice" }, { status: 422 });
+      }
     }
 
-    // Amount must not exceed PO value
-    if (poTotalAmount > 0 && parsed.data.total_amount > poTotalAmount) {
+    // Amount must not exceed PO value (per cycle for service POs)
+    const ceiling = po.po_type === "service" && po.unit_cost_per_cycle
+      ? Number(po.unit_cost_per_cycle)
+      : poTotalAmount;
+    if (ceiling > 0 && parsed.data.total_amount > ceiling) {
       return NextResponse.json({
-        error: `Invoice amount (₹${parsed.data.total_amount.toLocaleString("en-IN")}) cannot exceed the PO value (₹${poTotalAmount.toLocaleString("en-IN")})`,
+        error: `Invoice amount (₹${parsed.data.total_amount.toLocaleString("en-IN")}) cannot exceed the ${po.po_type === "service" ? "cycle cost" : "PO value"} (₹${ceiling.toLocaleString("en-IN")})`,
       }, { status: 422 });
     }
   }
@@ -142,6 +170,7 @@ export async function POST(request: NextRequest) {
       total_amount: parsed.data.total_amount,
       notes: parsed.data.notes ?? null,
       invoice_file_url: parsed.data.invoice_file_url ?? null,
+      service_report_id: parsed.data.service_report_id ?? null,
       bill_number: billNumber,
       amount_paid: 0,
       payment_status: "unpaid",
@@ -152,13 +181,21 @@ export async function POST(request: NextRequest) {
 
   if (billError) return NextResponse.json({ error: billError.message }, { status: 500 });
 
-  // ── Update PO status to invoice_received ──────────────────────────────────
+  // ── Update PO status to invoice_received (goods POs only) ─────────────────
   if (parsed.data.po_id && parsed.data.invoice_file_url) {
-    await supabase
+    // Fetch po_type to decide whether to update status
+    const { data: linkedPo } = await supabase
       .from("purchase_orders")
-      .update({ status: "invoice_received" })
+      .select("po_type")
       .eq("id", parsed.data.po_id)
-      .not("status", "eq", "cancelled");
+      .single();
+    if (linkedPo?.po_type !== "service") {
+      await supabase
+        .from("purchase_orders")
+        .update({ status: "invoice_received" })
+        .eq("id", parsed.data.po_id)
+        .not("status", "eq", "cancelled");
+    }
   }
 
   await logAudit(supabase, {

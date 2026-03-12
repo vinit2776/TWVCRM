@@ -21,14 +21,17 @@ import {
   PROCUREMENT_DEPARTMENT_LABELS,
   PROCUREMENT_DEPARTMENT_COLORS,
   ITEM_UNITS,
+  ITEM_TYPES,
+  ITEM_TYPE_LABELS,
 } from "@/lib/constants";
 import { toast } from "sonner";
-import type { ProcurementItem, ProcurementDepartment, ItemUnit } from "@/types";
+import type { ProcurementItem, ProcurementDepartment, ItemUnit, ItemType } from "@/types";
 
 const emptyForm = {
   name: "",
   department: "pantry" as ProcurementDepartment,
   unit: "piece" as ItemUnit,
+  item_type: "goods" as ItemType,
   standard_price: "",
   description: "",
 };
@@ -62,6 +65,7 @@ export default function CatalogPage() {
       name: item.name,
       department: item.department,
       unit: item.unit,
+      item_type: item.item_type ?? "goods",
       standard_price: item.standard_price != null ? String(item.standard_price) : "",
       description: item.description || "",
     });
@@ -75,6 +79,7 @@ export default function CatalogPage() {
       name: form.name.trim(),
       department: form.department,
       unit: form.unit,
+      item_type: form.item_type,
       standard_price: form.standard_price ? Number(form.standard_price) : undefined,
       description: form.description || undefined,
     };
@@ -188,7 +193,8 @@ export default function CatalogPage() {
                     <table className="w-full text-sm">
                       <thead className="border-y bg-muted/30">
                         <tr>
-                          <th className="text-left px-4 py-2 font-medium">Item Name</th>
+                              <th className="text-left px-4 py-2 font-medium">Item Name</th>
+                          <th className="text-left px-4 py-2 font-medium hidden sm:table-cell">Type</th>
                           <th className="text-left px-4 py-2 font-medium">Unit</th>
                           <th className="text-left px-4 py-2 font-medium hidden md:table-cell">Std. Price</th>
                           <th className="text-left px-4 py-2 font-medium">Status</th>
@@ -202,6 +208,11 @@ export default function CatalogPage() {
                               <span className={item.is_active ? "" : "text-muted-foreground line-through"}>
                                 {item.name}
                               </span>
+                            </td>
+                            <td className="px-4 py-2.5 hidden sm:table-cell">
+                              <Badge className={item.item_type === "service" ? "bg-blue-100 text-blue-800" : "bg-gray-100 text-gray-700"}>
+                                {ITEM_TYPE_LABELS[item.item_type ?? "goods"]}
+                              </Badge>
                             </td>
                             <td className="px-4 py-2.5 text-muted-foreground">{item.unit}</td>
                             <td className="px-4 py-2.5 hidden md:table-cell text-muted-foreground">
@@ -260,11 +271,30 @@ export default function CatalogPage() {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-1">
+              <Label>Item Type *</Label>
+              <div className="flex gap-2">
+                {ITEM_TYPES.map((t) => (
+                  <button
+                    key={t}
+                    type="button"
+                    onClick={() => setForm((f) => ({ ...f, item_type: t }))}
+                    className={`flex-1 rounded-md border px-3 py-2 text-sm font-medium transition-colors ${
+                      form.item_type === t
+                        ? "bg-primary text-primary-foreground border-primary"
+                        : "bg-background hover:bg-muted border-input"
+                    }`}
+                  >
+                    {ITEM_TYPE_LABELS[t]}
+                  </button>
+                ))}
+              </div>
+            </div>
+            <div className="space-y-1">
               <Label>Item Name *</Label>
               <Input
                 value={form.name}
                 onChange={(e) => setForm((f) => ({ ...f, name: e.target.value }))}
-                placeholder="e.g. Premium Coffee Beans"
+                placeholder={form.item_type === "service" ? "e.g. Generator Maintenance" : "e.g. Premium Coffee Beans"}
               />
             </div>
             <div className="grid grid-cols-2 gap-4">

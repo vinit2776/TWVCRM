@@ -9,12 +9,13 @@ const createPoItemSchema = z.object({
   item_id: z.string().uuid().nullish(),
   item_name: z.string().min(1),
   quantity_ordered: z.number().positive(),
-  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair"]),
+  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year"]),
   unit_price: z.number().min(0).nullish(),
   notes: z.string().nullish(),
 });
 
-const createPoSchema = z.object({
+const createGoodsPoSchema = z.object({
+  po_type: z.literal("goods").optional().default("goods"),
   pr_id: z.string().uuid("A linked Purchase Request is required"),
   vendor_id: z.string().uuid(),
   location_id: z.string().uuid().nullish(),
@@ -23,6 +24,21 @@ const createPoSchema = z.object({
   payment_terms: z.string().nullish(),
   terms_and_conditions: z.string().nullish(),
   items: z.array(createPoItemSchema).min(1, "At least one item is required"),
+});
+
+const createServicePoSchema = z.object({
+  po_type: z.literal("service"),
+  vendor_id: z.string().uuid(),
+  location_id: z.string().uuid().nullish(),
+  service_start_date: z.string().min(1, "Service start date is required"),
+  billing_cycle: z.enum(["monthly", "quarterly", "yearly"]),
+  cycle_count: z.number().int().positive("Number of cycles must be at least 1"),
+  unit_cost_per_cycle: z.number().positive("Cost per cycle must be greater than 0"),
+  service_item_name: z.string().min(1, "Service description is required"),
+  item_id: z.string().uuid().nullish(),
+  notes: z.string().nullish(),
+  payment_terms: z.string().nullish(),
+  terms_and_conditions: z.string().nullish(),
 });
 
 function generatePoNumber(count: number): string {
@@ -91,7 +107,80 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json();
-  const parsed = createPoSchema.safeParse(body);
+
+  // ── Route to goods or service PO handler ──────────────────────────────────
+  const poType = body?.po_type ?? "goods";
+
+  if (poType === "service") {
+    // ── SERVICE PO ────────────────────────────────────────────────────────────
+    const parsed = createServicePoSchema.safeParse(body);
+    if (!parsed.success) {
+      return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+    }
+
+    const { count: existingCount } = await supabase
+      .from("purchase_orders")
+      .select("*", { count: "exact", head: true });
+    const poNumber = generatePoNumber(existingCount ?? 0);
+
+    const totalAmount = parsed.data.unit_cost_per_cycle * parsed.data.cycle_count;
+
+    const { data: po, error: poError } = await supabase
+      .from("purchase_orders")
+      .insert({
+        po_type: "service",
+        vendor_id: parsed.data.vendor_id,
+        location_id: parsed.data.location_id ?? null,
+        service_start_date: parsed.data.service_start_date,
+        billing_cycle: parsed.data.billing_cycle,
+        cycle_count: parsed.data.cycle_count,
+        unit_cost_per_cycle: parsed.data.unit_cost_per_cycle,
+        notes: parsed.data.notes ?? null,
+        payment_terms: parsed.data.payment_terms ?? null,
+        terms_and_conditions: parsed.data.terms_and_conditions ?? null,
+        po_number: poNumber,
+        ordered_by: dbUser.id,
+        total_ordered_amount: totalAmount,
+        status: "pending",
+      })
+      .select("id, po_number")
+      .single();
+
+    if (poError) return NextResponse.json({ error: poError.message }, { status: 500 });
+
+    // Insert a single representative line item for the service
+    const unitMap: Record<string, string> = { monthly: "month", quarterly: "quarter", yearly: "year" };
+    await supabase.from("purchase_order_items").insert({
+      po_id: po.id,
+      item_id: parsed.data.item_id ?? null,
+      item_name: parsed.data.service_item_name,
+      quantity_ordered: parsed.data.cycle_count,
+      quantity_received: 0,
+      unit: unitMap[parsed.data.billing_cycle],
+      unit_price: parsed.data.unit_cost_per_cycle,
+      total_amount: totalAmount,
+    });
+
+    await logAudit(supabase, {
+      entityType: "purchase_order",
+      entityId: po.id,
+      action: "create",
+      performedBy: dbUser.id,
+      changes: {
+        po_number: { old: null, new: po.po_number },
+        po_type: { old: null, new: "service" },
+        vendor_id: { old: null, new: parsed.data.vendor_id },
+        total_ordered_amount: { old: null, new: totalAmount },
+        billing_cycle: { old: null, new: parsed.data.billing_cycle },
+        cycle_count: { old: null, new: parsed.data.cycle_count },
+      },
+    });
+
+    return NextResponse.json({ data: { id: po.id, po_number: po.po_number } }, { status: 201 });
+  }
+
+  // ── GOODS PO ───────────────────────────────────────────────────────────────
+  const parsed = createGoodsPoSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
@@ -115,7 +204,6 @@ export async function POST(request: NextRequest) {
   }
 
   // ── 2. Validate item qty / price ceilings ──
-  // Use computeOrderedQtyMap so cancelled POs don't count against remaining qty
   const prItemIds = items.filter(i => i.pr_item_id).map(i => i.pr_item_id!);
   const alreadyOrderedMap: Record<string, number> = {};
 
@@ -167,6 +255,7 @@ export async function POST(request: NextRequest) {
     .from("purchase_orders")
     .insert({
       ...poData,
+      po_type: "goods",
       pr_id: poData.pr_id,
       location_id: poData.location_id ?? null,
       expected_delivery_date: poData.expected_delivery_date ?? null,

@@ -62,8 +62,11 @@ export default function PurchaseOrdersPage() {
               ))}
             </SelectContent>
           </Select>
+          <Button variant="outline" onClick={() => router.push("/procurement/orders/new-service")}>
+            <Plus className="h-4 w-4 mr-1" /> New Service PO
+          </Button>
           <Button onClick={() => router.push("/procurement/requests?status=approved")}>
-            <Plus className="h-4 w-4 mr-1" /> New Order
+            <Plus className="h-4 w-4 mr-1" /> New Goods PO
           </Button>
         </div>
       </div>

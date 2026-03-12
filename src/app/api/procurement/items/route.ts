@@ -6,7 +6,8 @@ import { z } from "zod";
 const createItemSchema = z.object({
   name: z.string().min(1, "Item name is required"),
   department: z.enum(["pantry", "maintenance", "administration"]),
-  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair"]),
+  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year"]),
+  item_type: z.enum(["goods", "service"]).default("goods"),
   standard_price: z.number().min(0).optional(),
   description: z.string().optional(),
 });
@@ -19,6 +20,7 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const department = searchParams.get("department");
   const search = searchParams.get("search");
+  const itemType = searchParams.get("item_type");
   const includeInactive = searchParams.get("include_inactive") === "true";
 
   let query = supabase
@@ -29,6 +31,7 @@ export async function GET(request: NextRequest) {
 
   if (!includeInactive) query = query.eq("is_active", true);
   if (department) query = query.eq("department", department);
+  if (itemType) query = query.eq("item_type", itemType);
   if (search?.trim()) query = query.ilike("name", `%${search.trim()}%`);
 
   const { data, error, count } = await query;
