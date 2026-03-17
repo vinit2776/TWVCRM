@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { sendPushToAll } from "@/lib/push";
 import { z } from "zod";
 
 const createBillSchema = z.object({
@@ -33,6 +34,7 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const paymentStatus = searchParams.get("payment_status");
+  const approvalStatus = searchParams.get("approval_status");
   const vendorId = searchParams.get("vendor_id");
   const poId = searchParams.get("po_id");
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
@@ -42,18 +44,46 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("vendor_bills")
     .select(
-      `*, procurement_vendors(id, name), purchase_orders(id, po_number)`,
+      `*, procurement_vendors(id, name), purchase_orders(id, po_number, po_type)`,
       { count: "exact" }
     )
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
+  const paymentStatusNeq = searchParams.get("payment_status_neq");
+  const includeTotals = searchParams.get("include_totals") === "true";
+
   if (paymentStatus) query = query.eq("payment_status", paymentStatus);
+  if (paymentStatusNeq) query = query.neq("payment_status", paymentStatusNeq);
+  if (approvalStatus) query = query.eq("approval_status", approvalStatus);
   if (vendorId) query = query.eq("vendor_id", vendorId);
   if (poId) query = query.eq("po_id", poId);
 
   const { data, error, count } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Compute aggregate totals (used by payables summary cards)
+  let totals = null;
+  if (includeTotals) {
+    let totalsQuery = supabase
+      .from("vendor_bills")
+      .select("total_amount, amount_paid, due_date, payment_status");
+    if (paymentStatus) totalsQuery = totalsQuery.eq("payment_status", paymentStatus);
+    if (paymentStatusNeq) totalsQuery = totalsQuery.neq("payment_status", paymentStatusNeq);
+    if (approvalStatus) totalsQuery = totalsQuery.eq("approval_status", approvalStatus);
+    if (vendorId) totalsQuery = totalsQuery.eq("vendor_id", vendorId);
+    if (poId) totalsQuery = totalsQuery.eq("po_id", poId);
+
+    const { data: allBills } = await totalsQuery;
+    const todayStr = new Date().toISOString().split("T")[0];
+    totals = {
+      totalPayable: allBills?.reduce((s, b) => s + Number(b.total_amount), 0) ?? 0,
+      totalPaid: allBills?.reduce((s, b) => s + Number(b.amount_paid), 0) ?? 0,
+      overdueCount: allBills?.filter(
+        (b) => b.due_date && b.due_date < todayStr && b.payment_status !== "paid"
+      ).length ?? 0,
+    };
+  }
 
   return NextResponse.json({
     data,
@@ -63,6 +93,7 @@ export async function GET(request: NextRequest) {
       total: count ?? 0,
       totalPages: Math.ceil((count ?? 0) / limit),
     },
+    totals,
   });
 }
 
@@ -174,6 +205,7 @@ export async function POST(request: NextRequest) {
       bill_number: billNumber,
       amount_paid: 0,
       payment_status: "unpaid",
+      approval_status: "pending",
       created_by: dbUser.id,
     })
     .select("id, bill_number")
@@ -211,6 +243,14 @@ export async function POST(request: NextRequest) {
       invoice_file_uploaded: { old: null, new: !!parsed.data.invoice_file_url },
     },
   });
+
+  // Notify admins/managers that a new invoice needs approval
+  sendPushToAll({
+    title: "Invoice Pending Approval",
+    body: `${bill.bill_number} — ₹${parsed.data.total_amount.toLocaleString("en-IN")} requires approval`,
+    url: `/procurement/bills/${bill.id}`,
+    tag: `bill-approval-${bill.id}`,
+  }).catch((err) => console.error("[push] new bill notification failed:", err));
 
   return NextResponse.json({ data: { id: bill.id, bill_number: bill.bill_number } }, { status: 201 });
 }

@@ -5,6 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ChevronLeft, Loader2, Truck, FileText, Calendar, CreditCard, Package, ExternalLink,
+  CheckCircle2, XCircle, Clock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -22,6 +23,8 @@ import { toast } from "sonner";
 import {
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
   BILL_PAYMENT_MODES, BILL_PAYMENT_MODE_LABELS,
+  BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
+  REJECTION_OUTCOME_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { VendorBill } from "@/types";
@@ -32,8 +35,20 @@ export default function VendorBillDetailPage() {
 
   const [bill, setBill] = useState<VendorBill | null>(null);
   const [loading, setLoading] = useState(true);
+  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
+
+  // Payment dialog
   const [paymentDialog, setPaymentDialog] = useState(false);
   const [paymentLoading, setPaymentLoading] = useState(false);
+
+  // Approval
+  const [approveLoading, setApproveLoading] = useState(false);
+
+  // Rejection dialog
+  const [rejectDialog, setRejectDialog] = useState(false);
+  const [rejectLoading, setRejectLoading] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
+  const [rejectionOutcome, setRejectionOutcome] = useState("");
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -41,6 +56,14 @@ export default function VendorBillDetailPage() {
   const [paymentMode, setPaymentMode] = useState<"cash" | "upi" | "bank_transfer">("upi");
   const [paymentReference, setPaymentReference] = useState("");
   const [paymentDate, setPaymentDate] = useState(today);
+
+  // Fetch current user role
+  useEffect(() => {
+    fetch("/api/me")
+      .then((r) => r.json())
+      .then((json) => setCurrentUserRole(json.role || null))
+      .catch(() => setCurrentUserRole(null));
+  }, []);
 
   const fetchBill = useCallback(async () => {
     setLoading(true);
@@ -100,6 +123,68 @@ export default function VendorBillDetailPage() {
     }
   };
 
+  const handleApprove = async () => {
+    setApproveLoading(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "approve" }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to approve invoice");
+        return;
+      }
+      toast.success("Invoice approved");
+      await fetchBill();
+    } finally {
+      setApproveLoading(false);
+    }
+  };
+
+  const handleReject = async () => {
+    if (!rejectionReason.trim()) {
+      toast.error("Rejection reason is required");
+      return;
+    }
+    const poIsGoods = bill?.purchase_orders && (bill.purchase_orders as { po_type?: string }).po_type !== "service";
+    if (poIsGoods && !rejectionOutcome) {
+      toast.error("Select a rejection outcome");
+      return;
+    }
+
+    setRejectLoading(true);
+    let navigated = false;
+    try {
+      const res = await fetch(`/api/procurement/bills/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "reject",
+          rejection_reason: rejectionReason.trim(),
+          ...(poIsGoods && { rejection_outcome: rejectionOutcome }),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to reject invoice");
+        return;
+      }
+      toast.success(json.message || "Invoice rejected");
+      setRejectDialog(false);
+      // If the bill was voided (service PO deletion), navigate back
+      if (json.data === null) {
+        navigated = true;
+        router.push("/procurement/bills");
+      } else {
+        await fetchBill();
+      }
+    } finally {
+      if (!navigated) setRejectLoading(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="flex items-center justify-center h-64">
@@ -112,6 +197,8 @@ export default function VendorBillDetailPage() {
 
   const vendor = bill.procurement_vendors as { id: string; name: string; contact_name?: string; contact_phone?: string } | null;
   const remaining = Number(bill.total_amount) - Number(bill.amount_paid);
+  const canApprove = ["admin", "manager"].includes(currentUserRole ?? "");
+  const isGoodsPo = bill.purchase_orders && (bill.purchase_orders as { po_type?: string }).po_type !== "service";
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -127,6 +214,9 @@ export default function VendorBillDetailPage() {
               <Badge variant="secondary" className={BILL_PAYMENT_STATUS_COLORS[bill.payment_status]}>
                 {BILL_PAYMENT_STATUS_LABELS[bill.payment_status]}
               </Badge>
+              <Badge variant="secondary" className={BILL_APPROVAL_STATUS_COLORS[bill.approval_status]}>
+                {BILL_APPROVAL_STATUS_LABELS[bill.approval_status]}
+              </Badge>
             </div>
             <p className="text-sm text-muted-foreground mt-0.5">
               {vendor?.name ?? "Unknown vendor"}
@@ -134,15 +224,51 @@ export default function VendorBillDetailPage() {
           </div>
         </div>
 
-        {bill.payment_status !== "paid" && (
-          <Button
-            onClick={openPaymentDialog}
-            className="bg-green-600 hover:bg-green-700"
-          >
-            <CreditCard className="h-4 w-4 mr-1" /> Record Payment
-          </Button>
-        )}
+        <div className="flex items-center gap-2">
+          {bill.approval_status === "pending" && canApprove && (
+            <>
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setRejectionReason("");
+                  setRejectionOutcome("");
+                  setRejectDialog(true);
+                }}
+                className="text-red-600 border-red-200 hover:bg-red-50"
+                disabled={approveLoading || rejectLoading}
+              >
+                <XCircle className="h-4 w-4 mr-1" /> Reject
+              </Button>
+              <Button
+                onClick={handleApprove}
+                className="bg-green-600 hover:bg-green-700"
+                disabled={approveLoading || rejectLoading}
+              >
+                {approveLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+                <CheckCircle2 className="h-4 w-4 mr-1" /> Approve
+              </Button>
+            </>
+          )}
+          {bill.approval_status === "approved" && bill.payment_status !== "paid" && canApprove && (
+            <Button
+              onClick={openPaymentDialog}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              <CreditCard className="h-4 w-4 mr-1" /> Record Payment
+            </Button>
+          )}
+        </div>
       </div>
+
+      {/* Pending approval banner */}
+      {bill.approval_status === "pending" && (
+        <div className="rounded-md border border-yellow-200 bg-yellow-50 px-4 py-3 flex items-center gap-3">
+          <Clock className="h-5 w-5 text-yellow-600 flex-shrink-0" />
+          <p className="text-sm text-yellow-800">
+            This invoice is awaiting approval from a manager or admin before payment can be recorded.
+          </p>
+        </div>
+      )}
 
       {/* Details grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
@@ -231,6 +357,42 @@ export default function VendorBillDetailPage() {
                   <span className="text-muted-foreground">Notes: </span>
                   {bill.notes}
                 </span>
+              </div>
+            )}
+
+            {/* Approval info */}
+            {bill.approval_status === "approved" && bill.approved_at && (
+              <div className="flex items-center gap-2.5 border-t pt-3">
+                <CheckCircle2 className="h-4 w-4 text-green-600 flex-shrink-0" />
+                <span className="text-sm">
+                  <span className="text-muted-foreground">Approved: </span>
+                  {formatDate(bill.approved_at)}
+                  {bill.approver?.full_name ? ` by ${bill.approver.full_name}` : ""}
+                </span>
+              </div>
+            )}
+            {bill.approval_status === "rejected" && (
+              <div className="border-t pt-3 space-y-2">
+                <div className="flex items-start gap-2.5">
+                  <XCircle className="h-4 w-4 text-red-600 flex-shrink-0 mt-0.5" />
+                  <div className="text-sm">
+                    <span className="text-muted-foreground">Rejected: </span>
+                    {bill.rejection_reason}
+                    {bill.approved_at && (
+                      <span className="text-muted-foreground"> · {formatDate(bill.approved_at)}</span>
+                    )}
+                    {bill.approver?.full_name && (
+                      <span className="text-muted-foreground"> by {bill.approver.full_name}</span>
+                    )}
+                  </div>
+                </div>
+                {bill.rejection_outcome && (
+                  <div className="flex items-center gap-2.5 pl-[26px]">
+                    <span className="text-xs text-muted-foreground">
+                      Outcome: {REJECTION_OUTCOME_LABELS[bill.rejection_outcome] ?? bill.rejection_outcome}
+                    </span>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>
@@ -342,6 +504,56 @@ export default function VendorBillDetailPage() {
             >
               {paymentLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Record Payment
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Reject Invoice Dialog */}
+      <Dialog open={rejectDialog} onOpenChange={setRejectDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reject Invoice</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-1.5">
+              <Label>Rejection Reason <span className="text-red-500">*</span></Label>
+              <Textarea
+                placeholder="Explain why this invoice is being rejected..."
+                value={rejectionReason}
+                onChange={(e) => setRejectionReason(e.target.value)}
+                rows={3}
+              />
+            </div>
+            {isGoodsPo && (
+              <div className="space-y-1.5">
+                <Label>Outcome <span className="text-red-500">*</span></Label>
+                <Select value={rejectionOutcome} onValueChange={setRejectionOutcome}>
+                  <SelectTrigger>
+                    <SelectValue placeholder="Select outcome" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="return">Return Goods & Cancel PO</SelectItem>
+                    <SelectItem value="replacement">Request Replacement (New PR)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+            {!isGoodsPo && bill.purchase_orders && (
+              <p className="text-sm text-muted-foreground">
+                This is a service invoice. Rejecting it will void the bill, allowing a new invoice to be uploaded for this cycle.
+              </p>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setRejectDialog(false)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={handleReject}
+              disabled={rejectLoading}
+            >
+              {rejectLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Reject Invoice
             </Button>
           </DialogFooter>
         </DialogContent>
