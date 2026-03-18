@@ -112,27 +112,33 @@ function NewVendorBillForm() {
   // Effective ceiling: received value if shortfall, otherwise full PO value
   const effectiveCeiling = hasShortfall ? receivedValue! : (poData ? Number(poData.total_ordered_amount) : null);
 
+  // Inline real-time error shown below the amount field
+  const amountNum = parseFloat(totalAmount);
+  const amountError: string | null = (() => {
+    if (!totalAmount || isNaN(amountNum) || amountNum <= 0) return null;
+    if (hasShortfall && amountNum > receivedValue!) {
+      return `Exceeds received value of ${formatCurrency(receivedValue!)} — only ${formatCurrency(receivedValue!)} of goods received out of PO value ${formatCurrency(poData!.total_ordered_amount)}.`;
+    }
+    if (poData && poData.total_ordered_amount > 0 && amountNum > Number(poData.total_ordered_amount)) {
+      return `Exceeds PO value of ${formatCurrency(poData.total_ordered_amount)}.`;
+    }
+    return null;
+  })();
+
   const validate = (): string | null => {
     if (!vendorId) return "Please select a vendor";
     if (!invoiceDate) return "Invoice date is required";
     const amount = parseFloat(totalAmount);
     if (!totalAmount || isNaN(amount) || amount <= 0) return "Invoice amount must be greater than 0";
+    if (amountError) return amountError;
     // File is mandatory when linked to a PO
     if (poId && !invoiceFile) return "Please upload the vendor invoice file";
-    // Proportionate ceiling check: if shortfall, cap at received value
-    if (hasShortfall && amount > receivedValue!) {
-      return `Invoice amount (${formatCurrency(amount)}) exceeds the proportionate value of goods received (${formatCurrency(receivedValue!)}). Only goods worth ${formatCurrency(receivedValue!)} have been received against the PO value of ${formatCurrency(poData!.total_ordered_amount)}.`;
-    }
-    // Full PO ceiling
-    if (poData && poData.total_ordered_amount > 0 && amount > Number(poData.total_ordered_amount)) {
-      return `Invoice amount (${formatCurrency(amount)}) cannot exceed PO value (${formatCurrency(poData.total_ordered_amount)})`;
-    }
     return null;
   };
 
   const handleSubmit = async () => {
     const err = validate();
-    if (err) { toast.error(err); return; }
+    if (err) { toast.error(err, { duration: 6000 }); return; }
 
     setSubmitting(true);
     try {
@@ -284,12 +290,18 @@ function NewVendorBillForm() {
                 placeholder="0.00"
                 value={totalAmount}
                 onChange={(e) => setTotalAmount(e.target.value)}
+                className={amountError ? "border-red-500 focus-visible:ring-red-500" : ""}
               />
-              {effectiveCeiling !== null && effectiveCeiling > 0 && (
+              {amountError ? (
+                <p className="text-xs text-red-600 flex items-start gap-1">
+                  <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+                  {amountError}
+                </p>
+              ) : effectiveCeiling !== null && effectiveCeiling > 0 ? (
                 <p className="text-xs text-muted-foreground">
                   Max: {formatCurrency(effectiveCeiling)} ({hasShortfall ? "proportionate received value" : "PO value"})
                 </p>
-              )}
+              ) : null}
             </div>
 
             <div className="space-y-1.5">
@@ -374,7 +386,7 @@ function NewVendorBillForm() {
       </Card>
 
       <div className="flex justify-end">
-        <Button onClick={handleSubmit} disabled={submitting} size="lg">
+        <Button onClick={handleSubmit} disabled={submitting || !!amountError} size="lg">
           {submitting ? (
             <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Saving…</>
           ) : (
