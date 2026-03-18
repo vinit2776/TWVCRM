@@ -28,18 +28,24 @@ function urlBase64ToUint8Array(base64String: string): ArrayBuffer {
  *   (generate with: npx web-push generate-vapid-keys)
  */
 export function usePushNotifications() {
+  const [mounted, setMounted]       = useState(false);
   const [permission, setPermission] = useState<NotificationPermission>("default");
   const [subscribed, setSubscribed] = useState(false);
   const [loading, setLoading]       = useState(false);
   const [dismissed, setDismissed]   = useState(false);
 
   const vapidPublicKey = process.env.NEXT_PUBLIC_VAPID_PUBLIC_KEY;
+  // Evaluated only after mount so server and client agree on the initial render,
+  // preventing the React 19 hydration mismatch that made the whole tree non-responsive.
   const isSupported =
-    typeof window !== "undefined" &&
+    mounted &&
     "Notification" in window &&
     "serviceWorker" in navigator &&
     "PushManager" in window &&
     !!vapidPublicKey;
+
+  // Signal that we are now running in the browser — gates isSupported above
+  useEffect(() => { setMounted(true); }, []);
 
   useEffect(() => {
     if (!isSupported) return;
@@ -136,6 +142,7 @@ export function usePushNotifications() {
 
   return {
     isSupported,
+    mounted,
     permission,
     subscribed,
     loading,
