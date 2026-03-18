@@ -2,7 +2,7 @@
 
 import { useState, useEffect, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Plus, Trash2, ChevronLeft, Loader2, AlertTriangle } from "lucide-react";
+import { Plus, Trash2, ChevronLeft, Loader2, AlertTriangle, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -13,7 +13,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ITEM_UNITS } from "@/lib/constants";
+import { ITEM_UNITS, PO_ADVANCE_PAYMENT_MODE_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import type { ProcurementVendor, Location, PurchaseRequest, ItemUnit } from "@/types";
 
@@ -192,6 +192,14 @@ function NewPurchaseOrderFormWithPr({
   const [paymentTerms, setPaymentTerms] = useState("");
   const [termsAndConditions, setTermsAndConditions] = useState("");
 
+  // Advance payment
+  const [advanceRequired, setAdvanceRequired] = useState(false);
+  const [advanceExpanded, setAdvanceExpanded] = useState(false);
+  const [advanceAmount, setAdvanceAmount] = useState("");
+  const [advanceMode, setAdvanceMode] = useState("");
+  const [advanceReference, setAdvanceReference] = useState("");
+  const [advanceNotes, setAdvanceNotes] = useState("");
+
   const handleVendorChange = (newVendorId: string) => {
     const actualId = newVendorId === "__none__" ? "" : newVendorId;
     setVendorId(actualId);
@@ -232,6 +240,11 @@ function NewPurchaseOrderFormWithPr({
 
   const validate = (): string | null => {
     if (!vendorId) return "Please select a vendor";
+    if (advanceRequired) {
+      if (!advanceAmount || isNaN(parseFloat(advanceAmount)) || parseFloat(advanceAmount) <= 0)
+        return "Advance amount must be a positive number";
+      if (!advanceMode) return "Please select a payment mode for the advance";
+    }
     const orderable = activeItems.filter(li => parseFloat(li.quantity_ordered) > 0);
     if (orderable.length === 0) return "At least one item must have a quantity greater than 0";
     for (const li of orderable) {
@@ -272,6 +285,10 @@ function NewPurchaseOrderFormWithPr({
         notes: notes.trim() || null,
         payment_terms: paymentTerms.trim() || null,
         terms_and_conditions: termsAndConditions.trim() || null,
+        advance_amount: advanceRequired && advanceAmount ? parseFloat(advanceAmount) : null,
+        advance_payment_mode: advanceRequired && advanceMode ? advanceMode : null,
+        advance_payment_reference: advanceRequired && advanceReference.trim() ? advanceReference.trim() : null,
+        advance_notes: advanceRequired && advanceNotes.trim() ? advanceNotes.trim() : null,
         items: orderable.map((li) => ({
           pr_item_id: li.pr_item_id ?? null,
           item_id: li.item_id ?? null,
@@ -423,6 +440,94 @@ function NewPurchaseOrderFormWithPr({
             />
           </div>
         </CardContent>
+      </Card>
+
+      {/* Advance Payment */}
+      <Card>
+        <CardHeader
+          className="flex flex-row items-center justify-between pb-3 cursor-pointer select-none"
+          onClick={() => setAdvanceExpanded((v) => !v)}
+        >
+          <div className="flex items-center gap-2">
+            <CardTitle className="text-base">Advance Payment</CardTitle>
+            <span className="text-xs text-muted-foreground">(optional)</span>
+          </div>
+          {advanceExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+        </CardHeader>
+        {advanceExpanded && (
+          <CardContent className="space-y-4">
+            <div className="flex items-center gap-2">
+              <input
+                id="advance_required"
+                type="checkbox"
+                checked={advanceRequired}
+                onChange={(e) => {
+                  setAdvanceRequired(e.target.checked);
+                  if (!e.target.checked) {
+                    setAdvanceAmount("");
+                    setAdvanceMode("");
+                    setAdvanceReference("");
+                    setAdvanceNotes("");
+                  }
+                }}
+                className="h-4 w-4 rounded border-gray-300"
+              />
+              <Label htmlFor="advance_required" className="cursor-pointer">Advance payment required for this order</Label>
+            </div>
+
+            {advanceRequired && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t">
+                <div className="space-y-1.5">
+                  <Label htmlFor="advance_amount">Advance Amount (₹) <span className="text-red-500">*</span></Label>
+                  <Input
+                    id="advance_amount"
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    placeholder="e.g. 5000"
+                    value={advanceAmount}
+                    onChange={(e) => setAdvanceAmount(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="advance_mode">Payment Mode <span className="text-red-500">*</span></Label>
+                  <Select value={advanceMode || "__none__"} onValueChange={(v) => setAdvanceMode(v === "__none__" ? "" : v)}>
+                    <SelectTrigger id="advance_mode">
+                      <SelectValue placeholder="Select mode…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">Select mode…</SelectItem>
+                      {Object.entries(PO_ADVANCE_PAYMENT_MODE_LABELS).map(([k, label]) => (
+                        <SelectItem key={k} value={k}>{label}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="advance_reference">Reference No.</Label>
+                  <Input
+                    id="advance_reference"
+                    placeholder="e.g. NEFT/20250318/001"
+                    value={advanceReference}
+                    onChange={(e) => setAdvanceReference(e.target.value)}
+                  />
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label htmlFor="advance_notes">Notes</Label>
+                  <Input
+                    id="advance_notes"
+                    placeholder="Any notes about this advance…"
+                    value={advanceNotes}
+                    onChange={(e) => setAdvanceNotes(e.target.value)}
+                  />
+                </div>
+              </div>
+            )}
+          </CardContent>
+        )}
       </Card>
 
       {/* Line Items */}

@@ -95,6 +95,14 @@ export async function PATCH(
     );
   }
 
+  // build_approved can only be set by admin (already checked above), but guard explicitly
+  if (parsed.data.status === "build_approved" && currentUser.role !== "admin") {
+    return NextResponse.json(
+      { error: "Only admins can approve tickets for build" },
+      { status: 403 }
+    );
+  }
+
   const updates: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   };
@@ -103,6 +111,11 @@ export async function PATCH(
     updates.status = parsed.data.status;
     if (parsed.data.status === "resolved" || parsed.data.status === "closed") {
       updates.resolved_at = new Date().toISOString();
+    }
+    if (parsed.data.status === "build_approved") {
+      updates.build_approved_at = new Date().toISOString();
+      updates.build_approved_by = currentUser.id;
+      updates.build_approved_notes = parsed.data.build_approved_notes!;
     }
   }
   if (parsed.data.priority !== undefined) {

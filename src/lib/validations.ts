@@ -468,9 +468,18 @@ export const createSupportTicketSchema = z.object({
 export type CreateSupportTicketInput = z.infer<typeof createSupportTicketSchema>;
 
 export const updateSupportTicketSchema = z.object({
-  status: z.enum(["open", "in_progress", "resolved", "closed"]).optional(),
+  status: z.enum(["open", "in_progress", "resolved", "closed", "build_approved"]).optional(),
   priority: z.enum(["low", "medium", "high", "urgent"]).optional(),
   assigned_to: z.string().uuid().optional().or(z.literal("")).transform(v => v || null),
+  build_approved_notes: z.string().min(1).optional(),
+}).superRefine((data, ctx) => {
+  if (data.status === "build_approved" && !data.build_approved_notes?.trim()) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ["build_approved_notes"],
+      message: "Approval notes are required when setting status to Build Approved",
+    });
+  }
 });
 
 export type UpdateSupportTicketInput = z.input<typeof updateSupportTicketSchema>;

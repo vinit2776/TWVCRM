@@ -7,6 +7,7 @@ import {
   ChevronLeft, Loader2, Truck, MapPin, User, Calendar,
   FileText, PackageOpen, Receipt, Download, CreditCard,
   Clock, Paperclip, X, CheckCircle2, Package, ClipboardList, Info,
+  AlertTriangle, Undo2,
 } from "lucide-react";
 import { generatePurchaseOrderPDF } from "@/lib/po-pdf-generator";
 import { Button } from "@/components/ui/button";
@@ -24,6 +25,7 @@ import {
 import { toast } from "sonner";
 import {
   PO_STATUS_LABELS, PO_STATUS_COLORS, BILLING_CYCLE_LABELS,
+  PO_ADVANCE_STATUS_LABELS, PO_ADVANCE_STATUS_COLORS, PO_ADVANCE_PAYMENT_MODE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
@@ -39,17 +41,20 @@ type ActionType =
   | "partial_cancel"
   | "record_delivery"
   | "record_service_report"
-  | "add_invoice";
+  | "add_invoice"
+  | "reject_delivery"
+  | "process_advance";
 
 // ─── Timeline helper ─────────────────────────────────────────────────────────
 interface TimelineItem {
   id: string;
   ts: string;
-  type: "created" | "ordered" | "delivery" | "service_report" | "invoice" | "status";
+  type: "created" | "ordered" | "delivery" | "service_report" | "invoice" | "status" | "advance";
   title: string;
   subtitle: string;
   fileUrl?: string | null;
   fileLabel?: string;
+  deliveryReceiptId?: string;
 }
 
 function buildTimeline(
@@ -115,6 +120,7 @@ function buildTimeline(
       subtitle: dr.receiver?.full_name ?? "—",
       fileUrl: dr.file_url,
       fileLabel: "View Challan",
+      deliveryReceiptId: dr.id,
     });
   }
 
@@ -129,6 +135,17 @@ function buildTimeline(
       subtitle: `${formatDate(sr.period_from)} – ${formatDate(sr.period_to)} · ${sr.recorder?.full_name ?? "—"}${invoiced ? " · Invoiced" : " · Pending invoice"}`,
       fileUrl: sr.report_file_url,
       fileLabel: "View Report",
+    });
+  }
+
+  // Advance payment processed
+  if (po.advance_status === "processed" && po.advance_processed_at) {
+    items.push({
+      id: "advance-processed",
+      ts: po.advance_processed_at,
+      type: "advance",
+      title: "Advance Payment Processed",
+      subtitle: `${formatCurrency(po.advance_amount ?? 0)} · ${PO_ADVANCE_PAYMENT_MODE_LABELS[po.advance_payment_mode ?? ""] ?? ""}${po.advance_payment_date ? ` · ${formatDate(po.advance_payment_date)}` : ""}`,
     });
   }
 
@@ -156,6 +173,7 @@ const TIMELINE_DOT_COLORS: Record<TimelineItem["type"], string> = {
   service_report: "bg-teal-500",
   invoice: "bg-purple-500",
   status: "bg-gray-400",
+  advance: "bg-orange-500",
 };
 
 // ─── File validation helper ───────────────────────────────────────────────────
@@ -260,8 +278,11 @@ export default function PurchaseOrderDetailPage() {
   // Mark Ordered
   // (no extra state needed)
 
-  // Cancel
-  // (no extra state needed)
+  // Cancel (with delivery-aware warnings)
+  const [forceCancelStep, setForceCancelStep] = useState<1 | 2>(1);
+
+  // Reject Delivery
+  const [rejectDeliveryId, setRejectDeliveryId] = useState<string | null>(null);
 
   // Partial Cancel
   const [partialCancelQtys, setPartialCancelQtys] = useState<Record<string, string>>({});
@@ -287,6 +308,9 @@ export default function PurchaseOrderDetailPage() {
   const invFileRef = useRef<HTMLInputElement>(null);
   // Service PO invoice: which service report this invoice covers
   const [invServiceReportId, setInvServiceReportId] = useState("");
+
+  // Process Advance
+  const [advancePaymentDate, setAdvancePaymentDate] = useState("");
 
   // Record Service Report
   const [srCycleNumber, setSrCycleNumber] = useState("");
@@ -346,10 +370,34 @@ export default function PurchaseOrderDetailPage() {
         mark_ordered: "Order marked as ordered",
         cancel: "Order cancelled",
         partial_cancel: "Order partially cancelled — remaining qty released back to PR",
+        process_advance: "Advance payment marked as processed",
       };
       toast.success(msgs[action] ?? "Done");
       setActionDialog(null);
       setPartialCancelQtys({});
+      setForceCancelStep(1);
+      await fetchPo();
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
+  // ── Reject Delivery ──────────────────────────────────────────────────────
+  const rejectDelivery = async (deliveryId: string) => {
+    setActionLoading(true);
+    try {
+      const res = await fetch(
+        `/api/procurement/orders/${id}/deliveries?delivery_id=${deliveryId}`,
+        { method: "DELETE" }
+      );
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to reject delivery");
+        return;
+      }
+      toast.success("Delivery rejected — quantities reversed");
+      setActionDialog(null);
+      setRejectDeliveryId(null);
       await fetchPo();
     } finally {
       setActionLoading(false);
@@ -684,12 +732,12 @@ export default function PurchaseOrderDetailPage() {
               Partial Cancel
             </Button>
           )}
-          {["pending", "ordered"].includes(po.status) && (
+          {["pending", "ordered", "partially_received", "received"].includes(po.status) && (
             <Button
               size="sm"
               variant="ghost"
               className="text-muted-foreground"
-              onClick={() => setActionDialog("cancel")}
+              onClick={() => { setForceCancelStep(1); setActionDialog("cancel"); }}
               disabled={actionLoading}
             >
               Cancel Order
@@ -856,6 +904,68 @@ export default function PurchaseOrderDetailPage() {
                 <p className="font-medium">{po.vendor_bills?.length ?? 0} / {po.cycle_count ?? "?"}</p>
               </div>
             </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Advance Payment */}
+      {(po.advance_amount ?? 0) > 0 && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2">
+                <CreditCard className="h-4 w-4 text-muted-foreground" />
+                <CardTitle className="text-base">Advance Payment</CardTitle>
+              </div>
+              <Badge
+                variant="secondary"
+                className={PO_ADVANCE_STATUS_COLORS[po.advance_status ?? "not_required"]}
+              >
+                {PO_ADVANCE_STATUS_LABELS[po.advance_status ?? "not_required"]}
+              </Badge>
+            </div>
+          </CardHeader>
+          <CardContent className="space-y-3">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+              <div>
+                <p className="text-muted-foreground mb-0.5">Amount</p>
+                <p className="font-bold text-base">{formatCurrency(po.advance_amount ?? 0)}</p>
+              </div>
+              <div>
+                <p className="text-muted-foreground mb-0.5">Mode</p>
+                <p className="font-medium">{PO_ADVANCE_PAYMENT_MODE_LABELS[po.advance_payment_mode ?? ""] ?? "—"}</p>
+              </div>
+              {po.advance_payment_reference && (
+                <div>
+                  <p className="text-muted-foreground mb-0.5">Reference</p>
+                  <p className="font-medium font-mono text-xs">{po.advance_payment_reference}</p>
+                </div>
+              )}
+              {po.advance_payment_date && (
+                <div>
+                  <p className="text-muted-foreground mb-0.5">Paid On</p>
+                  <p className="font-medium">{formatDate(po.advance_payment_date)}</p>
+                </div>
+              )}
+            </div>
+            {po.advance_notes && (
+              <p className="text-sm text-muted-foreground">{po.advance_notes}</p>
+            )}
+            {po.advance_status === "pending" && (
+              <div className="pt-1">
+                <Button
+                  size="sm"
+                  className="bg-orange-600 hover:bg-orange-700"
+                  onClick={() => {
+                    setAdvancePaymentDate(today);
+                    setActionDialog("process_advance");
+                  }}
+                  disabled={actionLoading}
+                >
+                  <CheckCircle2 className="h-4 w-4 mr-1.5" /> Process Advance Payment
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
       )}
@@ -1059,17 +1169,29 @@ export default function PurchaseOrderDetailPage() {
                       <p className="text-xs text-muted-foreground mt-0.5">
                         {formatDate(item.ts)} · {item.subtitle}
                       </p>
-                      {item.fileUrl && (
-                        <a
-                          href={item.fileUrl}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1"
-                        >
-                          <Paperclip className="h-3 w-3" />
-                          {item.fileLabel ?? "View Document"}
-                        </a>
-                      )}
+                      <div className="flex items-center gap-3 mt-1">
+                        {item.fileUrl && (
+                          <a
+                            href={item.fileUrl}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+                          >
+                            <Paperclip className="h-3 w-3" />
+                            {item.fileLabel ?? "View Document"}
+                          </a>
+                        )}
+                        {item.deliveryReceiptId && ["partially_received", "received"].includes(po.status) && (
+                          <button
+                            type="button"
+                            className="inline-flex items-center gap-1 text-xs text-red-600 hover:text-red-700 hover:underline"
+                            onClick={() => { setRejectDeliveryId(item.deliveryReceiptId!); setActionDialog("reject_delivery"); }}
+                          >
+                            <Undo2 className="h-3 w-3" />
+                            Reject
+                          </button>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}
@@ -1169,6 +1291,47 @@ export default function PurchaseOrderDetailPage() {
             >
               {srUploading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Record Report
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Process Advance dialog ────────────────────────────────────────── */}
+      <Dialog
+        open={actionDialog === "process_advance"}
+        onOpenChange={() => { setActionDialog(null); setAdvancePaymentDate(today); }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Process Advance Payment</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Confirm that the advance of <strong>{formatCurrency(po.advance_amount ?? 0)}</strong> has
+              been transferred to <strong>{vendor?.name}</strong>.
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="adv_date">Payment Date <span className="text-red-500">*</span></Label>
+              <Input
+                id="adv_date"
+                type="date"
+                value={advancePaymentDate}
+                onChange={(e) => setAdvancePaymentDate(e.target.value)}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setActionDialog(null)}>Cancel</Button>
+            <Button
+              className="bg-orange-600 hover:bg-orange-700"
+              onClick={() => {
+                if (!advancePaymentDate) { toast.error("Payment date is required"); return; }
+                performAction("process_advance", { advance_payment_date: advancePaymentDate });
+              }}
+              disabled={actionLoading}
+            >
+              {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Confirm Payment
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1484,24 +1647,148 @@ export default function PurchaseOrderDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* ── Cancel dialog ────────────────────────────────────────────────── */}
-      <Dialog open={actionDialog === "cancel"} onOpenChange={() => setActionDialog(null)}>
+      {/* ── Cancel dialog (delivery-aware) ──────────────────────────────── */}
+      <Dialog open={actionDialog === "cancel"} onOpenChange={() => { setActionDialog(null); setForceCancelStep(1); }}>
         <DialogContent>
           <DialogHeader>
             <DialogTitle>Cancel Purchase Order</DialogTitle>
           </DialogHeader>
+
+          {(() => {
+            const receivedItems = (po.purchase_order_items ?? []).filter(
+              (i) => Number(i.quantity_received) > 0
+            );
+            const hasDeliveries = receivedItems.length > 0;
+
+            // Simple cancel — no deliveries
+            if (!hasDeliveries) {
+              return (
+                <>
+                  <p className="text-sm text-muted-foreground py-2">
+                    Are you sure you want to cancel <strong>{po.po_number}</strong>? This action cannot be undone.
+                  </p>
+                  <DialogFooter>
+                    <Button variant="outline" onClick={() => setActionDialog(null)}>Keep Order</Button>
+                    <Button
+                      variant="destructive"
+                      onClick={() => performAction("cancel")}
+                      disabled={actionLoading}
+                    >
+                      {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+                      Yes, Cancel
+                    </Button>
+                  </DialogFooter>
+                </>
+              );
+            }
+
+            // Step 1: Warning about received goods
+            if (forceCancelStep === 1) {
+              return (
+                <div className="space-y-4 py-2">
+                  <div className="rounded-md border border-amber-300 bg-amber-50 p-3 space-y-2">
+                    <div className="flex items-start gap-2">
+                      <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 flex-shrink-0" />
+                      <p className="text-sm font-medium text-amber-800">This PO has received goods</p>
+                    </div>
+                    <div className="rounded border border-amber-200 overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-amber-100/50 border-b border-amber-200">
+                            <th className="px-3 py-1.5 text-left font-medium text-amber-900">Item</th>
+                            <th className="px-3 py-1.5 text-right font-medium text-amber-900">Received</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {receivedItems.map((item) => (
+                            <tr key={item.id} className="border-b border-amber-200 last:border-0">
+                              <td className="px-3 py-1.5 text-amber-900">{item.item_name}</td>
+                              <td className="px-3 py-1.5 text-right text-amber-900">
+                                {item.quantity_received} {item.unit}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                    <p className="text-xs text-amber-700">
+                      Rejecting deliveries first is recommended to avoid inventory imbalance.
+                    </p>
+                  </div>
+                  <DialogFooter>
+                    <Button
+                      variant="outline"
+                      onClick={() => { setActionDialog(null); setForceCancelStep(1); }}
+                    >
+                      Reject Deliveries First
+                    </Button>
+                    <Button
+                      variant="destructive"
+                      onClick={() => setForceCancelStep(2)}
+                    >
+                      Cancel Anyway
+                    </Button>
+                  </DialogFooter>
+                </div>
+              );
+            }
+
+            // Step 2: Final force-cancel confirmation
+            return (
+              <div className="space-y-4 py-2">
+                <div className="rounded-md border border-red-300 bg-red-50 p-3">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="h-4 w-4 text-red-600 mt-0.5 flex-shrink-0" />
+                    <div className="space-y-1">
+                      <p className="text-sm font-medium text-red-800">Inventory imbalance warning</p>
+                      <p className="text-xs text-red-700">
+                        Cancelling with received goods means you have inventory that will never be billed.
+                        This creates an accounting discrepancy that must be resolved manually.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+                <DialogFooter>
+                  <Button variant="outline" onClick={() => setForceCancelStep(1)}>Go Back</Button>
+                  <Button
+                    variant="destructive"
+                    onClick={() => performAction("cancel", { force: true })}
+                    disabled={actionLoading}
+                  >
+                    {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+                    Yes, Force Cancel
+                  </Button>
+                </DialogFooter>
+              </div>
+            );
+          })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Reject Delivery confirmation dialog ────────────────────────────── */}
+      <Dialog
+        open={actionDialog === "reject_delivery" && !!rejectDeliveryId}
+        onOpenChange={() => { setActionDialog(null); setRejectDeliveryId(null); }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reject Delivery</DialogTitle>
+          </DialogHeader>
           <p className="text-sm text-muted-foreground py-2">
-            Are you sure you want to cancel <strong>{po.po_number}</strong>? This action cannot be undone.
+            This will reverse the received quantities from this delivery and delete the delivery record.
+            This action cannot be undone.
           </p>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setActionDialog(null)}>Keep Order</Button>
+            <Button variant="outline" onClick={() => { setActionDialog(null); setRejectDeliveryId(null); }}>
+              Keep Delivery
+            </Button>
             <Button
               variant="destructive"
-              onClick={() => performAction("cancel")}
+              onClick={() => rejectDeliveryId && rejectDelivery(rejectDeliveryId)}
               disabled={actionLoading}
             >
               {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              Yes, Cancel
+              Yes, Reject
             </Button>
           </DialogFooter>
         </DialogContent>

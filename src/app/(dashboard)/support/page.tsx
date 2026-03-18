@@ -81,6 +81,15 @@ export default function SupportPage() {
       });
   }, [router]);
 
+  // Status sort priority: open → in_progress → build_approved → resolved → closed
+  const STATUS_PRIORITY: Record<string, number> = {
+    open: 0,
+    in_progress: 1,
+    build_approved: 2,
+    resolved: 3,
+    closed: 4,
+  };
+
   const fetchTickets = useCallback(async () => {
     try {
       const params = new URLSearchParams();
@@ -90,7 +99,16 @@ export default function SupportPage() {
       const res = await fetch(`/api/support-tickets?${params}`);
       if (!res.ok) throw new Error("Failed to fetch tickets");
       const { data } = await res.json();
-      setTickets(data || []);
+
+      // Sort: open first, then by created_at descending within each status group
+      const sorted = (data || []).sort((a: Ticket, b: Ticket) => {
+        const statusDiff =
+          (STATUS_PRIORITY[a.status] ?? 99) - (STATUS_PRIORITY[b.status] ?? 99);
+        if (statusDiff !== 0) return statusDiff;
+        return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+      });
+
+      setTickets(sorted);
     } catch {
       toast.error("Failed to load tickets");
     } finally {

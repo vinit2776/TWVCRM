@@ -10,13 +10,17 @@ const patchPoSchema = z.discriminatedUnion("action", [
     action: z.literal("mark_received"),
     actual_delivery_date: z.string().nullish(),
   }),
-  z.object({ action: z.literal("cancel") }),
+  z.object({ action: z.literal("cancel"), force: z.boolean().optional() }),
   z.object({
     action: z.literal("partial_cancel"),
     confirmed_items: z.array(z.object({
       po_item_id: z.string().uuid(),
       confirmed_qty: z.number().min(0),
     })).min(1),
+  }),
+  z.object({
+    action: z.literal("process_advance"),
+    advance_payment_date: z.string().min(1, "Payment date is required"),
   }),
 ]);
 
@@ -110,12 +114,38 @@ export async function PATCH(
     }
 
     case "cancel": {
-      if (!["pending", "ordered"].includes(po.status)) {
-        return NextResponse.json({ error: "Only pending or ordered POs can be cancelled" }, { status: 422 });
+      if (!["pending", "ordered", "partially_received", "received"].includes(po.status)) {
+        return NextResponse.json({ error: "Only pre-invoice POs can be cancelled" }, { status: 422 });
       }
       if (!["admin", "manager"].includes(dbUser.role)) {
         return NextResponse.json({ error: "Only managers and admins can cancel purchase orders" }, { status: 403 });
       }
+
+      // Block cancellation if vendor bills exist — must handle bills first
+      const { count: billCount } = await supabase
+        .from("vendor_bills")
+        .select("id", { count: "exact", head: true })
+        .eq("po_id", id);
+      if (billCount && billCount > 0) {
+        return NextResponse.json({
+          error: "This PO has vendor bills. Delete or void the bills before cancelling.",
+        }, { status: 422 });
+      }
+
+      // If PO has received goods, require force flag
+      if (["partially_received", "received"].includes(po.status)) {
+        const { count: deliveryCount } = await supabase
+          .from("po_delivery_receipts")
+          .select("id", { count: "exact", head: true })
+          .eq("po_id", id);
+        if (deliveryCount && deliveryCount > 0 && !parsed.data.force) {
+          return NextResponse.json({
+            error: "This PO has received goods. Use force cancel or reject deliveries first.",
+            has_deliveries: true,
+          }, { status: 422 });
+        }
+      }
+
       updatePayload = { status: "cancelled" };
       break;
     }
@@ -191,6 +221,22 @@ export async function PATCH(
       }
 
       updatePayload = { status: "partially_cancelled", total_ordered_amount: newTotal };
+      break;
+    }
+
+    case "process_advance": {
+      if (po.advance_status !== "pending") {
+        return NextResponse.json({ error: "Only POs with a pending advance can be processed" }, { status: 422 });
+      }
+      if (!["admin", "manager"].includes(dbUser.role)) {
+        return NextResponse.json({ error: "Only managers and admins can process advance payments" }, { status: 403 });
+      }
+      updatePayload = {
+        advance_status: "processed",
+        advance_processed_by: dbUser.id,
+        advance_processed_at: new Date().toISOString(),
+        advance_payment_date: parsed.data.advance_payment_date,
+      };
       break;
     }
   }

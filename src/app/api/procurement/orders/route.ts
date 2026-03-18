@@ -14,6 +14,13 @@ const createPoItemSchema = z.object({
   notes: z.string().nullish(),
 });
 
+const advancePaymentSchema = z.object({
+  advance_amount: z.number().positive("Advance amount must be greater than 0").nullish(),
+  advance_payment_mode: z.enum(["cash", "upi", "bank_transfer"]).nullish(),
+  advance_payment_reference: z.string().nullish(),
+  advance_notes: z.string().nullish(),
+});
+
 const createGoodsPoSchema = z.object({
   po_type: z.literal("goods").optional().default("goods"),
   pr_id: z.string().uuid("A linked Purchase Request is required"),
@@ -24,7 +31,7 @@ const createGoodsPoSchema = z.object({
   payment_terms: z.string().nullish(),
   terms_and_conditions: z.string().nullish(),
   items: z.array(createPoItemSchema).min(1, "At least one item is required"),
-});
+}).merge(advancePaymentSchema);
 
 const createServicePoSchema = z.object({
   po_type: z.literal("service"),
@@ -39,7 +46,7 @@ const createServicePoSchema = z.object({
   notes: z.string().nullish(),
   payment_terms: z.string().nullish(),
   terms_and_conditions: z.string().nullish(),
-});
+}).merge(advancePaymentSchema);
 
 function generatePoNumber(count: number): string {
   const now = new Date();
@@ -62,6 +69,7 @@ export async function GET(request: NextRequest) {
   const vendorId = searchParams.get("vendor_id");
   const locationId = searchParams.get("location_id");
   const prId = searchParams.get("pr_id");
+  const advanceStatus = searchParams.get("advance_status");
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
   const offset = (page - 1) * limit;
@@ -79,6 +87,7 @@ export async function GET(request: NextRequest) {
   if (vendorId) query = query.eq("vendor_id", vendorId);
   if (locationId) query = query.eq("location_id", locationId);
   if (prId) query = query.eq("pr_id", prId);
+  if (advanceStatus) query = query.eq("advance_status", advanceStatus);
 
   const { data, error, count } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -125,6 +134,7 @@ export async function POST(request: NextRequest) {
 
     const totalAmount = parsed.data.unit_cost_per_cycle * parsed.data.cycle_count;
 
+    const hasAdvance = !!parsed.data.advance_amount;
     const { data: po, error: poError } = await supabase
       .from("purchase_orders")
       .insert({
@@ -142,6 +152,11 @@ export async function POST(request: NextRequest) {
         ordered_by: dbUser.id,
         total_ordered_amount: totalAmount,
         status: "pending",
+        advance_amount: parsed.data.advance_amount ?? null,
+        advance_payment_mode: parsed.data.advance_payment_mode ?? null,
+        advance_payment_reference: parsed.data.advance_payment_reference ?? null,
+        advance_notes: parsed.data.advance_notes ?? null,
+        advance_status: hasAdvance ? "pending" : "not_required",
       })
       .select("id, po_number")
       .single();
@@ -251,12 +266,13 @@ export async function POST(request: NextRequest) {
   const poNumber = generatePoNumber(existingCount ?? 0);
 
   // ── 4. Insert purchase order ──
+  const hasAdvance = !!parsed.data.advance_amount;
   const { data: po, error: poError } = await supabase
     .from("purchase_orders")
     .insert({
-      ...poData,
       po_type: "goods",
       pr_id: poData.pr_id,
+      vendor_id: poData.vendor_id,
       location_id: poData.location_id ?? null,
       expected_delivery_date: poData.expected_delivery_date ?? null,
       notes: poData.notes ?? null,
@@ -266,6 +282,11 @@ export async function POST(request: NextRequest) {
       ordered_by: dbUser.id,
       total_ordered_amount: totalOrderedAmount,
       status: "pending",
+      advance_amount: parsed.data.advance_amount ?? null,
+      advance_payment_mode: parsed.data.advance_payment_mode ?? null,
+      advance_payment_reference: parsed.data.advance_payment_reference ?? null,
+      advance_notes: parsed.data.advance_notes ?? null,
+      advance_status: hasAdvance ? "pending" : "not_required",
     })
     .select("id, po_number")
     .single();

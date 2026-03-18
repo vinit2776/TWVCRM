@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, Info } from "lucide-react";
+import { ChevronLeft, Info, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,6 +14,7 @@ import {
 import { toast } from "sonner";
 import {
   SERVICE_PO_BILLING_CYCLES, BILLING_CYCLE_LABELS, BILLING_CYCLE_MONTHS,
+  PO_ADVANCE_PAYMENT_MODE_LABELS,
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import type { ProcurementVendor, ProcurementItem } from "@/types";
@@ -51,6 +52,14 @@ export default function NewServicePOPage() {
   const [notes, setNotes] = useState("");
   const [paymentTerms, setPaymentTerms] = useState("");
   const [termsAndConditions, setTermsAndConditions] = useState("");
+
+  // Advance payment
+  const [advanceRequired, setAdvanceRequired] = useState(false);
+  const [advanceExpanded, setAdvanceExpanded] = useState(false);
+  const [advanceAmount, setAdvanceAmount] = useState("");
+  const [advanceMode, setAdvanceMode] = useState("");
+  const [advanceReference, setAdvanceReference] = useState("");
+  const [advanceNotes, setAdvanceNotes] = useState("");
 
   const fetchVendors = useCallback(async () => {
     const res = await fetch("/api/procurement/vendors?limit=100");
@@ -97,6 +106,12 @@ export default function NewServicePOPage() {
     if (!serviceStartDate) { toast.error("Service start date is required"); return; }
     if (cycleCountNum < 1) { toast.error("Number of cycles must be at least 1"); return; }
     if (unitCostNum <= 0) { toast.error("Cost per cycle must be greater than 0"); return; }
+    if (advanceRequired) {
+      if (!advanceAmount || isNaN(parseFloat(advanceAmount)) || parseFloat(advanceAmount) <= 0) {
+        toast.error("Advance amount must be a positive number"); return;
+      }
+      if (!advanceMode) { toast.error("Please select a payment mode for the advance"); return; }
+    }
 
     setSaving(true);
     try {
@@ -116,6 +131,10 @@ export default function NewServicePOPage() {
           notes: notes.trim() || undefined,
           payment_terms: paymentTerms.trim() || undefined,
           terms_and_conditions: termsAndConditions.trim() || undefined,
+          advance_amount: advanceRequired && advanceAmount ? parseFloat(advanceAmount) : undefined,
+          advance_payment_mode: advanceRequired && advanceMode ? advanceMode : undefined,
+          advance_payment_reference: advanceRequired && advanceReference.trim() ? advanceReference.trim() : undefined,
+          advance_notes: advanceRequired && advanceNotes.trim() ? advanceNotes.trim() : undefined,
         }),
       });
       const json = await res.json();
@@ -313,6 +332,91 @@ export default function NewServicePOPage() {
               <Textarea value={termsAndConditions} onChange={(e) => setTermsAndConditions(e.target.value)} rows={3} placeholder="Contract terms..." />
             </div>
           </CardContent>
+        </Card>
+
+        {/* Advance Payment */}
+        <Card>
+          <CardHeader
+            className="flex flex-row items-center justify-between pb-3 cursor-pointer select-none"
+            onClick={() => setAdvanceExpanded((v) => !v)}
+          >
+            <div className="flex items-center gap-2">
+              <CardTitle className="text-base">Advance Payment</CardTitle>
+              <span className="text-xs text-muted-foreground">(optional)</span>
+            </div>
+            {advanceExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+          </CardHeader>
+          {advanceExpanded && (
+            <CardContent className="space-y-4">
+              <div className="flex items-center gap-2">
+                <input
+                  id="advance_required"
+                  type="checkbox"
+                  checked={advanceRequired}
+                  onChange={(e) => {
+                    setAdvanceRequired(e.target.checked);
+                    if (!e.target.checked) {
+                      setAdvanceAmount("");
+                      setAdvanceMode("");
+                      setAdvanceReference("");
+                      setAdvanceNotes("");
+                    }
+                  }}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                <Label htmlFor="advance_required" className="cursor-pointer">Advance payment required for this order</Label>
+              </div>
+
+              {advanceRequired && (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 pt-2 border-t">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="advance_amount">Advance Amount (₹) <span className="text-red-500">*</span></Label>
+                    <Input
+                      id="advance_amount"
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      placeholder="e.g. 5000"
+                      value={advanceAmount}
+                      onChange={(e) => setAdvanceAmount(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="advance_mode">Payment Mode <span className="text-red-500">*</span></Label>
+                    <Select value={advanceMode || "__none__"} onValueChange={(v) => setAdvanceMode(v === "__none__" ? "" : v)}>
+                      <SelectTrigger id="advance_mode">
+                        <SelectValue placeholder="Select mode…" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none__">Select mode…</SelectItem>
+                        {Object.entries(PO_ADVANCE_PAYMENT_MODE_LABELS).map(([k, label]) => (
+                          <SelectItem key={k} value={k}>{label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="advance_reference">Reference No.</Label>
+                    <Input
+                      id="advance_reference"
+                      placeholder="e.g. NEFT/20250318/001"
+                      value={advanceReference}
+                      onChange={(e) => setAdvanceReference(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="advance_notes">Notes</Label>
+                    <Input
+                      id="advance_notes"
+                      placeholder="Any notes about this advance…"
+                      value={advanceNotes}
+                      onChange={(e) => setAdvanceNotes(e.target.value)}
+                    />
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          )}
         </Card>
 
         <div className="flex justify-end gap-3">

@@ -38,7 +38,7 @@ export async function GET(
     .from("vendor_bills")
     .select(
       `*, procurement_vendors(id, name, contact_name, contact_phone),
-       purchase_orders(id, po_number, status, po_type),
+       purchase_orders(id, po_number, status, po_type, advance_status, advance_amount, advance_payment_mode, advance_payment_reference, advance_payment_date),
        approver:users!vendor_bills_approved_by_fkey(id, full_name)`
     )
     .eq("id", id)

@@ -29,6 +29,7 @@ import {
   Clock,
   MessageSquare,
   Send,
+  CheckCircle2,
 } from "lucide-react";
 import {
   TICKET_STATUSES,
@@ -63,6 +64,8 @@ interface TicketDetail {
   screenshot_path: string | null;
   screenshot_url: string | null;
   resolved_at: string | null;
+  build_approved_at: string | null;
+  build_approved_notes: string | null;
   created_at: string;
   updated_at: string;
   reporter: { id: string; full_name: string; email: string; role: string } | null;
@@ -100,6 +103,7 @@ export function TicketDetailDialog({
   const [status, setStatus] = useState("");
   const [priority, setPriority] = useState("");
   const [assignedTo, setAssignedTo] = useState("");
+  const [buildApprovedNotes, setBuildApprovedNotes] = useState("");
   const [newNote, setNewNote] = useState("");
 
   // Fetch ticket detail
@@ -148,6 +152,10 @@ export function TicketDetailDialog({
 
   async function handleSave() {
     if (!ticketId) return;
+    if (status === "build_approved" && !buildApprovedNotes.trim()) {
+      toast.error("Please add approval notes and conclusions before approving for build");
+      return;
+    }
     setSaving(true);
     try {
       const res = await fetch(`/api/support-tickets/${ticketId}`, {
@@ -157,6 +165,7 @@ export function TicketDetailDialog({
           status,
           priority,
           assigned_to: assignedTo || "",
+          ...(status === "build_approved" ? { build_approved_notes: buildApprovedNotes.trim() } : {}),
         }),
       });
 
@@ -322,13 +331,29 @@ export function TicketDetailDialog({
 
               <Separator />
 
+              {/* Already Build Approved — show read-only approval record */}
+              {ticket.status === "build_approved" && ticket.build_approved_at && (
+                <div className="rounded-lg border border-emerald-200 bg-emerald-50/60 p-3 space-y-2">
+                  <div className="flex items-center gap-2">
+                    <CheckCircle2 className="h-4 w-4 text-emerald-700 flex-shrink-0" />
+                    <p className="text-sm font-semibold text-emerald-800">Build Approved</p>
+                    <span className="text-xs text-emerald-600 ml-auto">{formatDate(ticket.build_approved_at)}</span>
+                  </div>
+                  {ticket.build_approved_notes && (
+                    <p className="text-sm text-emerald-900 whitespace-pre-wrap pl-6">
+                      {ticket.build_approved_notes}
+                    </p>
+                  )}
+                </div>
+              )}
+
               {/* Admin Controls */}
               <div className="space-y-3">
                 <p className="text-sm font-medium">Manage Ticket</p>
                 <div className="grid grid-cols-3 gap-3">
                   <div className="space-y-1">
                     <Label className="text-xs">Status</Label>
-                    <Select value={status} onValueChange={setStatus}>
+                    <Select value={status} onValueChange={(v) => { setStatus(v); if (v !== "build_approved") setBuildApprovedNotes(""); }}>
                       <SelectTrigger className="h-8 text-xs">
                         <SelectValue />
                       </SelectTrigger>
@@ -376,10 +401,36 @@ export function TicketDetailDialog({
                     </Select>
                   </div>
                 </div>
+
+                {/* Build Approved Notes — required when setting status to build_approved */}
+                {status === "build_approved" && (
+                  <div className="space-y-1.5 rounded-lg border border-emerald-200 bg-emerald-50/40 p-3">
+                    <Label className="text-xs font-semibold text-emerald-800 flex items-center gap-1.5">
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      Approval Notes &amp; Conclusions <span className="text-red-500">*</span>
+                    </Label>
+                    <Textarea
+                      placeholder="Add your review conclusions, scope confirmation, and any conditions for the build to proceed..."
+                      value={buildApprovedNotes}
+                      onChange={(e) => setBuildApprovedNotes(e.target.value)}
+                      rows={3}
+                      className="text-sm border-emerald-200 focus-visible:ring-emerald-500"
+                    />
+                    <p className="text-xs text-emerald-700">
+                      This approval is final and will be recorded with your name and timestamp.
+                    </p>
+                  </div>
+                )}
+
                 <div className="flex justify-end">
-                  <Button size="sm" onClick={handleSave} disabled={saving}>
+                  <Button
+                    size="sm"
+                    onClick={handleSave}
+                    disabled={saving}
+                    className={status === "build_approved" ? "bg-emerald-600 hover:bg-emerald-700" : ""}
+                  >
                     {saving && <Loader2 className="mr-2 h-3 w-3 animate-spin" />}
-                    Save Changes
+                    {status === "build_approved" ? "Approve for Build" : "Save Changes"}
                   </Button>
                 </div>
               </div>

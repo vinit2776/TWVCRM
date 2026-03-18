@@ -14,7 +14,23 @@ import {
 import { toast } from "sonner";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
+import { AlertTriangle } from "lucide-react";
 import type { ProcurementVendor, PurchaseOrder } from "@/types";
+
+function computeReceivedValue(po: PurchaseOrder): number | null {
+  if (!po.purchase_order_items || !po.po_delivery_receipts) return null;
+  const priceMap: Record<string, number> = {};
+  for (const item of po.purchase_order_items) {
+    priceMap[item.id] = Number(item.unit_price ?? 0);
+  }
+  let total = 0;
+  for (const receipt of po.po_delivery_receipts) {
+    for (const ri of receipt.po_delivery_receipt_items ?? []) {
+      total += (priceMap[ri.po_item_id] ?? 0) * Number(ri.qty_received);
+    }
+  }
+  return total;
+}
 
 const ACCEPTED_TYPES = ["application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -61,7 +77,10 @@ function NewVendorBillForm() {
         setVendorId(po.vendor_id);
         setVendorLocked(true);
         if (po.total_ordered_amount > 0) {
-          setTotalAmount(String(po.total_ordered_amount));
+          // Pre-fill with received value if there's a shortfall, otherwise full PO value
+          const rv = po.po_type !== "service" ? computeReceivedValue(po) : null;
+          const prefill = (rv !== null && rv < Number(po.total_ordered_amount)) ? rv : Number(po.total_ordered_amount);
+          setTotalAmount(String(prefill));
         }
       })
       .finally(() => setLoadingPo(false));
@@ -88,6 +107,11 @@ function NewVendorBillForm() {
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
+  const receivedValue = poData && poData.po_type !== "service" ? computeReceivedValue(poData) : null;
+  const hasShortfall = receivedValue !== null && receivedValue < Number(poData?.total_ordered_amount ?? 0);
+  // Effective ceiling: received value if shortfall, otherwise full PO value
+  const effectiveCeiling = hasShortfall ? receivedValue! : (poData ? Number(poData.total_ordered_amount) : null);
+
   const validate = (): string | null => {
     if (!vendorId) return "Please select a vendor";
     if (!invoiceDate) return "Invoice date is required";
@@ -95,7 +119,11 @@ function NewVendorBillForm() {
     if (!totalAmount || isNaN(amount) || amount <= 0) return "Invoice amount must be greater than 0";
     // File is mandatory when linked to a PO
     if (poId && !invoiceFile) return "Please upload the vendor invoice file";
-    // Amount ceiling check
+    // Proportionate ceiling check: if shortfall, cap at received value
+    if (hasShortfall && amount > receivedValue!) {
+      return `Invoice amount (${formatCurrency(amount)}) exceeds the proportionate value of goods received (${formatCurrency(receivedValue!)}). Only goods worth ${formatCurrency(receivedValue!)} have been received against the PO value of ${formatCurrency(poData!.total_ordered_amount)}.`;
+    }
+    // Full PO ceiling
     if (poData && poData.total_ordered_amount > 0 && amount > Number(poData.total_ordered_amount)) {
       return `Invoice amount (${formatCurrency(amount)}) cannot exceed PO value (${formatCurrency(poData.total_ordered_amount)})`;
     }
@@ -166,8 +194,6 @@ function NewVendorBillForm() {
     );
   }
 
-  const poAmount = poData ? Number(poData.total_ordered_amount) : null;
-
   return (
     <div className="space-y-6 max-w-2xl mx-auto">
       {/* Header */}
@@ -187,9 +213,22 @@ function NewVendorBillForm() {
       {poData && (
         <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-4 py-3 text-sm text-blue-800">
           Recording invoice for PO <strong>{poData.po_number}</strong>.
-          {poAmount && poAmount > 0 && (
-            <> PO value: <strong>{formatCurrency(poAmount)}</strong> — invoice must not exceed this amount.</>
+          {Number(poData.total_ordered_amount) > 0 && (
+            <> PO value: <strong>{formatCurrency(poData.total_ordered_amount)}</strong>.</>
           )}
+        </div>
+      )}
+
+      {/* Shortfall warning */}
+      {hasShortfall && (
+        <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 flex items-start gap-3">
+          <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-amber-600" />
+          <div>
+            <strong>Delivery shortfall detected.</strong> Only goods worth{" "}
+            <strong>{formatCurrency(receivedValue!)}</strong> have been received out of the PO value of{" "}
+            <strong>{formatCurrency(poData!.total_ordered_amount)}</strong>. The invoice amount cannot exceed{" "}
+            <strong>{formatCurrency(receivedValue!)}</strong>.
+          </div>
         </div>
       )}
 
@@ -240,15 +279,15 @@ function NewVendorBillForm() {
                 id="total_amount"
                 type="number"
                 min="0.01"
-                max={poAmount ?? undefined}
+                max={effectiveCeiling ?? undefined}
                 step="0.01"
                 placeholder="0.00"
                 value={totalAmount}
                 onChange={(e) => setTotalAmount(e.target.value)}
               />
-              {poAmount && poAmount > 0 && (
+              {effectiveCeiling !== null && effectiveCeiling > 0 && (
                 <p className="text-xs text-muted-foreground">
-                  Max: {formatCurrency(poAmount)} (PO value)
+                  Max: {formatCurrency(effectiveCeiling)} ({hasShortfall ? "proportionate received value" : "PO value"})
                 </p>
               )}
             </div>

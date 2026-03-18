@@ -1091,13 +1091,14 @@ export const TICKET_TYPE_COLORS: Record<string, string> = {
   question: "bg-cyan-100 text-cyan-800",
 };
 
-export const TICKET_STATUSES = ["open", "in_progress", "resolved", "closed"] as const;
+export const TICKET_STATUSES = ["open", "in_progress", "resolved", "closed", "build_approved"] as const;
 
 export const TICKET_STATUS_LABELS: Record<string, string> = {
   open: "Open",
   in_progress: "In Progress",
   resolved: "Resolved",
   closed: "Closed",
+  build_approved: "Build Approved",
 };
 
 export const TICKET_STATUS_COLORS: Record<string, string> = {
@@ -1105,6 +1106,7 @@ export const TICKET_STATUS_COLORS: Record<string, string> = {
   in_progress: "bg-blue-100 text-blue-800",
   resolved: "bg-green-100 text-green-800",
   closed: "bg-gray-100 text-gray-800",
+  build_approved: "bg-emerald-100 text-emerald-800",
 };
 
 // ==========================================
@@ -1254,6 +1256,31 @@ export const ITEM_TYPE_LABELS: Record<string, string> = {
 // Service PO billing cycles (subset of contract BILLING_CYCLES — excludes half_yearly)
 export const SERVICE_PO_BILLING_CYCLES = ["monthly", "quarterly", "yearly"] as const;
 export type ServicePoBillingCycle = (typeof SERVICE_PO_BILLING_CYCLES)[number];
+
+// PO Advance Payment
+export const PO_ADVANCE_STATUSES = ["not_required", "pending", "processed"] as const;
+export type PoAdvanceStatus = (typeof PO_ADVANCE_STATUSES)[number];
+
+export const PO_ADVANCE_STATUS_LABELS: Record<string, string> = {
+  not_required: "No Advance",
+  pending: "Advance Pending",
+  processed: "Advance Processed",
+};
+
+export const PO_ADVANCE_STATUS_COLORS: Record<string, string> = {
+  not_required: "bg-gray-100 text-gray-600",
+  pending: "bg-orange-100 text-orange-800",
+  processed: "bg-green-100 text-green-800",
+};
+
+export const PO_ADVANCE_PAYMENT_MODES = ["cash", "upi", "bank_transfer"] as const;
+export type PoAdvancePaymentMode = (typeof PO_ADVANCE_PAYMENT_MODES)[number];
+
+export const PO_ADVANCE_PAYMENT_MODE_LABELS: Record<string, string> = {
+  cash: "Cash",
+  upi: "UPI",
+  bank_transfer: "Bank Transfer",
+};
 
 // ─────────────────────────────────────────────────────────────────────────────
 // Prepaid Package Constants

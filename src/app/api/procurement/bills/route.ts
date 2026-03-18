@@ -117,10 +117,11 @@ export async function POST(request: NextRequest) {
 
   // ── PO validation ──────────────────────────────────────────────────────────
   let poTotalAmount: number | null = null;
+  let poAdvanceCredit = 0;
   if (parsed.data.po_id) {
     const { data: po } = await supabase
       .from("purchase_orders")
-      .select("id, po_type, total_ordered_amount, status, unit_cost_per_cycle")
+      .select("id, po_type, total_ordered_amount, status, unit_cost_per_cycle, advance_status, advance_amount")
       .eq("id", parsed.data.po_id)
       .single();
 
@@ -163,23 +164,57 @@ export async function POST(request: NextRequest) {
       }
     } else {
       // ── Goods PO: must have a delivery receipt ────────────────────────────
-      const { count: deliveryCount } = await supabase
+      const { data: deliveryReceipts } = await supabase
         .from("po_delivery_receipts")
-        .select("*", { count: "exact", head: true })
+        .select("po_delivery_receipt_items(po_item_id, qty_received)")
         .eq("po_id", parsed.data.po_id);
-      if (!deliveryCount) {
+      if (!deliveryReceipts || deliveryReceipts.length === 0) {
         return NextResponse.json({ error: "A delivery must be recorded before uploading a vendor invoice" }, { status: 422 });
+      }
+
+      // Calculate proportionate received value for shortfall detection
+      const { data: poItems } = await supabase
+        .from("purchase_order_items")
+        .select("id, unit_price")
+        .eq("po_id", parsed.data.po_id);
+
+      const priceMap: Record<string, number> = {};
+      for (const item of poItems ?? []) {
+        priceMap[item.id] = Number(item.unit_price ?? 0);
+      }
+
+      let receivedValue = 0;
+      for (const receipt of deliveryReceipts) {
+        for (const ri of receipt.po_delivery_receipt_items ?? []) {
+          receivedValue += (priceMap[ri.po_item_id] ?? 0) * Number(ri.qty_received);
+        }
+      }
+
+      // If there is a shortfall, cap invoice at the received value (not the full PO value)
+      if (receivedValue < (poTotalAmount ?? 0)) {
+        if (parsed.data.total_amount > receivedValue) {
+          return NextResponse.json({
+            error: `Invoice amount (₹${parsed.data.total_amount.toLocaleString("en-IN")}) exceeds the proportionate value of goods received (₹${receivedValue.toLocaleString("en-IN")}). Only goods worth ₹${receivedValue.toLocaleString("en-IN")} have been received against the PO value of ₹${(poTotalAmount ?? 0).toLocaleString("en-IN")}.`,
+          }, { status: 422 });
+        }
+        // Override poTotalAmount so the generic ceiling check below does not fire on the full PO value
+        poTotalAmount = receivedValue;
       }
     }
 
-    // Amount must not exceed PO value (per cycle for service POs)
+    // Amount must not exceed ceiling (per cycle for service POs, full PO value for goods)
     const ceiling = po.po_type === "service" && po.unit_cost_per_cycle
       ? Number(po.unit_cost_per_cycle)
       : poTotalAmount;
-    if (ceiling > 0 && parsed.data.total_amount > ceiling) {
+    if (ceiling !== null && ceiling > 0 && parsed.data.total_amount > ceiling) {
       return NextResponse.json({
         error: `Invoice amount (₹${parsed.data.total_amount.toLocaleString("en-IN")}) cannot exceed the ${po.po_type === "service" ? "cycle cost" : "PO value"} (₹${ceiling.toLocaleString("en-IN")})`,
       }, { status: 422 });
+    }
+
+    // Pre-credit advance if already processed
+    if (po.advance_status === "processed" && po.advance_amount) {
+      poAdvanceCredit = Math.min(Number(po.advance_amount), parsed.data.total_amount);
     }
   }
 
@@ -189,6 +224,11 @@ export async function POST(request: NextRequest) {
     .select("*", { count: "exact", head: true });
 
   const billNumber = generateBillNumber(existingCount ?? 0);
+
+  const initialPaymentStatus =
+    poAdvanceCredit >= parsed.data.total_amount ? "paid" :
+    poAdvanceCredit > 0 ? "partially_paid" :
+    "unpaid";
 
   const { data: bill, error: billError } = await supabase
     .from("vendor_bills")
@@ -203,8 +243,8 @@ export async function POST(request: NextRequest) {
       invoice_file_url: parsed.data.invoice_file_url ?? null,
       service_report_id: parsed.data.service_report_id ?? null,
       bill_number: billNumber,
-      amount_paid: 0,
-      payment_status: "unpaid",
+      amount_paid: poAdvanceCredit,
+      payment_status: initialPaymentStatus,
       approval_status: "pending",
       created_by: dbUser.id,
     })

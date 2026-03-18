@@ -1469,6 +1469,8 @@ export interface PoBillSummary {
   creator?: { id: string; full_name?: string } | null;
 }
 
+export type PoAdvanceStatus = "not_required" | "pending" | "processed";
+
 export interface PurchaseOrder {
   id: string;
   po_number: string;
@@ -1489,6 +1491,15 @@ export interface PurchaseOrder {
   payment_terms?: string;
   terms_and_conditions?: string;
   total_ordered_amount: number;
+  // Advance payment fields
+  advance_amount?: number | null;
+  advance_payment_mode?: "cash" | "upi" | "bank_transfer" | null;
+  advance_payment_reference?: string | null;
+  advance_notes?: string | null;
+  advance_status?: PoAdvanceStatus;
+  advance_processed_by?: string | null;
+  advance_processed_at?: string | null;
+  advance_payment_date?: string | null;
   created_at: string;
   updated_at: string;
   // Joined fields

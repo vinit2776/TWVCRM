@@ -24,7 +24,7 @@ import {
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
   BILL_PAYMENT_MODES, BILL_PAYMENT_MODE_LABELS,
   BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
-  REJECTION_OUTCOME_LABELS,
+  REJECTION_OUTCOME_LABELS, PO_ADVANCE_PAYMENT_MODE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { VendorBill } from "@/types";
@@ -199,6 +199,14 @@ export default function VendorBillDetailPage() {
   const remaining = Number(bill.total_amount) - Number(bill.amount_paid);
   const canApprove = ["admin", "manager"].includes(currentUserRole ?? "");
   const isGoodsPo = bill.purchase_orders && (bill.purchase_orders as { po_type?: string }).po_type !== "service";
+
+  const linkedPo = bill.purchase_orders as {
+    id: string; po_number: string; status: string; po_type?: string;
+    advance_status?: string; advance_amount?: number | null;
+    advance_payment_mode?: string | null; advance_payment_reference?: string | null;
+    advance_payment_date?: string | null;
+  } | null;
+  const hasAdvanceCredit = linkedPo?.advance_status === "processed" && (linkedPo?.advance_amount ?? 0) > 0;
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -404,9 +412,25 @@ export default function VendorBillDetailPage() {
           </CardHeader>
           <CardContent className="space-y-3">
             <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Total Amount</span>
+              <span className="text-sm text-muted-foreground">Invoice Amount</span>
               <span className="text-xl font-bold">{formatCurrency(bill.total_amount)}</span>
             </div>
+            {hasAdvanceCredit && (
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground text-orange-700">
+                  Advance Paid
+                  {linkedPo?.advance_payment_mode && (
+                    <span className="ml-1 text-xs">
+                      ({PO_ADVANCE_PAYMENT_MODE_LABELS[linkedPo.advance_payment_mode] ?? linkedPo.advance_payment_mode}
+                      {linkedPo.advance_payment_reference ? ` · ${linkedPo.advance_payment_reference}` : ""})
+                    </span>
+                  )}
+                </span>
+                <span className="font-medium text-orange-700">
+                  − {formatCurrency(Math.min(linkedPo!.advance_amount!, bill.total_amount))}
+                </span>
+              </div>
+            )}
             <div className="flex justify-between text-sm">
               <span className="text-muted-foreground">Amount Paid</span>
               <span className="font-medium text-green-700">{formatCurrency(bill.amount_paid)}</span>

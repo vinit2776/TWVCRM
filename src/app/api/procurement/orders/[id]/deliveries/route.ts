@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { recalculatePrStatus } from "@/lib/procurement/pr-status";
 import { z } from "zod";
 
 const createDeliverySchema = z.object({
@@ -220,4 +221,112 @@ export async function POST(
   });
 
   return NextResponse.json({ data: { id: receipt.id, received_at: receipt.received_at } }, { status: 201 });
+}
+
+export async function DELETE(
+  request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id: poId } = await params;
+  const deliveryId = request.nextUrl.searchParams.get("delivery_id");
+  if (!deliveryId) {
+    return NextResponse.json({ error: "delivery_id query parameter is required" }, { status: 400 });
+  }
+
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data: dbUser } = await supabase
+    .from("users")
+    .select("id, role")
+    .eq("auth_id", user.id)
+    .single();
+  if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
+
+  if (!["admin", "manager"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Only managers and admins can reject deliveries" }, { status: 403 });
+  }
+
+  // Validate PO state
+  const { data: po, error: poErr } = await supabase
+    .from("purchase_orders")
+    .select("id, status, pr_id")
+    .eq("id", poId)
+    .single();
+  if (poErr || !po) return NextResponse.json({ error: "Purchase order not found" }, { status: 404 });
+
+  if (!["partially_received", "received"].includes(po.status)) {
+    return NextResponse.json({ error: "Deliveries can only be rejected on partially received or received POs" }, { status: 422 });
+  }
+
+  // Fetch delivery receipt + items
+  const { data: receipt, error: receiptErr } = await supabase
+    .from("po_delivery_receipts")
+    .select("*, po_delivery_receipt_items(id, po_item_id, qty_received)")
+    .eq("id", deliveryId)
+    .eq("po_id", poId)
+    .single();
+
+  if (receiptErr || !receipt) {
+    return NextResponse.json({ error: "Delivery receipt not found" }, { status: 404 });
+  }
+
+  // Reverse quantity_received on each PO item
+  for (const item of receipt.po_delivery_receipt_items ?? []) {
+    const { data: poItem } = await supabase
+      .from("purchase_order_items")
+      .select("quantity_received")
+      .eq("id", item.po_item_id)
+      .eq("po_id", poId)
+      .single();
+    if (poItem) {
+      const newQty = Math.max(0, Number(poItem.quantity_received) - Number(item.qty_received));
+      await supabase
+        .from("purchase_order_items")
+        .update({ quantity_received: newQty })
+        .eq("id", item.po_item_id)
+        .eq("po_id", poId);
+    }
+  }
+
+  // Delete receipt items, then receipt
+  await supabase.from("po_delivery_receipt_items").delete().eq("delivery_receipt_id", deliveryId);
+  await supabase.from("po_delivery_receipts").delete().eq("id", deliveryId).eq("po_id", poId);
+
+  // Recalculate PO status based on remaining quantities
+  const { data: updatedItems } = await supabase
+    .from("purchase_order_items")
+    .select("quantity_ordered, quantity_received")
+    .eq("po_id", poId);
+
+  const anyReceived = (updatedItems ?? []).some((i) => Number(i.quantity_received) > 0);
+  const allReceived = (updatedItems ?? []).every(
+    (i) => Number(i.quantity_received) >= Number(i.quantity_ordered)
+  );
+
+  const newStatus = allReceived ? "received" : anyReceived ? "partially_received" : "ordered";
+  const updatePayload: Record<string, unknown> = { status: newStatus };
+  if (newStatus === "ordered") {
+    updatePayload.actual_delivery_date = null;
+  }
+
+  await supabase.from("purchase_orders").update(updatePayload).eq("id", poId);
+
+  if (po.pr_id) {
+    await recalculatePrStatus(supabase, po.pr_id);
+  }
+
+  await logAudit(supabase, {
+    entityType: "purchase_order",
+    entityId: poId,
+    action: "update",
+    performedBy: dbUser.id,
+    changes: {
+      status: { old: po.status, new: newStatus },
+      delivery_rejected: { old: null, new: deliveryId },
+    },
+  });
+
+  return NextResponse.json({ data: { new_status: newStatus } });
 }
