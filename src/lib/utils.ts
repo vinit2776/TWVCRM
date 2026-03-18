@@ -15,7 +15,17 @@ export function formatDate(date: string | Date): string {
 export function formatDateTime(date: string | Date): string {
   const d = new Date(date);
   if (!isValid(d)) return "Invalid date";
-  return format(d, "MMM d, yyyy h:mm a");
+  // Always display in IST (Asia/Kolkata, UTC+5:30) regardless of the
+  // browser/server's local timezone — timestamps are stored in UTC.
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(d);
 }
 
 export function formatRelativeDate(date: string | Date): string {

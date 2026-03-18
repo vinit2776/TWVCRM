@@ -206,6 +206,7 @@ export function TicketDetailDialog({
 
   function formatDate(date: string) {
     return new Date(date).toLocaleString("en-IN", {
+      timeZone: "Asia/Kolkata",
       day: "numeric",
       month: "short",
       year: "numeric",
