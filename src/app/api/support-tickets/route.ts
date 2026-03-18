@@ -80,7 +80,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { data: ticket, error } = await adminSupabase
+  const { data: ticket, error } = await supabase
     .from("support_tickets")
     .insert({
       subject: parsed.data.subject,

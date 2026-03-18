@@ -13,6 +13,7 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import {
   BILL_PAYMENT_STATUSES, BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
+  BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency, cn } from "@/lib/utils";
 import type { VendorBill } from "@/types";
@@ -27,6 +28,8 @@ function isOverdue(bill: VendorBill): boolean {
   );
 }
 
+type QuickFilter = "all" | "pending_approval" | "ready_for_payment";
+
 export default function VendorBillsPage() {
   const router = useRouter();
   const [bills, setBills] = useState<VendorBill[]>([]);
@@ -34,10 +37,17 @@ export default function VendorBillsPage() {
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState("");
+  const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
 
   const fetchBills = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams({ page: String(page), limit: "25" });
+    if (quickFilter === "pending_approval") {
+      params.set("approval_status", "pending");
+    } else if (quickFilter === "ready_for_payment") {
+      params.set("approval_status", "approved");
+      if (!statusFilter) params.set("payment_status_neq", "paid");
+    }
     if (statusFilter) params.set("payment_status", statusFilter);
     const res = await fetch(`/api/procurement/bills?${params}`);
     if (res.ok) {
@@ -46,9 +56,15 @@ export default function VendorBillsPage() {
       setPagination(json.pagination);
     }
     setLoading(false);
-  }, [page, statusFilter]);
+  }, [page, statusFilter, quickFilter]);
 
   useEffect(() => { fetchBills(); }, [fetchBills]);
+
+  const handleQuickFilter = (filter: QuickFilter) => {
+    setQuickFilter(filter);
+    setStatusFilter("");
+    setPage(1);
+  };
 
   return (
     <div className="space-y-4">
@@ -78,15 +94,42 @@ export default function VendorBillsPage() {
         </div>
       </div>
 
+      {/* Quick filter tabs */}
+      <div className="flex gap-2">
+        <Button
+          variant={quickFilter === "all" ? "default" : "outline"}
+          size="sm"
+          onClick={() => handleQuickFilter("all")}
+        >
+          All Bills
+        </Button>
+        <Button
+          variant={quickFilter === "pending_approval" ? "default" : "outline"}
+          size="sm"
+          onClick={() => handleQuickFilter("pending_approval")}
+          className={quickFilter !== "pending_approval" ? "border-yellow-200 text-yellow-800 hover:bg-yellow-50" : "bg-yellow-600 hover:bg-yellow-700"}
+        >
+          Pending Approval
+        </Button>
+        <Button
+          variant={quickFilter === "ready_for_payment" ? "default" : "outline"}
+          size="sm"
+          onClick={() => handleQuickFilter("ready_for_payment")}
+          className={quickFilter !== "ready_for_payment" ? "border-green-200 text-green-800 hover:bg-green-50" : "bg-green-600 hover:bg-green-700"}
+        >
+          Ready for Payment
+        </Button>
+      </div>
+
       {loading ? (
         <TableSkeleton rows={8} />
       ) : bills.length === 0 ? (
         <EmptyState
           icon={Receipt}
-          title="No vendor bills"
-          description="Record your first vendor bill to start tracking payments."
-          actionLabel="New Bill"
-          onAction={() => router.push("/procurement/bills/new")}
+          title={quickFilter === "pending_approval" ? "No bills pending approval" : quickFilter === "ready_for_payment" ? "No bills ready for payment" : "No vendor bills"}
+          description={quickFilter === "all" ? "Record your first vendor bill to start tracking payments." : "No bills match the current filter."}
+          actionLabel={quickFilter === "all" ? "New Bill" : undefined}
+          onAction={quickFilter === "all" ? () => router.push("/procurement/bills/new") : undefined}
         />
       ) : (
         <div className="rounded-md border overflow-x-auto">
@@ -96,10 +139,9 @@ export default function VendorBillsPage() {
                 <th className="px-4 py-3 text-left font-medium">Bill #</th>
                 <th className="px-4 py-3 text-left font-medium">Vendor</th>
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">PO #</th>
-                <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Invoice #</th>
-                <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Invoice Date</th>
-                <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Due Date</th>
-                <th className="px-4 py-3 text-left font-medium">Status</th>
+                <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Invoice Date</th>
+                <th className="px-4 py-3 text-left font-medium">Approval</th>
+                <th className="px-4 py-3 text-left font-medium">Payment</th>
                 <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Total</th>
                 <th className="px-4 py-3 text-right font-medium hidden lg:table-cell">Paid</th>
               </tr>
@@ -141,13 +183,12 @@ export default function VendorBillsPage() {
                     ) : "—"}
                   </td>
                   <td className="px-4 py-3 hidden lg:table-cell text-muted-foreground">
-                    {bill.invoice_number ?? "—"}
-                  </td>
-                  <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
                     {formatDate(bill.invoice_date)}
                   </td>
-                  <td className="px-4 py-3 hidden lg:table-cell text-muted-foreground">
-                    {bill.due_date ? formatDate(bill.due_date) : "—"}
+                  <td className="px-4 py-3">
+                    <Badge variant="secondary" className={`text-xs ${BILL_APPROVAL_STATUS_COLORS[bill.approval_status]}`}>
+                      {BILL_APPROVAL_STATUS_LABELS[bill.approval_status]}
+                    </Badge>
                   </td>
                   <td className="px-4 py-3">
                     <Badge variant="secondary" className={BILL_PAYMENT_STATUS_COLORS[bill.payment_status]}>

@@ -71,6 +71,7 @@ const procurementItems: NavItem[] = [
   { href: "/procurement/requests", label: "Purchase Requests", icon: ClipboardListIcon, roles: null },
   { href: "/procurement/orders", label: "Purchase Orders", icon: Package, roles: null },
   { href: "/procurement/bills", label: "Vendor Bills", icon: ReceiptIcon, roles: ["admin", "manager"] },
+  { href: "/procurement/payables", label: "Payables", icon: IndianRupee, roles: ["admin", "manager"] },
   { href: "/procurement/vendors", label: "Vendors", icon: Truck, roles: ["admin", "manager"] },
   { href: "/procurement/catalog", label: "Item Catalog", icon: Archive, roles: ["admin"] },
 ];

@@ -1327,8 +1327,10 @@ export type ProcurementDepartment = "pantry" | "maintenance" | "administration";
 export type VendorCategory = "pantry" | "maintenance" | "administration" | "general";
 export type ItemUnit = "kg" | "litre" | "packet" | "box" | "piece" | "roll" | "dozen" | "bottle" | "bag" | "set" | "pair";
 export type PrStatus = "draft" | "submitted" | "approved" | "rejected" | "partially_ordered" | "po_created" | "cancelled";
-export type PoStatus = "pending" | "ordered" | "partially_received" | "received" | "invoice_received" | "cancelled" | "partially_cancelled";
+export type PoStatus = "pending" | "ordered" | "partially_received" | "received" | "invoice_received" | "invoice_approved" | "cancelled" | "partially_cancelled";
 export type BillPaymentStatus = "unpaid" | "partially_paid" | "paid";
+export type BillApprovalStatus = "pending" | "approved" | "rejected";
+export type RejectionOutcome = "return" | "replacement" | "void";
 
 export interface ProcurementVendor {
   id: string;
@@ -1461,6 +1463,7 @@ export interface PoBillSummary {
   invoice_file_url?: string | null;
   total_amount: number;
   payment_status: string;
+  approval_status: BillApprovalStatus;
   created_at: string;
   service_report_id?: string | null;
   creator?: { id: string; full_name?: string } | null;
@@ -1518,12 +1521,18 @@ export interface VendorBill {
   notes?: string;
   invoice_file_url?: string;
   service_report_id?: string | null;
+  approval_status: BillApprovalStatus;
+  approved_by?: string;
+  approved_at?: string;
+  rejection_reason?: string;
+  rejection_outcome?: RejectionOutcome;
   created_by: string;
   created_at: string;
   updated_at: string;
   // Joined fields
   procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
-  purchase_orders?: Pick<PurchaseOrder, "id" | "po_number"> | null;
+  purchase_orders?: Pick<PurchaseOrder, "id" | "po_number" | "po_type"> | null;
+  approver?: { id: string; full_name?: string } | null;
 }
 
 export interface ItemHistoryEntry {

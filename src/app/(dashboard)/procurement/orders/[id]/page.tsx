@@ -139,7 +139,7 @@ function buildTimeline(
       ts: bill.created_at,
       type: "invoice",
       title: `Invoice — ${bill.bill_number}`,
-      subtitle: `${formatCurrency(bill.total_amount)}${bill.creator?.full_name ? ` · by ${bill.creator.full_name}` : ""}`,
+      subtitle: `${formatCurrency(bill.total_amount)}${bill.approval_status === "approved" ? " · Approved" : bill.approval_status === "rejected" ? " · Rejected" : " · Pending Approval"}${bill.creator?.full_name ? ` · by ${bill.creator.full_name}` : ""}`,
       fileUrl: bill.invoice_file_url,
       fileLabel: "View Invoice",
     });
@@ -938,7 +938,12 @@ export default function PurchaseOrderDetailPage() {
                           </td>
                           <td className="px-3 py-2.5 text-center">
                             {bill ? (
-                              <Badge variant="secondary" className="text-xs font-mono">{bill.bill_number}</Badge>
+                              <div className="flex items-center justify-center gap-1">
+                                <Badge variant="secondary" className="text-xs font-mono">{bill.bill_number}</Badge>
+                                <Badge variant="secondary" className={`text-[10px] ${bill.approval_status === "approved" ? "bg-green-100 text-green-800" : bill.approval_status === "rejected" ? "bg-red-100 text-red-800" : "bg-yellow-100 text-yellow-800"}`}>
+                                  {bill.approval_status === "approved" ? "OK" : bill.approval_status === "rejected" ? "Rejected" : "Pending"}
+                                </Badge>
+                              </div>
                             ) : (
                               <span className="text-xs text-amber-600">Pending</span>
                             )}

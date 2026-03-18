@@ -1171,7 +1171,7 @@ export const PR_STATUS_COLORS: Record<string, string> = {
 
 export const PO_STATUSES = [
   "pending", "ordered", "partially_received", "received",
-  "invoice_received", "cancelled", "partially_cancelled",
+  "invoice_received", "invoice_approved", "cancelled", "partially_cancelled",
 ] as const;
 export type PoStatus = (typeof PO_STATUSES)[number];
 
@@ -1181,6 +1181,7 @@ export const PO_STATUS_LABELS: Record<string, string> = {
   partially_received: "Partially Received",
   received: "Received",
   invoice_received: "Invoice Received",
+  invoice_approved: "Invoice Approved",
   cancelled: "Cancelled",
   partially_cancelled: "Partially Cancelled",
 };
@@ -1191,6 +1192,7 @@ export const PO_STATUS_COLORS: Record<string, string> = {
   partially_received: "bg-orange-100 text-orange-800",
   received: "bg-green-100 text-green-800",
   invoice_received: "bg-purple-100 text-purple-800",
+  invoice_approved: "bg-emerald-100 text-emerald-800",
   cancelled: "bg-gray-100 text-gray-500",
   partially_cancelled: "bg-orange-100 text-orange-700",
 };
@@ -1217,6 +1219,28 @@ export const BILL_PAYMENT_MODE_LABELS: Record<string, string> = {
   cash: "Cash",
   upi: "UPI",
   bank_transfer: "Bank Transfer",
+};
+
+// Bill Approval
+export const BILL_APPROVAL_STATUSES = ["pending", "approved", "rejected"] as const;
+export type BillApprovalStatus = (typeof BILL_APPROVAL_STATUSES)[number];
+
+export const BILL_APPROVAL_STATUS_LABELS: Record<string, string> = {
+  pending: "Pending Approval",
+  approved: "Approved",
+  rejected: "Rejected",
+};
+
+export const BILL_APPROVAL_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-yellow-100 text-yellow-800",
+  approved: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+};
+
+export const REJECTION_OUTCOME_LABELS: Record<string, string> = {
+  return: "Return Goods & Cancel PO",
+  replacement: "Request Replacement (New PR)",
+  void: "Void (Service Invoice)",
 };
 
 export const ITEM_TYPES = ["goods", "service"] as const;
