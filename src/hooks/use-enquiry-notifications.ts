@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import { unstable_batchedUpdates } from "react-dom";
 import { toast } from "sonner";
 import { createClient } from "@/lib/supabase/client";
@@ -81,6 +81,9 @@ export function useEnquiryNotificationsCore() {
   const [recentItems, setRecentItems]       = useState<EnquiryNotificationItem[]>([]);
   const [alertQueue, setAlertQueue]         = useState<EnquiryAlert[]>([]);
 
+  // Tracks lead IDs with pending re-enquiries (used in real-time handlers to avoid stale closures)
+  const reEnquiryLeadIdsRef = useRef<Set<string>>(new Set());
+
   const totalCount = newLeadCount + reEnquiryCount;
 
   const getLastSeen = () => {
@@ -108,6 +111,7 @@ export function useEnquiryNotificationsCore() {
   }, []);
 
   const dismissReEnquiryItem = useCallback((leadId: string) => {
+    reEnquiryLeadIdsRef.current.delete(leadId);
     setRecentItems((prev) => prev.filter((i) => !(i.type === "activity" && i.leadId === leadId)));
     setReEnquiryCount((c) => Math.max(0, c - 1));
   }, []);
@@ -153,6 +157,13 @@ export function useEnquiryNotificationsCore() {
         const lead = a.lead as unknown as { status: string } | null;
         return !lead || EARLY_STATUSES.includes(lead.status);
       });
+
+      // Keep ref in sync so real-time UPDATE handler can check without stale closure
+      reEnquiryLeadIdsRef.current = new Set(
+        activeReEnquiries
+          .map((a) => (a.lead as unknown as { id: string } | null)?.id)
+          .filter((id): id is string => Boolean(id))
+      );
 
       setNewLeadCount(leadCount ?? 0);
       setReEnquiryCount(activeReEnquiries.length);
@@ -259,10 +270,11 @@ export function useEnquiryNotificationsCore() {
             setNewLeadCount((c) => Math.max(0, c - 1));
           }
 
-          // Remove from re-enquiry alerts when lead advances beyond "contacted"
-          // (reEnquiryCount resyncs accurately on the next visibility-change revalidation)
-          if (!earlyStatuses.has(lead.status)) {
+          // Remove from re-enquiry alerts when lead is actioned (status leaves "new")
+          if (!earlyStatuses.has(lead.status) && reEnquiryLeadIdsRef.current.has(lead.id)) {
+            reEnquiryLeadIdsRef.current.delete(lead.id);
             setRecentItems((prev) => prev.filter((i) => !(i.type === "activity" && i.leadId === lead.id)));
+            setReEnquiryCount((c) => Math.max(0, c - 1));
           }
         }
       )
@@ -285,6 +297,9 @@ export function useEnquiryNotificationsCore() {
           const name = lead ? `${lead.first_name} ${lead.last_name}` : "Existing lead";
           const sourceMatch = act.subject.match(/Re-enquiry via (.+?) form/);
           const sourceLabel = sourceMatch?.[1] ?? "Form";
+
+          // Track this lead as having a pending re-enquiry
+          reEnquiryLeadIdsRef.current = new Set([...reEnquiryLeadIdsRef.current, act.lead_id]);
 
           // Alert banner + audio chime
           const alertId = `activity-${act.id}-${Date.now()}`;
