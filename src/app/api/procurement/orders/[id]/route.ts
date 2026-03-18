@@ -164,6 +164,32 @@ export async function PATCH(
         (s, i) => s + Number(i.quantity_ordered) * Number(i.unit_price ?? 0), 0
       );
 
+      // ── Sync existing vendor bills down to the reduced PO total ───────────
+      const { data: existingBills } = await supabase
+        .from("vendor_bills")
+        .select("id, total_amount, amount_paid, payment_status")
+        .eq("po_id", id);
+
+      for (const bill of existingBills ?? []) {
+        const amountPaid = Number(bill.amount_paid);
+        // Guard: cannot reduce below an already-paid amount
+        if (amountPaid > newTotal) {
+          return NextResponse.json({
+            error: `Cannot partially cancel: bill already has ₹${amountPaid.toLocaleString("en-IN")} paid, which exceeds the new PO total of ₹${newTotal.toLocaleString("en-IN")}`,
+          }, { status: 422 });
+        }
+        if (Number(bill.total_amount) > newTotal) {
+          const newPaymentStatus =
+            amountPaid >= newTotal ? "paid" :
+            amountPaid > 0 ? "partially_paid" :
+            "unpaid";
+          await supabase
+            .from("vendor_bills")
+            .update({ total_amount: newTotal, payment_status: newPaymentStatus })
+            .eq("id", bill.id);
+        }
+      }
+
       updatePayload = { status: "partially_cancelled", total_ordered_amount: newTotal };
       break;
     }
