@@ -218,9 +218,14 @@ export function TicketDetailDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-2xl max-h-[90vh] overflow-y-auto">
         {loading || !ticket ? (
-          <div className="flex items-center justify-center py-12">
-            <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-          </div>
+          <>
+            <DialogHeader>
+              <DialogTitle>Support Ticket</DialogTitle>
+            </DialogHeader>
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+            </div>
+          </>
         ) : (
           <>
             <DialogHeader>
