@@ -54,8 +54,8 @@ export async function GET(request: NextRequest) {
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
-  // Non-managers can only see their own PRs
-  if (!["admin", "manager"].includes(dbUser.role)) {
+  // Non-managers/non-FMS can only see their own PRs
+  if (!["admin", "manager", "fms"].includes(dbUser.role)) {
     query = query.eq("requested_by", dbUser.id);
   }
 

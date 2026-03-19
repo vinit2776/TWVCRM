@@ -6,9 +6,81 @@ export async function GET(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  // Fetch the DB user to determine role for data scoping
+  const { data: dbUser } = await supabase
+    .from("users")
+    .select("id, role")
+    .eq("auth_id", user.id)
+    .single();
+
   const locationId = request.nextUrl.searchParams.get("location_id");
   const today = new Date().toISOString().split("T")[0];
   const NULL_ID = "00000000-0000-0000-0000-000000000000";
+
+  // ── Self-scoped path: sales_rep and floor_manager see only their own data ──
+  // Filter all lead/task/activity queries to records assigned to this user.
+  if (dbUser?.role === "sales_rep" || dbUser?.role === "floor_manager") {
+    const { data: myLeads } = await supabase
+      .from("leads")
+      .select("id, status")
+      .eq("assigned_to", dbUser.id);
+
+    const myLeadIds = (myLeads ?? []).map((l) => l.id);
+    const hasLeads = myLeadIds.length > 0;
+
+    // Compute pipeline counts in-memory (list is small for a single user)
+    const pipelineMap: Record<string, number> = {};
+    for (const l of myLeads ?? []) {
+      pipelineMap[l.status] = (pipelineMap[l.status] ?? 0) + 1;
+    }
+    const pipeline = Object.entries(pipelineMap).map(([status, count]) => ({ status, count }));
+
+    const total = myLeadIds.length;
+    const won = pipelineMap["won"] ?? 0;
+    const lost = pipelineMap["lost"] ?? 0;
+    const rate = total > 0 ? Math.round((won / total) * 100) : 0;
+
+    let tasksDueTodayQ = supabase.from("tasks").select("*", { count: "exact", head: true }).eq("due_date", today).neq("status", "done");
+    let tasksOverdueQ = supabase.from("tasks").select("*", { count: "exact", head: true }).lt("due_date", today).neq("status", "done");
+    let activitiesQ = supabase.from("activities").select("*, creator:users!activities_created_by_fkey(full_name), lead:leads!activities_lead_id_fkey(first_name, last_name)").order("created_at", { ascending: false }).limit(10);
+    let notesQ = supabase.from("activities").select("id, lead_id, subject, created_at, lead:leads!activities_lead_id_fkey(first_name, last_name)").eq("type", "note").order("created_at", { ascending: false }).limit(20);
+    let followUpsQ = supabase.from("activities").select("*", { count: "exact", head: true }).eq("is_follow_up_done", false).not("follow_up_date", "is", null);
+
+    if (hasLeads) {
+      tasksDueTodayQ = tasksDueTodayQ.in("lead_id", myLeadIds);
+      tasksOverdueQ = tasksOverdueQ.in("lead_id", myLeadIds);
+      activitiesQ = activitiesQ.in("lead_id", myLeadIds);
+      notesQ = notesQ.in("lead_id", myLeadIds);
+      followUpsQ = followUpsQ.in("lead_id", myLeadIds);
+    } else {
+      tasksDueTodayQ = tasksDueTodayQ.eq("lead_id", NULL_ID);
+      tasksOverdueQ = tasksOverdueQ.eq("lead_id", NULL_ID);
+      activitiesQ = activitiesQ.eq("lead_id", NULL_ID);
+      notesQ = notesQ.eq("lead_id", NULL_ID);
+      followUpsQ = followUpsQ.eq("lead_id", NULL_ID);
+    }
+
+    const [
+      { count: tasksDueToday },
+      { count: tasksOverdue },
+      { data: recentActivities },
+      { data: recentNotes },
+      { count: pendingFollowUps },
+    ] = await Promise.all([tasksDueTodayQ, tasksOverdueQ, activitiesQ, notesQ, followUpsQ]);
+
+    return NextResponse.json({
+      data: {
+        pipeline,
+        tasks_due_today: tasksDueToday ?? 0,
+        tasks_overdue: tasksOverdue ?? 0,
+        recent_activities: recentActivities ?? [],
+        recent_notes: recentNotes ?? [],
+        conversion: { total_leads: total, won, lost, rate },
+        pending_follow_ups: pendingFollowUps ?? 0,
+      },
+    });
+  }
+  // ── End self-scoped path ───────────────────────────────────────────────────
 
   if (locationId) {
     // When filtering by location, we need lead IDs to filter tasks/activities.

@@ -16,7 +16,7 @@ export interface Location {
 // ==========================================
 // User Types
 // ==========================================
-export type UserRole = "admin" | "manager" | "sales_rep" | "floor_manager";
+export type UserRole = "admin" | "manager" | "sales_rep" | "floor_manager" | "accounts" | "fms";
 
 export interface User {
   id: string;

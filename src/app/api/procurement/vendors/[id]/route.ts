@@ -47,7 +47,7 @@ export async function PATCH(
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
-  if (!["admin", "manager"].includes(dbUser.role)) {
+  if (!["admin", "manager", "fms"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Only managers and admins can update vendors" }, { status: 403 });
   }
 

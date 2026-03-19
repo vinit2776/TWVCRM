@@ -49,8 +49,8 @@ export async function POST(request: NextRequest) {
   // Only manager/admin can manage vendors
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
-  if (!["admin", "manager"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Only managers and admins can manage vendors" }, { status: 403 });
+  if (!["admin", "manager", "fms"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Only managers, admins, and FMS can manage vendors" }, { status: 403 });
   }
 
   const body = await request.json();

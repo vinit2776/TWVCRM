@@ -46,34 +46,46 @@ type NavItem = {
   roles: string[] | null; // null = visible to all roles
 };
 
+// Roles that existed before the accounts/fms additions — used as a shorthand below.
+// Items with roles: null are visible to ALL roles (no restriction).
+const LEGACY_ROLES = ["admin", "manager", "sales_rep", "floor_manager"];
+
 const allNavItems: NavItem[] = [
+  // Dashboard is universally visible (null = all roles including new ones)
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
-  { href: "/leads", label: "Leads", icon: Users, roles: null },
-  { href: "/pipeline", label: "Pipeline", icon: GitBranch, roles: null },
-  { href: "/activities", label: "Activities", icon: Activity, roles: null },
-  { href: "/tasks", label: "Tasks", icon: CheckSquare, roles: null },
-  { href: "/proposals", label: "Proposals", icon: FileText, roles: null },
-  { href: "/invoices", label: "Proforma Invoices", icon: Receipt, roles: null },
-  { href: "/contracts", label: "Contracts", icon: ScrollText, roles: null },
-  { href: "/billing", label: "Billing", icon: IndianRupee, roles: null },
-  { href: "/accounting", label: "Accounting", icon: Calculator, roles: null },
-  { href: "/bookings", label: "Bookings", icon: CalendarClock, roles: null },
-  { href: "/packages", label: "Packages", icon: TicketCheck, roles: null },
-  { href: "/vouchers", label: "Vouchers", icon: Wifi, roles: null },
+  // Sales & CRM items — visible to legacy roles + accounts (view access)
+  { href: "/leads",      label: "Leads",             icon: Users,         roles: [...LEGACY_ROLES, "accounts"] },
+  { href: "/pipeline",   label: "Pipeline",           icon: GitBranch,     roles: LEGACY_ROLES },
+  { href: "/activities", label: "Activities",         icon: Activity,      roles: LEGACY_ROLES },
+  { href: "/tasks",      label: "Tasks",              icon: CheckSquare,   roles: LEGACY_ROLES },
+  { href: "/proposals",  label: "Proposals",          icon: FileText,      roles: [...LEGACY_ROLES, "accounts"] },
+  { href: "/invoices",   label: "Proforma Invoices",  icon: Receipt,       roles: LEGACY_ROLES },
+  { href: "/contracts",  label: "Contracts",          icon: ScrollText,    roles: [...LEGACY_ROLES, "accounts"] },
+  // Finance items — legacy roles + accounts (full access)
+  { href: "/billing",    label: "Billing",            icon: IndianRupee,   roles: [...LEGACY_ROLES, "accounts"] },
+  { href: "/accounting", label: "Accounting",         icon: Calculator,    roles: [...LEGACY_ROLES, "accounts"] },
+  // Operations — legacy roles only
+  { href: "/bookings",   label: "Bookings",           icon: CalendarClock, roles: LEGACY_ROLES },
+  { href: "/packages",   label: "Packages",           icon: TicketCheck,   roles: LEGACY_ROLES },
+  { href: "/vouchers",   label: "Vouchers",           icon: Wifi,          roles: LEGACY_ROLES },
 ];
 
 const virtualOfficeItems: NavItem[] = [
-  { href: "/aggregators", label: "Aggregators", icon: Handshake, roles: null },
-  { href: "/cases", label: "Cases", icon: Briefcase, roles: null },
+  { href: "/aggregators", label: "Aggregators", icon: Handshake, roles: LEGACY_ROLES },
+  { href: "/cases",       label: "Cases",        icon: Briefcase, roles: LEGACY_ROLES },
 ];
 
 const procurementItems: NavItem[] = [
-  { href: "/procurement/requests", label: "Purchase Requests", icon: ClipboardListIcon, roles: null },
-  { href: "/procurement/orders", label: "Purchase Orders", icon: Package, roles: null },
-  { href: "/procurement/bills", label: "Vendor Bills", icon: ReceiptIcon, roles: ["admin", "manager"] },
-  { href: "/procurement/payables", label: "Payables", icon: IndianRupee, roles: ["admin", "manager"] },
-  { href: "/procurement/vendors", label: "Vendors", icon: Truck, roles: ["admin", "manager"] },
-  { href: "/procurement/catalog", label: "Item Catalog", icon: Archive, roles: ["admin"] },
+  // PRs and POs: legacy roles + fms (facility manager creates/manages procurement)
+  { href: "/procurement/requests", label: "Purchase Requests", icon: ClipboardListIcon, roles: [...LEGACY_ROLES, "fms"] },
+  { href: "/procurement/orders",   label: "Purchase Orders",   icon: Package,           roles: [...LEGACY_ROLES, "fms"] },
+  // Vendor Bills & Payables: admin/manager + accounts (pays bills) + fms (manages procurement)
+  { href: "/procurement/bills",    label: "Vendor Bills",      icon: ReceiptIcon,       roles: ["admin", "manager", "accounts", "fms"] },
+  { href: "/procurement/payables", label: "Payables",          icon: IndianRupee,       roles: ["admin", "manager", "accounts", "fms"] },
+  // Vendors: admin/manager + fms
+  { href: "/procurement/vendors",  label: "Vendors",           icon: Truck,             roles: ["admin", "manager", "fms"] },
+  // Item Catalog: admin + fms
+  { href: "/procurement/catalog",  label: "Item Catalog",      icon: Archive,           roles: ["admin", "fms"] },
 ];
 
 const adminNavItems = [

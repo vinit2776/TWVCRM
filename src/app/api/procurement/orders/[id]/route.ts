@@ -91,8 +91,8 @@ export async function PATCH(
       if (po.status !== "pending") {
         return NextResponse.json({ error: "Only pending POs can be marked as ordered" }, { status: 422 });
       }
-      if (!["admin", "manager"].includes(dbUser.role)) {
-        return NextResponse.json({ error: "Only managers and admins can mark orders as ordered" }, { status: 403 });
+      if (!["admin", "manager", "fms"].includes(dbUser.role)) {
+        return NextResponse.json({ error: "Only managers, admins, and FMS can mark orders as ordered" }, { status: 403 });
       }
       updatePayload = { status: "ordered" };
       break;
@@ -102,8 +102,8 @@ export async function PATCH(
       if (!["ordered", "partially_received"].includes(po.status)) {
         return NextResponse.json({ error: "Only ordered or partially received POs can be marked as received" }, { status: 422 });
       }
-      if (!["admin", "manager", "floor_manager"].includes(dbUser.role)) {
-        return NextResponse.json({ error: "Only floor managers, managers, and admins can mark orders as received" }, { status: 403 });
+      if (!["admin", "manager", "floor_manager", "fms"].includes(dbUser.role)) {
+        return NextResponse.json({ error: "Only floor managers, managers, admins, and FMS can mark orders as received" }, { status: 403 });
       }
       const today = new Date().toISOString().split("T")[0];
       updatePayload = {
@@ -117,8 +117,8 @@ export async function PATCH(
       if (!["pending", "ordered", "partially_received", "received"].includes(po.status)) {
         return NextResponse.json({ error: "Only pre-invoice POs can be cancelled" }, { status: 422 });
       }
-      if (!["admin", "manager"].includes(dbUser.role)) {
-        return NextResponse.json({ error: "Only managers and admins can cancel purchase orders" }, { status: 403 });
+      if (!["admin", "manager", "fms"].includes(dbUser.role)) {
+        return NextResponse.json({ error: "Only managers, admins, and FMS can cancel purchase orders" }, { status: 403 });
       }
 
       // Block cancellation if vendor bills exist — must handle bills first
@@ -154,8 +154,8 @@ export async function PATCH(
       if (po.status !== "invoice_received") {
         return NextResponse.json({ error: "Only invoice_received POs can be partially cancelled" }, { status: 422 });
       }
-      if (!["admin", "manager"].includes(dbUser.role)) {
-        return NextResponse.json({ error: "Only managers and admins can cancel purchase orders" }, { status: 403 });
+      if (!["admin", "manager", "fms"].includes(dbUser.role)) {
+        return NextResponse.json({ error: "Only managers, admins, and FMS can cancel purchase orders" }, { status: 403 });
       }
 
       const { confirmed_items } = parsed.data;
