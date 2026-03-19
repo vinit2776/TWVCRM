@@ -26,6 +26,16 @@ import {
 } from "@/lib/dashboard-config";
 import type { DashboardStats, UserRole } from "@/types";
 
+// ─── Pure utility — defined outside any component ────────────────────────────
+
+function timeAgo(iso: string): string {
+  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
+  if (diff < 60) return `${diff}s ago`;
+  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
+  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
+  return `${Math.floor(diff / 86400)}d ago`;
+}
+
 // ─── Live Enquiries inline widget (uses context hook) ────────────────────────
 
 function LiveEnquiriesWidget() {
@@ -39,14 +49,6 @@ function LiveEnquiriesWidget() {
   const newLeadItems = recentItems.filter((i) => i.type === "lead");
   const reEnquiryItems = recentItems.filter((i) => i.type === "activity");
   const hasLiveEnquiries = newLeadCount > 0 || reEnquiryCount > 0;
-
-  function timeAgo(iso: string): string {
-    const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-    if (diff < 60) return `${diff}s ago`;
-    if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-    if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-    return `${Math.floor(diff / 86400)}d ago`;
-  }
 
   if (!hasLiveEnquiries) {
     return (
