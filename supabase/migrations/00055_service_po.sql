@@ -46,6 +46,11 @@ CREATE INDEX IF NOT EXISTS idx_po_service_reports_po ON po_service_reports(po_id
 
 ALTER TABLE po_service_reports ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "Authenticated users can read po_service_reports" ON po_service_reports;
+DROP POLICY IF EXISTS "Authenticated users can insert po_service_reports" ON po_service_reports;
+DROP POLICY IF EXISTS "Authenticated users can update po_service_reports" ON po_service_reports;
+DROP POLICY IF EXISTS "Authenticated users can delete po_service_reports" ON po_service_reports;
+
 CREATE POLICY "Authenticated users can read po_service_reports"
   ON po_service_reports FOR SELECT USING (auth.uid() IS NOT NULL);
 CREATE POLICY "Authenticated users can insert po_service_reports"

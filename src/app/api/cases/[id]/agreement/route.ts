@@ -6,6 +6,7 @@ import {
   mergeVariables,
   generateAgreementPdf,
 } from "@/lib/agreement-generator";
+import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 
 /**
  * GET: Get agreement details with a signed URL for viewing the PDF
@@ -396,7 +397,7 @@ export async function PATCH(
   // Fetch current agreement to validate status transitions
   const { data: currentAgreement } = await supabase
     .from("case_agreements")
-    .select("status")
+    .select("status, variables, agreement_number, template_key, generated_document:documents!case_agreements_generated_document_id_fkey(file_path, file_name)")
     .eq("id", agreementId)
     .eq("case_id", caseId)
     .single();
@@ -475,6 +476,82 @@ export async function PATCH(
       .from("cases")
       .update({ agreement_status: data.status })
       .eq("id", caseId);
+  }
+
+  // Send email to client when agreement is sent to them
+  if (action === "send_to_client" && data) {
+    try {
+      const vars = (currentAgreement.variables || {}) as Record<string, unknown>;
+      const clientEmail = String(vars.client_email || "");
+      const clientName = String(vars.client_name || "Client");
+      const agreementNumber = currentAgreement.agreement_number || data.agreement_number || "";
+      const rateFormatted = String(vars.rate_formatted || vars.rate || "");
+      const tenureMonths = String(vars.tenure_months || "");
+      const startDateFormatted = String(vars.start_date_formatted || "");
+
+      if (clientEmail) {
+        const adminSupabase = await createAdminClient();
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const docRaw = currentAgreement.generated_document as any;
+        const doc = Array.isArray(docRaw) ? docRaw[0] : docRaw;
+
+        let pdfAttachment: { filename: string; content: Buffer; contentType: string } | undefined;
+        if (doc?.file_path) {
+          const { data: fileData } = await adminSupabase.storage
+            .from("crm-documents")
+            .download(doc.file_path);
+          if (fileData) {
+            const arrayBuffer = await fileData.arrayBuffer();
+            pdfAttachment = {
+              filename: `${agreementNumber || "Agreement"}.pdf`,
+              content: Buffer.from(arrayBuffer),
+              contentType: "application/pdf",
+            };
+          }
+        }
+
+        await resend.emails.send({
+          from: EMAIL_FROM,
+          replyTo: EMAIL_REPLY_TO,
+          to: clientEmail,
+          subject: `Your Virtual Office Agreement ${agreementNumber} - The WorkVilla`,
+          html: `
+            <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">
+              <div style="background-color: #015E65; padding: 24px 32px;">
+                <h1 style="color: #ffffff; margin: 0; font-size: 22px; font-weight: bold;">The WorkVilla</h1>
+                <p style="color: #00AE6C; margin: 4px 0 0; font-size: 12px;">Empower your business with flexible workspaces</p>
+              </div>
+              <div style="padding: 32px;">
+                <p style="color: #1a1b1e; font-size: 15px;">Dear ${clientName},</p>
+                <p style="color: #333; font-size: 14px;">We are pleased to share your Virtual Office Agreement for The WorkVilla. Please find the agreement <strong>${agreementNumber}</strong> attached to this email.</p>
+                <p style="color: #333; font-size: 14px;">Here is a summary of your agreement details:</p>
+                <table style="border-collapse: collapse; margin: 20px 0; width: 100%; background: #f0faf5; border-radius: 6px;">
+                  <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Agreement No.:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">${agreementNumber}</td></tr>
+                  ${rateFormatted ? `<tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Monthly Fee:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">${rateFormatted} + GST</td></tr>` : ""}
+                  ${startDateFormatted ? `<tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Start Date:</td><td style="padding: 10px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">${startDateFormatted}</td></tr>` : ""}
+                  ${tenureMonths ? `<tr><td style="padding: 10px 16px; color: #666;">Tenure:</td><td style="padding: 10px 16px; color: #333;">${tenureMonths} months</td></tr>` : ""}
+                </table>
+                <p style="color: #333; font-size: 14px;">Please review the attached agreement carefully. Once you have reviewed it, please confirm your acceptance so we can proceed with the next steps.</p>
+                <p style="color: #333; font-size: 14px;">We look forward to supporting your business at The WorkVilla.</p>
+                <p style="color: #333; font-size: 14px;">Warm regards,<br/><strong>The WorkVilla Team</strong></p>
+                <p style="color: #666; font-size: 12px; margin-top: 16px;">For any queries, write to us at <a href="mailto:space@theworkvilla.com" style="color: #015E65;">space@theworkvilla.com</a> or call <strong>+91 97910 97900</strong>.</p>
+              </div>
+              <div style="background-color: #015E65; padding: 16px 32px; text-align: center;">
+                <p style="color: #ffffff; margin: 0; font-size: 11px;">SREE DESIGN INFRASTRUCTURE PVT LTD</p>
+                <p style="color: rgba(255,255,255,0.7); margin: 4px 0 0; font-size: 10px;">Prakash Presidium, 110, MG Road, Nungambakkam, Chennai - 600034 | +91 97910 97900</p>
+                <p style="color: rgba(255,255,255,0.7); margin: 4px 0 0; font-size: 10px;">GST: 33AAACU4245J1ZF</p>
+                <p style="color: #00AE6C; margin: 4px 0 0; font-size: 10px;">www.theworkvilla.com</p>
+              </div>
+            </div>
+          `,
+          attachments: pdfAttachment ? [pdfAttachment] : undefined,
+        });
+      }
+    } catch (emailErr) {
+      // Log but don't fail the status update
+      console.error("Failed to send agreement email to client:", emailErr);
+    }
   }
 
   // Audit
