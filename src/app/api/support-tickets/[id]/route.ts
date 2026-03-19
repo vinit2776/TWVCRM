@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { updateSupportTicketSchema } from "@/lib/validations";
 
-// GET — single ticket with notes (admin only)
+// GET — single ticket with notes (admin or ticket owner)
 export async function GET(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -16,15 +16,14 @@ export async function GET(
 
   const adminSupabase = await createAdminClient();
 
-  // Check admin role
   const { data: currentUser } = await adminSupabase
     .from("users")
     .select("id, role")
     .eq("auth_id", user.id)
     .single();
 
-  if (!currentUser || currentUser.role !== "admin") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!currentUser) {
+    return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
   const { data: ticket, error } = await adminSupabase
@@ -37,6 +36,11 @@ export async function GET(
 
   if (error || !ticket) {
     return NextResponse.json({ error: "Ticket not found" }, { status: 404 });
+  }
+
+  // Allow admin OR the ticket's reporter (owner self-service)
+  if (currentUser.role !== "admin" && ticket.reported_by !== currentUser.id) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
   // Get notes

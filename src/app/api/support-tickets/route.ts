@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createSupportTicketSchema } from "@/lib/validations";
 
-// GET — list all tickets (admin only)
+// GET — list tickets
+// ?mine=true  → returns only the authenticated user's own tickets (any role)
+// (no param)  → returns all tickets (admin only)
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const {
@@ -12,20 +14,41 @@ export async function GET(request: NextRequest) {
 
   const adminSupabase = await createAdminClient();
 
-  // Check admin role
   const { data: currentUser } = await adminSupabase
     .from("users")
     .select("id, role")
     .eq("auth_id", user.id)
     .single();
 
-  if (!currentUser || currentUser.role !== "admin") {
-    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  if (!currentUser) {
+    return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
   const { searchParams } = new URL(request.url);
+  const mine = searchParams.get("mine");
   const status = searchParams.get("status");
   const type = searchParams.get("type");
+
+  // ── ?mine=true path — own tickets only, any role ──────────────────────────
+  if (mine === "true") {
+    let query = adminSupabase
+      .from("support_tickets")
+      .select(`*, reporter:reported_by(id, full_name, email, role)`)
+      .eq("reported_by", currentUser.id)
+      .order("created_at", { ascending: false });
+
+    if (status) query = query.eq("status", status);
+    if (type) query = query.eq("type", type);
+
+    const { data, error } = await query;
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ data: data || [] });
+  }
+
+  // ── Default path — all tickets, admin only ────────────────────────────────
+  if (currentUser.role !== "admin") {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   let query = adminSupabase
     .from("support_tickets")

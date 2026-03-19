@@ -35,6 +35,7 @@ import {
   Truck,
   Archive,
   TicketCheck,
+  Ticket,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -53,6 +54,8 @@ const LEGACY_ROLES = ["admin", "manager", "sales_rep", "floor_manager"];
 const allNavItems: NavItem[] = [
   // Dashboard is universally visible (null = all roles including new ones)
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
+  // My Tickets — universally visible; every user can track their own submitted tickets
+  { href: "/my-tickets", label: "My Tickets", icon: Ticket, roles: null },
   // Sales & CRM items — visible to legacy roles + accounts (view access)
   { href: "/leads",      label: "Leads",             icon: Users,         roles: [...LEGACY_ROLES, "accounts"] },
   { href: "/pipeline",   label: "Pipeline",           icon: GitBranch,     roles: LEGACY_ROLES },
