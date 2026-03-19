@@ -23,6 +23,7 @@ import {
   MessageSquare,
   Send,
   CheckCircle2,
+  RotateCcw,
 } from "lucide-react";
 import {
   TICKET_TYPE_LABELS,
@@ -78,6 +79,7 @@ export function MyTicketDetailDialog({
 }: MyTicketDetailDialogProps) {
   const [loading, setLoading] = useState(false);
   const [addingNote, setAddingNote] = useState(false);
+  const [reopening, setReopening] = useState(false);
   const [ticket, setTicket] = useState<TicketDetail | null>(null);
   const [newNote, setNewNote] = useState("");
 
@@ -101,6 +103,29 @@ export function MyTicketDetailDialog({
 
     fetchTicket();
   }, [open, ticketId, onOpenChange]);
+
+  async function handleReopen() {
+    if (!ticketId) return;
+    setReopening(true);
+    try {
+      const res = await fetch(`/api/support-tickets/${ticketId}/reopen`, {
+        method: "POST",
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to reopen ticket");
+      }
+
+      const { data: updated } = await res.json();
+      setTicket((prev) => (prev ? { ...prev, ...updated, notes: prev.notes } : prev));
+      toast.success("Ticket reopened");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to reopen ticket");
+    } finally {
+      setReopening(false);
+    }
+  }
 
   async function handleAddNote() {
     if (!ticketId || !newNote.trim()) return;
@@ -274,6 +299,29 @@ export function MyTicketDetailDialog({
                       {ticket.build_approved_notes}
                     </p>
                   )}
+                </div>
+              )}
+
+              {/* Reopen — shown only for resolved / closed tickets */}
+              {(ticket.status === "resolved" || ticket.status === "closed") && (
+                <div className="rounded-lg border border-muted bg-muted/30 p-3 flex items-center justify-between gap-3">
+                  <p className="text-sm text-muted-foreground">
+                    This ticket is {ticket.status}. Is the issue still occurring?
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={handleReopen}
+                    disabled={reopening}
+                    className="shrink-0"
+                  >
+                    {reopening ? (
+                      <Loader2 className="mr-2 h-3 w-3 animate-spin" />
+                    ) : (
+                      <RotateCcw className="mr-2 h-3 w-3" />
+                    )}
+                    Reopen Ticket
+                  </Button>
                 </div>
               )}
 
