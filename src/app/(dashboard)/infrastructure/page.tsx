@@ -42,12 +42,16 @@ interface InfraData {
   vercel: {
     plan: string;
     limits: Record<string, number>;
+    usage: { bandwidth_used_gb: number; build_minutes_used: number };
+    has_token: boolean;
     dashboard_url: string;
   };
   google_workspace: {
     smtp_user: string;
     connected: boolean;
     daily_limit: number;
+    sent_today: number;
+    failed_today: number;
     dashboard_url: string;
   };
 }
@@ -334,34 +338,69 @@ export default function InfrastructurePage() {
             </Badge>
           </CardHeader>
           <CardContent>
-            <div className="space-y-1 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Bandwidth</span>
-                <span>{data.vercel.limits.bandwidth_gb} GB/mo</span>
+            {data.vercel.has_token ? (
+              <div className="space-y-3">
+                {/* Bandwidth */}
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-muted-foreground">Bandwidth</span>
+                    <span className={getUsageTextColor(Math.round((data.vercel.usage.bandwidth_used_gb / data.vercel.limits.bandwidth_gb) * 100))}>
+                      {data.vercel.usage.bandwidth_used_gb} / {data.vercel.limits.bandwidth_gb} GB
+                    </span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${getUsageColor(Math.round((data.vercel.usage.bandwidth_used_gb / data.vercel.limits.bandwidth_gb) * 100))}`}
+                      style={{ width: `${Math.min((data.vercel.usage.bandwidth_used_gb / data.vercel.limits.bandwidth_gb) * 100, 100)}%` }}
+                    />
+                  </div>
+                </div>
+                {/* Build Minutes */}
+                <div>
+                  <div className="flex justify-between text-xs mb-1">
+                    <span className="text-muted-foreground">Build Minutes</span>
+                    <span className={getUsageTextColor(Math.round((data.vercel.usage.build_minutes_used / data.vercel.limits.build_minutes_per_month) * 100))}>
+                      {formatNumber(data.vercel.usage.build_minutes_used)} / {formatNumber(data.vercel.limits.build_minutes_per_month)} min
+                    </span>
+                  </div>
+                  <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                    <div
+                      className={`h-full rounded-full transition-all ${getUsageColor(Math.round((data.vercel.usage.build_minutes_used / data.vercel.limits.build_minutes_per_month) * 100))}`}
+                      style={{ width: `${Math.min((data.vercel.usage.build_minutes_used / data.vercel.limits.build_minutes_per_month) * 100, 100)}%` }}
+                    />
+                  </div>
+                </div>
+                <div className="flex justify-between text-xs text-muted-foreground">
+                  <span>Timeout</span>
+                  <span>{data.vercel.limits.serverless_function_timeout_sec}s</span>
+                </div>
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Build Minutes</span>
-                <span>{formatNumber(data.vercel.limits.build_minutes_per_month)}/mo</span>
+            ) : (
+              <div className="space-y-1 text-sm">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Bandwidth</span>
+                  <span>{data.vercel.limits.bandwidth_gb} GB/mo</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Build Minutes</span>
+                  <span>{formatNumber(data.vercel.limits.build_minutes_per_month)}/mo</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Edge Requests</span>
+                  <span>{(data.vercel.limits.edge_requests / 1000000).toFixed(0)}M/mo</span>
+                </div>
+                <p className="text-xs text-muted-foreground mt-2 italic">
+                  Set VERCEL_TOKEN env var for live usage
+                </p>
               </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Edge Requests</span>
-                <span>{(data.vercel.limits.edge_requests / 1000000).toFixed(0)}M/mo</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Function Timeout</span>
-                <span>{data.vercel.limits.serverless_function_timeout_sec}s</span>
-              </div>
-            </div>
-            <p className="text-xs text-muted-foreground mt-2 italic">
-              Plan limits shown — view dashboard for live usage
-            </p>
+            )}
             <a
               href={data.vercel.dashboard_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-1"
+              className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-3"
             >
-              View Usage <ExternalLink className="h-3 w-3" />
+              View Dashboard <ExternalLink className="h-3 w-3" />
             </a>
           </CardContent>
         </Card>
@@ -389,13 +428,30 @@ export default function InfrastructurePage() {
                 </span>
               </div>
               <div className="flex justify-between">
-                <span className="text-muted-foreground">Daily limit</span>
-                <span className="font-medium">{formatNumber(data.google_workspace.daily_limit)} emails</span>
-              </div>
-              <div className="flex justify-between">
                 <span className="text-muted-foreground">Protocol</span>
                 <span className="font-medium">SMTP / TLS 465</span>
               </div>
+            </div>
+            {/* Emails sent today */}
+            <div className="mt-3">
+              <div className="flex justify-between text-xs mb-1">
+                <span className="text-muted-foreground">Sent today</span>
+                <span className={getUsageTextColor(Math.round((data.google_workspace.sent_today / data.google_workspace.daily_limit) * 100))}>
+                  {formatNumber(data.google_workspace.sent_today)} / {formatNumber(data.google_workspace.daily_limit)}
+                </span>
+              </div>
+              <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                <div
+                  className={`h-full rounded-full transition-all ${getUsageColor(Math.round((data.google_workspace.sent_today / data.google_workspace.daily_limit) * 100))}`}
+                  style={{ width: `${Math.min((data.google_workspace.sent_today / data.google_workspace.daily_limit) * 100, 100)}%` }}
+                />
+              </div>
+              {data.google_workspace.failed_today > 0 && (
+                <p className="mt-1 text-xs text-amber-600 flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3" />
+                  {data.google_workspace.failed_today} failed send{data.google_workspace.failed_today > 1 ? "s" : ""} today
+                </p>
+              )}
             </div>
             <div className="mt-3 p-2 rounded-md bg-muted/50 text-xs text-muted-foreground flex items-center gap-1.5">
               <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />

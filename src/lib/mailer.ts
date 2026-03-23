@@ -1,4 +1,5 @@
 import nodemailer from "nodemailer";
+import { createAdminClient } from "@/lib/supabase/server";
 
 /**
  * Email transport using Google Workspace SMTP.
@@ -85,6 +86,14 @@ export const resend = {
         const info = await transporter.sendMail(mailOptions);
         console.log("Email sent via SMTP:", info.messageId, "to:", params.to);
 
+        // Fire-and-forget: increment today's sent count for Infrastructure monitoring
+        createAdminClient().then((client) => {
+          const today = new Date().toISOString().slice(0, 10);
+          Promise.resolve(
+            client.rpc("increment_email_count", { p_date: today, p_success: true })
+          ).then(() => {}).catch(() => {});
+        }).catch(() => {});
+
         return {
           data: { id: info.messageId },
           error: null,
@@ -92,6 +101,15 @@ export const resend = {
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : "Unknown SMTP error";
         console.error("SMTP email error:", message);
+
+        // Fire-and-forget: track failed sends too
+        createAdminClient().then((client) => {
+          const today = new Date().toISOString().slice(0, 10);
+          Promise.resolve(
+            client.rpc("increment_email_count", { p_date: today, p_success: false })
+          ).then(() => {}).catch(() => {});
+        }).catch(() => {});
+
         return {
           data: null,
           error: { message, name: "smtp_error" },

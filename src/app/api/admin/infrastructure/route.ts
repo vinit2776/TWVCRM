@@ -216,7 +216,48 @@ export async function GET() {
   const usersRow = tableCounts.find((t) => t.name === "users");
   const authUserCount = usersRow?.row_count || 0;
 
-  // ── 5. Test Google Workspace SMTP Connection ──
+  // ── 5. Fetch Vercel Live Usage ──
+  let vercelUsage = { bandwidth_used_gb: 0, build_minutes_used: 0 };
+  const vercelToken = process.env.VERCEL_TOKEN;
+  if (vercelToken) {
+    try {
+      const teamQuery = process.env.VERCEL_TEAM_ID
+        ? `?teamId=${process.env.VERCEL_TEAM_ID}`
+        : "";
+      const vRes = await fetch(
+        `https://api.vercel.com/v2/usage${teamQuery}`,
+        {
+          headers: { Authorization: `Bearer ${vercelToken}` },
+          cache: "no-store",
+        }
+      );
+      if (vRes.ok) {
+        const vData = await vRes.json();
+        vercelUsage = {
+          bandwidth_used_gb: parseFloat(
+            ((vData.data?.bandwidth?.usage || 0) / 1e9).toFixed(2)
+          ),
+          build_minutes_used: Math.round(
+            (vData.data?.buildMinutes?.usage || 0) / 60
+          ),
+        };
+      }
+    } catch {
+      // Vercel API unavailable — keep defaults
+    }
+  }
+
+  // ── 6. Query Today's Email Count ──
+  const today = new Date().toISOString().slice(0, 10);
+  const { data: emailStat } = await supabase
+    .from("email_daily_stats")
+    .select("sent_count, failed_count")
+    .eq("date", today)
+    .maybeSingle();
+  const emailsSentToday = emailStat?.sent_count || 0;
+  const emailsFailedToday = emailStat?.failed_count || 0;
+
+  // ── 7. Test Google Workspace SMTP Connection ──
   let smtpConnected = false;
   const smtpUser = (process.env.SMTP_USER || "").trim();
   const smtpPass = (process.env.SMTP_PASS || "").trim();
@@ -277,12 +318,16 @@ export async function GET() {
         projects: 200,
         deployments_per_day: 100,
       },
+      usage: vercelUsage,
+      has_token: !!vercelToken,
       dashboard_url: "https://vercel.com/dashboard/usage",
     },
     google_workspace: {
       smtp_user: smtpUser || "Not configured",
       connected: smtpConnected,
       daily_limit: 2000,
+      sent_today: emailsSentToday,
+      failed_today: emailsFailedToday,
       dashboard_url: "https://admin.google.com",
     },
   }, {
