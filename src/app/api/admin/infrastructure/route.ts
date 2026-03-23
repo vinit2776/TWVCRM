@@ -218,7 +218,7 @@ export async function GET() {
 
   // ── 5. Fetch Vercel Live Usage ──
   let vercelUsage = { bandwidth_used_gb: 0, build_minutes_used: 0 };
-  const vercelToken = process.env.VERCEL_TOKEN;
+  const vercelToken = process.env.VERCEL_API_TOKEN;
   if (vercelToken) {
     try {
       const teamQuery = process.env.VERCEL_TEAM_ID
