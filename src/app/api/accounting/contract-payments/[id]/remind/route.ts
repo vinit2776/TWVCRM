@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit, logEmailActivity } from "@/lib/audit";
+import { dltSms } from "@/lib/whatsapp";
 
 // POST — send payment reminder email
 export async function POST(
@@ -32,7 +33,7 @@ export async function POST(
   const { data: payment, error: fetchError } = await supabase
     .from("contract_payments")
     .select(
-      "*, contract:contracts!contract_payments_contract_id_fkey(id, contract_number, title, lead_id, monthly_membership_fee, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company))"
+      "*, contract:contracts!contract_payments_contract_id_fkey(id, contract_number, title, lead_id, monthly_membership_fee, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, phone, mobile))"
     )
     .eq("id", id)
     .single();
@@ -124,6 +125,20 @@ export async function POST(
         description: `Payment reminder for ${paymentData.contract?.contract_number || "contract"} (₹${Number(paymentData.amount).toLocaleString("en-IN")}) emailed to ${recipients.join(", ")}`,
         createdBy: dbUser.id,
       });
+    }
+
+    // DLT SMS: send payment reminder to lead's phone (fire-and-forget)
+    const leadPhone = lead?.phone || lead?.mobile;
+    if (leadPhone) {
+      const firstName = lead?.first_name || "Client";
+      const amountStr = String(Math.round(Number(paymentData.amount)));
+      // Use followup template if a reminder was already sent before, otherwise use first reminder
+      const isFollowup = !!paymentData.reminder_sent_at;
+      if (isFollowup) {
+        dltSms.paymentFollowup(leadPhone, firstName, amountStr, id).catch(console.error);
+      } else {
+        dltSms.paymentReminder(leadPhone, firstName, amountStr, id).catch(console.error);
+      }
     }
 
     return NextResponse.json({ message: "Reminder sent successfully" });

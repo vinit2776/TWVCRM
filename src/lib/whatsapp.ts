@@ -38,6 +38,7 @@ const WA_SENDER     = process.env.MSG91_WHATSAPP_SENDER;
 
 const WA_API_URL    = "https://control.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/";
 const SMS_API_URL   = "https://control.msg91.com/api/v5/flow/";
+const SMS_SEND_URL  = "https://control.msg91.com/api/v5/flow/";
 
 // SMS flow IDs (created in MSG91 dashboard after DLT registration)
 const SMS_FLOWS = {
@@ -45,6 +46,29 @@ const SMS_FLOWS = {
   billing:  process.env.MSG91_SMS_FLOW_BILLING,
   reminder: process.env.MSG91_SMS_FLOW_REMINDER,
 } as const;
+
+// ---------------------------------------------------------------------------
+// DLT SMS Configuration (Jio TrueConnect)
+// ---------------------------------------------------------------------------
+
+const DLT_PE_ID     = "1201177261686683603";
+const DLT_SENDER    = process.env.MSG91_SMS_SENDER_ID || "TWVLLA";
+
+/**
+ * DLT-registered template IDs (Jio TrueConnect).
+ * The message body MUST match the registered template exactly —
+ * only {#var#} portions are replaced. Even an extra space causes rejection.
+ */
+const DLT_TEMPLATES = {
+  otp:              { id: "1207177381203939088", vars: 1 },
+  booking:          { id: "1207177381893627534", vars: 2 },
+  contract_welcome: { id: "1207177381491417204", vars: 2 },
+  contract_renewal: { id: "1207177381386366257", vars: 2 },
+  payment_reminder: { id: "1207177381025319964", vars: 2 },
+  payment_followup: { id: "1207177381424325525", vars: 2 },
+} as const;
+
+type DltTemplateKey = keyof typeof DLT_TEMPLATES;
 
 // ---------------------------------------------------------------------------
 // Phone normalisation
@@ -257,6 +281,103 @@ export async function sendSms(
 }
 
 // ---------------------------------------------------------------------------
+// DLT SMS via MSG91 — exact-match registered templates
+// ---------------------------------------------------------------------------
+
+/**
+ * Send a DLT-compliant SMS using MSG91 Flow API.
+ * The message body is built from the registered template with variables
+ * substituted in order. MSG91 requires a Flow per DLT template — set the
+ * corresponding MSG91_SMS_FLOW_* env var, or pass `flowId` directly.
+ */
+export async function sendDltSms(
+  templateKey: DltTemplateKey,
+  to: string,
+  variables: string[],
+  opts?: { flowId?: string; entityType?: string; entityId?: string }
+): Promise<SendResult> {
+  if (!AUTH_KEY) {
+    console.warn("[messaging] MSG91_AUTH_KEY not set — DLT SMS disabled.");
+    return { success: false, error: "SMS not configured", channel: "sms" };
+  }
+
+  const tpl = DLT_TEMPLATES[templateKey];
+  if (variables.length !== tpl.vars) {
+    console.error(`[messaging] DLT template "${templateKey}" expects ${tpl.vars} variable(s), got ${variables.length}`);
+    return { success: false, error: `Variable count mismatch: expected ${tpl.vars}`, channel: "sms" };
+  }
+
+  const toNumber = normalisePhone(to);
+
+  // Build variable map: VAR1, VAR2, ... (MSG91 flow variable convention)
+  const vars: Record<string, string> = {};
+  variables.forEach((v, i) => { vars[`VAR${i + 1}`] = v; });
+
+  // Determine which Flow ID to use
+  const flowId = opts?.flowId || SMS_DLT_FLOWS[templateKey];
+  if (!flowId) {
+    console.warn(`[messaging] No MSG91 flow ID configured for DLT template "${templateKey}". Set MSG91_SMS_DLT_FLOW_${templateKey.toUpperCase()} env var.`);
+    return { success: false, error: `No flow ID for template "${templateKey}"`, channel: "sms" };
+  }
+
+  const payload = {
+    flow_id: flowId,
+    sender: DLT_SENDER,
+    recipients: [{ mobiles: toNumber, ...vars }],
+  };
+
+  let result: SendResult = { success: false, error: "Unknown error", channel: "sms" };
+
+  try {
+    const res = await fetch(SMS_SEND_URL, {
+      method: "POST",
+      headers: {
+        authkey: AUTH_KEY,
+        "Content-Type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const json = await res.json() as Record<string, unknown>;
+
+    if (json.type === "success" || json.status === "success") {
+      result = { success: true, requestId: json.request_id as string, channel: "sms" };
+    } else {
+      result = { success: false, error: JSON.stringify(json), channel: "sms" };
+    }
+  } catch (err) {
+    console.error("[messaging] DLT SMS network error:", err);
+    result = { success: false, error: String(err), channel: "sms" };
+  }
+
+  await logMessage({
+    waMessageId:  result.requestId,
+    channel:      "sms",
+    direction:    "outbound",
+    toNumber,
+    templateName: `dlt_${templateKey}`,
+    messageBody:  `DLT:${tpl.id} PE:${DLT_PE_ID}`,
+    status:       result.success ? "sent" : "failed",
+    entityType:   opts?.entityType,
+    entityId:     opts?.entityId,
+    errorMessage: result.error,
+  });
+
+  return result;
+}
+
+// MSG91 Flow IDs for each DLT template (set in Vercel env vars)
+const SMS_DLT_FLOWS: Record<DltTemplateKey, string | undefined> = {
+  otp:              process.env.MSG91_SMS_DLT_FLOW_OTP,
+  booking:          process.env.MSG91_SMS_DLT_FLOW_BOOKING          || SMS_FLOWS.booking,
+  contract_welcome: process.env.MSG91_SMS_DLT_FLOW_CONTRACT_WELCOME,
+  contract_renewal: process.env.MSG91_SMS_DLT_FLOW_CONTRACT_RENEWAL,
+  payment_reminder: process.env.MSG91_SMS_DLT_FLOW_PAYMENT_REMINDER || SMS_FLOWS.reminder,
+  payment_followup: process.env.MSG91_SMS_DLT_FLOW_PAYMENT_FOLLOWUP,
+};
+
+// ---------------------------------------------------------------------------
 // sendTemplate — WhatsApp first, SMS fallback if WhatsApp fails
 // ---------------------------------------------------------------------------
 
@@ -358,6 +479,60 @@ export const messaging = {
       entityType: "lead",
       entityId: leadId,
     });
+  },
+};
+
+// ---------------------------------------------------------------------------
+// DLT SMS convenience wrappers — exact template match required by TRAI
+// ---------------------------------------------------------------------------
+
+export const dltSms = {
+  /**
+   * TWV_OTP_Transactional (1207177381203939088)
+   * "Your OTP for The Work Villa is {#var#}. Valid for 10 minutes. Do not share this OTP. -Sree Design Infrastructure"
+   */
+  otp(to: string, otpCode: string, entityId?: string) {
+    return sendDltSms("otp", to, [otpCode], { entityType: "otp", entityId });
+  },
+
+  /**
+   * TWV_Booking_Confirmation (1207177381893627534)
+   * "Dear {#var#}, your booking at The Work Villa is confirmed. Booking Ref: {#var#}. Our team will contact you shortly. -Sree Design Infrastructure"
+   */
+  bookingConfirmation(to: string, customerName: string, bookingRef: string, bookingId: string) {
+    return sendDltSms("booking", to, [customerName, bookingRef], { entityType: "booking", entityId: bookingId });
+  },
+
+  /**
+   * TWV_Contract_Welcome (1207177381491417204)
+   * "Welcome to The Work Villa! Dear {#var#}, your workspace contract commences on {#var#}. We look forward to serving you. -Sree Design Infrastructure"
+   */
+  contractWelcome(to: string, customerName: string, startDate: string, caseId: string) {
+    return sendDltSms("contract_welcome", to, [customerName, startDate], { entityType: "case", entityId: caseId });
+  },
+
+  /**
+   * TWV_Contract_Renewal (1207177381386366257)
+   * "Dear {#var#}, your workspace contract at The Work Villa is due for renewal on {#var#}. Please contact us to renew and continue uninterrupted service. -Sree Design Infrastructure"
+   */
+  contractRenewal(to: string, customerName: string, renewalDate: string, caseId: string) {
+    return sendDltSms("contract_renewal", to, [customerName, renewalDate], { entityType: "case", entityId: caseId });
+  },
+
+  /**
+   * TWV_Payment_Reminder (1207177381025319964)
+   * "Dear {#var#}, your payment of Rs.{#var#} is due for your workspace at The Work Villa. Please pay to avoid disruption. -Sree Design Infrastructure"
+   */
+  paymentReminder(to: string, customerName: string, amount: string, paymentId: string) {
+    return sendDltSms("payment_reminder", to, [customerName, amount], { entityType: "contract_payment", entityId: paymentId });
+  },
+
+  /**
+   * TWV_Payment_Followup (1207177381424325525)
+   * "Dear {#var#}, this is a reminder that your payment of Rs.{#var#} to The Work Villa is overdue. Please settle at the earliest. -Sree Design Infrastructure"
+   */
+  paymentFollowup(to: string, customerName: string, amount: string, paymentId: string) {
+    return sendDltSms("payment_followup", to, [customerName, amount], { entityType: "contract_payment", entityId: paymentId });
   },
 };
 

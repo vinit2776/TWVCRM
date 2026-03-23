@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createBookingSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
-import { messaging } from "@/lib/whatsapp";
+import { messaging, dltSms } from "@/lib/whatsapp";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 const DAYS_OF_WEEK = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
@@ -590,14 +590,13 @@ export async function POST(request: NextRequest) {
       const bookingDate = new Date(booking.booking_date as string).toLocaleDateString("en-IN", {
         day: "numeric", month: "short", year: "numeric",
       });
+      const guestName = (booking.guest_name as string) ?? "Guest";
+      const bookingRef = (booking.booking_number as string) ?? (booking.id as string).slice(0, 8);
       phones.forEach((phone) => {
-        messaging.bookingConfirmation(
-          phone,
-          (booking.guest_name as string) ?? "Guest",
-          (booking.booking_number as string) ?? (booking.id as string).slice(0, 8),
-          bookingDate,
-          booking.id as string
-        ).catch(console.error);
+        // WhatsApp (existing)
+        messaging.bookingConfirmation(phone, guestName, bookingRef, bookingDate, booking.id as string).catch(console.error);
+        // DLT SMS — TWV_Booking_Confirmation
+        dltSms.bookingConfirmation(phone, guestName, bookingRef, booking.id as string).catch(console.error);
       });
     }
   }

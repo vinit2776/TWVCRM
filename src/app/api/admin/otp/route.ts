@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
 import { OTP_EXPIRY_MINUTES, OTP_MAX_ATTEMPTS } from "@/lib/constants";
+import { dltSms } from "@/lib/whatsapp";
 
 /**
  * POST /api/admin/otp — Generate OTP for voucher replacement
@@ -55,10 +56,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: insertError.message }, { status: 500 });
   }
 
-  // Fetch all admin + manager users' emails for OTP delivery
+  // Fetch all admin + manager users' emails + phones for OTP delivery
   const { data: approvers } = await supabase
     .from("users")
-    .select("email, full_name, role")
+    .select("email, full_name, role, phone")
     .in("role", ["admin", "manager"])
     .eq("is_active", true);
 
@@ -130,10 +131,20 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // DLT SMS: send OTP to all approvers with a phone number (fire-and-forget)
+  const approverPhones = (approvers || [])
+    .map((a) => a.phone)
+    .filter((p): p is string => !!p && p.trim().length >= 10);
+
+  for (const phone of approverPhones) {
+    dltSms.otp(phone, otpCode, otp.id).catch(console.error);
+  }
+
   return NextResponse.json({
     otp_id: otp.id,
     expires_at: otp.expires_at,
     sent_to_count: emailsSent,
+    sms_sent_to_count: approverPhones.length,
   });
 }
 

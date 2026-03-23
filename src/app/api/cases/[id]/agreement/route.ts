@@ -7,6 +7,7 @@ import {
   generateAgreementPdf,
 } from "@/lib/agreement-generator";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
+import { dltSms } from "@/lib/whatsapp";
 
 /**
  * GET: Get agreement details with a signed URL for viewing the PDF
@@ -551,6 +552,26 @@ export async function PATCH(
     } catch (emailErr) {
       // Log but don't fail the status update
       console.error("Failed to send agreement email to client:", emailErr);
+    }
+  }
+
+  // DLT SMS: Contract Welcome when agreement is executed
+  if (action === "mark_executed" && data) {
+    try {
+      const vars = (currentAgreement.variables || {}) as Record<string, unknown>;
+      const clientPhone = String(vars.client_phone || "");
+      const clientName = String(vars.client_name || "Client");
+      const startDate = vars.start_date_formatted
+        ? String(vars.start_date_formatted)
+        : vars.start_date
+          ? new Date(String(vars.start_date)).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" })
+          : new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
+
+      if (clientPhone) {
+        dltSms.contractWelcome(clientPhone, clientName, startDate, caseId).catch(console.error);
+      }
+    } catch (smsErr) {
+      console.error("Failed to send contract welcome SMS:", smsErr);
     }
   }
 
