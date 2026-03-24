@@ -702,6 +702,97 @@ export const ENTITY_TYPE_LABELS: Record<string, string> = {
 };
 
 // ==========================================
+// KYC Documents Required per Entity Type
+// ==========================================
+export const KYC_DOCUMENTS: Record<string, string[]> = {
+  individual: [
+    "PAN Card",
+    "Aadhaar Card",
+    "Passport-size Photograph",
+    "Address Proof (utility bill / bank statement)",
+  ],
+  proprietorship: [
+    "PAN Card of Proprietor",
+    "Aadhaar Card of Proprietor",
+    "GST Registration Certificate",
+    "Shop & Establishment Certificate / Udyam Registration",
+    "Business Address Proof",
+    "Passport-size Photograph of Proprietor",
+  ],
+  partnership: [
+    "Partnership Deed",
+    "PAN Card of Firm",
+    "PAN & Aadhaar of all Partners",
+    "GST Registration Certificate",
+    "Authority Letter / Board Resolution",
+    "Address Proof of Firm",
+    "Passport-size Photograph of Authorised Partner",
+  ],
+  llp: [
+    "LLP Agreement",
+    "Certificate of Incorporation (MCA)",
+    "PAN Card of LLP",
+    "PAN & Aadhaar of Designated Partners",
+    "GST Registration Certificate",
+    "Board Resolution / Authority Letter",
+    "Address Proof of LLP",
+    "Passport-size Photograph of Authorised Partner",
+  ],
+  pvt_ltd: [
+    "Certificate of Incorporation (MCA)",
+    "MOA & AOA",
+    "PAN Card of Company",
+    "GST Registration Certificate",
+    "Board Resolution authorising signatory",
+    "PAN & Aadhaar of Authorised Director(s)",
+    "Address Proof of Company",
+    "Passport-size Photograph of Authorised Director",
+  ],
+  public_ltd: [
+    "Certificate of Incorporation (MCA)",
+    "MOA & AOA",
+    "PAN Card of Company",
+    "GST Registration Certificate",
+    "Board Resolution authorising signatory",
+    "PAN & Aadhaar of Authorised Director(s)",
+    "Address Proof of Company",
+    "Passport-size Photograph of Authorised Director",
+  ],
+  trust: [
+    "Trust Deed",
+    "PAN Card of Trust",
+    "PAN & Aadhaar of Trustees",
+    "Registration Certificate (if registered)",
+    "Authority Letter / Resolution",
+    "Address Proof of Trust",
+    "Passport-size Photograph of Authorised Trustee",
+  ],
+  society: [
+    "Society Registration Certificate",
+    "PAN Card of Society",
+    "PAN & Aadhaar of Authorised Members",
+    "Resolution / Authority Letter",
+    "Address Proof of Society",
+    "Passport-size Photograph of Authorised Member",
+  ],
+  huf: [
+    "PAN Card of HUF",
+    "PAN & Aadhaar of Karta",
+    "HUF Declaration Deed",
+    "Address Proof",
+    "Passport-size Photograph of Karta",
+  ],
+  other: [
+    "PAN Card",
+    "Aadhaar Card / ID Proof",
+    "GST Registration Certificate (if applicable)",
+    "Address Proof",
+    "Passport-size Photograph",
+    "Authority Letter (if applicable)",
+  ],
+};
+
+// ==========================================
 // Case Status Constants
 // ==========================================
 export const CASE_STATUSES = [

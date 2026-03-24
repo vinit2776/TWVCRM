@@ -143,16 +143,6 @@ export function ProposalForm({
                 placeholder="Select center"
               />
             </div>
-            <div className="space-y-2 sm:col-span-2">
-              <Label htmlFor="proposal-description">Description</Label>
-              <Textarea
-                id="proposal-description"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="Brief proposal description..."
-                rows={2}
-              />
-            </div>
           </div>
 
           {/* Line Items */}
@@ -165,6 +155,18 @@ export function ProposalForm({
               onTaxChange={setTaxPercentage}
               discountPercentage={discountPercentage}
               onDiscountChange={setDiscountPercentage}
+            />
+          </div>
+
+          {/* Complimentary Services — below line items */}
+          <div className="space-y-2">
+            <Label htmlFor="proposal-description">Complimentary Services Offered</Label>
+            <Textarea
+              id="proposal-description"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              placeholder="e.g. Meeting room credits, mail handling, reception services..."
+              rows={2}
             />
           </div>
 
@@ -192,12 +194,12 @@ export function ProposalForm({
           </div>
 
           <div className="space-y-2">
-            <Label htmlFor="proposal-notes">Notes</Label>
+            <Label htmlFor="proposal-notes">Customer Notes</Label>
             <Textarea
               id="proposal-notes"
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
-              placeholder="Internal notes..."
+              placeholder="Notes visible to the customer..."
               rows={2}
             />
           </div>

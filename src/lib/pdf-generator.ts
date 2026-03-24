@@ -51,12 +51,15 @@ interface PDFOptions {
   discountAmount: number;
   totalAmount: number;
   lead?: Partial<Lead>;
+  location?: Partial<Location>;
   createdAt: string;
   validUntil?: string;
   dueDate?: string;
   description?: string;
+  descriptionLabel?: string;
   termsAndConditions?: string;
   notes?: string;
+  notesLabel?: string;
 }
 
 function addLogoToDoc(doc: jsPDF): number {
@@ -146,16 +149,6 @@ function generatePDF(options: PDFOptions): jsPDF {
 
   y += 8;
 
-  // ── Description ──
-  if (options.description) {
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(80, 80, 80);
-    const lines = doc.splitTextToSize(options.description, pageWidth - 28);
-    doc.text(lines, 14, y);
-    y += lines.length * 5 + 4;
-  }
-
   // ── Prepared For (Lead Info) ──
   if (options.lead) {
     // Section header with teal accent
@@ -187,6 +180,13 @@ function generatePDF(options: PDFOptions): jsPDF {
     }
     if (options.lead.phone || options.lead.mobile) {
       doc.text(options.lead.phone || options.lead.mobile || "", 16, y);
+      y += 5;
+    }
+    if (options.location?.name) {
+      doc.setTextColor(...BRAND_TEAL);
+      doc.setFont("helvetica", "bold");
+      doc.text(`Location: ${options.location.name}`, 16, y);
+      doc.setFont("helvetica", "normal");
       y += 5;
     }
     y += 4;
@@ -278,6 +278,22 @@ function generatePDF(options: PDFOptions): jsPDF {
   });
   y += 14;
 
+  // ── Description / Complimentary Services ──
+  if (options.description) {
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...BRAND_TEAL);
+    doc.text(options.descriptionLabel || "Description", 14, y);
+    y += 6;
+
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    doc.setTextColor(80, 80, 80);
+    const descLines = doc.splitTextToSize(options.description, pageWidth - 28);
+    doc.text(descLines, 14, y);
+    y += descLines.length * 4.5 + 6;
+  }
+
   // ── Terms & Conditions ──
   if (options.termsAndConditions) {
     doc.setFontSize(10);
@@ -325,7 +341,7 @@ function generatePDF(options: PDFOptions): jsPDF {
     doc.setFontSize(10);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...BRAND_TEAL);
-    doc.text("Notes", 14, y);
+    doc.text(options.notesLabel || "Notes", 14, y);
     y += 6;
 
     doc.setFont("helvetica", "normal");
@@ -378,7 +394,7 @@ function generatePDF(options: PDFOptions): jsPDF {
 }
 
 export function generateProposalPDF(
-  proposal: Proposal,
+  proposal: Proposal & { location?: Partial<Location> },
   lead?: Partial<Lead>
 ): jsPDF {
   return generatePDF({
@@ -392,11 +408,16 @@ export function generateProposalPDF(
     discountAmount: proposal.discount_amount,
     totalAmount: proposal.total_amount,
     lead,
+    location: proposal.location,
     createdAt: proposal.created_at,
     validUntil: proposal.valid_until,
-    description: [proposal.title, proposal.description].filter(Boolean).join("\n"),
+    description: proposal.description
+      ? `${proposal.title}\n${proposal.description}`
+      : undefined,
+    descriptionLabel: "Complimentary Services Offered",
     termsAndConditions: proposal.terms_and_conditions,
     notes: proposal.notes,
+    notesLabel: "Customer Notes",
   });
 }
 

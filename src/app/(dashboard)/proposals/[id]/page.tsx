@@ -22,6 +22,8 @@ import { Skeleton } from "@/components/shared/loading-skeleton";
 import {
   PROPOSAL_STATUS_LABELS,
   PROPOSAL_STATUS_COLORS,
+  KYC_DOCUMENTS,
+  ENTITY_TYPE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { generateProposalPDF } from "@/lib/pdf-generator";
@@ -66,14 +68,17 @@ export default function ProposalDetailPage({
     setEmailDialogOpen(true);
   };
 
-  const handleUpdateStatus = async (status: string, label: string) => {
+  const handleUpdateStatus = async (status: string, label: string, rejectionReason?: string) => {
     const now = new Date().toISOString();
     const body: Record<string, unknown> = { status };
 
     if (status === "sent") body.sent_at = now;
     if (status === "viewed") body.viewed_at = now;
     if (status === "accepted") body.accepted_at = now;
-    if (status === "rejected") body.rejected_at = now;
+    if (status === "rejected") {
+      body.rejected_at = now;
+      if (rejectionReason) body.rejection_reason = rejectionReason;
+    }
 
     const res = await fetch(`/api/proposals/${id}`, {
       method: "PATCH",
@@ -189,7 +194,15 @@ export default function ProposalDetailPage({
               <Button
                 size="sm"
                 variant="destructive"
-                onClick={() => handleUpdateStatus("rejected", "Rejected")}
+                onClick={() => {
+                  const reason = window.prompt("Please enter the reason for rejection:");
+                  if (reason === null) return; // cancelled
+                  if (!reason.trim()) {
+                    toast.error("Rejection reason is required");
+                    return;
+                  }
+                  handleUpdateStatus("rejected", "Rejected", reason.trim());
+                }}
               >
                 <XCircle className="mr-2 h-4 w-4" />
                 Reject
@@ -328,11 +341,11 @@ export default function ProposalDetailPage({
             </CardContent>
           </Card>
 
-          {/* Description */}
+          {/* Complimentary Services Offered (formerly Description) */}
           {proposal.description && (
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Description</CardTitle>
+                <CardTitle className="text-base">Complimentary Services Offered</CardTitle>
               </CardHeader>
               <CardContent>
                 <p className="text-sm whitespace-pre-wrap">
@@ -358,14 +371,32 @@ export default function ProposalDetailPage({
             </Card>
           )}
 
-          {/* Notes */}
+          {/* Customer Notes (formerly Notes) */}
           {proposal.notes && (
             <Card>
               <CardHeader>
-                <CardTitle className="text-base">Notes</CardTitle>
+                <CardTitle className="text-base">Customer Notes</CardTitle>
               </CardHeader>
               <CardContent>
                 <p className="text-sm whitespace-pre-wrap">{proposal.notes}</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* KYC Documents Required */}
+          {proposal.lead?.entity_type && KYC_DOCUMENTS[proposal.lead.entity_type] && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  Documents Required — {ENTITY_TYPE_LABELS[proposal.lead.entity_type] || proposal.lead.entity_type}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ul className="list-disc list-inside text-sm space-y-1 text-muted-foreground">
+                  {KYC_DOCUMENTS[proposal.lead.entity_type].map((doc, idx) => (
+                    <li key={idx}>{doc}</li>
+                  ))}
+                </ul>
               </CardContent>
             </Card>
           )}
@@ -468,6 +499,18 @@ export default function ProposalDetailPage({
               )}
             </CardContent>
           </Card>
+
+          {/* Rejection Reason */}
+          {proposal.status === "rejected" && proposal.rejection_reason && (
+            <Card className="border-red-200 bg-red-50">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-red-700">Rejection Reason</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm text-red-800 whitespace-pre-wrap">{proposal.rejection_reason}</p>
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
 

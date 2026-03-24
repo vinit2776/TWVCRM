@@ -13,7 +13,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("proposals")
-    .select("*, lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, location_id), location:locations!proposals_location_id_fkey(id, name, code)")
+    .select("*, lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, location_id, entity_type), location:locations!proposals_location_id_fkey(id, name, code)")
     .eq("id", id)
     .single();
 
@@ -41,6 +41,7 @@ export async function PATCH(
   if (body.viewed_at) allowedFields.viewed_at = body.viewed_at;
   if (body.accepted_at) allowedFields.accepted_at = body.accepted_at;
   if (body.rejected_at) allowedFields.rejected_at = body.rejected_at;
+  if (body.rejection_reason !== undefined) allowedFields.rejection_reason = body.rejection_reason || null;
 
   if (Object.keys(allowedFields).length === 0) {
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });

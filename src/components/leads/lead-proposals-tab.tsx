@@ -142,7 +142,8 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
   const handleUpdateProposalStatus = async (
     proposalId: string,
     status: string,
-    label: string
+    label: string,
+    rejectionReason?: string
   ) => {
     const now = new Date().toISOString();
     const body: Record<string, unknown> = { status };
@@ -151,7 +152,10 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
     if (status === "sent") body.sent_at = now;
     if (status === "viewed") body.viewed_at = now;
     if (status === "accepted") body.accepted_at = now;
-    if (status === "rejected") body.rejected_at = now;
+    if (status === "rejected") {
+      body.rejected_at = now;
+      if (rejectionReason) body.rejection_reason = rejectionReason;
+    }
 
     const res = await fetch(`/api/proposals/${proposalId}`, {
       method: "PATCH",
@@ -291,7 +295,15 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                                   Accept Proposal
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
-                                  onClick={() => handleUpdateProposalStatus(p.id, "rejected", "Rejected")}
+                                  onClick={() => {
+                                    const reason = window.prompt("Please enter the reason for rejection:");
+                                    if (reason === null) return;
+                                    if (!reason.trim()) {
+                                      toast.error("Rejection reason is required");
+                                      return;
+                                    }
+                                    handleUpdateProposalStatus(p.id, "rejected", "Rejected", reason.trim());
+                                  }}
                                   className="text-red-600"
                                 >
                                   <XCircle className="mr-2 h-4 w-4" />

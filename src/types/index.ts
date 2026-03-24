@@ -251,6 +251,7 @@ export interface Proposal {
   viewed_at?: string;
   accepted_at?: string;
   rejected_at?: string;
+  rejection_reason?: string;
   created_by?: string;
   created_at: string;
   updated_at: string;
