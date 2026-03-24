@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 // GET — returns only non-secret settings needed by the frontend
 export async function GET() {
@@ -19,13 +19,22 @@ export async function GET() {
     result[s.key] = s.value;
   });
 
-  // Generate signed URL for UPI QR code image if path exists
+  // Fetch UPI QR code image and return as base64 for PDF embedding
+  // Uses admin client to bypass storage RLS
   if (result.upi_qr_code_path) {
-    const { data: signedData } = await supabase.storage
-      .from("crm-documents")
-      .createSignedUrl(result.upi_qr_code_path, 3600);
-    if (signedData?.signedUrl) {
-      result.upi_qr_code_url = signedData.signedUrl;
+    try {
+      const adminSupabase = await createAdminClient();
+      const { data: fileData } = await adminSupabase.storage
+        .from("crm-documents")
+        .download(result.upi_qr_code_path);
+      if (fileData) {
+        const arrayBuffer = await fileData.arrayBuffer();
+        const base64 = Buffer.from(arrayBuffer).toString("base64");
+        const mimeType = result.upi_qr_code_path.endsWith(".png") ? "image/png" : "image/jpeg";
+        result.upi_qr_code_base64 = `data:${mimeType};base64,${base64}`;
+      }
+    } catch {
+      // Continue without QR code if download fails
     }
   }
 
