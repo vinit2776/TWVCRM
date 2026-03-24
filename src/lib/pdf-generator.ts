@@ -60,6 +60,8 @@ interface PDFOptions {
   termsAndConditions?: string;
   notes?: string;
   notesLabel?: string;
+  qrCodeBase64?: string; // Base64 image data (PNG/JPEG) for UPI QR code
+  upiId?: string; // UPI ID text to show alongside QR
 }
 
 function addLogoToDoc(doc: jsPDF): number {
@@ -330,10 +332,53 @@ function generatePDF(options: PDFOptions): jsPDF {
     `Bank: ${COMPANY_BANK_DETAILS.bank}`,
     `Branch: ${COMPANY_BANK_DETAILS.branch}`,
   ];
+  // Layout bank details on the left, QR code on the right
+  const bankStartY = y;
   bankLines.forEach((line) => {
     doc.text(line, 14, y);
     y += 4.5;
   });
+
+  // ── UPI QR Code (right side, next to bank details) ──
+  if (options.qrCodeBase64) {
+    const qrSize = 38; // 38mm ≈ ~144px — large enough for reliable scanning
+    const qrX = pageWidth - 14 - qrSize; // right-aligned with margin
+    const qrY = bankStartY - 4;
+
+    // Light border around QR
+    doc.setDrawColor(200, 200, 200);
+    doc.setLineWidth(0.3);
+    doc.rect(qrX - 1, qrY - 1, qrSize + 2, qrSize + 2);
+
+    try {
+      doc.addImage(options.qrCodeBase64, "PNG", qrX, qrY, qrSize, qrSize);
+    } catch {
+      // Fallback: try as JPEG if PNG fails
+      try {
+        doc.addImage(options.qrCodeBase64, "JPEG", qrX, qrY, qrSize, qrSize);
+      } catch {
+        // Silently skip if image is invalid
+      }
+    }
+
+    // "Scan to Pay" label below QR
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...BRAND_TEAL);
+    doc.text("Scan to Pay", qrX + qrSize / 2, qrY + qrSize + 4, { align: "center" });
+
+    // UPI ID below label
+    if (options.upiId) {
+      doc.setFontSize(7);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(100, 100, 100);
+      doc.text(`UPI: ${options.upiId}`, qrX + qrSize / 2, qrY + qrSize + 8, { align: "center" });
+    }
+
+    // Ensure y is below QR if QR extends past bank details
+    const qrBottomY = qrY + qrSize + (options.upiId ? 12 : 8);
+    if (qrBottomY > y) y = qrBottomY;
+  }
   y += 6;
 
   // ── Notes ──
@@ -395,7 +440,8 @@ function generatePDF(options: PDFOptions): jsPDF {
 
 export function generateProposalPDF(
   proposal: Proposal & { location?: Partial<Location> },
-  lead?: Partial<Lead>
+  lead?: Partial<Lead>,
+  paymentOptions?: { qrCodeBase64?: string; upiId?: string }
 ): jsPDF {
   return generatePDF({
     title: "PRO-FORMA INVOICE / PROPOSAL",
@@ -418,6 +464,8 @@ export function generateProposalPDF(
     termsAndConditions: proposal.terms_and_conditions,
     notes: proposal.notes,
     notesLabel: "Customer Notes",
+    qrCodeBase64: paymentOptions?.qrCodeBase64,
+    upiId: paymentOptions?.upiId,
   });
 }
 

@@ -58,9 +58,41 @@ export default function ProposalDetailPage({
     fetchProposal();
   }, [fetchProposal]);
 
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
     if (!proposal) return;
-    const doc = generateProposalPDF(proposal, proposal.lead || undefined);
+
+    // Fetch UPI QR code from payment module settings
+    let qrCodeBase64: string | undefined;
+    let upiId: string | undefined;
+    try {
+      const settingsRes = await fetch("/api/settings/public");
+      if (settingsRes.ok) {
+        const sJson = await settingsRes.json();
+        const settings = sJson.data || {};
+        upiId = settings.upi_id || undefined;
+        const qrUrl = settings.upi_qr_code_url; // signed URL from payment module
+        if (qrUrl) {
+          // Fetch QR image and convert to base64 for PDF embedding
+          const imgRes = await fetch(qrUrl);
+          if (imgRes.ok) {
+            const blob = await imgRes.blob();
+            qrCodeBase64 = await new Promise<string>((resolve) => {
+              const reader = new FileReader();
+              reader.onloadend = () => resolve(reader.result as string);
+              reader.readAsDataURL(blob);
+            });
+          }
+        }
+      }
+    } catch {
+      // Continue without QR code if fetch fails
+    }
+
+    const doc = generateProposalPDF(
+      proposal,
+      proposal.lead || undefined,
+      { qrCodeBase64, upiId }
+    );
     doc.save(`${proposal.proposal_number}.pdf`);
   };
 

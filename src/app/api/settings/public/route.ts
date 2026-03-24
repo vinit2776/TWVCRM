@@ -19,5 +19,15 @@ export async function GET() {
     result[s.key] = s.value;
   });
 
+  // Generate signed URL for UPI QR code image if path exists
+  if (result.upi_qr_code_path) {
+    const { data: signedData } = await supabase.storage
+      .from("crm-documents")
+      .createSignedUrl(result.upi_qr_code_path, 3600);
+    if (signedData?.signedUrl) {
+      result.upi_qr_code_url = signedData.signedUrl;
+    }
+  }
+
   return NextResponse.json({ data: result });
 }
