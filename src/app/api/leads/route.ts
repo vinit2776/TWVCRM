@@ -85,6 +85,18 @@ export async function GET(request: NextRequest) {
         l._followup = fMap[l.id] || null;
       });
     }
+
+    // Sort: overdue first → due today → upcoming → rest (preserves DB order within each group)
+    leads.sort((a: { _followup?: { overdue: boolean; due_today: boolean; upcoming: boolean } | null }, b: { _followup?: { overdue: boolean; due_today: boolean; upcoming: boolean } | null }) => {
+      const priority = (f: typeof a._followup) => {
+        if (!f) return 3;
+        if (f.overdue) return 0;
+        if (f.due_today) return 1;
+        if (f.upcoming) return 2;
+        return 3;
+      };
+      return priority(a._followup) - priority(b._followup);
+    });
   }
 
   return NextResponse.json({
