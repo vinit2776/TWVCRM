@@ -308,7 +308,11 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     }
   };
 
+  const [paymentLinkSending, setPaymentLinkSending] = useState(false);
+  const [paymentLinkSent, setPaymentLinkSent] = useState(false);
+
   const handleSendPaymentLink = async () => {
+    setPaymentLinkSending(true);
     // Try to create Razorpay payment link first
     const razorpayUrl = await ensureRazorpayPaymentLink();
 
@@ -320,11 +324,33 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         razorpay_payment_link_url: razorpayUrl || undefined,
       }),
     });
+    setPaymentLinkSending(false);
     if (res.ok) {
-      toast.success("Payment link sent to customer");
+      setPaymentLinkSent(true);
+      const customerEmail = booking?.lead?.email || booking?.guest_email || "customer";
+      toast.success(`Payment link sent to ${customerEmail}`, {
+        description: razorpayUrl
+          ? "Customer will receive a Razorpay payment link via email. Payment status will update automatically once completed."
+          : "Customer will receive an internal payment link via email.",
+        duration: 6000,
+      });
+      // Start polling for payment status updates
+      const pollInterval = setInterval(async () => {
+        const refreshRes = await fetch(`/api/bookings/${id}`);
+        if (refreshRes.ok) {
+          const refreshJson = await refreshRes.json();
+          if (refreshJson.data?.payment_status === "paid") {
+            clearInterval(pollInterval);
+            setBooking(refreshJson.data);
+            toast.success("Payment received! Customer has completed the payment.", { duration: 8000 });
+          }
+        }
+      }, 10000); // Poll every 10 seconds
+      // Stop polling after 10 minutes
+      setTimeout(() => clearInterval(pollInterval), 600000);
     } else {
       const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to send");
+      toast.error(err?.error || "Failed to send payment link");
     }
   };
 
@@ -653,9 +679,24 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleCopyPaymentLink}>
               <Link2 className="mr-1 h-3.5 w-3.5" />Copy Payment Link
             </Button>
-            <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleSendPaymentLink}>
-              <Mail className="mr-1 h-3.5 w-3.5" />Send Payment Link
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs h-7"
+              onClick={handleSendPaymentLink}
+              disabled={paymentLinkSending}
+            >
+              {paymentLinkSending ? (
+                <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />Sending...</>
+              ) : (
+                <><Mail className="mr-1 h-3.5 w-3.5" />Send Payment Link</>
+              )}
             </Button>
+            {paymentLinkSent && (
+              <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-700 bg-blue-50 animate-pulse">
+                ⏳ Awaiting payment…
+              </Badge>
+            )}
           </>
         )}
       </div>
