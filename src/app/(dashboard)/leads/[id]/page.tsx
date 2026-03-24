@@ -27,6 +27,9 @@ import {
   LEAD_SOURCE_LABELS,
   WORKSPACE_TYPE_LABELS,
   LEAD_SCORE_SHORT_LABELS,
+  ENTITY_TYPE_LABELS,
+  DOCUMENT_CHECKLISTS,
+  VO_PURPOSE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import {
@@ -218,9 +221,60 @@ export default function LeadDetailPage({
                         value={lead.assigned_user.full_name}
                       />
                     )}
+                    <InfoRow
+                      icon={Building}
+                      label="Entity Type"
+                      value={lead.entity_type ? ENTITY_TYPE_LABELS[lead.entity_type] : undefined}
+                    />
                   </div>
                 </CardContent>
               </Card>
+
+              {/* KYC Document Requirements Preview */}
+              {lead.entity_type && (
+                <Card>
+                  <CardHeader>
+                    <CardTitle className="text-base">
+                      KYC Documents Required — {ENTITY_TYPE_LABELS[lead.entity_type]}
+                    </CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-4">
+                    {Object.entries(DOCUMENT_CHECKLISTS).map(([purpose, entityMap]) => {
+                      const docs = entityMap[lead.entity_type!];
+                      if (!docs || docs.length === 0) return null;
+                      return (
+                        <div key={purpose}>
+                          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">
+                            {VO_PURPOSE_LABELS[purpose] || purpose}
+                          </p>
+                          <div className="flex flex-wrap gap-1.5">
+                            {docs.map((doc) => (
+                              <span
+                                key={doc.type}
+                                className={`inline-flex items-center rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                                  doc.required
+                                    ? "bg-primary/10 text-primary"
+                                    : "bg-muted text-muted-foreground"
+                                }`}
+                              >
+                                {doc.label}
+                                {!doc.required && (
+                                  <span className="ml-1 text-[10px] opacity-60">
+                                    (optional)
+                                  </span>
+                                )}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                    <p className="text-xs text-muted-foreground mt-2">
+                      These documents will be required when creating a case for this client.
+                    </p>
+                  </CardContent>
+                </Card>
+              )}
 
               {/* Coworking Requirements */}
               {(lead.workspace_type ||

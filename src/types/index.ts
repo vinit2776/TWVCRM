@@ -95,6 +95,9 @@ export interface Lead {
   working_hours?: string;
   budget_per_seat?: number;
   pan_number?: string;
+  entity_type?: string | null;
+  // Followup flag (attached by API, not DB column)
+  _followup?: { overdue: boolean; due_today: boolean; upcoming: boolean } | null;
   // Address
   street?: string;
   city?: string;

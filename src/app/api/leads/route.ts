@@ -60,8 +60,35 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  // Attach followup status flags for each lead
+  const leads = data || [];
+  if (leads.length > 0) {
+    const leadIds = leads.map((l: { id: string }) => l.id);
+    const { data: followups } = await supabase
+      .from("activities")
+      .select("lead_id, follow_up_date")
+      .in("lead_id", leadIds)
+      .eq("is_follow_up_done", false)
+      .not("follow_up_date", "is", null);
+
+    if (followups && followups.length > 0) {
+      const today = new Date().toISOString().slice(0, 10);
+      const fMap: Record<string, { overdue: boolean; due_today: boolean; upcoming: boolean }> = {};
+      for (const f of followups) {
+        const d = (f.follow_up_date as string).slice(0, 10);
+        if (!fMap[f.lead_id]) fMap[f.lead_id] = { overdue: false, due_today: false, upcoming: false };
+        if (d < today) fMap[f.lead_id].overdue = true;
+        else if (d === today) fMap[f.lead_id].due_today = true;
+        else fMap[f.lead_id].upcoming = true;
+      }
+      leads.forEach((l: { id: string; _followup?: unknown }) => {
+        l._followup = fMap[l.id] || null;
+      });
+    }
+  }
+
   return NextResponse.json({
-    data,
+    data: leads,
     pagination: {
       page,
       limit,

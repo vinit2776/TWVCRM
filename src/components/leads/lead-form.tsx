@@ -25,6 +25,8 @@ import {
   RATING_LABELS,
   LEAD_SCORES,
   LEAD_SCORE_LABELS,
+  ENTITY_TYPES,
+  ENTITY_TYPE_LABELS,
 } from "@/lib/constants";
 import type { Lead } from "@/types";
 import { useState } from "react";
@@ -79,6 +81,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
       country: lead?.country || "India",
       enquiry_form_google: lead?.enquiry_form_google || "",
       enquiry_form_direct: lead?.enquiry_form_direct || "",
+      entity_type: (lead?.entity_type as CreateLeadInput["entity_type"]) || undefined,
       description: lead?.description || "",
       tags: lead?.tags || [],
     },
@@ -89,6 +92,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
   const rating = watch("rating");
   const score = watch("score");
   const workspaceType = watch("workspace_type");
+  const entityType = watch("entity_type");
 
   const onFormSubmit = async (data: CreateLeadInput) => {
     setSubmitting(true);
@@ -158,7 +162,9 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             <Input id="title" {...register("title")} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="email">Email</Label>
+            <Label htmlFor="email">
+              Email <span className="text-destructive">*</span>
+            </Label>
             <Input id="email" type="email" {...register("email")} />
             {errors.email && (
               <p className="text-xs text-destructive">
@@ -179,8 +185,15 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             <Input id="phone" {...register("phone")} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="mobile">Mobile</Label>
+            <Label htmlFor="mobile">
+              Mobile <span className="text-destructive">*</span>
+            </Label>
             <Input id="mobile" {...register("mobile")} />
+            {errors.mobile && (
+              <p className="text-xs text-destructive">
+                {errors.mobile.message}
+              </p>
+            )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="website">Website</Label>
@@ -284,6 +297,26 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
               type="number"
               {...register("no_of_employees", { setValueAs: (v: string) => v === "" ? undefined : Number(v) })}
             />
+          </div>
+          <div className="space-y-2">
+            <Label>Entity Type</Label>
+            <Select
+              value={entityType || ""}
+              onValueChange={(val) =>
+                setValue("entity_type", (val || undefined) as CreateLeadInput["entity_type"])
+              }
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select entity type" />
+              </SelectTrigger>
+              <SelectContent>
+                {ENTITY_TYPES.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {ENTITY_TYPE_LABELS[t]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
         </div>
       </section>

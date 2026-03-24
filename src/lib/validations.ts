@@ -8,9 +8,9 @@ export const createLeadSchema = z.object({
   last_name: z.string().min(1, "Last name is required"),
   company: z.string().optional(),
   aggregator_contact_name: z.string().optional(),
-  email: z.string().email("Invalid email").optional().or(z.literal("")),
+  email: z.string().min(1, "Email is required").email("Invalid email address"),
   phone: z.string().optional(),
-  mobile: z.string().optional(),
+  mobile: z.string().min(1, "Mobile number is required"),
   website: z.string().url("Invalid URL").optional().or(z.literal("")),
   title: z.string().optional(),
   secondary_email: z.string().email("Invalid email").optional().or(z.literal("")),
@@ -65,6 +65,10 @@ export const createLeadSchema = z.object({
   enquiry_form_google: z.string().url("Invalid URL").optional().or(z.literal("")),
   enquiry_form_direct: z.string().url("Invalid URL").optional().or(z.literal("")),
   description: z.string().optional(),
+  entity_type: z.enum([
+    "individual", "proprietorship", "partnership", "llp",
+    "pvt_ltd", "public_ltd", "trust", "society", "huf", "other",
+  ]).optional().nullable(),
   tags: z.array(z.string()),
   assigned_to: z.string().uuid().optional(),
   lost_reason: z.string().optional(),
@@ -112,6 +116,10 @@ export const importLeadSchema = z.object({
   enquiry_form_google: z.string().optional(),
   enquiry_form_direct: z.string().optional(),
   description: z.string().optional(),
+  entity_type: z.enum([
+    "individual", "proprietorship", "partnership", "llp",
+    "pvt_ltd", "public_ltd", "trust", "society", "huf", "other",
+  ]).optional().nullable(),
   tags: z.array(z.string()).default([]),
 });
 

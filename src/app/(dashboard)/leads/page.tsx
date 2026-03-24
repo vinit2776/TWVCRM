@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload, Bell, RefreshCw } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload, Bell, RefreshCw, AlertTriangle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -347,6 +347,22 @@ export default function LeadsPage() {
                         >
                           {lead.first_name} {lead.last_name}
                         </Link>
+                        {/* Followup flag */}
+                        {lead._followup?.overdue && (
+                          <span title="Overdue follow-up" className="shrink-0">
+                            <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
+                          </span>
+                        )}
+                        {!lead._followup?.overdue && lead._followup?.due_today && (
+                          <span title="Follow-up due today" className="shrink-0">
+                            <Clock className="h-3.5 w-3.5 text-amber-500" />
+                          </span>
+                        )}
+                        {!lead._followup?.overdue && !lead._followup?.due_today && lead._followup?.upcoming && (
+                          <span title="Upcoming follow-up" className="shrink-0">
+                            <Clock className="h-3.5 w-3.5 text-blue-500" />
+                          </span>
+                        )}
                       </div>
                     </td>
                     <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
