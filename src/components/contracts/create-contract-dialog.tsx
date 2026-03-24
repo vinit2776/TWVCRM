@@ -20,7 +20,7 @@ import {
 } from "@/components/ui/select";
 import { Loader2, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
-import { BILLING_CYCLES, BILLING_CYCLE_LABELS } from "@/lib/constants";
+import { BILLING_CYCLES, BILLING_CYCLE_LABELS, KYC_DOCUMENTS, ENTITY_TYPE_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import { LocationSelector } from "@/components/shared/location-selector";
 import type { Proposal, Lead } from "@/types";
@@ -49,6 +49,7 @@ export function CreateContractDialog({
   // Member details (auto-filled from lead, editable)
   const [company, setCompany] = useState("");
   const [panNumber, setPanNumber] = useState("");
+  const [gstNumber, setGstNumber] = useState("");
   const [street, setStreet] = useState("");
   const [city, setCity] = useState("");
   const [state, setState] = useState("");
@@ -98,6 +99,7 @@ export function CreateContractDialog({
             setLead(l);
             setCompany(l.company || "");
             setPanNumber(l.pan_number || "");
+            setGstNumber(l.gst_number || "");
             setStreet(l.street || "");
             setCity(l.city || "");
             setState(l.state || "");
@@ -124,6 +126,25 @@ export function CreateContractDialog({
       setMonthlyFee(selectedProposal.total_amount);
       if (selectedProposal.location_id) {
         setLocationId(selectedProposal.location_id);
+      }
+      // Prefill complimentary services from proposal description
+      if (selectedProposal.description) {
+        setComplimentaryServices(selectedProposal.description);
+      }
+      // Prefill notes from proposal notes
+      if (selectedProposal.notes) {
+        setNotes(selectedProposal.notes);
+      }
+      // Prefill workspace description from proposal title + items summary
+      if (selectedProposal.title) {
+        const itemsSummary = selectedProposal.items
+          ?.map((item: { description: string; quantity: number; unit?: string }) =>
+            `${item.quantity}${item.unit ? " " + item.unit : ""} ${item.description}`
+          )
+          .join(", ");
+        setWorkspaceDescription(
+          itemsSummary ? `${selectedProposal.title} — ${itemsSummary}` : selectedProposal.title
+        );
       }
     }
   }, [selectedProposal]);
@@ -153,6 +174,7 @@ export function CreateContractDialog({
     setSelectedProposalId("");
     setCompany("");
     setPanNumber("");
+    setGstNumber("");
     setStreet("");
     setCity("");
     setState("");
@@ -229,6 +251,7 @@ export function CreateContractDialog({
     const leadUpdates: Record<string, string | undefined> = {};
     if (company.trim() !== (lead?.company || "")) leadUpdates.company = company.trim();
     if (panNumber.trim() !== (lead?.pan_number || "")) leadUpdates.pan_number = panNumber.trim();
+    if (gstNumber.trim() !== (lead?.gst_number || "")) leadUpdates.gst_number = gstNumber.trim();
     if (street.trim() !== (lead?.street || "")) leadUpdates.street = street.trim();
     if (city.trim() !== (lead?.city || "")) leadUpdates.city = city.trim();
     if (state.trim() !== (lead?.state || "")) leadUpdates.state = state.trim();
@@ -393,6 +416,15 @@ export function CreateContractDialog({
                     Recommended for agreement
                   </div>
                 )}
+              </div>
+              <div className="space-y-2">
+                <Label>GSTIN</Label>
+                <Input
+                  value={gstNumber}
+                  onChange={(e) => setGstNumber(e.target.value.toUpperCase())}
+                  placeholder="e.g. 33AABCA1234E1Z5"
+                  maxLength={15}
+                />
               </div>
             </div>
             <div className="space-y-2">
@@ -606,7 +638,11 @@ export function CreateContractDialog({
                 <p>
                   <span className="text-muted-foreground">Monthly Fee:</span>{" "}
                   <span className="font-medium">{formatCurrency(monthlyFee)}</span>
-                  <span className="text-muted-foreground text-xs ml-1">+ GST</span>
+                  <span className="text-muted-foreground text-xs ml-1">+ 18% GST ({formatCurrency(monthlyFee * 0.18)})</span>
+                </p>
+                <p>
+                  <span className="text-muted-foreground">Monthly Fee incl. GST:</span>{" "}
+                  <span className="font-semibold">{formatCurrency(monthlyFee * 1.18)}</span>
                 </p>
               </div>
             )}
@@ -699,6 +735,36 @@ export function CreateContractDialog({
               rows={2}
             />
           </div>
+
+          {/* KYC Documents Required */}
+          {lead?.entity_type && KYC_DOCUMENTS[lead.entity_type] && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 p-4 space-y-2">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-amber-600" />
+                <Label className="text-sm font-semibold text-amber-800">
+                  KYC Documents Required — {ENTITY_TYPE_LABELS[lead.entity_type] || lead.entity_type}
+                </Label>
+              </div>
+              <p className="text-xs text-amber-700">
+                Collect these documents from the customer for contract activation:
+              </p>
+              <ul className="text-xs text-amber-800 space-y-1 ml-5 list-disc">
+                {KYC_DOCUMENTS[lead.entity_type].map((doc) => (
+                  <li key={doc}>{doc}</li>
+                ))}
+              </ul>
+            </div>
+          )}
+          {!lead?.entity_type && (
+            <div className="rounded-md border border-red-200 bg-red-50 p-3">
+              <div className="flex items-center gap-2">
+                <AlertTriangle className="h-4 w-4 text-red-500" />
+                <p className="text-xs text-red-700">
+                  Customer profile type not set on lead. Go to the lead page to set entity type (Individual, Company, LLP, etc.) for KYC document requirements.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Actions */}
           <div className="flex justify-end gap-2 pt-2">

@@ -55,6 +55,7 @@ export const createLeadSchema = z.object({
   preferred_location: z.string().optional(),
   location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   pan_number: z.string().optional(),
+  gst_number: z.string().max(15).optional(),
   working_hours: z.string().optional(),
   budget_per_seat: z.number().positive().optional(),
   street: z.string().optional(),

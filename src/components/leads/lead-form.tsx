@@ -55,6 +55,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
       last_name: lead?.last_name || "",
       company: lead?.company || "",
       pan_number: lead?.pan_number || "",
+      gst_number: lead?.gst_number || "",
       aggregator_contact_name: lead?.aggregator_contact_name || "",
       email: lead?.email || "",
       phone: lead?.phone || "",
@@ -156,6 +157,10 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
           <div className="space-y-2">
             <Label htmlFor="pan_number">PAN Number</Label>
             <Input id="pan_number" placeholder="e.g. AABCA1234E" {...register("pan_number")} className="uppercase" />
+          </div>
+          <div className="space-y-2">
+            <Label htmlFor="gst_number">GSTIN</Label>
+            <Input id="gst_number" placeholder="e.g. 33AABCA1234E1Z5" {...register("gst_number")} className="uppercase" maxLength={15} />
           </div>
           <div className="space-y-2">
             <Label htmlFor="title">Title</Label>
