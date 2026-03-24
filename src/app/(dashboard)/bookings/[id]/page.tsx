@@ -345,46 +345,66 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
       const res = await fetch(`/api/bookings/${id}/receipt`);
       if (!res.ok) { toast.error("Failed to generate receipt"); return; }
       const json = await res.json();
-      // Open receipt data in new tab for print/save
-      const receiptData = json.data;
+      const rd = json.data;
+      const b = rd.booking;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const spaceName = (b.space as any)?.name || "—";
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const lead = b.lead as any;
+      const customerName = b.guest_name || (lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Walk-in");
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const loc = b.location as any;
+      const locationStr = loc ? `${loc.name}${loc.address ? ", " + loc.address : ""}${loc.city ? ", " + loc.city : ""}` : "";
+      const dateStr = new Date(b.booking_date).toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" });
+      const startStr = b.start_time?.slice(0, 5);
+      const endStr = b.end_time?.slice(0, 5);
+      const totalPaid = (rd.payments || []).reduce((s: number, p: { amount: number }) => s + p.amount, 0);
+
       const win = window.open("", "_blank");
-      if (!win) { toast.error("Popup blocked"); return; }
+      if (!win) { toast.error("Popup blocked — allow popups for this site"); return; }
       win.document.write(`
-        <html><head><title>Receipt - ${receiptData.booking.booking_number}</title>
+        <html><head><title>Receipt - ${b.booking_number}</title>
         <style>
-          body { font-family: Arial, sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; }
-          h1 { color: #015E65; font-size: 24px; } h2 { font-size: 16px; margin-top: 24px; color: #333; }
-          table { width: 100%; border-collapse: collapse; margin: 12px 0; }
-          td { padding: 6px 0; } .label { color: #666; } .amount { text-align: right; font-weight: bold; }
-          .total { border-top: 2px solid #015E65; font-size: 18px; padding-top: 12px; }
-          .footer { margin-top: 40px; text-align: center; color: #999; font-size: 12px; }
-          @media print { body { margin: 0; } }
+          body { font-family: Arial, sans-serif; max-width: 600px; margin: 40px auto; padding: 20px; color: #1a1b1e; }
+          h1 { color: #015E65; font-size: 24px; margin-bottom: 0; }
+          .brand { color: #00AE6C; font-size: 13px; margin-top: 4px; }
+          h2 { font-size: 15px; margin-top: 24px; color: #333; border-bottom: 1px solid #e5e7eb; padding-bottom: 6px; }
+          table { width: 100%; border-collapse: collapse; margin: 8px 0; }
+          td { padding: 5px 0; font-size: 14px; } .lbl { color: #666; width: 40%; } .val { font-weight: 500; }
+          .amt { text-align: right; font-weight: 600; } .total-row td { border-top: 2px solid #015E65; padding-top: 10px; font-size: 16px; }
+          .footer { margin-top: 40px; text-align: center; color: #999; font-size: 11px; border-top: 1px solid #e5e7eb; padding-top: 16px; }
+          @media print { body { margin: 0; } .no-print { display: none; } }
         </style></head><body>
         <h1>The WorkVilla</h1>
-        <p style="color:#00AE6C;font-size:14px;">Booking Receipt</p>
+        <p class="brand">Booking Receipt</p>
         <hr/>
         <h2>Booking Details</h2>
         <table>
-          <tr><td class="label">Booking #</td><td>${receiptData.booking.booking_number}</td></tr>
-          <tr><td class="label">Space</td><td>${receiptData.booking.space_name}</td></tr>
-          <tr><td class="label">Date</td><td>${receiptData.booking.booking_date}</td></tr>
-          <tr><td class="label">Time</td><td>${receiptData.booking.start_time} - ${receiptData.booking.end_time}</td></tr>
-          <tr><td class="label">Duration</td><td>${receiptData.booking.duration_hours} hour(s)</td></tr>
-          <tr><td class="label">Customer</td><td>${receiptData.booking.customer_name}</td></tr>
+          <tr><td class="lbl">Booking #</td><td class="val">${b.booking_number}</td></tr>
+          <tr><td class="lbl">Space</td><td class="val">${spaceName}</td></tr>
+          ${locationStr ? `<tr><td class="lbl">Location</td><td class="val">${locationStr}</td></tr>` : ""}
+          <tr><td class="lbl">Date</td><td class="val">${dateStr}</td></tr>
+          <tr><td class="lbl">Time</td><td class="val">${startStr} – ${endStr}</td></tr>
+          <tr><td class="lbl">Duration</td><td class="val">${b.duration_hours} hour(s)</td></tr>
+          <tr><td class="lbl">Customer</td><td class="val">${customerName}</td></tr>
+          ${lead?.company ? `<tr><td class="lbl">Company</td><td class="val">${lead.company}</td></tr>` : ""}
         </table>
         <h2>Payment Summary</h2>
         <table>
-          <tr><td class="label">Total Amount</td><td class="amount">₹${receiptData.booking.total_amount?.toLocaleString("en-IN")}</td></tr>
-          ${receiptData.payments.map((p: { amount: number; payment_mode: string; status: string }) =>
-            `<tr><td class="label">${p.payment_mode} (${p.status})</td><td class="amount">₹${p.amount.toLocaleString("en-IN")}</td></tr>`
+          <tr><td class="lbl">Total Amount</td><td class="amt">₹${b.total_amount?.toLocaleString("en-IN")}</td></tr>
+          ${(rd.payments || []).map((p: { amount: number; payment_mode: string }) =>
+            `<tr><td class="lbl">${(p.payment_mode || "").toUpperCase()}</td><td class="amt">₹${p.amount.toLocaleString("en-IN")}</td></tr>`
           ).join("")}
+          <tr class="total-row"><td class="lbl">Total Paid</td><td class="amt">₹${totalPaid.toLocaleString("en-IN")}</td></tr>
+          ${b.total_amount - totalPaid > 0 ? `<tr><td class="lbl" style="color:#dc2626">Balance Due</td><td class="amt" style="color:#dc2626">₹${(b.total_amount - totalPaid).toLocaleString("en-IN")}</td></tr>` : ""}
         </table>
-        ${receiptData.voucher ? `<p><strong>WiFi Voucher:</strong> ${receiptData.voucher.voucher_code}</p>` : ""}
+        ${rd.voucher_code ? `<p style="margin-top:16px;"><strong>WiFi Voucher:</strong> <code style="background:#f0faf5;padding:2px 8px;border-radius:4px;">${rd.voucher_code}</code></p>` : ""}
         <div class="footer">
-          <p>${receiptData.company.name}</p>
-          <p>${receiptData.company.address}</p>
+          <p><strong>${rd.company.name}</strong></p>
+          <p>${rd.company.brand} | ${rd.company.address}</p>
+          <p>${rd.company.phone} | GST: ${rd.company.gst}</p>
         </div>
-        <script>window.print();</script>
+        <script>setTimeout(function(){ window.print(); }, 300);</script>
         </body></html>
       `);
       win.document.close();
@@ -604,12 +624,26 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleDownloadReceipt}>
           <Download className="mr-1 h-3.5 w-3.5" />Download Receipt
         </Button>
-        {booking.status === "checked_out" && booking.feedback_token && (
+        {booking.status === "checked_out" && (
           <>
-            <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleCopyFeedbackLink}>
-              <Copy className="mr-1 h-3.5 w-3.5" />Copy Feedback Link
-            </Button>
-            <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleSendFeedbackLink}>
+            {booking.feedback_token && (
+              <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleCopyFeedbackLink}>
+                <Copy className="mr-1 h-3.5 w-3.5" />Copy Feedback Link
+              </Button>
+            )}
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs h-7"
+              onClick={() => {
+                const email = booking.lead?.email || booking.guest_email;
+                if (!email) {
+                  toast.error("No customer email on file — add email to the lead before sending feedback");
+                  return;
+                }
+                handleSendFeedbackLink();
+              }}
+            >
               <MessageCircle className="mr-1 h-3.5 w-3.5" />Send Feedback Link
             </Button>
           </>
