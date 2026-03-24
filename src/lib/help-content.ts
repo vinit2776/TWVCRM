@@ -139,7 +139,7 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Dashboard",
       icon: LayoutDashboard,
       overview:
-        "The Dashboard is your home screen. It shows key performance indicators (KPIs) like total leads, conversion rate, tasks due today, and pending follow-ups. A Follow-ups widget highlights overdue and upcoming follow-up actions so nothing slips through. Recent team activities are shown in a live feed. Use the location filter to focus on a specific coworking center.",
+        "The Dashboard is your home screen. It shows key performance indicators (KPIs) like total leads, conversion rate, tasks due today, and pending follow-ups. A Follow-ups widget highlights overdue and upcoming follow-up actions so nothing slips through. Recent team activities are shown in a live feed. Use the location filter to focus on a specific coworking center. Admins can configure which widgets are visible for each role, so different team members see the most relevant information.",
       workflows: [
         {
           title: "Reading Your Dashboard",
@@ -150,16 +150,26 @@ export const HELP_CONTENT: HelpContentData = {
             { step: 4, title: "Filter by location", description: "Use the location dropdown at the top to filter all dashboard metrics for a specific coworking center." },
           ],
         },
+        {
+          title: "Configuring Dashboard Widgets per Role (Admin only)",
+          steps: [
+            { step: 1, title: "Go to Settings → Dashboard Widgets", description: "Navigate to Settings and find the Dashboard Widgets configuration section." },
+            { step: 2, title: "Select a role", description: "Choose the role you want to configure (Admin, Manager, Sales Rep, Floor Manager, etc.)." },
+            { step: 3, title: "Toggle widgets", description: "Enable or disable individual widgets for the selected role. Changes take effect immediately for all users in that role." },
+          ],
+        },
       ],
       tips: [
         "Check the dashboard first thing each morning — the Follow-ups widget shows overdue actions that need immediate attention.",
         "A declining conversion rate may indicate leads are stalling — review the Leads list for bottlenecks.",
         "The Follow-ups widget is role-aware: Sales Reps see only their own follow-ups; Managers and Admins see all.",
+        "Admins can tailor the dashboard for each role — hide irrelevant widgets to keep the interface clean for each team member.",
       ],
       faqs: [
         { question: "Why are my dashboard numbers different from my colleague's?", answer: "If you are a Sales Rep, you only see leads and tasks assigned to you. Admins and Managers see data for all team members. Filter by location to narrow the view further." },
         { question: "How often does the dashboard refresh?", answer: "The dashboard fetches fresh data each time you visit the page or refresh your browser. There is no auto-refresh interval." },
         { question: "What does the Follow-ups widget show?", answer: "It lists leads whose scheduled follow-up date has passed (overdue) or is coming up soon, sorted by urgency. Click any row to open the lead and take action." },
+        { question: "I can't see a widget my colleague can see. Why?", answer: "Admins can configure which widgets are visible per role. If a widget is missing, ask your admin to enable it for your role in Settings → Dashboard Widgets." },
       ],
       roles: null,
     },
@@ -172,13 +182,13 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Leads",
       icon: Users,
       overview:
-        "Leads represent potential customers interested in your coworking spaces. Each lead tracks contact details, company information, workspace requirements, and their journey from initial inquiry to becoming a member. You can create, edit, rate, and move leads through statuses as they progress.",
+        "Leads represent potential customers interested in your coworking spaces. Each lead tracks contact details, company information, workspace requirements, and their journey from initial inquiry to becoming a member. You can create, edit, rate, and move leads through statuses as they progress. Email and mobile number are mandatory fields for every lead. The leads list is sorted by follow-up urgency — overdue follow-ups appear first so the most time-sensitive actions are always at the top.",
       workflows: [
         {
           title: "Creating a New Lead",
           steps: [
             { step: 1, title: "Click 'New Lead'", description: "Go to the Leads page and click the 'New Lead' button in the top right corner." },
-            { step: 2, title: "Fill in contact details", description: "Enter the lead's first name, last name, email, phone, and company. All fields marked with * are required." },
+            { step: 2, title: "Fill in contact details", description: "Enter the lead's first name, last name, email, and mobile number (both are mandatory). Add company name and any other details." },
             { step: 3, title: "Set workspace requirements", description: "Select the workspace type (dedicated desk, private office, etc.), preferred location, and number of seats needed." },
             { step: 4, title: "Choose source and status", description: "Select how the lead found you (website, referral, cold outreach, etc.) and set the initial status (usually 'New')." },
             { step: 5, title: "Save", description: "Click Save to create the lead. You will be redirected to the lead detail page." },
@@ -195,6 +205,8 @@ export const HELP_CONTENT: HelpContentData = {
         },
       ],
       tips: [
+        "Email and mobile are mandatory — you cannot save a lead without both fields filled in.",
+        "The leads list is automatically sorted by follow-up urgency: overdue follow-ups appear first, then upcoming ones, then the rest.",
         "Use the star rating (1-5) to quickly prioritize high-value leads.",
         "Filter the leads list by status, source, or location to find exactly what you need.",
         "Each lead detail page shows related proposals, contracts, activities, and tasks in separate tabs.",
@@ -204,6 +216,7 @@ export const HELP_CONTENT: HelpContentData = {
         { question: "What do the lead statuses mean?", answer: "New: Just entered the system. Qualified: Confirmed as a real opportunity. Proposal Sent: A proposal has been emailed. Negotiation: Active discussions on terms. Won: Converted to a customer. Lost: Did not convert." },
         { question: "Can I assign a lead to another team member?", answer: "Yes. Open the lead's edit page and change the 'Assigned To' field to another team member. They will then see the lead in their own leads list." },
         { question: "How do I find a specific lead?", answer: "Use the search bar at the top of the leads list to search by name, email, or company. You can also use Cmd+K to search globally." },
+        { question: "Why is the leads list sorted in a specific order?", answer: "The list sorts by follow-up urgency: leads with overdue follow-up dates appear first, followed by those with upcoming follow-ups. This ensures the most time-sensitive actions are always visible at the top." },
       ],
       roles: null,
     },
@@ -313,7 +326,7 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Proposals",
       icon: FileText,
       overview:
-        "Proposals are formal workspace offers sent to qualified leads. Each proposal is auto-numbered (PROP-XXXX), contains pricing details and workspace specifications, and can be emailed directly to the lead as a PDF attachment from the CRM.",
+        "Proposals are formal workspace offers sent to qualified leads. Each proposal is auto-numbered (PROP-XXXX), contains pricing details and workspace specifications, and can be emailed directly to the lead as a PDF attachment from the CRM. When a proposal is rejected, a rejection reason must be recorded. KYC documents can be attached directly to a proposal.",
       workflows: [
         {
           title: "Creating and Sending a Proposal",
@@ -325,17 +338,36 @@ export const HELP_CONTENT: HelpContentData = {
             { step: 5, title: "Email to the client", description: "Open the proposal and click 'Email'. Add recipient(s) and send. The proposal PDF is attached automatically." },
           ],
         },
+        {
+          title: "Rejecting a Proposal",
+          steps: [
+            { step: 1, title: "Open the proposal", description: "Navigate to the proposal you need to mark as rejected." },
+            { step: 2, title: "Click 'Reject'", description: "Select the Reject action. A dialog will prompt you for a rejection reason." },
+            { step: 3, title: "Enter the reason", description: "Type the reason the client declined (e.g., price too high, chose competitor, requirement changed). This is required." },
+            { step: 4, title: "Confirm", description: "Save. The proposal moves to 'Rejected' status and the reason is stored for future reference." },
+          ],
+        },
+        {
+          title: "Attaching KYC Documents to a Proposal",
+          steps: [
+            { step: 1, title: "Open the proposal", description: "Navigate to the relevant proposal." },
+            { step: 2, title: "Go to the Documents section", description: "Scroll to or select the Documents/KYC section within the proposal." },
+            { step: 3, title: "Upload files", description: "Upload ID proof, address proof, or other KYC documents. PDF and image formats are supported." },
+          ],
+        },
       ],
       tips: [
         "You can add multiple email recipients when sending — add the lead's email plus any additional contacts.",
         "After sending, the proposal status changes to 'Sent' and the lead status updates to 'Proposal Sent'.",
         "Review the PDF preview before sending to ensure formatting is correct.",
+        "Always log a rejection reason — this data helps identify why deals are lost and improve future pitches.",
         "Proposals that receive no response can be manually set to 'Expired'.",
       ],
       faqs: [
         { question: "Can I edit a proposal after sending it?", answer: "Yes, you can edit the proposal content. However, the previously sent PDF will not update in the recipient's inbox. You would need to re-send the updated version." },
         { question: "What email address are proposals sent from?", answer: "All emails are sent from contact@theworkvilla.com via Google Workspace. Recipients can reply directly to this address." },
         { question: "Can I send a proposal to multiple people?", answer: "Yes. In the email dialog, type each additional email address and press Enter to add them. All recipients will receive the same email with the proposal PDF attached." },
+        { question: "Is a rejection reason mandatory?", answer: "Yes. When rejecting a proposal, you must enter a reason. This ensures there is always an explanation on record for why an opportunity was lost." },
       ],
       roles: null,
     },
@@ -396,12 +428,14 @@ export const HELP_CONTENT: HelpContentData = {
       ],
       tips: [
         "The contract email includes bank details so the client knows where to make payments.",
+        "Use 'Send to Client' to automatically email the signed agreement PDF directly to the client — no need to export and attach manually.",
         "Use the search and date filters to find contracts by number, lead name, or date range.",
         "Active contracts appear in the Accounting module for monthly billing.",
       ],
       faqs: [
         { question: "What happens when a contract ends?", answer: "When a contract reaches its end date, you can update the status to 'Completed' or create a new contract for renewal." },
         { question: "Can I cancel an active contract?", answer: "Yes. Change the contract status to 'Cancelled'. Note that this does not automatically handle any outstanding payments." },
+        { question: "How do I send the signed agreement to the client?", answer: "Use the 'Send to Client' action on the contract. The system will automatically generate the agreement PDF and email it directly to the client's registered email address." },
       ],
       roles: null,
     },
@@ -787,25 +821,29 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Infrastructure",
       icon: Server,
       overview:
-        "The Infrastructure page provides real-time monitoring of the systems powering the CRM. It shows database usage, hosting metrics, email sending quotas, and a breakdown of database table sizes. Use this to ensure the system is healthy and within resource limits.",
+        "The Infrastructure page provides real-time monitoring of the systems powering the CRM. It shows database usage, hosting metrics, email sending quotas, live Vercel deployment usage, an email sent counter, and a breakdown of database table sizes. Use this to ensure the system is healthy and within resource limits.",
       workflows: [
         {
           title: "Monitoring System Health",
           steps: [
             { step: 1, title: "Go to Infrastructure", description: "Navigate to Infrastructure from the sidebar (Admin only)." },
-            { step: 2, title: "Review metrics", description: "Check Supabase (database), Vercel (hosting), and Email Service panels for usage levels." },
-            { step: 3, title: "Check alerts", description: "Amber (60%+) and red (80%+) indicators flag high resource usage." },
-            { step: 4, title: "Refresh data", description: "Click Refresh to fetch the latest metrics. Data is cached for 24 hours." },
+            { step: 2, title: "Review metrics", description: "Check Supabase (database), Vercel (hosting), and Email Service panels for usage levels. The Vercel panel shows live bandwidth and function invocation counts." },
+            { step: 3, title: "Check the email counter", description: "The email sent counter shows how many emails have been dispatched from the CRM, helping you track send volume against your provider quota." },
+            { step: 4, title: "Check alerts", description: "Amber (60%+) and red (80%+) indicators flag high resource usage." },
+            { step: 5, title: "Refresh data", description: "Click Refresh to fetch the latest metrics. Data is cached for 24 hours." },
           ],
         },
       ],
       tips: [
         "Monitor the database row count to track growth over time.",
+        "The live Vercel usage panel shows real-time bandwidth and function execution against your plan limits.",
+        "The email sent counter gives a quick snapshot of send volume — useful for spotting unexpected spikes.",
         "Email quotas reset daily and monthly. If sending fails, check if the quota is exhausted.",
         "Use the external dashboard links to access Supabase, Vercel, or Email provider consoles directly.",
       ],
       faqs: [
         { question: "What do the color indicators mean?", answer: "Green: Usage is normal (under 60%). Amber: Usage is elevated (60-80%). Red: Usage is high (over 80%) — consider upgrading or optimizing." },
+        { question: "What does the email sent counter show?", answer: "It shows the total number of emails sent from the CRM (proposals, contracts, invoices, etc.) allowing you to monitor send volume and check if you are approaching provider limits." },
       ],
       roles: ["admin"],
     },
@@ -815,10 +853,10 @@ export const HELP_CONTENT: HelpContentData = {
     /* ============================================================== */
     {
       id: "email-system",
-      title: "Email System",
+      title: "Email & SMS System",
       icon: Mail,
       overview:
-        "The CRM sends emails via Google Workspace SMTP using the contact@theworkvilla.com address. Emails are sent for proposals, contracts, invoices, booking confirmations, payment reminders, feedback requests, and vouchers. All sent emails are logged as activities on the lead's timeline.",
+        "The CRM sends emails via Google Workspace SMTP using the contact@theworkvilla.com address. Emails are sent for proposals, contracts, invoices, booking confirmations, payment reminders, feedback requests, and vouchers. All sent emails are logged as activities on the lead's timeline. In addition, the CRM sends DLT-compliant transactional SMS messages via MSG91 for key customer touchpoints, using pre-approved templates registered with India's telecom regulatory framework.",
       workflows: [
         {
           title: "Sending an Email from the CRM",
@@ -835,11 +873,13 @@ export const HELP_CONTENT: HelpContentData = {
         "The sender's name (your profile name) appears in the email sign-off.",
         "Multiple recipients are supported — simply add more email addresses in the dialog.",
         "Check the Activities tab on the lead's page to confirm the email was sent and see all recipients.",
+        "SMS messages are sent automatically for key events (e.g., booking confirmation, payment received) using DLT-registered templates — no manual action needed.",
       ],
       faqs: [
         { question: "What email address do emails come from?", answer: "All CRM emails are sent from 'The WorkVilla <contact@theworkvilla.com>' via Google Workspace SMTP." },
         { question: "Can recipients reply to CRM emails?", answer: "Yes. The reply-to address is set to contact@theworkvilla.com. Replies go to the Google Workspace inbox." },
         { question: "An email was not received. What should I check?", answer: "Ask the recipient to check their spam/junk folder. Also verify the email address was typed correctly. Check the lead's activity timeline to confirm the email was sent successfully from the CRM." },
+        { question: "What is DLT-compliant SMS?", answer: "DLT (Distributed Ledger Technology) is TRAI's mandatory framework for commercial SMS in India. All SMS templates used by the CRM are pre-registered with the telecom regulator via MSG91 to ensure deliverability and compliance. These cover 6 key customer communication events." },
       ],
       roles: null,
     },
@@ -938,7 +978,7 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Support Tickets",
       icon: LifeBuoy,
       overview:
-        "Support Tickets track internal issues, customer complaints, and maintenance requests. Any staff member can create a ticket. Each ticket is auto-numbered (TWV-T-XXXX) and has a subject, type, priority, status, reporter, and assignee. Admins and Managers triage and resolve tickets. This module keeps issues visible and accountable.",
+        "Support Tickets track internal issues, customer complaints, and maintenance requests. Any staff member can create a ticket and track their own tickets via the 'My Tickets' view. Each ticket is auto-numbered (TWV-T-XXXX) and has a subject, type, priority, status, reporter, and assignee. Admins and Managers triage and resolve tickets. If a resolved or closed ticket needs further attention, the ticket owner (creator) can reopen it. This module keeps issues visible and accountable.",
       workflows: [
         {
           title: "Creating a Support Ticket",
@@ -960,15 +1000,27 @@ export const HELP_CONTENT: HelpContentData = {
             { step: 4, title: "Resolve or close", description: "Set status to 'Resolved' when fixed, then 'Closed' after confirmation from the reporter." },
           ],
         },
+        {
+          title: "Tracking Your Own Tickets (My Tickets)",
+          steps: [
+            { step: 1, title: "Open 'My Tickets'", description: "Switch to the 'My Tickets' tab on the Support Tickets page to see only tickets you created." },
+            { step: 2, title: "Monitor status", description: "Track the progress of your reported issues — you can see when they move from Open to In Progress to Resolved." },
+            { step: 3, title: "Reopen if needed", description: "If a ticket was marked Resolved or Closed but the issue persists, click 'Reopen'. The ticket returns to Open status and the assignee is notified." },
+          ],
+        },
       ],
       tips: [
         "Use 'Urgent' priority for issues affecting current customers or operations — these show at the top of the list.",
         "Add detailed notes when closing a ticket so there is a record of how the issue was resolved.",
         "Tickets are numbered sequentially (TWV-T-0001, TWV-T-0002, …) making them easy to reference in conversations.",
         "Any team member can create tickets — encourage staff to report issues immediately rather than verbally.",
+        "Use 'My Tickets' to track the status of issues you reported without digging through the full ticket list.",
+        "As the ticket creator, you can reopen a Resolved or Closed ticket if the issue was not fully fixed.",
       ],
       faqs: [
         { question: "Who can see support tickets?", answer: "All authenticated team members can view tickets. Any staff member can create one. Admins and Managers can assign, update, and close tickets." },
+        { question: "Can I reopen a ticket that was marked resolved?", answer: "Yes. If you are the ticket creator (owner), you will see a 'Reopen' option on Resolved and Closed tickets. This lets you flag that the issue needs further attention." },
+        { question: "What is 'My Tickets'?", answer: "My Tickets is a self-service view that shows only the tickets you personally created. Every role has access to it, making it easy to track your own reported issues without seeing the full ticket queue." },
         { question: "Can I link a ticket to a lead or booking?", answer: "Tickets can reference any context in their description. Direct linking to other entities is via ticket notes." },
         { question: "What ticket types are available?", answer: "Common types include Maintenance, IT Issue, Customer Complaint, Billing Query, and General. The exact list may vary based on your configuration." },
       ],
@@ -983,7 +1035,7 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Procurement",
       icon: ShoppingCart,
       overview:
-        "The Procurement module manages the full purchasing lifecycle for The WorkVilla — from vendor management and item catalogues through purchase requests, purchase orders, and vendor bills. It provides visibility into what is being ordered, from whom, and at what cost, enabling better control over operational expenses.",
+        "The Procurement module manages the full purchasing lifecycle for The WorkVilla — from vendor management and item catalogues through purchase requests, purchase orders (goods and services), delivery receipts, vendor bills, and bill approvals. It provides visibility into what is being ordered, from whom, and at what cost, enabling better control over operational expenses. Service POs support recurring billing cycles and per-cycle invoicing.",
       workflows: [
         {
           title: "Adding a Vendor",
@@ -1003,33 +1055,50 @@ export const HELP_CONTENT: HelpContentData = {
           ],
         },
         {
-          title: "Raising a Purchase Order",
+          title: "Raising a Goods Purchase Order",
           steps: [
             { step: 1, title: "Go to Purchase Orders", description: "Navigate to Procurement → Purchase Orders." },
-            { step: 2, title: "Create from request", description: "Click 'New PO' and optionally link to an approved purchase request. Select the vendor and add line items." },
+            { step: 2, title: "Create from request", description: "Click 'New PO', select type 'Goods', and optionally link to an approved purchase request. Select the vendor and add line items." },
             { step: 3, title: "Send to vendor", description: "Generate the PO document and send it to the vendor. The PO status moves to 'Sent'." },
-            { step: 4, title: "Receive goods", description: "When goods are received, mark the PO as 'Received'. This triggers the vendor bill flow." },
+            { step: 4, title: "Record delivery receipt", description: "When goods arrive, create a Delivery Receipt against the PO. Enter received quantities for each line item." },
+            { step: 5, title: "Raise vendor bill", description: "After recording a delivery receipt, a vendor bill can be raised. The system enforces that the bill amount cannot exceed the proportionate value of goods received." },
           ],
         },
         {
-          title: "Recording a Vendor Bill",
+          title: "Raising a Service Purchase Order",
+          steps: [
+            { step: 1, title: "Create a Service PO", description: "Click 'New PO' and select type 'Service'. Enter the service description, total value, billing cycle (monthly, quarterly, etc.), and number of cycles." },
+            { step: 2, title: "Track billing cycles", description: "Each billing cycle is listed on the PO. Mark cycles as completed when the service period is done." },
+            { step: 3, title: "Upload service reports", description: "Attach service completion reports or delivery proof for each cycle." },
+            { step: 4, title: "Raise per-cycle invoices", description: "Create a vendor bill for each completed billing cycle. The bill amount is capped at the cycle value." },
+          ],
+        },
+        {
+          title: "Recording a Vendor Bill and Getting it Approved",
           steps: [
             { step: 1, title: "Go to Vendor Bills", description: "Navigate to Procurement → Vendor Bills." },
-            { step: 2, title: "Create a bill", description: "Link the bill to a Purchase Order or add items manually. Enter the invoice number, date, and amount." },
-            { step: 3, title: "Track payment", description: "Mark the bill as 'Paid' once the vendor is paid. Outstanding bills appear in the pending list." },
+            { step: 2, title: "Create a bill", description: "Link the bill to a Purchase Order. Upload the vendor invoice file. Enter the invoice number, date, and amount. For goods POs with a delivery shortfall, the amount is capped at the proportionate received value." },
+            { step: 3, title: "Submit for approval", description: "Submit the bill. A Manager or Admin will review and approve or reject it." },
+            { step: 4, title: "Approved → Payment", description: "Once approved, the bill is ready for payment. Mark it as 'Paid' once the vendor is paid." },
           ],
         },
       ],
       tips: [
         "Maintain an Item Catalogue with standard items and prices to speed up PO creation.",
         "Purchase Requests create a paper trail for spending decisions — always use them for non-routine purchases.",
+        "A vendor bill cannot be created against a goods PO until at least one delivery receipt has been recorded.",
+        "If a delivery shortfall exists (received qty < ordered qty), the bill amount is automatically capped at the proportionate received value. An inline error appears if you enter a higher amount.",
+        "Service POs support recurring billing cycles — create one PO for an annual contract and track each month or quarter as a separate cycle.",
         "Filter vendor bills by status to quickly see what payments are due.",
         "Link Purchase Orders to approved requests for complete traceability from request to payment.",
       ],
       faqs: [
-        { question: "Who can approve purchase requests?", answer: "Managers and Admins can approve or reject purchase requests. Sales Reps and Floor Managers can create requests but cannot approve them." },
+        { question: "Who can approve purchase requests and vendor bills?", answer: "Managers and Admins can approve or reject purchase requests and vendor bills. Sales Reps and Floor Managers can create requests but cannot approve them." },
         { question: "Can I create a PO without a purchase request?", answer: "Yes. For routine or emergency purchases, you can create a Purchase Order directly without linking to a request." },
         { question: "What is the Item Catalogue?", answer: "A reusable list of standard items (cleaning supplies, stationery, furniture, etc.) with standard descriptions and prices. Using catalogue items speeds up PO and bill creation and ensures consistent item naming." },
+        { question: "Why can't I create a vendor bill for my goods PO?", answer: "A vendor bill requires at least one delivery receipt to be recorded first. Record the goods received (even a partial delivery) before creating the bill." },
+        { question: "Why is the bill amount limited?", answer: "If fewer goods were delivered than ordered (a shortfall), the bill is capped at the proportionate value of what was actually received. For example, if 60% of goods were delivered, the bill cannot exceed 60% of the PO value. This protects against overpayment for undelivered goods." },
+        { question: "What is a Service PO?", answer: "A Service PO is for recurring or contracted services (e.g., housekeeping, security, internet). It is structured around billing cycles (monthly, quarterly, etc.) and allows you to raise a separate invoice for each cycle as the service is delivered, rather than paying the full amount upfront." },
       ],
       roles: ["admin", "manager"],
     },
