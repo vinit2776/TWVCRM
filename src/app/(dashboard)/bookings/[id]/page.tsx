@@ -204,6 +204,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
       body: JSON.stringify(body),
     });
     if (res.ok) {
+      const resJson = await res.json().catch(() => ({ data: null }));
       toast.success(
         action === "check_in" ? "Guest checked in" :
         action === "check_out" ? "Guest checked out" :
@@ -221,13 +222,28 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         }).catch(() => {});
       }
 
-      // On checkout, send cleaning alert and open feedback dialog
+      // On checkout, check for overtime charges and open feedback dialog
       if (action === "check_out") {
         fetch(`/api/bookings/${id}/email`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ type: "cleaning" }),
         }).catch(() => {});
+
+        // Show overtime alert if applicable
+        if (resJson.overtime) {
+          const ot = resJson.overtime;
+          toast.warning(
+            `Overtime detected: ${ot.minutes} minutes past booking end time`,
+            {
+              description: `Additional charge: ₹${ot.charge.toLocaleString("en-IN")} (${ot.hours} hr × ₹${ot.hourly_rate.toLocaleString("en-IN")}/hr). Add a payment to collect overtime charges.`,
+              duration: 15000,
+            }
+          );
+          // Open payment dialog so they can collect the overtime charge
+          setPaymentDialogOpen(true);
+        }
+
         setFeedbackDialogOpen(true);
       }
     } else if (res.status === 402) {

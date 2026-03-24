@@ -257,9 +257,34 @@ export async function PATCH(
         if (!canManage) {
           return NextResponse.json({ error: "Only managers/floor managers can check out" }, { status: 403 });
         }
+        const now = new Date();
         updates.status = "checked_out";
-        updates.check_out_at = new Date().toISOString();
+        updates.check_out_at = now.toISOString();
         updates.checked_out_by = dbUser.id;
+
+        // Calculate overtime if checkout is past booking end_time
+        const bookingEndMin = (() => {
+          const [h, m] = (booking.end_time || "00:00").split(":").map(Number);
+          return h * 60 + m;
+        })();
+        const actualCheckoutMin = now.getHours() * 60 + now.getMinutes();
+
+        // Only flag overtime if checkout is past the booked end_time by > 15 minutes
+        const overtimeMinutes = actualCheckoutMin - bookingEndMin;
+        if (overtimeMinutes > 15 && !body.skip_overtime) {
+          const overtimeHours = Math.ceil(overtimeMinutes / 60);
+          const hourlyRate = Number(booking.hourly_rate || booking.space?.hourly_rate || 0);
+          const overtimeCharge = overtimeHours * hourlyRate;
+
+          // Return overtime info for the frontend to collect payment
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          (updates as any)._overtime = {
+            minutes: overtimeMinutes,
+            hours: overtimeHours,
+            hourly_rate: hourlyRate,
+            charge: overtimeCharge,
+          };
+        }
         break;
       }
 
@@ -360,6 +385,12 @@ export async function PATCH(
     return NextResponse.json({ error: "No valid updates provided" }, { status: 400 });
   }
 
+  // Extract overtime info before saving (not a DB column)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const overtimeInfo = (updates as any)._overtime || null;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  delete (updates as any)._overtime;
+
   const { data: updated, error } = await supabase
     .from("bookings")
     .update(updates)
@@ -422,5 +453,5 @@ export async function PATCH(
     });
   }
 
-  return NextResponse.json({ data: updated });
+  return NextResponse.json({ data: updated, overtime: overtimeInfo });
 }

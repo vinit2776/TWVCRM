@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Loader2, Clock, IndianRupee, Search, Phone, User2, Building2, Banknote, CreditCard, Smartphone, Repeat, ListOrdered, Link2, TicketCheck } from "lucide-react";
+import { ArrowLeft, Loader2, Clock, IndianRupee, Search, Phone, User2, Building2, Banknote, CreditCard, Smartphone, Repeat, ListOrdered, Link2, TicketCheck, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -91,6 +91,9 @@ function NewBookingForm() {
 
   // Contracts for contract_holder/guest type
   const [contracts, setContracts] = useState<ContractOption[]>([]);
+
+  // Outstanding charges from past bookings
+  const [outstandingCharges, setOutstandingCharges] = useState<{ id: string; description: string; total: number; booking?: { booking_number: string; booking_date: string } }[]>([]);
 
   // Step 4: Facilities
   const [selectedFacilities, setSelectedFacilities] = useState<string[]>([]);
@@ -277,6 +280,24 @@ function NewBookingForm() {
     );
     setSlotConflict(!isAvailable && availableSlots.length > 0);
   }, [startTime, endTime, availabilityWindows, availableSlots, spaceId, bookingDate]);
+
+  // Fetch outstanding charges when customer is selected
+  useEffect(() => {
+    if (!leadId) { setOutstandingCharges([]); return; }
+    let cancelled = false;
+    fetch(`/api/usage-charges?lead_id=${leadId}&status=pending&limit=50`)
+      .then(r => r.json())
+      .then(json => {
+        if (!cancelled) {
+          const charges = (json.data || []).filter(
+            (c: { booking_id?: string | null }) => !!c.booking_id
+          );
+          setOutstandingCharges(charges);
+        }
+      })
+      .catch(() => { if (!cancelled) setOutstandingCharges([]); });
+    return () => { cancelled = true; };
+  }, [leadId]);
 
   // Auto-detect prepaid purchase when customer + space are both selected
   useEffect(() => {
@@ -1054,6 +1075,34 @@ function NewBookingForm() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Outstanding Charges Warning */}
+      {outstandingCharges.length > 0 && (
+        <div className="bg-amber-50 border border-amber-300 rounded-lg p-4">
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
+            <div className="flex-1 min-w-0">
+              <p className="font-semibold text-amber-800">
+                Past dues: ₹{outstandingCharges.reduce((s, c) => s + c.total, 0).toLocaleString("en-IN")}
+              </p>
+              <p className="text-sm text-amber-700 mb-2">
+                This customer has {outstandingCharges.length} unpaid charge{outstandingCharges.length > 1 ? "s" : ""} from previous bookings. Consider collecting these during this transaction.
+              </p>
+              <div className="space-y-1">
+                {outstandingCharges.slice(0, 5).map((c) => (
+                  <div key={c.id} className="flex items-center justify-between text-sm bg-white/70 rounded px-3 py-1.5 border border-amber-100">
+                    <span className="text-amber-900">{c.description}</span>
+                    <span className="font-semibold text-amber-800 ml-4 shrink-0">₹{c.total.toLocaleString("en-IN")}</span>
+                  </div>
+                ))}
+                {outstandingCharges.length > 5 && (
+                  <p className="text-xs text-amber-600">+{outstandingCharges.length - 5} more charges</p>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Summary & Submit */}
       <Card className="border-primary/30">
