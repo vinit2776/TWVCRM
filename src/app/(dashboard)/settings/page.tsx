@@ -11,9 +11,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClient } from "@/lib/supabase/client"; // still needed for handleSave
 import { getInitials } from "@/lib/utils";
 import { toast } from "sonner";
-import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart } from "lucide-react";
+import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart, LayoutDashboard } from "lucide-react";
 import { PaymentGatewaySettings } from "@/components/settings/payment-gateway-settings";
 import { ProcurementSettings } from "@/components/settings/procurement-settings";
+import { DashboardSettings } from "@/components/settings/dashboard-settings";
 import Link from "next/link";
 
 export default function SettingsPage() {
@@ -119,6 +120,11 @@ export default function SettingsPage() {
           {profile.role === "admin" && (
             <TabsTrigger value="procurement" className="flex items-center gap-1.5">
               <ShoppingCart className="h-3.5 w-3.5" />Procurement
+            </TabsTrigger>
+          )}
+          {profile.role === "admin" && (
+            <TabsTrigger value="dashboard-config" className="flex items-center gap-1.5">
+              <LayoutDashboard className="h-3.5 w-3.5" />Dashboard
             </TabsTrigger>
           )}
         </TabsList>
@@ -278,6 +284,12 @@ export default function SettingsPage() {
         {profile.role === "admin" && (
           <TabsContent value="procurement" className="mt-6">
             <ProcurementSettings />
+          </TabsContent>
+        )}
+
+        {profile.role === "admin" && (
+          <TabsContent value="dashboard-config" className="mt-6">
+            <DashboardSettings />
           </TabsContent>
         )}
       </Tabs>

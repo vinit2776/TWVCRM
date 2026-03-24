@@ -26,6 +26,19 @@ import {
 } from "@/lib/dashboard-config";
 import type { DashboardStats, UserRole } from "@/types";
 
+async function fetchWidgetConfig(role: UserRole): Promise<WidgetId[]> {
+  try {
+    const res = await fetch(`/api/settings/dashboard?role=${role}`);
+    if (res.ok) {
+      const data = await res.json();
+      if (Array.isArray(data) && data.length > 0) return data as WidgetId[];
+    }
+  } catch {
+    /* fall through */
+  }
+  return DASHBOARD_ROLE_WIDGETS[role];
+}
+
 // ─── Pure utility — defined outside any component ────────────────────────────
 
 function timeAgo(iso: string): string {
@@ -165,13 +178,22 @@ export default function DashboardPage() {
   const [statsLoading, setStatsLoading] = useState(true);
   const [locationFilter, setLocationFilter] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<UserRole | null>(null);
+  const [widgetConfig, setWidgetConfig] = useState<WidgetId[]>([]);
 
-  // Fetch role once on mount
+  // Fetch role + widget config once on mount
   useEffect(() => {
     fetch("/api/me")
       .then((r) => r.json())
-      .then((json) => setUserRole((json.role as UserRole) ?? "sales_rep"))
-      .catch(() => setUserRole("sales_rep"));
+      .then(async (json) => {
+        const role = (json.role as UserRole) ?? "sales_rep";
+        setUserRole(role);
+        const widgets = await fetchWidgetConfig(role);
+        setWidgetConfig(widgets);
+      })
+      .catch(() => {
+        setUserRole("sales_rep");
+        setWidgetConfig(DASHBOARD_ROLE_WIDGETS.sales_rep);
+      });
   }, []);
 
   const fetchStats = useCallback(async () => {
@@ -190,7 +212,7 @@ export default function DashboardPage() {
     fetchStats();
   }, [fetchStats]);
 
-  const widgetIds: WidgetId[] = userRole ? DASHBOARD_ROLE_WIDGETS[userRole] : [];
+  const widgetIds = widgetConfig;
 
   // Loading skeleton
   if (!userRole || statsLoading) {
