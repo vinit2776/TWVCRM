@@ -161,6 +161,16 @@ export function CaseDocumentsTab({ caseId }: CaseDocumentsTabProps) {
                       {doc.rejection_reason && (
                         <p className="text-xs text-red-500 mt-1">Reason: {doc.rejection_reason}</p>
                       )}
+                      {(doc.status === "approved" || doc.status === "rejected") && doc.reviewed_at && (
+                        <p className={`text-xs mt-1 ${doc.status === "approved" ? "text-green-600" : "text-red-500"}`}>
+                          {doc.status === "approved" ? "Approved" : "Rejected"}
+                          {doc.reviewer?.full_name && <> by <span className="font-medium">{doc.reviewer.full_name}</span></>}
+                          {" on "}
+                          {new Date(doc.reviewed_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                          {" at "}
+                          {new Date(doc.reviewed_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                        </p>
+                      )}
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
