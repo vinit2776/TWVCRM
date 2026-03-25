@@ -25,6 +25,7 @@ import { CaseAgreementTab } from "@/components/cases/case-agreement-tab";
 import { CaseLeaveAgreementTab } from "@/components/cases/case-leave-agreement-tab";
 import { CaseCommentsTab } from "@/components/cases/case-comments-tab";
 import { CaseEmailsTab } from "@/components/cases/case-emails-tab";
+import { CaseSubscriptionHistory } from "@/components/cases/case-subscription-history";
 import { CaseStatusTransitionDialog } from "@/components/cases/case-status-transition-dialog";
 import { useCase } from "@/hooks/use-cases";
 import { toast } from "sonner";
@@ -145,6 +146,7 @@ export default function CaseDetailPage({
       <Tabs defaultValue="overview">
         <TabsList className="flex-wrap">
           <TabsTrigger value="overview">Overview</TabsTrigger>
+          <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="compliance">Compliance</TabsTrigger>
           <TabsTrigger value="proposal">Proposal</TabsTrigger>
@@ -333,6 +335,10 @@ export default function CaseDetailPage({
               )}
             </div>
           </div>
+        </TabsContent>
+
+        <TabsContent value="subscriptions" className="mt-4">
+          <CaseSubscriptionHistory caseId={id} />
         </TabsContent>
 
         <TabsContent value="documents" className="mt-4">

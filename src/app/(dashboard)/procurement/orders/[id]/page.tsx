@@ -531,6 +531,28 @@ export default function PurchaseOrderDetailPage() {
       toast.error("Please select the service cycle this invoice covers");
       return;
     }
+
+    // Proportionate value check for goods POs with delivery shortfall
+    if (po?.po_type !== "service" && po?.purchase_order_items && po?.po_delivery_receipts) {
+      const priceMap: Record<string, number> = {};
+      for (const item of po.purchase_order_items) {
+        priceMap[item.id] = Number(item.unit_price ?? 0);
+      }
+      let receivedValue = 0;
+      for (const receipt of po.po_delivery_receipts) {
+        for (const ri of receipt.po_delivery_receipt_items ?? []) {
+          receivedValue += (priceMap[ri.po_item_id] ?? 0) * Number(ri.qty_received);
+        }
+      }
+      if (receivedValue > 0 && receivedValue < Number(po.total_ordered_amount) && amount > receivedValue) {
+        toast.error(
+          `Invoice amount (${formatCurrency(amount)}) exceeds the proportionate value of goods received (${formatCurrency(receivedValue)}). Only goods worth ${formatCurrency(receivedValue)} have been received against the PO value of ${formatCurrency(po.total_ordered_amount)}.`,
+          { duration: 8000 }
+        );
+        return;
+      }
+    }
+
     const ceiling = po?.po_type === "service" && po?.unit_cost_per_cycle
       ? Number(po.unit_cost_per_cycle)
       : Number(po?.total_ordered_amount ?? 0);
