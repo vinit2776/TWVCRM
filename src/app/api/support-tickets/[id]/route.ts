@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { updateSupportTicketSchema } from "@/lib/validations";
+import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
+import { TICKET_STATUS_LABELS } from "@/lib/constants";
 
 // GET — single ticket with notes (admin or ticket owner)
 export async function GET(
@@ -140,6 +142,74 @@ export async function PATCH(
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  // Send email notification to ticket creator for status/assignment changes
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const reporter = ticket.reporter as any;
+  if (reporter?.email && ticket.reported_by !== currentUser.id) {
+    const statusChanged = parsed.data.status !== undefined;
+    const assignmentChanged = parsed.data.assigned_to !== undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const assignee = ticket.assignee as any;
+
+    if (statusChanged || assignmentChanged) {
+      // Fire-and-forget
+      (async () => {
+        try {
+          const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
+          const statusLabel = TICKET_STATUS_LABELS[ticket.status] || ticket.status;
+
+          let actionText = "";
+          if (statusChanged && assignmentChanged) {
+            actionText = `Status changed to <strong>${statusLabel}</strong> and assigned to <strong>${assignee?.full_name || "a team member"}</strong>.`;
+          } else if (statusChanged) {
+            actionText = `Status has been updated to <strong>${statusLabel}</strong>.`;
+          } else {
+            actionText = `Ticket has been assigned to <strong>${assignee?.full_name || "a team member"}</strong>.`;
+          }
+
+          const buildNotes = parsed.data.status === "build_approved" && parsed.data.build_approved_notes
+            ? `<div style="background:#f0faf5;border-left:4px solid #00AE6C;padding:12px 16px;margin:12px 0;border-radius:0 6px 6px 0;"><p style="color:#333;font-size:13px;margin:0;"><strong>Build Notes:</strong> ${parsed.data.build_approved_notes.replace(/</g, "&lt;").replace(/>/g, "&gt;")}</p></div>`
+            : "";
+
+          await resend.emails.send({
+            from: EMAIL_FROM,
+            replyTo: EMAIL_REPLY_TO,
+            to: reporter.email,
+            subject: `[${ticket.ticket_number}] ${ticket.subject} — ${statusChanged ? "Status: " + statusLabel : "Assigned"}`,
+            html: `
+              <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+                <div style="background:#015E65;padding:20px 32px;">
+                  <h1 style="color:white;margin:0;font-size:20px;">The WorkVilla</h1>
+                  <p style="color:#00AE6C;margin:4px 0 0;font-size:12px;">Support Ticket Update</p>
+                </div>
+                <div style="padding:32px;">
+                  <p style="color:#1a1b1e;font-size:15px;">Hi ${reporter.full_name},</p>
+                  <p style="color:#333;font-size:14px;">Your ticket <strong>${ticket.ticket_number}</strong> has been updated:</p>
+                  <p style="color:#333;font-size:14px;">${actionText}</p>
+                  ${buildNotes}
+                  <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
+                    <tr><td style="padding:6px 0;color:#666;">Ticket</td><td style="padding:6px 0;font-weight:600;">${ticket.ticket_number}</td></tr>
+                    <tr><td style="padding:6px 0;color:#666;">Subject</td><td style="padding:6px 0;">${ticket.subject}</td></tr>
+                    <tr><td style="padding:6px 0;color:#666;">Status</td><td style="padding:6px 0;font-weight:600;">${statusLabel}</td></tr>
+                    ${assignee?.full_name ? `<tr><td style="padding:6px 0;color:#666;">Assigned To</td><td style="padding:6px 0;">${assignee.full_name}</td></tr>` : ""}
+                  </table>
+                  <div style="text-align:center;margin:24px 0;">
+                    <a href="${appUrl}/my-tickets" style="background:#015E65;color:white;padding:10px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;font-size:14px;">View Ticket</a>
+                  </div>
+                </div>
+                <div style="background:#015E65;padding:12px 32px;text-align:center;">
+                  <p style="color:#fff;margin:0;font-size:10px;">SREE DESIGN INFRASTRUCTURE PVT LTD | The WorkVilla</p>
+                  <p style="color:rgba(255,255,255,0.6);margin:4px 0 0;font-size:9px;">Prakash Presidium, 110, MG Road, Nungambakkam, Chennai - 600034</p>
+                </div>
+              </div>`,
+          });
+        } catch (err) {
+          console.error("Failed to send ticket status notification:", err);
+        }
+      })();
+    }
   }
 
   return NextResponse.json({ data: ticket });
