@@ -1,20 +1,21 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { usePettyCashEntries, usePettyCashCategories } from "@/hooks/use-petty-cash";
+import { Button } from "@/components/ui/button";
+import { usePettyCashEntries } from "@/hooks/use-petty-cash";
+import { getDateRange, type TimelinePreset } from "@/lib/petty-cash-utils";
 
 export function AnalyticsTab() {
-  const [period, setPeriod] = useState<"30" | "90" | "365">("30");
-  const dateFrom = new Date(Date.now() - parseInt(period) * 86400000).toISOString().slice(0, 10);
+  const [period, setPeriod] = useState<TimelinePreset>("this_month");
+  const { dateFrom, dateTo } = getDateRange(period);
 
   const { data: entries, loading } = usePettyCashEntries({
     status: "approved",
     dateFrom,
+    dateTo,
     limit: 50,
   });
-  const { data: categories } = usePettyCashCategories();
 
   // Compute analytics
   const totalSpend = entries.reduce((sum, e) => sum + Number(e.amount), 0);
@@ -30,18 +31,28 @@ export function AnalyticsTab() {
   const sortedCategories = Object.entries(categoryMap).sort(([, a], [, b]) => b - a);
   const maxCategorySpend = sortedCategories.length > 0 ? sortedCategories[0][1] : 1;
 
+  const presets: { key: TimelinePreset; label: string }[] = [
+    { key: "this_week", label: "This Week" },
+    { key: "this_month", label: "This Month" },
+    { key: "this_year", label: "This Year" },
+  ];
+
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <h3 className="text-lg font-semibold">Spending Analytics</h3>
-        <Select value={period} onValueChange={(v) => setPeriod(v as "30" | "90" | "365")}>
-          <SelectTrigger className="w-[160px]"><SelectValue /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="30">Last 30 days</SelectItem>
-            <SelectItem value="90">Last 90 days</SelectItem>
-            <SelectItem value="365">This year</SelectItem>
-          </SelectContent>
-        </Select>
+        <div className="flex gap-2">
+          {presets.map((p) => (
+            <Button
+              key={p.key}
+              size="sm"
+              variant={period === p.key ? "default" : "outline"}
+              onClick={() => setPeriod(p.key)}
+            >
+              {p.label}
+            </Button>
+          ))}
+        </div>
       </div>
 
       {loading ? (
