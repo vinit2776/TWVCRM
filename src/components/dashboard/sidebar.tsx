@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -37,6 +37,8 @@ import {
   TicketCheck,
   Ticket,
   Banknote,
+  TrendingUp,
+  Search,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -48,86 +50,252 @@ type NavItem = {
   roles: string[] | null; // null = visible to all roles
 };
 
+type NavSection = {
+  key: string;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  items: NavItem[];
+};
+
 // Roles that existed before the accounts/fms additions — used as a shorthand below.
-// Items with roles: null are visible to ALL roles (no restriction).
 const LEGACY_ROLES = ["admin", "manager", "sales_rep", "floor_manager"];
 
-const allNavItems: NavItem[] = [
-  // Dashboard is universally visible (null = all roles including new ones)
+// Top-level items — always visible, never grouped
+const topNavItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
-  // My Tickets — universally visible; every user can track their own submitted tickets
   { href: "/my-tickets", label: "My Tickets", icon: Ticket, roles: null },
-  // Sales & CRM items — visible to legacy roles + accounts (view access)
-  { href: "/leads",      label: "Leads",             icon: Users,         roles: [...LEGACY_ROLES, "accounts"] },
-  { href: "/pipeline",   label: "Pipeline",           icon: GitBranch,     roles: LEGACY_ROLES },
-  { href: "/activities", label: "Activities",         icon: Activity,      roles: LEGACY_ROLES },
-  { href: "/tasks",      label: "Tasks",              icon: CheckSquare,   roles: LEGACY_ROLES },
-  { href: "/proposals",  label: "Proposals",          icon: FileText,      roles: [...LEGACY_ROLES, "accounts"] },
-  { href: "/invoices",   label: "Proforma Invoices",  icon: Receipt,       roles: LEGACY_ROLES },
-  { href: "/contracts",  label: "Contracts",          icon: ScrollText,    roles: [...LEGACY_ROLES, "accounts"] },
-  // Finance items — legacy roles + accounts (full access)
-  { href: "/billing",    label: "Billing",            icon: IndianRupee,   roles: [...LEGACY_ROLES, "accounts"] },
-  { href: "/accounting", label: "Accounting",         icon: Calculator,    roles: [...LEGACY_ROLES, "accounts"] },
-  { href: "/petty-cash", label: "Petty Cash",         icon: Banknote,      roles: null },
-  // Operations — legacy roles only
-  { href: "/bookings",   label: "Bookings",           icon: CalendarClock, roles: LEGACY_ROLES },
-  { href: "/packages",   label: "Packages",           icon: TicketCheck,   roles: LEGACY_ROLES },
-  { href: "/vouchers",   label: "Vouchers",           icon: Wifi,          roles: LEGACY_ROLES },
 ];
 
-const virtualOfficeItems: NavItem[] = [
-  { href: "/aggregators", label: "Aggregators", icon: Handshake, roles: LEGACY_ROLES },
-  { href: "/cases",       label: "Cases",        icon: Briefcase, roles: LEGACY_ROLES },
+// Collapsible sections
+const navSections: NavSection[] = [
+  {
+    key: "sales",
+    label: "Sales",
+    icon: TrendingUp,
+    items: [
+      { href: "/leads",      label: "Leads",      icon: Users,       roles: [...LEGACY_ROLES, "accounts"] },
+      { href: "/pipeline",   label: "Pipeline",    icon: GitBranch,   roles: LEGACY_ROLES },
+      { href: "/activities", label: "Activities",  icon: Activity,    roles: LEGACY_ROLES },
+      { href: "/tasks",      label: "Tasks",       icon: CheckSquare, roles: LEGACY_ROLES },
+      { href: "/proposals",  label: "Proposals",   icon: FileText,    roles: [...LEGACY_ROLES, "accounts"] },
+    ],
+  },
+  {
+    key: "finance",
+    label: "Finance",
+    icon: IndianRupee,
+    items: [
+      { href: "/invoices",   label: "Proforma Invoices", icon: Receipt,     roles: LEGACY_ROLES },
+      { href: "/contracts",  label: "Contracts",          icon: ScrollText,  roles: [...LEGACY_ROLES, "accounts"] },
+      { href: "/billing",    label: "Billing",            icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
+      { href: "/accounting", label: "Accounting",         icon: Calculator,  roles: [...LEGACY_ROLES, "accounts"] },
+      { href: "/petty-cash", label: "Petty Cash",         icon: Banknote,    roles: null },
+    ],
+  },
+  {
+    key: "operations",
+    label: "Operations",
+    icon: CalendarClock,
+    items: [
+      { href: "/bookings", label: "Bookings", icon: CalendarClock, roles: LEGACY_ROLES },
+      { href: "/packages", label: "Packages", icon: TicketCheck,   roles: LEGACY_ROLES },
+      { href: "/vouchers", label: "Vouchers", icon: Wifi,          roles: LEGACY_ROLES },
+    ],
+  },
+  {
+    key: "virtual-offices",
+    label: "Virtual Offices",
+    icon: Building2,
+    items: [
+      { href: "/aggregators", label: "Aggregators", icon: Handshake, roles: LEGACY_ROLES },
+      { href: "/cases",       label: "Cases",       icon: Briefcase, roles: LEGACY_ROLES },
+    ],
+  },
+  {
+    key: "procurement",
+    label: "Procurement",
+    icon: ShoppingCart,
+    items: [
+      { href: "/procurement/requests", label: "Purchase Requests", icon: ClipboardListIcon, roles: [...LEGACY_ROLES, "fms"] },
+      { href: "/procurement/orders",   label: "Purchase Orders",   icon: Package,           roles: [...LEGACY_ROLES, "fms"] },
+      { href: "/procurement/bills",    label: "Vendor Bills",      icon: ReceiptIcon,       roles: ["admin", "manager", "accounts", "fms"] },
+      { href: "/procurement/payables", label: "Payables",          icon: IndianRupee,       roles: ["admin", "manager", "accounts", "fms"] },
+      { href: "/procurement/vendors",  label: "Vendors",           icon: Truck,             roles: ["admin", "manager", "fms"] },
+      { href: "/procurement/catalog",  label: "Item Catalog",      icon: Archive,           roles: ["admin", "fms"] },
+    ],
+  },
+  {
+    key: "admin",
+    label: "Admin",
+    icon: Settings,
+    items: [
+      { href: "/locations",      label: "Locations",      icon: MapPin,        roles: ["admin", "manager"] },
+      { href: "/audit-logs",     label: "Audit Logs",     icon: ClipboardList, roles: ["admin", "manager"] },
+      { href: "/infrastructure", label: "Infrastructure", icon: Server,        roles: ["admin"] },
+      { href: "/support",        label: "Support",        icon: LifeBuoy,      roles: ["admin"] },
+      { href: "/settings",       label: "Settings",       icon: Settings,      roles: ["admin"] },
+      { href: "/team",           label: "Team",           icon: UserPlus,      roles: ["admin", "manager", "sales_rep"] },
+    ],
+  },
 ];
 
-const procurementItems: NavItem[] = [
-  // PRs and POs: legacy roles + fms (facility manager creates/manages procurement)
-  { href: "/procurement/requests", label: "Purchase Requests", icon: ClipboardListIcon, roles: [...LEGACY_ROLES, "fms"] },
-  { href: "/procurement/orders",   label: "Purchase Orders",   icon: Package,           roles: [...LEGACY_ROLES, "fms"] },
-  // Vendor Bills & Payables: admin/manager + accounts (pays bills) + fms (manages procurement)
-  { href: "/procurement/bills",    label: "Vendor Bills",      icon: ReceiptIcon,       roles: ["admin", "manager", "accounts", "fms"] },
-  { href: "/procurement/payables", label: "Payables",          icon: IndianRupee,       roles: ["admin", "manager", "accounts", "fms"] },
-  // Vendors: admin/manager + fms
-  { href: "/procurement/vendors",  label: "Vendors",           icon: Truck,             roles: ["admin", "manager", "fms"] },
-  // Item Catalog: admin + fms
-  { href: "/procurement/catalog",  label: "Item Catalog",      icon: Archive,           roles: ["admin", "fms"] },
-];
+function filterItems(items: NavItem[], userRole: string | null) {
+  return items.filter(
+    (item) => item.roles === null || (userRole && item.roles.includes(userRole))
+  );
+}
 
-const adminNavItems = [
-  { href: "/locations", label: "Locations", icon: MapPin, roles: ["admin", "manager"] },
-  { href: "/audit-logs", label: "Audit Logs", icon: ClipboardList, roles: ["admin", "manager"] },
-  { href: "/infrastructure", label: "Infrastructure", icon: Server, roles: ["admin"] },
-  { href: "/support", label: "Support", icon: LifeBuoy, roles: ["admin"] },
-  { href: "/settings", label: "Settings", icon: Settings, roles: ["admin"] },
-  { href: "/team", label: "Team", icon: UserPlus, roles: ["admin", "manager", "sales_rep"] },
-];
+function findActiveSection(pathname: string, userRole: string | null): string | null {
+  for (const section of navSections) {
+    const visible = filterItems(section.items, userRole);
+    if (visible.some((item) => pathname === item.href || pathname.startsWith(item.href + "/"))) {
+      return section.key;
+    }
+  }
+  return null;
+}
+
+function CollapsibleSection({
+  section,
+  isOpen,
+  onToggle,
+  pathname,
+  userRole,
+  onNavigate,
+}: {
+  section: NavSection;
+  isOpen: boolean;
+  onToggle: () => void;
+  pathname: string;
+  userRole: string | null;
+  onNavigate: () => void;
+}) {
+  const visibleItems = filterItems(section.items, userRole);
+  if (visibleItems.length === 0) return null;
+
+  const isActive = visibleItems.some(
+    (item) => pathname === item.href || pathname.startsWith(item.href + "/")
+  );
+
+  return (
+    <div>
+      <button
+        onClick={onToggle}
+        className={cn(
+          "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+          isActive
+            ? "bg-sidebar-accent text-sidebar-accent-foreground"
+            : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+        )}
+      >
+        <section.icon className="h-5 w-5 shrink-0" />
+        {section.label}
+        <ChevronDown
+          className={cn(
+            "ml-auto h-4 w-4 shrink-0 transition-transform duration-200",
+            isOpen ? "rotate-0" : "-rotate-90"
+          )}
+        />
+      </button>
+      {isOpen && (
+        <div className="ml-4 mt-1 space-y-1 border-l border-sidebar-accent pl-3">
+          {visibleItems.map((item) => {
+            const itemActive =
+              pathname === item.href || pathname.startsWith(item.href + "/");
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                onClick={onNavigate}
+                className={cn(
+                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                  itemActive
+                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                )}
+              >
+                <item.icon className="h-4 w-4 shrink-0" />
+                {item.label}
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
 
 export function Sidebar() {
   const pathname = usePathname();
   const { sidebarOpen, setSidebarOpen } = useUiStore();
   const [userRole, setUserRole] = useState<string | null>(null);
-  const isVoActive = pathname.startsWith("/aggregators") || pathname.startsWith("/cases");
-  const [voOpen, setVoOpen] = useState(isVoActive);
-  const isProcurementActive = pathname.startsWith("/procurement");
-  const [procOpen, setProcOpen] = useState(isProcurementActive);
+  const [openSections, setOpenSections] = useState<Set<string>>(new Set());
+  const [search, setSearch] = useState("");
+  const searchRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    // Use same-origin API route to avoid browser extensions blocking
-    // direct cross-origin requests to supabase.co
     fetch("/api/me")
       .then((r) => r.json())
       .then((json) => setUserRole(json.role || "sales_rep"))
       .catch(() => setUserRole("sales_rep"));
   }, []);
 
-  // Filter nav items based on role (null = visible to all roles)
-  const visibleNavItems = allNavItems.filter(
-    (item) => item.roles === null || (userRole && item.roles.includes(userRole))
-  );
+  // Auto-expand the section containing the active route
+  useEffect(() => {
+    const active = findActiveSection(pathname, userRole);
+    if (active) {
+      setOpenSections((prev) => {
+        if (prev.has(active)) return prev;
+        const next = new Set(prev);
+        next.add(active);
+        return next;
+      });
+    }
+  }, [pathname, userRole]);
 
-  const visibleAdminItems = adminNavItems.filter(
-    (item) => userRole && item.roles.includes(userRole)
-  );
+  const toggleSection = useCallback((key: string) => {
+    setOpenSections((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) {
+        next.delete(key);
+      } else {
+        next.add(key);
+      }
+      return next;
+    });
+  }, []);
+
+  const closeSidebar = useCallback(() => setSidebarOpen(false), [setSidebarOpen]);
+
+  const visibleTopItems = filterItems(topNavItems, userRole);
+
+  // Flat list of all searchable items (top items + section items + Help)
+  const searchResults = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    if (!q) return null;
+    const results: { item: NavItem; section?: string }[] = [];
+    for (const item of filterItems(topNavItems, userRole)) {
+      if (item.label.toLowerCase().includes(q)) results.push({ item });
+    }
+    for (const section of navSections) {
+      for (const item of filterItems(section.items, userRole)) {
+        if (
+          item.label.toLowerCase().includes(q) ||
+          section.label.toLowerCase().includes(q)
+        ) {
+          results.push({ item, section: section.label });
+        }
+      }
+    }
+    const helpItem: NavItem = { href: "/help", label: "Help", icon: HelpCircle, roles: null };
+    if ("help".includes(q)) results.push({ item: helpItem });
+    return results;
+  }, [search, userRole]);
+
+  const clearSearch = useCallback(() => {
+    setSearch("");
+    searchRef.current?.blur();
+  }, []);
 
   return (
     <>
@@ -135,7 +303,7 @@ export function Sidebar() {
       {sidebarOpen && (
         <div
           className="fixed inset-0 z-40 bg-black/50 lg:hidden"
-          onClick={() => setSidebarOpen(false)}
+          onClick={closeSidebar}
         />
       )}
 
@@ -152,141 +320,84 @@ export function Sidebar() {
             <img src="/logo-white.png" alt="The WorkVilla" className="h-8" />
           </Link>
           <button
-            onClick={() => setSidebarOpen(false)}
+            onClick={closeSidebar}
             className="rounded-md p-1 hover:bg-sidebar-accent lg:hidden"
           >
             <X className="h-5 w-5" />
           </button>
         </div>
 
-        {/* Scrollable nav area */}
-        <nav className="flex-1 overflow-y-auto space-y-1 px-3 py-4">
-          {visibleNavItems.map((item) => {
-            const isActive =
-              pathname === item.href || pathname.startsWith(item.href + "/");
-            return (
-              <Link
-                key={item.href}
-                href={item.href}
-                onClick={() => setSidebarOpen(false)}
-                className={cn(
-                  "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                  isActive
-                    ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                    : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-                )}
+        {/* Search */}
+        <div className="px-3 pb-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-sidebar-foreground/40" />
+            <input
+              ref={searchRef}
+              type="text"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") clearSearch();
+              }}
+              placeholder="Search menu..."
+              className="w-full rounded-md border border-sidebar-accent bg-sidebar-accent/30 py-1.5 pl-8 pr-8 text-sm text-sidebar-foreground placeholder:text-sidebar-foreground/40 focus:outline-none focus:ring-1 focus:ring-sidebar-accent"
+            />
+            {search && (
+              <button
+                onClick={clearSearch}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-sidebar-foreground/40 hover:text-sidebar-foreground"
               >
-                <item.icon className="h-5 w-5 shrink-0" />
-                {item.label}
-              </Link>
-            );
-          })}
-
-          {/* Virtual Offices dropdown */}
-          <div>
-            <button
-              onClick={() => setVoOpen((o) => !o)}
-              className={cn(
-                "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                isVoActive
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-              )}
-            >
-              <Building2 className="h-5 w-5 shrink-0" />
-              Virtual Offices
-              <ChevronDown
-                className={cn(
-                  "ml-auto h-4 w-4 shrink-0 transition-transform duration-200",
-                  voOpen ? "rotate-0" : "-rotate-90"
-                )}
-              />
-            </button>
-            {voOpen && (
-              <div className="ml-4 mt-1 space-y-1 border-l border-sidebar-accent pl-3">
-                {virtualOfficeItems.map((item) => {
-                  const isActive =
-                    pathname === item.href || pathname.startsWith(item.href + "/");
-                  return (
-                    <Link
-                      key={item.href}
-                      href={item.href}
-                      onClick={() => setSidebarOpen(false)}
-                      className={cn(
-                        "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                        isActive
-                          ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                          : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-                      )}
-                    >
-                      <item.icon className="h-4 w-4 shrink-0" />
-                      {item.label}
-                    </Link>
-                  );
-                })}
-              </div>
+                <X className="h-3.5 w-3.5" />
+              </button>
             )}
           </div>
+        </div>
 
-          {/* Procurement dropdown */}
-          <div>
-            <button
-              onClick={() => setProcOpen((o) => !o)}
-              className={cn(
-                "flex w-full items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                isProcurementActive
-                  ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                  : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-              )}
-            >
-              <ShoppingCart className="h-5 w-5 shrink-0" />
-              Procurement
-              <ChevronDown
-                className={cn(
-                  "ml-auto h-4 w-4 shrink-0 transition-transform duration-200",
-                  procOpen ? "rotate-0" : "-rotate-90"
-                )}
-              />
-            </button>
-            {procOpen && (
-              <div className="ml-4 mt-1 space-y-1 border-l border-sidebar-accent pl-3">
-                {procurementItems
-                  .filter((item) => item.roles === null || (userRole && item.roles.includes(userRole)))
-                  .map((item) => {
-                    const isActive =
-                      pathname === item.href || pathname.startsWith(item.href + "/");
-                    return (
-                      <Link
-                        key={item.href}
-                        href={item.href}
-                        onClick={() => setSidebarOpen(false)}
-                        className={cn(
-                          "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
-                          isActive
-                            ? "bg-sidebar-accent text-sidebar-accent-foreground"
-                            : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
-                        )}
-                      >
-                        <item.icon className="h-4 w-4 shrink-0" />
-                        {item.label}
-                      </Link>
-                    );
-                  })}
-              </div>
-            )}
-          </div>
-
-          {/* Admin items inside scrollable area */}
-          {visibleAdminItems.length > 0 && (
-            <div className="border-t border-sidebar-accent pt-4 mt-3 space-y-1">
-              {visibleAdminItems.map((item) => {
+        {/* Scrollable nav area */}
+        <nav className="flex-1 overflow-y-auto space-y-1 px-3 py-2">
+          {searchResults ? (
+            /* Search results — flat list */
+            searchResults.length === 0 ? (
+              <p className="px-3 py-4 text-sm text-sidebar-foreground/50 text-center">
+                No matching menu items
+              </p>
+            ) : (
+              searchResults.map(({ item, section }) => {
                 const isActive =
                   pathname === item.href || pathname.startsWith(item.href + "/");
                 return (
                   <Link
                     key={item.href}
                     href={item.href}
-                    onClick={() => setSidebarOpen(false)}
+                    onClick={() => { clearSearch(); closeSidebar(); }}
+                    className={cn(
+                      "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
+                      isActive
+                        ? "bg-sidebar-accent text-sidebar-accent-foreground"
+                        : "text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground"
+                    )}
+                  >
+                    <item.icon className="h-5 w-5 shrink-0" />
+                    <span className="flex-1">{item.label}</span>
+                    {section && (
+                      <span className="text-xs text-sidebar-foreground/40">{section}</span>
+                    )}
+                  </Link>
+                );
+              })
+            )
+          ) : (
+            /* Normal navigation */
+            <>
+              {/* Top-level items */}
+              {visibleTopItems.map((item) => {
+                const isActive =
+                  pathname === item.href || pathname.startsWith(item.href + "/");
+                return (
+                  <Link
+                    key={item.href}
+                    href={item.href}
+                    onClick={closeSidebar}
                     className={cn(
                       "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
                       isActive
@@ -299,7 +410,20 @@ export function Sidebar() {
                   </Link>
                 );
               })}
-            </div>
+
+              {/* Collapsible sections */}
+              {navSections.map((section) => (
+                <CollapsibleSection
+                  key={section.key}
+                  section={section}
+                  isOpen={openSections.has(section.key)}
+                  onToggle={() => toggleSection(section.key)}
+                  pathname={pathname}
+                  userRole={userRole}
+                  onNavigate={closeSidebar}
+                />
+              ))}
+            </>
           )}
         </nav>
 
@@ -307,7 +431,7 @@ export function Sidebar() {
         <div className="shrink-0 border-t border-sidebar-accent px-3 py-3">
           <Link
             href="/help"
-            onClick={() => setSidebarOpen(false)}
+            onClick={closeSidebar}
             className={cn(
               "flex items-center gap-3 rounded-md px-3 py-2 text-sm font-medium transition-colors",
               pathname === "/help" || pathname.startsWith("/help/")
