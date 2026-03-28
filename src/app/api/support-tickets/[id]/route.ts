@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { updateSupportTicketSchema } from "@/lib/validations";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { TICKET_STATUS_LABELS } from "@/lib/constants";
+import { logAudit } from "@/lib/audit";
 
 // GET — single ticket with notes (admin or ticket owner)
 export async function GET(
@@ -143,6 +144,13 @@ export async function PATCH(
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  // Audit log
+  const auditChanges: Record<string, { old: unknown; new: unknown }> = {};
+  if (parsed.data.status !== undefined) auditChanges.status = { old: null, new: parsed.data.status };
+  if (parsed.data.priority !== undefined) auditChanges.priority = { old: null, new: parsed.data.priority };
+  if (parsed.data.assigned_to !== undefined) auditChanges.assigned_to = { old: null, new: parsed.data.assigned_to };
+  logAudit(adminSupabase, { entityType: "support_ticket", entityId: id, action: "update", performedBy: currentUser.id, changes: auditChanges });
 
   // Send email notification to ticket creator for status/assignment changes
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

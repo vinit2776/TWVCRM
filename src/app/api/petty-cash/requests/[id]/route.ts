@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { z } from "zod";
+import { logAudit } from "@/lib/audit";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -98,6 +99,14 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       note: parsed.data.note || null,
     });
 
+    logAudit(supabase, {
+      entityType: "pc_request",
+      entityId: id,
+      action: "update",
+      performedBy: dbUser.id,
+      changes: { status: { old: req.status, new: newStatus }, ...(action === "reject" && parsed.data.note ? { rejection_note: { old: null, new: parsed.data.note } } : {}) },
+    });
+
     return NextResponse.json({ success: true, status: newStatus });
   }
 
@@ -136,6 +145,14 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       .from("petty_cash_books")
       .update({ current_balance: newBalance })
       .eq("id", req.book_id);
+
+    logAudit(supabase, {
+      entityType: "pc_request",
+      entityId: id,
+      action: "update",
+      performedBy: dbUser.id,
+      changes: { status: { old: "approved", new: "issued" }, issuance_method: { old: null, new: parsed.data.issuance_method }, balance: { old: book.current_balance, new: newBalance } },
+    });
 
     return NextResponse.json({ success: true, status: "issued", new_balance: newBalance });
   }

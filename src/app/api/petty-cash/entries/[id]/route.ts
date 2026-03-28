@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { z } from "zod";
+import { logAudit } from "@/lib/audit";
 
 type Params = { params: Promise<{ id: string }> };
 
@@ -92,6 +93,14 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       rejection_note: null,
     }).eq("id", id);
 
+    logAudit(supabase, {
+      entityType: "pc_entry",
+      entityId: id,
+      action: "update",
+      performedBy: dbUser.id,
+      changes: { status: { old: "rejected", new: "pending_manager" }, amount: { old: entry.amount, new: amount }, description: { old: entry.description, new: description } },
+    });
+
     return NextResponse.json({ success: true, status: "pending_manager" });
   }
 
@@ -121,6 +130,8 @@ export async function PATCH(request: NextRequest, { params }: Params) {
         note: note || null,
       });
 
+      logAudit(supabase, { entityType: "pc_entry", entityId: id, action: "update", performedBy: dbUser.id, changes: { status: { old: "pending_manager", new: "rejected" } } });
+
       return NextResponse.json({ success: true, status: "rejected" });
     }
 
@@ -146,6 +157,8 @@ export async function PATCH(request: NextRequest, { params }: Params) {
       await supabase.from("petty_cash_books").update({ current_balance: newBalance }).eq("id", entry.book_id);
     }
 
+    logAudit(supabase, { entityType: "pc_entry", entityId: id, action: "update", performedBy: dbUser.id, changes: { status: { old: "pending_manager", new: nextStatus } } });
+
     return NextResponse.json({ success: true, status: nextStatus });
   }
 
@@ -169,6 +182,8 @@ export async function PATCH(request: NextRequest, { params }: Params) {
         note: note || null,
       });
 
+      logAudit(supabase, { entityType: "pc_entry", entityId: id, action: "update", performedBy: dbUser.id, changes: { status: { old: "pending_admin", new: "rejected" } } });
+
       return NextResponse.json({ success: true, status: "rejected" });
     }
 
@@ -188,6 +203,8 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     const book = entry.book as { id: string; current_balance: number };
     const newBalance = Number(book.current_balance) - Number(entry.amount);
     await supabase.from("petty_cash_books").update({ current_balance: newBalance }).eq("id", entry.book_id);
+
+    logAudit(supabase, { entityType: "pc_entry", entityId: id, action: "update", performedBy: dbUser.id, changes: { status: { old: "pending_admin", new: "approved" } } });
 
     return NextResponse.json({ success: true, status: "approved" });
   }

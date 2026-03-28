@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { z } from "zod";
+import { logAudit } from "@/lib/audit";
 
 const createEntrySchema = z.object({
   date: z.string().min(1, "Date is required"),
@@ -153,5 +154,14 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  logAudit(supabase, {
+    entityType: "pc_entry",
+    entityId: data.id,
+    action: "create",
+    performedBy: dbUser.id,
+    changes: { amount: { old: null, new: parsed.data.amount }, description: { old: null, new: parsed.data.description } },
+  });
+
   return NextResponse.json({ data }, { status: 201 });
 }

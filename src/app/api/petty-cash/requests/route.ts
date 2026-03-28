@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { z } from "zod";
+import { logAudit } from "@/lib/audit";
 
 const createRequestSchema = z.object({
   amount_requested: z.number().positive("Amount must be greater than 0"),
@@ -114,5 +115,14 @@ export async function POST(request: NextRequest) {
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  logAudit(supabase, {
+    entityType: "pc_request",
+    entityId: data.id,
+    action: "create",
+    performedBy: dbUser.id,
+    changes: { amount: { old: null, new: parsed.data.amount_requested }, purpose: { old: null, new: parsed.data.purpose } },
+  });
+
   return NextResponse.json({ data }, { status: 201 });
 }

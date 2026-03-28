@@ -545,7 +545,12 @@ export type AuditEntityType =
   | "procurement_item"
   | "purchase_request"
   | "purchase_order"
-  | "vendor_bill";
+  | "vendor_bill"
+  | "pc_request"
+  | "pc_entry"
+  | "support_ticket"
+  | "prepaid_package"
+  | "location";
 
 export interface AuditLog {
   id: string;

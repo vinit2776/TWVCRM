@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { logAudit } from "@/lib/audit";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -34,11 +35,11 @@ export async function POST(request: NextRequest) {
   // Check admin role
   const { data: dbUser } = await supabase
     .from("users")
-    .select("role")
+    .select("id, role")
     .eq("auth_id", user.id)
     .single();
 
-  if (dbUser?.role !== "admin") {
+  if (!dbUser || dbUser.role !== "admin") {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
@@ -73,6 +74,8 @@ export async function POST(request: NextRequest) {
     }
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  logAudit(supabase, { entityType: "location", entityId: data.id, action: "create", performedBy: dbUser.id, changes: { name: { old: null, new: name }, code: { old: null, new: code } } });
 
   return NextResponse.json({ data }, { status: 201 });
 }

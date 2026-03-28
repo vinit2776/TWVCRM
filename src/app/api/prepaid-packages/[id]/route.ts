@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { logAudit } from "@/lib/audit";
 
 // GET — fetch a single package template
 export async function GET(_req: NextRequest, { params }: { params: Promise<{ id: string }> }) {
@@ -63,6 +64,11 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  if (dbUser) {
+    logAudit(supabase, { entityType: "prepaid_package", entityId: id, action: "update", performedBy: dbUser.id, changes: Object.fromEntries(Object.entries(updates).filter(([k]) => k !== "updated_at").map(([k, v]) => [k, { old: null, new: v }])) });
+  }
 
   return NextResponse.json({ data });
 }

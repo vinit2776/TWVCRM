@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createSupportTicketSchema } from "@/lib/validations";
+import { logAudit } from "@/lib/audit";
 
 // GET — list tickets
 // ?mine=true  → returns only the authenticated user's own tickets (any role)
@@ -121,6 +122,14 @@ export async function POST(request: NextRequest) {
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  logAudit(supabase, {
+    entityType: "support_ticket",
+    entityId: ticket.id,
+    action: "create",
+    performedBy: currentUser.id,
+    changes: { subject: { old: null, new: parsed.data.subject }, type: { old: null, new: parsed.data.type }, priority: { old: null, new: parsed.data.priority } },
+  });
 
   return NextResponse.json({ data: ticket }, { status: 201 });
 }

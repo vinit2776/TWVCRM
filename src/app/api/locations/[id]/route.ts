@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { logAudit } from "@/lib/audit";
 
 export async function GET(
   request: NextRequest,
@@ -32,11 +33,11 @@ export async function PUT(
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("role")
+    .select("id, role")
     .eq("auth_id", user.id)
     .single();
 
-  if (dbUser?.role !== "admin") {
+  if (!dbUser || dbUser.role !== "admin") {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
@@ -72,6 +73,8 @@ export async function PUT(
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
+  logAudit(supabase, { entityType: "location", entityId: id, action: "update", performedBy: dbUser.id, changes: Object.fromEntries(Object.entries(updates).map(([k, v]) => [k, { old: null, new: v }])) });
+
   return NextResponse.json({ data });
 }
 
@@ -86,11 +89,11 @@ export async function DELETE(
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("role")
+    .select("id, role")
     .eq("auth_id", user.id)
     .single();
 
-  if (dbUser?.role !== "admin") {
+  if (!dbUser || dbUser.role !== "admin") {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
@@ -103,6 +106,8 @@ export async function DELETE(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  logAudit(supabase, { entityType: "location", entityId: id, action: "delete", performedBy: dbUser.id, changes: { is_active: { old: true, new: false } } });
 
   return NextResponse.json({ data });
 }
