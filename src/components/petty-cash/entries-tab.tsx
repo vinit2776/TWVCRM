@@ -9,7 +9,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "@/components/ui/dialog";
-import { Plus } from "lucide-react";
+import { Plus, Pencil } from "lucide-react";
 import { toast } from "sonner";
 import { usePettyCashEntries, usePettyCashCategories } from "@/hooks/use-petty-cash";
 import { PC_ENTRY_STATUS_LABELS, PC_ENTRY_STATUS_COLORS } from "@/lib/constants";
@@ -20,12 +20,26 @@ export function EntriesTab() {
   const { data: categories } = usePettyCashCategories();
   const [open, setOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
-  const [form, setForm] = useState({
-    date: new Date().toISOString().slice(0, 10),
-    amount: "",
-    category_id: "",
-    description: "",
-  });
+  const [editingEntry, setEditingEntry] = useState<{ id: string; rejection_note?: string | null } | null>(null);
+  const emptyForm = { date: new Date().toISOString().slice(0, 10), amount: "", category_id: "", description: "" };
+  const [form, setForm] = useState(emptyForm);
+
+  const openNewDialog = () => {
+    setEditingEntry(null);
+    setForm(emptyForm);
+    setOpen(true);
+  };
+
+  const openEditDialog = (entry: { id: string; date: string; amount: number; category_id?: string | null; description: string; rejection_note?: string | null }) => {
+    setEditingEntry({ id: entry.id, rejection_note: entry.rejection_note });
+    setForm({
+      date: entry.date.slice(0, 10),
+      amount: String(entry.amount),
+      category_id: entry.category_id || "",
+      description: entry.description,
+    });
+    setOpen(true);
+  };
 
   const handleSubmit = async () => {
     if (!form.amount || !form.description || !form.date) {
@@ -34,22 +48,32 @@ export function EntriesTab() {
     }
     setSubmitting(true);
     try {
-      const res = await fetch("/api/petty-cash/entries", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          date: form.date,
-          amount: parseFloat(form.amount),
-          category_id: form.category_id || undefined,
-          description: form.description,
-        }),
-      });
+      const payload = {
+        date: form.date,
+        amount: parseFloat(form.amount),
+        category_id: form.category_id || undefined,
+        description: form.description,
+      };
+
+      const res = editingEntry
+        ? await fetch(`/api/petty-cash/entries/${editingEntry.id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ action: "resubmit", ...payload }),
+          })
+        : await fetch("/api/petty-cash/entries", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          });
+
       if (!res.ok) {
         const err = await res.json();
         throw new Error(err.error || "Failed to submit");
       }
-      toast.success("Expense submitted for approval");
-      setForm({ date: new Date().toISOString().slice(0, 10), amount: "", category_id: "", description: "" });
+      toast.success(editingEntry ? "Expense resubmitted for approval" : "Expense submitted for approval");
+      setForm(emptyForm);
+      setEditingEntry(null);
       setOpen(false);
       refetch();
     } catch (err) {
@@ -63,15 +87,21 @@ export function EntriesTab() {
     <Card>
       <CardHeader className="flex flex-row items-center justify-between pb-3">
         <CardTitle className="text-base">My Expenses</CardTitle>
-        <Dialog open={open} onOpenChange={setOpen}>
+        <Dialog open={open} onOpenChange={(v) => { setOpen(v); if (!v) setEditingEntry(null); }}>
           <DialogTrigger asChild>
-            <Button size="sm"><Plus className="h-4 w-4 mr-1" />Log Expense</Button>
+            <Button size="sm" onClick={openNewDialog}><Plus className="h-4 w-4 mr-1" />Log Expense</Button>
           </DialogTrigger>
           <DialogContent>
             <DialogHeader>
-              <DialogTitle>Log Petty Cash Expense</DialogTitle>
+              <DialogTitle>{editingEntry ? "Edit & Resubmit Expense" : "Log Petty Cash Expense"}</DialogTitle>
             </DialogHeader>
             <div className="space-y-4 mt-2">
+              {editingEntry?.rejection_note && (
+                <div className="rounded-md border border-red-200 bg-red-50 p-3 text-sm">
+                  <p className="font-medium text-red-800">Rejection reason:</p>
+                  <p className="text-red-700 mt-1">{editingEntry.rejection_note}</p>
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Date</Label>
@@ -116,7 +146,7 @@ export function EntriesTab() {
                   : "This expense will require manager approval."}
               </p>
               <Button onClick={handleSubmit} disabled={submitting} className="w-full">
-                {submitting ? "Submitting..." : "Submit Expense"}
+                {submitting ? "Submitting..." : editingEntry ? "Resubmit Expense" : "Submit Expense"}
               </Button>
             </div>
           </DialogContent>
@@ -139,6 +169,7 @@ export function EntriesTab() {
                     <th className="pb-2 font-medium text-muted-foreground hidden md:table-cell">Category</th>
                     <th className="pb-2 font-medium text-muted-foreground hidden lg:table-cell">Description</th>
                     <th className="pb-2 font-medium text-muted-foreground">Status</th>
+                    <th className="pb-2 font-medium text-muted-foreground"></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -155,6 +186,21 @@ export function EntriesTab() {
                         <Badge variant="secondary" className={PC_ENTRY_STATUS_COLORS[e.status] || ""}>
                           {PC_ENTRY_STATUS_LABELS[e.status] || e.status}
                         </Badge>
+                        {e.status === "rejected" && e.rejection_note && (
+                          <p className="text-xs text-red-600 mt-0.5 truncate max-w-[160px]" title={e.rejection_note}>{e.rejection_note}</p>
+                        )}
+                      </td>
+                      <td className="py-2.5">
+                        {e.status === "rejected" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-xs h-7"
+                            onClick={() => openEditDialog(e as { id: string; date: string; amount: number; category_id?: string | null; description: string; rejection_note?: string | null })}
+                          >
+                            <Pencil className="h-3 w-3 mr-1" />Edit & Resubmit
+                          </Button>
+                        )}
                       </td>
                     </tr>
                   ))}

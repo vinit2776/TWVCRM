@@ -38,6 +38,14 @@ const approveSchema = z.object({
   note: z.string().optional(),
 });
 
+const resubmitSchema = z.object({
+  action: z.literal("resubmit"),
+  date: z.string().min(1),
+  amount: z.number().positive(),
+  category_id: z.string().uuid().optional().nullable(),
+  description: z.string().min(1),
+});
+
 /**
  * PATCH /api/petty-cash/entries/[id] — approve or reject a spend entry
  */
@@ -52,8 +60,6 @@ export async function PATCH(request: NextRequest, { params }: Params) {
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
   const body = await request.json();
-  const parsed = approveSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
 
   // Fetch current entry
   const { data: entry, error: fetchErr } = await supabase
@@ -63,6 +69,34 @@ export async function PATCH(request: NextRequest, { params }: Params) {
     .single();
 
   if (fetchErr || !entry) return NextResponse.json({ error: "Entry not found" }, { status: 404 });
+
+  // Handle resubmit — only the original submitter can resubmit a rejected entry
+  if (body.action === "resubmit") {
+    const resubmit = resubmitSchema.safeParse(body);
+    if (!resubmit.success) return NextResponse.json({ error: resubmit.error.issues[0].message }, { status: 400 });
+
+    if (entry.status !== "rejected") {
+      return NextResponse.json({ error: "Only rejected entries can be resubmitted" }, { status: 400 });
+    }
+    if (entry.submitted_by !== dbUser.id) {
+      return NextResponse.json({ error: "Only the original submitter can resubmit" }, { status: 403 });
+    }
+
+    const { date, amount, category_id, description } = resubmit.data;
+    await supabase.from("petty_cash_entries").update({
+      date,
+      amount,
+      category_id: category_id || null,
+      description,
+      status: "pending_manager",
+      rejection_note: null,
+    }).eq("id", id);
+
+    return NextResponse.json({ success: true, status: "pending_manager" });
+  }
+
+  const parsed = approveSchema.safeParse(body);
+  if (!parsed.success) return NextResponse.json({ error: parsed.error.issues[0].message }, { status: 400 });
 
   const { action, note } = parsed.data;
 
