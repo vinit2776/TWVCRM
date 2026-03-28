@@ -1,5 +1,6 @@
 "use client";
 
+import { Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useEffect, useState } from "react";
 import { CaseForm } from "@/components/cases/case-form";
@@ -8,7 +9,7 @@ import { Loader2 } from "lucide-react";
 import type { CreateCaseInput } from "@/lib/validations";
 import type { VoCase } from "@/types";
 
-export default function NewCasePage() {
+function NewCaseContent() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const renewFrom = searchParams.get("renew_from");
@@ -72,5 +73,17 @@ export default function NewCasePage() {
         onCancel={() => router.back()}
       />
     </div>
+  );
+}
+
+export default function NewCasePage() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center py-24">
+        <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+      </div>
+    }>
+      <NewCaseContent />
+    </Suspense>
   );
 }
