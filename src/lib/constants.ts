@@ -1408,14 +1408,14 @@ export const PC_REQUEST_STATUSES = ["pending", "approved", "issued", "rejected"]
 
 export const PC_REQUEST_STATUS_LABELS: Record<string, string> = {
   pending: "Pending",
-  approved: "Approved",
+  approved: "Awaiting Issuance",
   issued: "Issued",
   rejected: "Rejected",
 };
 
 export const PC_REQUEST_STATUS_COLORS: Record<string, string> = {
   pending: "bg-yellow-100 text-yellow-800",
-  approved: "bg-blue-100 text-blue-800",
+  approved: "bg-orange-100 text-orange-800",
   issued: "bg-green-100 text-green-800",
   rejected: "bg-red-100 text-red-800",
 };

@@ -15,6 +15,7 @@ import { ExportSummaryDialog } from "@/components/accounting/export-summary-dial
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { Calculator, ScrollText, Banknote, HandCoins } from "lucide-react";
+import { PettyCashIssuance } from "@/components/accounting/petty-cash-issuance";
 
 interface MonthlySummary {
   period: {
@@ -273,6 +274,9 @@ export default function AccountingPage() {
               <TabsTrigger value="gst">
                 GST Invoices
               </TabsTrigger>
+              <TabsTrigger value="petty-cash">
+                <Banknote className="h-3.5 w-3.5 mr-1" />Petty Cash
+              </TabsTrigger>
             </TabsList>
 
             {/* Tab 1: Contracts */}
@@ -325,6 +329,11 @@ export default function AccountingPage() {
             {/* Tab 4: GST Invoices */}
             <TabsContent value="gst" className="mt-4">
               <GstInvoiceEntry entries={gstEntries} onRefresh={fetchData} />
+            </TabsContent>
+
+            {/* Tab 5: Petty Cash Issuance */}
+            <TabsContent value="petty-cash" className="mt-4">
+              <PettyCashIssuance />
             </TabsContent>
           </Tabs>
         </>
