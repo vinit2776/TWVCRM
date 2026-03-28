@@ -1399,3 +1399,48 @@ export const PREPAID_PURCHASE_STATUS_COLORS: Record<string, string> = {
   exhausted: "bg-gray-100 text-gray-600",
   expired: "bg-red-100 text-red-800",
 };
+
+// ==========================================
+// Petty Cash Constants
+// ==========================================
+
+export const PC_REQUEST_STATUSES = ["pending", "approved", "issued", "rejected"] as const;
+
+export const PC_REQUEST_STATUS_LABELS: Record<string, string> = {
+  pending: "Pending",
+  approved: "Approved",
+  issued: "Issued",
+  rejected: "Rejected",
+};
+
+export const PC_REQUEST_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-yellow-100 text-yellow-800",
+  approved: "bg-blue-100 text-blue-800",
+  issued: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+};
+
+export const PC_ENTRY_STATUSES = ["pending_manager", "pending_admin", "approved", "rejected"] as const;
+
+export const PC_ENTRY_STATUS_LABELS: Record<string, string> = {
+  pending_manager: "Pending Manager",
+  pending_admin: "Pending Admin",
+  approved: "Approved",
+  rejected: "Rejected",
+};
+
+export const PC_ENTRY_STATUS_COLORS: Record<string, string> = {
+  pending_manager: "bg-yellow-100 text-yellow-800",
+  pending_admin: "bg-orange-100 text-orange-800",
+  approved: "bg-green-100 text-green-800",
+  rejected: "bg-red-100 text-red-800",
+};
+
+export const PC_ISSUANCE_METHODS = ["cash", "upi", "bank_transfer", "cheque"] as const;
+
+export const PC_ISSUANCE_METHOD_LABELS: Record<string, string> = {
+  cash: "Cash",
+  upi: "UPI",
+  bank_transfer: "Bank Transfer",
+  cheque: "Cheque",
+};

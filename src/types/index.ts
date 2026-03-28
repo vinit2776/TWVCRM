@@ -1645,3 +1645,88 @@ export interface PrepaidRedemption {
   redeemer?: User;
   redeemed_at: string;
 }
+
+// ==========================================
+// Petty Cash Types
+// ==========================================
+
+export interface PettyCashCategory {
+  id: string;
+  name: string;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PettyCashBook {
+  id: string;
+  user_id: string;
+  current_balance: number;
+  created_at: string;
+  updated_at: string;
+  owner?: Pick<User, "id" | "full_name" | "email" | "role">;
+}
+
+export type PcRequestStatus = "pending" | "approved" | "issued" | "rejected";
+export type PcEntryStatus = "pending_manager" | "pending_admin" | "approved" | "rejected";
+export type PcIssuanceMethod = "cash" | "upi" | "bank_transfer" | "cheque";
+
+export interface PettyCashRequest {
+  id: string;
+  request_number: string;
+  book_id: string;
+  amount_requested: number;
+  purpose: string;
+  status: PcRequestStatus;
+  approved_by?: string;
+  approved_at?: string;
+  rejection_note?: string;
+  issued_by?: string;
+  issued_at?: string;
+  issuance_method?: PcIssuanceMethod;
+  issuance_reference?: string;
+  issuance_proof_url?: string;
+  created_by: string;
+  created_at: string;
+  updated_at: string;
+  // joined
+  book?: PettyCashBook;
+  requester?: Pick<User, "id" | "full_name" | "email">;
+  approver?: Pick<User, "id" | "full_name">;
+  issuer?: Pick<User, "id" | "full_name">;
+}
+
+export interface PettyCashEntry {
+  id: string;
+  entry_number: string;
+  book_id: string;
+  date: string;
+  amount: number;
+  category_id?: string;
+  description: string;
+  receipt_url?: string;
+  po_id?: string;
+  status: PcEntryStatus;
+  rejection_note?: string;
+  submitted_by: string;
+  created_at: string;
+  updated_at: string;
+  // joined
+  book?: PettyCashBook;
+  category?: PettyCashCategory;
+  submitter?: Pick<User, "id" | "full_name" | "email">;
+  purchase_order?: { id: string; po_number: string };
+}
+
+export interface PettyCashApproval {
+  id: string;
+  approval_type: "request" | "entry";
+  request_id?: string;
+  entry_id?: string;
+  approver_id: string;
+  approval_level: "manager" | "admin";
+  decision: "approved" | "rejected";
+  note?: string;
+  decided_at: string;
+  approver?: Pick<User, "id" | "full_name">;
+}

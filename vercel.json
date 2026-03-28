@@ -1,0 +1,8 @@
+{
+  "crons": [
+    {
+      "path": "/api/petty-cash/day-book",
+      "schedule": "0 13 * * *"
+    }
+  ]
+}

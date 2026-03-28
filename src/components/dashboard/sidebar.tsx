@@ -36,6 +36,7 @@ import {
   Archive,
   TicketCheck,
   Ticket,
+  Banknote,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -67,6 +68,7 @@ const allNavItems: NavItem[] = [
   // Finance items — legacy roles + accounts (full access)
   { href: "/billing",    label: "Billing",            icon: IndianRupee,   roles: [...LEGACY_ROLES, "accounts"] },
   { href: "/accounting", label: "Accounting",         icon: Calculator,    roles: [...LEGACY_ROLES, "accounts"] },
+  { href: "/petty-cash", label: "Petty Cash",         icon: Banknote,      roles: null },
   // Operations — legacy roles only
   { href: "/bookings",   label: "Bookings",           icon: CalendarClock, roles: LEGACY_ROLES },
   { href: "/packages",   label: "Packages",           icon: TicketCheck,   roles: LEGACY_ROLES },
