@@ -26,6 +26,7 @@ import {
   ShoppingCart,
   Briefcase,
   Handshake,
+  Wallet,
   type LucideIcon,
 } from "lucide-react";
 
@@ -111,14 +112,17 @@ export const HELP_CONTENT: HelpContentData = {
         {
           title: "Navigating the Application",
           steps: [
-            { step: 1, title: "Use the sidebar", description: "The left sidebar lists all modules. Click any item to navigate." },
-            { step: 2, title: "Quick search", description: "Press Cmd+K (or Ctrl+K) to open the command palette. Type a page name or lead name to jump there instantly." },
-            { step: 3, title: "Mobile access", description: "On mobile devices, use the bottom navigation bar. Tap 'More' to access additional modules via the sidebar." },
+            { step: 1, title: "Use the sidebar", description: "The left sidebar organizes modules into collapsible groups: Sales, Finance, Operations, Virtual Offices, Procurement, and Admin. Click a group header to expand or collapse it." },
+            { step: 2, title: "Search the sidebar", description: "Type in the search box at the top of the sidebar to instantly filter menu items across all groups. Results show with their section labels." },
+            { step: 3, title: "Quick search", description: "Press Cmd+K (or Ctrl+K) to open the command palette. Type a page name or lead name to jump there instantly." },
+            { step: 4, title: "Mobile access", description: "On mobile devices, the sidebar slides in from the left. Tap to navigate, and it auto-closes after selection." },
           ],
         },
       ],
       tips: [
         "Bookmark the CRM URL for quick access from your browser.",
+        "The sidebar groups auto-expand when you navigate to a page within them — the active item is always visible.",
+        "Use the sidebar search box to quickly find any menu item — it searches across all groups.",
         "The command palette (Cmd+K) searches across pages and leads — it is the fastest way to find anything.",
         "If you forget your password, use the 'Forgot Password' link on the login page.",
         "Your role determines which modules and actions are available to you.",
@@ -360,6 +364,7 @@ export const HELP_CONTENT: HelpContentData = {
         "You can add multiple email recipients when sending — add the lead's email plus any additional contacts.",
         "After sending, the proposal status changes to 'Sent' and the lead status updates to 'Proposal Sent'.",
         "Review the PDF preview before sending to ensure formatting is correct.",
+        "Proposal PDFs include a UPI QR code from the payment module, making it easy for clients to pay directly by scanning.",
         "Always log a rejection reason — this data helps identify why deals are lost and improve future pitches.",
         "Proposals that receive no response can be manually set to 'Expired'.",
       ],
@@ -489,7 +494,7 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Accounting",
       icon: Calculator,
       overview:
-        "The Accounting module provides a monthly financial overview. Select a month and see all contract revenue, walk-in collections, cash handovers, and GST invoices in one place. Periods can be locked after reconciliation to prevent further changes.",
+        "The Accounting module provides a monthly financial overview. Select a month and see all contract revenue, walk-in collections, cash handovers, GST invoices, and petty cash in one place. An 'Action Required' banner at the top aggregates all pending items across tabs — outstanding payments, cash handovers, GST invoices to send, petty cash to issue, and expenses to approve — so nothing is missed. Periods can be locked after reconciliation to prevent further changes.",
       workflows: [
         {
           title: "Reviewing a Monthly Period",
@@ -504,14 +509,18 @@ export const HELP_CONTENT: HelpContentData = {
         },
       ],
       tips: [
+        "The 'Action Required' banner shows a count of all pending items and is collapsible. Click any item to jump to the relevant tab.",
+        "Action items include: outstanding payments, pending cash handovers, GST invoices to send, petty cash to issue, and expenses awaiting admin approval.",
         "Summary cards at the top show totals: Billable, Collected, Outstanding, Cash Pending, and Cash Handed Over.",
         "The aging analysis shows current vs 30/60/90-day overdue amounts.",
         "Locked periods display a status bar showing who locked them and when.",
         "GST invoices can be uploaded as PDFs and emailed to clients directly.",
+        "The Petty Cash tab shows all books, approvals, and fund request management within the Accounting page.",
       ],
       faqs: [
         { question: "Can I unlock a locked period?", answer: "Yes. An Admin or Manager can unlock a period to make corrections, then lock it again." },
         { question: "What does the 'Carried Forward' amount mean?", answer: "It represents outstanding balances from previous periods that are still unpaid." },
+        { question: "What is the Action Required banner?", answer: "An orange banner at the top of the Accounting page that aggregates all pending items: outstanding contract payments, pending cash handovers, GST invoices to send, petty cash funds to issue, and expenses awaiting admin approval. Click any item to jump to the relevant tab. The banner is collapsible and hides when there are no action items." },
       ],
       roles: null,
     },
@@ -603,6 +612,7 @@ export const HELP_CONTENT: HelpContentData = {
         "Use the search bar to find bookings by guest phone number, name, or booking number.",
         "Recurring bookings are ideal for members with regular weekly or monthly room reservations.",
         "When a prepaid package holder books, one Booking Slot credit is deducted from their package balance automatically.",
+        "If a customer has outstanding unpaid charges, an amber warning banner appears on the booking form showing the total due and up to 5 individual charges — consider collecting during the transaction.",
       ],
       faqs: [
         { question: "What is the difference between Member and Walk-in bookings?", answer: "Member bookings are for existing contract holders — their details are pre-filled and billing may go through the contract. Walk-in bookings are for one-time guests who pay at the time of booking." },
@@ -611,6 +621,7 @@ export const HELP_CONTENT: HelpContentData = {
         { question: "Can I cancel a recurring booking series?", answer: "Individual instances can be cancelled one at a time. There is no bulk-cancel for a full recurring series — cancel each occurrence as needed." },
         { question: "Can I cancel a booking?", answer: "Yes. Open the booking and click 'Cancel'. Cancelled bookings are preserved in history but marked as cancelled." },
         { question: "How does the feedback system work?", answer: "After a guest checks out, you can send them a feedback link via email. The guest rates their experience on a public page (no login required). Feedback scores appear in the booking details and analytics." },
+        { question: "What is the outstanding charges warning on the booking form?", answer: "When creating a booking for a customer with unpaid usage charges, an amber warning banner displays the total outstanding amount and lists up to 5 individual charges. This is informational — you can proceed with the booking and collect outstanding amounts separately or at the same time." },
       ],
       roles: null,
     },
@@ -892,7 +903,7 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Payments & Razorpay",
       icon: CreditCard,
       overview:
-        "The CRM integrates with Razorpay for online payment collection. Payment links can be generated for walk-in bookings and contract payments. When a payment is completed through Razorpay, the booking or payment record updates automatically.",
+        "The CRM integrates with Razorpay for online payment collection. Payment links can be generated for walk-in bookings and contract payments. When you create or resend a payment link, the system automatically notifies the customer via SMS and/or email based on available contact details, with a confirmation of which channels were used. Payment status updates in real-time — the dialog shows a live breakdown of collected, pending, and balance amounts.",
       workflows: [
         {
           title: "Collecting Payment via Razorpay",
@@ -908,10 +919,14 @@ export const HELP_CONTENT: HelpContentData = {
         "Razorpay API keys are configured in Settings by the Admin.",
         "Payment confirmation details (amount, method, Razorpay ID) are shown on the booking page after successful payment.",
         "You can also send payment links for contract payment reminders from the Accounting module.",
+        "When you create or resend a payment link, the system confirms which channels (SMS, email) were used to notify the customer.",
+        "The payment dialog shows a live breakdown: verified (collected), pending (awaiting), and balance due — it auto-closes when fully paid.",
       ],
       faqs: [
         { question: "What payment methods are supported?", answer: "Razorpay supports UPI, credit/debit cards, net banking, and wallets. The guest chooses their preferred method on the payment page." },
         { question: "How do I know if a payment was successful?", answer: "Successful payments show a green 'Payment Collected' banner on the booking page with the transaction details. The payment status changes from 'Pending' to 'Collected'." },
+        { question: "Can I resend a payment link?", answer: "Yes. If a payment link already exists, clicking 'Send Link' again resends notifications via SMS and/or email. The system confirms which channels the resend was attempted on." },
+        { question: "What does the live payment breakdown show?", answer: "The payment dialog shows three amounts in real-time: Verified (amount already collected), Pending (amount awaiting completion), and Balance Due (remaining to collect). Once payment reaches the booking total, the dialog auto-closes." },
       ],
       roles: null,
     },
@@ -978,7 +993,7 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Support Tickets",
       icon: LifeBuoy,
       overview:
-        "Support Tickets track internal issues, customer complaints, and maintenance requests. Any staff member can create a ticket and track their own tickets via the 'My Tickets' view. Each ticket is auto-numbered (TWV-T-XXXX) and has a subject, type, priority, status, reporter, and assignee. Admins and Managers triage and resolve tickets. If a resolved or closed ticket needs further attention, the ticket owner (creator) can reopen it. This module keeps issues visible and accountable.",
+        "Support Tickets track internal issues, customer complaints, and maintenance requests. Any staff member can create a ticket and track their own tickets via the 'My Tickets' view. Each ticket is auto-numbered (TWV-T-XXXX) and has a subject, type, priority, status, reporter, and assignee. Admins and Managers triage and resolve tickets. If a resolved or closed ticket needs further attention, the ticket owner (creator) can reopen it. Email notifications are sent automatically when a ticket is updated, keeping all stakeholders informed. This module keeps issues visible and accountable.",
       workflows: [
         {
           title: "Creating a Support Ticket",
@@ -1016,6 +1031,7 @@ export const HELP_CONTENT: HelpContentData = {
         "Any team member can create tickets — encourage staff to report issues immediately rather than verbally.",
         "Use 'My Tickets' to track the status of issues you reported without digging through the full ticket list.",
         "As the ticket creator, you can reopen a Resolved or Closed ticket if the issue was not fully fixed.",
+        "Email notifications are sent automatically when a ticket status changes or a note is added — no need to manually notify stakeholders.",
       ],
       faqs: [
         { question: "Who can see support tickets?", answer: "All authenticated team members can view tickets. Any staff member can create one. Admins and Managers can assign, update, and close tickets." },
@@ -1023,6 +1039,7 @@ export const HELP_CONTENT: HelpContentData = {
         { question: "What is 'My Tickets'?", answer: "My Tickets is a self-service view that shows only the tickets you personally created. Every role has access to it, making it easy to track your own reported issues without seeing the full ticket queue." },
         { question: "Can I link a ticket to a lead or booking?", answer: "Tickets can reference any context in their description. Direct linking to other entities is via ticket notes." },
         { question: "What ticket types are available?", answer: "Common types include Maintenance, IT Issue, Customer Complaint, Billing Query, and General. The exact list may vary based on your configuration." },
+        { question: "Do I get notified when my ticket is updated?", answer: "Yes. Email notifications are sent automatically when a ticket status changes or notes are added. The ticket reporter, assignee, and relevant managers all receive updates." },
       ],
       roles: null,
     },
@@ -1111,46 +1128,69 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Cases",
       icon: Briefcase,
       overview:
-        "Cases manage Virtual Office and membership service workflows. Each case tracks a client service request from initiation to completion — including document collection, agreement signing, and service delivery milestones. Cases are managed in a Kanban board view, moving through stages as work progresses. Documents such as KYC files and signed agreements are attached directly to cases.",
+        "Cases manage Virtual Office and membership service workflows. Each case tracks a client service request from initiation to completion — including document collection, proposal generation, Leave & License agreement execution, and service delivery milestones. Cases are managed in a list or detail view, moving through stages as work progresses. Each case has dedicated tabs: Overview, Documents, Compliance, Proposal, Agreement, Comments, and Emails. Documents show who reviewed them and when. Subscription history tracks all periods with renewal support.",
       workflows: [
         {
           title: "Creating a Case",
           steps: [
-            { step: 1, title: "Go to Cases", description: "Navigate to Cases from the sidebar." },
-            { step: 2, title: "Click 'New Case'", description: "Click the create button and select the case type (e.g., Virtual Office, Membership)." },
-            { step: 3, title: "Link to a lead", description: "Select the lead this case is for. Their contact details are pre-filled." },
-            { step: 4, title: "Set stage and assignee", description: "Place the case in the appropriate stage and assign it to a team member." },
-            { step: 5, title: "Save", description: "The case appears on the Kanban board." },
+            { step: 1, title: "Go to Cases", description: "Navigate to Cases from the sidebar under Virtual Offices." },
+            { step: 2, title: "Click 'Create Case'", description: "Click the create button and fill in client details, purpose, rate, and tenure." },
+            { step: 3, title: "Link to a client", description: "Select the client this case is for. Their contact details are pre-filled." },
+            { step: 4, title: "Save", description: "The case is created and you are taken to the case detail page." },
           ],
         },
         {
-          title: "Managing Cases on the Kanban Board",
+          title: "Generating a Proposal (Proposal Tab)",
           steps: [
-            { step: 1, title: "View the board", description: "The Kanban board shows all cases in columns by stage (e.g., Application, Documents Pending, Agreement, Active, Closed)." },
-            { step: 2, title: "Drag to advance", description: "Drag a case card to the next column to move it to the next stage." },
-            { step: 3, title: "Open for details", description: "Click a case card to open the full case detail page where you can add notes and upload documents." },
+            { step: 1, title: "Open the Proposal tab", description: "Navigate to a case and click the 'Proposal' tab." },
+            { step: 2, title: "Click 'Generate Proposal'", description: "Click the button to auto-generate a proposal PDF from the case details (rate, tenure, purpose, client info)." },
+            { step: 3, title: "Review and edit", description: "View the generated PDF. Click 'Edit Proposal' to adjust variables like rate, tenure, or start date, then regenerate." },
+            { step: 4, title: "Approve and send", description: "Move the proposal through statuses: Draft → Internally Approved → Sent to Client → Client Approved." },
           ],
         },
         {
-          title: "Uploading Documents to a Case",
+          title: "Generating a Leave & License Agreement (Agreement Tab)",
           steps: [
-            { step: 1, title: "Open the case", description: "Click on the case from the Kanban board or case list." },
-            { step: 2, title: "Go to Documents tab", description: "Open the Documents tab within the case detail." },
-            { step: 3, title: "Upload files", description: "Upload KYC documents, agreements, or any supporting files. Common formats (PDF, images) are supported." },
-            { step: 4, title: "Mark as signed", description: "For agreement documents, mark them as signed once the client has returned the executed agreement." },
+            { step: 1, title: "Open the Agreement tab", description: "Navigate to a case and click the 'Agreement' tab." },
+            { step: 2, title: "Click 'Generate Agreement'", description: "Click to auto-generate a Leave & License agreement PDF with 12 legal clauses, schedule, and signature blocks." },
+            { step: 3, title: "Edit agreement details", description: "Click 'Edit Agreement' to fill in nature of business, lessee signatory name/designation, witness details (names and last 4 digits of Aadhaar), and e-stamp value." },
+            { step: 4, title: "Approve and execute", description: "Move through statuses: Draft → Internally Approved → Sent to Client → Client Approved → Signing → Executed." },
+            { step: 5, title: "Initiate e-stamping & signing", description: "Once client-approved, click 'Initiate E-Stamping & Signing' to send the agreement for digital execution via Leegality (e-stamp paper + Aadhaar eSign)." },
+          ],
+        },
+        {
+          title: "Uploading and Reviewing Documents",
+          steps: [
+            { step: 1, title: "Open the Documents tab", description: "Navigate to a case and click the Documents tab." },
+            { step: 2, title: "Upload files", description: "Upload KYC documents, agreements, or any supporting files. Common formats (PDF, images) are supported." },
+            { step: 3, title: "Review documents", description: "When a document is reviewed, the reviewer's name and timestamp are displayed on the document card." },
+          ],
+        },
+        {
+          title: "Renewing a Subscription",
+          steps: [
+            { step: 1, title: "Check subscription status", description: "On the case Overview tab, the Subscription History table shows all periods with expiry countdown (green >30 days, amber ≤30 days, red for expired)." },
+            { step: 2, title: "Click 'Renew'", description: "When a subscription is active or renewal-due, click the 'Renew' button. A renewal alert banner also appears when expiry is within 60 days." },
+            { step: 3, title: "Confirm renewal details", description: "You are taken to the case creation form pre-filled with the current case details. Adjust rate, tenure, or start date as needed." },
+            { step: 4, title: "Save", description: "The new renewal case is created and linked to the original, marked with a '(renewal)' label." },
           ],
         },
       ],
       tips: [
-        "Use the Kanban board for daily case reviews — it gives a visual snapshot of all active Virtual Office and membership workflows.",
+        "The case detail page has 7 tabs: Overview, Documents, Compliance, Proposal, Agreement, Comments, and Emails.",
+        "The Proposal tab generates a commercial proposal PDF; the Agreement tab generates a formal Leave & License agreement — they are separate stages.",
+        "Document cards show the reviewer's name and review timestamp so you can track who verified each document.",
+        "The Subscription History table on Overview shows all subscription periods with color-coded expiry countdowns.",
+        "A renewal alert banner appears automatically when a subscription expires within 60 days — click 'Renew Now' to start the renewal.",
+        "Leave & License agreements include 12 legal clauses, a schedule table, annexure, witness section, and required documents list based on entity type.",
         "Attach all client KYC documents directly to the case to keep everything in one place.",
-        "Add detailed notes when requesting documents or following up — these form the case history.",
-        "Cases linked to leads inherit contact information, saving data entry time.",
       ],
       faqs: [
-        { question: "What types of cases are available?", answer: "The primary case types are Virtual Office and Membership. Each represents a distinct service offering with its own workflow stages." },
-        { question: "Can I attach multiple documents to a single case?", answer: "Yes. The Documents tab within a case supports multiple file uploads. Each file can be categorized and marked with a status (Pending, Received, Signed)." },
-        { question: "How is a case different from a contract?", answer: "A Contract formalizes the ongoing billing relationship. A Case tracks the service delivery workflow — especially document collection and onboarding steps — that happens before and alongside the contract." },
+        { question: "What is the difference between the Proposal tab and the Agreement tab?", answer: "The Proposal tab generates a commercial offer (pricing, workspace details). The Agreement tab generates a formal Leave & License legal agreement with clauses, schedules, and signature blocks. Typically, you create a Proposal first, then generate the Agreement after the client accepts." },
+        { question: "How does the Leave & License agreement e-stamping work?", answer: "Once the agreement is client-approved, click 'Initiate E-Stamping & Signing'. This sends the PDF to Leegality for Tamil Nadu e-stamp paper (via BharatStamp) and Aadhaar-based digital signatures. You can track the signing status from the Agreement tab." },
+        { question: "Can I attach multiple documents to a single case?", answer: "Yes. The Documents tab within a case supports multiple file uploads. Each file can be categorized and shows reviewer name and timestamp when reviewed." },
+        { question: "How does subscription renewal work?", answer: "The Overview tab shows a Subscription History table with all periods. When a subscription nears expiry (within 60 days), a renewal alert banner appears. Click 'Renew' to create a new case pre-filled with the current details. Renewal cases are marked with '(renewal)' in the case list." },
+        { question: "How is a case different from a contract?", answer: "A Contract formalizes the ongoing billing relationship. A Case tracks the service delivery workflow — especially document collection, proposal, agreement signing, and onboarding steps — that happens before and alongside the contract." },
       ],
       roles: null,
     },
@@ -1197,6 +1237,78 @@ export const HELP_CONTENT: HelpContentData = {
         { question: "Can I track bookings by aggregator?", answer: "Yes. Bookings can be tagged with an aggregator source. Filter the Bookings list by aggregator to see all partner-sourced bookings and their revenue." },
       ],
       roles: ["admin", "manager"],
+    },
+
+    /* ============================================================== */
+    /*  28. Petty Cash                                                 */
+    /* ============================================================== */
+    {
+      id: "petty-cash",
+      title: "Petty Cash",
+      icon: Wallet,
+      overview:
+        "The Petty Cash module manages small operational expenses across the team. Each team member gets a personal petty cash book (auto-created on first access) that tracks their balance, funding requests, and expenses. Expenses go through a multi-level approval workflow: expenses under ₹5,000 need manager approval only, while those ₹5,000 and above require both manager and admin approval. Rejected expenses can be edited and resubmitted. Admins and Managers can view all books, spending breakdowns by category, and timeline-filtered analytics. Approved funding requests appear on the Accounting page for the accounts team to issue payment.",
+      workflows: [
+        {
+          title: "Requesting Petty Cash Funds",
+          steps: [
+            { step: 1, title: "Go to Petty Cash", description: "Navigate to Petty Cash from the sidebar under Finance." },
+            { step: 2, title: "View your book", description: "The 'My Book' view shows your current balance and recent activity. A personal book is auto-created on first access." },
+            { step: 3, title: "Submit a funding request", description: "Click 'Request Funds', enter the amount and purpose, then submit. The request goes to an Admin/Manager for approval." },
+            { step: 4, title: "Funds issued", description: "Once approved, the request moves to Accounting for the accounts team to issue payment. Your book balance increases when funds are issued." },
+          ],
+        },
+        {
+          title: "Logging an Expense",
+          steps: [
+            { step: 1, title: "Open your book", description: "Go to Petty Cash → My Book." },
+            { step: 2, title: "Click 'Add Expense'", description: "Enter the date, amount, category, and description of the expense." },
+            { step: 3, title: "Submit", description: "The expense enters the approval workflow. Under ₹5,000 needs manager approval only. ₹5,000 and above needs both manager and admin approval." },
+            { step: 4, title: "Approved", description: "Once fully approved, the expense amount is deducted from your book balance." },
+          ],
+        },
+        {
+          title: "Editing and Resubmitting a Rejected Expense",
+          steps: [
+            { step: 1, title: "Find the rejected expense", description: "In your book, rejected expenses show a rejection reason in a highlighted box." },
+            { step: 2, title: "Click 'Edit & Resubmit'", description: "Click the button on the rejected entry to modify the date, amount, category, or description." },
+            { step: 3, title: "Resubmit", description: "Save changes. The expense returns to 'Pending Manager' status and goes through the approval cycle again." },
+          ],
+        },
+        {
+          title: "Approving Expenses and Requests (Manager/Admin)",
+          steps: [
+            { step: 1, title: "Go to Approvals tab", description: "Navigate to Petty Cash → Approvals (visible to Managers and Admins)." },
+            { step: 2, title: "Review fund requests", description: "The Fund Requests tab shows pending requests with the requester's name and current balance. Approve or reject with optional notes." },
+            { step: 3, title: "Review expenses", description: "The Expense Approvals tab shows pending expenses. Review the entry details, category, and amount before approving or rejecting." },
+          ],
+        },
+        {
+          title: "Viewing All Books (Admin/Manager)",
+          steps: [
+            { step: 1, title: "Go to All Books tab", description: "Navigate to Petty Cash → All Books to see all team members' petty cash books." },
+            { step: 2, title: "Click a book", description: "Click any person's book to see their detailed view with balance, spending, and funding history." },
+            { step: 3, title: "Use timeline presets", description: "Filter the detail view by 'This Week', 'This Month', or 'This Year' to see spending and funding for specific periods." },
+            { step: 4, title: "Review category breakdown", description: "The 'Spend by Category' section shows a visual bar chart of how expenses are distributed across categories." },
+          ],
+        },
+      ],
+      tips: [
+        "Expenses under ₹5,000 need only manager approval. ₹5,000+ requires both manager and admin sign-off.",
+        "Rejected expenses can be edited and resubmitted — the rejection reason is shown so you know what to fix.",
+        "The All Books view shows 'Total Float Outstanding' across all petty cash books at the top.",
+        "Use timeline presets (This Week / This Month / This Year) in the detailed book view to analyze spending over specific periods.",
+        "The 'Spend by Category' visual breakdown helps identify where money is being spent most.",
+        "Approved funding requests automatically appear on the Accounting page's Action Required banner for the accounts team to issue payment.",
+      ],
+      faqs: [
+        { question: "What is the approval threshold?", answer: "Expenses under ₹5,000 require manager approval only. Expenses of ₹5,000 or more require both manager approval first, then admin approval. This two-tier system ensures oversight on larger expenses." },
+        { question: "Can I resubmit a rejected expense?", answer: "Yes. Click 'Edit & Resubmit' on the rejected entry. You can modify the details and the expense re-enters the approval workflow from the beginning." },
+        { question: "How do I get my petty cash book?", answer: "Your personal petty cash book is automatically created the first time you access the Petty Cash module. No setup needed." },
+        { question: "Where do approved fund requests go?", answer: "Approved requests appear on the Accounting page's Action Required banner under 'Issue Cash'. The accounts team processes the payment and marks it as issued, which increases your book balance." },
+        { question: "Can Managers see everyone's expenses?", answer: "Yes. Managers and Admins can view the All Books tab to see all team members' books, balances, and spending history with category breakdowns." },
+      ],
+      roles: null,
     },
   ],
 
@@ -1255,6 +1367,9 @@ export const HELP_CONTENT: HelpContentData = {
     { feature: "Support Tickets (manage/close)", admin: true, manager: true, sales_rep: false, floor_manager: false },
     { feature: "Procurement (view)", admin: true, manager: true, sales_rep: false, floor_manager: false },
     { feature: "Procurement (approve/PO/bills)", admin: true, manager: true, sales_rep: false, floor_manager: false },
+    { feature: "Petty Cash (view own book)", admin: true, manager: true, sales_rep: true, floor_manager: true },
+    { feature: "Petty Cash (approve)", admin: true, manager: true, sales_rep: false, floor_manager: false },
+    { feature: "Petty Cash (all books)", admin: true, manager: true, sales_rep: false, floor_manager: false },
     { feature: "Cases", admin: true, manager: true, sales_rep: true, floor_manager: true },
     { feature: "Aggregators", admin: true, manager: true, sales_rep: false, floor_manager: false },
     { feature: "Locations", admin: true, manager: true, sales_rep: false, floor_manager: false },

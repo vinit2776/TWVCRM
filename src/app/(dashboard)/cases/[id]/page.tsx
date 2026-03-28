@@ -27,6 +27,8 @@ import { CaseCommentsTab } from "@/components/cases/case-comments-tab";
 import { CaseEmailsTab } from "@/components/cases/case-emails-tab";
 import { CaseSubscriptionHistory } from "@/components/cases/case-subscription-history";
 import { CaseStatusTransitionDialog } from "@/components/cases/case-status-transition-dialog";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
+import { TooltipProvider } from "@/components/ui/tooltip";
 import { useCase } from "@/hooks/use-cases";
 import { toast } from "sonner";
 import {
@@ -149,8 +151,8 @@ export default function CaseDetailPage({
           <TabsTrigger value="subscriptions">Subscriptions</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
           <TabsTrigger value="compliance">Compliance</TabsTrigger>
-          <TabsTrigger value="proposal">Proposal</TabsTrigger>
-          <TabsTrigger value="agreement">Agreement</TabsTrigger>
+          <TabsTrigger value="proposal" className="flex items-center gap-1">Proposal <InfoTooltip text="Commercial offer with pricing and terms for this case" side="bottom" /></TabsTrigger>
+          <TabsTrigger value="agreement" className="flex items-center gap-1">Agreement <InfoTooltip text="Formal Leave & License agreement with legal clauses and e-stamping" side="bottom" /></TabsTrigger>
           <TabsTrigger value="comments">Comments</TabsTrigger>
           <TabsTrigger value="emails">Emails</TabsTrigger>
         </TabsList>

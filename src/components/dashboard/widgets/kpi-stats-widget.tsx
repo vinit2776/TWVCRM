@@ -2,6 +2,7 @@
 
 import { Users, TrendingUp, CheckSquare, Clock, AlertTriangle } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import type { DashboardStats } from "@/types";
 
 interface KpiStatsWidgetProps {
@@ -13,7 +14,7 @@ export function KpiStatsWidget({ stats }: KpiStatsWidgetProps) {
     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-sm font-medium">Total Leads</CardTitle>
+          <CardTitle className="text-sm font-medium flex items-center gap-1">Total Leads <InfoTooltip text="All leads in your pipeline across all statuses" /></CardTitle>
           <Users className="h-4 w-4 text-muted-foreground" />
         </CardHeader>
         <CardContent>
@@ -26,7 +27,7 @@ export function KpiStatsWidget({ stats }: KpiStatsWidgetProps) {
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-sm font-medium">Conversion Rate</CardTitle>
+          <CardTitle className="text-sm font-medium flex items-center gap-1">Conversion Rate <InfoTooltip text="Percentage of leads won out of total leads" /></CardTitle>
           <TrendingUp className="h-4 w-4 text-muted-foreground" />
         </CardHeader>
         <CardContent>
@@ -37,7 +38,7 @@ export function KpiStatsWidget({ stats }: KpiStatsWidgetProps) {
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-sm font-medium">Tasks Due Today</CardTitle>
+          <CardTitle className="text-sm font-medium flex items-center gap-1">Tasks Due Today <InfoTooltip text="Tasks with a due date of today that need attention" /></CardTitle>
           <CheckSquare className="h-4 w-4 text-muted-foreground" />
         </CardHeader>
         <CardContent>
@@ -53,7 +54,7 @@ export function KpiStatsWidget({ stats }: KpiStatsWidgetProps) {
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-sm font-medium">Pending Follow-ups</CardTitle>
+          <CardTitle className="text-sm font-medium flex items-center gap-1">Pending Follow-ups <InfoTooltip text="Leads with scheduled follow-ups that haven't been completed yet" /></CardTitle>
           <Clock className="h-4 w-4 text-muted-foreground" />
         </CardHeader>
         <CardContent>

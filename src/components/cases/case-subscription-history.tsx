@@ -14,6 +14,7 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { RefreshCw, Loader2, History } from "lucide-react";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { CASE_STATUS_LABELS, CASE_STATUS_COLORS } from "@/lib/constants";
 import { formatDate, formatCurrency, cn } from "@/lib/utils";
 
@@ -110,7 +111,7 @@ export function CaseSubscriptionHistory({ caseId }: CaseSubscriptionHistoryProps
 
       <Card>
         <CardHeader className="pb-2">
-          <CardTitle className="text-base">Subscription History</CardTitle>
+          <CardTitle className="text-base flex items-center gap-1">Subscription History <InfoTooltip text="All subscription periods for this client including renewals. Color-coded expiry countdowns help track renewal timing." side="right" /></CardTitle>
         </CardHeader>
         <CardContent className="p-0">
           <Table>

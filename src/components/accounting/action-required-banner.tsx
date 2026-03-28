@@ -5,6 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { AlertCircle, Banknote, HandCoins, Receipt, ScrollText, ChevronDown, ChevronUp } from "lucide-react";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import type { PettyCashRequest, PettyCashEntry, PaginatedResponse } from "@/types";
 
 interface ContractSummary {
@@ -168,7 +169,7 @@ export function ActionRequiredBanner({ contracts, cashHandovers, gstEntries, onS
         <div className="flex items-center justify-between">
           <CardTitle className="text-base flex items-center gap-2">
             <AlertCircle className="h-4 w-4 text-orange-500" />
-            Action Required ({items.length})
+            Action Required ({items.length}) <InfoTooltip text="Pending tasks: outstanding payments, cash handovers, GST invoices, petty cash. Click an item to go to the relevant tab." side="right" />
           </CardTitle>
           <Button variant="ghost" size="sm" onClick={() => setExpanded(!expanded)}>
             {expanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}

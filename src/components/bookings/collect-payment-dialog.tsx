@@ -17,6 +17,7 @@ import {
   Link2, Copy, ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { createClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
 import {
@@ -393,16 +394,16 @@ export function CollectPaymentDialog({
           {/* Summary Bar */}
           <div className="grid grid-cols-3 gap-3 text-center">
             <div className="rounded-md bg-muted/50 p-2.5">
-              <p className="text-xs text-muted-foreground">Total</p>
+              <p className="text-xs text-muted-foreground flex items-center justify-center gap-1">Total <InfoTooltip text="Full amount due for this booking" /></p>
               <p className="text-lg font-bold">{formatCurrency(totalAmount)}</p>
             </div>
             <div className="rounded-md bg-green-50 p-2.5">
-              <p className="text-xs text-green-600">Paid</p>
+              <p className="text-xs text-green-600 flex items-center justify-center gap-1">Paid <InfoTooltip text="Amount verified and collected from the customer" /></p>
               <p className="text-lg font-bold text-green-700">{formatCurrency(verifiedTotal)}</p>
             </div>
             <div className={`rounded-md p-2.5 ${balanceDue > 0 ? "bg-amber-50" : "bg-green-50"}`}>
-              <p className={`text-xs ${balanceDue > 0 ? "text-amber-600" : "text-green-600"}`}>
-                {balanceDue > 0 ? "Balance Due" : "Fully Paid"}
+              <p className={`text-xs flex items-center justify-center gap-1 ${balanceDue > 0 ? "text-amber-600" : "text-green-600"}`}>
+                {balanceDue > 0 ? "Balance Due" : "Fully Paid"} <InfoTooltip text="Remaining amount to collect. Auto-closes when fully paid." />
               </p>
               <p className={`text-lg font-bold ${balanceDue > 0 ? "text-amber-700" : "text-green-700"}`}>
                 {formatCurrency(balanceDue)}

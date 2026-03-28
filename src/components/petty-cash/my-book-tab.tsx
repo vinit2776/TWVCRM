@@ -4,6 +4,7 @@ import { useState } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Wallet, ArrowUpCircle, ArrowDownCircle } from "lucide-react";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { usePettyCashBooks, usePettyCashRequests, usePettyCashEntries } from "@/hooks/use-petty-cash";
 import { PC_REQUEST_STATUS_LABELS, PC_REQUEST_STATUS_COLORS, PC_ENTRY_STATUS_LABELS, PC_ENTRY_STATUS_COLORS } from "@/lib/constants";
 
@@ -35,14 +36,14 @@ export function MyBookTab() {
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center gap-2">
-            <Wallet className="h-4 w-4" />My Petty Cash Book
+            <Wallet className="h-4 w-4" />My Petty Cash Book <InfoTooltip text="Your personal petty cash account. Request funds and log expenses here." side="right" />
           </CardTitle>
         </CardHeader>
         <CardContent>
           <div className="text-3xl font-bold">
             ₹{book ? Number(book.current_balance).toLocaleString("en-IN") : "0"}
           </div>
-          <p className="text-sm text-muted-foreground mt-1">Current Balance</p>
+          <p className="text-sm text-muted-foreground mt-1 flex items-center gap-1">Current Balance <InfoTooltip text="Cash available in your book. Increases when funds are issued, decreases when expenses are approved." /></p>
         </CardContent>
       </Card>
 
@@ -51,7 +52,7 @@ export function MyBookTab() {
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-base flex items-center gap-2">
-              <ArrowUpCircle className="h-4 w-4 text-green-600" />Recent Requests
+              <ArrowUpCircle className="h-4 w-4 text-green-600" />Recent Requests <InfoTooltip text="Fund requests you've submitted. Approved requests go to Accounting for payment." side="right" />
             </CardTitle>
           </CardHeader>
           <CardContent>
