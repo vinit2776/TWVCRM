@@ -67,7 +67,7 @@ export async function GET(request: Request) {
     year: "numeric",
   });
 
-  const html = buildDigestHtml(dateLabel, today, lw, ly, locations, attention, portfolio);
+  const html = buildDigestHtml(dateLabel, todayIST, today, lw, ly, locations, attention, portfolio);
 
   let sent = 0;
   for (const email of recipients) {
@@ -309,10 +309,19 @@ async function fetchLocationBreakdown(supabase: any, date: string): Promise<Loca
   return results;
 }
 
+interface UnpaidBill {
+  invoice_number: string;
+  vendor_name: string;
+  total_amount: number;
+  amount_paid: number;
+  due_date: string | null;
+  payment_status: string;
+}
+
 interface AttentionItems {
   overdueTasks: number;
-  unpaidBills: number;
-  unpaidBillsAmount: number;
+  unpaidBills: UnpaidBill[];
+  unpaidBillsTotal: number;
   expiringContracts: number;
   pendingFollowups: number;
 }
@@ -331,8 +340,9 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
       .neq("status", "done"),
     supabase
       .from("vendor_bills")
-      .select("total_amount")
-      .neq("payment_status", "paid"),
+      .select("invoice_number, total_amount, amount_paid, due_date, payment_status, vendor:procurement_vendors!vendor_bills_vendor_id_fkey(company_name)")
+      .neq("payment_status", "paid")
+      .order("due_date", { ascending: true }),
     supabase
       .from("contracts")
       .select("id", { count: "exact", head: true })
@@ -346,14 +356,19 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
       .not("follow_up_date", "is", null),
   ]);
 
-  const billRows = bills.data || [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const billRows: UnpaidBill[] = (bills.data || []).map((b: any) => ({
+    invoice_number: b.invoice_number || "—",
+    vendor_name: b.vendor?.company_name || "Unknown",
+    total_amount: Number(b.total_amount || 0),
+    amount_paid: Number(b.amount_paid || 0),
+    due_date: b.due_date,
+    payment_status: b.payment_status,
+  }));
   return {
     overdueTasks: overdue.count || 0,
-    unpaidBills: billRows.length,
-    unpaidBillsAmount: billRows.reduce(
-      (s: number, r: { total_amount: number }) => s + Number(r.total_amount || 0),
-      0
-    ),
+    unpaidBills: billRows,
+    unpaidBillsTotal: billRows.reduce((s, r) => s + (r.total_amount - r.amount_paid), 0),
     expiringContracts: expiring.count || 0,
     pendingFollowups: followups.count || 0,
   };
@@ -433,6 +448,7 @@ function tableHeader(): string {
 
 function buildDigestHtml(
   dateLabel: string,
+  todayIST: string,
   today: Metrics,
   lw: Metrics,
   ly: Metrics,
@@ -472,9 +488,43 @@ function buildDigestHtml(
 
   const attentionList: string[] = [];
   if (attention.overdueTasks > 0) attentionList.push(`${attention.overdueTasks} overdue task${attention.overdueTasks > 1 ? "s" : ""}`);
-  if (attention.unpaidBills > 0) attentionList.push(`${attention.unpaidBills} unpaid vendor bill${attention.unpaidBills > 1 ? "s" : ""} (${rupees(attention.unpaidBillsAmount)})`);
   if (attention.expiringContracts > 0) attentionList.push(`${attention.expiringContracts} contract${attention.expiringContracts > 1 ? "s" : ""} expiring in 30 days`);
   if (attention.pendingFollowups > 0) attentionList.push(`${attention.pendingFollowups} pending follow-up${attention.pendingFollowups > 1 ? "s" : ""}`);
+
+  // Pending vendor bills table
+  const billsTableHtml =
+    attention.unpaidBills.length > 0
+      ? `
+    <h2 style="color:#015E65;font-size:15px;margin:0 0 12px;border-bottom:2px solid #015E65;padding-bottom:6px;">Pending Vendor Bills (${attention.unpaidBills.length})</h2>
+    <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+      <tr style="background:#f7f8fa;">
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Vendor</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Invoice #</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Amount</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Paid</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Balance</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Due Date</td>
+      </tr>
+      ${attention.unpaidBills
+        .map(
+          (b) => `
+      <tr>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;">${b.vendor_name}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;">${b.invoice_number}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;text-align:right;">${rupees(b.total_amount)}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;text-align:right;">${rupees(b.amount_paid)}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#e53e3e;font-size:12px;text-align:right;">${rupees(b.total_amount - b.amount_paid)}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:${b.due_date && b.due_date <= todayIST ? "#e53e3e" : "#333"};font-size:12px;">${b.due_date ? new Date(b.due_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—"}</td>
+      </tr>`
+        )
+        .join("")}
+      <tr style="background:#f7f8fa;">
+        <td colspan="4" style="padding:8px 12px;font-weight:600;color:#333;font-size:12px;">Total Outstanding</td>
+        <td style="padding:8px 12px;font-weight:700;color:#e53e3e;font-size:13px;text-align:right;">${rupees(attention.unpaidBillsTotal)}</td>
+        <td></td>
+      </tr>
+    </table>`
+      : "";
 
   const attentionHtml =
     attentionList.length > 0
@@ -535,6 +585,8 @@ function buildDigestHtml(
     </table>
 
     ${attentionHtml}
+
+    ${billsTableHtml}
 
   </div>
 
