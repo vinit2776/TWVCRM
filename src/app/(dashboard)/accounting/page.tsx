@@ -16,6 +16,7 @@ import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
 import { Calculator, ScrollText, Banknote, HandCoins } from "lucide-react";
 import { PettyCashIssuance } from "@/components/accounting/petty-cash-issuance";
+import { ActionRequiredBanner } from "@/components/accounting/action-required-banner";
 
 interface MonthlySummary {
   period: {
@@ -258,6 +259,14 @@ export default function AccountingPage() {
 
           {/* Aging buckets */}
           <AgingBuckets buckets={summary.aging_buckets} />
+
+          {/* Unified Action Required Banner */}
+          <ActionRequiredBanner
+            contracts={summary.contracts as { contract: { id: string; contract_number: string; title: string; lead?: { first_name: string; last_name: string; company?: string } }; outstanding: number }[]}
+            cashHandovers={cashHandovers.filter((c) => c.cash_handover_status === "pending_handover")}
+            gstEntries={gstEntries as { contract_id: string; contract_number: string; company: string; total_billable: number; gst_invoice_number: string | null; gst_invoice_sent_at: string | null }[]}
+            onSwitchTab={setActiveTab}
+          />
 
           {/* Tabs */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
