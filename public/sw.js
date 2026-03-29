@@ -1,9 +1,101 @@
 /**
- * TWV CRM — Service Worker for Web Push Notifications
+ * TWV CRM — Service Worker
  *
- * Handles push events sent by the server (via web-push + VAPID)
- * and shows OS-level notifications even when the CRM tab is minimised or closed.
+ * Handles:
+ *  1. Web Push notifications (existing)
+ *  2. Offline caching with app-shell strategy
  */
+
+const CACHE_NAME = "twv-crm-v1";
+const OFFLINE_URL = "/offline";
+
+// ─── Install: precache app shell ───────────────────────────────────────────────
+self.addEventListener("install", (event) => {
+  event.waitUntil(
+    caches.open(CACHE_NAME).then((cache) =>
+      cache.addAll(["/", OFFLINE_URL])
+    )
+  );
+  self.skipWaiting();
+});
+
+// ─── Activate: clean old caches, take control ──────────────────────────────────
+self.addEventListener("activate", (event) => {
+  event.waitUntil(
+    caches.keys().then((keys) =>
+      Promise.all(
+        keys
+          .filter((key) => key !== CACHE_NAME)
+          .map((key) => caches.delete(key))
+      )
+    )
+  );
+  self.clients.claim();
+});
+
+// ─── Fetch: route-based caching strategy ───────────────────────────────────────
+self.addEventListener("fetch", (event) => {
+  const { request } = event;
+  const url = new URL(request.url);
+
+  // Skip non-GET requests
+  if (request.method !== "GET") return;
+
+  // Skip cross-origin requests
+  if (url.origin !== self.location.origin) return;
+
+  // Skip API and auth routes — always go to network
+  if (url.pathname.startsWith("/api/") || url.pathname.startsWith("/auth/")) {
+    return;
+  }
+
+  // Static assets (content-hashed) → cache-first
+  if (url.pathname.startsWith("/_next/static/")) {
+    event.respondWith(
+      caches.match(request).then(
+        (cached) =>
+          cached ||
+          fetch(request).then((response) => {
+            const clone = response.clone();
+            caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+            return response;
+          })
+      )
+    );
+    return;
+  }
+
+  // Navigation requests → network-first, fallback to offline page
+  if (request.mode === "navigate") {
+    event.respondWith(
+      fetch(request)
+        .then((response) => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          return response;
+        })
+        .catch(() => caches.match(OFFLINE_URL))
+    );
+    return;
+  }
+
+  // Other same-origin GETs → stale-while-revalidate
+  event.respondWith(
+    caches.match(request).then((cached) => {
+      const fetchPromise = fetch(request)
+        .then((response) => {
+          const clone = response.clone();
+          caches.open(CACHE_NAME).then((cache) => cache.put(request, clone));
+          return response;
+        })
+        .catch(() => cached);
+
+      return cached || fetchPromise;
+    })
+  );
+});
+
+// ─── Push Notifications (existing) ─────────────────────────────────────────────
 
 // Receive push from server
 self.addEventListener("push", function (event) {
@@ -19,8 +111,8 @@ self.addEventListener("push", function (event) {
   const title = data.title || "New Enquiry — TWV CRM";
   const options = {
     body: data.body || "A new enquiry has been received.",
-    icon: "/logo.png",
-    badge: "/logo.png",
+    icon: "/icons/icon-192x192.png",
+    badge: "/icons/icon-192x192.png",
     data: { url: data.url || "/leads" },
     vibrate: [200, 100, 200],
     requireInteraction: true,
