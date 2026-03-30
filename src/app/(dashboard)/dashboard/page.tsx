@@ -16,6 +16,7 @@ import { SupportSummaryWidget } from "@/components/dashboard/widgets/support-sum
 import { TeamPerformanceWidget } from "@/components/dashboard/widgets/team-performance-widget";
 import { BookingSummaryWidget } from "@/components/dashboard/widgets/booking-summary-widget";
 import { FinancialSummaryWidget } from "@/components/dashboard/widgets/financial-summary-widget";
+import { RecentLeadsWidget } from "@/components/dashboard/widgets/recent-leads-widget";
 
 import Link from "next/link";
 import { Bell, RefreshCw, Zap } from "lucide-react";
@@ -31,7 +32,14 @@ async function fetchWidgetConfig(role: UserRole): Promise<WidgetId[]> {
     const res = await fetch(`/api/settings/dashboard?role=${role}`);
     if (res.ok) {
       const data = await res.json();
-      if (Array.isArray(data) && data.length > 0) return data as WidgetId[];
+      if (Array.isArray(data) && data.length > 0) {
+        const saved = data as WidgetId[];
+        // Merge any newly-added widgets from code defaults that the saved
+        // config doesn't know about yet, so new widgets appear automatically.
+        const defaults = DASHBOARD_ROLE_WIDGETS[role];
+        const missing = defaults.filter((w) => !saved.includes(w));
+        return missing.length > 0 ? [...saved, ...missing] : saved;
+      }
     }
   } catch {
     /* fall through */
@@ -249,6 +257,8 @@ export default function DashboardPage() {
         return <ProcurementSummaryWidget key="procurement_summary" />;
       case "support_summary":
         return <SupportSummaryWidget key="support_summary" />;
+      case "recent_leads":
+        return <RecentLeadsWidget key="recent_leads" locationFilter={locationFilter} />;
       case "team_performance":
         return <TeamPerformanceWidget key="team_performance" locationFilter={locationFilter} />;
       case "booking_summary":

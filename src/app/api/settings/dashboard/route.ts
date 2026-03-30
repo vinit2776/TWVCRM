@@ -38,7 +38,14 @@ export async function GET(request: NextRequest) {
       try {
         const config = JSON.parse(data.value);
         if (config[role] && Array.isArray(config[role])) {
-          return NextResponse.json(config[role]);
+          const saved = config[role] as string[];
+          // Merge any newly-added widgets from code defaults so new widgets
+          // appear automatically without requiring a manual DB update.
+          const defaults = DASHBOARD_ROLE_WIDGETS[role];
+          const missing = defaults.filter((w) => !saved.includes(w));
+          return NextResponse.json(
+            missing.length > 0 ? [...saved, ...missing] : saved
+          );
         }
       } catch {
         /* fall through to defaults */

@@ -7,6 +7,7 @@ export type WidgetId =
   | "kpi_stats"
   | "followups"
   | "recent_activities"
+  | "recent_leads"
   | "notes"
   | "procurement_summary"
   | "support_summary"
@@ -26,6 +27,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   kpi_stats:           { id: "kpi_stats",           title: "Key Metrics" },
   followups:           { id: "followups",           title: "Follow-ups" },
   recent_activities:   { id: "recent_activities",   title: "Recent Activities" },
+  recent_leads:        { id: "recent_leads",        title: "Recent Leads" },
   notes:               { id: "notes",               title: "Unread Notes" },
   procurement_summary: { id: "procurement_summary", title: "Procurement Overview" },
   support_summary:     { id: "support_summary",     title: "Support Tickets" },
@@ -49,6 +51,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "procurement_summary",
     "support_summary",
     "followups",
+    "recent_leads",
     "recent_activities",
     "notes",
     "team_performance",
@@ -61,6 +64,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "procurement_summary",
     "booking_summary",
     "followups",
+    "recent_leads",
     "recent_activities",
     "notes",
     "team_performance",
@@ -70,6 +74,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "live_enquiries",
     "kpi_stats",
     "followups",
+    "recent_leads",
     "recent_activities",
     "notes",
   ],
@@ -79,6 +84,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "booking_summary",
     "kpi_stats",
     "followups",
+    "recent_leads",
     "recent_activities",
     "notes",
   ],
