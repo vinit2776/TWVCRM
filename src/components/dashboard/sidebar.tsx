@@ -116,7 +116,7 @@ const navSections: NavSection[] = [
     label: "Procurement",
     icon: ShoppingCart,
     items: [
-      { href: "/procurement/requests", label: "Purchase Requests", icon: ClipboardListIcon, roles: [...LEGACY_ROLES, "fms"] },
+      { href: "/procurement/requests", label: "Purchase Requests", icon: ClipboardListIcon, roles: null },
       { href: "/procurement/orders",   label: "Purchase Orders",   icon: Package,           roles: [...LEGACY_ROLES, "fms"] },
       { href: "/procurement/bills",    label: "Vendor Bills",      icon: ReceiptIcon,       roles: ["admin", "manager", "accounts", "fms"] },
       { href: "/procurement/payables", label: "Payables",          icon: IndianRupee,       roles: ["admin", "manager", "accounts", "fms"] },
