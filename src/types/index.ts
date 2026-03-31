@@ -510,6 +510,20 @@ export interface BillingStatement {
   created_by?: string;
   created_at: string;
   updated_at: string;
+  // GST invoice fields (auto-billing)
+  gst_invoice_number?: string;
+  gst_invoice_path?: string;
+  cgst_amount?: number;
+  sgst_amount?: number;
+  igst_amount?: number;
+  is_interstate?: boolean;
+  hsn_sac_code?: string;
+  buyer_gstin?: string;
+  place_of_supply?: string;
+  razorpay_payment_link_id?: string;
+  razorpay_payment_link_url?: string;
+  emailed_at?: string;
+  emailed_to?: string;
 }
 
 // ==========================================
