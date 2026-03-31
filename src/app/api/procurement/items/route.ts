@@ -48,8 +48,8 @@ export async function POST(request: NextRequest) {
   // Only admin and FMS can manage the item catalog
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
-  if (!["admin", "fms"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Only admins and FMS can manage the item catalog" }, { status: 403 });
+  if (!["admin", "fms", "floor_manager"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Only admins, FMS, and floor managers can manage the item catalog" }, { status: 403 });
   }
 
   const body = await request.json();
