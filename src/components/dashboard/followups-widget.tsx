@@ -146,8 +146,8 @@ export function FollowupsWidget({ locationFilter }: FollowupsWidgetProps) {
             <p className="text-sm text-muted-foreground">All caught up — no pending follow-ups</p>
           </div>
         ) : (
-          <div className="space-y-2">
-            {items.map((item) => {
+          <div className="space-y-2 max-h-[480px] overflow-y-auto">
+            {items.slice(0, 10).map((item) => {
               const { text: dateText, cls: dateCls } = followUpLabel(item.follow_up_date);
               const Icon = ACTIVITY_ICONS[item.type] || FileText;
               const isRescheduling = reschedulingId === item.id;
