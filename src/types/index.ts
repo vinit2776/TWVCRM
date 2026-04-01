@@ -256,6 +256,13 @@ export interface Proposal {
   created_by?: string;
   created_at: string;
   updated_at: string;
+  // Payment tracking (Razorpay)
+  payment_status?: string; // "pending" | "paid"
+  razorpay_payment_link_id?: string;
+  razorpay_payment_link_url?: string;
+  payment_received_at?: string;
+  payment_amount?: number;
+  payment_reference?: string;
 }
 
 // ==========================================

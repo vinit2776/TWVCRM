@@ -151,6 +151,30 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: "ok", entity: "prepaid_purchase" });
     }
 
+    // Check if this payment link belongs to a proposal
+    const { data: proposal } = await supabase
+      .from("proposals")
+      .select("id, proposal_number, lead_id, payment_status")
+      .eq("razorpay_payment_link_id", paymentLinkId)
+      .maybeSingle();
+
+    if (proposal && proposal.payment_status !== "paid") {
+      const now = new Date().toISOString();
+      await supabase
+        .from("proposals")
+        .update({
+          payment_status: "paid",
+          status: "accepted",
+          accepted_at: now,
+          payment_received_at: now,
+          payment_amount: amountPaid,
+          payment_reference: razorpayPaymentId || paymentLinkId,
+        })
+        .eq("id", proposal.id);
+
+      return NextResponse.json({ status: "ok", entity: "proposal" });
+    }
+
     // Find the booking by razorpay_payment_link_id
     const { data: booking } = await supabase
       .from("bookings")
@@ -159,7 +183,7 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (!booking) {
-      return NextResponse.json({ status: "ignored", reason: "No matching booking or purchase for payment link" });
+      return NextResponse.json({ status: "ignored", reason: "No matching booking, proposal, or purchase for payment link" });
     }
 
     // Check if we already recorded this payment (idempotency)

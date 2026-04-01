@@ -170,6 +170,16 @@ export default function ProposalDetailPage({
               >
                 {PROPOSAL_STATUS_LABELS[proposal.status]}
               </Badge>
+              {proposal.payment_status === "paid" && (
+                <Badge variant="secondary" className="bg-green-100 text-green-800 border-green-300">
+                  Paid
+                </Badge>
+              )}
+              {proposal.payment_status === "pending" && proposal.razorpay_payment_link_url && (
+                <Badge variant="secondary" className="bg-amber-100 text-amber-800 border-amber-300 animate-pulse">
+                  Awaiting Payment
+                </Badge>
+              )}
             </div>
             <p className="text-sm text-muted-foreground">
               {proposal.title}
@@ -519,6 +529,65 @@ export default function ProposalDetailPage({
               )}
             </CardContent>
           </Card>
+
+          {/* Payment Details */}
+          {proposal.payment_status === "paid" && (
+            <Card className="border-green-200 bg-green-50">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-green-700">Payment Received</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1 text-sm">
+                {proposal.payment_amount && (
+                  <div className="flex justify-between">
+                    <span className="text-green-700">Amount</span>
+                    <span className="font-semibold text-green-800">₹{Number(proposal.payment_amount).toLocaleString("en-IN")}</span>
+                  </div>
+                )}
+                {proposal.payment_reference && (
+                  <div className="flex justify-between">
+                    <span className="text-green-700">Reference</span>
+                    <span className="font-mono text-xs text-green-800">{proposal.payment_reference}</span>
+                  </div>
+                )}
+                {proposal.payment_received_at && (
+                  <div className="flex justify-between">
+                    <span className="text-green-700">Received</span>
+                    <span className="text-green-800">{formatDate(proposal.payment_received_at)}</span>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Payment Link (awaiting payment) */}
+          {proposal.razorpay_payment_link_url && proposal.payment_status !== "paid" && (
+            <Card className="border-amber-200 bg-amber-50">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-amber-700">Payment Link</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <p className="text-amber-800">Payment link has been sent to the customer.</p>
+                <div className="flex items-center gap-2">
+                  <input
+                    readOnly
+                    value={proposal.razorpay_payment_link_url}
+                    className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-amber-800"
+                  />
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="text-xs h-7"
+                    onClick={() => {
+                      navigator.clipboard.writeText(proposal.razorpay_payment_link_url!);
+                      toast.success("Payment link copied");
+                    }}
+                  >
+                    Copy
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )}
 
           {/* Rejection Reason */}
           {proposal.status === "rejected" && proposal.rejection_reason && (
