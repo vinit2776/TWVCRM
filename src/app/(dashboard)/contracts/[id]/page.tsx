@@ -78,12 +78,24 @@ export default function ContractDetailPage({
     else { setCopiedLessee(true); setTimeout(() => setCopiedLessee(false), 2000); }
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [linkedProposal, setLinkedProposal] = useState<any>(null);
+
   const fetchContract = useCallback(async () => {
     setLoading(true);
     const res = await fetch(`/api/contracts/${id}`);
     if (res.ok) {
       const json = await res.json();
       setContract(json.data || null);
+
+      // Fetch linked proposal for payment gate check
+      const proposalId = json.data?.proposal_id;
+      if (proposalId) {
+        fetch(`/api/proposals/${proposalId}`)
+          .then(r => r.json())
+          .then(pJson => setLinkedProposal(pJson.data || null))
+          .catch(() => setLinkedProposal(null));
+      }
     }
     setLoading(false);
   }, [id]);
@@ -381,12 +393,30 @@ export default function ContractDetailPage({
               </Button>
             </>
           )}
-          {contract.status === "accepted" && (
-            <Button variant="outline" onClick={() => handleStatusUpdate("active")} disabled={statusUpdating}>
-              {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-              Activate
-            </Button>
-          )}
+          {contract.status === "accepted" && (() => {
+            const proposalPaid = !linkedProposal || linkedProposal.payment_status === "paid";
+            const depositPaid = !linkedProposal || linkedProposal.deposit_payment_status !== "pending";
+            const canActivate = proposalPaid && depositPaid;
+
+            return canActivate ? (
+              <Button variant="outline" onClick={() => handleStatusUpdate("active")} disabled={statusUpdating}>
+                {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
+                Activate
+              </Button>
+            ) : (
+              <div className="flex items-center gap-3">
+                <Button variant="outline" disabled className="opacity-50">
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                  Activate
+                </Button>
+                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                  <p className="font-semibold mb-1">Cannot activate until:</p>
+                  {!proposalPaid && <p>• Proposal payment collected</p>}
+                  {!depositPaid && <p>• Security deposit collected</p>}
+                </div>
+              </div>
+            );
+          })()}
           {contract.status === "active" && (
             <Button variant="destructive" onClick={() => setTerminateOpen(true)}>
               <XCircle className="mr-2 h-4 w-4" />

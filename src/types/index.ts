@@ -263,6 +263,15 @@ export interface Proposal {
   payment_received_at?: string;
   payment_amount?: number;
   payment_reference?: string;
+  // Security deposit
+  security_deposit_months?: number;
+  security_deposit_amount?: number;
+  deposit_payment_status?: string; // "not_required" | "pending" | "paid"
+  deposit_razorpay_link_id?: string;
+  deposit_razorpay_link_url?: string;
+  deposit_payment_received_at?: string;
+  deposit_payment_amount?: number;
+  deposit_payment_reference?: string;
 }
 
 // ==========================================

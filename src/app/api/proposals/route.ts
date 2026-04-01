@@ -59,6 +59,10 @@ export async function POST(request: NextRequest) {
   const { count } = await supabase.from("proposals").select("*", { count: "exact", head: true });
   const proposalNumber = `PROP-${String((count || 0) + 1).padStart(4, "0")}`;
 
+  const depositMonths = result.data.security_deposit_months || 0;
+  const depositAmount = result.data.security_deposit_amount ?? (depositMonths * subtotal);
+  const depositPaymentStatus = depositMonths > 0 ? "pending" : "not_required";
+
   const { data, error } = await supabase
     .from("proposals")
     .insert({
@@ -69,6 +73,9 @@ export async function POST(request: NextRequest) {
       tax_amount: taxAmount,
       discount_amount: discountAmount,
       total_amount: totalAmount,
+      security_deposit_months: depositMonths,
+      security_deposit_amount: depositAmount,
+      deposit_payment_status: depositPaymentStatus,
       created_by: dbUser?.id,
     })
     .select("*")

@@ -151,7 +151,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: "ok", entity: "prepaid_purchase" });
     }
 
-    // Check if this payment link belongs to a proposal
+    // Check if this payment link belongs to a proposal (main payment)
     const { data: proposal } = await supabase
       .from("proposals")
       .select("id, proposal_number, lead_id, payment_status")
@@ -173,6 +173,28 @@ export async function POST(request: NextRequest) {
         .eq("id", proposal.id);
 
       return NextResponse.json({ status: "ok", entity: "proposal" });
+    }
+
+    // Check if this payment link belongs to a proposal security deposit
+    const { data: depositProposal } = await supabase
+      .from("proposals")
+      .select("id, proposal_number, deposit_payment_status")
+      .eq("deposit_razorpay_link_id", paymentLinkId)
+      .maybeSingle();
+
+    if (depositProposal && depositProposal.deposit_payment_status !== "paid") {
+      const now = new Date().toISOString();
+      await supabase
+        .from("proposals")
+        .update({
+          deposit_payment_status: "paid",
+          deposit_payment_received_at: now,
+          deposit_payment_amount: amountPaid,
+          deposit_payment_reference: razorpayPaymentId || paymentLinkId,
+        })
+        .eq("id", depositProposal.id);
+
+      return NextResponse.json({ status: "ok", entity: "proposal_deposit" });
     }
 
     // Find the booking by razorpay_payment_link_id

@@ -199,6 +199,8 @@ export const createProposalSchema = z.object({
   valid_until: z.string().optional(),
   terms_and_conditions: z.string().optional(),
   notes: z.string().optional(),
+  security_deposit_months: z.number().min(0).max(6).optional(),
+  security_deposit_amount: z.number().min(0).optional(),
 });
 
 export const updateProposalSchema = createProposalSchema.partial();

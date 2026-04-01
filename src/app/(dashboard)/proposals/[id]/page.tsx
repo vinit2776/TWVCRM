@@ -589,6 +589,80 @@ export default function ProposalDetailPage({
             </Card>
           )}
 
+          {/* Security Deposit */}
+          {Number(proposal.security_deposit_months) > 0 && (
+            <Card className={proposal.deposit_payment_status === "paid" ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}>
+              <CardHeader className="pb-2">
+                <CardTitle className={`text-base ${proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}`}>
+                  Security Deposit ({proposal.security_deposit_months} month{Number(proposal.security_deposit_months) > 1 ? "s" : ""})
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-2 text-sm">
+                <div className="flex justify-between">
+                  <span className={proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}>Amount (pre-GST)</span>
+                  <span className="font-semibold">₹{Number(proposal.security_deposit_amount || 0).toLocaleString("en-IN")}</span>
+                </div>
+
+                {proposal.deposit_payment_status === "paid" && (
+                  <>
+                    {proposal.deposit_payment_amount && (
+                      <div className="flex justify-between">
+                        <span className="text-green-700">Paid</span>
+                        <span className="font-semibold text-green-800">₹{Number(proposal.deposit_payment_amount).toLocaleString("en-IN")}</span>
+                      </div>
+                    )}
+                    {proposal.deposit_payment_reference && (
+                      <div className="flex justify-between">
+                        <span className="text-green-700">Reference</span>
+                        <span className="font-mono text-xs text-green-800">{proposal.deposit_payment_reference}</span>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {proposal.deposit_payment_status === "pending" && proposal.status === "accepted" && !proposal.deposit_razorpay_link_url && (
+                  <Button
+                    size="sm"
+                    className="w-full mt-2"
+                    onClick={async () => {
+                      const res = await fetch(`/api/proposals/${proposal.id}/deposit-link`, { method: "POST" });
+                      const json = await res.json();
+                      if (res.ok) {
+                        toast.success(`Deposit link sent: ₹${Number(proposal.security_deposit_amount).toLocaleString("en-IN")}`);
+                        fetchProposal();
+                      } else {
+                        toast.error(json.error || "Failed to create deposit link");
+                      }
+                    }}
+                  >
+                    Send Deposit Link
+                  </Button>
+                )}
+
+                {proposal.deposit_razorpay_link_url && proposal.deposit_payment_status !== "paid" && (
+                  <div className="flex items-center gap-2 mt-2">
+                    <input
+                      readOnly
+                      value={proposal.deposit_razorpay_link_url}
+                      className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-amber-800"
+                    />
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-xs h-7"
+                      onClick={() => {
+                        navigator.clipboard.writeText(proposal.deposit_razorpay_link_url!);
+                        toast.success("Deposit link copied");
+                      }}
+                    >
+                      Copy
+                    </Button>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {/* Rejection Reason */}
           {proposal.status === "rejected" && proposal.rejection_reason && (
             <Card className="border-red-200 bg-red-50">

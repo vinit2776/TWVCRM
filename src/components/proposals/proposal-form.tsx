@@ -11,6 +11,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LineItemsEditor, type LineItemData } from "@/components/shared/line-items-editor";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
@@ -43,7 +44,15 @@ export function ProposalForm({
   const [validUntil, setValidUntil] = useState("");
   const [termsAndConditions, setTermsAndConditions] = useState(DEFAULT_PROPOSAL_TERMS);
   const [notes, setNotes] = useState("");
+  const [depositMonths, setDepositMonths] = useState(0);
+  const [depositAmount, setDepositAmount] = useState(0);
+  const [depositOverridden, setDepositOverridden] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  // Compute subtotal for deposit auto-calculation
+  const computedSubtotal = items
+    .filter((item) => item.description.trim())
+    .reduce((sum, item) => sum + Math.max(1, item.quantity) * item.unit_price, 0);
 
   const resetForm = () => {
     setTitle("");
@@ -55,6 +64,9 @@ export function ProposalForm({
     setTermsAndConditions(DEFAULT_PROPOSAL_TERMS);
     setNotes("");
     setLocationId(leadLocationId || null);
+    setDepositMonths(0);
+    setDepositAmount(0);
+    setDepositOverridden(false);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -96,6 +108,8 @@ export function ProposalForm({
       valid_until: validUntil || undefined,
       terms_and_conditions: termsAndConditions.trim() || undefined,
       notes: notes.trim() || undefined,
+      security_deposit_months: depositMonths,
+      security_deposit_amount: depositMonths > 0 ? depositAmount : 0,
     };
 
     const res = await fetch("/api/proposals", {
@@ -180,6 +194,76 @@ export function ProposalForm({
                 onChange={(e) => setValidUntil(e.target.value)}
               />
             </div>
+          </div>
+
+          {/* Security Deposit */}
+          <div className="border rounded-lg p-4 space-y-3 bg-muted/30">
+            <Label className="text-sm font-semibold">Security Deposit</Label>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label htmlFor="deposit-months" className="text-xs text-muted-foreground">Number of Months</Label>
+                <Select
+                  value={String(depositMonths)}
+                  onValueChange={(v) => {
+                    const months = parseInt(v);
+                    setDepositMonths(months);
+                    if (!depositOverridden) {
+                      setDepositAmount(months * computedSubtotal);
+                    }
+                  }}
+                >
+                  <SelectTrigger id="deposit-months">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="0">No deposit</SelectItem>
+                    <SelectItem value="1">1 month</SelectItem>
+                    <SelectItem value="2">2 months</SelectItem>
+                    <SelectItem value="3">3 months</SelectItem>
+                    <SelectItem value="4">4 months</SelectItem>
+                    <SelectItem value="5">5 months</SelectItem>
+                    <SelectItem value="6">6 months</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              {depositMonths > 0 && (
+                <div className="space-y-2">
+                  <Label htmlFor="deposit-amount" className="text-xs text-muted-foreground">
+                    Deposit Amount (pre-GST)
+                    {!depositOverridden && computedSubtotal > 0 && (
+                      <span className="ml-1 text-muted-foreground">= {depositMonths} × ₹{computedSubtotal.toLocaleString("en-IN")}</span>
+                    )}
+                  </Label>
+                  <Input
+                    id="deposit-amount"
+                    type="number"
+                    value={depositAmount || ""}
+                    onChange={(e) => {
+                      setDepositAmount(parseFloat(e.target.value) || 0);
+                      setDepositOverridden(true);
+                    }}
+                    placeholder="0"
+                  />
+                  {depositOverridden && (
+                    <button
+                      type="button"
+                      className="text-xs text-primary underline"
+                      onClick={() => {
+                        setDepositOverridden(false);
+                        setDepositAmount(depositMonths * computedSubtotal);
+                      }}
+                    >
+                      Reset to auto-calculated
+                    </button>
+                  )}
+                </div>
+              )}
+            </div>
+            {depositMonths > 0 && (
+              <p className="text-xs text-muted-foreground">
+                Refundable deposit. A separate payment link will be generated after proposal acceptance.
+              </p>
+            )}
           </div>
 
           <div className="space-y-2">
