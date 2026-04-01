@@ -47,6 +47,12 @@ export function HelpSection({ section, highlightFaqs = false }: HelpSectionProps
                   <div>
                     <span className="font-medium">{step.title}</span>
                     <p className="text-muted-foreground mt-0.5">{step.description}</p>
+                    {step.hint && (
+                      <div className="mt-1.5 flex items-start gap-1.5 rounded-md bg-amber-50 border border-amber-200 px-2.5 py-1.5">
+                        <span className="text-amber-500 text-xs mt-0.5 shrink-0">💡</span>
+                        <p className="text-xs text-amber-800 leading-relaxed">{step.hint}</p>
+                      </div>
+                    )}
                   </div>
                 </li>
               ))}
