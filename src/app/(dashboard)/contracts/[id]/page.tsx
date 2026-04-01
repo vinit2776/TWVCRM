@@ -80,6 +80,9 @@ export default function ContractDetailPage({
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [linkedProposal, setLinkedProposal] = useState<any>(null);
+  const [userRole, setUserRole] = useState<string | null>(null);
+  const [overrideReason, setOverrideReason] = useState("");
+  const [showOverride, setShowOverride] = useState(false);
 
   const fetchContract = useCallback(async () => {
     setLoading(true);
@@ -102,14 +105,18 @@ export default function ContractDetailPage({
 
   useEffect(() => {
     fetchContract();
+    fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {});
   }, [fetchContract]);
 
-  const handleStatusUpdate = async (newStatus: string) => {
+  const handleStatusUpdate = async (newStatus: string, paymentOverrideReason?: string) => {
     setStatusUpdating(true);
+    const payload: Record<string, unknown> = { status: newStatus };
+    if (paymentOverrideReason) payload.payment_override_reason = paymentOverrideReason;
+
     const res = await fetch(`/api/contracts/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ status: newStatus }),
+      body: JSON.stringify(payload),
     });
     if (res.ok) {
       const statusLabel = CONTRACT_STATUS_LABELS[newStatus] || newStatus;
@@ -404,16 +411,51 @@ export default function ContractDetailPage({
                 Activate
               </Button>
             ) : (
-              <div className="flex items-center gap-3">
-                <Button variant="outline" disabled className="opacity-50">
-                  <CheckCircle2 className="mr-2 h-4 w-4" />
-                  Activate
-                </Button>
-                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                  <p className="font-semibold mb-1">Cannot activate until:</p>
-                  {!proposalPaid && <p>• Proposal payment collected</p>}
-                  {!depositPaid && <p>• Security deposit collected</p>}
+              <div className="space-y-2">
+                <div className="flex items-center gap-3">
+                  <Button variant="outline" disabled className="opacity-50">
+                    <CheckCircle2 className="mr-2 h-4 w-4" />
+                    Activate
+                  </Button>
+                  <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                    <p className="font-semibold mb-1">Cannot activate until:</p>
+                    {!proposalPaid && <p>• Proposal payment collected</p>}
+                    {!depositPaid && <p>• Security deposit collected</p>}
+                  </div>
                 </div>
+                {userRole === "admin" && (
+                  <div className="border border-dashed border-amber-300 rounded-lg p-3 bg-amber-50/50">
+                    {!showOverride ? (
+                      <button
+                        className="text-xs text-amber-700 underline hover:text-amber-900"
+                        onClick={() => setShowOverride(true)}
+                      >
+                        Admin: Override payment requirement
+                      </button>
+                    ) : (
+                      <div className="space-y-2">
+                        <p className="text-xs font-semibold text-amber-800">Admin Override — this will be logged</p>
+                        <input
+                          type="text"
+                          value={overrideReason}
+                          onChange={(e) => setOverrideReason(e.target.value)}
+                          placeholder="Reason (e.g., Legacy contract migration)"
+                          className="w-full text-sm border rounded px-3 py-1.5"
+                        />
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="border-amber-400 text-amber-800 hover:bg-amber-100"
+                          disabled={!overrideReason.trim() || statusUpdating}
+                          onClick={() => handleStatusUpdate("active", overrideReason.trim())}
+                        >
+                          {statusUpdating ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
+                          Activate with Override
+                        </Button>
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })()}

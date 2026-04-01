@@ -65,6 +65,27 @@ export async function PATCH(
     } else if (body.status === "rejected") {
       allowedFields.rejected_at = body.rejected_at || now;
     } else if (body.status === "active") {
+      // Payment gate: check linked proposal payments (unless admin override)
+      if (!body.payment_override_reason && oldContract.proposal_id) {
+        const { data: proposal } = await supabase
+          .from("proposals")
+          .select("payment_status, deposit_payment_status")
+          .eq("id", oldContract.proposal_id)
+          .single();
+
+        if (proposal) {
+          const unpaid = proposal.payment_status !== "paid";
+          const depositPending = proposal.deposit_payment_status === "pending";
+          if (unpaid || depositPending) {
+            const missing: string[] = [];
+            if (unpaid) missing.push("proposal payment");
+            if (depositPending) missing.push("security deposit");
+            return NextResponse.json({
+              error: `Cannot activate: ${missing.join(" and ")} not yet collected`,
+            }, { status: 400 });
+          }
+        }
+      }
       allowedFields.activated_at = now;
     } else if (body.status === "terminated") {
       if (!body.termination_reason && !allowedFields.termination_reason) {
