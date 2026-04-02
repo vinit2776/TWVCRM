@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 
 export async function GET(
   _request: NextRequest,
@@ -120,6 +121,91 @@ export async function PATCH(
   // Auto-advance lead status when contract becomes active
   if (body.status === "active" && oldContract.status !== "active") {
     await autoUpdateLeadStatus(supabase, oldContract.lead_id, "contract");
+  }
+
+  // On termination: revoke active vouchers and notify IT
+  if (body.status === "terminated" && oldContract.status !== "terminated") {
+    (async () => {
+      try {
+        // Fetch active voucher issuances with voucher codes
+        const { data: issuances } = await supabase
+          .from("voucher_issuances")
+          .select("id, voucher_id, seat_number, seat_occupant_email, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code)")
+          .eq("contract_id", id)
+          .eq("is_active", true);
+
+        if (issuances && issuances.length > 0) {
+          const revokeNow = new Date().toISOString();
+
+          // Revoke all issuances
+          const issuanceIds = issuances.map((i) => i.id);
+          await supabase
+            .from("voucher_issuances")
+            .update({ is_active: false, revoked_at: revokeNow, revoke_reason: "Contract terminated" })
+            .in("id", issuanceIds);
+
+          // Revoke vouchers in repository
+          const voucherIds = issuances.map((i) => i.voucher_id).filter(Boolean);
+          if (voucherIds.length > 0) {
+            await supabase
+              .from("voucher_repository")
+              .update({ status: "revoked" })
+              .in("id", voucherIds);
+          }
+
+          // Email IT and Tech Support
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const voucherRows = issuances.map((i) => {
+            const v = i.voucher as any;
+            return `<tr>
+              <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;">${i.seat_number}</td>
+              <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-family:monospace;font-weight:bold;color:#e53e3e;">${v?.voucher_code || "—"}</td>
+              <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${i.seat_occupant_email || "—"}</td>
+            </tr>`;
+          }).join("");
+
+          const terminationReason = body.termination_reason || allowedFields.termination_reason || "Not specified";
+
+          resend.emails.send({
+            from: EMAIL_FROM,
+            replyTo: EMAIL_REPLY_TO,
+            to: ["it@theworkvilla.com", "techsupport@theworkvilla.com"],
+            subject: `Voucher Revocation — ${oldContract.contract_number} Terminated`,
+            html: `
+              <div style="font-family:sans-serif;max-width:640px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+                <div style="background:#dc2626;padding:20px 32px;">
+                  <h1 style="color:white;margin:0;font-size:20px;">WiFi Voucher Revocation</h1>
+                  <p style="color:rgba(255,255,255,0.8);margin:4px 0 0;font-size:12px;">Action Required — Revoke in WiFi System</p>
+                </div>
+                <div style="padding:28px 32px;">
+                  <p style="color:#333;font-size:14px;">Contract <strong>${oldContract.contract_number}</strong> has been terminated. Please revoke the following WiFi voucher codes immediately.</p>
+                  <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
+                    <tr><td style="padding:6px 0;color:#666;">Contract</td><td style="padding:6px 0;font-weight:600;">${oldContract.contract_number}</td></tr>
+                    <tr><td style="padding:6px 0;color:#666;">Reason</td><td style="padding:6px 0;">${terminationReason}</td></tr>
+                    <tr><td style="padding:6px 0;color:#666;">Terminated</td><td style="padding:6px 0;">${new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</td></tr>
+                  </table>
+                  <h3 style="color:#dc2626;font-size:14px;margin:20px 0 8px;">Vouchers to Revoke (${issuances.length})</h3>
+                  <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                    <tr style="background:#fef2f2;">
+                      <th style="padding:8px 12px;text-align:center;border-bottom:2px solid #fecaca;color:#991b1b;font-size:11px;">Seat</th>
+                      <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #fecaca;color:#991b1b;font-size:11px;">Voucher Code</th>
+                      <th style="padding:8px 12px;text-align:left;border-bottom:2px solid #fecaca;color:#991b1b;font-size:11px;">Occupant</th>
+                    </tr>
+                    ${voucherRows}
+                  </table>
+                  <p style="color:#991b1b;font-size:13px;margin-top:16px;font-weight:600;">Please revoke these codes in the WiFi management system at the earliest.</p>
+                </div>
+                <div style="background:#015E65;padding:12px 32px;text-align:center;">
+                  <p style="color:#fff;margin:0;font-size:10px;">SREE DESIGN INFRASTRUCTURE PVT LTD | The WorkVilla</p>
+                </div>
+              </div>
+            `,
+          }).catch((err) => console.error("[contract termination] Failed to send voucher revocation email:", err));
+        }
+      } catch (err) {
+        console.error("[contract termination] Voucher revocation failed:", err);
+      }
+    })();
   }
 
   return NextResponse.json({ data });
