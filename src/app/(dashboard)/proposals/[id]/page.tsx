@@ -49,7 +49,20 @@ export default function ProposalDetailPage({
     const res = await fetch(`/api/proposals/${id}`);
     if (res.ok) {
       const json = await res.json();
-      setProposal(json.data || null);
+      const p = json.data || null;
+      setProposal(p);
+
+      // Auto-generate Razorpay payment link if not yet created
+      if (p && !p.razorpay_payment_link_url && p.status !== "rejected") {
+        fetch(`/api/proposals/${id}/payment-link`, { method: "POST" })
+          .then((r) => r.ok ? r.json() : null)
+          .then((data) => {
+            if (data?.razorpay_payment_link_url) {
+              setProposal((prev) => prev ? { ...prev, ...data } : prev);
+            }
+          })
+          .catch(() => {});
+      }
     }
     setLoading(false);
   }, [id]);
@@ -76,26 +89,10 @@ export default function ProposalDetailPage({
       // Continue without QR code if fetch fails
     }
 
-    // Generate Razorpay payment link if not already created
-    let paymentLink = proposal.razorpay_payment_link_url || undefined;
-    if (!paymentLink) {
-      try {
-        const linkRes = await fetch(`/api/proposals/${id}/payment-link`, { method: "POST" });
-        if (linkRes.ok) {
-          const linkData = await linkRes.json();
-          paymentLink = linkData.razorpay_payment_link_url || undefined;
-          // Refresh proposal state so UI also shows the link
-          if (paymentLink) fetchProposal();
-        }
-      } catch {
-        // Continue without payment link if creation fails
-      }
-    }
-
     const doc = generateProposalPDF(
       proposal,
       proposal.lead || undefined,
-      { qrCodeBase64, upiId, razorpayPaymentLink: paymentLink }
+      { qrCodeBase64, upiId, razorpayPaymentLink: proposal.razorpay_payment_link_url || undefined }
     );
     doc.save(`${proposal.proposal_number}.pdf`);
   };
