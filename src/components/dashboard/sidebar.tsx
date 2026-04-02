@@ -121,7 +121,7 @@ const navSections: NavSection[] = [
       { href: "/procurement/bills",    label: "Vendor Bills",      icon: ReceiptIcon,       roles: ["admin", "manager", "accounts", "fms"] },
       { href: "/procurement/payables", label: "Payables",          icon: IndianRupee,       roles: ["admin", "manager", "accounts", "fms"] },
       { href: "/procurement/vendors",  label: "Vendors",           icon: Truck,             roles: ["admin", "manager", "fms", "floor_manager"] },
-      { href: "/procurement/catalog",  label: "Item Catalog",      icon: Archive,           roles: ["admin", "fms", "floor_manager"] },
+      { href: "/procurement/catalog",  label: "Item Catalog",      icon: Archive,           roles: ["admin", "manager", "fms", "floor_manager"] },
     ],
   },
   {
@@ -129,7 +129,7 @@ const navSections: NavSection[] = [
     label: "Admin",
     icon: Settings,
     items: [
-      { href: "/locations",      label: "Locations",      icon: MapPin,        roles: ["admin", "manager"] },
+      { href: "/locations",      label: "Locations",      icon: MapPin,        roles: ["admin", "manager", "fms", "floor_manager"] },
       { href: "/audit-logs",     label: "Audit Logs",     icon: ClipboardList, roles: ["admin", "manager"] },
       { href: "/infrastructure", label: "Infrastructure", icon: Server,        roles: ["admin"] },
       { href: "/support",        label: "Support",        icon: LifeBuoy,      roles: ["admin"] },

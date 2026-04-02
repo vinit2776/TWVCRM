@@ -1363,9 +1363,9 @@ export interface AggregatorInvoiceLineItem {
 // Procurement Module
 // ==========================================
 
-export type ProcurementDepartment = "pantry" | "maintenance" | "administration";
+export type ProcurementDepartment = "pantry" | "maintenance" | "administration" | "asset";
 export type VendorCategory = "pantry" | "maintenance" | "administration" | "general";
-export type ItemUnit = "kg" | "litre" | "packet" | "box" | "piece" | "roll" | "dozen" | "bottle" | "bag" | "set" | "pair";
+export type ItemUnit = "kg" | "litre" | "packet" | "box" | "piece" | "roll" | "dozen" | "bottle" | "bag" | "set" | "pair" | "month" | "quarter" | "year" | "nos" | "can" | "ton";
 export type PrStatus = "draft" | "submitted" | "approved" | "rejected" | "partially_ordered" | "po_created" | "cancelled";
 export type PoStatus = "pending" | "ordered" | "partially_received" | "received" | "invoice_received" | "invoice_approved" | "cancelled" | "partially_cancelled";
 export type BillPaymentStatus = "unpaid" | "partially_paid" | "paid";
@@ -1400,6 +1400,7 @@ export interface ProcurementItem {
   unit: ItemUnit;
   item_type: ItemType;
   standard_price?: number;
+  gst_rate?: number;
   description?: string;
   is_active: boolean;
   created_by?: string;
@@ -1470,9 +1471,11 @@ export interface PurchaseOrderItem {
   unit: ItemUnit;
   unit_price?: number;
   total_amount?: number;
+  gst_rate?: number;
+  gst_amount?: number;
   notes?: string;
   created_at: string;
-  procurement_items?: { id: string; name: string; description?: string } | null;
+  procurement_items?: { id: string; name: string; description?: string; gst_rate?: number } | null;
 }
 
 export interface PoDeliveryReceiptItem {
@@ -1531,6 +1534,8 @@ export interface PurchaseOrder {
   payment_terms?: string;
   terms_and_conditions?: string;
   total_ordered_amount: number;
+  total_gst_amount?: number;
+  total_amount_with_gst?: number;
   // Advance payment fields
   advance_amount?: number | null;
   advance_payment_mode?: "cash" | "upi" | "bank_transfer" | null;

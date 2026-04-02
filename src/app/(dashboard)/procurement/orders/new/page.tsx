@@ -13,7 +13,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
-import { ITEM_UNITS, PO_ADVANCE_PAYMENT_MODE_LABELS } from "@/lib/constants";
+import { ITEM_UNITS, PO_ADVANCE_PAYMENT_MODE_LABELS, GST_RATES, GST_RATE_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import type { ProcurementVendor, Location, PurchaseRequest, ItemUnit } from "@/types";
 
@@ -25,6 +25,7 @@ interface LineItem {
   quantity_ordered: string;
   unit: ItemUnit;
   unit_price: string;
+  gst_rate: string;
   notes: string;
   // Ceiling info from PR (display only — not sent in API)
   approved_qty?: number;
@@ -46,6 +47,7 @@ const emptyItem = (): LineItem => ({
   quantity_ordered: "",
   unit: "piece",
   unit_price: "",
+  gst_rate: "0",
   notes: "",
 });
 
@@ -164,6 +166,7 @@ function NewPurchaseOrderFormWithPr({
               notes?: string | null;
               already_ordered_qty?: number;
               remaining_qty?: number;
+              procurement_items?: { gst_rate?: number } | null;
             }) => {
               const remainingQty = i.remaining_qty ?? i.quantity;
               const fullyOrdered = remainingQty <= 0;
@@ -175,6 +178,7 @@ function NewPurchaseOrderFormWithPr({
                 quantity_ordered: fullyOrdered ? "0" : String(Math.min(i.quantity, remainingQty)),
                 unit: i.unit,
                 unit_price: i.estimated_price ? String(i.estimated_price) : "",
+                gst_rate: String(i.procurement_items?.gst_rate ?? 0),
                 notes: i.notes ?? "",
                 approved_qty: i.quantity,
                 already_ordered_qty: i.already_ordered_qty ?? 0,
@@ -238,6 +242,14 @@ function NewPurchaseOrderFormWithPr({
     return sum;
   }, 0);
 
+  const totalGst = activeItems.reduce((sum, li) => {
+    const q = parseFloat(li.quantity_ordered);
+    const p = parseFloat(li.unit_price);
+    const g = parseFloat(li.gst_rate) || 0;
+    if (!isNaN(q) && !isNaN(p)) return sum + Math.round(q * p * g) / 100;
+    return sum;
+  }, 0);
+
   const validate = (): string | null => {
     if (!vendorId) return "Please select a vendor";
     if (advanceRequired) {
@@ -296,6 +308,7 @@ function NewPurchaseOrderFormWithPr({
           quantity_ordered: parseFloat(li.quantity_ordered),
           unit: li.unit,
           unit_price: li.unit_price ? parseFloat(li.unit_price) : null,
+          gst_rate: parseFloat(li.gst_rate) || 0,
           notes: li.notes.trim() || null,
         })),
       };
@@ -653,13 +666,36 @@ function NewPurchaseOrderFormWithPr({
                     )}
                   </div>
 
+                  <div className="space-y-1">
+                    <Label className="text-xs">GST %</Label>
+                    <Select value={li.gst_rate} onValueChange={(v) => updateItem(li.id, "gst_rate", v)}>
+                      <SelectTrigger className="h-9">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {GST_RATES.map((r) => (
+                          <SelectItem key={r} value={String(r)}>{GST_RATE_LABELS[r]}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
                   {li.unit_price && li.quantity_ordered && (
                     <div className="flex items-end pb-0.5">
                       <p className="text-sm text-muted-foreground">
                         Line total:{" "}
                         <span className="font-medium text-foreground">
-                          {formatCurrency(parseFloat(li.quantity_ordered || "0") * parseFloat(li.unit_price || "0"))}
+                          {(() => {
+                            const base = parseFloat(li.quantity_ordered || "0") * parseFloat(li.unit_price || "0");
+                            const gst = Math.round(base * (parseFloat(li.gst_rate) || 0)) / 100;
+                            return formatCurrency(base + gst);
+                          })()}
                         </span>
+                        {parseFloat(li.gst_rate) > 0 && (
+                          <span className="text-xs ml-1">
+                            (incl. GST {formatCurrency(Math.round(parseFloat(li.quantity_ordered || "0") * parseFloat(li.unit_price || "0") * (parseFloat(li.gst_rate) || 0)) / 100)})
+                          </span>
+                        )}
                       </p>
                     </div>
                   )}
@@ -683,12 +719,17 @@ function NewPurchaseOrderFormWithPr({
       <Card>
         <CardContent className="pt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
           <div>
-            <p className="text-sm text-muted-foreground">Total Ordered Amount</p>
-            <p className="text-xl font-bold">
+            <p className="text-sm text-muted-foreground">Subtotal</p>
+            <p className="text-lg font-semibold">
               {totalOrdered > 0 ? formatCurrency(totalOrdered) : "—"}
             </p>
-            <p className="text-xs text-muted-foreground mt-0.5">
-              (Only items with unit price contribute to total)
+            {totalGst > 0 && (
+              <p className="text-sm text-muted-foreground mt-0.5">
+                GST: <span className="font-medium text-foreground">{formatCurrency(totalGst)}</span>
+              </p>
+            )}
+            <p className="text-xl font-bold mt-1">
+              Total: {totalOrdered > 0 ? formatCurrency(totalOrdered + totalGst) : "—"}
             </p>
           </div>
           <Button onClick={handleSubmit} disabled={submitting || allItemsFullyOrdered} size="lg">

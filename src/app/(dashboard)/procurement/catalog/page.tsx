@@ -23,6 +23,8 @@ import {
   ITEM_UNITS,
   ITEM_TYPES,
   ITEM_TYPE_LABELS,
+  GST_RATES,
+  GST_RATE_LABELS,
 } from "@/lib/constants";
 import { toast } from "sonner";
 import type { ProcurementItem, ProcurementDepartment, ItemUnit, ItemType } from "@/types";
@@ -33,6 +35,7 @@ const emptyForm = {
   unit: "piece" as ItemUnit,
   item_type: "goods" as ItemType,
   standard_price: "",
+  gst_rate: "0",
   description: "",
 };
 
@@ -67,6 +70,7 @@ export default function CatalogPage() {
       unit: item.unit,
       item_type: item.item_type ?? "goods",
       standard_price: item.standard_price != null ? String(item.standard_price) : "",
+      gst_rate: item.gst_rate != null ? String(item.gst_rate) : "0",
       description: item.description || "",
     });
     setDialogOpen(true);
@@ -81,6 +85,7 @@ export default function CatalogPage() {
       unit: form.unit,
       item_type: form.item_type,
       standard_price: form.standard_price ? Number(form.standard_price) : undefined,
+      gst_rate: Number(form.gst_rate) || 0,
       description: form.description || undefined,
     };
     const res = editItem
@@ -197,6 +202,7 @@ export default function CatalogPage() {
                           <th className="text-left px-4 py-2 font-medium hidden sm:table-cell">Type</th>
                           <th className="text-left px-4 py-2 font-medium">Unit</th>
                           <th className="text-left px-4 py-2 font-medium hidden md:table-cell">Std. Price</th>
+                          <th className="text-left px-4 py-2 font-medium hidden md:table-cell">GST</th>
                           <th className="text-left px-4 py-2 font-medium">Status</th>
                           <th className="px-4 py-2" />
                         </tr>
@@ -217,6 +223,9 @@ export default function CatalogPage() {
                             <td className="px-4 py-2.5 text-muted-foreground">{item.unit}</td>
                             <td className="px-4 py-2.5 hidden md:table-cell text-muted-foreground">
                               {item.standard_price != null ? `₹${item.standard_price}` : "—"}
+                            </td>
+                            <td className="px-4 py-2.5 hidden md:table-cell text-muted-foreground">
+                              {item.gst_rate ? `${item.gst_rate}%` : "—"}
                             </td>
                             <td className="px-4 py-2.5">
                               <Badge className={item.is_active ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-500"}>
@@ -327,14 +336,27 @@ export default function CatalogPage() {
                 </Select>
               </div>
             </div>
-            <div className="space-y-1">
-              <Label>Standard Price (₹) <span className="text-muted-foreground text-xs">optional reference</span></Label>
-              <Input
-                type="number" min="0" step="0.01"
-                value={form.standard_price}
-                onChange={(e) => setForm((f) => ({ ...f, standard_price: e.target.value }))}
-                placeholder="0.00"
-              />
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <Label>Standard Price (₹) <span className="text-muted-foreground text-xs">optional</span></Label>
+                <Input
+                  type="number" min="0" step="0.01"
+                  value={form.standard_price}
+                  onChange={(e) => setForm((f) => ({ ...f, standard_price: e.target.value }))}
+                  placeholder="0.00"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>GST Rate</Label>
+                <Select value={form.gst_rate} onValueChange={(v) => setForm((f) => ({ ...f, gst_rate: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {GST_RATES.map((r) => (
+                      <SelectItem key={r} value={String(r)}>{GST_RATE_LABELS[r]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
             <div className="space-y-1">
               <Label>Item Notes</Label>

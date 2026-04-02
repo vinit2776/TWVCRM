@@ -248,18 +248,44 @@ export function generatePurchaseOrderPDF(po: PoForPDF): jsPDF {
 
   // ── Line Items Table ──
   const items = po.purchase_order_items ?? [];
-  const tableRows = items.map((item, i) => [
-    String(i + 1),
-    item.item_name,
-    item.unit,
-    String(item.quantity_ordered),
-    item.unit_price != null ? formatCurrencyPDF(item.unit_price) : "—",
-    item.total_amount != null ? formatCurrencyPDF(item.total_amount) : "—",
-  ]);
+  const hasGst = items.some((item) => Number(item.gst_rate) > 0);
+  const tableRows = items.map((item, i) => {
+    const row = [
+      String(i + 1),
+      item.item_name,
+      item.unit,
+      String(item.quantity_ordered),
+      item.unit_price != null ? formatCurrencyPDF(item.unit_price) : "—",
+    ];
+    if (hasGst) {
+      row.push(Number(item.gst_rate) > 0 ? `${item.gst_rate}%` : "—");
+    }
+    const lineTotal = Number(item.total_amount ?? 0) + Number(item.gst_amount ?? 0);
+    row.push(lineTotal > 0 ? formatCurrencyPDF(lineTotal) : "—");
+    return row;
+  });
+
+  const tableHead = hasGst
+    ? [["#", "Item", "Unit", "Qty", "Unit Price", "GST%", "Total"]]
+    : [["#", "Item", "Unit", "Qty", "Unit Price", "Total"]];
+
+  const columnStyles: Record<number, { cellWidth?: number | "auto"; halign?: "left" | "center" | "right" }> = {
+    0: { cellWidth: 10, halign: "center" },
+    1: { cellWidth: "auto" },
+    2: { cellWidth: 20 },
+    3: { cellWidth: 18, halign: "right" },
+    4: { cellWidth: 30, halign: "right" },
+  };
+  if (hasGst) {
+    columnStyles[5] = { cellWidth: 18, halign: "right" };
+    columnStyles[6] = { cellWidth: 30, halign: "right" };
+  } else {
+    columnStyles[5] = { cellWidth: 30, halign: "right" };
+  }
 
   autoTable(doc, {
     startY: y,
-    head: [["#", "Item", "Unit", "Qty", "Unit Price", "Total"]],
+    head: tableHead,
     body: tableRows,
     theme: "striped",
     headStyles: {
@@ -272,33 +298,41 @@ export function generatePurchaseOrderPDF(po: PoForPDF): jsPDF {
       fontSize: 9,
       textColor: BRAND_DARK,
     },
-    columnStyles: {
-      0: { cellWidth: 10, halign: "center" },
-      1: { cellWidth: "auto" },
-      2: { cellWidth: 20 },
-      3: { cellWidth: 18, halign: "right" },
-      4: { cellWidth: 32, halign: "right" },
-      5: { cellWidth: 32, halign: "right" },
-    },
+    columnStyles,
     alternateRowStyles: { fillColor: [248, 250, 252] },
     margin: { left: 14, right: 14 },
   });
 
-  // ── Grand Total ──
-  const finalY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6;
+  // ── Totals ──
+  let finalY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6;
 
-  const totalAmount = Number(po.total_ordered_amount);
-  if (totalAmount > 0) {
+  const subtotal = Number(po.total_ordered_amount);
+  const gstTotal = Number(po.total_gst_amount ?? 0);
+  const grandTotal = Number(po.total_amount_with_gst ?? subtotal);
+
+  if (subtotal > 0) {
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...BRAND_DARK);
+
+    if (gstTotal > 0) {
+      doc.text("Subtotal:", pageWidth - 75, finalY);
+      doc.text(formatCurrencyPDF(subtotal), pageWidth - 14, finalY, { align: "right" });
+      finalY += 5;
+      doc.text("GST:", pageWidth - 75, finalY);
+      doc.text(formatCurrencyPDF(gstTotal), pageWidth - 14, finalY, { align: "right" });
+      finalY += 6;
+    }
+
     doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(...BRAND_DARK);
-    doc.text("GRAND TOTAL:", pageWidth - 60, finalY);
+    doc.text("GRAND TOTAL:", pageWidth - 75, finalY);
     doc.setTextColor(...BRAND_GREEN);
-    doc.text(formatCurrencyPDF(totalAmount), pageWidth - 14, finalY, { align: "right" });
+    doc.text(formatCurrencyPDF(grandTotal), pageWidth - 14, finalY, { align: "right" });
   }
 
   // ── Terms & Conditions Section ──
-  let footerStartY = finalY + (totalAmount > 0 ? 18 : 8);
+  let footerStartY = finalY + (subtotal > 0 ? 18 : 8);
   if (po.terms_and_conditions) {
     const tcStartY = footerStartY;
     doc.setFillColor(245, 247, 250);

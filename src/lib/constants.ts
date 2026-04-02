@@ -1210,19 +1210,21 @@ export const PROCUREMENT_APPROVAL_THRESHOLDS = {
   ADMIN_REQUIRED_ABOVE: 25000, // INR — PRs above this amount require admin approval
 };
 
-export const PROCUREMENT_DEPARTMENTS = ["pantry", "maintenance", "administration"] as const;
+export const PROCUREMENT_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
 export type ProcurementDepartment = (typeof PROCUREMENT_DEPARTMENTS)[number];
 
 export const PROCUREMENT_DEPARTMENT_LABELS: Record<string, string> = {
   pantry: "Pantry",
   maintenance: "Maintenance",
   administration: "Administration",
+  asset: "Asset",
 };
 
 export const PROCUREMENT_DEPARTMENT_COLORS: Record<string, string> = {
   pantry: "bg-orange-100 text-orange-800",
   maintenance: "bg-blue-100 text-blue-800",
   administration: "bg-purple-100 text-purple-800",
+  asset: "bg-emerald-100 text-emerald-800",
 };
 
 export const VENDOR_CATEGORIES = ["pantry", "maintenance", "administration", "general"] as const;
@@ -1235,8 +1237,17 @@ export const VENDOR_CATEGORY_LABELS: Record<string, string> = {
   general: "General",
 };
 
-export const ITEM_UNITS = ["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year"] as const;
+export const ITEM_UNITS = ["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton"] as const;
 export type ItemUnit = (typeof ITEM_UNITS)[number];
+
+export const GST_RATES = [0, 5, 12, 18, 28] as const;
+export const GST_RATE_LABELS: Record<number, string> = {
+  0: "0% (Exempt)",
+  5: "5%",
+  12: "12%",
+  18: "18%",
+  28: "28%",
+};
 
 export const PR_STATUSES = [
   "draft", "submitted", "approved", "rejected",

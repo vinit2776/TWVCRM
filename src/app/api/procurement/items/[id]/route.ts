@@ -5,10 +5,11 @@ import { z } from "zod";
 
 const updateItemSchema = z.object({
   name: z.string().min(1).optional(),
-  department: z.enum(["pantry", "maintenance", "administration"]).optional(),
-  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year"]).optional(),
+  department: z.enum(["pantry", "maintenance", "administration", "asset"]).optional(),
+  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton"]).optional(),
   item_type: z.enum(["goods", "service"]).optional(),
   standard_price: z.number().min(0).optional().nullable(),
+  gst_rate: z.number().min(0).max(28).optional(),
   description: z.string().optional(),
   is_active: z.boolean().optional(),
 });
@@ -43,8 +44,8 @@ export async function PATCH(
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
-  if (!["admin", "fms", "floor_manager"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Only admins, FMS, and floor managers can manage the item catalog" }, { status: 403 });
+  if (!["admin", "manager", "fms", "floor_manager"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Only admins, managers, FMS, and floor managers can manage the item catalog" }, { status: 403 });
   }
 
   const body = await request.json();

@@ -9,8 +9,9 @@ const createPoItemSchema = z.object({
   item_id: z.string().uuid().nullish(),
   item_name: z.string().min(1),
   quantity_ordered: z.number().positive(),
-  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year"]),
+  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton"]),
   unit_price: z.number().min(0).nullish(),
+  gst_rate: z.number().min(0).max(28).default(0),
   notes: z.string().nullish(),
 });
 
@@ -43,6 +44,7 @@ const createServicePoSchema = z.object({
   unit_cost_per_cycle: z.number().positive("Cost per cycle must be greater than 0"),
   service_item_name: z.string().min(1, "Service description is required"),
   item_id: z.string().uuid().nullish(),
+  gst_rate: z.number().min(0).max(28).default(0),
   notes: z.string().nullish(),
   payment_terms: z.string().nullish(),
   terms_and_conditions: z.string().nullish(),
@@ -133,6 +135,8 @@ export async function POST(request: NextRequest) {
     const poNumber = generatePoNumber(existingCount ?? 0);
 
     const totalAmount = parsed.data.unit_cost_per_cycle * parsed.data.cycle_count;
+    const svcGstRate = parsed.data.gst_rate ?? 0;
+    const svcGstAmount = Math.round(totalAmount * svcGstRate) / 100;
 
     const hasAdvance = !!parsed.data.advance_amount;
     const { data: po, error: poError } = await supabase
@@ -151,6 +155,8 @@ export async function POST(request: NextRequest) {
         po_number: poNumber,
         ordered_by: dbUser.id,
         total_ordered_amount: totalAmount,
+        total_gst_amount: svcGstAmount,
+        total_amount_with_gst: totalAmount + svcGstAmount,
         status: "pending",
         advance_amount: parsed.data.advance_amount ?? null,
         advance_payment_mode: parsed.data.advance_payment_mode ?? null,
@@ -174,6 +180,8 @@ export async function POST(request: NextRequest) {
       unit: unitMap[parsed.data.billing_cycle],
       unit_price: parsed.data.unit_cost_per_cycle,
       total_amount: totalAmount,
+      gst_rate: svcGstRate,
+      gst_amount: svcGstAmount,
     });
 
     await logAudit(supabase, {
@@ -259,6 +267,11 @@ export async function POST(request: NextRequest) {
     return sum + item.quantity_ordered * (item.unit_price ?? 0);
   }, 0);
 
+  const totalGstAmount = items.reduce((sum, item) => {
+    const base = item.quantity_ordered * (item.unit_price ?? 0);
+    return sum + Math.round(base * (item.gst_rate ?? 0)) / 100;
+  }, 0);
+
   const { count: existingCount } = await supabase
     .from("purchase_orders")
     .select("*", { count: "exact", head: true });
@@ -281,6 +294,8 @@ export async function POST(request: NextRequest) {
       po_number: poNumber,
       ordered_by: dbUser.id,
       total_ordered_amount: totalOrderedAmount,
+      total_gst_amount: totalGstAmount,
+      total_amount_with_gst: totalOrderedAmount + totalGstAmount,
       status: "pending",
       advance_amount: parsed.data.advance_amount ?? null,
       advance_payment_mode: parsed.data.advance_payment_mode ?? null,
@@ -294,18 +309,25 @@ export async function POST(request: NextRequest) {
   if (poError) return NextResponse.json({ error: poError.message }, { status: 500 });
 
   // ── 5. Batch insert line items ──
-  const lineItems = items.map((item) => ({
-    po_id: po.id,
-    pr_item_id: item.pr_item_id ?? null,
-    item_id: item.item_id ?? null,
-    item_name: item.item_name,
-    quantity_ordered: item.quantity_ordered,
-    quantity_received: 0,
-    unit: item.unit,
-    unit_price: item.unit_price ?? null,
-    total_amount: item.unit_price ? item.quantity_ordered * item.unit_price : null,
-    notes: item.notes ?? null,
-  }));
+  const lineItems = items.map((item) => {
+    const baseAmount = item.unit_price ? item.quantity_ordered * item.unit_price : 0;
+    const gstRate = item.gst_rate ?? 0;
+    const gstAmount = Math.round(baseAmount * gstRate) / 100;
+    return {
+      po_id: po.id,
+      pr_item_id: item.pr_item_id ?? null,
+      item_id: item.item_id ?? null,
+      item_name: item.item_name,
+      quantity_ordered: item.quantity_ordered,
+      quantity_received: 0,
+      unit: item.unit,
+      unit_price: item.unit_price ?? null,
+      total_amount: item.unit_price ? item.quantity_ordered * item.unit_price : null,
+      gst_rate: gstRate,
+      gst_amount: gstAmount,
+      notes: item.notes ?? null,
+    };
+  });
 
   const { error: itemsError } = await supabase.from("purchase_order_items").insert(lineItems);
   if (itemsError) return NextResponse.json({ error: itemsError.message }, { status: 500 });

@@ -864,10 +864,22 @@ export default function PurchaseOrderDetailPage() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Amount Summary</CardTitle>
           </CardHeader>
           <CardContent className="space-y-3">
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Total Ordered</span>
-              <span className="text-xl font-bold">
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Subtotal</span>
+              <span className="font-medium">
                 {po.total_ordered_amount > 0 ? formatCurrency(po.total_ordered_amount) : "—"}
+              </span>
+            </div>
+            {Number(po.total_gst_amount) > 0 && (
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">GST</span>
+                <span className="font-medium">{formatCurrency(po.total_gst_amount!)}</span>
+              </div>
+            )}
+            <div className="flex justify-between items-center">
+              <span className="text-sm text-muted-foreground">Total</span>
+              <span className="text-xl font-bold">
+                {formatCurrency(po.total_amount_with_gst ?? po.total_ordered_amount)}
               </span>
             </div>
             <div className="flex justify-between text-sm">
@@ -1113,6 +1125,7 @@ export default function PurchaseOrderDetailPage() {
                     <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">Qty Received</th>
                     <th className="px-3 py-2.5 text-left font-medium">Unit</th>
                     <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">Unit Price</th>
+                    <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">GST%</th>
                     <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">Total</th>
                   </tr>
                 </thead>
@@ -1152,8 +1165,13 @@ export default function PurchaseOrderDetailPage() {
                       <td className="px-3 py-2.5 text-right hidden sm:table-cell">
                         {item.unit_price ? formatCurrency(item.unit_price) : "—"}
                       </td>
+                      <td className="px-3 py-2.5 text-right hidden sm:table-cell text-muted-foreground">
+                        {Number(item.gst_rate) > 0 ? `${item.gst_rate}%` : "—"}
+                      </td>
                       <td className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">
-                        {item.total_amount ? formatCurrency(item.total_amount) : "—"}
+                        {item.total_amount
+                          ? formatCurrency(Number(item.total_amount) + Number(item.gst_amount ?? 0))
+                          : "—"}
                       </td>
                     </tr>
                   ))}
