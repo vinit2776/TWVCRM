@@ -4,6 +4,9 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logEmailActivity } from "@/lib/audit";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 
+// Allow larger request bodies for PDF attachments (default is 4.5MB)
+export const maxDuration = 30; // seconds
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -241,9 +244,10 @@ export async function POST(
       razorpay_payment_link_url: razorpayLinkUrl,
     });
   } catch (error) {
-    console.error("Email send error:", error);
+    const message = error instanceof Error ? error.message : "Unknown error";
+    console.error("Email send error:", message, error);
     return NextResponse.json(
-      { error: "Failed to send email." },
+      { error: `Failed to send email: ${message}` },
       { status: 500 }
     );
   }

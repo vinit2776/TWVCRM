@@ -698,20 +698,8 @@ export default function ProposalDetailPage({
         documentId={proposal.id}
         documentNumber={proposal.proposal_number}
         leadEmail={proposal.lead?.email || undefined}
-        onGeneratePDF={async () => {
-          let qrCode: string | undefined;
-          let upi: string | undefined;
-          try {
-            const sRes = await fetch("/api/settings/public");
-            if (sRes.ok) {
-              const s = (await sRes.json()).data || {};
-              upi = s.upi_id || undefined;
-              qrCode = s.upi_qr_code_base64 || undefined;
-            }
-          } catch { /* continue without QR */ }
+        onGeneratePDF={() => {
           const doc = generateProposalPDF(proposal, proposal.lead || undefined, {
-            qrCodeBase64: qrCode,
-            upiId: upi,
             razorpayPaymentLink: proposal.razorpay_payment_link_url || undefined,
           });
           const base64 = doc.output("datauristring").split(",")[1];
