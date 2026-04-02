@@ -199,6 +199,11 @@ export const createProposalSchema = z.object({
   valid_until: z.string().optional(),
   terms_and_conditions: z.string().optional(),
   notes: z.string().optional(),
+  complimentary_items: z.array(z.object({
+    name: z.string().min(1),
+    unit: z.string().min(1),
+    quantity: z.number().min(0),
+  })).optional(),
   security_deposit_months: z.number().min(0).max(6).optional(),
   security_deposit_amount: z.number().min(0).optional(),
 });

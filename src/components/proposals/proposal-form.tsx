@@ -36,6 +36,11 @@ export function ProposalForm({
   const [title, setTitle] = useState("");
   const [locationId, setLocationId] = useState<string | null>(leadLocationId || null);
   const [description, setDescription] = useState("");
+  const [complimentaryItems, setComplimentaryItems] = useState([
+    { name: "Complimentary Printouts", unit: "nos", quantity: 0 },
+    { name: "Complimentary Conference Hall", unit: "hours", quantity: 0 },
+    { name: "Meeting Room", unit: "hours", quantity: 0 },
+  ]);
   const [items, setItems] = useState<LineItemData[]>([
     { description: "", quantity: 1, unit_price: 0, total: 0 },
   ]);
@@ -64,6 +69,11 @@ export function ProposalForm({
     setTermsAndConditions(DEFAULT_PROPOSAL_TERMS);
     setNotes("");
     setLocationId(leadLocationId || null);
+    setComplimentaryItems([
+      { name: "Complimentary Printouts", unit: "nos", quantity: 0 },
+      { name: "Complimentary Conference Hall", unit: "hours", quantity: 0 },
+      { name: "Meeting Room", unit: "hours", quantity: 0 },
+    ]);
     setDepositMonths(0);
     setDepositAmount(0);
     setDepositOverridden(false);
@@ -91,11 +101,17 @@ export function ProposalForm({
 
     setSubmitting(true);
 
+    // Build complimentary text for PDF backward compat
+    const activeComplimentary = complimentaryItems.filter(ci => ci.quantity > 0);
+    const complimentaryText = activeComplimentary
+      .map(ci => `${ci.name}: ${ci.quantity} ${ci.unit}/month`)
+      .join("\n");
+
     const body = {
       lead_id: leadId,
       location_id: locationId || undefined,
       title: title.trim(),
-      description: description.trim() || undefined,
+      description: complimentaryText || description.trim() || undefined,
       items: validItems.map((item) => ({
         description: item.description,
         quantity: Math.max(1, item.quantity),
@@ -108,6 +124,7 @@ export function ProposalForm({
       valid_until: validUntil || undefined,
       terms_and_conditions: termsAndConditions.trim() || undefined,
       notes: notes.trim() || undefined,
+      complimentary_items: activeComplimentary.length > 0 ? activeComplimentary : undefined,
       security_deposit_months: depositMonths,
       security_deposit_amount: depositMonths > 0 ? depositAmount : 0,
     };
@@ -172,16 +189,83 @@ export function ProposalForm({
             />
           </div>
 
-          {/* Complimentary Services — below line items */}
-          <div className="space-y-2">
-            <Label htmlFor="proposal-description">Complimentary Services Offered</Label>
-            <Textarea
-              id="proposal-description"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="e.g. Meeting room credits, mail handling, reception services..."
-              rows={2}
-            />
+          {/* Complimentary Services — structured line items */}
+          <div className="border rounded-lg p-4 space-y-3 bg-muted/30">
+            <div className="flex items-center justify-between">
+              <Label className="text-sm font-semibold">Complimentary Services (per month)</Label>
+              <button
+                type="button"
+                className="text-xs text-primary underline"
+                onClick={() => setComplimentaryItems([...complimentaryItems, { name: "", unit: "nos", quantity: 0 }])}
+              >
+                + Add service
+              </button>
+            </div>
+            <div className="space-y-2">
+              {complimentaryItems.map((ci, idx) => (
+                <div key={idx} className="grid grid-cols-12 gap-2 items-center">
+                  <div className="col-span-6">
+                    <Input
+                      placeholder="Service name"
+                      value={ci.name}
+                      onChange={(e) => {
+                        const updated = [...complimentaryItems];
+                        updated[idx] = { ...ci, name: e.target.value };
+                        setComplimentaryItems(updated);
+                      }}
+                      className="text-sm h-9"
+                    />
+                  </div>
+                  <div className="col-span-2">
+                    <Input
+                      type="number"
+                      placeholder="Qty"
+                      value={ci.quantity || ""}
+                      onChange={(e) => {
+                        const updated = [...complimentaryItems];
+                        updated[idx] = { ...ci, quantity: parseInt(e.target.value) || 0 };
+                        setComplimentaryItems(updated);
+                      }}
+                      className="text-sm h-9"
+                    />
+                  </div>
+                  <div className="col-span-3">
+                    <Select
+                      value={ci.unit}
+                      onValueChange={(v) => {
+                        const updated = [...complimentaryItems];
+                        updated[idx] = { ...ci, unit: v };
+                        setComplimentaryItems(updated);
+                      }}
+                    >
+                      <SelectTrigger className="h-9 text-sm">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="nos">nos</SelectItem>
+                        <SelectItem value="hours">hours</SelectItem>
+                        <SelectItem value="days">days</SelectItem>
+                        <SelectItem value="pages">pages</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="col-span-1 flex justify-center">
+                    {idx >= 3 && (
+                      <button
+                        type="button"
+                        className="text-muted-foreground hover:text-destructive text-xs"
+                        onClick={() => setComplimentaryItems(complimentaryItems.filter((_, i) => i !== idx))}
+                      >
+                        ×
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              Usage beyond these quantities will be charged to the customer.
+            </p>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

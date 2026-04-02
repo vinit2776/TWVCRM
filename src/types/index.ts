@@ -228,6 +228,12 @@ export interface LineItem {
   total: number;
 }
 
+export interface ComplimentaryItem {
+  name: string;
+  unit: string;
+  quantity: number; // free quota per month
+}
+
 export interface Proposal {
   id: string;
   lead_id: string;
@@ -238,6 +244,7 @@ export interface Proposal {
   title: string;
   status: ProposalStatus;
   description?: string;
+  complimentary_items?: ComplimentaryItem[];
   items: LineItem[];
   subtotal: number;
   tax_percentage: number;

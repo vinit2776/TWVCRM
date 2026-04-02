@@ -569,7 +569,7 @@ export function CreateContractDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {[6, 12, 18, 24, 36].map((m) => (
+                    {[6, 11, 12, 18, 24, 36].map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m} months
                       </SelectItem>
