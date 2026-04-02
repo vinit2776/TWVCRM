@@ -21,7 +21,7 @@ interface EmailDocumentDialogProps {
   documentId: string;
   documentNumber: string;
   leadEmail?: string;
-  onGeneratePDF: () => string; // Returns base64 string
+  onGeneratePDF: () => string | Promise<string>; // Returns base64 string (sync or async)
   onSuccess?: () => void;
 }
 
@@ -77,7 +77,7 @@ export function EmailDocumentDialog({
 
     try {
       // Generate PDF as base64
-      const pdfBase64 = onGeneratePDF();
+      const pdfBase64 = await Promise.resolve(onGeneratePDF());
 
       const apiPath =
         documentType === "proposal"

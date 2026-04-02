@@ -62,6 +62,7 @@ interface PDFOptions {
   notesLabel?: string;
   qrCodeBase64?: string; // Base64 image data (PNG/JPEG) for UPI QR code
   upiId?: string; // UPI ID text to show alongside QR
+  razorpayPaymentLink?: string; // Razorpay payment link URL
 }
 
 function addLogoToDoc(doc: jsPDF): number {
@@ -339,23 +340,50 @@ function generatePDF(options: PDFOptions): jsPDF {
     y += 4.5;
   });
 
+  // ── Razorpay Payment Link (below bank details, above QR) ──
+  if (options.razorpayPaymentLink) {
+    y += 2;
+    doc.setFontSize(9);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...BRAND_TEAL);
+    doc.text("Pay Online:", 14, y);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(0, 0, 200);
+    doc.textWithLink(options.razorpayPaymentLink, 42, y, { url: options.razorpayPaymentLink });
+    y += 6;
+  }
+
   // ── UPI QR Code (right side, next to bank details) ──
   if (options.qrCodeBase64) {
-    const qrSize = 38; // 38mm ≈ ~144px — large enough for reliable scanning
-    const qrX = pageWidth - 14 - qrSize; // right-aligned with margin
+    // Detect original image dimensions to preserve aspect ratio
+    let imgW = 38;
+    let imgH = 38;
+    try {
+      const imgProps = doc.getImageProperties(options.qrCodeBase64);
+      const origW = imgProps.width;
+      const origH = imgProps.height;
+      const maxDim = 38; // max width or height in mm
+      const scale = Math.min(maxDim / origW, maxDim / origH);
+      imgW = origW * scale;
+      imgH = origH * scale;
+    } catch {
+      // Fallback to square if dimensions can't be read
+    }
+
+    const qrX = pageWidth - 14 - imgW; // right-aligned with margin
     const qrY = bankStartY - 4;
 
     // Light border around QR
     doc.setDrawColor(200, 200, 200);
     doc.setLineWidth(0.3);
-    doc.rect(qrX - 1, qrY - 1, qrSize + 2, qrSize + 2);
+    doc.rect(qrX - 1, qrY - 1, imgW + 2, imgH + 2);
 
     try {
-      doc.addImage(options.qrCodeBase64, "PNG", qrX, qrY, qrSize, qrSize);
+      doc.addImage(options.qrCodeBase64, "PNG", qrX, qrY, imgW, imgH);
     } catch {
       // Fallback: try as JPEG if PNG fails
       try {
-        doc.addImage(options.qrCodeBase64, "JPEG", qrX, qrY, qrSize, qrSize);
+        doc.addImage(options.qrCodeBase64, "JPEG", qrX, qrY, imgW, imgH);
       } catch {
         // Silently skip if image is invalid
       }
@@ -365,18 +393,18 @@ function generatePDF(options: PDFOptions): jsPDF {
     doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...BRAND_TEAL);
-    doc.text("Scan to Pay", qrX + qrSize / 2, qrY + qrSize + 4, { align: "center" });
+    doc.text("Scan to Pay", qrX + imgW / 2, qrY + imgH + 4, { align: "center" });
 
     // UPI ID below label
     if (options.upiId) {
       doc.setFontSize(7);
       doc.setFont("helvetica", "normal");
       doc.setTextColor(100, 100, 100);
-      doc.text(`UPI: ${options.upiId}`, qrX + qrSize / 2, qrY + qrSize + 8, { align: "center" });
+      doc.text(`UPI: ${options.upiId}`, qrX + imgW / 2, qrY + imgH + 8, { align: "center" });
     }
 
     // Ensure y is below QR if QR extends past bank details
-    const qrBottomY = qrY + qrSize + (options.upiId ? 12 : 8);
+    const qrBottomY = qrY + imgH + (options.upiId ? 12 : 8);
     if (qrBottomY > y) y = qrBottomY;
   }
   y += 6;
@@ -441,7 +469,7 @@ function generatePDF(options: PDFOptions): jsPDF {
 export function generateProposalPDF(
   proposal: Proposal & { location?: Partial<Location> },
   lead?: Partial<Lead>,
-  paymentOptions?: { qrCodeBase64?: string; upiId?: string }
+  paymentOptions?: { qrCodeBase64?: string; upiId?: string; razorpayPaymentLink?: string }
 ): jsPDF {
   return generatePDF({
     title: "PRO-FORMA INVOICE / PROPOSAL",
@@ -466,6 +494,7 @@ export function generateProposalPDF(
     notesLabel: "Customer Notes",
     qrCodeBase64: paymentOptions?.qrCodeBase64,
     upiId: paymentOptions?.upiId,
+    razorpayPaymentLink: paymentOptions?.razorpayPaymentLink,
   });
 }
 
