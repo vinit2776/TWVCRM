@@ -76,10 +76,26 @@ export default function ProposalDetailPage({
       // Continue without QR code if fetch fails
     }
 
+    // Generate Razorpay payment link if not already created
+    let paymentLink = proposal.razorpay_payment_link_url || undefined;
+    if (!paymentLink) {
+      try {
+        const linkRes = await fetch(`/api/proposals/${id}/payment-link`, { method: "POST" });
+        if (linkRes.ok) {
+          const linkData = await linkRes.json();
+          paymentLink = linkData.razorpay_payment_link_url || undefined;
+          // Refresh proposal state so UI also shows the link
+          if (paymentLink) fetchProposal();
+        }
+      } catch {
+        // Continue without payment link if creation fails
+      }
+    }
+
     const doc = generateProposalPDF(
       proposal,
       proposal.lead || undefined,
-      { qrCodeBase64, upiId, razorpayPaymentLink: proposal.razorpay_payment_link_url || undefined }
+      { qrCodeBase64, upiId, razorpayPaymentLink: paymentLink }
     );
     doc.save(`${proposal.proposal_number}.pdf`);
   };
