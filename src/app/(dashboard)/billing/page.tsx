@@ -13,7 +13,11 @@ import {
   CheckCircle,
   Upload,
   X,
+  IndianRupee,
 } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -149,6 +153,46 @@ export default function BillingPage() {
   const [statementsStatusFilter, setStatementsStatusFilter] = useState("");
   const [generateStatementOpen, setGenerateStatementOpen] = useState(false);
   const [viewStatementId, setViewStatementId] = useState<string | null>(null);
+
+  // Record Payment dialog state
+  const [recordPaymentDialogOpen, setRecordPaymentDialogOpen] = useState(false);
+  const [recordPaymentStatementId, setRecordPaymentStatementId] = useState<string | null>(null);
+  const [rpAmount, setRpAmount] = useState("");
+  const [rpDate, setRpDate] = useState(new Date().toISOString().slice(0, 10));
+  const [rpMode, setRpMode] = useState("neft");
+  const [rpReference, setRpReference] = useState("");
+  const [rpNotes, setRpNotes] = useState("");
+  const [rpSubmitting, setRpSubmitting] = useState(false);
+
+  const handleRecordPayment = async () => {
+    if (!recordPaymentStatementId || !rpAmount || Number(rpAmount) <= 0) {
+      toast.error("Amount must be positive");
+      return;
+    }
+    setRpSubmitting(true);
+    const res = await fetch(`/api/billing-statements/${recordPaymentStatementId}/payment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amount: Number(rpAmount),
+        payment_date: rpDate,
+        payment_mode: rpMode,
+        payment_reference: rpReference.trim() || undefined,
+        notes: rpNotes.trim() || undefined,
+      }),
+    });
+    setRpSubmitting(false);
+    if (res.ok) {
+      const json = await res.json();
+      toast.success(`Payment recorded. ${json.payment_status === "paid" ? "Invoice fully paid!" : `Balance due: ₹${json.balance_due.toLocaleString("en-IN")}`}`);
+      setRecordPaymentDialogOpen(false);
+      setRpAmount(""); setRpReference(""); setRpNotes("");
+      fetchStatements();
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to record payment");
+    }
+  };
 
   // Shared: contract list for filter dropdowns
   const [contracts, setContracts] = useState<Contract[]>([]);
@@ -721,14 +765,25 @@ export default function BillingPage() {
                               </DropdownMenuItem>
                             )}
                             {stmt.status === "finalized" && (
-                              <DropdownMenuItem
-                                onClick={() =>
-                                  handleExportStatement(stmt.id)
-                                }
-                              >
-                                <Upload className="mr-2 h-4 w-4" />
-                                Export
-                              </DropdownMenuItem>
+                              <>
+                                <DropdownMenuItem
+                                  onClick={() =>
+                                    handleExportStatement(stmt.id)
+                                  }
+                                >
+                                  <Upload className="mr-2 h-4 w-4" />
+                                  Export
+                                </DropdownMenuItem>
+                                <DropdownMenuItem
+                                  onClick={() => {
+                                    setRecordPaymentStatementId(stmt.id);
+                                    setRecordPaymentDialogOpen(true);
+                                  }}
+                                >
+                                  <IndianRupee className="mr-2 h-4 w-4" />
+                                  Record Payment
+                                </DropdownMenuItem>
+                              </>
                             )}
                           </DropdownMenuContent>
                         </DropdownMenu>
@@ -788,6 +843,72 @@ export default function BillingPage() {
         onOpenChange={(v) => { if (!v) setViewStatementId(null); }}
         onStatusChange={fetchStatements}
       />
+
+      {/* Record Payment Dialog */}
+      <Dialog open={recordPaymentDialogOpen} onOpenChange={setRecordPaymentDialogOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Record Payment</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 mt-2">
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Amount (₹)</Label>
+                <Input
+                  type="number"
+                  value={rpAmount}
+                  onChange={(e) => setRpAmount(e.target.value)}
+                  placeholder="e.g. 15000"
+                />
+              </div>
+              <div className="space-y-2">
+                <Label>Payment Date</Label>
+                <Input
+                  type="date"
+                  value={rpDate}
+                  onChange={(e) => setRpDate(e.target.value)}
+                />
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-2">
+                <Label>Payment Mode</Label>
+                <Select value={rpMode} onValueChange={setRpMode}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="neft">NEFT</SelectItem>
+                    <SelectItem value="rtgs">RTGS</SelectItem>
+                    <SelectItem value="upi">UPI</SelectItem>
+                    <SelectItem value="cheque">Cheque</SelectItem>
+                    <SelectItem value="cash">Cash</SelectItem>
+                    <SelectItem value="razorpay">Razorpay</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Reference / UTR No.</Label>
+                <Input
+                  value={rpReference}
+                  onChange={(e) => setRpReference(e.target.value)}
+                  placeholder="UTR or cheque number"
+                />
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>Notes (optional)</Label>
+              <Textarea
+                value={rpNotes}
+                onChange={(e) => setRpNotes(e.target.value)}
+                placeholder="Additional notes..."
+                rows={2}
+              />
+            </div>
+            <Button onClick={handleRecordPayment} disabled={rpSubmitting} className="w-full">
+              {rpSubmitting ? "Recording..." : "Record Payment"}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

@@ -431,9 +431,24 @@ export interface Contract {
   termination_reason?: string;
   signed_document_id?: string;
   signed_document?: CrmDocument;
+  printer_department_id?: string;
   created_by?: string;
   created_at: string;
   updated_at: string;
+}
+
+export interface BillingPayment {
+  id: string;
+  billing_statement_id: string;
+  amount: number;
+  payment_date: string;
+  payment_mode: string;
+  payment_reference?: string;
+  razorpay_payment_id?: string;
+  proof_path?: string;
+  notes?: string;
+  recorded_by?: string;
+  created_at: string;
 }
 
 // ==========================================
@@ -560,6 +575,8 @@ export interface BillingStatement {
   razorpay_payment_link_url?: string;
   emailed_at?: string;
   emailed_to?: string;
+  payment_status?: string; // "unpaid" | "partially_paid" | "paid"
+  billing_payments?: BillingPayment[];
 }
 
 // ==========================================

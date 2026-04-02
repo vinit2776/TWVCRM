@@ -712,6 +712,8 @@ export default function ContractDetailPage({
             signedDocumentId={contract.signed_document_id}
             leadEmail={contract.lead?.email}
             locationId={contract.location_id}
+            printerDepartmentId={contract.printer_department_id}
+            onDepartmentIdUpdate={fetchContract}
           />
 
           {/* Billing Section */}

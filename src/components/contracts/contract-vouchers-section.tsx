@@ -62,6 +62,8 @@ interface ContractVouchersSectionProps {
   signedDocumentId?: string;
   leadEmail?: string;
   locationId?: string;
+  printerDepartmentId?: string;
+  onDepartmentIdUpdate?: () => void;
 }
 
 export function ContractVouchersSection({
@@ -74,6 +76,8 @@ export function ContractVouchersSection({
   signedDocumentId,
   leadEmail,
   locationId,
+  printerDepartmentId,
+  onDepartmentIdUpdate,
 }: ContractVouchersSectionProps) {
   const [issuances, setIssuances] = useState<VoucherIssuance[]>([]);
   const [loading, setLoading] = useState(true);
@@ -353,6 +357,15 @@ export function ContractVouchersSection({
         </div>
       </CardHeader>
       <CardContent>
+        {/* Printer Department ID */}
+        {isContractActive && (
+          <DepartmentIdCard
+            contractId={contractId}
+            departmentId={printerDepartmentId}
+            onUpdate={onDepartmentIdUpdate}
+          />
+        )}
+
         {/* Signed document warning */}
         {isContractActive && !hasSignedDoc && !loading && (
           <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 flex items-start gap-2">
@@ -698,5 +711,67 @@ export function ContractVouchersSection({
         onSuccess={fetchIssuances}
       />
     </Card>
+  );
+}
+
+// ── Inline Department ID Card ──
+function DepartmentIdCard({ contractId, departmentId, onUpdate }: { contractId: string; departmentId?: string; onUpdate?: () => void }) {
+  const [editing, setEditing] = useState(false);
+  const [value, setValue] = useState(departmentId || "");
+  const [saving, setSaving] = useState(false);
+
+  const handleSave = async () => {
+    setSaving(true);
+    const res = await fetch(`/api/contracts/${contractId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ printer_department_id: value.trim() || null }),
+    });
+    setSaving(false);
+    if (res.ok) {
+      toast.success(value.trim() ? "Department ID saved" : "Department ID cleared");
+      setEditing(false);
+      onUpdate?.();
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to save");
+    }
+  };
+
+  return (
+    <div className="mb-4 rounded-md border bg-muted/30 p-3 flex items-center gap-3">
+      <div className="flex items-center gap-2 text-sm font-medium text-muted-foreground shrink-0">
+        <Ticket className="h-4 w-4" />
+        Printer Dept ID:
+      </div>
+      {editing ? (
+        <div className="flex items-center gap-2 flex-1">
+          <Input
+            value={value}
+            onChange={(e) => setValue(e.target.value)}
+            placeholder="e.g. DEPT-001"
+            className="h-7 text-sm w-40"
+            onKeyDown={(e) => e.key === "Enter" && handleSave()}
+          />
+          <Button size="sm" className="h-7 text-xs" onClick={handleSave} disabled={saving}>
+            {saving ? <Loader2 className="h-3 w-3 animate-spin" /> : "Save"}
+          </Button>
+          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={() => { setEditing(false); setValue(departmentId || ""); }}>
+            Cancel
+          </Button>
+        </div>
+      ) : (
+        <div className="flex items-center gap-2 flex-1">
+          {departmentId ? (
+            <Badge variant="secondary" className="font-mono">{departmentId}</Badge>
+          ) : (
+            <span className="text-xs text-muted-foreground">Not assigned</span>
+          )}
+          <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => setEditing(true)}>
+            <Pencil className="h-3 w-3 mr-1" />{departmentId ? "Edit" : "Assign"}
+          </Button>
+        </div>
+      )}
+    </div>
   );
 }

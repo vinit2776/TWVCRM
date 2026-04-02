@@ -197,6 +197,43 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ status: "ok", entity: "proposal_deposit" });
     }
 
+    // Check if this payment link belongs to a billing statement (invoice)
+    const { data: billingStatement } = await supabase
+      .from("billing_statements")
+      .select("id, total_amount, payment_status")
+      .eq("razorpay_payment_link_id", paymentLinkId)
+      .maybeSingle();
+
+    if (billingStatement && billingStatement.payment_status !== "paid") {
+      // Record payment
+      await supabase
+        .from("billing_payments")
+        .insert({
+          billing_statement_id: billingStatement.id,
+          amount: amountPaid,
+          payment_date: new Date().toISOString().slice(0, 10),
+          payment_mode: "razorpay",
+          payment_reference: razorpayPaymentId || paymentLinkId,
+          razorpay_payment_id: razorpayPaymentId,
+        });
+
+      // Check if fully paid
+      const { data: allPayments } = await supabase
+        .from("billing_payments")
+        .select("amount")
+        .eq("billing_statement_id", billingStatement.id);
+
+      const totalPaid = (allPayments || []).reduce((s: number, p: { amount: number }) => s + Number(p.amount), 0);
+      const newStatus = totalPaid >= Number(billingStatement.total_amount) ? "paid" : "partially_paid";
+
+      await supabase
+        .from("billing_statements")
+        .update({ payment_status: newStatus })
+        .eq("id", billingStatement.id);
+
+      return NextResponse.json({ status: "ok", entity: "billing_statement" });
+    }
+
     // Find the booking by razorpay_payment_link_id
     const { data: booking } = await supabase
       .from("bookings")
@@ -205,7 +242,7 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (!booking) {
-      return NextResponse.json({ status: "ignored", reason: "No matching booking, proposal, or purchase for payment link" });
+      return NextResponse.json({ status: "ignored", reason: "No matching entity for payment link" });
     }
 
     // Check if we already recorded this payment (idempotency)

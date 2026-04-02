@@ -46,6 +46,7 @@ export async function PATCH(
   if (body.tenure_months) allowedFields.tenure_months = body.tenure_months;
   if (body.renewed_at) allowedFields.renewed_at = body.renewed_at;
   if (body.signed_document_id !== undefined) allowedFields.signed_document_id = body.signed_document_id;
+  if (body.printer_department_id !== undefined) allowedFields.printer_department_id = body.printer_department_id;
 
   if (Object.keys(allowedFields).length === 0) {
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });
