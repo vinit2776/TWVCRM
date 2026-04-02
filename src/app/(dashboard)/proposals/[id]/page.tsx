@@ -74,25 +74,10 @@ export default function ProposalDetailPage({
   const handleDownloadPDF = async () => {
     if (!proposal) return;
 
-    // Fetch UPI QR code (base64) from payment module settings
-    let qrCodeBase64: string | undefined;
-    let upiId: string | undefined;
-    try {
-      const settingsRes = await fetch("/api/settings/public");
-      if (settingsRes.ok) {
-        const sJson = await settingsRes.json();
-        const settings = sJson.data || {};
-        upiId = settings.upi_id || undefined;
-        qrCodeBase64 = settings.upi_qr_code_base64 || undefined;
-      }
-    } catch {
-      // Continue without QR code if fetch fails
-    }
-
     const doc = generateProposalPDF(
       proposal,
       proposal.lead || undefined,
-      { qrCodeBase64, upiId, razorpayPaymentLink: proposal.razorpay_payment_link_url || undefined }
+      { razorpayPaymentLink: proposal.razorpay_payment_link_url || undefined }
     );
     doc.save(`${proposal.proposal_number}.pdf`);
   };
