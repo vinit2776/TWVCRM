@@ -19,11 +19,24 @@ export async function POST(
   if (!user)
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const body = await request.json();
-  const { recipients, pdfBase64 } = body as {
-    recipients: string[];
-    pdfBase64: string;
-  };
+  // Support both FormData (binary PDF) and JSON (base64 PDF) for backwards compat
+  let recipients: string[];
+  let pdfBuffer: Buffer;
+
+  const contentType = request.headers.get("content-type") || "";
+  if (contentType.includes("multipart/form-data")) {
+    const formData = await request.formData();
+    recipients = JSON.parse(formData.get("recipients") as string || "[]");
+    const pdfFile = formData.get("pdf") as File;
+    if (!pdfFile) {
+      return NextResponse.json({ error: "PDF file is required" }, { status: 400 });
+    }
+    pdfBuffer = Buffer.from(await pdfFile.arrayBuffer());
+  } else {
+    const body = await request.json();
+    recipients = body.recipients;
+    pdfBuffer = Buffer.from(body.pdfBase64, "base64");
+  }
 
   if (!recipients || recipients.length === 0) {
     return NextResponse.json(
@@ -32,7 +45,7 @@ export async function POST(
     );
   }
 
-  if (!pdfBase64) {
+  if (!pdfBuffer || pdfBuffer.length === 0) {
     return NextResponse.json(
       { error: "PDF data is required" },
       { status: 400 }
@@ -149,9 +162,6 @@ export async function POST(
   }
 
   try {
-    // Convert base64 to Buffer
-    const pdfBuffer = Buffer.from(pdfBase64, "base64");
-
     // Build payment options HTML
     const payNowButton = razorpayLinkUrl
       ? `<div style="text-align:center;margin:20px 0;">

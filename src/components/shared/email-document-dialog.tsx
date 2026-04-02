@@ -86,10 +86,18 @@ export function EmailDocumentDialog({
             ? `/api/contracts/${documentId}/email`
             : `/api/invoices/${documentId}/email`;
 
+      // Send as FormData to avoid Vercel's 4.5MB JSON body limit
+      const formData = new FormData();
+      formData.append("recipients", JSON.stringify(recipients));
+      // Convert base64 to Blob for efficient transfer
+      const byteChars = atob(pdfBase64);
+      const byteArray = new Uint8Array(byteChars.length);
+      for (let i = 0; i < byteChars.length; i++) byteArray[i] = byteChars.charCodeAt(i);
+      formData.append("pdf", new Blob([byteArray], { type: "application/pdf" }), "document.pdf");
+
       const res = await fetch(apiPath, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ recipients, pdfBase64 }),
+        body: formData,
       });
 
       if (res.ok) {
