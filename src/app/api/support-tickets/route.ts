@@ -104,7 +104,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const { data: ticket, error } = await supabase
+  const { data: ticket, error } = await adminSupabase
     .from("support_tickets")
     .insert({
       subject: parsed.data.subject,
