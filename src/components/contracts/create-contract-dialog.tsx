@@ -228,6 +228,13 @@ export function CreateContractDialog({
       toast.error("Please select a start date");
       return;
     }
+    // Warn if direct contract with future start date (likely should be linked to a proposal)
+    if (source === "direct" && startDate > new Date().toISOString().slice(0, 10)) {
+      const proceed = window.confirm(
+        "This direct contract has a future start date. Direct contracts are intended for onboarding legacy customers with past start dates.\n\nFor new customers, consider creating a proposal first and linking the contract to it for proper payment tracking.\n\nDo you want to proceed anyway?"
+      );
+      if (!proceed) return;
+    }
     if (!tenureMonths) {
       toast.error("Please select a tenure");
       return;
