@@ -168,7 +168,7 @@ export default function ProposalDetailPage({
           <Button
             variant="ghost"
             size="icon"
-            onClick={() => router.push("/proposals")}
+            onClick={() => router.push(proposal?.lead_id ? `/leads/${proposal.lead_id}` : "/proposals")}
           >
             <ArrowLeft className="h-4 w-4" />
           </Button>
