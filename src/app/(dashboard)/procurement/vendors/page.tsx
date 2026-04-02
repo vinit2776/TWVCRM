@@ -300,13 +300,71 @@ export default function VendorsPage() {
                 />
               </div>
               <div className="col-span-2 space-y-1">
-                <Label>Contact Email</Label>
-                <Input
-                  type="email"
-                  value={form.contact_email}
-                  onChange={(e) => setForm((f) => ({ ...f, contact_email: e.target.value }))}
-                  placeholder="vendor@example.com"
-                />
+                <Label>Contact Email(s)</Label>
+                {(() => {
+                  const emails = form.contact_email ? form.contact_email.split(",").map((e) => e.trim()).filter(Boolean) : [];
+                  return (
+                    <>
+                      {emails.length > 0 && (
+                        <div className="flex flex-wrap gap-1.5 mb-1.5">
+                          {emails.map((email) => (
+                            <Badge key={email} variant="secondary" className="flex items-center gap-1 px-2 py-0.5 text-xs">
+                              {email}
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const updated = emails.filter((e) => e !== email).join(", ");
+                                  setForm((f) => ({ ...f, contact_email: updated }));
+                                }}
+                                className="ml-0.5 rounded-full hover:bg-muted p-0.5"
+                              >
+                                <X className="h-3 w-3" />
+                              </button>
+                            </Badge>
+                          ))}
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        <Input
+                          type="email"
+                          placeholder="vendor@example.com"
+                          onKeyDown={(e) => {
+                            if (e.key === "Enter" || e.key === ",") {
+                              e.preventDefault();
+                              const val = (e.target as HTMLInputElement).value.trim().replace(/,$/, "");
+                              if (!val) return;
+                              if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) { toast.error("Invalid email address"); return; }
+                              if (emails.includes(val)) { toast.error("Email already added"); return; }
+                              const updated = [...emails, val].join(", ");
+                              setForm((f) => ({ ...f, contact_email: updated }));
+                              (e.target as HTMLInputElement).value = "";
+                            }
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          variant="outline"
+                          size="icon"
+                          className="shrink-0"
+                          onClick={() => {
+                            const input = document.querySelector<HTMLInputElement>('input[type="email"][placeholder="vendor@example.com"]');
+                            if (!input) return;
+                            const val = input.value.trim();
+                            if (!val) return;
+                            if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val)) { toast.error("Invalid email address"); return; }
+                            if (emails.includes(val)) { toast.error("Email already added"); return; }
+                            const updated = [...emails, val].join(", ");
+                            setForm((f) => ({ ...f, contact_email: updated }));
+                            input.value = "";
+                          }}
+                        >
+                          <Plus className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">Press Enter or click + to add multiple emails</p>
+                    </>
+                  );
+                })()}
               </div>
               <div className="space-y-1">
                 <Label>GSTIN</Label>
