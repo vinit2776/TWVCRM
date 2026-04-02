@@ -16,6 +16,7 @@ import { PaymentGatewaySettings } from "@/components/settings/payment-gateway-se
 import { ProcurementSettings } from "@/components/settings/procurement-settings";
 import { DashboardSettings } from "@/components/settings/dashboard-settings";
 import { PettyCashSettings } from "@/components/settings/petty-cash-settings";
+import { ServicesSettings } from "@/components/settings/services-settings";
 import Link from "next/link";
 
 export default function SettingsPage() {
@@ -116,6 +117,11 @@ export default function SettingsPage() {
           {profile.role === "admin" && (
             <TabsTrigger value="documents" className="flex items-center gap-1.5">
               <FolderOpen className="h-3.5 w-3.5" />Documents
+            </TabsTrigger>
+          )}
+          {["admin", "manager"].includes(profile.role) && (
+            <TabsTrigger value="services" className="flex items-center gap-1.5">
+              <DoorOpen className="h-3.5 w-3.5" />Services
             </TabsTrigger>
           )}
           {profile.role === "admin" && (
@@ -284,6 +290,12 @@ export default function SettingsPage() {
                 </Button>
               </CardContent>
             </Card>
+          </TabsContent>
+        )}
+
+        {["admin", "manager"].includes(profile.role) && (
+          <TabsContent value="services" className="mt-6">
+            <ServicesSettings />
           </TabsContent>
         )}
 

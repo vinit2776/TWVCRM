@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,11 +36,8 @@ export function ProposalForm({
   const [title, setTitle] = useState("");
   const [locationId, setLocationId] = useState<string | null>(leadLocationId || null);
   const [description, setDescription] = useState("");
-  const [complimentaryItems, setComplimentaryItems] = useState([
-    { name: "Complimentary Printouts", unit: "nos", quantity: 0 },
-    { name: "Complimentary Conference Hall", unit: "hours", quantity: 0 },
-    { name: "Meeting Room", unit: "hours", quantity: 0 },
-  ]);
+  const [complimentaryItems, setComplimentaryItems] = useState<{ name: string; unit: string; quantity: number; price_per_unit: number; service_id?: string }[]>([]);
+  const [availableServices, setAvailableServices] = useState<{ id: string; name: string; unit: string; price_per_unit: number }[]>([]);
   const [items, setItems] = useState<LineItemData[]>([
     { description: "", quantity: 1, unit_price: 0, total: 0 },
   ]);
@@ -53,6 +50,15 @@ export function ProposalForm({
   const [depositAmount, setDepositAmount] = useState(0);
   const [depositOverridden, setDepositOverridden] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+
+  // Fetch available services when location changes
+  useEffect(() => {
+    if (!locationId) { setAvailableServices([]); return; }
+    fetch(`/api/location-services?location_id=${locationId}&is_active=true`)
+      .then(r => r.json())
+      .then(json => setAvailableServices(json.data || []))
+      .catch(() => setAvailableServices([]));
+  }, [locationId]);
 
   // Compute subtotal for deposit auto-calculation
   const computedSubtotal = items
@@ -69,11 +75,7 @@ export function ProposalForm({
     setTermsAndConditions(DEFAULT_PROPOSAL_TERMS);
     setNotes("");
     setLocationId(leadLocationId || null);
-    setComplimentaryItems([
-      { name: "Complimentary Printouts", unit: "nos", quantity: 0 },
-      { name: "Complimentary Conference Hall", unit: "hours", quantity: 0 },
-      { name: "Meeting Room", unit: "hours", quantity: 0 },
-    ]);
+    setComplimentaryItems([]);
     setDepositMonths(0);
     setDepositAmount(0);
     setDepositOverridden(false);
@@ -189,83 +191,103 @@ export function ProposalForm({
             />
           </div>
 
-          {/* Complimentary Services — structured line items */}
+          {/* Complimentary Services — from location master */}
           <div className="border rounded-lg p-4 space-y-3 bg-muted/30">
             <div className="flex items-center justify-between">
               <Label className="text-sm font-semibold">Complimentary Services (per month)</Label>
-              <button
-                type="button"
-                className="text-xs text-primary underline"
-                onClick={() => setComplimentaryItems([...complimentaryItems, { name: "", unit: "nos", quantity: 0 }])}
-              >
-                + Add service
-              </button>
+              {locationId && availableServices.length > 0 && (
+                <Select
+                  value=""
+                  onValueChange={(serviceId) => {
+                    const svc = availableServices.find(s => s.id === serviceId);
+                    if (!svc) return;
+                    if (complimentaryItems.some(ci => ci.service_id === serviceId)) {
+                      toast.error(`${svc.name} is already added`);
+                      return;
+                    }
+                    setComplimentaryItems([...complimentaryItems, {
+                      name: svc.name,
+                      unit: svc.unit,
+                      quantity: 0,
+                      price_per_unit: svc.price_per_unit,
+                      service_id: svc.id,
+                    }]);
+                  }}
+                >
+                  <SelectTrigger className="h-8 text-xs w-auto min-w-[140px]">
+                    <SelectValue placeholder="+ Add service" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {availableServices
+                      .filter(s => !complimentaryItems.some(ci => ci.service_id === s.id))
+                      .map(s => (
+                        <SelectItem key={s.id} value={s.id}>
+                          {s.name} ({s.unit})
+                        </SelectItem>
+                      ))}
+                  </SelectContent>
+                </Select>
+              )}
             </div>
-            <div className="space-y-2">
-              {complimentaryItems.map((ci, idx) => (
-                <div key={idx} className="grid grid-cols-12 gap-2 items-center">
-                  <div className="col-span-6">
-                    <Input
-                      placeholder="Service name"
-                      value={ci.name}
-                      onChange={(e) => {
-                        const updated = [...complimentaryItems];
-                        updated[idx] = { ...ci, name: e.target.value };
-                        setComplimentaryItems(updated);
-                      }}
-                      className="text-sm h-9"
-                    />
-                  </div>
-                  <div className="col-span-2">
-                    <Input
-                      type="number"
-                      placeholder="Qty"
-                      value={ci.quantity || ""}
-                      onChange={(e) => {
-                        const updated = [...complimentaryItems];
-                        updated[idx] = { ...ci, quantity: parseInt(e.target.value) || 0 };
-                        setComplimentaryItems(updated);
-                      }}
-                      className="text-sm h-9"
-                    />
-                  </div>
-                  <div className="col-span-3">
-                    <Select
-                      value={ci.unit}
-                      onValueChange={(v) => {
-                        const updated = [...complimentaryItems];
-                        updated[idx] = { ...ci, unit: v };
-                        setComplimentaryItems(updated);
-                      }}
-                    >
-                      <SelectTrigger className="h-9 text-sm">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="nos">nos</SelectItem>
-                        <SelectItem value="hours">hours</SelectItem>
-                        <SelectItem value="days">days</SelectItem>
-                        <SelectItem value="pages">pages</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
-                  <div className="col-span-1 flex justify-center">
-                    {idx >= 3 && (
+            {!locationId && (
+              <p className="text-xs text-muted-foreground py-2">Select a location above to see available services.</p>
+            )}
+            {locationId && availableServices.length === 0 && (
+              <p className="text-xs text-muted-foreground py-2">No services configured for this location. Add them in Settings → Services.</p>
+            )}
+            {complimentaryItems.length > 0 && (
+              <div className="space-y-2">
+                <div className="grid grid-cols-12 gap-2 text-xs text-muted-foreground font-medium">
+                  <div className="col-span-5">Service</div>
+                  <div className="col-span-2">Free Qty</div>
+                  <div className="col-span-2">Unit</div>
+                  <div className="col-span-2 text-right">Rate (excess)</div>
+                  <div className="col-span-1"></div>
+                </div>
+                {complimentaryItems.map((ci, idx) => (
+                  <div key={idx} className="grid grid-cols-12 gap-2 items-center">
+                    <div className="col-span-5">
+                      <span className="text-sm font-medium">{ci.name}</span>
+                    </div>
+                    <div className="col-span-2">
+                      <Input
+                        type="number"
+                        placeholder="0"
+                        value={ci.quantity || ""}
+                        onChange={(e) => {
+                          const updated = [...complimentaryItems];
+                          updated[idx] = { ...ci, quantity: parseInt(e.target.value) || 0 };
+                          setComplimentaryItems(updated);
+                        }}
+                        className="text-sm h-8"
+                      />
+                    </div>
+                    <div className="col-span-2">
+                      <span className="text-xs text-muted-foreground">{ci.unit}</span>
+                    </div>
+                    <div className="col-span-2 text-right">
+                      <span className="text-xs font-mono text-muted-foreground">
+                        {Number(ci.price_per_unit) > 0 ? `₹${Number(ci.price_per_unit).toLocaleString("en-IN")}` : "Free"}
+                      </span>
+                    </div>
+                    <div className="col-span-1 flex justify-center">
                       <button
                         type="button"
-                        className="text-muted-foreground hover:text-destructive text-xs"
+                        className="text-muted-foreground hover:text-destructive text-sm"
                         onClick={() => setComplimentaryItems(complimentaryItems.filter((_, i) => i !== idx))}
                       >
                         ×
                       </button>
-                    )}
+                    </div>
                   </div>
-                </div>
-              ))}
-            </div>
-            <p className="text-xs text-muted-foreground">
-              Usage beyond these quantities will be charged to the customer.
-            </p>
+                ))}
+              </div>
+            )}
+            {complimentaryItems.length > 0 && (
+              <p className="text-xs text-muted-foreground">
+                Usage beyond the free quantity will be charged at the listed rate per unit.
+              </p>
+            )}
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

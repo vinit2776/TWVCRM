@@ -232,6 +232,19 @@ export interface ComplimentaryItem {
   name: string;
   unit: string;
   quantity: number; // free quota per month
+  price_per_unit?: number; // rate for excess usage
+  service_id?: string; // link to location_services master
+}
+
+export interface LocationService {
+  id: string;
+  location_id: string;
+  name: string;
+  unit: string;
+  price_per_unit: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Proposal {
