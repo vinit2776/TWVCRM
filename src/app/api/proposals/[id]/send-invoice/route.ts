@@ -235,25 +235,48 @@ export async function POST(
           </div>
           <div style="padding:32px;">
             <p style="color:#333;font-size:14px;">Dear ${customerName},</p>
-            <p style="color:#333;font-size:14px;">Please find attached your tax invoice for <strong>${periodLabel}</strong> (from ${startLabel}).</p>
-            ${prorationFactor < 1 ? `<p style="color:#666;font-size:13px;">This invoice is prorated for ${daysRemaining} of ${daysInMonth} days as your occupation starts on ${startLabel}.</p>` : ""}
-            <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
-              <tr><td style="padding:6px 0;color:#666;">Invoice No.</td><td style="padding:6px 0;font-weight:600;">${invoiceNumber}</td></tr>
-              <tr><td style="padding:6px 0;color:#666;">Reference</td><td style="padding:6px 0;">${proposal.proposal_number}</td></tr>
-              <tr><td style="padding:6px 0;color:#666;">Amount</td><td style="padding:6px 0;font-weight:600;color:#015E65;font-size:16px;">Rs. ${totalAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+            <p style="color:#333;font-size:14px;">Thank you for choosing The WorkVilla. Please find attached your tax invoice for the period <strong>${startLabel}</strong> to <strong>${new Date(periodEnd + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</strong>.</p>
+
+            ${prorationFactor < 1 ? `
+            <!-- Proration explanation -->
+            <div style="background:#f0faf5;border-left:4px solid #015E65;padding:14px 18px;margin:16px 0;border-radius:0 6px 6px 0;">
+              <p style="color:#015E65;font-size:13px;font-weight:600;margin:0 0 8px;">About this invoice</p>
+              <p style="color:#333;font-size:13px;margin:0 0 4px;">Your regular monthly charge is <strong>Rs. ${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })} + GST</strong> per month.</p>
+              <p style="color:#333;font-size:13px;margin:0 0 4px;">Since your occupation begins on <strong>${startLabel}</strong>, this invoice covers <strong>${daysRemaining} of ${daysInMonth} days</strong> in ${periodLabel}.</p>
+              <p style="color:#333;font-size:13px;margin:0;">Prorated amount: Rs. ${subtotal.toLocaleString("en-IN")} x ${daysRemaining}/${daysInMonth} = <strong>Rs. ${proratedSubtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong> + GST</p>
+              <p style="color:#666;font-size:12px;margin:8px 0 0;font-style:italic;">From next month onwards, you will be billed the full monthly amount of Rs. ${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })} + GST.</p>
+            </div>` : `
+            <p style="color:#333;font-size:13px;margin:8px 0 0;">Your monthly charge: <strong>Rs. ${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })} + GST</strong></p>
+            `}
+
+            <!-- Invoice summary -->
+            <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;background:#f7f8fa;border-radius:6px;">
+              <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Invoice No.</td><td style="padding:10px 16px;font-weight:600;">${invoiceNumber}</td></tr>
+              <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Proposal Ref.</td><td style="padding:10px 16px;">${proposal.proposal_number}</td></tr>
+              <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Subtotal${prorationFactor < 1 ? " (prorated)" : ""}</td><td style="padding:10px 16px;">Rs. ${proratedSubtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+              <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">GST @${taxPercentage}%</td><td style="padding:10px 16px;">Rs. ${taxAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+              <tr style="background:#015E65;"><td style="padding:10px 16px;color:white;font-weight:600;">Amount Payable</td><td style="padding:10px 16px;color:white;font-weight:700;font-size:16px;">Rs. ${totalAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
             </table>
+
             ${razorpayUrl ? `
             <div style="text-align:center;margin:24px 0;">
-              <a href="${razorpayUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a>
+              <a href="${razorpayUrl}" style="background:#015E65;color:white;padding:14px 40px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:15px;">Pay Now — Rs. ${totalAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</a>
+              <p style="color:#666;font-size:11px;margin:8px 0 0;">Secure payment via Razorpay</p>
             </div>` : ""}
+
             <p style="color:#015E65;font-size:13px;font-weight:bold;margin:20px 0 8px;">Bank Transfer</p>
             <table style="border-collapse:collapse;width:100%;background:#f0faf5;border-radius:6px;">
-              <tr><td style="padding:8px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Account</td><td style="padding:8px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${COMPANY_BANK_DETAILS.accountName}</td></tr>
-              <tr><td style="padding:8px 16px;color:#666;border-bottom:1px solid #e5e7eb;">A/C No</td><td style="padding:8px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${COMPANY_BANK_DETAILS.accountNumber}</td></tr>
-              <tr><td style="padding:8px 16px;color:#666;">IFSC</td><td style="padding:8px 16px;color:#333;">${COMPANY_BANK_DETAILS.ifscCode}</td></tr>
+              <tr><td style="padding:8px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Account Name</td><td style="padding:8px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${COMPANY_BANK_DETAILS.accountName}</td></tr>
+              <tr><td style="padding:8px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Account No.</td><td style="padding:8px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${COMPANY_BANK_DETAILS.accountNumber}</td></tr>
+              <tr><td style="padding:8px 16px;color:#666;border-bottom:1px solid #e5e7eb;">IFSC Code</td><td style="padding:8px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${COMPANY_BANK_DETAILS.ifscCode}</td></tr>
+              <tr><td style="padding:8px 16px;color:#666;">Bank & Branch</td><td style="padding:8px 16px;color:#333;">${COMPANY_BANK_DETAILS.bank}, ${COMPANY_BANK_DETAILS.branch}</td></tr>
             </table>
             ${upiId ? `<p style="color:#666;font-size:12px;margin-top:8px;">UPI: ${upiId}</p>` : ""}
-            <p style="color:#333;font-size:14px;margin-top:20px;">Warm regards,<br/><strong>The WorkVilla</strong></p>
+            ${razorpayUrl ? `<p style="color:#666;font-size:12px;margin-top:4px;">Online: <a href="${razorpayUrl}" style="color:#015E65;">${razorpayUrl}</a></p>` : ""}
+
+            <p style="color:#333;font-size:14px;margin-top:24px;">We look forward to welcoming you to The WorkVilla.</p>
+            <p style="color:#333;font-size:14px;">Warm regards,<br/><strong>The WorkVilla Team</strong></p>
+            <p style="color:#666;font-size:12px;margin-top:12px;">For any queries, write to us at <a href="mailto:space@theworkvilla.com" style="color:#015E65;">space@theworkvilla.com</a> or call <strong>+91 97910 97900</strong>.</p>
           </div>
           <div style="background:#015E65;padding:12px 32px;text-align:center;">
             <p style="color:#fff;margin:0;font-size:10px;">SREE DESIGN INFRASTRUCTURE PVT LTD | GSTIN: 33AAACU4245J1ZF</p>
