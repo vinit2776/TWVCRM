@@ -127,6 +127,14 @@ export function CreateContractDialog({
       if (selectedProposal.location_id) {
         setLocationId(selectedProposal.location_id);
       }
+      // Prefill start date from occupation date (set during GST invoice)
+      if (selectedProposal.occupation_start_date) {
+        setStartDate(selectedProposal.occupation_start_date);
+      }
+      // Prefill security deposit months from proposal
+      if (selectedProposal.security_deposit_months) {
+        setSecurityDepositMonths(selectedProposal.security_deposit_months);
+      }
       // Prefill complimentary services from proposal description
       if (selectedProposal.description) {
         setComplimentaryServices(selectedProposal.description);
