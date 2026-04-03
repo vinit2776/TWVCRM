@@ -143,27 +143,8 @@ export async function POST(
     }
   }
 
-  // Fetch UPI QR
-  let qrCodeBase64: string | undefined;
-  let upiId: string | undefined;
-  try {
-    const { data: settings } = await adminSupabase
-      .from("app_settings")
-      .select("key, value")
-      .in("key", ["upi_id", "upi_qr_code_path"]);
-    const sMap: Record<string, string> = {};
-    (settings || []).forEach((s) => { sMap[s.key] = s.value; });
-    upiId = sMap.upi_id;
-    if (sMap.upi_qr_code_path) {
-      const { data: fileData } = await adminSupabase.storage.from("crm-documents").download(sMap.upi_qr_code_path);
-      if (fileData) {
-        const ab = await fileData.arrayBuffer();
-        const b64 = Buffer.from(ab).toString("base64");
-        const mime = sMap.upi_qr_code_path.endsWith(".png") ? "image/png" : "image/jpeg";
-        qrCodeBase64 = `data:${mime};base64,${b64}`;
-      }
-    }
-  } catch { /* continue without QR */ }
+  // Note: Generic UPI QR code removed — not transaction-specific, no traceability.
+  // Payments are tracked via Razorpay payment link only.
 
   // Build line items (prorated)
   const periodEnd = `${year}-${String(month + 1).padStart(2, "0")}-${daysInMonth}`;
@@ -195,8 +176,6 @@ export async function POST(
     isInterstate,
     taxPercentage,
     razorpayUrl: razorpayUrl || undefined,
-    qrCodeBase64,
-    upiId,
   };
 
   const doc = generateGstInvoicePDF(invoiceData);
@@ -271,7 +250,6 @@ export async function POST(
               <tr><td style="padding:8px 16px;color:#666;border-bottom:1px solid #e5e7eb;">IFSC Code</td><td style="padding:8px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${COMPANY_BANK_DETAILS.ifscCode}</td></tr>
               <tr><td style="padding:8px 16px;color:#666;">Bank & Branch</td><td style="padding:8px 16px;color:#333;">${COMPANY_BANK_DETAILS.bank}, ${COMPANY_BANK_DETAILS.branch}</td></tr>
             </table>
-            ${upiId ? `<p style="color:#666;font-size:12px;margin-top:8px;">UPI: ${upiId}</p>` : ""}
             ${razorpayUrl ? `<p style="color:#666;font-size:12px;margin-top:4px;">Online: <a href="${razorpayUrl}" style="color:#015E65;">${razorpayUrl}</a></p>` : ""}
 
             <p style="color:#333;font-size:14px;margin-top:24px;">We look forward to welcoming you to The WorkVilla.</p>
