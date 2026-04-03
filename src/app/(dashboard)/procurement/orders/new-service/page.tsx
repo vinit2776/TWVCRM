@@ -49,6 +49,7 @@ export default function NewServicePOPage() {
   const [billingCycle, setBillingCycle] = useState<string>("monthly");
   const [cycleCount, setCycleCount] = useState("12");
   const [unitCost, setUnitCost] = useState("");
+  const [gstRate, setGstRate] = useState("18");
   const [notes, setNotes] = useState("");
   const [paymentTerms, setPaymentTerms] = useState("");
   const [termsAndConditions, setTermsAndConditions] = useState("");
@@ -86,7 +87,10 @@ export default function NewServicePOPage() {
   const serviceItemName = selectedItem?.name ?? customName;
   const cycleCountNum = parseInt(cycleCount) || 0;
   const unitCostNum = parseFloat(unitCost) || 0;
+  const gstRateNum = parseFloat(gstRate) || 0;
   const totalAmount = cycleCountNum * unitCostNum;
+  const gstAmount = Math.round(totalAmount * gstRateNum) / 100;
+  const totalWithGst = totalAmount + gstAmount;
 
   // Build cycle schedule preview
   const cycleSchedule = (() => {
@@ -128,6 +132,7 @@ export default function NewServicePOPage() {
           billing_cycle: billingCycle,
           cycle_count: cycleCountNum,
           unit_cost_per_cycle: unitCostNum,
+          gst_rate: gstRateNum,
           notes: notes.trim() || undefined,
           payment_terms: paymentTerms.trim() || undefined,
           terms_and_conditions: termsAndConditions.trim() || undefined,
@@ -264,12 +269,39 @@ export default function NewServicePOPage() {
                   placeholder="0.00"
                 />
               </div>
+              <div className="space-y-1.5">
+                <Label>GST Rate</Label>
+                <Select value={gstRate} onValueChange={setGstRate}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="0">0% (Exempt)</SelectItem>
+                    <SelectItem value="5">5%</SelectItem>
+                    <SelectItem value="12">12%</SelectItem>
+                    <SelectItem value="18">18%</SelectItem>
+                    <SelectItem value="28">28%</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
 
             {totalAmount > 0 && (
-              <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2.5 text-sm text-blue-800">
-                Total contract value: <strong>{formatCurrency(totalAmount)}</strong>
-                {" "}({cycleCountNum} × {formatCurrency(unitCostNum)})
+              <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2.5 text-sm text-blue-800 space-y-1">
+                <div className="flex justify-between">
+                  <span>Subtotal ({cycleCountNum} × {formatCurrency(unitCostNum)})</span>
+                  <strong>{formatCurrency(totalAmount)}</strong>
+                </div>
+                {gstRateNum > 0 && (
+                  <div className="flex justify-between text-blue-700">
+                    <span>GST @{gstRateNum}%</span>
+                    <span>{formatCurrency(gstAmount)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between border-t border-blue-200 pt-1 font-semibold">
+                  <span>Total{gstRateNum > 0 ? " (incl. GST)" : ""}</span>
+                  <span>{formatCurrency(totalWithGst)}</span>
+                </div>
               </div>
             )}
 
