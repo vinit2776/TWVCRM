@@ -557,32 +557,72 @@ export default function ProposalDetailPage({
             </Card>
           )}
 
-          {/* Payment Link (awaiting payment) */}
-          {proposal.razorpay_payment_link_url && proposal.payment_status !== "paid" && (
-            <Card className="border-amber-200 bg-amber-50">
+          {/* Monthly Charge Payment */}
+          {proposal.status !== "draft" && proposal.status !== "rejected" && (
+            <Card className={proposal.payment_status === "paid" ? "border-green-200 bg-green-50" : "border-blue-200 bg-blue-50"}>
               <CardHeader className="pb-2">
-                <CardTitle className="text-base text-amber-700">Payment Link</CardTitle>
+                <CardTitle className={`text-base ${proposal.payment_status === "paid" ? "text-green-700" : "text-blue-700"}`}>
+                  Monthly Charge — ₹{Number(proposal.total_amount).toLocaleString("en-IN")}
+                </CardTitle>
               </CardHeader>
               <CardContent className="space-y-2 text-sm">
-                <p className="text-amber-800">Payment link has been sent to the customer.</p>
-                <div className="flex items-center gap-2">
-                  <input
-                    readOnly
-                    value={proposal.razorpay_payment_link_url}
-                    className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-amber-800"
-                  />
+                {proposal.payment_status === "paid" && proposal.payment_amount && (
+                  <>
+                    <div className="flex justify-between">
+                      <span className="text-green-700">Paid</span>
+                      <span className="font-semibold text-green-800">₹{Number(proposal.payment_amount).toLocaleString("en-IN")}</span>
+                    </div>
+                    {proposal.payment_reference && (
+                      <div className="flex justify-between">
+                        <span className="text-green-700">Reference</span>
+                        <span className="font-mono text-xs text-green-800">{proposal.payment_reference}</span>
+                      </div>
+                    )}
+                  </>
+                )}
+
+                {!proposal.razorpay_payment_link_url && proposal.payment_status !== "paid" && (
                   <Button
                     size="sm"
-                    variant="outline"
-                    className="text-xs h-7"
-                    onClick={() => {
-                      navigator.clipboard.writeText(proposal.razorpay_payment_link_url!);
-                      toast.success("Payment link copied");
+                    className="w-full"
+                    onClick={async () => {
+                      const res = await fetch(`/api/proposals/${proposal.id}/monthly-link`, { method: "POST" });
+                      const json = await res.json();
+                      if (res.ok) {
+                        toast.success(`Monthly charge link sent: ₹${Number(proposal.total_amount).toLocaleString("en-IN")}`);
+                        fetchProposal();
+                      } else {
+                        toast.error(json.error || "Failed to create link");
+                      }
                     }}
                   >
-                    Copy
+                    Send Monthly Charge Link
                   </Button>
-                </div>
+                )}
+
+                {proposal.razorpay_payment_link_url && proposal.payment_status !== "paid" && (
+                  <>
+                    <p className="text-blue-800">Payment link sent to customer.</p>
+                    <div className="flex items-center gap-2">
+                      <input
+                        readOnly
+                        value={proposal.razorpay_payment_link_url}
+                        className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-blue-800"
+                      />
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-xs h-7"
+                        onClick={() => {
+                          navigator.clipboard.writeText(proposal.razorpay_payment_link_url!);
+                          toast.success("Payment link copied");
+                        }}
+                      >
+                        Copy
+                      </Button>
+                    </div>
+                  </>
+                )}
               </CardContent>
             </Card>
           )}

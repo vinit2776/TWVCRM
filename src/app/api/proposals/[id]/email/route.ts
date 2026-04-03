@@ -83,11 +83,14 @@ export async function POST(
   const customerEmail = lead?.email || recipients[0];
   const customerPhone = lead?.phone || lead?.mobile;
 
-  // ── Create Razorpay payment link (if enabled and not already created) ──
-  let razorpayLinkUrl: string | null = null;
-  let razorpayLinkId: string | null = null;
+  // ── Create Razorpay deposit payment link (if deposit required and not already created) ──
+  // The deposit link is the primary payment sent with the proposal.
+  // Monthly charge link is generated separately (manual trigger).
+  let depositLinkUrl: string | null = proposal.deposit_razorpay_link_url || null;
+  const depositAmount = Number(proposal.security_deposit_amount || 0);
+  const hasDeposit = depositAmount > 0 && proposal.deposit_payment_status === "pending";
 
-  if (!proposal.razorpay_payment_link_id) {
+  if (hasDeposit && !proposal.deposit_razorpay_link_id) {
     try {
       const adminSupabase = await createAdminClient();
       const { data: rzpSettings } = await adminSupabase
@@ -102,7 +105,6 @@ export async function POST(
         const auth = Buffer.from(`${rzpMap.razorpay_key_id}:${rzpMap.razorpay_key_secret}`).toString("base64");
         const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
 
-        // Expire: use valid_until date or 30 days from now
         const expireDate = proposal.valid_until
           ? new Date(proposal.valid_until + "T23:59:59Z")
           : new Date(Date.now() + 30 * 24 * 60 * 60 * 1000);
@@ -110,14 +112,14 @@ export async function POST(
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const payload: Record<string, any> = {
-          amount: Math.round(Number(proposal.total_amount) * 100), // paise
+          amount: Math.round(depositAmount * 100), // paise — deposit amount, not total
           currency: "INR",
-          description: `Proposal ${proposal.proposal_number} — ${proposal.title} — The WorkVilla`,
-          reference_id: proposal.proposal_number,
+          description: `Security Deposit — ${proposal.proposal_number} — The WorkVilla`,
+          reference_id: `${proposal.proposal_number}-DEP`,
           expire_by: expireBy,
           notify: { sms: !!customerPhone, email: !!customerEmail },
           reminder_enable: true,
-          notes: { proposal_id: id, proposal_number: proposal.proposal_number, lead_id: proposal.lead_id },
+          notes: { proposal_id: id, proposal_number: proposal.proposal_number, type: "security_deposit" },
           callback_url: `${appUrl}/proposals`,
           callback_method: "get",
         };
@@ -137,36 +139,33 @@ export async function POST(
 
         if (rzpRes.ok) {
           const linkData = await rzpRes.json();
-          razorpayLinkId = linkData.id;
-          razorpayLinkUrl = linkData.short_url;
+          depositLinkUrl = linkData.short_url;
 
-          // Store on proposal
+          // Store deposit link on proposal
           await supabase
             .from("proposals")
             .update({
-              razorpay_payment_link_id: razorpayLinkId,
-              razorpay_payment_link_url: razorpayLinkUrl,
+              deposit_razorpay_link_id: linkData.id,
+              deposit_razorpay_link_url: linkData.short_url,
             })
             .eq("id", id);
         } else {
           const rzpErr = await rzpRes.json().catch(() => null);
-          console.error("[proposal email] Razorpay link creation failed:", rzpErr);
+          console.error("[proposal email] Razorpay deposit link creation failed:", rzpErr);
         }
       }
     } catch (err) {
       console.error("[proposal email] Razorpay error:", err);
     }
-  } else {
-    razorpayLinkUrl = proposal.razorpay_payment_link_url;
-    razorpayLinkId = proposal.razorpay_payment_link_id;
   }
 
   try {
-    // Build payment options HTML
-    const payNowButton = razorpayLinkUrl
+    // Build deposit payment CTA (not monthly charge — that's manual later)
+    const depositMonths = Number(proposal.security_deposit_months || 0);
+    const payNowButton = depositLinkUrl && hasDeposit
       ? `<div style="text-align:center;margin:20px 0;">
-          <a href="${razorpayLinkUrl}" style="background:#015E65;color:white;padding:14px 40px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:15px;">Pay Now — ₹${Number(proposal.total_amount).toLocaleString("en-IN")}</a>
-          <p style="color:#666;font-size:11px;margin:8px 0 0;">Secure payment via Razorpay</p>
+          <a href="${depositLinkUrl}" style="background:#015E65;color:white;padding:14px 40px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:15px;">Pay Security Deposit — ₹${depositAmount.toLocaleString("en-IN")}</a>
+          <p style="color:#666;font-size:11px;margin:8px 0 0;">Refundable deposit (${depositMonths} month${depositMonths > 1 ? "s" : ""}) • Secure payment via Razorpay</p>
         </div>`
       : "";
 
@@ -187,9 +186,11 @@ export async function POST(
             <p style="color: #333; font-size: 14px;">We have curated this proposal based on your workspace requirements. The details are summarized below:</p>
             <table style="border-collapse: collapse; margin: 20px 0; width: 100%; background: #f0faf5; border-radius: 6px;">
               <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Proposal:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">${proposal.proposal_number}</td></tr>
-              <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Amount:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">₹${Number(proposal.total_amount).toLocaleString("en-IN")}</td></tr>
+              <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Monthly Charge:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">₹${Number(proposal.total_amount).toLocaleString("en-IN")}/month</td></tr>
+              ${hasDeposit ? `<tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Security Deposit:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">₹${depositAmount.toLocaleString("en-IN")} (${depositMonths} month${depositMonths > 1 ? "s" : ""}, refundable)</td></tr>` : ""}
               ${proposal.valid_until ? `<tr><td style="padding: 10px 16px; color: #666;">Valid Until:</td><td style="padding: 10px 16px; color: #333;">${new Date(proposal.valid_until).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}</td></tr>` : ""}
             </table>
+            ${hasDeposit ? `<p style="color:#333;font-size:14px;">To confirm your booking, please pay the refundable security deposit. The monthly charge will be collected separately closer to the start date.</p>` : ""}
 
             ${payNowButton}
 
@@ -201,7 +202,7 @@ export async function POST(
               <tr><td style="padding: 8px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Bank</td><td style="padding: 8px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">${COMPANY_BANK_DETAILS.bank}</td></tr>
               <tr><td style="padding: 8px 16px; color: #666;">Branch</td><td style="padding: 8px 16px; color: #333;">${COMPANY_BANK_DETAILS.branch}</td></tr>
             </table>
-            ${razorpayLinkUrl ? `<p style="color:#666;font-size:12px;">Or pay online: <a href="${razorpayLinkUrl}" style="color:#015E65;font-weight:bold;">${razorpayLinkUrl}</a></p>` : ""}
+            ${depositLinkUrl ? `<p style="color:#666;font-size:12px;">Pay deposit online: <a href="${depositLinkUrl}" style="color:#015E65;font-weight:bold;">${depositLinkUrl}</a></p>` : ""}
             <p style="color: #333; font-size: 14px;">Please review the attached proposal at your convenience. We look forward to welcoming you to The WorkVilla.</p>
             <p style="color: #333; font-size: 14px;">Warm regards,<br/><strong>${senderName}</strong><br/>The WorkVilla</p>
             <p style="color: #666; font-size: 12px; margin-top: 16px;">For any queries, write to us at <a href="mailto:contact@theworkvilla.com" style="color: #015E65;">contact@theworkvilla.com</a> or call <strong>+91 97910 97900</strong>.</p>
@@ -244,14 +245,14 @@ export async function POST(
       logEmailActivity(supabase, {
         leadId: proposal.lead_id,
         subject: `Proposal ${proposal.proposal_number} sent`,
-        description: `Proposal "${proposal.title}" (${proposal.proposal_number}) emailed to ${recipients.join(", ")}${razorpayLinkUrl ? ". Payment link: " + razorpayLinkUrl : ""}`,
+        description: `Proposal "${proposal.title}" (${proposal.proposal_number}) emailed to ${recipients.join(", ")}${depositLinkUrl ? ". Deposit link: " + depositLinkUrl : ""}`,
         createdBy: sender.id,
       });
     }
 
     return NextResponse.json({
       message: "Email sent successfully",
-      razorpay_payment_link_url: razorpayLinkUrl,
+      deposit_link_url: depositLinkUrl,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";

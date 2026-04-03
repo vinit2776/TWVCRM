@@ -184,6 +184,7 @@ export async function POST(request: NextRequest) {
 
     if (depositProposal && depositProposal.deposit_payment_status !== "paid") {
       const now = new Date().toISOString();
+      // Mark deposit as paid AND auto-accept the proposal
       await supabase
         .from("proposals")
         .update({
@@ -191,6 +192,8 @@ export async function POST(request: NextRequest) {
           deposit_payment_received_at: now,
           deposit_payment_amount: amountPaid,
           deposit_payment_reference: razorpayPaymentId || paymentLinkId,
+          status: "accepted",
+          accepted_at: now,
         })
         .eq("id", depositProposal.id);
 
