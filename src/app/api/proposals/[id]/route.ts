@@ -47,6 +47,7 @@ export async function PATCH(
   if (body.razorpay_payment_link_url !== undefined) allowedFields.razorpay_payment_link_url = body.razorpay_payment_link_url;
   if (body.deposit_razorpay_link_id !== undefined) allowedFields.deposit_razorpay_link_id = body.deposit_razorpay_link_id;
   if (body.deposit_razorpay_link_url !== undefined) allowedFields.deposit_razorpay_link_url = body.deposit_razorpay_link_url;
+  if (body.occupation_start_date !== undefined) allowedFields.occupation_start_date = body.occupation_start_date;
 
   if (Object.keys(allowedFields).length === 0) {
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });

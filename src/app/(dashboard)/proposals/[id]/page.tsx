@@ -557,113 +557,103 @@ export default function ProposalDetailPage({
             </Card>
           )}
 
-          {/* Monthly Charge Payment */}
-          {proposal.status !== "draft" && proposal.status !== "rejected" && (
-            <Card className={proposal.payment_status === "paid" ? "border-green-200 bg-green-50" : "border-blue-200 bg-blue-50"}>
-              <CardHeader className="pb-2">
-                <CardTitle className={`text-base ${proposal.payment_status === "paid" ? "text-green-700" : "text-blue-700"}`}>
-                  Monthly Charge — ₹{Number(proposal.total_amount).toLocaleString("en-IN")}
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-2 text-sm">
-                {proposal.payment_status === "paid" && proposal.payment_amount && (
-                  <>
-                    <div className="flex justify-between">
-                      <span className="text-green-700">Paid</span>
-                      <span className="font-semibold text-green-800">₹{Number(proposal.payment_amount).toLocaleString("en-IN")}</span>
-                    </div>
-                    {proposal.payment_reference && (
+          {/* Monthly Charge — GST Invoice */}
+          {proposal.status !== "draft" && proposal.status !== "rejected" && (() => {
+            const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
+            const depositPaid = proposal.deposit_payment_status === "paid";
+            const canSendInvoice = !depositRequired || depositPaid;
+            const invoiceSent = !!proposal.occupation_start_date;
+
+            return (
+              <Card className={proposal.payment_status === "paid" ? "border-green-200 bg-green-50" : "border-blue-200 bg-blue-50"}>
+                <CardHeader className="pb-2">
+                  <CardTitle className={`text-base ${proposal.payment_status === "paid" ? "text-green-700" : "text-blue-700"}`}>
+                    Monthly Charge — ₹{Number(proposal.total_amount).toLocaleString("en-IN")}/month
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                  {/* Paid state */}
+                  {proposal.payment_status === "paid" && proposal.payment_amount && (
+                    <>
                       <div className="flex justify-between">
-                        <span className="text-green-700">Reference</span>
-                        <span className="font-mono text-xs text-green-800">{proposal.payment_reference}</span>
+                        <span className="text-green-700">Paid</span>
+                        <span className="font-semibold text-green-800">₹{Number(proposal.payment_amount).toLocaleString("en-IN")}</span>
                       </div>
-                    )}
-                  </>
-                )}
+                      {proposal.payment_reference && (
+                        <div className="flex justify-between">
+                          <span className="text-green-700">Reference</span>
+                          <span className="font-mono text-xs text-green-800">{proposal.payment_reference}</span>
+                        </div>
+                      )}
+                    </>
+                  )}
 
-                {!proposal.razorpay_payment_link_url && proposal.payment_status !== "paid" && (
-                  <Button
-                    size="sm"
-                    className="w-full"
-                    onClick={async () => {
-                      const res = await fetch(`/api/proposals/${proposal.id}/monthly-link`, { method: "POST" });
-                      const json = await res.json();
-                      if (res.ok) {
-                        toast.success(`Monthly charge link sent: ₹${Number(proposal.total_amount).toLocaleString("en-IN")}`);
-                        fetchProposal();
-                      } else {
-                        toast.error(json.error || "Failed to create link");
-                      }
-                    }}
-                  >
-                    Send Monthly Charge Link
-                  </Button>
-                )}
-
-                {proposal.razorpay_payment_link_url && proposal.payment_status !== "paid" && (() => {
-                  // Calculate days remaining (links expire 30 days after proposal sent)
-                  const linkCreated = proposal.sent_at ? new Date(proposal.sent_at) : new Date();
-                  const expiresAt = new Date(linkCreated.getTime() + 30 * 24 * 60 * 60 * 1000);
-                  const now = new Date();
-                  const daysLeft = Math.ceil((expiresAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
-                  const isExpired = daysLeft <= 0;
-
-                  return (
+                  {/* Invoice already sent */}
+                  {invoiceSent && proposal.payment_status !== "paid" && (
                     <>
                       <div className="flex justify-between text-xs">
-                        <span className="text-blue-700">Created: {linkCreated.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
-                        {isExpired ? (
-                          <span className="text-red-600 font-semibold">Expired</span>
-                        ) : (
-                          <span className={daysLeft <= 7 ? "text-amber-600 font-semibold" : "text-blue-600"}>
-                            {daysLeft} day{daysLeft !== 1 ? "s" : ""} remaining
-                          </span>
-                        )}
+                        <span className="text-blue-700">Occupation from: {new Date(proposal.occupation_start_date + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
+                        <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-700">Invoice Sent</Badge>
                       </div>
-                      {!isExpired && (
-                        <div className="flex items-center gap-2">
-                          <input
-                            readOnly
-                            value={proposal.razorpay_payment_link_url}
-                            className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-blue-800"
-                          />
+                      {proposal.razorpay_payment_link_url && (
+                        <div className="flex items-center gap-2 mt-1">
+                          <input readOnly value={proposal.razorpay_payment_link_url} className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-blue-800" />
                           <Button size="sm" variant="outline" className="text-xs h-7"
                             onClick={() => { navigator.clipboard.writeText(proposal.razorpay_payment_link_url!); toast.success("Payment link copied"); }}>
                             Copy
                           </Button>
                         </div>
                       )}
-                      {isExpired && (
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="w-full border-red-300 text-red-700 hover:bg-red-50"
-                          onClick={async () => {
-                            // Clear old link so a new one can be created
-                            await fetch(`/api/proposals/${proposal.id}`, {
-                              method: "PATCH",
-                              headers: { "Content-Type": "application/json" },
-                              body: JSON.stringify({ razorpay_payment_link_id: null, razorpay_payment_link_url: null }),
-                            });
-                            // Create new link
-                            const res = await fetch(`/api/proposals/${proposal.id}/monthly-link`, { method: "POST" });
-                            if (res.ok) {
-                              toast.success("New payment link generated and sent");
-                              fetchProposal();
-                            } else {
-                              toast.error("Failed to regenerate link");
-                            }
-                          }}
-                        >
-                          Regenerate Expired Link
-                        </Button>
-                      )}
                     </>
-                  );
-                })()}
-              </CardContent>
-            </Card>
-          )}
+                  )}
+
+                  {/* Send GST Invoice button */}
+                  {!invoiceSent && proposal.payment_status !== "paid" && (
+                    <>
+                      {!canSendInvoice && (
+                        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                          Security deposit must be paid before sending the GST invoice.
+                        </p>
+                      )}
+                      <Button
+                        size="sm"
+                        className="w-full"
+                        disabled={!canSendInvoice}
+                        onClick={() => {
+                          const dateStr = window.prompt("Enter the occupation start date (YYYY-MM-DD):", new Date().toISOString().slice(0, 10));
+                          if (!dateStr) return;
+                          if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) { toast.error("Invalid date format. Use YYYY-MM-DD"); return; }
+
+                          fetch(`/api/proposals/${proposal.id}/send-invoice`, {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ occupation_start_date: dateStr }),
+                          })
+                            .then(r => r.json().then(j => ({ ok: r.ok, json: j })))
+                            .then(({ ok, json }) => {
+                              if (ok) {
+                                const factor = json.prorationFactor;
+                                toast.success(
+                                  factor < 1
+                                    ? `GST invoice sent (prorated: ${json.daysRemaining}/${json.daysInMonth} days = ₹${json.totalAmount.toLocaleString("en-IN")})`
+                                    : `GST invoice sent: ₹${json.totalAmount.toLocaleString("en-IN")}`,
+                                  { duration: 8000 }
+                                );
+                                fetchProposal();
+                              } else {
+                                toast.error(json.error || "Failed to send invoice");
+                              }
+                            });
+                        }}
+                      >
+                        Send GST Invoice
+                      </Button>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })()}
 
           {/* Security Deposit */}
           {Number(proposal.security_deposit_months) > 0 && (

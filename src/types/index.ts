@@ -276,6 +276,7 @@ export interface Proposal {
   created_by?: string;
   created_at: string;
   updated_at: string;
+  occupation_start_date?: string;
   // Payment tracking (Razorpay)
   payment_status?: string; // "pending" | "paid"
   razorpay_payment_link_id?: string;
