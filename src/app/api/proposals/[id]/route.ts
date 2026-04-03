@@ -42,6 +42,11 @@ export async function PATCH(
   if (body.accepted_at) allowedFields.accepted_at = body.accepted_at;
   if (body.rejected_at) allowedFields.rejected_at = body.rejected_at;
   if (body.rejection_reason !== undefined) allowedFields.rejection_reason = body.rejection_reason || null;
+  // Allow clearing razorpay links for regeneration
+  if (body.razorpay_payment_link_id !== undefined) allowedFields.razorpay_payment_link_id = body.razorpay_payment_link_id;
+  if (body.razorpay_payment_link_url !== undefined) allowedFields.razorpay_payment_link_url = body.razorpay_payment_link_url;
+  if (body.deposit_razorpay_link_id !== undefined) allowedFields.deposit_razorpay_link_id = body.deposit_razorpay_link_id;
+  if (body.deposit_razorpay_link_url !== undefined) allowedFields.deposit_razorpay_link_url = body.deposit_razorpay_link_url;
 
   if (Object.keys(allowedFields).length === 0) {
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });

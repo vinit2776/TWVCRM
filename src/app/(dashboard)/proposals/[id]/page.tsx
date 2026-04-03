@@ -600,29 +600,67 @@ export default function ProposalDetailPage({
                   </Button>
                 )}
 
-                {proposal.razorpay_payment_link_url && proposal.payment_status !== "paid" && (
-                  <>
-                    <p className="text-blue-800">Payment link sent to customer.</p>
-                    <div className="flex items-center gap-2">
-                      <input
-                        readOnly
-                        value={proposal.razorpay_payment_link_url}
-                        className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-blue-800"
-                      />
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="text-xs h-7"
-                        onClick={() => {
-                          navigator.clipboard.writeText(proposal.razorpay_payment_link_url!);
-                          toast.success("Payment link copied");
-                        }}
-                      >
-                        Copy
-                      </Button>
-                    </div>
-                  </>
-                )}
+                {proposal.razorpay_payment_link_url && proposal.payment_status !== "paid" && (() => {
+                  // Calculate days remaining (links expire 30 days after proposal sent)
+                  const linkCreated = proposal.sent_at ? new Date(proposal.sent_at) : new Date();
+                  const expiresAt = new Date(linkCreated.getTime() + 30 * 24 * 60 * 60 * 1000);
+                  const now = new Date();
+                  const daysLeft = Math.ceil((expiresAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+                  const isExpired = daysLeft <= 0;
+
+                  return (
+                    <>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-blue-700">Created: {linkCreated.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
+                        {isExpired ? (
+                          <span className="text-red-600 font-semibold">Expired</span>
+                        ) : (
+                          <span className={daysLeft <= 7 ? "text-amber-600 font-semibold" : "text-blue-600"}>
+                            {daysLeft} day{daysLeft !== 1 ? "s" : ""} remaining
+                          </span>
+                        )}
+                      </div>
+                      {!isExpired && (
+                        <div className="flex items-center gap-2">
+                          <input
+                            readOnly
+                            value={proposal.razorpay_payment_link_url}
+                            className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-blue-800"
+                          />
+                          <Button size="sm" variant="outline" className="text-xs h-7"
+                            onClick={() => { navigator.clipboard.writeText(proposal.razorpay_payment_link_url!); toast.success("Payment link copied"); }}>
+                            Copy
+                          </Button>
+                        </div>
+                      )}
+                      {isExpired && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="w-full border-red-300 text-red-700 hover:bg-red-50"
+                          onClick={async () => {
+                            // Clear old link so a new one can be created
+                            await fetch(`/api/proposals/${proposal.id}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ razorpay_payment_link_id: null, razorpay_payment_link_url: null }),
+                            });
+                            // Create new link
+                            const res = await fetch(`/api/proposals/${proposal.id}/monthly-link`, { method: "POST" });
+                            if (res.ok) {
+                              toast.success("New payment link generated and sent");
+                              fetchProposal();
+                            } else {
+                              toast.error("Failed to regenerate link");
+                            }
+                          }}
+                        >
+                          Regenerate Expired Link
+                        </Button>
+                      )}
+                    </>
+                  );
+                })()}
               </CardContent>
             </Card>
           )}
@@ -677,26 +715,64 @@ export default function ProposalDetailPage({
                   </Button>
                 )}
 
-                {proposal.deposit_razorpay_link_url && proposal.deposit_payment_status !== "paid" && (
-                  <div className="flex items-center gap-2 mt-2">
-                    <input
-                      readOnly
-                      value={proposal.deposit_razorpay_link_url}
-                      className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-amber-800"
-                    />
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-xs h-7"
-                      onClick={() => {
-                        navigator.clipboard.writeText(proposal.deposit_razorpay_link_url!);
-                        toast.success("Deposit link copied");
-                      }}
-                    >
-                      Copy
-                    </Button>
-                  </div>
-                )}
+                {proposal.deposit_razorpay_link_url && proposal.deposit_payment_status !== "paid" && (() => {
+                  const linkCreated = proposal.sent_at ? new Date(proposal.sent_at) : new Date();
+                  const expiresAt = new Date(linkCreated.getTime() + 30 * 24 * 60 * 60 * 1000);
+                  const now = new Date();
+                  const daysLeft = Math.ceil((expiresAt.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+                  const isExpired = daysLeft <= 0;
+
+                  return (
+                    <div className="mt-2 space-y-2">
+                      <div className="flex justify-between text-xs">
+                        <span className="text-amber-700">Created: {linkCreated.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
+                        {isExpired ? (
+                          <span className="text-red-600 font-semibold">Expired</span>
+                        ) : (
+                          <span className={daysLeft <= 7 ? "text-amber-600 font-semibold" : "text-amber-600"}>
+                            {daysLeft} day{daysLeft !== 1 ? "s" : ""} remaining
+                          </span>
+                        )}
+                      </div>
+                      {!isExpired && (
+                        <div className="flex items-center gap-2">
+                          <input
+                            readOnly
+                            value={proposal.deposit_razorpay_link_url}
+                            className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-amber-800"
+                          />
+                          <Button size="sm" variant="outline" className="text-xs h-7"
+                            onClick={() => { navigator.clipboard.writeText(proposal.deposit_razorpay_link_url!); toast.success("Deposit link copied"); }}>
+                            Copy
+                          </Button>
+                        </div>
+                      )}
+                      {isExpired && (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="w-full border-red-300 text-red-700 hover:bg-red-50"
+                          onClick={async () => {
+                            await fetch(`/api/proposals/${proposal.id}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ deposit_razorpay_link_id: null, deposit_razorpay_link_url: null }),
+                            });
+                            const res = await fetch(`/api/proposals/${proposal.id}/deposit-link`, { method: "POST" });
+                            if (res.ok) {
+                              toast.success("New deposit link generated and sent");
+                              fetchProposal();
+                            } else {
+                              toast.error("Failed to regenerate deposit link");
+                            }
+                          }}
+                        >
+                          Regenerate Expired Link
+                        </Button>
+                      )}
+                    </div>
+                  );
+                })()}
               </CardContent>
             </Card>
           )}

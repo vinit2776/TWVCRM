@@ -33,8 +33,9 @@ export async function POST(
     return NextResponse.json({ error: proposal.deposit_payment_status === "paid" ? "Deposit already paid" : "No deposit required for this proposal" }, { status: 400 });
   }
 
-  if (proposal.deposit_razorpay_link_url) {
-    return NextResponse.json({ error: "Deposit link already created", deposit_link_url: proposal.deposit_razorpay_link_url }, { status: 200 });
+  // If link already exists, return it (unless it was cleared for regeneration)
+  if (proposal.deposit_razorpay_link_url && proposal.deposit_razorpay_link_id) {
+    return NextResponse.json({ deposit_link_url: proposal.deposit_razorpay_link_url, message: "Link already exists" });
   }
 
   const depositAmount = Number(proposal.security_deposit_amount || 0);
