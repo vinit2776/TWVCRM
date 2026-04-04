@@ -3,8 +3,8 @@
   "configurations": [
     {
       "name": "twv-crm",
-      "runtimeExecutable": "npm",
-      "runtimeArgs": ["run", "dev"],
+      "runtimeExecutable": "/bin/sh",
+      "runtimeArgs": ["-c", "PATH=/opt/homebrew/bin:$PATH npm run dev"],
       "port": 3000
     }
   ]

@@ -155,8 +155,8 @@ export async function PATCH(
           }
 
           // Email IT and Tech Support
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
           const voucherRows = issuances.map((i) => {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
             const v = i.voucher as any;
             return `<tr>
               <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;">${i.seat_number}</td>
