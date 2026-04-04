@@ -36,6 +36,7 @@ interface Location {
 
 interface InventoryItem {
   id: string;
+  item_id: string;
   item_name: string;
   department: string;
   unit: string;
@@ -65,8 +66,8 @@ function ConsumptionPageContent() {
     fetch("/api/locations")
       .then((r) => r.json())
       .then((data) => {
-        const locs = data.locations || data || [];
-        setLocations(locs);
+        const locs = data.data || data.locations || [];
+        setLocations(Array.isArray(locs) ? locs : []);
         if (locs.length > 0) setSelectedLocation(locs[0].id);
       })
       .catch(() => toast.error("Failed to load locations"));
@@ -78,7 +79,19 @@ function ConsumptionPageContent() {
     try {
       const res = await fetch(`/api/procurement/inventory?location_id=${selectedLocation}`);
       const data = await res.json();
-      setItems(data.items || data || []);
+      const rows = data.data || [];
+      setItems(
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        rows.map((row: any) => ({
+          id: row.id,
+          item_id: row.item_id,
+          item_name: row.procurement_items?.name ?? "Unknown",
+          department: row.procurement_items?.department ?? "",
+          unit: row.procurement_items?.unit ?? "",
+          quantity_on_hand: Number(row.quantity_on_hand) || 0,
+          reorder_level: Number(row.reorder_level) || 0,
+        }))
+      );
       setEntries({});
     } catch {
       toast.error("Failed to load inventory");
@@ -124,7 +137,7 @@ function ConsumptionPageContent() {
           location_id: selectedLocation,
           notes: globalNotes || undefined,
           items: itemsWithQty.map((e) => ({
-            item_id: e.itemId,
+            item_id: e.item!.item_id,
             item_name: e.item!.item_name,
             unit: e.item!.unit,
             quantity_consumed: e.quantity,
