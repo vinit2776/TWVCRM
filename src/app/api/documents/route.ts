@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -64,14 +64,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "File too large (max 10MB)" }, { status: 400 });
   }
 
-  const { data: dbUser } = await supabase
+  const adminSupabase = await createAdminClient();
+
+  const { data: dbUser } = await adminSupabase
     .from("users").select("id").eq("auth_id", user.id).single();
 
-  // Upload to Supabase Storage
+  // Upload to Supabase Storage (use admin client to bypass storage RLS)
   const fileName = `${Date.now()}-${file.name}`;
   const filePath = customPath ? `${customPath}/${fileName}` : `documents/${fileName}`;
 
-  const { error: uploadError } = await supabase.storage
+  const { error: uploadError } = await adminSupabase.storage
     .from("crm-documents")
     .upload(filePath, file);
 
@@ -80,7 +82,7 @@ export async function POST(request: NextRequest) {
   }
 
   // Create document record
-  const { data: doc, error: docError } = await supabase
+  const { data: doc, error: docError } = await adminSupabase
     .from("documents")
     .insert({
       title: title || file.name,
@@ -103,7 +105,7 @@ export async function POST(request: NextRequest) {
 
   // Link to lead if provided
   if (leadId && doc) {
-    await supabase.from("lead_documents").insert({
+    await adminSupabase.from("lead_documents").insert({
       lead_id: leadId,
       document_id: doc.id,
     });
