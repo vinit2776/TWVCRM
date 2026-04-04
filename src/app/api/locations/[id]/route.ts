@@ -37,8 +37,8 @@ export async function PUT(
     .eq("auth_id", user.id)
     .single();
 
-  if (!dbUser || dbUser.role !== "admin") {
-    return NextResponse.json({ error: "Admin access required" }, { status: 403 });
+  if (!dbUser || !["admin", "manager"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Admin or Manager access required" }, { status: 403 });
   }
 
   const body = await request.json();

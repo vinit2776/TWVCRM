@@ -223,26 +223,16 @@ export default function ContractDetailPage({
   };
 
   const handleViewSignedDoc = async () => {
-    if (!contract?.signed_document?.file_path) return;
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-    if (supabaseUrl && supabaseKey) {
-      const res = await fetch(
-        `${supabaseUrl}/storage/v1/object/sign/crm-documents/${contract.signed_document.file_path}`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${supabaseKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ expiresIn: 3600 }),
-        }
-      );
+    if (!contract?.signed_document?.id) return;
+    try {
+      const res = await fetch(`/api/documents/${contract.signed_document.id}/view`);
       if (res.ok) {
-        const { signedURL } = await res.json();
-        window.open(`${supabaseUrl}/storage/v1${signedURL}`, "_blank");
+        const { signedUrl } = await res.json();
+        window.open(signedUrl, "_blank");
         return;
       }
+    } catch {
+      // fall through to error
     }
     toast.error("Failed to get download URL");
   };
