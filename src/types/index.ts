@@ -618,7 +618,9 @@ export type AuditEntityType =
   | "pc_entry"
   | "support_ticket"
   | "prepaid_package"
-  | "location";
+  | "location"
+  | "stock_transfer"
+  | "consumption_log";
 
 export interface AuditLog {
   id: string;
@@ -1807,4 +1809,113 @@ export interface PettyCashApproval {
   note?: string;
   decided_at: string;
   approver?: Pick<User, "id" | "full_name">;
+}
+
+// ─── Inventory & Stock Transfer Types ────────────────────────────────────────
+
+export type TransferStatus = "draft" | "pending_approval" | "approved" | "dispatched" | "received" | "completed" | "issue_raised";
+export type TransferIssueType = "shortfall" | "damage" | "wrong_item";
+export type TransferIssueStatus = "open" | "investigating" | "resolved";
+export type ConsumptionStatus = "active" | "voided";
+export type CorrectionType = "void" | "adjust" | "relog";
+
+export interface LocationStock {
+  id: string;
+  location_id: string;
+  item_id: string;
+  quantity_on_hand: number;
+  reorder_level: number;
+  last_updated: string;
+  locations?: { id: string; name: string; code: string } | null;
+  procurement_items?: { id: string; name: string; department: string; unit: string; item_type: string } | null;
+}
+
+export interface StockTransferItem {
+  id: string;
+  transfer_id: string;
+  item_id?: string;
+  item_name: string;
+  unit: string;
+  quantity_sent: number;
+  quantity_received: number;
+  notes?: string;
+  procurement_items?: { id: string; name: string } | null;
+}
+
+export interface StockTransferIssue {
+  id: string;
+  transfer_id: string;
+  transfer_item_id: string;
+  issue_type: TransferIssueType;
+  reported_quantity: number;
+  expected_quantity: number;
+  description?: string;
+  status: TransferIssueStatus;
+  resolved_by?: string;
+  resolved_at?: string;
+  resolution_notes?: string;
+  created_at: string;
+  resolver?: { id: string; full_name?: string } | null;
+}
+
+export interface StockTransfer {
+  id: string;
+  transfer_number: string;
+  from_location_id: string;
+  to_location_id: string;
+  status: TransferStatus;
+  initiated_by: string;
+  approved_by?: string;
+  approved_at?: string;
+  dispatched_at?: string;
+  received_by?: string;
+  received_at?: string;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+  from_location?: { id: string; name: string; code: string } | null;
+  to_location?: { id: string; name: string; code: string } | null;
+  initiator?: { id: string; full_name?: string } | null;
+  approver?: { id: string; full_name?: string } | null;
+  receiver?: { id: string; full_name?: string } | null;
+  stock_transfer_items?: StockTransferItem[];
+  stock_transfer_issues?: StockTransferIssue[];
+}
+
+export interface ConsumptionLogItem {
+  id: string;
+  consumption_log_id: string;
+  item_id?: string;
+  item_name: string;
+  unit: string;
+  quantity_consumed: number;
+  notes?: string;
+}
+
+export interface ConsumptionCorrection {
+  id: string;
+  consumption_log_item_id?: string;
+  consumption_log_id: string;
+  correction_type: CorrectionType;
+  original_quantity: number;
+  new_quantity: number;
+  reason: string;
+  corrected_by: string;
+  new_consumption_log_id?: string;
+  created_at: string;
+  corrector?: { id: string; full_name?: string } | null;
+}
+
+export interface ConsumptionLog {
+  id: string;
+  location_id: string;
+  logged_by: string;
+  logged_at: string;
+  status: ConsumptionStatus;
+  notes?: string;
+  created_at: string;
+  locations?: { id: string; name: string } | null;
+  logger?: { id: string; full_name?: string } | null;
+  consumption_log_items?: ConsumptionLogItem[];
+  consumption_corrections?: ConsumptionCorrection[];
 }

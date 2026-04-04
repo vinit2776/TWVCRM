@@ -1455,3 +1455,69 @@ export const PC_ISSUANCE_METHOD_LABELS: Record<string, string> = {
   bank_transfer: "Bank Transfer",
   cheque: "Cheque",
 };
+
+// ─── Inventory & Stock Transfer Constants ────────────────────────────────────
+
+export const TRANSFER_STATUSES = ["draft", "pending_approval", "approved", "dispatched", "received", "completed", "issue_raised"] as const;
+
+export const TRANSFER_STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  pending_approval: "Pending Approval",
+  approved: "Approved",
+  dispatched: "Dispatched",
+  received: "Received",
+  completed: "Completed",
+  issue_raised: "Issue Raised",
+};
+
+export const TRANSFER_STATUS_COLORS: Record<string, string> = {
+  draft: "bg-gray-100 text-gray-600",
+  pending_approval: "bg-yellow-100 text-yellow-800",
+  approved: "bg-blue-100 text-blue-800",
+  dispatched: "bg-purple-100 text-purple-800",
+  received: "bg-green-100 text-green-800",
+  completed: "bg-emerald-100 text-emerald-800",
+  issue_raised: "bg-red-100 text-red-800",
+};
+
+export const TRANSFER_ISSUE_TYPES = ["shortfall", "damage", "wrong_item"] as const;
+
+export const TRANSFER_ISSUE_TYPE_LABELS: Record<string, string> = {
+  shortfall: "Shortfall",
+  damage: "Damaged Goods",
+  wrong_item: "Wrong Item",
+};
+
+export const TRANSFER_ISSUE_STATUSES = ["open", "investigating", "resolved"] as const;
+
+export const TRANSFER_ISSUE_STATUS_LABELS: Record<string, string> = {
+  open: "Open",
+  investigating: "Investigating",
+  resolved: "Resolved",
+};
+
+export const TRANSFER_ISSUE_STATUS_COLORS: Record<string, string> = {
+  open: "bg-red-100 text-red-800",
+  investigating: "bg-amber-100 text-amber-800",
+  resolved: "bg-green-100 text-green-800",
+};
+
+export const CONSUMPTION_STATUSES = ["active", "voided"] as const;
+
+export const CONSUMPTION_STATUS_LABELS: Record<string, string> = {
+  active: "Active",
+  voided: "Voided",
+};
+
+export const CONSUMPTION_STATUS_COLORS: Record<string, string> = {
+  active: "bg-green-100 text-green-800",
+  voided: "bg-red-100 text-red-800",
+};
+
+export const CORRECTION_TYPES = ["void", "adjust", "relog"] as const;
+
+export const CORRECTION_TYPE_LABELS: Record<string, string> = {
+  void: "Void Entry",
+  adjust: "Adjust Quantity",
+  relog: "Re-log (Void & Replace)",
+};

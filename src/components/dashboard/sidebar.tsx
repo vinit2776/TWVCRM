@@ -39,6 +39,9 @@ import {
   Banknote,
   TrendingUp,
   Search,
+  Warehouse,
+  ArrowLeftRight,
+  UtensilsCrossed,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -120,8 +123,11 @@ const navSections: NavSection[] = [
       { href: "/procurement/orders",   label: "Purchase Orders",   icon: Package,           roles: null },
       { href: "/procurement/bills",    label: "Vendor Bills",      icon: ReceiptIcon,       roles: ["admin", "manager", "accounts", "fms"] },
       { href: "/procurement/payables", label: "Payables",          icon: IndianRupee,       roles: ["admin", "manager", "accounts", "fms"] },
-      { href: "/procurement/vendors",  label: "Vendors",           icon: Truck,             roles: null },
-      { href: "/procurement/catalog",  label: "Item Catalog",      icon: Archive,           roles: ["admin", "manager", "fms", "floor_manager"] },
+      { href: "/procurement/vendors",     label: "Vendors",           icon: Truck,             roles: null },
+      { href: "/procurement/catalog",     label: "Item Catalog",      icon: Archive,           roles: ["admin", "manager", "fms", "floor_manager"] },
+      { href: "/procurement/inventory",   label: "Inventory",         icon: Warehouse,         roles: null },
+      { href: "/procurement/transfers",   label: "Transfers",         icon: ArrowLeftRight,    roles: ["admin", "manager", "floor_manager"] },
+      { href: "/procurement/consumption", label: "Consumption",       icon: UtensilsCrossed,   roles: null },
     ],
   },
   {

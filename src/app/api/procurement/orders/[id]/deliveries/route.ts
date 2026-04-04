@@ -78,7 +78,7 @@ export async function POST(
   // Validate PO exists and is in a receivable state
   const { data: po, error: poErr } = await supabase
     .from("purchase_orders")
-    .select("id, status, vendor_id")
+    .select("id, status, vendor_id, location_id")
     .eq("id", id)
     .single();
 
@@ -111,7 +111,7 @@ export async function POST(
   // Fetch all PO items to validate ownership and over-receiving
   const { data: poItems } = await supabase
     .from("purchase_order_items")
-    .select("id, quantity_ordered, quantity_received")
+    .select("id, item_id, quantity_ordered, quantity_received")
     .eq("po_id", id);
 
   const poItemMap = Object.fromEntries(
@@ -188,6 +188,20 @@ export async function POST(
       .eq("po_id", id);
   }
 
+  // Update location_stock for each received item
+  if (po.location_id) {
+    for (const item of items.filter((i) => i.qty_received > 0)) {
+      const poItem = poItemMap[item.po_item_id];
+      if (poItem?.item_id) {
+        await supabase.rpc("upsert_location_stock", {
+          p_location_id: po.location_id,
+          p_item_id: poItem.item_id,
+          p_quantity_delta: item.qty_received,
+        });
+      }
+    }
+  }
+
   // Re-fetch updated items to determine new PO status
   const { data: updatedItems } = await supabase
     .from("purchase_order_items")
@@ -251,7 +265,7 @@ export async function DELETE(
   // Validate PO state
   const { data: po, error: poErr } = await supabase
     .from("purchase_orders")
-    .select("id, status, pr_id")
+    .select("id, status, pr_id, location_id")
     .eq("id", poId)
     .single();
   if (poErr || !po) return NextResponse.json({ error: "Purchase order not found" }, { status: 404 });
@@ -272,11 +286,11 @@ export async function DELETE(
     return NextResponse.json({ error: "Delivery receipt not found" }, { status: 404 });
   }
 
-  // Reverse quantity_received on each PO item
+  // Reverse quantity_received on each PO item + reverse location_stock
   for (const item of receipt.po_delivery_receipt_items ?? []) {
     const { data: poItem } = await supabase
       .from("purchase_order_items")
-      .select("quantity_received")
+      .select("item_id, quantity_received")
       .eq("id", item.po_item_id)
       .eq("po_id", poId)
       .single();
@@ -287,6 +301,14 @@ export async function DELETE(
         .update({ quantity_received: newQty })
         .eq("id", item.po_item_id)
         .eq("po_id", poId);
+      // Reverse location_stock
+      if (po.location_id && poItem.item_id) {
+        await supabase.rpc("upsert_location_stock", {
+          p_location_id: po.location_id,
+          p_item_id: poItem.item_id,
+          p_quantity_delta: -Number(item.qty_received),
+        });
+      }
     }
   }
 

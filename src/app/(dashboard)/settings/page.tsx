@@ -11,12 +11,13 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClient } from "@/lib/supabase/client"; // still needed for handleSave
 import { getInitials } from "@/lib/utils";
 import { toast } from "sonner";
-import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart, LayoutDashboard, Banknote } from "lucide-react";
+import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart, LayoutDashboard, Banknote, AlertTriangle } from "lucide-react";
 import { PaymentGatewaySettings } from "@/components/settings/payment-gateway-settings";
 import { ProcurementSettings } from "@/components/settings/procurement-settings";
 import { DashboardSettings } from "@/components/settings/dashboard-settings";
 import { PettyCashSettings } from "@/components/settings/petty-cash-settings";
 import { ServicesSettings } from "@/components/settings/services-settings";
+import { ReorderSettings } from "@/components/settings/reorder-settings";
 import Link from "next/link";
 
 export default function SettingsPage() {
@@ -137,6 +138,11 @@ export default function SettingsPage() {
           {profile.role === "admin" && (
             <TabsTrigger value="petty-cash" className="flex items-center gap-1.5">
               <Banknote className="h-3.5 w-3.5" />Petty Cash
+            </TabsTrigger>
+          )}
+          {["admin", "manager"].includes(profile.role) && (
+            <TabsTrigger value="reorder-levels" className="flex items-center gap-1.5">
+              <AlertTriangle className="h-3.5 w-3.5" />Reorder Levels
             </TabsTrigger>
           )}
         </TabsList>
@@ -314,6 +320,12 @@ export default function SettingsPage() {
         {profile.role === "admin" && (
           <TabsContent value="petty-cash" className="mt-6">
             <PettyCashSettings />
+          </TabsContent>
+        )}
+
+        {["admin", "manager"].includes(profile.role) && (
+          <TabsContent value="reorder-levels" className="mt-6">
+            <ReorderSettings />
           </TabsContent>
         )}
       </Tabs>
