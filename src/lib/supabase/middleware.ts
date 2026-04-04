@@ -45,7 +45,8 @@ export async function updateSession(request: NextRequest) {
     request.nextUrl.pathname.startsWith("/meta") ||
     request.nextUrl.pathname.startsWith("/walkin") ||
     request.nextUrl.pathname.startsWith("/feedback") ||
-    request.nextUrl.pathname.startsWith("/pay");
+    request.nextUrl.pathname.startsWith("/pay") ||
+    request.nextUrl.pathname === "/offline";
 
   // If user is not signed in and trying to access protected routes
   if (!user && !isAuthRoute && !isApiRoute && !isPublicRoute) {
