@@ -147,7 +147,7 @@ export default function TransferDetailPage() {
         quantity_sent: item.quantity_sent,
         quantity_received: String(item.quantity_sent),
         has_issue: false,
-        issue_type: "shortfall",
+        issue_type: "shortage",
         issue_description: "",
       }))
     );

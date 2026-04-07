@@ -1814,7 +1814,7 @@ export interface PettyCashApproval {
 // ─── Inventory & Stock Transfer Types ────────────────────────────────────────
 
 export type TransferStatus = "draft" | "pending_approval" | "approved" | "dispatched" | "received" | "completed" | "issue_raised";
-export type TransferIssueType = "shortfall" | "damage" | "wrong_item";
+export type TransferIssueType = "shortage" | "excess" | "damage" | "wrong_item" | "quality" | "other";
 export type TransferIssueStatus = "open" | "investigating" | "resolved";
 export type ConsumptionStatus = "active" | "voided";
 export type CorrectionType = "void" | "adjust" | "relog";

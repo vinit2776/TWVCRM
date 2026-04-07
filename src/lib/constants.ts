@@ -1480,12 +1480,15 @@ export const TRANSFER_STATUS_COLORS: Record<string, string> = {
   issue_raised: "bg-red-100 text-red-800",
 };
 
-export const TRANSFER_ISSUE_TYPES = ["shortfall", "damage", "wrong_item"] as const;
+export const TRANSFER_ISSUE_TYPES = ["shortage", "excess", "damage", "wrong_item", "quality", "other"] as const;
 
 export const TRANSFER_ISSUE_TYPE_LABELS: Record<string, string> = {
-  shortfall: "Shortfall",
+  shortage: "Shortage",
+  excess: "Excess Received",
   damage: "Damaged Goods",
   wrong_item: "Wrong Item",
+  quality: "Quality Issue",
+  other: "Other",
 };
 
 export const TRANSFER_ISSUE_STATUSES = ["open", "investigating", "resolved"] as const;
