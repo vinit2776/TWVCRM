@@ -154,6 +154,8 @@ function NewPurchaseOrderFormWithPr({
         if (!pr) return;
         setPrData(pr);
         setLocationId(pr.location_id ?? "");
+        // Carry forward PR-level notes to PO
+        if (pr.notes) setNotes(pr.notes);
         if (pr.purchase_request_items?.length) {
           setItems(
             pr.purchase_request_items.map((i: {

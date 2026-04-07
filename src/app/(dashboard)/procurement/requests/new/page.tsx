@@ -242,10 +242,10 @@ export default function NewPurchaseRequestPage() {
           </div>
 
           <div className="space-y-1.5 sm:col-span-2">
-            <Label htmlFor="notes">Notes</Label>
+            <Label htmlFor="notes">Notes <span className="text-xs text-muted-foreground font-normal">(will carry forward to Purchase Order)</span></Label>
             <Textarea
               id="notes"
-              placeholder="Any additional context for this request..."
+              placeholder="Any additional context — this will be visible on the Purchase Order as well..."
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
               rows={2}
@@ -378,9 +378,9 @@ export default function NewPurchaseRequestPage() {
                 )}
 
                 <div className="space-y-1 sm:col-span-2">
-                  <Label className="text-xs">Notes (optional)</Label>
+                  <Label className="text-xs">Notes <span className="text-muted-foreground">(carries to PO)</span></Label>
                   <Input
-                    placeholder="Brand preference, urgency, etc."
+                    placeholder="Brand preference, urgency, etc. — visible on PO"
                     value={li.notes}
                     onChange={(e) => updateItem(li.id, "notes", e.target.value)}
                   />
