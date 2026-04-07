@@ -106,6 +106,7 @@ function NewBookingForm() {
   const [advancePaymentMode, setAdvancePaymentMode] = useState<string>("cash");
   const [advancePaymentReference, setAdvancePaymentReference] = useState("");
   const [advancePaymentAmount, setAdvancePaymentAmount] = useState("");
+  const [razorpayEnabled, setRazorpayEnabled] = useState(false);
 
   // Recurring booking
   const [isRecurring, setIsRecurring] = useState(false);
@@ -175,6 +176,13 @@ function NewBookingForm() {
       setGuestCompany(sug.company || "");
     }
   };
+
+  // Fetch Razorpay enabled status
+  useEffect(() => {
+    fetch("/api/settings/public").then(r => r.json()).then(json => {
+      if (json.data?.razorpay_enabled === "true") setRazorpayEnabled(true);
+    }).catch(() => {});
+  }, []);
 
   // Close suggestions on outside click
   useEffect(() => {
@@ -343,6 +351,16 @@ function NewBookingForm() {
     const [eh, em] = endTime.split(":").map(Number);
     return Math.max(0, (eh * 60 + em - sh * 60 - sm) / 60);
   })();
+
+  // Format fractional hours as "Xh Ym" (e.g. 2.75 → "2h 45m")
+  const formatDuration = (hours: number): string => {
+    if (hours <= 0) return "—";
+    const h = Math.floor(hours);
+    const m = Math.round((hours - h) * 60);
+    if (h === 0) return `${m}m`;
+    if (m === 0) return `${h}h 00m`;
+    return `${h}h ${String(m).padStart(2, "0")}m`;
+  };
 
   const parsedCustomRate = parseFloat(customRate);
   const effectiveRate = selectedSpace
@@ -583,9 +601,7 @@ function NewBookingForm() {
                       const [ws, wm] = window.start_time.split(":").map(Number);
                       const [we, wme] = window.end_time.split(":").map(Number);
                       const windowDuration = (we * 60 + wme) - (ws * 60 + wm);
-                      const durationLabel = windowDuration >= 60
-                        ? `${(windowDuration / 60).toFixed(windowDuration % 60 ? 1 : 0)}hr`
-                        : `${windowDuration}min`;
+                      const durationLabel = formatDuration(windowDuration / 60);
 
                       return (
                         <Badge
@@ -643,7 +659,7 @@ function NewBookingForm() {
               <Label>Duration</Label>
               <div className="flex items-center gap-2 h-10 px-3 rounded-md border bg-muted/30">
                 <Clock className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-medium">{durationHours > 0 ? `${durationHours} hour(s)` : "—"}</span>
+                <span className="text-sm font-medium">{formatDuration(durationHours)}</span>
               </div>
             </div>
           </div>
@@ -977,7 +993,7 @@ function NewBookingForm() {
                         { mode: "cash", icon: Banknote, label: "Cash" },
                         { mode: "card", icon: CreditCard, label: "Card" },
                         { mode: "upi", icon: Smartphone, label: "UPI" },
-                        { mode: "send_link", icon: Link2, label: "Send Link" },
+                        ...(razorpayEnabled ? [{ mode: "send_link", icon: Link2, label: "Send Link" }] : []),
                       ].map(({ mode, icon: Icon, label }) => (
                         <Button
                           key={mode}
@@ -1125,7 +1141,7 @@ function NewBookingForm() {
             </div>
             <div>
               <p className="text-xs text-muted-foreground">Duration</p>
-              <p className="font-medium text-sm">{durationHours > 0 ? `${durationHours}h` : "—"}</p>
+              <p className="font-medium text-sm">{formatDuration(durationHours)}</p>
             </div>
           </div>
           <div className="border-t pt-3 space-y-1">
@@ -1145,7 +1161,7 @@ function NewBookingForm() {
               </div>
             )}
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Room ({durationHours}h)</span>
+              <span className="text-muted-foreground">Room ({formatDuration(durationHours)})</span>
               <span>{formatCurrency(roomCost)}</span>
             </div>
             {facilityCost > 0 && (
