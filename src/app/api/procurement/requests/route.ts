@@ -8,13 +8,13 @@ const createPrItemSchema = z.object({
   item_id: z.string().uuid().optional().nullable(),
   item_name: z.string().min(1),
   quantity: z.number().positive(),
-  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair"]),
+  unit: z.enum(["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton"]),
   estimated_price: z.number().min(0).optional().nullable(),
   notes: z.string().optional(),
 });
 
 const createPrSchema = z.object({
-  department: z.enum(["pantry", "maintenance", "administration"]),
+  department: z.enum(["pantry", "maintenance", "administration", "asset"]),
   location_id: z.string().uuid().optional().nullable(),
   notes: z.string().optional(),
   items: z.array(createPrItemSchema).min(1, "At least one item is required"),
@@ -88,7 +88,9 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const parsed = createPrSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+    const flat = parsed.error.flatten();
+    const msg = Object.entries(flat.fieldErrors).map(([k, v]) => `${k}: ${(v as string[]).join(", ")}`).join("; ");
+    return NextResponse.json({ error: msg || "Invalid request data" }, { status: 400 });
   }
 
   const { items, submit, ...prData } = parsed.data;
