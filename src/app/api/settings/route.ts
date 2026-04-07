@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
 // GET — fetch all settings (admin only, secrets masked)
@@ -18,7 +18,8 @@ export async function GET() {
     return NextResponse.json({ error: "Admin access required" }, { status: 403 });
   }
 
-  const { data: settings, error } = await supabase
+  const adminSupabase = await createAdminClient();
+  const { data: settings, error } = await adminSupabase
     .from("app_settings")
     .select("*")
     .order("key");
@@ -76,18 +77,19 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "No valid settings to update" }, { status: 400 });
   }
 
+  const adminSupabase = await createAdminClient();
   for (const { key, value } of updates) {
-    const { error } = await supabase
+    // Use upsert to handle both existing and missing rows
+    const { error } = await adminSupabase
       .from("app_settings")
-      .update({ value, updated_by: dbUser.id })
-      .eq("key", key);
+      .upsert({ key, value, updated_by: dbUser.id }, { onConflict: "key" });
 
     if (error) {
       return NextResponse.json({ error: `Failed to update ${key}: ${error.message}` }, { status: 500 });
     }
   }
 
-  logAudit(supabase, {
+  logAudit(adminSupabase, {
     entityType: "app_setting",
     entityId: "batch",
     action: "update",
