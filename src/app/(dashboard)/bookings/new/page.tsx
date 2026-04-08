@@ -93,7 +93,9 @@ function NewBookingForm() {
   const [contracts, setContracts] = useState<ContractOption[]>([]);
 
   // Outstanding charges from past bookings
-  const [outstandingCharges, setOutstandingCharges] = useState<{ id: string; description: string; total: number; booking?: { booking_number: string; booking_date: string } }[]>([]);
+  const [outstandingCharges, setOutstandingCharges] = useState<{ id: string; description: string; total: number; notes?: string; quantity?: number; unit_price?: number; charge_date?: string; proof_path?: string; booking?: { booking_number: string; booking_date: string } }[]>([]);
+  const [selectedChargeIds, setSelectedChargeIds] = useState<Set<string>>(new Set());
+  const [expandedChargeId, setExpandedChargeId] = useState<string | null>(null);
 
   // Step 4: Facilities
   const [selectedFacilities, setSelectedFacilities] = useState<string[]>([]);
@@ -459,6 +461,7 @@ function NewBookingForm() {
         hourly_rate: effectiveRate,
         advance_payment: advancePayment,
         prepaid_purchase_id: (usePrepaid && activePurchase) ? activePurchase.id : undefined,
+        settle_charge_ids: selectedChargeIds.size > 0 ? Array.from(selectedChargeIds) : undefined,
       };
 
       const res = await fetch("/api/bookings", {
@@ -1092,28 +1095,65 @@ function NewBookingForm() {
         </CardContent>
       </Card>
 
-      {/* Outstanding Charges Warning */}
+      {/* Outstanding Charges — Interactive Collection */}
       {outstandingCharges.length > 0 && (
         <div className="bg-amber-50 border border-amber-300 rounded-lg p-4">
           <div className="flex items-start gap-3">
             <AlertTriangle className="h-5 w-5 text-amber-600 shrink-0 mt-0.5" />
             <div className="flex-1 min-w-0">
-              <p className="font-semibold text-amber-800">
-                Past dues: ₹{outstandingCharges.reduce((s, c) => s + c.total, 0).toLocaleString("en-IN")}
-              </p>
+              <div className="flex items-center justify-between mb-2">
+                <p className="font-semibold text-amber-800">
+                  Past dues: ₹{outstandingCharges.reduce((s, c) => s + c.total, 0).toLocaleString("en-IN")}
+                </p>
+                {selectedChargeIds.size > 0 && (
+                  <span className="text-xs font-semibold text-green-700 bg-green-100 px-2 py-0.5 rounded">
+                    +₹{outstandingCharges.filter(c => selectedChargeIds.has(c.id)).reduce((s, c) => s + c.total, 0).toLocaleString("en-IN")} added to bill
+                  </span>
+                )}
+              </div>
               <p className="text-sm text-amber-700 mb-2">
-                This customer has {outstandingCharges.length} unpaid charge{outstandingCharges.length > 1 ? "s" : ""} from previous bookings. Consider collecting these during this transaction.
+                Select charges to include in this booking&apos;s payment.
               </p>
               <div className="space-y-1">
-                {outstandingCharges.slice(0, 5).map((c) => (
-                  <div key={c.id} className="flex items-center justify-between text-sm bg-white/70 rounded px-3 py-1.5 border border-amber-100">
-                    <span className="text-amber-900">{c.description}</span>
-                    <span className="font-semibold text-amber-800 ml-4 shrink-0">₹{c.total.toLocaleString("en-IN")}</span>
+                {outstandingCharges.map((c) => (
+                  <div key={c.id}>
+                    <div
+                      className={`flex items-center gap-2 text-sm rounded px-3 py-2 border cursor-pointer transition-colors ${
+                        selectedChargeIds.has(c.id) ? "bg-green-50 border-green-300" : "bg-white/70 border-amber-100 hover:border-amber-200"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedChargeIds.has(c.id)}
+                        onChange={() => {
+                          setSelectedChargeIds(prev => {
+                            const next = new Set(prev);
+                            if (next.has(c.id)) next.delete(c.id); else next.add(c.id);
+                            return next;
+                          });
+                        }}
+                        className="h-4 w-4 rounded border-amber-300"
+                      />
+                      <button
+                        type="button"
+                        className="flex-1 flex items-center justify-between text-left"
+                        onClick={() => setExpandedChargeId(expandedChargeId === c.id ? null : c.id)}
+                      >
+                        <span className={selectedChargeIds.has(c.id) ? "text-green-900" : "text-amber-900"}>{c.description}</span>
+                        <span className="font-semibold text-amber-800 ml-4 shrink-0">₹{c.total.toLocaleString("en-IN")}</span>
+                      </button>
+                    </div>
+                    {expandedChargeId === c.id && (
+                      <div className="ml-8 mt-1 mb-2 p-3 bg-white rounded border border-amber-100 text-xs space-y-1">
+                        {c.booking && <p><span className="text-muted-foreground">From:</span> {c.booking.booking_number} ({c.booking.booking_date})</p>}
+                        {c.charge_date && <p><span className="text-muted-foreground">Charged:</span> {c.charge_date}</p>}
+                        {c.quantity && c.unit_price ? <p><span className="text-muted-foreground">Breakdown:</span> {c.quantity} × ₹{c.unit_price.toLocaleString("en-IN")} = ₹{c.total.toLocaleString("en-IN")}</p> : null}
+                        {c.notes && <p><span className="text-muted-foreground">Reason:</span> {c.notes}</p>}
+                        {c.proof_path && <p><a href={`/api/documents/view?path=${encodeURIComponent(c.proof_path)}`} target="_blank" rel="noopener noreferrer" className="text-primary underline">View Proof Photo</a></p>}
+                      </div>
+                    )}
                   </div>
                 ))}
-                {outstandingCharges.length > 5 && (
-                  <p className="text-xs text-amber-600">+{outstandingCharges.length - 5} more charges</p>
-                )}
               </div>
             </div>
           </div>
@@ -1206,12 +1246,23 @@ function NewBookingForm() {
                 </>
               );
             })()}
+            {/* Past dues added to this bill */}
+            {selectedChargeIds.size > 0 && (
+              <>
+                {outstandingCharges.filter(c => selectedChargeIds.has(c.id)).map(c => (
+                  <div key={c.id} className="flex justify-between text-sm text-amber-700">
+                    <span className="truncate max-w-[200px]">+ {c.description}</span>
+                    <span>{formatCurrency(c.total)}</span>
+                  </div>
+                ))}
+              </>
+            )}
             {!(usePrepaid && activePurchase) && (
               <div className="flex justify-between font-bold text-base pt-1 border-t">
                 <span>Total</span>
                 <span className="flex items-center gap-1">
                   <IndianRupee className="h-4 w-4" />
-                  {formatCurrency(totalAmount)}
+                  {formatCurrency(totalAmount + outstandingCharges.filter(c => selectedChargeIds.has(c.id)).reduce((s, c) => s + c.total, 0))}
                 </span>
               </div>
             )}

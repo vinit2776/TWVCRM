@@ -534,6 +534,13 @@ export interface UsageCharge {
   status: UsageChargeStatus;
   billing_statement_id?: string;
   notes?: string;
+  proof_path?: string;
+  settled_in_booking_id?: string;
+  settled_at?: string;
+  waived_by?: string;
+  waived_at?: string;
+  waive_reason?: string;
+  booking?: { booking_number: string; booking_date: string };
   created_by?: string;
   created_at: string;
   updated_at: string;

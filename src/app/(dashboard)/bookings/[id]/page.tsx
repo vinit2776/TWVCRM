@@ -64,9 +64,15 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     id: string;
     description: string;
     total: number;
+    quantity?: number;
+    unit_price?: number;
     charge_date: string;
+    notes?: string;
+    proof_path?: string;
     booking?: { booking_number: string; booking_date: string } | null;
   }>>([]);
+  const [expandedChargeId, setExpandedChargeId] = useState<string | null>(null);
+  const [userRole, setUserRole] = useState<string | null>(null);
 
   // Pricing inline-edit state
   const [editingPricing, setEditingPricing] = useState(false);
@@ -129,6 +135,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   }, [id]);
 
   useEffect(() => { fetchBooking(); }, [fetchBooking]);
+  useEffect(() => { fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {}); }, []);
 
   const handlePricingSave = async () => {
     const newRate = parseFloat(draftRate);
@@ -609,16 +616,53 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             </p>
             <div className="space-y-1">
               {outstandingCharges.map((c) => (
-                <div key={c.id} className="flex items-center justify-between text-sm bg-white/70 rounded px-3 py-1.5 border border-amber-100">
-                  <span className="text-amber-900">{c.description}</span>
-                  <div className="flex items-center gap-3 shrink-0 ml-4">
-                    {c.booking && (
-                      <span className="text-xs text-amber-600 font-mono">
-                        {c.booking.booking_number} · {formatDate(c.booking.booking_date)}
-                      </span>
-                    )}
-                    <span className="font-semibold text-amber-800">{formatCurrency(c.total)}</span>
+                <div key={c.id}>
+                  <div className="flex items-center justify-between text-sm bg-white/70 rounded px-3 py-1.5 border border-amber-100">
+                    <button type="button" className="flex-1 text-left text-amber-900 hover:underline" onClick={() => setExpandedChargeId(expandedChargeId === c.id ? null : c.id)}>
+                      {c.description}
+                    </button>
+                    <div className="flex items-center gap-2 shrink-0 ml-4">
+                      {c.booking && (
+                        <span className="text-xs text-amber-600 font-mono">
+                          {c.booking.booking_number}
+                        </span>
+                      )}
+                      <span className="font-semibold text-amber-800">{formatCurrency(c.total)}</span>
+                      {(userRole === "admin" || userRole === "manager") && (
+                        <button
+                          type="button"
+                          className="text-xs text-red-600 hover:text-red-800 underline ml-1"
+                          onClick={async () => {
+                            const reason = window.prompt("Reason for waiving this charge:");
+                            if (reason === null) return;
+                            const res = await fetch(`/api/usage-charges/${c.id}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ status: "waived", waive_reason: reason }),
+                            });
+                            if (res.ok) {
+                              toast.success("Charge waived");
+                              setOutstandingCharges(prev => prev.filter(ch => ch.id !== c.id));
+                            } else {
+                              const err = await res.json().catch(() => null);
+                              toast.error(err?.error || "Failed to waive");
+                            }
+                          }}
+                        >
+                          Waive
+                        </button>
+                      )}
+                    </div>
                   </div>
+                  {expandedChargeId === c.id && (
+                    <div className="ml-4 mt-1 mb-2 p-3 bg-white rounded border border-amber-100 text-xs space-y-1">
+                      {c.booking && <p><span className="text-muted-foreground">From:</span> {c.booking.booking_number} ({formatDate(c.booking.booking_date)})</p>}
+                      {c.charge_date && <p><span className="text-muted-foreground">Charged:</span> {formatDate(c.charge_date)}</p>}
+                      {c.quantity && c.unit_price ? <p><span className="text-muted-foreground">Breakdown:</span> {c.quantity} × {formatCurrency(c.unit_price)} = {formatCurrency(c.total)}</p> : null}
+                      {c.notes && <p><span className="text-muted-foreground">Reason:</span> {c.notes}</p>}
+                      {c.proof_path && <p><a href={`/api/documents/view?path=${encodeURIComponent(c.proof_path)}`} target="_blank" rel="noopener noreferrer" className="text-primary underline">View Proof Photo</a></p>}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>

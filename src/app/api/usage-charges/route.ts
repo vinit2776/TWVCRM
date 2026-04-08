@@ -100,6 +100,7 @@ export async function POST(request: NextRequest) {
       total: result.data.total,
       charge_date: result.data.charge_date,
       notes: result.data.notes,
+      proof_path: body.proof_path || null,
       lead_id: leadId,
       status: "pending",
       created_by: dbUser?.id,

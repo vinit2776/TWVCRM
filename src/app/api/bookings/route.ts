@@ -601,7 +601,21 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // 11. Return full booking
+  // 11. Settle past dues included in this booking
+  if (input.settle_charge_ids && Array.isArray(input.settle_charge_ids) && input.settle_charge_ids.length > 0) {
+    const now = new Date().toISOString();
+    await supabase
+      .from("usage_charges")
+      .update({
+        status: "billed",
+        settled_in_booking_id: booking.id,
+        settled_at: now,
+      })
+      .in("id", input.settle_charge_ids)
+      .eq("status", "pending");
+  }
+
+  // 12. Return full booking
   const { data: fullBooking } = await supabase
     .from("bookings")
     .select("*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate), location:locations!bookings_location_id_fkey(id, name, code), contract:contracts!bookings_contract_id_fkey(id, contract_number), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email), facilities:booking_facilities(*)")
