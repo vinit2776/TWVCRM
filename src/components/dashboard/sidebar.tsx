@@ -38,6 +38,7 @@ import {
   Ticket,
   Banknote,
   TrendingUp,
+  DoorOpen,
   Search,
   Warehouse,
   ArrowLeftRight,
@@ -101,6 +102,7 @@ const navSections: NavSection[] = [
     icon: CalendarClock,
     items: [
       { href: "/bookings", label: "Bookings", icon: CalendarClock, roles: LEGACY_ROLES },
+      { href: "/spaces",   label: "Spaces",   icon: DoorOpen,      roles: ["admin", "manager", "floor_manager"] },
       { href: "/packages", label: "Packages", icon: TicketCheck,   roles: LEGACY_ROLES },
       { href: "/vouchers", label: "Vouchers", icon: Wifi,          roles: LEGACY_ROLES },
     ],
