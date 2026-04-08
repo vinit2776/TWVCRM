@@ -85,7 +85,7 @@ export function ConsumptionCorrectionDialog({
 
     setSubmitting(true);
     try {
-      let body: Record<string, unknown> = {
+      const body: Record<string, unknown> = {
         action: correctionType,
         reason,
       };
