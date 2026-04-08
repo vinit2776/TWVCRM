@@ -53,9 +53,13 @@ export async function POST(
   const ext = file.name.split(".").pop() || "png";
   const filePath = `support-screenshots/${id}-${Date.now()}.${ext}`;
 
+  // Convert File to Buffer for reliable server-side upload
+  const arrayBuffer = await file.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
   const { error: uploadError } = await adminSupabase.storage
     .from("crm-documents")
-    .upload(filePath, file, { contentType: file.type });
+    .upload(filePath, buffer, { contentType: file.type, upsert: true });
 
   if (uploadError) {
     return NextResponse.json(
