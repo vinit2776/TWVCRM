@@ -46,6 +46,7 @@ export async function updateSession(request: NextRequest) {
     request.nextUrl.pathname.startsWith("/walkin") ||
     request.nextUrl.pathname.startsWith("/feedback") ||
     request.nextUrl.pathname.startsWith("/pay") ||
+    request.nextUrl.pathname.startsWith("/verify") ||
     request.nextUrl.pathname === "/offline";
 
   // If user is not signed in and trying to access protected routes
@@ -62,8 +63,8 @@ export async function updateSession(request: NextRequest) {
     return NextResponse.redirect(url);
   }
 
-  // Redirect root to dashboard if signed in
-  if (user && isPublicRoute) {
+  // Redirect root to dashboard if signed in (except /verify which should stay public always)
+  if (user && isPublicRoute && !request.nextUrl.pathname.startsWith("/verify")) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     return NextResponse.redirect(url);

@@ -8,6 +8,7 @@
 
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
+import QRCode from "qrcode";
 import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
 import type { PurchaseOrder } from "@/types";
 
@@ -88,7 +89,7 @@ type PoForPDF = PurchaseOrder & {
 
 // ── Main Export ───────────────────────────────────────────────────────────────
 
-export function generatePurchaseOrderPDF(po: PoForPDF): jsPDF {
+export async function generatePurchaseOrderPDF(po: PoForPDF): Promise<jsPDF> {
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.getWidth();
 
@@ -351,15 +352,29 @@ export function generatePurchaseOrderPDF(po: PoForPDF): jsPDF {
     footerStartY = tcStartY + 10 + lineCount * 4.5 + 6;
   }
 
-  // ── Verification Seal ──
+  // ── Verification Seal + QR Code ──
   const approvalCode = po.purchase_requests?.approval_code;
   if (approvalCode) {
+    const appUrl = (typeof window !== "undefined" ? window.location.origin : process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").replace(/\/$/, "");
+    const verifyUrl = `${appUrl}/verify/${encodeURIComponent(approvalCode)}`;
+
     const sealY = footerStartY;
-    const sealW = 80;
-    const sealH = 22;
+    const qrSize = 28;
+    const sealW = 85;
+    const sealH = 30;
     const sealX = pageWidth - 14 - sealW;
 
-    // Outer border (double-line effect)
+    // QR Code (left of seal)
+    try {
+      const qrDataUrl = await QRCode.toDataURL(verifyUrl, { width: 200, margin: 1, color: { dark: "#015E65", light: "#FFFFFF" } });
+      doc.addImage(qrDataUrl, "PNG", sealX - qrSize - 4, sealY, qrSize, qrSize);
+      doc.setFontSize(5);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(120, 120, 120);
+      doc.text("Scan to verify", sealX - qrSize - 4 + qrSize / 2, sealY + qrSize + 3, { align: "center" });
+    } catch { /* QR generation failed — continue without it */ }
+
+    // Seal box
     doc.setDrawColor(...BRAND_TEAL);
     doc.setLineWidth(1);
     doc.rect(sealX, sealY, sealW, sealH);
@@ -370,19 +385,24 @@ export function generatePurchaseOrderPDF(po: PoForPDF): jsPDF {
     doc.setFontSize(7);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...BRAND_TEAL);
-    doc.text("VERIFIED APPROVAL", sealX + sealW / 2, sealY + 6, { align: "center" });
+    doc.text("VERIFIED APPROVAL", sealX + sealW / 2, sealY + 7, { align: "center" });
 
     // Approval code (large, prominent)
-    doc.setFontSize(10);
+    doc.setFontSize(11);
     doc.setFont("helvetica", "bold");
     doc.setTextColor(...BRAND_DARK);
-    doc.text(approvalCode, sealX + sealW / 2, sealY + 13, { align: "center" });
+    doc.text(approvalCode, sealX + sealW / 2, sealY + 15, { align: "center" });
 
     // Signature hint
     doc.setFontSize(5.5);
     doc.setFont("helvetica", "normal");
     doc.setTextColor(120, 120, 120);
-    doc.text("Cryptographically signed", sealX + sealW / 2, sealY + 18, { align: "center" });
+    doc.text("Cryptographically signed & verifiable", sealX + sealW / 2, sealY + 21, { align: "center" });
+
+    // Verify URL
+    doc.setFontSize(5);
+    doc.setTextColor(...BRAND_TEAL);
+    doc.text(verifyUrl, sealX + sealW / 2, sealY + 26, { align: "center" });
 
     footerStartY = sealY + sealH + 6;
   }

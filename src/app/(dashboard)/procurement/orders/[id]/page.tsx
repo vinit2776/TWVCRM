@@ -658,8 +658,8 @@ export default function PurchaseOrderDetailPage() {
             <Button
               variant="outline"
               size="sm"
-              onClick={() => {
-                const pdf = generatePurchaseOrderPDF(po as Parameters<typeof generatePurchaseOrderPDF>[0]);
+              onClick={async () => {
+                const pdf = await generatePurchaseOrderPDF(po as Parameters<typeof generatePurchaseOrderPDF>[0]);
                 pdf.save(`${po.po_number}.pdf`);
               }}
             >
@@ -1879,7 +1879,7 @@ export default function PurchaseOrderDetailPage() {
                 }
                 setEmailSending(true);
                 try {
-                  const pdf = generatePurchaseOrderPDF(po as Parameters<typeof generatePurchaseOrderPDF>[0]);
+                  const pdf = await generatePurchaseOrderPDF(po as Parameters<typeof generatePurchaseOrderPDF>[0]);
                   const pdfBlob = pdf.output("blob");
                   const formData = new FormData();
                   formData.append("recipients", JSON.stringify([email]));
