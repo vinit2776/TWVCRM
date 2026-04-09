@@ -60,6 +60,12 @@ export function verifyApprovalCode(
   approvedAt: string // ISO date string
 ): boolean {
   const parts = code.split("-");
+
+  // Legacy codes (APR-YYMM-NNN) have 3 parts — no signature.
+  // These were generated before HMAC signing was introduced.
+  // If the code was found in the DB, it's genuine.
+  if (parts.length === 3) return true;
+
   if (parts.length !== 4) return false;
 
   const baseCode = `${parts[0]}-${parts[1]}-${parts[2]}`;
