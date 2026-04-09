@@ -4,6 +4,7 @@ import { logAudit, diffChanges } from "@/lib/audit";
 import { z } from "zod";
 import { PROCUREMENT_APPROVAL_THRESHOLDS } from "@/lib/constants";
 import { computeOrderedQtyMap } from "@/lib/procurement/pr-status";
+import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 
 const patchPrSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("submit") }),
@@ -35,17 +36,13 @@ async function getApprovalThreshold(supabase: Awaited<ReturnType<typeof createCl
   return PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE;
 }
 
-/** Generate next approval code: APR-YYMM-NNN */
-async function generateApprovalCode(supabase: Awaited<ReturnType<typeof createClient>>): Promise<string> {
+/** Generate next signed approval code for PRs */
+async function generateApprovalCode(supabase: Awaited<ReturnType<typeof createClient>>, entityId: string): Promise<string> {
   const { count } = await supabase
     .from("purchase_requests")
     .select("*", { count: "exact", head: true })
     .not("approval_code", "is", null);
-  const now = new Date();
-  const yy = String(now.getFullYear()).slice(-2);
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const seq = String((count ?? 0) + 1).padStart(3, "0");
-  return `APR-${yy}${mm}-${seq}`;
+  return generateSignedApprovalCode("pr", (count ?? 0) + 1, entityId);
 }
 
 export async function GET(
@@ -161,7 +158,7 @@ export async function PATCH(
       if (!["admin", "manager"].includes(dbUser.role)) {
         return NextResponse.json({ error: "Only managers and admins can approve PRs" }, { status: 403 });
       }
-      const approvalCode = await generateApprovalCode(supabase);
+      const approvalCode = await generateApprovalCode(supabase, id);
       updatePayload = {
         status: "approved",
         approved_by: dbUser.id,

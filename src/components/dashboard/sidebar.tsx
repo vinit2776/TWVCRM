@@ -42,6 +42,7 @@ import {
   Search,
   Warehouse,
   ArrowLeftRight,
+  ShieldCheck,
   UtensilsCrossed,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -130,6 +131,7 @@ const navSections: NavSection[] = [
       { href: "/procurement/inventory",   label: "Inventory",         icon: Warehouse,         roles: null },
       { href: "/procurement/transfers",   label: "Transfers",         icon: ArrowLeftRight,    roles: ["admin", "manager", "floor_manager"] },
       { href: "/procurement/consumption", label: "Consumption",       icon: UtensilsCrossed,   roles: null },
+      { href: "/procurement/verify",      label: "Verify Approval",  icon: ShieldCheck,       roles: null },
     ],
   },
   {

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 import { z } from "zod";
 
 const patchTransferSchema = z.discriminatedUnion("action", [
@@ -168,12 +169,19 @@ export async function PATCH(
         }
       }
 
+      const { count: transferApprovalCount } = await supabase
+        .from("stock_transfers")
+        .select("*", { count: "exact", head: true })
+        .not("approval_code", "is", null);
+      const transferApprovalCode = generateSignedApprovalCode("transfer", (transferApprovalCount ?? 0) + 1, id);
+
       const { error: updateError } = await supabase
         .from("stock_transfers")
         .update({
           status: "approved",
           approved_by: dbUser.id,
           approved_at: new Date().toISOString(),
+          approval_code: transferApprovalCode,
         })
         .eq("id", id);
 

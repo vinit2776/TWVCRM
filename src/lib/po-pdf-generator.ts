@@ -351,6 +351,42 @@ export function generatePurchaseOrderPDF(po: PoForPDF): jsPDF {
     footerStartY = tcStartY + 10 + lineCount * 4.5 + 6;
   }
 
+  // ── Verification Seal ──
+  const approvalCode = po.purchase_requests?.approval_code;
+  if (approvalCode) {
+    const sealY = footerStartY;
+    const sealW = 80;
+    const sealH = 22;
+    const sealX = pageWidth - 14 - sealW;
+
+    // Outer border (double-line effect)
+    doc.setDrawColor(...BRAND_TEAL);
+    doc.setLineWidth(1);
+    doc.rect(sealX, sealY, sealW, sealH);
+    doc.setLineWidth(0.3);
+    doc.rect(sealX + 1.5, sealY + 1.5, sealW - 3, sealH - 3);
+
+    // "VERIFIED" label
+    doc.setFontSize(7);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...BRAND_TEAL);
+    doc.text("VERIFIED APPROVAL", sealX + sealW / 2, sealY + 6, { align: "center" });
+
+    // Approval code (large, prominent)
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...BRAND_DARK);
+    doc.text(approvalCode, sealX + sealW / 2, sealY + 13, { align: "center" });
+
+    // Signature hint
+    doc.setFontSize(5.5);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(120, 120, 120);
+    doc.text("Cryptographically signed", sealX + sealW / 2, sealY + 18, { align: "center" });
+
+    footerStartY = sealY + sealH + 6;
+  }
+
   // ── Footer ──
   const footerY = footerStartY;
   doc.setDrawColor(...BRAND_TEAL);
@@ -360,7 +396,6 @@ export function generatePurchaseOrderPDF(po: PoForPDF): jsPDF {
   doc.setFontSize(7.5);
   doc.setFont("helvetica", "italic");
   doc.setTextColor(120, 120, 120);
-  const approvalCode = po.purchase_requests?.approval_code;
   doc.text(
     `This is a computer-generated Purchase Order.${approvalCode ? ` Approval reference: ${approvalCode}.` : ""} Please retain for your records.`,
     14,

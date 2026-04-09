@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
+import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 import { z } from "zod";
 
 const patchBillSchema = z.discriminatedUnion("action", [
@@ -123,10 +124,17 @@ export async function PATCH(
         );
       }
 
+      const { count: billApprovalCount } = await supabase
+        .from("vendor_bills")
+        .select("*", { count: "exact", head: true })
+        .eq("approval_status", "approved");
+      const billApprovalCode = generateSignedApprovalCode("bill", (billApprovalCount ?? 0) + 1, id);
+
       updatePayload = {
         approval_status: "approved",
         approved_by: dbUser.id,
         approved_at: new Date().toISOString(),
+        approval_code: billApprovalCode,
         rejection_reason: null,
         rejection_outcome: null,
       };
