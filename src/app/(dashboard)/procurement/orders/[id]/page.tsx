@@ -7,7 +7,7 @@ import {
   ChevronLeft, Loader2, Truck, MapPin, User, Calendar,
   FileText, PackageOpen, Receipt, Download, CreditCard,
   Clock, Paperclip, X, CheckCircle2, Package, ClipboardList, Info,
-  AlertTriangle, Undo2,
+  AlertTriangle, Undo2, Mail,
 } from "lucide-react";
 import { generatePurchaseOrderPDF } from "@/lib/po-pdf-generator";
 import { Button } from "@/components/ui/button";
@@ -43,7 +43,8 @@ type ActionType =
   | "record_service_report"
   | "add_invoice"
   | "reject_delivery"
-  | "process_advance";
+  | "process_advance"
+  | "email_po";
 
 // ─── Timeline helper ─────────────────────────────────────────────────────────
 interface TimelineItem {
@@ -283,6 +284,11 @@ export default function PurchaseOrderDetailPage() {
 
   // Reject Delivery
   const [rejectDeliveryId, setRejectDeliveryId] = useState<string | null>(null);
+
+  // Email PO
+  const [emailTo, setEmailTo] = useState("");
+  const [emailSaveToVendor, setEmailSaveToVendor] = useState(false);
+  const [emailSending, setEmailSending] = useState(false);
 
   // Partial Cancel
   const [partialCancelQtys, setPartialCancelQtys] = useState<Record<string, string>>({});
@@ -658,6 +664,20 @@ export default function PurchaseOrderDetailPage() {
               }}
             >
               <Download className="h-4 w-4 mr-1" /> Download PO
+            </Button>
+          )}
+          {!["cancelled", "partially_cancelled"].includes(po.status) && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const vendor = po.procurement_vendors as { contact_email?: string } | null;
+                setEmailTo(vendor?.contact_email || "");
+                setEmailSaveToVendor(false);
+                setActionDialog("email_po");
+              }}
+            >
+              <Mail className="h-4 w-4 mr-1" /> Email PO
             </Button>
           )}
           {po.status === "pending" && (
@@ -1802,6 +1822,94 @@ export default function PurchaseOrderDetailPage() {
               </div>
             );
           })()}
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Email PO dialog ─────────────────────────────────────────────────── */}
+      <Dialog
+        open={actionDialog === "email_po"}
+        onOpenChange={() => { setActionDialog(null); setEmailTo(""); setEmailSaveToVendor(false); }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Email Purchase Order</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            {!(po.procurement_vendors as { contact_email?: string } | null)?.contact_email && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-3">
+                <p className="text-sm text-amber-800">
+                  No email address on file for this vendor. Enter one below.
+                </p>
+              </div>
+            )}
+            <div className="space-y-2">
+              <Label htmlFor="email-to">Recipient Email</Label>
+              <Input
+                id="email-to"
+                type="email"
+                placeholder="vendor@example.com"
+                value={emailTo}
+                onChange={(e) => setEmailTo(e.target.value)}
+              />
+            </div>
+            {!(po.procurement_vendors as { contact_email?: string } | null)?.contact_email && emailTo && (
+              <label className="flex items-center gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  checked={emailSaveToVendor}
+                  onChange={(e) => setEmailSaveToVendor(e.target.checked)}
+                  className="rounded border-gray-300"
+                />
+                Save this email to vendor for future use
+              </label>
+            )}
+            <p className="text-xs text-muted-foreground">
+              The PO PDF will be generated and sent as an attachment.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setActionDialog(null); setEmailTo(""); }}>Cancel</Button>
+            <Button
+              disabled={emailSending || !emailTo.trim()}
+              onClick={async () => {
+                const email = emailTo.trim();
+                if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+                  toast.error("Please enter a valid email address");
+                  return;
+                }
+                setEmailSending(true);
+                try {
+                  const pdf = generatePurchaseOrderPDF(po as Parameters<typeof generatePurchaseOrderPDF>[0]);
+                  const pdfBlob = pdf.output("blob");
+                  const formData = new FormData();
+                  formData.append("recipients", JSON.stringify([email]));
+                  formData.append("pdf", new File([pdfBlob], `${po.po_number}.pdf`, { type: "application/pdf" }));
+                  if (emailSaveToVendor) formData.append("save_email", "true");
+                  const res = await fetch(`/api/procurement/orders/${id}/email`, {
+                    method: "POST",
+                    body: formData,
+                  });
+                  const json = await res.json();
+                  if (!res.ok) {
+                    toast.error(json.error || "Failed to send email");
+                    return;
+                  }
+                  toast.success(`PO emailed to ${email}`);
+                  setActionDialog(null);
+                  setEmailTo("");
+                  setEmailSaveToVendor(false);
+                  if (emailSaveToVendor) fetchPo(); // Refresh to show updated vendor email
+                } catch {
+                  toast.error("Failed to send email");
+                } finally {
+                  setEmailSending(false);
+                }
+              }}
+            >
+              {emailSending && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Send Email
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
