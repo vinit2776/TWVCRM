@@ -78,19 +78,21 @@ export async function POST(
   const existingAttachments = (ticket as { attachments?: unknown[] }).attachments || [];
   const newAttachment = { path: filePath, name: file.name, uploaded_at: new Date().toISOString() };
 
-  const { data: updated, error: updateError } = await adminSupabase
+  const newAttachments = [...existingAttachments, newAttachment];
+
+  const { data: updatedRows, error: updateError } = await adminSupabase
     .from("support_tickets")
     .update({
       screenshot_path: filePath,
-      attachments: [...existingAttachments, newAttachment],
+      attachments: newAttachments,
     })
     .eq("id", id)
-    .select("*")
-    .single();
+    .select("*");
 
   if (updateError) {
     return NextResponse.json({ error: updateError.message }, { status: 500 });
   }
 
+  const updated = updatedRows?.[0] ?? null;
   return NextResponse.json({ data: updated });
 }

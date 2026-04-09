@@ -73,9 +73,13 @@ export async function POST(request: NextRequest) {
   const fileName = `${Date.now()}-${file.name}`;
   const filePath = customPath ? `${customPath}/${fileName}` : `documents/${fileName}`;
 
+  // Convert File to Buffer for reliable server-side upload (avoids Node.js File API issues)
+  const arrayBuffer = await file.arrayBuffer();
+  const buffer = Buffer.from(arrayBuffer);
+
   const { error: uploadError } = await adminSupabase.storage
     .from("crm-documents")
-    .upload(filePath, file);
+    .upload(filePath, buffer, { contentType: file.type || "application/octet-stream", upsert: false });
 
   if (uploadError) {
     return NextResponse.json({ error: uploadError.message }, { status: 500 });
