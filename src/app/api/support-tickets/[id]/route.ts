@@ -53,7 +53,7 @@ export async function GET(
     .eq("ticket_id", id)
     .order("created_at", { ascending: true });
 
-  // Get screenshot signed URL if present
+  // Get screenshot signed URL if present (legacy)
   let screenshotUrl = null;
   if (ticket.screenshot_path) {
     const { data: urlData } = await adminSupabase.storage
@@ -62,8 +62,19 @@ export async function GET(
     screenshotUrl = urlData?.signedUrl || null;
   }
 
+  // Generate signed URLs for all attachments
+  const rawAttachments = (ticket as { attachments?: { path: string; name: string; uploaded_at: string }[] }).attachments || [];
+  const attachmentsWithUrls = await Promise.all(
+    rawAttachments.map(async (att) => {
+      const { data: urlData } = await adminSupabase.storage
+        .from("crm-documents")
+        .createSignedUrl(att.path, 3600);
+      return { ...att, url: urlData?.signedUrl || null };
+    })
+  );
+
   return NextResponse.json({
-    data: { ...ticket, notes: notes || [], screenshot_url: screenshotUrl },
+    data: { ...ticket, notes: notes || [], screenshot_url: screenshotUrl, attachments_with_urls: attachmentsWithUrls },
   });
 }
 

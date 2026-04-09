@@ -24,6 +24,10 @@ import {
   Send,
   CheckCircle2,
   RotateCcw,
+  Paperclip,
+  Upload,
+  FileText,
+  Image as ImageIcon,
 } from "lucide-react";
 import {
   TICKET_TYPE_LABELS,
@@ -40,6 +44,13 @@ interface TicketNote {
   note: string;
   created_at: string;
   author: { id: string; full_name: string; email: string } | null;
+}
+
+interface Attachment {
+  path: string;
+  name: string;
+  uploaded_at: string;
+  url: string | null;
 }
 
 interface TicketDetail {
@@ -64,6 +75,7 @@ interface TicketDetail {
   assignee: { id: string; full_name: string; email: string } | null;
   assigned_to: string | null;
   notes: TicketNote[];
+  attachments_with_urls?: Attachment[];
 }
 
 interface MyTicketDetailDialogProps {
@@ -80,6 +92,7 @@ export function MyTicketDetailDialog({
   const [loading, setLoading] = useState(false);
   const [addingNote, setAddingNote] = useState(false);
   const [reopening, setReopening] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [ticket, setTicket] = useState<TicketDetail | null>(null);
   const [newNote, setNewNote] = useState("");
 
@@ -155,6 +168,35 @@ export function MyTicketDetailDialog({
     }
   }
 
+  async function handleAttachFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file || !ticketId) return;
+    if (file.size > 10 * 1024 * 1024) { toast.error("File must be under 10MB"); return; }
+
+    setUploading(true);
+    try {
+      const formData = new FormData();
+      formData.append("file", file);
+      const res = await fetch(`/api/support-tickets/${ticketId}/screenshot`, { method: "POST", body: formData });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        throw new Error(err?.error || "Upload failed");
+      }
+      toast.success("Attachment uploaded");
+      // Re-fetch ticket to get updated attachments with signed URLs
+      const ticketRes = await fetch(`/api/support-tickets/${ticketId}`);
+      if (ticketRes.ok) {
+        const { data } = await ticketRes.json();
+        setTicket(data);
+      }
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+      e.target.value = "";
+    }
+  }
+
   function formatDate(date: string) {
     return new Date(date).toLocaleString("en-IN", {
       timeZone: "Asia/Kolkata",
@@ -212,22 +254,46 @@ export function MyTicketDetailDialog({
                 </div>
               )}
 
-              {/* Screenshot */}
-              {ticket.screenshot_url && (
-                <div className="space-y-1">
-                  <Label className="text-xs text-muted-foreground">Screenshot</Label>
-                  <a
-                    href={ticket.screenshot_url}
-                    target="_blank"
-                    rel="noopener noreferrer"
-                  >
-                    <img
-                      src={ticket.screenshot_url}
-                      alt="Ticket screenshot"
-                      className="rounded-md border max-h-64 object-contain w-full bg-muted cursor-pointer hover:opacity-90 transition-opacity"
-                    />
-                  </a>
+              {/* Attachments */}
+              {((ticket.attachments_with_urls && ticket.attachments_with_urls.length > 0) || ticket.screenshot_url) && (
+                <div className="space-y-2">
+                  <Label className="text-xs text-muted-foreground flex items-center gap-1.5">
+                    <Paperclip className="h-3.5 w-3.5" />
+                    Attachments ({ticket.attachments_with_urls?.length || (ticket.screenshot_url ? 1 : 0)})
+                  </Label>
+                  <div className="grid gap-2">
+                    {ticket.attachments_with_urls && ticket.attachments_with_urls.length > 0 ? (
+                      ticket.attachments_with_urls.map((att, i) => (
+                        <a key={i} href={att.url || "#"} target="_blank" rel="noopener noreferrer" className="flex items-center gap-2 rounded-md border p-2 hover:bg-muted/50 transition-colors">
+                          {att.name?.match(/\.(png|jpg|jpeg|gif|webp)$/i) ? (
+                            <ImageIcon className="h-4 w-4 text-muted-foreground shrink-0" />
+                          ) : (
+                            <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                          )}
+                          <span className="text-sm truncate flex-1">{att.name || "attachment"}</span>
+                          <ExternalLink className="h-3 w-3 text-muted-foreground shrink-0" />
+                        </a>
+                      ))
+                    ) : ticket.screenshot_url ? (
+                      <a href={ticket.screenshot_url} target="_blank" rel="noopener noreferrer">
+                        <img src={ticket.screenshot_url} alt="Screenshot" className="rounded-md border max-h-48 object-contain w-full bg-muted cursor-pointer hover:opacity-90 transition-opacity" />
+                      </a>
+                    ) : null}
+                  </div>
                 </div>
+              )}
+
+              {/* Add attachment (if ticket not closed) */}
+              {ticket.status !== "closed" && (
+                <label className="flex cursor-pointer items-center justify-center gap-2 rounded-md border border-dashed p-3 text-sm text-muted-foreground hover:bg-muted/50 transition-colors">
+                  {uploading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Upload className="h-4 w-4" />
+                  )}
+                  <span>{uploading ? "Uploading..." : "Attach a file (image, PDF, document — max 10MB)"}</span>
+                  <input type="file" accept="image/*,.pdf,.doc,.docx" className="hidden" onChange={handleAttachFile} disabled={uploading} />
+                </label>
               )}
 
               {/* Context info */}

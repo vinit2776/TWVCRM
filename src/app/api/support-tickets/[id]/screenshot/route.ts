@@ -18,7 +18,7 @@ export async function POST(
   // Verify ticket exists
   const { data: ticket } = await adminSupabase
     .from("support_tickets")
-    .select("id")
+    .select("id, status, attachments")
     .eq("id", id)
     .single();
 
@@ -33,10 +33,11 @@ export async function POST(
     return NextResponse.json({ error: "No file provided" }, { status: 400 });
   }
 
-  // Validate file type
-  if (!file.type.startsWith("image/")) {
+  // Validate file type (images and common document types)
+  const allowedTypes = ["image/", "application/pdf", "application/msword", "application/vnd.openxmlformats"];
+  if (!allowedTypes.some((t) => file.type.startsWith(t))) {
     return NextResponse.json(
-      { error: "Only image files are allowed" },
+      { error: "Only images, PDFs, and documents are allowed" },
       { status: 400 }
     );
   }
@@ -47,6 +48,11 @@ export async function POST(
       { error: "File size must be under 10MB" },
       { status: 400 }
     );
+  }
+
+  // Check ticket is not closed
+  if (ticket.status === "closed") {
+    return NextResponse.json({ error: "Cannot add attachments to a closed ticket" }, { status: 400 });
   }
 
   // Upload to Supabase storage
@@ -68,10 +74,16 @@ export async function POST(
     );
   }
 
-  // Update ticket record with screenshot path
+  // Append to attachments array + keep legacy screenshot_path for backward compat
+  const existingAttachments = (ticket as { attachments?: unknown[] }).attachments || [];
+  const newAttachment = { path: filePath, name: file.name, uploaded_at: new Date().toISOString() };
+
   const { data: updated, error: updateError } = await adminSupabase
     .from("support_tickets")
-    .update({ screenshot_path: filePath })
+    .update({
+      screenshot_path: filePath,
+      attachments: [...existingAttachments, newAttachment],
+    })
     .eq("id", id)
     .select("*")
     .single();
