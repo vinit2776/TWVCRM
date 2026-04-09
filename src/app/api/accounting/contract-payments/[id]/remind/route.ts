@@ -128,16 +128,18 @@ export async function POST(
     }
 
     // DLT SMS: send payment reminder to lead's phone (fire-and-forget)
-    const leadPhone = lead?.phone || lead?.mobile;
-    if (leadPhone) {
-      const firstName = lead?.first_name || "Client";
-      const amountStr = String(Math.round(Number(paymentData.amount)));
-      // Use followup template if a reminder was already sent before, otherwise use first reminder
-      const isFollowup = !!paymentData.reminder_sent_at;
-      if (isFollowup) {
-        dltSms.paymentFollowup(leadPhone, firstName, amountStr, id).catch(console.error);
-      } else {
-        dltSms.paymentReminder(leadPhone, firstName, amountStr, id).catch(console.error);
+    // Respects send_sms flag from request body (defaults to true)
+    if (body.send_sms !== false) {
+      const leadPhone = lead?.phone || lead?.mobile;
+      if (leadPhone) {
+        const firstName = lead?.first_name || "Client";
+        const amountStr = String(Math.round(Number(paymentData.amount)));
+        const isFollowup = !!paymentData.reminder_sent_at;
+        if (isFollowup) {
+          dltSms.paymentFollowup(leadPhone, firstName, amountStr, id).catch(console.error);
+        } else {
+          dltSms.paymentReminder(leadPhone, firstName, amountStr, id).catch(console.error);
+        }
       }
     }
 

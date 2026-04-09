@@ -99,7 +99,7 @@ export async function PATCH(
         .single();
 
       const phone = (lead?.mobile || lead?.phone) as string | null | undefined;
-      if (lead && phone) {
+      if (lead && phone && body.send_sms !== false) {
         const customerName = lead.company
           ?? `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim();
         const amount = `₹${((data.total_amount as number) ?? 0).toLocaleString("en-IN")}`;

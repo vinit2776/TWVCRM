@@ -567,7 +567,7 @@ export async function PATCH(
           ? new Date(String(vars.start_date)).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" })
           : new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
 
-      if (clientPhone) {
+      if (clientPhone && body.send_sms !== false) {
         dltSms.contractWelcome(clientPhone, clientName, startDate, caseId).catch(console.error);
       }
     } catch (smsErr) {

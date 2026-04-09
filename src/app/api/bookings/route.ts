@@ -593,10 +593,14 @@ export async function POST(request: NextRequest) {
       const guestName = (booking.guest_name as string) ?? "Guest";
       const bookingRef = (booking.booking_number as string) ?? (booking.id as string).slice(0, 8);
       phones.forEach((phone) => {
-        // WhatsApp (existing)
-        messaging.bookingConfirmation(phone, guestName, bookingRef, bookingDate, booking.id as string).catch(console.error);
-        // DLT SMS — TWV_Booking_Confirmation
-        dltSms.bookingConfirmation(phone, guestName, bookingRef, booking.id as string).catch(console.error);
+        // WhatsApp — only if opted in
+        if (body.send_whatsapp !== false) {
+          messaging.bookingConfirmation(phone, guestName, bookingRef, bookingDate, booking.id as string).catch(console.error);
+        }
+        // DLT SMS — only if opted in
+        if (body.send_sms !== false) {
+          dltSms.bookingConfirmation(phone, guestName, bookingRef, booking.id as string).catch(console.error);
+        }
       });
     }
   }

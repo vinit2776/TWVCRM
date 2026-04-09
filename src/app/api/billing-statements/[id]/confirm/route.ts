@@ -18,10 +18,11 @@ import { messaging, dltSms } from "@/lib/whatsapp";
  *  7. Update contract.next_billing_date
  */
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -346,24 +347,16 @@ export async function POST(
     }
   }
 
-  // 10. SMS/WhatsApp notification
+  // 10. SMS/WhatsApp notification (respects send_sms/send_whatsapp flags)
   const customerPhone = lead?.phone || lead?.mobile;
   if (customerPhone) {
     const amountStr = String(Math.round(totalAmount));
-    messaging.billingStatementReady(
-      customerPhone,
-      customerName,
-      invoiceNumber,
-      amountStr,
-      id
-    ).catch(console.error);
-
-    dltSms.paymentReminder(
-      customerPhone,
-      customerName,
-      amountStr,
-      id
-    ).catch(console.error);
+    if (body.send_whatsapp !== false) {
+      messaging.billingStatementReady(customerPhone, customerName, invoiceNumber, amountStr, id).catch(console.error);
+    }
+    if (body.send_sms !== false) {
+      dltSms.paymentReminder(customerPhone, customerName, amountStr, id).catch(console.error);
+    }
   }
 
   // 11. Update contract.next_billing_date
