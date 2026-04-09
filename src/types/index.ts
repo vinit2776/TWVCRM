@@ -1291,6 +1291,24 @@ export interface CaseDocument {
   updated_at: string;
 }
 
+export interface ContractDocument {
+  id: string;
+  contract_id: string;
+  document_id?: string;
+  document?: CrmDocument;
+  document_type: string;
+  label: string;
+  is_required: boolean;
+  status: CaseDocStatus; // reuse same enum: pending, uploaded, approved, rejected
+  reviewed_by?: string;
+  reviewer?: User;
+  reviewed_at?: string;
+  rejection_reason?: string;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface CaseComment {
   id: string;
   case_id: string;
@@ -1432,6 +1450,23 @@ export interface ProcurementVendor {
   terms_and_conditions?: string;
   notes?: string;
   is_active: boolean;
+  // Bank details
+  bank_name?: string;
+  bank_account_holder?: string;
+  bank_account_number?: string;
+  bank_ifsc?: string;
+  // KYC & compliance
+  pan_number?: string;
+  msme_number?: string;
+  kyc_verified: boolean;
+  kyc_verified_at?: string;
+  kyc_verified_by?: string;
+  // Document paths (Supabase Storage)
+  pan_doc_path?: string;
+  gst_cert_path?: string;
+  reg_cert_path?: string;
+  aadhar_doc_path?: string;
+  msme_cert_path?: string;
   created_by?: string;
   created_at: string;
   updated_at: string;

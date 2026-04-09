@@ -30,6 +30,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
+import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import {
@@ -82,6 +83,7 @@ export default function ContractDetailPage({
   const [linkedProposal, setLinkedProposal] = useState<any>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
+  const [kycStatus, setKycStatus] = useState<{ allApproved: boolean; total: number; approved: number }>({ allApproved: true, total: 0, approved: 0 });
   const [showOverride, setShowOverride] = useState(false);
 
   const fetchContract = useCallback(async () => {
@@ -393,7 +395,8 @@ export default function ContractDetailPage({
           {contract.status === "accepted" && (() => {
             const proposalPaid = !linkedProposal || linkedProposal.payment_status === "paid";
             const depositPaid = !linkedProposal || linkedProposal.deposit_payment_status !== "pending";
-            const canActivate = proposalPaid && depositPaid;
+            const kycComplete = kycStatus.total === 0 || kycStatus.allApproved;
+            const canActivate = proposalPaid && depositPaid && kycComplete;
 
             return canActivate ? (
               <Button variant="outline" onClick={() => handleStatusUpdate("active")} disabled={statusUpdating}>
@@ -411,6 +414,7 @@ export default function ContractDetailPage({
                     <p className="font-semibold mb-1">Cannot activate until:</p>
                     {!proposalPaid && <p>• Proposal payment collected</p>}
                     {!depositPaid && <p>• Security deposit collected</p>}
+                    {!kycComplete && <p>• KYC documents approved ({kycStatus.approved}/{kycStatus.total})</p>}
                   </div>
                 </div>
                 {userRole === "admin" && (
@@ -617,36 +621,14 @@ export default function ContractDetailPage({
             </CardContent>
           </Card>
 
-          {/* KYC Documents Status */}
-          {contract.lead?.entity_type && KYC_DOCUMENTS[contract.lead.entity_type] && (
-            <Card className="border-amber-200">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base flex items-center gap-2">
-                  <AlertTriangle className="h-4 w-4 text-amber-600" />
-                  KYC Documents — {ENTITY_TYPE_LABELS[contract.lead.entity_type] || contract.lead.entity_type}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-xs text-muted-foreground mb-3">
-                  Documents required for contract activation and compliance. Missing documents will be flagged until completed.
-                </p>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-                  {KYC_DOCUMENTS[contract.lead.entity_type].map((doc) => (
-                    <div
-                      key={doc}
-                      className="flex items-center gap-2 rounded-md border px-3 py-2 text-sm bg-amber-50 border-amber-200"
-                    >
-                      <AlertTriangle className="h-3.5 w-3.5 text-amber-500 shrink-0" />
-                      <span className="text-amber-800">{doc}</span>
-                      <Badge variant="outline" className="ml-auto text-[10px] border-amber-400 text-amber-700">
-                        Pending
-                      </Badge>
-                    </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
-          )}
+          {/* KYC Documents — Upload & Approval */}
+          <ContractDocumentsTab
+            contractId={id}
+            onKycStatusChange={(allApproved, total, approved) => {
+              // Store KYC status for activation gate
+              setKycStatus({ allApproved, total, approved });
+            }}
+          />
 
           {/* Line Items Table */}
           <Card>
