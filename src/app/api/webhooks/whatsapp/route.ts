@@ -83,10 +83,58 @@ export async function POST(request: NextRequest) {
 
     if (requestId && mappedStatus && ["delivered", "read", "failed"].includes(mappedStatus)) {
       // Update existing outbound message status
-      await supabase
+      const { data: msg } = await supabase
         .from("whatsapp_messages")
         .update({ status: mappedStatus, updated_at: new Date().toISOString() })
-        .eq("wa_message_id", requestId);
+        .eq("wa_message_id", requestId)
+        .select("id, channel, template_name, to_number, entity_type, entity_id")
+        .single();
+
+      // Log delivery confirmation to audit trail + lead activity
+      if (msg) {
+        const statusLabel = mappedStatus === "delivered" ? "Delivered" : mappedStatus === "read" ? "Read" : "Failed";
+        const channelLabel = msg.channel === "sms" ? "SMS" : "WhatsApp";
+
+        // Audit trail — linked to the entity that triggered the message
+        if (msg.entity_type && msg.entity_id) {
+          await supabase.from("audit_trail").insert({
+            entity_type: msg.entity_type,
+            entity_id: msg.entity_id,
+            action: "update",
+            changes: {
+              sms_delivery: {
+                old: "sent",
+                new: `${statusLabel} (${channelLabel} to ${msg.to_number || "unknown"})`,
+              },
+              template: { old: null, new: msg.template_name || "unknown" },
+            },
+          }).then(({ error }) => { if (error) console.error("[webhook] audit insert failed:", error.message); });
+        }
+
+        // Lead activity — find the lead from the entity
+        let leadId: string | null = null;
+        if (msg.entity_type === "booking" && msg.entity_id) {
+          const { data: booking } = await supabase.from("bookings").select("lead_id").eq("id", msg.entity_id).single();
+          leadId = booking?.lead_id || null;
+        } else if (msg.entity_type === "billing_statement" && msg.entity_id) {
+          const { data: stmt } = await supabase.from("billing_statements").select("lead_id").eq("id", msg.entity_id).single();
+          leadId = stmt?.lead_id || null;
+        } else if (msg.entity_type === "lead" && msg.entity_id) {
+          leadId = msg.entity_id;
+        } else if (msg.entity_type === "case" && msg.entity_id) {
+          const { data: voCase } = await supabase.from("cases").select("lead_id").eq("id", msg.entity_id).single();
+          leadId = voCase?.lead_id || null;
+        }
+
+        if (leadId) {
+          await supabase.from("activities").insert({
+            lead_id: leadId,
+            type: "note",
+            subject: `${channelLabel} ${statusLabel} — ${msg.template_name || "message"}`,
+            description: `${channelLabel} to ${msg.to_number || "unknown"}: ${statusLabel}. Template: ${msg.template_name || "—"}`,
+          }).then(({ error }) => { if (error) console.error("[webhook] activity insert failed:", error.message); });
+        }
+      }
     } else if (fromNumber && text) {
       // Inbound message — log it for potential future auto-reply handling
       const channel = (event.channel as string | undefined) ?? "whatsapp";
