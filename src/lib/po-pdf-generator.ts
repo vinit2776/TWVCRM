@@ -304,9 +304,26 @@ export async function generatePurchaseOrderPDF(po: PoForPDF): Promise<jsPDF> {
     margin: { left: 14, right: 14 },
   });
 
-  // ── Totals ──
+  // ── Guard: ensure enough room on current page for totals + seal + footer ──
+  const pageHeight = doc.internal.pageSize.getHeight();
+  const FOOTER_MIN_SPACE = 90; // mm needed for totals + terms + QR seal + footer
+
   let finalY = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6;
 
+  if (finalY > pageHeight - FOOTER_MIN_SPACE) {
+    doc.addPage();
+    // Teal accent bar at top of continuation page
+    doc.setFillColor(...BRAND_TEAL);
+    doc.rect(0, 0, pageWidth, 3, "F");
+    // Continuation label
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(160, 160, 160);
+    doc.text(`${po.po_number} (continued)`, pageWidth - 14, 10, { align: "right" });
+    finalY = 18;
+  }
+
+  // ── Totals ──
   const subtotal = Number(po.total_ordered_amount);
   const gstTotal = Number(po.total_gst_amount ?? 0);
   const grandTotal = Number(po.total_amount_with_gst ?? subtotal);
@@ -333,8 +350,22 @@ export async function generatePurchaseOrderPDF(po: PoForPDF): Promise<jsPDF> {
   }
 
   // ── Terms & Conditions Section ──
+  const approvalCode = po.purchase_requests?.approval_code;
+
   let footerStartY = finalY + (subtotal > 0 ? 18 : 8);
   if (po.terms_and_conditions) {
+    // Guard: TC block needs space — push to new page if needed
+    if (footerStartY > pageHeight - 60) {
+      doc.addPage();
+      doc.setFillColor(...BRAND_TEAL);
+      doc.rect(0, 0, pageWidth, 3, "F");
+      doc.setFontSize(8);
+      doc.setFont("helvetica", "normal");
+      doc.setTextColor(160, 160, 160);
+      doc.text(`${po.po_number} (continued)`, pageWidth - 14, 10, { align: "right" });
+      footerStartY = 18;
+    }
+
     const tcStartY = footerStartY;
     doc.setFillColor(245, 247, 250);
     doc.rect(14, tcStartY - 3, pageWidth - 28, 7, "F");
@@ -353,7 +384,18 @@ export async function generatePurchaseOrderPDF(po: PoForPDF): Promise<jsPDF> {
   }
 
   // ── Verification Seal + QR Code ──
-  const approvalCode = po.purchase_requests?.approval_code;
+  // Guard: seal needs ~40mm — push to new page if it would overflow
+  if (approvalCode && footerStartY > pageHeight - 50) {
+    doc.addPage();
+    doc.setFillColor(...BRAND_TEAL);
+    doc.rect(0, 0, pageWidth, 3, "F");
+    doc.setFontSize(8);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(160, 160, 160);
+    doc.text(`${po.po_number} (continued)`, pageWidth - 14, 10, { align: "right" });
+    footerStartY = 18;
+  }
+
   if (approvalCode) {
     const appUrl = (typeof window !== "undefined" ? window.location.origin : process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").replace(/\/$/, "");
     const verifyUrl = `${appUrl}/verify/${encodeURIComponent(approvalCode)}`;

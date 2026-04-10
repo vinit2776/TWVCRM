@@ -76,9 +76,10 @@ export async function POST(
   }
 
   // Validate PO exists and is in a receivable state
+  // Also fetch pr_id so we can fall back to the PR's location when the PO has none
   const { data: po, error: poErr } = await supabase
     .from("purchase_orders")
-    .select("id, status, vendor_id, location_id")
+    .select("id, status, vendor_id, location_id, pr_id")
     .eq("id", id)
     .single();
 
@@ -108,10 +109,11 @@ export async function POST(
     );
   }
 
-  // Fetch all PO items to validate ownership and over-receiving
+  // Fetch all PO items — also include pr_item_id so we can resolve item_id
+  // via the PR item when the PO item itself has no item_id set.
   const { data: poItems } = await supabase
     .from("purchase_order_items")
-    .select("id, item_id, quantity_ordered, quantity_received")
+    .select("id, item_id, quantity_ordered, quantity_received, pr_item_id, purchase_request_items(id, item_id)")
     .eq("po_id", id);
 
   const poItemMap = Object.fromEntries(
@@ -188,16 +190,47 @@ export async function POST(
       .eq("po_id", id);
   }
 
-  // Update location_stock for each received item
-  if (po.location_id) {
+  // ── Update location_stock for each received item ──────────────────────────
+  // Resolve the location: use PO's location_id; if absent, fall back to the
+  // Purchase Request's location_id (common when location wasn't selected on PO).
+  let stockLocationId: string | null = po.location_id ?? null;
+  if (!stockLocationId && po.pr_id) {
+    const { data: prRow } = await supabase
+      .from("purchase_requests")
+      .select("location_id")
+      .eq("id", po.pr_id)
+      .maybeSingle();
+    stockLocationId = prRow?.location_id ?? null;
+  }
+
+  if (stockLocationId) {
     for (const item of items.filter((i) => i.qty_received > 0)) {
-      const poItem = poItemMap[item.po_item_id];
-      if (poItem?.item_id) {
-        await supabase.rpc("upsert_location_stock", {
-          p_location_id: po.location_id,
-          p_item_id: poItem.item_id,
+      const poItem = poItemMap[item.po_item_id] as {
+        item_id: string | null;
+        purchase_request_items?: { item_id: string | null } | null;
+        [key: string]: unknown;
+      };
+
+      // Prefer item_id on the PO item; fall back to the linked PR item's item_id.
+      const resolvedItemId: string | null =
+        poItem?.item_id ??
+        (poItem?.purchase_request_items as { item_id: string | null } | null)?.item_id ??
+        null;
+
+      if (resolvedItemId) {
+        const { error: rpcErr } = await supabase.rpc("upsert_location_stock", {
+          p_location_id: stockLocationId,
+          p_item_id: resolvedItemId,
           p_quantity_delta: item.qty_received,
         });
+        if (rpcErr) {
+          // Log but don't fail the request — delivery is still recorded
+          console.error("[delivery] upsert_location_stock failed:", rpcErr.message, {
+            location: stockLocationId,
+            item: resolvedItemId,
+            qty: item.qty_received,
+          });
+        }
       }
     }
   }
