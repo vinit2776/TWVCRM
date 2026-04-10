@@ -211,12 +211,28 @@ export default function PurchaseRequestDetailPage() {
 
       {/* Rejection reason callout */}
       {pr.status === "rejected" && pr.rejection_reason && (
-        <Card className="border-red-200 bg-red-50/50">
-          <CardContent className="pt-4 flex gap-3">
+        <Card className="border-red-300 bg-red-50 ring-1 ring-red-200">
+          <CardContent className="pt-4 pb-4 flex gap-3">
             <XCircle className="h-5 w-5 text-red-500 flex-shrink-0 mt-0.5" />
-            <div>
-              <p className="text-sm font-medium text-red-800">Rejection Reason</p>
-              <p className="text-sm text-red-700 mt-0.5">{pr.rejection_reason}</p>
+            <div className="flex-1">
+              <p className="text-sm font-semibold text-red-800 uppercase tracking-wide">
+                ⚠ Request Rejected
+              </p>
+              <p className="text-sm text-red-900 mt-1.5 font-medium leading-relaxed">
+                {pr.rejection_reason}
+              </p>
+              {pr.approver && (
+                <p className="text-xs text-red-600 mt-2">
+                  Rejected by{" "}
+                  <span className="font-medium">
+                    {pr.approver.full_name ?? pr.approver.email}
+                  </span>
+                  {pr.approved_at ? ` on ${formatDate(pr.approved_at)}` : ""}
+                </p>
+              )}
+              <p className="text-xs text-red-600 mt-1">
+                Please address the issue and resubmit the request.
+              </p>
             </div>
           </CardContent>
         </Card>

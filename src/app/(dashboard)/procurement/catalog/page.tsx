@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Archive, Pencil, Plus, X, Check } from "lucide-react";
+import { Archive, Pencil, Plus, X, Check, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -45,6 +45,8 @@ export default function CatalogPage() {
   const [deptFilter, setDeptFilter] = useState("");
   const [includeInactive, setIncludeInactive] = useState(false);
 
+  const [search, setSearch] = useState("");
+
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editItem, setEditItem] = useState<ProcurementItem | null>(null);
   const [form, setForm] = useState(emptyForm);
@@ -55,10 +57,11 @@ export default function CatalogPage() {
     const params = new URLSearchParams();
     if (deptFilter) params.set("department", deptFilter);
     if (includeInactive) params.set("include_inactive", "true");
+    if (search.trim()) params.set("search", search.trim());
     const res = await fetch(`/api/procurement/items?${params}`);
     if (res.ok) { const json = await res.json(); setItems(json.data || []); }
     setLoading(false);
-  }, [deptFilter, includeInactive]);
+  }, [deptFilter, includeInactive, search]);
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
 
@@ -142,7 +145,10 @@ export default function CatalogPage() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Item Catalog</h1>
-          <p className="text-sm text-muted-foreground">{items.length} item{items.length !== 1 ? "s" : ""} across all departments</p>
+          <p className="text-sm text-muted-foreground">
+            {items.length} item{items.length !== 1 ? "s" : ""}
+            {search.trim() ? ` matching "${search.trim()}"` : " across all departments"}
+          </p>
         </div>
         <Button onClick={() => setDialogOpen(true)} className="shrink-0">
           <Plus className="h-4 w-4 mr-2" /> Add Item
@@ -150,7 +156,24 @@ export default function CatalogPage() {
       </div>
 
       {/* Filters */}
-      <div className="flex gap-2">
+      <div className="flex flex-col sm:flex-row gap-2">
+        <div className="relative flex-1 max-w-sm">
+          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+          <Input
+            placeholder="Search items..."
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="pl-9"
+          />
+          {search && (
+            <button
+              onClick={() => setSearch("")}
+              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          )}
+        </div>
         <Select value={deptFilter} onValueChange={(v) => setDeptFilter(v === "all" ? "" : v)}>
           <SelectTrigger className="w-[200px]"><SelectValue placeholder="All Departments" /></SelectTrigger>
           <SelectContent>

@@ -328,8 +328,8 @@ export default function NewPurchaseRequestPage() {
                     <Label className="text-xs">Quantity <span className="text-red-500">*</span></Label>
                     <Input
                       type="number"
-                      min="0.01"
-                      step="0.01"
+                      min="1"
+                      step="1"
                       placeholder="0"
                       value={li.quantity}
                       onChange={(e) => updateItem(li.id, "quantity", e.target.value)}
@@ -388,6 +388,19 @@ export default function NewPurchaseRequestPage() {
               </div>
             </div>
           ))}
+
+          {/* Add Item — bottom button so users don't need to scroll up */}
+          <Button
+            variant="outline"
+            className="w-full border-dashed"
+            onClick={() => {
+              const newItem = emptyItem();
+              setItems((prev) => [...prev, newItem]);
+              setTimeout(() => openCatalogForItem(newItem.id), 0);
+            }}
+          >
+            <Plus className="h-4 w-4 mr-1" /> Add Another Item
+          </Button>
         </CardContent>
       </Card>
 
