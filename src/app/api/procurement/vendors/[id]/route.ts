@@ -15,6 +15,17 @@ const updateVendorSchema = z.object({
   terms_and_conditions: z.string().optional(),
   notes: z.string().optional(),
   is_active: z.boolean().optional(),
+  // Bank details
+  bank_name: z.string().optional(),
+  bank_account_holder: z.string().optional(),
+  bank_account_number: z.string().optional(),
+  bank_ifsc: z.string().optional(),
+  // KYC & compliance
+  pan_number: z.string().optional(),
+  msme_number: z.string().optional(),
+  kyc_verified: z.boolean().optional(),
+  kyc_verified_at: z.string().optional(),
+  kyc_verified_by: z.string().uuid().optional(),
 });
 
 export async function GET(
@@ -57,9 +68,23 @@ export async function PATCH(
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
+  // If kyc_verified is being set to true, record who verified and when
+  const updatePayload: Record<string, unknown> = { ...parsed.data };
+  if (parsed.data.kyc_verified === true && !parsed.data.kyc_verified_at) {
+    // Only admin and manager can mark KYC verified
+    if (!["admin", "manager"].includes(dbUser.role)) {
+      return NextResponse.json({ error: "Only managers and admins can mark KYC as verified" }, { status: 403 });
+    }
+    updatePayload.kyc_verified_at = new Date().toISOString();
+    updatePayload.kyc_verified_by = dbUser.id;
+  } else if (parsed.data.kyc_verified === false) {
+    updatePayload.kyc_verified_at = null;
+    updatePayload.kyc_verified_by = null;
+  }
+
   const { data: updated, error } = await supabase
     .from("procurement_vendors")
-    .update(parsed.data)
+    .update(updatePayload)
     .eq("id", id)
     .select("*")
     .single();

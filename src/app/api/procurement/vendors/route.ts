@@ -14,6 +14,14 @@ const createVendorSchema = z.object({
   payment_terms: z.string().optional(),
   terms_and_conditions: z.string().optional(),
   notes: z.string().optional(),
+  // Bank details
+  bank_name: z.string().optional(),
+  bank_account_holder: z.string().optional(),
+  bank_account_number: z.string().optional(),
+  bank_ifsc: z.string().optional(),
+  // KYC & compliance
+  pan_number: z.string().optional(),
+  msme_number: z.string().optional(),
 });
 
 export async function GET(request: NextRequest) {
