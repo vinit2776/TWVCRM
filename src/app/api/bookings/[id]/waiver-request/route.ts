@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { sendWhatsApp } from "@/lib/whatsapp";
+import { transporter, EMAIL_FROM } from "@/lib/mailer";
 
 function generateOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
@@ -69,13 +69,13 @@ export async function POST(
 
   if (waiverErr) return NextResponse.json({ error: waiverErr.message }, { status: 500 });
 
-  // Notify all managers/admins who have a phone number
+  // Notify all managers/admins who have an email address
   const { data: managers } = await supabase
     .from("users")
-    .select("phone, first_name")
+    .select("email, first_name")
     .in("role", ["admin", "manager"])
-    .not("phone", "is", null)
-    .neq("phone", "");
+    .not("email", "is", null)
+    .neq("email", "");
 
   const requesterName = `${dbUser.first_name || ""} ${dbUser.last_name || ""}`.trim() || "Staff";
   const customerName = booking.lead
@@ -83,25 +83,37 @@ export async function POST(
     : "Walk-in";
   const spaceName = (booking.space as { name?: string })?.name || "Room";
   const amountStr = `₹${Number(waiver_amount).toLocaleString("en-IN")}`;
+  const waiverTypeLabel = waiver_type === "overtime" ? "Overtime" : waiver_type === "extension" ? "Extension" : "Charge";
 
   if (managers && managers.length > 0) {
+    const emailHtml = `
+      <div style="font-family:sans-serif;max-width:480px">
+        <h2 style="color:#b45309">⚠️ Waiver Approval Request</h2>
+        <table style="width:100%;border-collapse:collapse;font-size:14px">
+          <tr><td style="padding:6px 0;color:#6b7280">Requested by</td><td style="padding:6px 0;font-weight:600">${requesterName}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280">Booking</td><td style="padding:6px 0;font-weight:600">${booking.booking_number}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280">Customer</td><td style="padding:6px 0">${customerName}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280">Room</td><td style="padding:6px 0">${spaceName}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280">Waiver Type</td><td style="padding:6px 0">${waiverTypeLabel}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280">Amount</td><td style="padding:6px 0;font-weight:600;color:#b45309">${amountStr}</td></tr>
+          <tr><td style="padding:6px 0;color:#6b7280">Note</td><td style="padding:6px 0">${note || "No reason provided"}</td></tr>
+        </table>
+        <div style="margin-top:20px;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:16px;text-align:center">
+          <p style="margin:0 0 8px;font-size:13px;color:#92400e">Share this OTP with the floor manager to approve the waiver.</p>
+          <p style="margin:0;font-size:32px;font-weight:700;letter-spacing:8px;color:#78350f">${otp}</p>
+          <p style="margin:8px 0 0;font-size:12px;color:#92400e">Valid for 15 minutes</p>
+        </div>
+        <p style="font-size:12px;color:#9ca3af;margin-top:16px">If you did not expect this request, please ignore this email.</p>
+      </div>
+    `;
+
     for (const mgr of managers) {
-      if (mgr.phone) {
-        // Send WhatsApp with waiver details and OTP
-        sendWhatsApp({
-          to: mgr.phone,
-          template: "waiver_approval_request",
-          params: [
-            requesterName,
-            booking.booking_number,
-            customerName,
-            spaceName,
-            amountStr,
-            note || "No reason provided",
-            otp,
-          ],
-          entityType: "booking",
-          entityId: id,
+      if (mgr.email) {
+        transporter.sendMail({
+          from: EMAIL_FROM,
+          to: mgr.email,
+          subject: `Waiver Approval OTP — ${booking.booking_number} (${amountStr})`,
+          html: emailHtml,
         }).catch(() => {});
       }
     }
