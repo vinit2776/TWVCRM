@@ -714,6 +714,9 @@ export interface Booking {
   guest_company?: string;
   hourly_rate: number;
   total_amount: number;
+  gst_rate?: number;
+  gst_amount?: number;
+  total_amount_with_gst?: number;
   payment_status: BookingPaymentStatus;
   payment_mode?: string;
   payment_reference?: string;

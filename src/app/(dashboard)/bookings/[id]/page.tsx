@@ -919,9 +919,17 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               )}
             </div>
 
+            {/* GST breakdown */}
+            {booking.gst_rate && booking.gst_amount ? (
+              <div className="flex justify-between text-sm text-muted-foreground">
+                <span>GST ({booking.gst_rate}%)</span>
+                <span>{formatCurrency(booking.gst_amount)}</span>
+              </div>
+            ) : null}
+
             {/* Total Amount — auto-recalculated or direct override */}
             <div className="flex justify-between items-center font-medium">
-              <span className="text-muted-foreground">Total Amount</span>
+              <span className="text-muted-foreground">Total (incl. GST)</span>
               {editingPricing ? (
                 <Input
                   type="number"
@@ -933,7 +941,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                   disabled={pricingSaving}
                 />
               ) : (
-                <span>{formatCurrency(booking.total_amount)}</span>
+                <span>{formatCurrency(Number(booking.total_amount_with_gst) || booking.total_amount)}</span>
               )}
             </div>
 
@@ -971,7 +979,8 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               const pendingTotal = existingPayments
                 .filter((p) => p.status === "pending")
                 .reduce((sum, p) => sum + Number(p.amount), 0);
-              const balanceDue = Math.max(0, Number(booking.total_amount) - verifiedTotal);
+              const chargeableTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount);
+              const balanceDue = Math.max(0, chargeableTotal - verifiedTotal);
 
               return (
                 <>
@@ -1228,7 +1237,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         open={paymentDialogOpen}
         onOpenChange={setPaymentDialogOpen}
         bookingId={booking.id}
-        totalAmount={Number(booking.total_amount)}
+        totalAmount={Number(booking.total_amount_with_gst) || Number(booking.total_amount)}
         onSuccess={fetchBooking}
         razorpayEnabled={razorpayEnabled}
         razorpayKeyId={razorpayKeyId}

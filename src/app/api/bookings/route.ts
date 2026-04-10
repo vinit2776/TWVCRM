@@ -257,6 +257,11 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // GST calculation — conference room bookings attract 18% GST
+  const gstRate = 18;
+  const gstAmount = parseFloat((totalAmount * gstRate / 100).toFixed(2));
+  const totalAmountWithGst = parseFloat((totalAmount + gstAmount).toFixed(2));
+
   // 3b. Prepaid purchase validation (if caller passes prepaid_purchase_id in body)
   let prepaidPurchaseId: string | undefined;
   let prepaidCreditsUsed: number | undefined;
@@ -408,6 +413,9 @@ export async function POST(request: NextRequest) {
       guest_company: input.guest_company,
       hourly_rate: effectiveRate,
       total_amount: totalAmount,
+      gst_rate: gstRate,
+      gst_amount: gstAmount,
+      total_amount_with_gst: totalAmountWithGst,
       payment_status: paymentStatus,
       payment_mode: input.payment_mode,
       payment_reference: input.payment_reference,

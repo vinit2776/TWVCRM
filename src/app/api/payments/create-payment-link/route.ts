@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
   // Fetch the booking with customer details
   const { data: booking } = await supabase
     .from("bookings")
-    .select("id, booking_number, booking_date, start_time, end_time, total_amount, payment_status, payment_token, customer_type, razorpay_payment_link_id, razorpay_payment_link_url, space:spaces!bookings_space_id_fkey(name), lead:leads!bookings_lead_id_fkey(first_name, last_name, email, phone), guest_name, guest_email, guest_phone, status")
+    .select("id, booking_number, booking_date, start_time, end_time, total_amount, gst_rate, gst_amount, total_amount_with_gst, payment_status, payment_token, customer_type, razorpay_payment_link_id, razorpay_payment_link_url, space:spaces!bookings_space_id_fkey(name), lead:leads!bookings_lead_id_fkey(first_name, last_name, email, phone), guest_name, guest_email, guest_phone, status")
     .eq("id", booking_id)
     .single();
 
@@ -110,7 +110,9 @@ export async function POST(request: NextRequest) {
     .eq("status", "verified");
 
   const totalPaid = (payments || []).reduce((s, p) => s + Number(p.amount), 0);
-  const balanceDue = Number(booking.total_amount) - totalPaid;
+  // Use GST-inclusive total for payment links; fall back to total_amount for legacy bookings
+  const chargeableTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount);
+  const balanceDue = chargeableTotal - totalPaid;
 
   if (balanceDue <= 0) {
     return NextResponse.json({ error: "No balance due for this booking" }, { status: 400 });

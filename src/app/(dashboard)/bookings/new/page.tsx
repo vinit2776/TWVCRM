@@ -377,6 +377,9 @@ function NewBookingForm() {
         .reduce((sum, f) => sum + f.charge_per_use, 0)
     : 0;
   const totalAmount = roomCost + facilityCost;
+  const GST_RATE = 18;
+  const gstAmount = parseFloat((totalAmount * GST_RATE / 100).toFixed(2));
+  const totalAmountWithGst = parseFloat((totalAmount + gstAmount).toFixed(2));
 
   // Build time dropdown options from available slots
   const timeOptions = (() => {
@@ -969,7 +972,7 @@ function NewBookingForm() {
                 onChange={(e) => {
                   setCollectAdvancePayment(e.target.checked);
                   if (e.target.checked && !advancePaymentAmount) {
-                    setAdvancePaymentAmount(totalAmount > 0 ? totalAmount.toFixed(2) : "");
+                    setAdvancePaymentAmount(totalAmountWithGst > 0 ? totalAmountWithGst.toFixed(2) : "");
                   }
                 }}
                 className="h-4 w-4 rounded border-gray-300"
@@ -990,7 +993,7 @@ function NewBookingForm() {
                       min="1"
                       value={advancePaymentAmount}
                       onChange={(e) => setAdvancePaymentAmount(e.target.value)}
-                      placeholder={`Total: ${formatCurrency(totalAmount)}`}
+                      placeholder={`Total incl. GST: ${formatCurrency(totalAmountWithGst)}`}
                     />
                   </div>
                   <div className="space-y-2">
@@ -1214,6 +1217,13 @@ function NewBookingForm() {
                 <span>{formatCurrency(facilityCost)}</span>
               </div>
             )}
+            {/* GST row */}
+            {totalAmount > 0 && (
+              <div className="flex justify-between text-sm text-muted-foreground">
+                <span>GST ({GST_RATE}%)</span>
+                <span>{formatCurrency(gstAmount)}</span>
+              </div>
+            )}
             {/* Gap 3: Prepaid-aware pricing rows */}
             {usePrepaid && activePurchase && (() => {
               const purchase = activePurchase;
@@ -1230,7 +1240,7 @@ function NewBookingForm() {
                   ? `Package covers (${coveredHours}h)`
                   : "Package applied";
               }
-              const topUpDue = Math.max(0, roomCost + facilityCost - coveredAmount);
+              const topUpDue = Math.max(0, totalAmountWithGst - coveredAmount);
               return (
                 <>
                   <div className="flex justify-between text-sm text-green-700">
@@ -1241,7 +1251,7 @@ function NewBookingForm() {
                     <span>− {formatCurrency(coveredAmount)}</span>
                   </div>
                   <div className="flex justify-between font-bold text-base pt-1 border-t">
-                    <span>{topUpDue > 0 ? "Top-up due" : "Total due"}</span>
+                    <span>{topUpDue > 0 ? "Top-up due (incl. GST)" : "Total due"}</span>
                     <span className="flex items-center gap-1">
                       <IndianRupee className="h-4 w-4" />
                       {formatCurrency(topUpDue)}
@@ -1263,10 +1273,10 @@ function NewBookingForm() {
             )}
             {!(usePrepaid && activePurchase) && (
               <div className="flex justify-between font-bold text-base pt-1 border-t">
-                <span>Total</span>
+                <span>Total (incl. GST)</span>
                 <span className="flex items-center gap-1">
                   <IndianRupee className="h-4 w-4" />
-                  {formatCurrency(totalAmount + outstandingCharges.filter(c => selectedChargeIds.has(c.id)).reduce((s, c) => s + c.total, 0))}
+                  {formatCurrency(totalAmountWithGst + outstandingCharges.filter(c => selectedChargeIds.has(c.id)).reduce((s, c) => s + c.total, 0))}
                 </span>
               </div>
             )}
