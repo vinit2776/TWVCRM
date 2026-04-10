@@ -6,7 +6,7 @@ function generateOtp(): string {
   return Math.floor(100000 + Math.random() * 900000).toString();
 }
 
-// POST — create a waiver request and notify managers
+// POST — create a waiver request and notify managers with unique OTPs
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -49,7 +49,6 @@ export async function POST(
     .eq("booking_id", id)
     .eq("status", "pending");
 
-  const otp = generateOtp();
   const expiresAt = new Date(Date.now() + 15 * 60 * 1000); // 15 min
 
   const { data: waiverReq, error: waiverErr } = await supabase
@@ -60,7 +59,6 @@ export async function POST(
       waiver_type,
       waiver_amount: Number(waiver_amount),
       note: note || null,
-      otp,
       otp_expires_at: expiresAt.toISOString(),
       status: "pending",
     })
@@ -69,10 +67,10 @@ export async function POST(
 
   if (waiverErr) return NextResponse.json({ error: waiverErr.message }, { status: 500 });
 
-  // Notify all managers/admins who have an email address
+  // Fetch all managers/admins with email
   const { data: managers } = await supabase
     .from("users")
-    .select("email, first_name")
+    .select("id, email, first_name")
     .in("role", ["admin", "manager"])
     .not("email", "is", null)
     .neq("email", "");
@@ -86,36 +84,46 @@ export async function POST(
   const waiverTypeLabel = waiver_type === "overtime" ? "Overtime" : waiver_type === "extension" ? "Extension" : "Charge";
 
   if (managers && managers.length > 0) {
-    const emailHtml = `
-      <div style="font-family:sans-serif;max-width:480px">
-        <h2 style="color:#b45309">⚠️ Waiver Approval Request</h2>
-        <table style="width:100%;border-collapse:collapse;font-size:14px">
-          <tr><td style="padding:6px 0;color:#6b7280">Requested by</td><td style="padding:6px 0;font-weight:600">${requesterName}</td></tr>
-          <tr><td style="padding:6px 0;color:#6b7280">Booking</td><td style="padding:6px 0;font-weight:600">${booking.booking_number}</td></tr>
-          <tr><td style="padding:6px 0;color:#6b7280">Customer</td><td style="padding:6px 0">${customerName}</td></tr>
-          <tr><td style="padding:6px 0;color:#6b7280">Room</td><td style="padding:6px 0">${spaceName}</td></tr>
-          <tr><td style="padding:6px 0;color:#6b7280">Waiver Type</td><td style="padding:6px 0">${waiverTypeLabel}</td></tr>
-          <tr><td style="padding:6px 0;color:#6b7280">Amount</td><td style="padding:6px 0;font-weight:600;color:#b45309">${amountStr}</td></tr>
-          <tr><td style="padding:6px 0;color:#6b7280">Note</td><td style="padding:6px 0">${note || "No reason provided"}</td></tr>
-        </table>
-        <div style="margin-top:20px;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:16px;text-align:center">
-          <p style="margin:0 0 8px;font-size:13px;color:#92400e">Share this OTP with the floor manager to approve the waiver.</p>
-          <p style="margin:0;font-size:32px;font-weight:700;letter-spacing:8px;color:#78350f">${otp}</p>
-          <p style="margin:8px 0 0;font-size:12px;color:#92400e">Valid for 15 minutes</p>
-        </div>
-        <p style="font-size:12px;color:#9ca3af;margin-top:16px">If you did not expect this request, please ignore this email.</p>
-      </div>
-    `;
-
     for (const mgr of managers) {
-      if (mgr.email) {
-        transporter.sendMail({
-          from: EMAIL_FROM,
-          to: mgr.email,
-          subject: `Waiver Approval OTP — ${booking.booking_number} (${amountStr})`,
-          html: emailHtml,
-        }).catch(() => {});
-      }
+      if (!mgr.email) continue;
+
+      // Generate a unique OTP for each manager
+      const otp = generateOtp();
+
+      // Store the per-manager OTP
+      await supabase.from("waiver_request_otps").insert({
+        waiver_request_id: waiverReq!.id,
+        manager_id: mgr.id,
+        otp,
+      });
+
+      const emailHtml = `
+        <div style="font-family:sans-serif;max-width:480px">
+          <h2 style="color:#b45309">⚠️ Waiver Approval Request</h2>
+          <table style="width:100%;border-collapse:collapse;font-size:14px">
+            <tr><td style="padding:6px 0;color:#6b7280">Requested by</td><td style="padding:6px 0;font-weight:600">${requesterName}</td></tr>
+            <tr><td style="padding:6px 0;color:#6b7280">Booking</td><td style="padding:6px 0;font-weight:600">${booking.booking_number}</td></tr>
+            <tr><td style="padding:6px 0;color:#6b7280">Customer</td><td style="padding:6px 0">${customerName}</td></tr>
+            <tr><td style="padding:6px 0;color:#6b7280">Room</td><td style="padding:6px 0">${spaceName}</td></tr>
+            <tr><td style="padding:6px 0;color:#6b7280">Waiver Type</td><td style="padding:6px 0">${waiverTypeLabel}</td></tr>
+            <tr><td style="padding:6px 0;color:#6b7280">Amount</td><td style="padding:6px 0;font-weight:600;color:#b45309">${amountStr}</td></tr>
+            <tr><td style="padding:6px 0;color:#6b7280">Note</td><td style="padding:6px 0">${note || "No reason provided"}</td></tr>
+          </table>
+          <div style="margin-top:20px;background:#fef3c7;border:1px solid #fcd34d;border-radius:8px;padding:16px;text-align:center">
+            <p style="margin:0 0 8px;font-size:13px;color:#92400e">Share this OTP with the floor manager to approve the waiver. This OTP is unique to you.</p>
+            <p style="margin:0;font-size:32px;font-weight:700;letter-spacing:8px;color:#78350f">${otp}</p>
+            <p style="margin:8px 0 0;font-size:12px;color:#92400e">Valid for 15 minutes</p>
+          </div>
+          <p style="font-size:12px;color:#9ca3af;margin-top:16px">If you did not expect this request, please ignore this email.</p>
+        </div>
+      `;
+
+      transporter.sendMail({
+        from: EMAIL_FROM,
+        to: mgr.email,
+        subject: `Waiver Approval OTP — ${booking.booking_number} (${amountStr})`,
+        html: emailHtml,
+      }).catch(() => {});
     }
   }
 
@@ -124,7 +132,7 @@ export async function POST(
   });
 }
 
-// PUT — confirm OTP and apply waiver
+// PUT — verify OTP and apply waiver, recording which manager approved
 export async function PUT(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -146,7 +154,7 @@ export async function PUT(
   const { otp } = body;
   if (!otp) return NextResponse.json({ error: "OTP required" }, { status: 400 });
 
-  // Find pending waiver request for this booking
+  // Find the pending waiver request for this booking
   const { data: waiverReq } = await supabase
     .from("waiver_requests")
     .select("*")
@@ -166,15 +174,33 @@ export async function PUT(
     return NextResponse.json({ error: "OTP has expired. Please request a new waiver." }, { status: 400 });
   }
 
-  // Validate OTP
-  if (waiverReq.otp !== otp.trim()) {
+  // Find the matching per-manager OTP
+  const { data: otpRecord } = await supabase
+    .from("waiver_request_otps")
+    .select("id, manager_id, used")
+    .eq("waiver_request_id", waiverReq.id)
+    .eq("otp", otp.trim())
+    .maybeSingle();
+
+  if (!otpRecord) {
     return NextResponse.json({ error: "Invalid OTP. Please check with the manager." }, { status: 400 });
   }
 
-  // Mark waiver as approved
+  if (otpRecord.used) {
+    return NextResponse.json({ error: "This OTP has already been used." }, { status: 400 });
+  }
+
+  // Mark the specific OTP as used
+  await supabase.from("waiver_request_otps").update({ used: true }).eq("id", otpRecord.id);
+
+  // Approve the waiver, recording which manager's OTP was used
   await supabase
     .from("waiver_requests")
-    .update({ status: "approved", approved_by: dbUser.id, approved_at: new Date().toISOString() })
+    .update({
+      status: "approved",
+      approved_by: otpRecord.manager_id,
+      approved_at: new Date().toISOString(),
+    })
     .eq("id", waiverReq.id);
 
   return NextResponse.json({
@@ -182,6 +208,7 @@ export async function PUT(
       approved: true,
       waiver_type: waiverReq.waiver_type,
       waiver_amount: waiverReq.waiver_amount,
+      approved_by: otpRecord.manager_id,
     },
   });
 }
