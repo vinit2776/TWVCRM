@@ -55,7 +55,7 @@ export const createLeadSchema = z.object({
   preferred_location: z.string().optional(),
   location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   pan_number: z.string().optional(),
-  gst_number: z.string().max(15).optional(),
+  gst_number: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/, "Invalid GST number format (e.g. 33AAAAA0000A1Z5)").optional().or(z.literal("")).transform(v => v || undefined),
   working_hours: z.string().optional(),
   budget_per_seat: z.number().positive().optional(),
   street: z.string().optional(),
@@ -335,6 +335,7 @@ export const createBookingSchema = z.object({
   contract_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   lead_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   booker_phone: z.string().min(1, "Mobile number of the person booking is required"),
+  booker_gst_number: z.string().regex(/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/, "Invalid GST number format").optional().or(z.literal("")).transform(v => v || undefined),
   guest_name: z.string().optional(),
   guest_email: z.string().email("Invalid email").optional().or(z.literal("")),
   guest_phone: z.string().optional(),
@@ -345,6 +346,7 @@ export const createBookingSchema = z.object({
   notes: z.string().optional(),
   hourly_rate: z.number().min(0).optional(),
   settle_charge_ids: z.array(z.string().uuid()).optional(),
+  aggregator_booking_id: z.string().optional(),
 }).refine(data => {
   if (data.customer_type === "contract_holder" && !data.contract_id) return false;
   return true;

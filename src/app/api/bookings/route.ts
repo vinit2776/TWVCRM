@@ -19,6 +19,7 @@ async function findOrCreateLeadForBooking(
     guestPhone?: string;
     bookerPhone: string;
     guestCompany?: string;
+    guestGstNumber?: string;
     locationId: string;
     createdBy: string;
   }
@@ -29,11 +30,18 @@ async function findOrCreateLeadForBooking(
   // 1. Try to find existing lead by phone/mobile match
   const { data: existingLeads } = await supabase
     .from("leads")
-    .select("id")
+    .select("id, gst_number")
     .or(`phone.eq.${searchPhone},mobile.eq.${searchPhone}`)
     .limit(1);
 
   if (existingLeads && existingLeads.length > 0) {
+    // If a GST number is provided and the lead doesn't have one yet, update it
+    if (params.guestGstNumber && !existingLeads[0].gst_number) {
+      await supabase
+        .from("leads")
+        .update({ gst_number: params.guestGstNumber })
+        .eq("id", existingLeads[0].id);
+    }
     return existingLeads[0].id;
   }
 
@@ -56,6 +64,7 @@ async function findOrCreateLeadForBooking(
       phone: params.guestPhone || null,
       mobile: params.bookerPhone,
       company: params.guestCompany || null,
+      gst_number: params.guestGstNumber || null,
       location_id: params.locationId,
       source: "direct_walkin",
       status: "new",
@@ -364,6 +373,7 @@ export async function POST(request: NextRequest) {
         guestPhone: input.guest_phone,
         bookerPhone: input.booker_phone,
         guestCompany: input.guest_company,
+        guestGstNumber: input.booker_gst_number,
         locationId: space.location_id,
         createdBy: dbUser.id,
       })) || undefined;
@@ -384,6 +394,7 @@ export async function POST(request: NextRequest) {
       guestPhone: input.guest_phone,
       bookerPhone: input.booker_phone,
       guestCompany: input.guest_company,
+      guestGstNumber: input.booker_gst_number,
       locationId: space.location_id,
       createdBy: dbUser.id,
     });
@@ -424,6 +435,7 @@ export async function POST(request: NextRequest) {
       prepaid_credits_used: prepaidCreditsUsed || null,
       prepaid_topup_amount: prepaidTopupAmount || null,
       notes: input.notes,
+      aggregator_booking_id: input.aggregator_booking_id || null,
       created_by: dbUser.id,
     })
     .select("*")

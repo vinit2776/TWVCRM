@@ -25,6 +25,17 @@ export async function GET(request: NextRequest) {
   const location_id = searchParams.get("location_id");
   const sort_by = searchParams.get("sort_by") || "created_at";
   const sort_order = searchParams.get("sort_order") || "desc";
+  const phone_exact = searchParams.get("phone_exact");
+
+  // Quick phone lookup — returns just id, id_proof_path fields
+  if (phone_exact) {
+    const { data } = await supabase
+      .from("leads")
+      .select("id, first_name, last_name, id_proof_path")
+      .eq("phone", phone_exact.trim())
+      .limit(1);
+    return NextResponse.json({ data: data ?? [] });
+  }
 
   const offset = (page - 1) * limit;
 

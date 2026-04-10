@@ -89,7 +89,14 @@ function NewBookingForm() {
   const [guestEmail, setGuestEmail] = useState("");
   const [guestPhone, setGuestPhone] = useState("");
   const [guestCompany, setGuestCompany] = useState("");
+  const [bookerGstNumber, setBookerGstNumber] = useState("");
+  const [gstError, setGstError] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerSuggestion | null>(null);
+
+  // ID proof
+  const [idProofFile, setIdProofFile] = useState<File | null>(null);
+  const [leadHasIdProof, setLeadHasIdProof] = useState(false);
+  const [idProofLookingUp, setIdProofLookingUp] = useState(false);
 
   // Contracts for contract_holder/guest type
   const [contracts, setContracts] = useState<ContractOption[]>([]);
@@ -106,6 +113,7 @@ function NewBookingForm() {
   const [paymentMode, setPaymentMode] = useState("");
   const [paymentReference, setPaymentReference] = useState("");
   const [notes, setNotes] = useState("");
+  const [aggregatorBookingId, setAggregatorBookingId] = useState("");
   const [collectAdvancePayment, setCollectAdvancePayment] = useState(false);
   const [advancePaymentMode, setAdvancePaymentMode] = useState<string>("cash");
   const [advancePaymentReference, setAdvancePaymentReference] = useState("");
@@ -187,6 +195,38 @@ function NewBookingForm() {
       if (json.data?.razorpay_enabled === "true") setRazorpayEnabled(true);
     }).catch(() => {});
   }, []);
+
+  // Check if lead already has ID proof when phone is entered
+  useEffect(() => {
+    const phone = bookerPhone.replace(/\s/g, "");
+    if (phone.length < 10 || (customerType !== "walk_in" && customerType !== "guest")) {
+      setLeadHasIdProof(false);
+      return;
+    }
+    // If we have a selectedCustomer lead_id, check directly
+    const checkLeadId = leadId;
+    if (!checkLeadId) {
+      // lookup by phone
+      setIdProofLookingUp(true);
+      fetch(`/api/leads?phone_exact=${encodeURIComponent(phone)}`)
+        .then(r => r.json())
+        .then(json => {
+          const lead = (json.data || [])[0];
+          setLeadHasIdProof(!!(lead?.id_proof_path));
+        })
+        .catch(() => setLeadHasIdProof(false))
+        .finally(() => setIdProofLookingUp(false));
+    } else {
+      // Lookup by lead_id
+      setIdProofLookingUp(true);
+      fetch(`/api/leads/${checkLeadId}`)
+        .then(r => r.json())
+        .then(json => setLeadHasIdProof(!!(json.data?.id_proof_path)))
+        .catch(() => setLeadHasIdProof(false))
+        .finally(() => setIdProofLookingUp(false));
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bookerPhone, leadId, customerType]);
 
   // Close suggestions on outside click
   useEffect(() => {
@@ -430,6 +470,10 @@ function NewBookingForm() {
       toast.error("Please select the host contract");
       return;
     }
+    if ((customerType === "walk_in" || customerType === "guest") && !leadHasIdProof && !idProofFile) {
+      toast.error("Government ID proof is mandatory. Please upload the customer's ID document.");
+      return;
+    }
 
     setSaving(true);
     try {
@@ -459,6 +503,8 @@ function NewBookingForm() {
         guest_email: guestEmail.trim() || undefined,
         guest_phone: guestPhone.trim() || undefined,
         guest_company: guestCompany.trim() || undefined,
+        booker_gst_number: bookerGstNumber.trim().toUpperCase() || undefined,
+        aggregator_booking_id: aggregatorBookingId.trim() || undefined,
         facility_ids: selectedFacilities,
         payment_mode: paymentMode || undefined,
         payment_reference: paymentReference.trim() || undefined,
@@ -480,7 +526,18 @@ function NewBookingForm() {
       const json = await res.json();
       if (res.ok) {
         const bookingId = json.data?.id;
+        const createdLeadId = json.data?.lead_id;
         toast.success(`Booking ${json.data?.booking_number} created`);
+
+        // Upload ID proof if provided
+        if (idProofFile && createdLeadId && !leadHasIdProof) {
+          const fd = new FormData();
+          // Compress image client-side before upload
+          const compressed = await compressIdProof(idProofFile);
+          fd.append("file", compressed, compressed.name);
+          fetch(`/api/leads/${createdLeadId}/id-proof`, { method: "POST", body: fd })
+            .catch(() => toast.warning("Booking created but ID proof upload failed. Please upload from the booking page."));
+        }
 
         // Send confirmation email
         if (bookingId) {
@@ -524,6 +581,37 @@ function NewBookingForm() {
     } finally {
       setSaving(false);
     }
+  };
+
+  // Compress image files client-side before upload (PDFs pass through unchanged)
+  const compressIdProof = async (file: File): Promise<File> => {
+    if (file.type === "application/pdf") return file;
+    return new Promise<File>((resolve) => {
+      const img = new Image();
+      const url = URL.createObjectURL(file);
+      img.onload = () => {
+        const MAX_DIM = 1200;
+        let { width, height } = img;
+        if (width > MAX_DIM || height > MAX_DIM) {
+          if (width > height) { height = Math.round((height * MAX_DIM) / width); width = MAX_DIM; }
+          else { width = Math.round((width * MAX_DIM) / height); height = MAX_DIM; }
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d")!.drawImage(img, 0, 0, width, height);
+        canvas.toBlob((blob) => {
+          URL.revokeObjectURL(url);
+          if (blob) {
+            resolve(new File([blob], file.name.replace(/\.[^.]+$/, ".jpg"), { type: "image/jpeg" }));
+          } else {
+            resolve(file);
+          }
+        }, "image/jpeg", 0.80);
+      };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(file); };
+      img.src = url;
+    });
   };
 
   const formatTime12 = (t: string) => {
@@ -853,13 +941,70 @@ function NewBookingForm() {
                 <Label>Guest Company</Label>
                 <Input value={guestCompany} onChange={(e) => setGuestCompany(e.target.value)} placeholder="Company name" />
               </div>
+              <div className="space-y-2 sm:col-span-2">
+                <Label>GST Number <span className="text-muted-foreground font-normal text-xs">(Optional — for tax invoice)</span></Label>
+                <Input
+                  value={bookerGstNumber}
+                  onChange={(e) => {
+                    const val = e.target.value.toUpperCase();
+                    setBookerGstNumber(val);
+                    if (val && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(val)) {
+                      setGstError("Format: 33AAAAA0000A1Z5 (15 characters)");
+                    } else {
+                      setGstError(null);
+                    }
+                  }}
+                  placeholder="e.g. 33AAAAA0000A1Z5"
+                  maxLength={15}
+                  className={gstError ? "border-red-400" : ""}
+                />
+                {gstError && <p className="text-xs text-red-500">{gstError}</p>}
+                {!gstError && bookerGstNumber.length === 15 && <p className="text-xs text-green-600">✓ Valid GST format</p>}
+              </div>
+              {/* ID Proof — mandatory */}
+              <div className="sm:col-span-2 space-y-1.5">
+                <Label>Government ID Proof <span className="text-red-500">*</span> <span className="text-muted-foreground font-normal text-xs">(Aadhaar, PAN, Passport, DL)</span></Label>
+                {idProofLookingUp ? (
+                  <p className="text-xs text-muted-foreground">Checking ID records…</p>
+                ) : leadHasIdProof ? (
+                  <p className="text-xs text-green-600 font-medium">✓ ID on file — no re-upload needed</p>
+                ) : (
+                  <>
+                    <Input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,application/pdf"
+                      onChange={(e) => setIdProofFile(e.target.files?.[0] || null)}
+                      className="cursor-pointer"
+                    />
+                    <p className="text-xs text-muted-foreground">JPG, PNG, WebP, or PDF · Max 2 MB · Images auto-compressed</p>
+                    {idProofFile && <p className="text-xs text-green-600">✓ {idProofFile.name} selected</p>}
+                  </>
+                )}
+              </div>
             </div>
           )}
 
-          {/* Walk-in with selected customer — show read-only */}
+          {/* Walk-in with selected customer — show read-only + ID proof status */}
           {customerType === "walk_in" && selectedCustomer && (
-            <div className="text-xs text-muted-foreground">
-              Customer details loaded from {selectedCustomer.type === "lead" ? "lead" : "past booking"} record.
+            <div className="space-y-2">
+              <p className="text-xs text-muted-foreground">Customer details loaded from {selectedCustomer.type === "lead" ? "lead" : "past booking"} record.</p>
+              {idProofLookingUp ? (
+                <p className="text-xs text-muted-foreground">Checking ID records…</p>
+              ) : leadHasIdProof ? (
+                <p className="text-xs text-green-600 font-medium">✓ ID on file — no re-upload needed</p>
+              ) : (
+                <div className="space-y-1.5">
+                  <Label>Government ID Proof <span className="text-red-500">*</span></Label>
+                  <Input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,application/pdf"
+                    onChange={(e) => setIdProofFile(e.target.files?.[0] || null)}
+                    className="cursor-pointer"
+                  />
+                  <p className="text-xs text-muted-foreground">JPG, PNG, WebP, or PDF · Max 2 MB · Images auto-compressed</p>
+                  {idProofFile && <p className="text-xs text-green-600">✓ {idProofFile.name} selected</p>}
+                </div>
+              )}
             </div>
           )}
 
@@ -896,6 +1041,46 @@ function NewBookingForm() {
                 <div className="space-y-2">
                   <Label>Guest Company</Label>
                   <Input value={guestCompany} onChange={(e) => setGuestCompany(e.target.value)} placeholder="Company name" />
+                </div>
+                <div className="space-y-2 sm:col-span-2">
+                  <Label>GST Number <span className="text-muted-foreground font-normal text-xs">(Optional — for tax invoice)</span></Label>
+                  <Input
+                    value={bookerGstNumber}
+                    onChange={(e) => {
+                      const val = e.target.value.toUpperCase();
+                      setBookerGstNumber(val);
+                      if (val && !/^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/.test(val)) {
+                        setGstError("Format: 33AAAAA0000A1Z5 (15 characters)");
+                      } else {
+                        setGstError(null);
+                      }
+                    }}
+                    placeholder="e.g. 33AAAAA0000A1Z5"
+                    maxLength={15}
+                    className={gstError ? "border-red-400" : ""}
+                  />
+                  {gstError && <p className="text-xs text-red-500">{gstError}</p>}
+                  {!gstError && bookerGstNumber.length === 15 && <p className="text-xs text-green-600">✓ Valid GST format</p>}
+                </div>
+                {/* ID Proof — mandatory for guest */}
+                <div className="sm:col-span-2 space-y-1.5">
+                  <Label>Government ID Proof <span className="text-red-500">*</span> <span className="text-muted-foreground font-normal text-xs">(Aadhaar, PAN, Passport, DL)</span></Label>
+                  {idProofLookingUp ? (
+                    <p className="text-xs text-muted-foreground">Checking ID records…</p>
+                  ) : leadHasIdProof ? (
+                    <p className="text-xs text-green-600 font-medium">✓ ID on file — no re-upload needed</p>
+                  ) : (
+                    <>
+                      <Input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,application/pdf"
+                        onChange={(e) => setIdProofFile(e.target.files?.[0] || null)}
+                        className="cursor-pointer"
+                      />
+                      <p className="text-xs text-muted-foreground">JPG, PNG, WebP, or PDF · Max 2 MB · Images auto-compressed</p>
+                      {idProofFile && <p className="text-xs text-green-600">✓ {idProofFile.name} selected</p>}
+                    </>
+                  )}
                 </div>
               </div>
             </div>
@@ -1070,6 +1255,14 @@ function NewBookingForm() {
               setNotes(prev => prev ? `${prev}\n${text}` : text);
             }}
           />
+          <div className="space-y-1.5 pt-1">
+            <Label className="text-sm">Aggregator Booking ID <span className="text-muted-foreground font-normal text-xs">(Optional — if referred by an aggregator)</span></Label>
+            <Input
+              value={aggregatorBookingId}
+              onChange={(e) => setAggregatorBookingId(e.target.value)}
+              placeholder="e.g. AGG-12345"
+            />
+          </div>
         </CardContent>
       </Card>
 

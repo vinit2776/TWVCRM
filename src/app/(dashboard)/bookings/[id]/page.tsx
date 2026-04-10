@@ -25,6 +25,7 @@ import { ExtendBookingDialog } from "@/components/bookings/extend-booking-dialog
 import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
+import { WaiverRequestDialog } from "@/components/bookings/waiver-request-dialog";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import {
   BOOKING_STATUS_LABELS, BOOKING_STATUS_COLORS,
@@ -47,6 +48,15 @@ function formatTime12(timeStr: string): string {
   return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
 }
 
+function formatDuration(hours: number): string {
+  if (hours <= 0) return "—";
+  const h = Math.floor(hours);
+  const m = Math.round((hours - h) * 60);
+  if (h === 0) return `${m}m`;
+  if (m === 0) return `${h}h 00m`;
+  return `${h}h ${String(m).padStart(2, "0")}m`;
+}
+
 export default function BookingDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
@@ -60,6 +70,8 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [rescheduleDialogOpen, setRescheduleDialogOpen] = useState(false);
   const [extendDialogOpen, setExtendDialogOpen] = useState(false);
   const [logChargeOpen, setLogChargeOpen] = useState(false);
+  const [waiverOpen, setWaiverOpen] = useState(false);
+  const [pendingOvertimeCharge, setPendingOvertimeCharge] = useState<{ minutes: number; hours: number; hourly_rate: number; charge: number } | null>(null);
   const [outstandingCharges, setOutstandingCharges] = useState<Array<{
     id: string;
     description: string;
@@ -73,6 +85,12 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   }>>([]);
   const [expandedChargeId, setExpandedChargeId] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
+
+  // GST inline-edit state
+  const [editingGst, setEditingGst] = useState(false);
+  const [draftGst, setDraftGst] = useState("");
+  const [gstSaving, setGstSaving] = useState(false);
+  const [gstError, setGstError] = useState<string | null>(null);
 
   // Pricing inline-edit state
   const [editingPricing, setEditingPricing] = useState(false);
@@ -160,6 +178,33 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     setPricingSaving(false);
   };
 
+  const GST_REGEX = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+
+  const handleGstSave = async () => {
+    const val = draftGst.trim().toUpperCase();
+    if (val && !GST_REGEX.test(val)) {
+      setGstError("Format: 33AAAAA0000A1Z5 (15 characters)");
+      return;
+    }
+    if (!booking?.lead_id) { toast.error("No lead associated with this booking"); return; }
+    setGstSaving(true);
+    const res = await fetch(`/api/leads/${booking.lead_id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ gst_number: val || "" }),
+    });
+    if (res.ok) {
+      setBooking((prev) => prev ? { ...prev, lead: prev.lead ? { ...prev.lead, gst_number: val || undefined } : prev.lead } : prev);
+      setEditingGst(false);
+      setGstError(null);
+      toast.success("GST number updated");
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to update GST number");
+    }
+    setGstSaving(false);
+  };
+
   // Poll for payment updates when a Razorpay payment link is active and payment is pending
   useEffect(() => {
     if (!booking) return;
@@ -240,10 +285,11 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         // Show overtime alert if applicable
         if (resJson.overtime) {
           const ot = resJson.overtime;
+          setPendingOvertimeCharge(ot);
           toast.warning(
-            `Overtime detected: ${ot.minutes} minutes past booking end time`,
+            `Overtime: ${ot.minutes} min past booking end`,
             {
-              description: `Additional charge: ₹${ot.charge.toLocaleString("en-IN")} (${ot.hours} hr × ₹${ot.hourly_rate.toLocaleString("en-IN")}/hr). Add a payment to collect overtime charges.`,
+              description: `Differential charge: ₹${ot.charge.toLocaleString("en-IN")} (${ot.hours}h × ₹${ot.hourly_rate.toLocaleString("en-IN")}/hr). Collect payment or request manager waiver.`,
               duration: 15000,
             }
           );
@@ -434,7 +480,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           ${locationStr ? `<tr><td class="lbl">Location</td><td class="val">${locationStr}</td></tr>` : ""}
           <tr><td class="lbl">Date</td><td class="val">${dateStr}</td></tr>
           <tr><td class="lbl">Time</td><td class="val">${startStr} – ${endStr}</td></tr>
-          <tr><td class="lbl">Duration</td><td class="val">${b.duration_hours} hour(s)</td></tr>
+          <tr><td class="lbl">Duration</td><td class="val">${formatDuration(Number(b.duration_hours))}</td></tr>
           <tr><td class="lbl">Customer</td><td class="val">${customerName}</td></tr>
           ${lead?.company ? `<tr><td class="lbl">Company</td><td class="val">${lead.company}</td></tr>` : ""}
         </table>
@@ -597,6 +643,17 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <Receipt className="mr-1 h-4 w-4" />Log Charge
             </Button>
           )}
+          {/* Overtime waiver button — shown after checkout if overtime was detected */}
+          {pendingOvertimeCharge && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setWaiverOpen(true)}
+              className="border-amber-300 text-amber-700 hover:bg-amber-50"
+            >
+              <ShieldCheck className="mr-1 h-4 w-4" />Request Overtime Waiver
+            </Button>
+          )}
           {actionLoading && <Loader2 className="h-4 w-4 animate-spin self-center" />}
         </div>
       </div>
@@ -623,11 +680,32 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                     </button>
                     <div className="flex items-center gap-2 shrink-0 ml-4">
                       {c.booking && (
-                        <span className="text-xs text-amber-600 font-mono">
+                        <Link href={`/bookings/${c.booking.booking_number}`} className="text-xs text-amber-600 font-mono hover:underline" title="View original booking">
                           {c.booking.booking_number}
-                        </span>
+                        </Link>
                       )}
                       <span className="font-semibold text-amber-800">{formatCurrency(c.total)}</span>
+                      <button
+                        type="button"
+                        className="text-xs text-green-700 hover:text-green-900 underline font-medium"
+                        title="Mark as collected in this booking"
+                        onClick={async () => {
+                          const res = await fetch(`/api/usage-charges/${c.id}`, {
+                            method: "PATCH",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({ settled_in_booking_id: id }),
+                          });
+                          if (res.ok) {
+                            toast.success("Charge marked as collected");
+                            setOutstandingCharges(prev => prev.filter(ch => ch.id !== c.id));
+                          } else {
+                            const err = await res.json().catch(() => null);
+                            toast.error(err?.error || "Failed to settle charge");
+                          }
+                        }}
+                      >
+                        Collect
+                      </button>
                       {(userRole === "admin" || userRole === "manager") && (
                         <button
                           type="button"
@@ -655,12 +733,26 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                     </div>
                   </div>
                   {expandedChargeId === c.id && (
-                    <div className="ml-4 mt-1 mb-2 p-3 bg-white rounded border border-amber-100 text-xs space-y-1">
-                      {c.booking && <p><span className="text-muted-foreground">From:</span> {c.booking.booking_number} ({formatDate(c.booking.booking_date)})</p>}
-                      {c.charge_date && <p><span className="text-muted-foreground">Charged:</span> {formatDate(c.charge_date)}</p>}
+                    <div className="ml-4 mt-1 mb-2 p-3 bg-white rounded border border-amber-100 text-xs space-y-1.5">
+                      {c.booking && (
+                        <p>
+                          <span className="text-muted-foreground">Original booking:</span>{" "}
+                          <Link href={`/bookings/${c.booking.booking_number}`} className="text-primary underline font-mono">
+                            {c.booking.booking_number}
+                          </Link>{" "}
+                          <span className="text-muted-foreground">({formatDate(c.booking.booking_date)})</span>
+                        </p>
+                      )}
+                      {c.charge_date && <p><span className="text-muted-foreground">Charged on:</span> {formatDate(c.charge_date)}</p>}
                       {c.quantity && c.unit_price ? <p><span className="text-muted-foreground">Breakdown:</span> {c.quantity} × {formatCurrency(c.unit_price)} = {formatCurrency(c.total)}</p> : null}
                       {c.notes && <p><span className="text-muted-foreground">Reason:</span> {c.notes}</p>}
-                      {c.proof_path && <p><a href={`/api/documents/view?path=${encodeURIComponent(c.proof_path)}`} target="_blank" rel="noopener noreferrer" className="text-primary underline">View Proof Photo</a></p>}
+                      {c.proof_path && (
+                        <p>
+                          <a href={`/api/documents/view?path=${encodeURIComponent(c.proof_path)}`} target="_blank" rel="noopener noreferrer" className="text-primary underline">
+                            View Proof Photo
+                          </a>
+                        </p>
+                      )}
                     </div>
                   )}
                 </div>
@@ -798,7 +890,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Duration</span>
-              <span>{booking.duration_hours} hour(s)</span>
+              <span>{formatDuration(Number(booking.duration_hours))}</span>
             </div>
             {booking.original_booking_date && (
               <>
@@ -867,6 +959,53 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                 <Link href={`/contracts/${booking.contract_id}`} className="text-primary hover:underline">
                   {booking.contract?.contract_number || booking.contract_id.slice(0, 8)}
                 </Link>
+              </div>
+            )}
+            {/* GST Number — inline editable */}
+            {booking.lead_id && (
+              <div className="flex justify-between items-start">
+                <span className="text-muted-foreground">GST Number</span>
+                {editingGst ? (
+                  <div className="flex flex-col items-end gap-1">
+                    <div className="flex items-center gap-1">
+                      <Input
+                        value={draftGst}
+                        onChange={(e) => {
+                          const v = e.target.value.toUpperCase();
+                          setDraftGst(v);
+                          if (v && !GST_REGEX.test(v)) {
+                            setGstError("Format: 33AAAAA0000A1Z5");
+                          } else {
+                            setGstError(null);
+                          }
+                        }}
+                        placeholder="33AAAAA0000A1Z5"
+                        maxLength={15}
+                        className="h-7 w-40 text-right text-sm uppercase"
+                        disabled={gstSaving}
+                        autoFocus
+                      />
+                      <button onClick={handleGstSave} disabled={gstSaving} className="text-green-600 hover:text-green-700" title="Save">
+                        {gstSaving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+                      </button>
+                      <button onClick={() => { setEditingGst(false); setGstError(null); }} disabled={gstSaving} className="text-muted-foreground hover:text-foreground" title="Cancel">
+                        <X className="h-4 w-4" />
+                      </button>
+                    </div>
+                    {gstError && <p className="text-xs text-red-500">{gstError}</p>}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1">
+                    <span className="font-mono text-xs">{booking.lead?.gst_number || <span className="text-muted-foreground italic">Not provided</span>}</span>
+                    <button
+                      onClick={() => { setDraftGst(booking.lead?.gst_number || ""); setEditingGst(true); }}
+                      className="text-muted-foreground hover:text-foreground ml-1"
+                      title="Edit GST number"
+                    >
+                      <Pencil className="h-3 w-3" />
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </CardContent>
@@ -1220,6 +1359,12 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3">
+          {booking.aggregator_booking_id && (
+            <div className="flex justify-between text-sm">
+              <span className="text-muted-foreground">Aggregator Ref</span>
+              <span className="font-mono text-xs">{booking.aggregator_booking_id}</span>
+            </div>
+          )}
           {booking.notes && (
             <p className="text-sm whitespace-pre-wrap bg-muted/30 rounded p-3">{booking.notes}</p>
           )}
@@ -1289,6 +1434,20 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         onSuccess={fetchBooking}
         bookingId={booking.id}
       />
+
+      {pendingOvertimeCharge && (
+        <WaiverRequestDialog
+          open={waiverOpen}
+          onOpenChange={setWaiverOpen}
+          bookingId={booking.id}
+          waiverType="overtime"
+          waiverAmount={pendingOvertimeCharge.charge}
+          onApproved={() => {
+            setPendingOvertimeCharge(null);
+            fetchBooking();
+          }}
+        />
+      )}
     </div>
   );
 }

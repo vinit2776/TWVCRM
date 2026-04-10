@@ -753,6 +753,7 @@ export interface Booking {
   prepaid_credits_used?: number;
   prepaid_topup_amount?: number;
   notes?: string;
+  aggregator_booking_id?: string;
   created_by?: string;
   created_at: string;
   updated_at: string;
