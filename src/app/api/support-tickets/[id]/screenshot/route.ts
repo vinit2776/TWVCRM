@@ -96,3 +96,5 @@ export async function POST(
   const updated = updatedRows?.[0] ?? null;
   return NextResponse.json({ data: updated });
 }
+
+export const maxDuration = 30;

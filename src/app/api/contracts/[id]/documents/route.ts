@@ -101,3 +101,5 @@ export async function POST(request: NextRequest, { params }: Params) {
 
   return NextResponse.json({ data: updated });
 }
+
+export const maxDuration = 30;

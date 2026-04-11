@@ -79,7 +79,7 @@ export async function POST(request: NextRequest) {
 
   const { error: uploadError } = await adminSupabase.storage
     .from("crm-documents")
-    .upload(filePath, buffer, { contentType: file.type || "application/octet-stream", upsert: false });
+    .upload(filePath, buffer, { contentType: file.type || "application/octet-stream", upsert: true });
 
   if (uploadError) {
     return NextResponse.json({ error: uploadError.message }, { status: 500 });
@@ -117,3 +117,6 @@ export async function POST(request: NextRequest) {
 
   return NextResponse.json({ data: doc }, { status: 201 });
 }
+
+// Extend timeout for large file uploads
+export const maxDuration = 30;
