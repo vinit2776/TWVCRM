@@ -422,62 +422,75 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  const fetchAll = useCallback(async () => {
+  // Store lead.created_at in a ref to avoid dependency on the entire lead object
+  const leadCreatedAt = lead.created_at;
+
+  const fetchAll = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
-    const [activitiesRes, proposalsRes, invoicesRes, contractsRes, bookingsRes] =
-      await Promise.all([
-        fetch(`/api/leads/${leadId}/activities`),
-        fetch(`/api/proposals?lead_id=${leadId}`),
-        fetch(`/api/invoices?lead_id=${leadId}`),
-        fetch(`/api/contracts?lead_id=${leadId}`),
-        fetch(`/api/bookings?lead_id=${leadId}&limit=200`),
-      ]);
+    try {
+      const opts = signal ? { signal } : {};
+      const [activitiesRes, proposalsRes, invoicesRes, contractsRes, bookingsRes] =
+        await Promise.all([
+          fetch(`/api/leads/${leadId}/activities`, opts),
+          fetch(`/api/proposals?lead_id=${leadId}`, opts),
+          fetch(`/api/invoices?lead_id=${leadId}`, opts),
+          fetch(`/api/contracts?lead_id=${leadId}`, opts),
+          fetch(`/api/bookings?lead_id=${leadId}&limit=50`, opts),
+        ]);
 
-    const merged: TimelineItem[] = [];
+      if (signal?.aborted) return;
 
-    if (activitiesRes.ok) {
-      const json = await activitiesRes.json();
-      (json.data || []).forEach((a: Activity) =>
-        merged.push({ kind: "activity", date: a.created_at, activity: a })
-      );
-    }
-    if (proposalsRes.ok) {
-      const json = await proposalsRes.json();
-      (json.data || []).forEach((p: Proposal) =>
-        merged.push({ kind: "proposal", date: p.created_at, proposal: p })
-      );
-    }
-    if (invoicesRes.ok) {
-      const json = await invoicesRes.json();
-      (json.data || []).forEach((inv: ProformaInvoice) =>
-        merged.push({ kind: "invoice", date: inv.created_at, invoice: inv })
-      );
-    }
-    if (contractsRes.ok) {
-      const json = await contractsRes.json();
-      (json.data || []).forEach((c: Contract) =>
-        merged.push({ kind: "contract", date: c.created_at, contract: c })
-      );
-    }
-    if (bookingsRes.ok) {
-      const json = await bookingsRes.json();
-      (json.data || []).forEach((b: Booking) =>
-        merged.push({ kind: "booking", date: b.created_at, booking: b })
-      );
-    }
+      const merged: TimelineItem[] = [];
 
-    // Sort newest-first; lead creation is pinned at the very end
-    merged.sort(
-      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
-    );
-    merged.push({ kind: "created", date: lead.created_at, lead });
+      if (activitiesRes.ok) {
+        const json = await activitiesRes.json();
+        (json.data || []).forEach((a: Activity) =>
+          merged.push({ kind: "activity", date: a.created_at, activity: a })
+        );
+      }
+      if (proposalsRes.ok) {
+        const json = await proposalsRes.json();
+        (json.data || []).forEach((p: Proposal) =>
+          merged.push({ kind: "proposal", date: p.created_at, proposal: p })
+        );
+      }
+      if (invoicesRes.ok) {
+        const json = await invoicesRes.json();
+        (json.data || []).forEach((inv: ProformaInvoice) =>
+          merged.push({ kind: "invoice", date: inv.created_at, invoice: inv })
+        );
+      }
+      if (contractsRes.ok) {
+        const json = await contractsRes.json();
+        (json.data || []).forEach((c: Contract) =>
+          merged.push({ kind: "contract", date: c.created_at, contract: c })
+        );
+      }
+      if (bookingsRes.ok) {
+        const json = await bookingsRes.json();
+        (json.data || []).forEach((b: Booking) =>
+          merged.push({ kind: "booking", date: b.created_at, booking: b })
+        );
+      }
 
-    setItems(merged);
-    setLoading(false);
-  }, [leadId, lead, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+      // Sort newest-first; lead creation is pinned at the very end
+      merged.sort(
+        (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+      );
+      merged.push({ kind: "created", date: leadCreatedAt, lead });
+
+      setItems(merged);
+    } catch (err) {
+      if ((err as Error).name !== "AbortError") console.error("[timeline] fetch failed:", err);
+    } finally {
+      setLoading(false);
+    }
+  }, [leadId, leadCreatedAt, lead, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    fetchAll();
+    const controller = new AbortController();
+    fetchAll(controller.signal);
+    return () => controller.abort();
   }, [fetchAll]);
 
   const handleRefresh = useCallback(() => setRefreshKey((k) => k + 1), []);

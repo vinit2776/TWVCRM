@@ -22,7 +22,7 @@ export async function GET(
     .select("*, creator:users!activities_created_by_fkey(*), follow_up_actor:users!activities_follow_up_actioned_by_fkey(*)")
     .eq("lead_id", id)
     .order("created_at", { ascending: false })
-    .limit(200);
+    .limit(100);
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
