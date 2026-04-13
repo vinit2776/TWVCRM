@@ -70,8 +70,8 @@ export async function GET(
 
   if (error || !data) return NextResponse.json({ error: "Request not found" }, { status: 404 });
 
-  // Non-manager/admin/fms can only view their own PRs
-  if (!["admin", "manager", "fms", "office_admin"].includes(dbUser.role) && data.requested_by !== dbUser.id) {
+  // Only procurement roles can access
+  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -138,7 +138,7 @@ export async function PATCH(
       if (!["draft", "submitted"].includes(pr.status)) {
         return NextResponse.json({ error: "Only draft or submitted PRs can be cancelled" }, { status: 422 });
       }
-      if (pr.requested_by !== dbUser.id && !["admin", "manager", "fms", "office_admin"].includes(dbUser.role)) {
+      if (pr.requested_by !== dbUser.id && !["admin", "manager", "office_admin"].includes(dbUser.role)) {
         return NextResponse.json({ error: "Access denied" }, { status: 403 });
       }
       updatePayload = { status: "cancelled" };

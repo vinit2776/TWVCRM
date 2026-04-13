@@ -68,9 +68,9 @@ export async function POST(
     .single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  if (!["admin", "manager", "floor_manager", "fms", "office_admin"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
     return NextResponse.json(
-      { error: "Only floor incharges, managers, admins, FMS, and office admins can record deliveries" },
+      { error: "Access denied" },
       { status: 403 }
     );
   }

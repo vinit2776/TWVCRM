@@ -105,8 +105,8 @@ export async function POST(request: NextRequest) {
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  if (!["admin", "manager", "accounts", "fms", "office_admin"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Only managers, admins, accounts, FMS, and office admins can create vendor invoices" }, { status: 403 });
+  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
   const body = await request.json();

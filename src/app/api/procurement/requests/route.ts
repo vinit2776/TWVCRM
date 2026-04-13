@@ -54,9 +54,9 @@ export async function GET(request: NextRequest) {
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
-  // Non-managers/non-FMS can only see their own PRs
-  if (!["admin", "manager", "fms", "office_admin"].includes(dbUser.role)) {
-    query = query.eq("requested_by", dbUser.id);
+  // Only procurement roles can see all; others are blocked at the route level
+  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
   if (status) query = query.eq("status", status);
@@ -84,6 +84,9 @@ export async function POST(request: NextRequest) {
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
+  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
 
   const body = await request.json();
   const parsed = createPrSchema.safeParse(body);
