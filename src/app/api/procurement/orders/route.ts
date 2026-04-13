@@ -72,6 +72,7 @@ export async function GET(request: NextRequest) {
   const locationId = searchParams.get("location_id");
   const prId = searchParams.get("pr_id");
   const advanceStatus = searchParams.get("advance_status");
+  const search = searchParams.get("search")?.trim() ?? "";
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
   const offset = (page - 1) * limit;
@@ -90,6 +91,21 @@ export async function GET(request: NextRequest) {
   if (locationId) query = query.eq("location_id", locationId);
   if (prId) query = query.eq("pr_id", prId);
   if (advanceStatus) query = query.eq("advance_status", advanceStatus);
+
+  // Search: require ≥3 chars to prevent full-table scans on short terms
+  if (search.length >= 3) {
+    // Search by PO number OR vendor name (vendor lookup is acceptable at ≥3 chars)
+    const { data: matchingVendors } = await supabase
+      .from("procurement_vendors")
+      .select("id")
+      .ilike("name", `%${search}%`);
+    const vendorIds = (matchingVendors ?? []).map((v: { id: string }) => v.id);
+    if (vendorIds.length > 0) {
+      query = query.or(`po_number.ilike.%${search}%,vendor_id.in.(${vendorIds.join(",")})`);
+    } else {
+      query = query.ilike("po_number", `%${search}%`);
+    }
+  }
 
   const { data, error, count } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

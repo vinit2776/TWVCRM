@@ -41,6 +41,7 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get("status");
   const department = searchParams.get("department");
   const locationId = searchParams.get("location_id");
+  const search = searchParams.get("search")?.trim() ?? "";
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
   const offset = (page - 1) * limit;
@@ -62,6 +63,11 @@ export async function GET(request: NextRequest) {
   if (status) query = query.eq("status", status);
   if (department) query = query.eq("department", department);
   if (locationId) query = query.eq("location_id", locationId);
+
+  // Search: require ≥3 chars to prevent full-table scans on short terms
+  if (search.length >= 3) {
+    query = query.ilike("pr_number", `%${search}%`);
+  }
 
   const { data, error, count } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

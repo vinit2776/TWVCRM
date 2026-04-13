@@ -3,9 +3,10 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ClipboardList, Plus, ChevronLeft, ChevronRight } from "lucide-react";
+import { ClipboardList, Plus, ChevronLeft, ChevronRight, Search, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
+import { Input } from "@/components/ui/input";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -26,6 +27,8 @@ export default function PurchaseRequestsPage() {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState("");
   const [deptFilter, setDeptFilter] = useState("");
+  const [searchInput, setSearchInput] = useState("");
+  const [search, setSearch] = useState("");
   const [userRole, setUserRole] = useState<string>("");
 
   const canSeePrices = ["admin", "manager"].includes(userRole);
@@ -34,11 +37,25 @@ export default function PurchaseRequestsPage() {
     fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role || ""));
   }, []);
 
+  // Debounce search: wait 600 ms and require ≥3 chars before querying
+  useEffect(() => {
+    const trimmed = searchInput.trim();
+    if (trimmed.length === 0) {
+      setSearch("");
+      setPage(1);
+      return;
+    }
+    if (trimmed.length < 3) return; // wait for more input — no query yet
+    const t = setTimeout(() => { setSearch(trimmed); setPage(1); }, 600);
+    return () => clearTimeout(t);
+  }, [searchInput]);
+
   const fetchRequests = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams({ page: String(page), limit: "25" });
     if (statusFilter) params.set("status", statusFilter);
     if (deptFilter) params.set("department", deptFilter);
+    if (search) params.set("search", search);
     const res = await fetch(`/api/procurement/requests?${params}`);
     if (res.ok) {
       const json = await res.json();
@@ -46,7 +63,7 @@ export default function PurchaseRequestsPage() {
       setPagination(json.pagination);
     }
     setLoading(false);
-  }, [page, statusFilter, deptFilter]);
+  }, [page, statusFilter, deptFilter, search]);
 
   useEffect(() => { fetchRequests(); }, [fetchRequests]);
 
@@ -58,6 +75,27 @@ export default function PurchaseRequestsPage() {
           <p className="text-sm text-muted-foreground">{pagination.total} total requests</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
+          {/* Search */}
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+            <Input
+              placeholder="Search MR # or item..."
+              className="pl-8 w-[200px]"
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+            />
+            {searchInput && (
+              <button
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                onClick={() => { setSearchInput(""); setSearch(""); }}
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
+          {searchInput.trim().length > 0 && searchInput.trim().length < 3 && (
+            <p className="text-xs text-muted-foreground mt-1">Type at least 3 characters…</p>
+          )}
           <Select
             value={deptFilter}
             onValueChange={(val) => { setDeptFilter(val === "all" ? "" : val); setPage(1); }}
@@ -65,7 +103,7 @@ export default function PurchaseRequestsPage() {
             <SelectTrigger className="w-[160px]">
               <SelectValue placeholder="All Departments" />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent position="popper">
               <SelectItem value="all">All Departments</SelectItem>
               {PROCUREMENT_DEPARTMENTS.map((d) => (
                 <SelectItem key={d} value={d}>{PROCUREMENT_DEPARTMENT_LABELS[d]}</SelectItem>
@@ -79,7 +117,7 @@ export default function PurchaseRequestsPage() {
             <SelectTrigger className="w-[150px]">
               <SelectValue placeholder="All Statuses" />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent position="popper">
               <SelectItem value="all">All Statuses</SelectItem>
               {PR_STATUSES.map((s) => (
                 <SelectItem key={s} value={s}>{PR_STATUS_LABELS[s]}</SelectItem>
