@@ -46,7 +46,6 @@ export async function POST(request: NextRequest) {
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Only admin and FMS can manage the item catalog
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
   if (!["admin", "manager", "fms", "floor_manager"].includes(dbUser.role)) {
@@ -57,6 +56,20 @@ export async function POST(request: NextRequest) {
   const parsed = createItemSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+  }
+
+  // ── Uniqueness check (case-insensitive) ─────────────────────────────
+  const { data: existing } = await supabase
+    .from("procurement_items")
+    .select("id, name")
+    .ilike("name", parsed.data.name.trim())
+    .maybeSingle();
+
+  if (existing) {
+    return NextResponse.json(
+      { error: `An item named "${existing.name}" already exists in the catalog. Item names must be unique.` },
+      { status: 409 }
+    );
   }
 
   const { data: item, error } = await supabase

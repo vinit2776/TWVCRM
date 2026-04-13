@@ -47,7 +47,7 @@ export default function PurchaseRequestsPage() {
     <div className="space-y-4">
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Purchase Requests</h1>
+          <h1 className="text-2xl font-bold">Material Requests</h1>
           <p className="text-sm text-muted-foreground">{pagination.total} total requests</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
@@ -90,8 +90,8 @@ export default function PurchaseRequestsPage() {
       ) : requests.length === 0 ? (
         <EmptyState
           icon={ClipboardList}
-          title="No purchase requests"
-          description="Create your first purchase request to get started."
+          title="No material requests"
+          description="Create your first material request to get started."
           actionLabel="New Request"
           onAction={() => router.push("/procurement/requests/new")}
         />

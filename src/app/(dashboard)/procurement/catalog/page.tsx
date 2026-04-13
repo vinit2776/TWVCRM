@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Archive, Pencil, Plus, X, Check, Search } from "lucide-react";
+import { Archive, Pencil, Plus, X, Check, Search, History, AlertTriangle, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -27,7 +27,19 @@ import {
   GST_RATE_LABELS,
 } from "@/lib/constants";
 import { toast } from "sonner";
+import { formatCurrency, formatDate } from "@/lib/utils";
 import type { ProcurementItem, ProcurementDepartment, ItemUnit, ItemType } from "@/types";
+
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+interface PriceHistoryEntry {
+  id: string;
+  old_price: number | null;
+  new_price: number | null;
+  changed_at: string;
+  notes: string | null;
+  changer: { id: string; full_name?: string; email?: string } | null;
+}
 
 const emptyForm = {
   name: "",
@@ -39,18 +51,39 @@ const emptyForm = {
   description: "",
 };
 
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+/** Groups items by lower-cased trimmed name, returns names that appear more than once. */
+function detectDuplicates(items: ProcurementItem[]): Set<string> {
+  const counts: Record<string, number> = {};
+  for (const item of items) {
+    const key = item.name.trim().toLowerCase();
+    counts[key] = (counts[key] ?? 0) + 1;
+  }
+  return new Set(Object.entries(counts).filter(([, c]) => c > 1).map(([k]) => k));
+}
+
+// ── Component ──────────────────────────────────────────────────────────────────
+
 export default function CatalogPage() {
   const [items, setItems] = useState<ProcurementItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [deptFilter, setDeptFilter] = useState("");
   const [includeInactive, setIncludeInactive] = useState(false);
-
   const [search, setSearch] = useState("");
 
+  // Add / Edit dialog
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editItem, setEditItem] = useState<ProcurementItem | null>(null);
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
+
+  // Price history dialog
+  const [historyItem, setHistoryItem] = useState<ProcurementItem | null>(null);
+  const [historyData, setHistoryData] = useState<PriceHistoryEntry[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+
+  // ── Data fetching ────────────────────────────────────────────────────────────
 
   const fetchItems = useCallback(async () => {
     setLoading(true);
@@ -64,6 +97,30 @@ export default function CatalogPage() {
   }, [deptFilter, includeInactive, search]);
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
+
+  // Always fetch all items (without search filter) to detect duplicates globally
+  const [allItems, setAllItems] = useState<ProcurementItem[]>([]);
+  useEffect(() => {
+    fetch("/api/procurement/items?include_inactive=true")
+      .then((r) => r.json())
+      .then((j) => setAllItems(j.data || []));
+  }, [items]); // re-check after any save
+
+  const duplicateNames = detectDuplicates(allItems);
+  const hasDuplicates = duplicateNames.size > 0;
+
+  // ── Price history ────────────────────────────────────────────────────────────
+
+  const openPriceHistory = async (item: ProcurementItem) => {
+    setHistoryItem(item);
+    setHistoryData([]);
+    setHistoryLoading(true);
+    const res = await fetch(`/api/procurement/items/${item.id}/price-history`);
+    if (res.ok) setHistoryData((await res.json()).data || []);
+    setHistoryLoading(false);
+  };
+
+  // ── Edit ─────────────────────────────────────────────────────────────────────
 
   function openEdit(item: ProcurementItem) {
     setEditItem(item);
@@ -129,7 +186,8 @@ export default function CatalogPage() {
     }
   }
 
-  // Group items by department
+  // ── Grouping ─────────────────────────────────────────────────────────────────
+
   const grouped = PROCUREMENT_DEPARTMENTS.reduce<Record<string, ProcurementItem[]>>((acc, dept) => {
     acc[dept] = items.filter((i) => i.department === dept);
     return acc;
@@ -138,6 +196,8 @@ export default function CatalogPage() {
   const activeDepts = deptFilter
     ? PROCUREMENT_DEPARTMENTS.filter((d) => d === deptFilter)
     : PROCUREMENT_DEPARTMENTS;
+
+  // ── Render ────────────────────────────────────────────────────────────────────
 
   return (
     <div className="space-y-4">
@@ -150,10 +210,32 @@ export default function CatalogPage() {
             {search.trim() ? ` matching "${search.trim()}"` : " across all departments"}
           </p>
         </div>
-        <Button onClick={() => setDialogOpen(true)} className="shrink-0">
+        <Button onClick={() => { setEditItem(null); setForm(emptyForm); setDialogOpen(true); }} className="shrink-0">
           <Plus className="h-4 w-4 mr-2" /> Add Item
         </Button>
       </div>
+
+      {/* Duplicate names warning banner */}
+      {hasDuplicates && (
+        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+          <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+          <div className="flex-1 text-sm">
+            <p className="font-semibold text-amber-800">Duplicate item names detected</p>
+            <p className="text-amber-700 mt-0.5">
+              The following names appear more than once and must be made unique before a uniqueness constraint can be enforced:{" "}
+              {[...duplicateNames].map((n, i) => (
+                <span key={n}>
+                  <span className="font-medium">"{n}"</span>
+                  {i < duplicateNames.size - 1 ? ", " : ""}
+                </span>
+              ))}
+            </p>
+            <p className="text-amber-600 mt-1 text-xs">
+              Edit or deactivate the duplicate entries using the pencil icon below.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Filters */}
       <div className="flex flex-col sm:flex-row gap-2">
@@ -221,7 +303,7 @@ export default function CatalogPage() {
                     <table className="w-full text-sm">
                       <thead className="border-y bg-muted/30">
                         <tr>
-                              <th className="text-left px-4 py-2 font-medium">Item Name</th>
+                          <th className="text-left px-4 py-2 font-medium">Item Name</th>
                           <th className="text-left px-4 py-2 font-medium hidden sm:table-cell">Type</th>
                           <th className="text-left px-4 py-2 font-medium">Unit</th>
                           <th className="text-left px-4 py-2 font-medium hidden md:table-cell">Std. Price</th>
@@ -231,54 +313,78 @@ export default function CatalogPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {deptItems.map((item) => (
-                          <tr key={item.id} className="border-b last:border-0 hover:bg-muted/20">
-                            <td className="px-4 py-2.5">
-                              <span className={item.is_active ? "" : "text-muted-foreground line-through"}>
-                                {item.name}
-                              </span>
-                            </td>
-                            <td className="px-4 py-2.5 hidden sm:table-cell">
-                              <Badge className={item.item_type === "service" ? "bg-blue-100 text-blue-800" : "bg-gray-100 text-gray-700"}>
-                                {ITEM_TYPE_LABELS[item.item_type ?? "goods"]}
-                              </Badge>
-                            </td>
-                            <td className="px-4 py-2.5 text-muted-foreground">{item.unit}</td>
-                            <td className="px-4 py-2.5 hidden md:table-cell text-muted-foreground">
-                              {item.standard_price != null ? `₹${item.standard_price}` : "—"}
-                            </td>
-                            <td className="px-4 py-2.5 hidden md:table-cell text-muted-foreground">
-                              {item.gst_rate ? `${item.gst_rate}%` : "—"}
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <Badge className={item.is_active ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-500"}>
-                                {item.is_active ? "Active" : "Inactive"}
-                              </Badge>
-                            </td>
-                            <td className="px-4 py-2.5">
-                              <div className="flex items-center gap-1">
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => openEdit(item)}
-                                  title="Edit item"
-                                >
-                                  <Pencil className="h-3 w-3 text-muted-foreground" />
-                                </Button>
-                                <Button
-                                  size="sm"
-                                  variant="ghost"
-                                  onClick={() => toggleActive(item)}
-                                  title={item.is_active ? "Deactivate" : "Reactivate"}
-                                >
-                                  {item.is_active
-                                    ? <X className="h-3 w-3 text-red-500" />
-                                    : <Check className="h-3 w-3 text-green-600" />}
-                                </Button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
+                        {deptItems.map((item) => {
+                          const isDuplicate = duplicateNames.has(item.name.trim().toLowerCase());
+                          return (
+                            <tr key={item.id} className={`border-b last:border-0 hover:bg-muted/20 ${isDuplicate ? "bg-amber-50/40" : ""}`}>
+                              <td className="px-4 py-2.5">
+                                <div className="flex items-center gap-2">
+                                  <span className={item.is_active ? "" : "text-muted-foreground line-through"}>
+                                    {item.name}
+                                  </span>
+                                  {isDuplicate && (
+                                    <Badge className="text-[10px] bg-amber-100 text-amber-800 border-amber-200 border px-1.5 py-0">
+                                      duplicate
+                                    </Badge>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-4 py-2.5 hidden sm:table-cell">
+                                <Badge className={item.item_type === "service" ? "bg-blue-100 text-blue-800" : "bg-gray-100 text-gray-700"}>
+                                  {ITEM_TYPE_LABELS[item.item_type ?? "goods"]}
+                                </Badge>
+                              </td>
+                              <td className="px-4 py-2.5 text-muted-foreground">{item.unit}</td>
+                              <td className="px-4 py-2.5 hidden md:table-cell text-muted-foreground">
+                                {item.standard_price != null ? formatCurrency(item.standard_price) : "—"}
+                              </td>
+                              <td className="px-4 py-2.5 hidden md:table-cell text-muted-foreground">
+                                {item.gst_rate ? `${item.gst_rate}%` : "—"}
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <Badge className={item.is_active ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-500"}>
+                                  {item.is_active ? "Active" : "Inactive"}
+                                </Badge>
+                              </td>
+                              <td className="px-4 py-2.5">
+                                <div className="flex items-center gap-0.5">
+                                  {/* Price history */}
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => openPriceHistory(item)}
+                                    title="Price history"
+                                    className="h-7 w-7 p-0"
+                                  >
+                                    <History className="h-3.5 w-3.5 text-muted-foreground" />
+                                  </Button>
+                                  {/* Edit */}
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => openEdit(item)}
+                                    title="Edit item"
+                                    className="h-7 w-7 p-0"
+                                  >
+                                    <Pencil className="h-3 w-3 text-muted-foreground" />
+                                  </Button>
+                                  {/* Toggle active */}
+                                  <Button
+                                    size="sm"
+                                    variant="ghost"
+                                    onClick={() => toggleActive(item)}
+                                    title={item.is_active ? "Deactivate" : "Reactivate"}
+                                    className="h-7 w-7 p-0"
+                                  >
+                                    {item.is_active
+                                      ? <X className="h-3 w-3 text-red-500" />
+                                      : <Check className="h-3 w-3 text-green-600" />}
+                                  </Button>
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -289,7 +395,7 @@ export default function CatalogPage() {
         </div>
       )}
 
-      {/* Add / Edit Item Dialog */}
+      {/* ── Add / Edit Item Dialog ── */}
       <Dialog
         open={dialogOpen}
         onOpenChange={(open) => {
@@ -302,6 +408,7 @@ export default function CatalogPage() {
             <DialogTitle>{editItem ? "Edit Item" : "Add Item to Catalog"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            {/* Item type toggle */}
             <div className="space-y-1">
               <Label>Item Type *</Label>
               <div className="flex gap-2">
@@ -321,6 +428,7 @@ export default function CatalogPage() {
                 ))}
               </div>
             </div>
+
             <div className="space-y-1">
               <Label>Item Name *</Label>
               <Input
@@ -329,6 +437,7 @@ export default function CatalogPage() {
                 placeholder={form.item_type === "service" ? "e.g. Generator Maintenance" : "e.g. Premium Coffee Beans"}
               />
             </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
                 <Label>Department *</Label>
@@ -359,15 +468,24 @@ export default function CatalogPage() {
                 </Select>
               </div>
             </div>
+
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-1">
-                <Label>Standard Price (₹) <span className="text-muted-foreground text-xs">optional</span></Label>
+                <Label>
+                  Standard Price (₹){" "}
+                  <span className="text-muted-foreground text-xs font-normal">optional</span>
+                </Label>
                 <Input
                   type="number" min="0" step="0.01"
                   value={form.standard_price}
                   onChange={(e) => setForm((f) => ({ ...f, standard_price: e.target.value }))}
                   placeholder="0.00"
                 />
+                {editItem && (
+                  <p className="text-xs text-muted-foreground">
+                    Current: {editItem.standard_price != null ? formatCurrency(editItem.standard_price) : "—"}
+                  </p>
+                )}
               </div>
               <div className="space-y-1">
                 <Label>GST Rate</Label>
@@ -381,6 +499,7 @@ export default function CatalogPage() {
                 </Select>
               </div>
             </div>
+
             <div className="space-y-1">
               <Label>Item Notes</Label>
               <Textarea
@@ -397,6 +516,93 @@ export default function CatalogPage() {
               {saving
                 ? (editItem ? "Saving..." : "Adding...")
                 : (editItem ? "Save Changes" : "Add Item")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Price History Dialog ── */}
+      <Dialog
+        open={!!historyItem}
+        onOpenChange={(open) => { if (!open) { setHistoryItem(null); setHistoryData([]); } }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <History className="h-4 w-4" />
+              Price History — {historyItem?.name}
+            </DialogTitle>
+          </DialogHeader>
+
+          <div className="py-1">
+            {/* Current price */}
+            <div className="flex items-center justify-between rounded-lg bg-muted/40 border px-4 py-2.5 mb-4">
+              <span className="text-sm text-muted-foreground">Current standard price</span>
+              <span className="font-semibold text-base">
+                {historyItem?.standard_price != null
+                  ? formatCurrency(historyItem.standard_price)
+                  : <span className="text-muted-foreground">Not set</span>}
+              </span>
+            </div>
+
+            {historyLoading ? (
+              <p className="text-sm text-muted-foreground text-center py-8">Loading history...</p>
+            ) : historyData.length === 0 ? (
+              <p className="text-sm text-muted-foreground text-center py-8">
+                No price changes recorded yet. Price updates will appear here.
+              </p>
+            ) : (
+              <div className="space-y-0 border rounded-lg overflow-hidden">
+                {historyData.map((entry, idx) => {
+                  const oldP = entry.old_price != null ? Number(entry.old_price) : null;
+                  const newP = entry.new_price != null ? Number(entry.new_price) : null;
+                  const increased = oldP != null && newP != null && newP > oldP;
+                  const decreased = oldP != null && newP != null && newP < oldP;
+                  return (
+                    <div
+                      key={entry.id}
+                      className={`flex items-start gap-3 px-4 py-3 text-sm ${idx !== historyData.length - 1 ? "border-b" : ""}`}
+                    >
+                      {/* Trend icon */}
+                      <div className="mt-0.5 shrink-0">
+                        {increased ? (
+                          <TrendingUp className="h-4 w-4 text-green-600" />
+                        ) : decreased ? (
+                          <TrendingDown className="h-4 w-4 text-red-500" />
+                        ) : (
+                          <Minus className="h-4 w-4 text-muted-foreground" />
+                        )}
+                      </div>
+
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="text-muted-foreground">
+                            {oldP != null ? formatCurrency(oldP) : "—"}
+                          </span>
+                          <span className="text-muted-foreground">→</span>
+                          <span className={`font-semibold ${increased ? "text-green-700" : decreased ? "text-red-600" : ""}`}>
+                            {newP != null ? formatCurrency(newP) : "—"}
+                          </span>
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {entry.changer?.full_name ?? entry.changer?.email ?? "Unknown user"}
+                          {" · "}
+                          {formatDate(entry.changed_at)}
+                        </div>
+                        {entry.notes && (
+                          <p className="text-xs text-muted-foreground italic mt-0.5">{entry.notes}</p>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setHistoryItem(null); setHistoryData([]); }}>
+              Close
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -42,7 +42,7 @@ export async function PATCH(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+  const { data: dbUser } = await supabase.from("users").select("id, role, full_name").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
   if (!["admin", "manager", "fms", "floor_manager"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Only admins, managers, FMS, and floor managers can manage the item catalog" }, { status: 403 });
@@ -54,6 +54,33 @@ export async function PATCH(
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
+  // ── Fetch current item (needed for name-uniqueness check + price history) ──
+  const { data: current, error: fetchErr } = await supabase
+    .from("procurement_items")
+    .select("id, name, standard_price")
+    .eq("id", id)
+    .single();
+
+  if (fetchErr || !current) return NextResponse.json({ error: "Item not found" }, { status: 404 });
+
+  // ── Name uniqueness check (if name is being changed) ────────────────
+  if (parsed.data.name && parsed.data.name.trim().toLowerCase() !== current.name.trim().toLowerCase()) {
+    const { data: existing } = await supabase
+      .from("procurement_items")
+      .select("id, name")
+      .ilike("name", parsed.data.name.trim())
+      .neq("id", id)
+      .maybeSingle();
+
+    if (existing) {
+      return NextResponse.json(
+        { error: `An item named "${existing.name}" already exists in the catalog. Item names must be unique.` },
+        { status: 409 }
+      );
+    }
+  }
+
+  // ── Update item ──────────────────────────────────────────────────────
   const { data: updated, error } = await supabase
     .from("procurement_items")
     .update(parsed.data)
@@ -63,6 +90,22 @@ export async function PATCH(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!updated) return NextResponse.json({ error: "Item not found" }, { status: 404 });
+
+  // ── Record price history when standard_price changes ────────────────
+  const oldPrice = current.standard_price != null ? Number(current.standard_price) : null;
+  const newPrice = parsed.data.standard_price != null ? Number(parsed.data.standard_price) : null;
+
+  if (
+    "standard_price" in parsed.data &&
+    oldPrice !== newPrice
+  ) {
+    await supabase.from("procurement_item_price_history").insert({
+      item_id:    id,
+      old_price:  oldPrice,
+      new_price:  newPrice,
+      changed_by: dbUser.id,
+    });
+  }
 
   await logAudit(supabase, {
     entityType: "procurement_item",

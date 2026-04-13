@@ -1084,7 +1084,7 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Procurement",
       icon: ShoppingCart,
       overview:
-        "The Procurement module manages the full purchasing lifecycle — from vendor management and item catalogues through purchase requests, purchase orders (goods and services), delivery receipts, vendor bills, and bill approvals. All team members (including Sales Reps) can submit purchase requests. Floor Managers and FMS can create POs and manage the item catalogue. Managers and Admins approve everything. Service POs support recurring billing cycles and per-cycle invoicing.",
+        "The Procurement module manages the full purchasing lifecycle — from vendor management and item catalogues through material requests, purchase orders (goods and services), delivery receipts, vendor bills, and bill approvals. All team members (including Sales Reps) can submit material requests. Floor Managers and FMS can create POs and manage the item catalogue. Managers and Admins approve everything. Service POs support recurring billing cycles and per-cycle invoicing.",
       workflows: [
         {
           title: "Adding a Vendor",
@@ -1095,11 +1095,11 @@ export const HELP_CONTENT: HelpContentData = {
           ],
         },
         {
-          title: "Submitting a Purchase Request",
+          title: "Submitting a Material Request",
           steps: [
-            { step: 1, title: "Go to Purchase Requests", description: "Navigate to Procurement → Purchase Requests from the sidebar.", hint: "Any team member (all roles) can submit a purchase request — even Sales Reps!" },
+            { step: 1, title: "Go to Material Requests", description: "Navigate to Procurement → Material Requests from the sidebar.", hint: "Any team member (all roles) can submit a purchase request — even Sales Reps!" },
             { step: 2, title: "Click 'New Request'", description: "Describe the items needed, quantity, estimated unit cost, and the reason for the purchase.", hint: "Be specific in your description — vague requests are harder to approve and may be sent back to you." },
-            { step: 3, title: "Submit for approval", description: "Submit the request. A Manager or Admin reviews and approves or rejects it. You'll see the status update on the request.", hint: "You can track the status of your submitted requests in the Purchase Requests list — filter by 'My Requests'." },
+            { step: 3, title: "Submit for approval", description: "Submit the request. A Manager or Admin reviews and approves or rejects it. You'll see the status update on the request.", hint: "You can track the status of your submitted requests in the Material Requests list — filter by 'My Requests'." },
             { step: 4, title: "Request approved", description: "Once approved, a Purchase Order can be raised against the request by a Manager, Admin, or Floor Manager.", hint: "You'll see the request status change to 'Approved' — from here, a PO can be raised to place the order with a vendor." },
           ],
         },
@@ -1134,7 +1134,7 @@ export const HELP_CONTENT: HelpContentData = {
         },
       ],
       tips: [
-        "All team members can submit purchase requests — encourage everyone to use the system instead of verbal requests.",
+        "All team members can submit material requests — encourage everyone to use the system instead of verbal requests.",
         "Floor Managers can create POs and manage the item catalogue — they don't need to wait for a Manager.",
         "A vendor bill for a goods PO is blocked until at least one delivery receipt is recorded — always log receipt of goods first.",
         "If a delivery shortfall exists (received qty < ordered qty), the bill is capped proportionately — an inline red error prevents overpayment.",
@@ -1143,7 +1143,7 @@ export const HELP_CONTENT: HelpContentData = {
         "Use the Item Catalogue for standard items to ensure consistent naming across all POs.",
       ],
       faqs: [
-        { question: "Who can submit purchase requests?", answer: "All team members across all roles can submit purchase requests. Sales Reps, Floor Managers, FMS, Managers, and Admins can all create requests. Only Managers and Admins can approve them." },
+        { question: "Who can submit material requests?", answer: "All team members across all roles can submit material requests. Sales Reps, Floor Managers, FMS, Managers, and Admins can all create requests. Only Managers and Admins can approve them." },
         { question: "Who can create Purchase Orders?", answer: "Managers, Admins, Floor Managers, and FMS can create Purchase Orders. Sales Reps can submit requests but cannot raise POs." },
         { question: "Who can manage the Item Catalogue?", answer: "Admins, Managers, and Floor Managers can add and edit items in the catalogue." },
         { question: "Can I create a PO without a purchase request?", answer: "Yes. For routine or emergency purchases, you can create a Purchase Order directly without linking to a request." },
@@ -1401,7 +1401,7 @@ export const HELP_CONTENT: HelpContentData = {
     { feature: "Prepaid Packages (create/edit)", admin: true, manager: true, sales_rep: false, floor_manager: false },
     { feature: "Support Tickets (create)", admin: true, manager: true, sales_rep: true, floor_manager: true },
     { feature: "Support Tickets (manage/close)", admin: true, manager: true, sales_rep: false, floor_manager: false },
-    { feature: "Purchase Requests (submit)", admin: true, manager: true, sales_rep: true, floor_manager: true },
+    { feature: "Material Requests (submit)", admin: true, manager: true, sales_rep: true, floor_manager: true },
     { feature: "Procurement (view)", admin: true, manager: true, sales_rep: false, floor_manager: true },
     { feature: "Procurement (create PO/vendors/catalogue)", admin: true, manager: true, sales_rep: false, floor_manager: true },
     { feature: "Procurement (approve PRs/bills)", admin: true, manager: true, sales_rep: false, floor_manager: false },

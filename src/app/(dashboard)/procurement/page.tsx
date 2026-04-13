@@ -9,8 +9,8 @@ const modules = [
   {
     href: "/procurement/requests",
     icon: ClipboardList,
-    title: "Purchase Requests",
-    description: "Raise and track purchase requests from any department. Submit for manager or admin approval.",
+    title: "Material Requests",
+    description: "Raise and track material requests from any department. Submit for manager or admin approval.",
     badge: "Sprint 2",
     badgeColor: "bg-yellow-100 text-yellow-800",
   },

@@ -31,6 +31,7 @@ interface LineItem {
   quantity: string;
   unit: ItemUnit;
   estimated_price: string;
+  catalog_standard_price: number | null; // price ceiling — cannot exceed this
   notes: string;
 }
 
@@ -45,6 +46,7 @@ const emptyItem = (): LineItem => ({
   quantity: "",
   unit: "piece",
   estimated_price: "",
+  catalog_standard_price: null,
   notes: "",
 });
 
@@ -90,6 +92,7 @@ export default function NewPurchaseRequestPage() {
   };
 
   const selectCatalogItem = (catalogItem: ProcurementItem) => {
+    const stdPrice = catalogItem.standard_price != null ? Number(catalogItem.standard_price) : null;
     setItems((prev) =>
       prev.map((li) =>
         li.id === targetItemId
@@ -98,7 +101,11 @@ export default function NewPurchaseRequestPage() {
               item_id: catalogItem.id,
               item_name: catalogItem.name,
               unit: catalogItem.unit,
-              estimated_price: catalogItem.standard_price ? String(catalogItem.standard_price) : li.estimated_price,
+              catalog_standard_price: stdPrice,
+              // Pre-fill price only if current entry is blank or higher than catalog ceiling
+              estimated_price: stdPrice != null
+                ? String(stdPrice)
+                : li.estimated_price,
             }
           : li
       )
@@ -142,12 +149,19 @@ export default function NewPurchaseRequestPage() {
     })),
   });
 
+  const isPriceOverCeiling = (li: LineItem): boolean => {
+    if (li.catalog_standard_price == null || !li.estimated_price) return false;
+    return parseFloat(li.estimated_price) > li.catalog_standard_price;
+  };
+
   const validate = (): string | null => {
     for (const li of items) {
       if (!li.item_id) return "All items must be selected from the catalog";
       if (!li.item_name.trim()) return "All items must have a name";
       if (!li.quantity || isNaN(parseFloat(li.quantity)) || parseFloat(li.quantity) <= 0)
         return "All items must have a valid quantity";
+      if (isPriceOverCeiling(li))
+        return `Price for "${li.item_name}" cannot exceed the catalog price of ${formatCurrency(li.catalog_standard_price!)}`;
     }
     return null;
   };
@@ -198,7 +212,7 @@ export default function NewPurchaseRequestPage() {
           <ChevronLeft className="h-5 w-5" />
         </Button>
         <div>
-          <h1 className="text-2xl font-bold">New Purchase Request</h1>
+          <h1 className="text-2xl font-bold">New Material Request</h1>
           <p className="text-sm text-muted-foreground">Fill in details and add items to request</p>
         </div>
       </div>
@@ -355,15 +369,29 @@ export default function NewPurchaseRequestPage() {
                 </div>
 
                 <div className="space-y-1">
-                  <Label className="text-xs">Est. Price per Unit (₹)</Label>
+                  <Label className="text-xs">
+                    Est. Price per Unit (₹)
+                    {li.catalog_standard_price != null && (
+                      <span className="ml-1 text-muted-foreground font-normal">
+                        — max {formatCurrency(li.catalog_standard_price)}
+                      </span>
+                    )}
+                  </Label>
                   <Input
                     type="number"
                     min="0"
+                    max={li.catalog_standard_price != null ? li.catalog_standard_price : undefined}
                     step="0.01"
                     placeholder="0.00"
                     value={li.estimated_price}
+                    className={isPriceOverCeiling(li) ? "border-red-400 focus-visible:ring-red-400" : ""}
                     onChange={(e) => updateItem(li.id, "estimated_price", e.target.value)}
                   />
+                  {isPriceOverCeiling(li) && (
+                    <p className="text-xs text-red-600 font-medium">
+                      ↑ Exceeds catalog price ({formatCurrency(li.catalog_standard_price!)}). Price can only be reduced here — update the catalog to increase it.
+                    </p>
+                  )}
                 </div>
 
                 {li.estimated_price && li.quantity && (
