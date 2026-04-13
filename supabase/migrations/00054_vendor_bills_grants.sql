@@ -12,5 +12,11 @@ GRANT SELECT, INSERT, UPDATE, DELETE ON public.vendor_bills TO authenticated;
 GRANT SELECT, INSERT, UPDATE, DELETE ON public.vendor_bills TO service_role;
 
 -- Also ensure po_service_reports (new table from service PO feature) has grants
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.po_service_reports TO authenticated;
-GRANT SELECT, INSERT, UPDATE, DELETE ON public.po_service_reports TO service_role;
+-- Wrapped in DO block: table is created in 00055, so this is a no-op on fresh staging envs
+DO $$
+BEGIN
+  IF EXISTS (SELECT FROM pg_tables WHERE schemaname = 'public' AND tablename = 'po_service_reports') THEN
+    EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.po_service_reports TO authenticated';
+    EXECUTE 'GRANT SELECT, INSERT, UPDATE, DELETE ON public.po_service_reports TO service_role';
+  END IF;
+END $$;
