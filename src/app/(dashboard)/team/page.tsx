@@ -15,6 +15,12 @@ import {
   MoreHorizontal,
   Eye,
   EyeOff,
+  Building2,
+  Receipt,
+  Wrench,
+  Briefcase,
+  Check,
+  Minus,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -42,18 +48,202 @@ import { getInitials, formatDate } from "@/lib/utils";
 import type { User as UserType } from "@/types";
 import { toast } from "sonner";
 
-const ROLE_ICONS: Record<string, React.ComponentType<{ className?: string }>> =
-  {
-    admin: ShieldCheck,
-    manager: Shield,
-    sales_rep: User,
-  };
+const ROLE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
+  admin: ShieldCheck,
+  manager: Shield,
+  sales_rep: User,
+  floor_manager: Building2,
+  accounts: Receipt,
+  fms: Wrench,
+  office_admin: Briefcase,
+};
 
 const ROLE_COLORS: Record<string, string> = {
-  admin: "bg-red-100 text-red-800",
-  manager: "bg-blue-100 text-blue-800",
-  sales_rep: "bg-gray-100 text-gray-800",
+  admin:         "bg-red-100 text-red-800",
+  manager:       "bg-blue-100 text-blue-800",
+  sales_rep:     "bg-gray-100 text-gray-800",
+  floor_manager: "bg-green-100 text-green-800",
+  accounts:      "bg-amber-100 text-amber-800",
+  fms:           "bg-purple-100 text-purple-800",
+  office_admin:  "bg-orange-100 text-orange-800",
 };
+
+const ROLE_ICON_COLORS: Record<string, string> = {
+  admin:         "text-red-600",
+  manager:       "text-blue-600",
+  sales_rep:     "text-gray-600",
+  floor_manager: "text-green-600",
+  accounts:      "text-amber-600",
+  fms:           "text-purple-600",
+  office_admin:  "text-orange-600",
+};
+
+const ROLE_DESCRIPTIONS: Record<string, string> = {
+  admin:         "Full system access including team management, settings, and all modules",
+  manager:       "Broad operational access across leads, bookings, billing, and procurement",
+  sales_rep:     "Own leads and assigned tasks only",
+  floor_manager: "Spaces, bookings, waivers, contracts, and petty cash operations",
+  accounts:      "Billing statements, invoicing, and payment confirmation",
+  fms:           "Procurement dashboard, purchase requests, and facility operations",
+  office_admin:  "Vendor management, purchase requests, and reorder configuration",
+};
+
+// Feature matrix: rows = modules, cols = roles
+// "full" | "limited" | "none"
+type Access = "full" | "limited" | "none";
+
+const FEATURE_MATRIX: Array<{
+  module: string;
+  rows: Array<{ feature: string; access: Record<string, Access> }>;
+}> = [
+  {
+    module: "Team & Users",
+    rows: [
+      {
+        feature: "View team members",
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+      },
+      {
+        feature: "Create / edit / suspend users",
+        access: { admin: "full", manager: "none", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+      },
+    ],
+  },
+  {
+    module: "Leads & CRM",
+    rows: [
+      {
+        feature: "View & manage all leads",
+        access: { admin: "full", manager: "full", sales_rep: "limited", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+      },
+      {
+        feature: "Import leads",
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+      },
+      {
+        feature: "Activities & tasks",
+        access: { admin: "full", manager: "full", sales_rep: "limited", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+      },
+    ],
+  },
+  {
+    module: "Spaces & Bookings",
+    rows: [
+      {
+        feature: "View & manage bookings",
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "full", accounts: "none", fms: "none", office_admin: "none" },
+      },
+      {
+        feature: "Waiver requests",
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "full", accounts: "none", fms: "none", office_admin: "none" },
+      },
+      {
+        feature: "Space configuration",
+        access: { admin: "full", manager: "none", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+      },
+    ],
+  },
+  {
+    module: "Contracts & Proposals",
+    rows: [
+      {
+        feature: "View & manage contracts",
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "full", accounts: "none", fms: "none", office_admin: "none" },
+      },
+      {
+        feature: "Contract payments",
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "full", accounts: "none", fms: "none", office_admin: "none" },
+      },
+    ],
+  },
+  {
+    module: "Billing & Invoicing",
+    rows: [
+      {
+        feature: "View billing statements",
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "full", fms: "none", office_admin: "none" },
+      },
+      {
+        feature: "Confirm & lock invoices",
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "full", fms: "none", office_admin: "none" },
+      },
+    ],
+  },
+  {
+    module: "Petty Cash",
+    rows: [
+      {
+        feature: "View & add petty cash entries",
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+      },
+      {
+        feature: "Approve entries",
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+      },
+    ],
+  },
+  {
+    module: "Procurement",
+    rows: [
+      {
+        feature: "View procurement dashboard",
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "full", office_admin: "none" },
+      },
+      {
+        feature: "Raise purchase requests",
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "full", office_admin: "full" },
+      },
+      {
+        feature: "Approve purchase requests",
+        access: { admin: "full", manager: "limited", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+      },
+      {
+        feature: "Vendor & bill management",
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "full" },
+      },
+    ],
+  },
+  {
+    module: "Support Tickets",
+    rows: [
+      {
+        feature: "Raise support tickets",
+        access: { admin: "full", manager: "full", sales_rep: "full", floor_manager: "full", accounts: "full", fms: "full", office_admin: "full" },
+      },
+      {
+        feature: "Manage all tickets",
+        access: { admin: "full", manager: "full", sales_rep: "limited", floor_manager: "limited", accounts: "limited", fms: "limited", office_admin: "limited" },
+      },
+    ],
+  },
+  {
+    module: "Settings & Configuration",
+    rows: [
+      {
+        feature: "System settings",
+        access: { admin: "full", manager: "none", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+      },
+      {
+        feature: "Services & reorder config",
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "full" },
+      },
+      {
+        feature: "Audit logs",
+        access: { admin: "full", manager: "none", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+      },
+    ],
+  },
+];
+
+const ALL_ROLES = [
+  { key: "admin",         label: "Admin" },
+  { key: "manager",       label: "Manager" },
+  { key: "sales_rep",     label: "Sales Rep" },
+  { key: "floor_manager", label: "Floor Incharge" },
+  { key: "accounts",      label: "Accounts" },
+  { key: "fms",           label: "Facility Mgr" },
+  { key: "office_admin",  label: "Office Admin" },
+];
 
 export default function TeamPage() {
   const [users, setUsers] = useState<UserType[]>([]);
@@ -282,40 +472,128 @@ export default function TeamPage() {
         )}
       </div>
 
-      {/* RBAC Info */}
+      {/* ── Role Legend ── */}
       <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Role Permissions</CardTitle>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Role Legend</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="grid gap-4 md:grid-cols-3">
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <ShieldCheck className="h-4 w-4 text-red-600" />
-                <span className="font-medium text-sm">Admin</span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Full access + delete records + manage team roles
-              </p>
-            </div>
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <Shield className="h-4 w-4 text-blue-600" />
-                <span className="font-medium text-sm">Manager</span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Full access to all leads, tasks, and records
-              </p>
-            </div>
-            <div className="space-y-1">
-              <div className="flex items-center gap-2">
-                <User className="h-4 w-4 text-gray-600" />
-                <span className="font-medium text-sm">Sales Rep</span>
-              </div>
-              <p className="text-xs text-muted-foreground">
-                Own leads + assigned tasks only
-              </p>
-            </div>
+          <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+            {ALL_ROLES.map(({ key, label }) => {
+              const Icon = ROLE_ICONS[key] || User;
+              return (
+                <div
+                  key={key}
+                  className="flex items-start gap-3 rounded-lg border p-3"
+                >
+                  <div className={`mt-0.5 shrink-0 ${ROLE_ICON_COLORS[key]}`}>
+                    <Icon className="h-4 w-4" />
+                  </div>
+                  <div className="min-w-0">
+                    <Badge
+                      variant="secondary"
+                      className={`mb-1 ${ROLE_COLORS[key]}`}
+                    >
+                      {label}
+                    </Badge>
+                    <p className="text-xs text-muted-foreground leading-relaxed">
+                      {ROLE_DESCRIPTIONS[key]}
+                    </p>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* ── Feature Access Matrix ── */}
+      <Card>
+        <CardHeader className="pb-3">
+          <div>
+            <CardTitle className="text-base">Feature Access Matrix</CardTitle>
+            <p className="text-xs text-muted-foreground mt-1 flex items-center gap-3">
+              <span className="flex items-center gap-1">
+                <Check className="h-3 w-3 text-green-600" /> Full access
+              </span>
+              <span className="flex items-center gap-1">
+                <span className="inline-block h-3 w-3 rounded-full bg-amber-400 text-[9px] leading-3 text-center text-white font-bold">~</span>
+                Limited / own records only
+              </span>
+              <span className="flex items-center gap-1">
+                <Minus className="h-3 w-3 text-muted-foreground" /> No access
+              </span>
+            </p>
+          </div>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead>
+                <tr className="border-b bg-muted/50">
+                  <th className="px-4 py-2.5 text-left font-medium text-muted-foreground w-48 min-w-[180px]">
+                    Feature
+                  </th>
+                  {ALL_ROLES.map(({ key, label }) => {
+                    const Icon = ROLE_ICONS[key] || User;
+                    return (
+                      <th
+                        key={key}
+                        className="px-3 py-2.5 text-center font-medium min-w-[80px]"
+                      >
+                        <div className="flex flex-col items-center gap-1">
+                          <Icon className={`h-3.5 w-3.5 ${ROLE_ICON_COLORS[key]}`} />
+                          <span className="leading-tight">{label}</span>
+                        </div>
+                      </th>
+                    );
+                  })}
+                </tr>
+              </thead>
+              <tbody>
+                {FEATURE_MATRIX.map((section, si) => (
+                  <>
+                    {/* Module header row */}
+                    <tr key={`section-${si}`} className="bg-muted/30 border-b">
+                      <td
+                        colSpan={ALL_ROLES.length + 1}
+                        className="px-4 py-1.5 font-semibold text-[11px] uppercase tracking-wide text-muted-foreground"
+                      >
+                        {section.module}
+                      </td>
+                    </tr>
+                    {section.rows.map((row, ri) => (
+                      <tr
+                        key={`row-${si}-${ri}`}
+                        className="border-b hover:bg-muted/20 transition-colors"
+                      >
+                        <td className="px-4 py-2.5 text-muted-foreground">
+                          {row.feature}
+                        </td>
+                        {ALL_ROLES.map(({ key }) => {
+                          const access = row.access[key] ?? "none";
+                          return (
+                            <td key={key} className="px-3 py-2.5 text-center">
+                              {access === "full" && (
+                                <Check className="h-3.5 w-3.5 text-green-600 mx-auto" />
+                              )}
+                              {access === "limited" && (
+                                <span className="inline-flex h-4 w-4 items-center justify-center rounded-full bg-amber-100 text-amber-700 font-bold text-[10px] mx-auto">
+                                  ~
+                                </span>
+                              )}
+                              {access === "none" && (
+                                <Minus className="h-3.5 w-3.5 text-muted-foreground/40 mx-auto" />
+                              )}
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </>
+                ))}
+              </tbody>
+            </table>
           </div>
         </CardContent>
       </Card>
