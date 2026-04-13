@@ -1258,7 +1258,7 @@ export type PrStatus = (typeof PR_STATUSES)[number];
 
 export const PR_STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
-  submitted: "Submitted",
+  submitted: "Pending Approval",
   approved: "Approved",
   rejected: "Rejected",
   partially_ordered: "Partially Ordered",
