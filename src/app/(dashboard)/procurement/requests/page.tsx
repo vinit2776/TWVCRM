@@ -26,6 +26,13 @@ export default function PurchaseRequestsPage() {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState("");
   const [deptFilter, setDeptFilter] = useState("");
+  const [userRole, setUserRole] = useState<string>("");
+
+  const canSeePrices = ["admin", "manager"].includes(userRole);
+
+  useEffect(() => {
+    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role || ""));
+  }, []);
 
   const fetchRequests = useCallback(async () => {
     setLoading(true);
@@ -104,7 +111,7 @@ export default function PurchaseRequestsPage() {
                 <th className="px-4 py-3 text-left font-medium">Department</th>
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Location</th>
                 <th className="px-4 py-3 text-left font-medium">Status</th>
-                <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Est. Amount</th>
+                {canSeePrices && <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Est. Amount</th>}
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Requested By</th>
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Date</th>
               </tr>
@@ -138,9 +145,11 @@ export default function PurchaseRequestsPage() {
                       {PR_STATUS_LABELS[pr.status]}
                     </Badge>
                   </td>
-                  <td className="px-4 py-3 text-right hidden md:table-cell font-medium">
-                    {pr.total_estimated_amount > 0 ? formatCurrency(pr.total_estimated_amount) : "—"}
-                  </td>
+                  {canSeePrices && (
+                    <td className="px-4 py-3 text-right hidden md:table-cell font-medium">
+                      {pr.total_estimated_amount > 0 ? formatCurrency(pr.total_estimated_amount) : "—"}
+                    </td>
+                  )}
                   <td className="px-4 py-3 hidden lg:table-cell text-muted-foreground">
                     {pr.requester?.full_name ?? pr.requester?.email ?? "—"}
                   </td>

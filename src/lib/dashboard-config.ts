@@ -98,4 +98,10 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   fms: [
     "procurement_summary",
   ],
+
+  // Office Administrator — procurement + operations focus
+  office_admin: [
+    "procurement_summary",
+    "booking_summary",
+  ],
 };

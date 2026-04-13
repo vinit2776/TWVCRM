@@ -90,7 +90,7 @@ export default function SettingsPage() {
       : profile.role === "manager"
         ? "Manager"
         : profile.role === "floor_manager"
-          ? "Floor Manager"
+          ? "Floor Incharge"
           : "Sales Rep";
 
   return (

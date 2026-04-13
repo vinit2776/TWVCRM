@@ -43,12 +43,21 @@ function buildRoleMatrix(): RoleRow[] {
     },
     {
       role: "floor_manager",
-      label: "Floor Manager",
+      label: "Floor Incharge",
       canRequestPR: true,
       canApproveBelow: false,
       canApproveAbove: false,
       canManageVendors: false,
       canCreatePO: false,
+    },
+    {
+      role: "office_admin",
+      label: "Office Administrator",
+      canRequestPR: true,
+      canApproveBelow: false,
+      canApproveAbove: false,
+      canManageVendors: true,
+      canCreatePO: true,
     },
     {
       role: "sales_rep",

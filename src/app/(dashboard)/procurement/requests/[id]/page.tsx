@@ -34,6 +34,7 @@ export default function PurchaseRequestDetailPage() {
   const [pr, setPr] = useState<PurchaseRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
+  const [userRole, setUserRole] = useState<string>("");
 
   // Dialog state
   const [actionDialog, setActionDialog] = useState<ActionType | null>(null);
@@ -53,6 +54,9 @@ export default function PurchaseRequestDetailPage() {
   }, [id, router]);
 
   useEffect(() => { fetchPr(); }, [fetchPr]);
+  useEffect(() => {
+    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role || ""));
+  }, []);
 
   const performAction = async (action: ActionType, extra?: Record<string, string>) => {
     setActionLoading(true);
@@ -101,6 +105,7 @@ export default function PurchaseRequestDetailPage() {
 
   if (!pr) return null;
 
+  const canSeePrices = ["admin", "manager"].includes(userRole);
   const isLargeAmount = pr.total_estimated_amount > PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE;
   const showOrderedCols = ["approved", "partially_ordered", "po_created"].includes(pr.status);
 
@@ -123,7 +128,7 @@ export default function PurchaseRequestDetailPage() {
               <Badge variant="secondary" className={PROCUREMENT_DEPARTMENT_COLORS[pr.department]}>
                 {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}
               </Badge>
-              {isLargeAmount && pr.status === "submitted" && (
+              {canSeePrices && isLargeAmount && pr.status === "submitted" && (
                 <Badge variant="secondary" className="bg-amber-100 text-amber-800 text-xs">
                   Requires admin approval
                 </Badge>
@@ -353,28 +358,42 @@ export default function PurchaseRequestDetailPage() {
           </CardContent>
         </Card>
 
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-sm font-medium text-muted-foreground">Amount Summary</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="flex justify-between items-center">
-              <span className="text-sm text-muted-foreground">Total Estimated</span>
-              <span className="text-xl font-bold">
-                {pr.total_estimated_amount > 0 ? formatCurrency(pr.total_estimated_amount) : "—"}
-              </span>
-            </div>
-            {isLargeAmount && (
-              <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
-                Amount exceeds ₹{PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE.toLocaleString()} — admin approval required
+        {canSeePrices ? (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Amount Summary</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3">
+              <div className="flex justify-between items-center">
+                <span className="text-sm text-muted-foreground">Total Estimated</span>
+                <span className="text-xl font-bold">
+                  {pr.total_estimated_amount > 0 ? formatCurrency(pr.total_estimated_amount) : "—"}
+                </span>
               </div>
-            )}
-            <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Line items</span>
-              <span>{pr.purchase_request_items?.length ?? 0}</span>
-            </div>
-          </CardContent>
-        </Card>
+              {isLargeAmount && (
+                <div className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
+                  Amount exceeds ₹{PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE.toLocaleString()} — admin approval required
+                </div>
+              )}
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Line items</span>
+                <span>{pr.purchase_request_items?.length ?? 0}</span>
+              </div>
+            </CardContent>
+          </Card>
+        ) : (
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Summary</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">Line items</span>
+                <span>{pr.purchase_request_items?.length ?? 0}</span>
+              </div>
+            </CardContent>
+          </Card>
+        )}
       </div>
 
       {/* Line Items */}
@@ -397,8 +416,8 @@ export default function PurchaseRequestDetailPage() {
                     <th className="px-3 py-2.5 text-left font-medium">Item</th>
                     <th className="px-3 py-2.5 text-right font-medium">Qty</th>
                     <th className="px-3 py-2.5 text-left font-medium">Unit</th>
-                    <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">Est. Price</th>
-                    <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">Line Total</th>
+                    {canSeePrices && <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">Est. Price</th>}
+                    {canSeePrices && <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">Line Total</th>}
                     {showOrderedCols && (
                       <>
                         <th className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">Ordered</th>
@@ -434,12 +453,16 @@ export default function PurchaseRequestDetailPage() {
                       </td>
                       <td className="px-3 py-2.5 text-right">{item.quantity}</td>
                       <td className="px-3 py-2.5 text-muted-foreground">{item.unit}</td>
-                      <td className="px-3 py-2.5 text-right hidden sm:table-cell">
-                        {item.estimated_price ? formatCurrency(item.estimated_price) : "—"}
-                      </td>
-                      <td className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">
-                        {item.total_estimated ? formatCurrency(item.total_estimated) : "—"}
-                      </td>
+                      {canSeePrices && (
+                        <td className="px-3 py-2.5 text-right hidden sm:table-cell">
+                          {item.estimated_price ? formatCurrency(item.estimated_price) : "—"}
+                        </td>
+                      )}
+                      {canSeePrices && (
+                        <td className="px-3 py-2.5 text-right font-medium hidden sm:table-cell">
+                          {item.total_estimated ? formatCurrency(item.total_estimated) : "—"}
+                        </td>
+                      )}
                       {showOrderedCols && (
                         <>
                           <td className="px-3 py-2.5 text-right hidden sm:table-cell text-blue-700 font-medium">
@@ -455,7 +478,7 @@ export default function PurchaseRequestDetailPage() {
                     </tr>
                   ))}
                 </tbody>
-                {pr.total_estimated_amount > 0 && (
+                {canSeePrices && pr.total_estimated_amount > 0 && (
                   <tfoot>
                     <tr className="bg-muted/30">
                       <td colSpan={4} className="px-3 py-2.5 text-sm font-medium text-right hidden sm:table-cell">

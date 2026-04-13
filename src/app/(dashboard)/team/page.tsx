@@ -561,7 +561,10 @@ export default function TeamPage() {
                   <SelectItem value="admin">Admin</SelectItem>
                   <SelectItem value="manager">Manager</SelectItem>
                   <SelectItem value="sales_rep">Sales Rep</SelectItem>
-                  <SelectItem value="floor_manager">Floor Manager</SelectItem>
+                  <SelectItem value="floor_manager">Floor Incharge</SelectItem>
+                  <SelectItem value="accounts">Accounts</SelectItem>
+                  <SelectItem value="fms">Facility Manager</SelectItem>
+                  <SelectItem value="office_admin">Office Administrator</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -695,7 +698,10 @@ export default function TeamPage() {
                   <SelectItem value="admin">Admin</SelectItem>
                   <SelectItem value="manager">Manager</SelectItem>
                   <SelectItem value="sales_rep">Sales Rep</SelectItem>
-                  <SelectItem value="floor_manager">Floor Manager</SelectItem>
+                  <SelectItem value="floor_manager">Floor Incharge</SelectItem>
+                  <SelectItem value="accounts">Accounts</SelectItem>
+                  <SelectItem value="fms">Facility Manager</SelectItem>
+                  <SelectItem value="office_admin">Office Administrator</SelectItem>
                 </SelectContent>
               </Select>
             </div>

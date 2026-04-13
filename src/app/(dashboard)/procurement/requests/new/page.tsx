@@ -58,6 +58,13 @@ export default function NewPurchaseRequestPage() {
   const [items, setItems] = useState<LineItem[]>([emptyItem()]);
   const [submitting, setSubmitting] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [userRole, setUserRole] = useState<string>("");
+
+  const canSeePrices = ["admin", "manager"].includes(userRole);
+
+  useEffect(() => {
+    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role || ""));
+  }, []);
 
   // Catalog picker
   const [catalogOpen, setCatalogOpen] = useState(false);
@@ -368,33 +375,35 @@ export default function NewPurchaseRequestPage() {
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <Label className="text-xs">
-                    Est. Price per Unit (₹)
-                    {li.catalog_standard_price != null && (
-                      <span className="ml-1 text-muted-foreground font-normal">
-                        — max {formatCurrency(li.catalog_standard_price)}
-                      </span>
+                {canSeePrices && (
+                  <div className="space-y-1">
+                    <Label className="text-xs">
+                      Est. Price per Unit (₹)
+                      {li.catalog_standard_price != null && (
+                        <span className="ml-1 text-muted-foreground font-normal">
+                          — max {formatCurrency(li.catalog_standard_price)}
+                        </span>
+                      )}
+                    </Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      max={li.catalog_standard_price != null ? li.catalog_standard_price : undefined}
+                      step="0.01"
+                      placeholder="0.00"
+                      value={li.estimated_price}
+                      className={isPriceOverCeiling(li) ? "border-red-400 focus-visible:ring-red-400" : ""}
+                      onChange={(e) => updateItem(li.id, "estimated_price", e.target.value)}
+                    />
+                    {isPriceOverCeiling(li) && (
+                      <p className="text-xs text-red-600 font-medium">
+                        ↑ Exceeds catalog price ({formatCurrency(li.catalog_standard_price!)}). Price can only be reduced here — update the catalog to increase it.
+                      </p>
                     )}
-                  </Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    max={li.catalog_standard_price != null ? li.catalog_standard_price : undefined}
-                    step="0.01"
-                    placeholder="0.00"
-                    value={li.estimated_price}
-                    className={isPriceOverCeiling(li) ? "border-red-400 focus-visible:ring-red-400" : ""}
-                    onChange={(e) => updateItem(li.id, "estimated_price", e.target.value)}
-                  />
-                  {isPriceOverCeiling(li) && (
-                    <p className="text-xs text-red-600 font-medium">
-                      ↑ Exceeds catalog price ({formatCurrency(li.catalog_standard_price!)}). Price can only be reduced here — update the catalog to increase it.
-                    </p>
-                  )}
-                </div>
+                  </div>
+                )}
 
-                {li.estimated_price && li.quantity && (
+                {canSeePrices && li.estimated_price && li.quantity && (
                   <div className="flex items-end pb-0.5">
                     <p className="text-sm text-muted-foreground">
                       Line total:{" "}
@@ -435,12 +444,18 @@ export default function NewPurchaseRequestPage() {
       {/* Summary & Actions */}
       <Card>
         <CardContent className="pt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div>
-            <p className="text-sm text-muted-foreground">Total Estimated</p>
-            <p className="text-xl font-bold">
-              {totalEstimated > 0 ? formatCurrency(totalEstimated) : "—"}
-            </p>
-          </div>
+          {canSeePrices ? (
+            <div>
+              <p className="text-sm text-muted-foreground">Total Estimated</p>
+              <p className="text-xl font-bold">
+                {totalEstimated > 0 ? formatCurrency(totalEstimated) : "—"}
+              </p>
+            </div>
+          ) : (
+            <div>
+              <p className="text-sm text-muted-foreground">{items.length} item{items.length !== 1 ? "s" : ""} added</p>
+            </div>
+          )}
           <div className="flex gap-2">
             <Button
               variant="outline"
