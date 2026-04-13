@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
+import { pingCronHealth } from "@/lib/cron-ping";
 
 /**
  * GET /api/billing/auto-generate
@@ -231,6 +232,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
+  await pingCronHealth("billing/auto-generate", "ok", { month: targetMonth, year: targetYear, generated, skipped });
   return NextResponse.json({
     month: targetMonth,
     year: targetYear,

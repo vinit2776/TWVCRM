@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
+import { pingCronHealth } from "@/lib/cron-ping";
 
 export const maxDuration = 300;
 
@@ -88,6 +89,7 @@ export async function GET(request: NextRequest) {
   const durationMs = Date.now() - startedAt;
 
   console.log(`[storage-backup] ✓ ${total} files total (${durationMs}ms)`);
+  await pingCronHealth("cron/storage-backup", "ok", { results, total_synced: total });
 
   return NextResponse.json({ ok: true, results, total_synced: total, duration_ms: durationMs });
 }

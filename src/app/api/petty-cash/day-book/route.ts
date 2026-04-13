@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
+import { pingCronHealth } from "@/lib/cron-ping";
 
 /**
  * GET /api/petty-cash/day-book
@@ -175,5 +176,6 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: emailErr.message }, { status: 500 });
   }
 
+  await pingCronHealth("petty-cash/day-book", "ok", { sent_to: emails.length, date: targetDate });
   return NextResponse.json({ success: true, sent_to: emails.length, date: targetDate });
 }

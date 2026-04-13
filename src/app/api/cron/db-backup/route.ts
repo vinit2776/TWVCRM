@@ -3,6 +3,7 @@ import { Pool } from "pg";
 import { S3Client, PutObjectCommand } from "@aws-sdk/client-s3";
 import { gzip } from "zlib";
 import { promisify } from "util";
+import { pingCronHealth } from "@/lib/cron-ping";
 
 export const maxDuration = 300;
 
@@ -93,6 +94,7 @@ export async function GET(request: NextRequest) {
     const sizeKb = Math.round(compressed.length / 1024);
 
     console.log(`[db-backup] ✓ ${tables.length} tables, ${sizeKb} KB → ${key} (${durationMs}ms)`);
+    await pingCronHealth("cron/db-backup", "ok", { tables: tables.length, size_kb: sizeKb, path: key });
 
     return NextResponse.json({
       ok: true,
@@ -103,6 +105,7 @@ export async function GET(request: NextRequest) {
     });
   } catch (err) {
     console.error("[db-backup] failed:", err);
+    await pingCronHealth("cron/db-backup", "error", { error: String(err) });
     return NextResponse.json({ error: String(err) }, { status: 500 });
   } finally {
     await pool.end();
