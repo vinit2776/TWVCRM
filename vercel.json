@@ -11,6 +11,14 @@
     {
       "path": "/api/billing/auto-generate",
       "schedule": "0 1 1 * *"
+    },
+    {
+      "path": "/api/cron/db-backup",
+      "schedule": "0 20 * * *"
+    },
+    {
+      "path": "/api/cron/storage-backup",
+      "schedule": "30 20 * * *"
     }
   ],
   "headers": [
