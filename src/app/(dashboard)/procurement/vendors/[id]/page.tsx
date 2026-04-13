@@ -7,6 +7,7 @@ import {
   ArrowLeft, Pencil, ShieldCheck, ShieldOff, Upload,
   Building2, Phone, Mail, MapPin, CreditCard, FileText,
   Banknote, X, Check, Plus, Tag, ExternalLink,
+  TrendingUp, TrendingDown, Minus, BarChart2, AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -166,6 +167,26 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   }>>([]);
   const [pricesLoading, setPricesLoading] = useState(false);
 
+  // Activity & Insights
+  type InsightsData = {
+    spendByMonth: { label: string; amount: number }[];
+    totalPoValue: number;
+    totalPoCount: number;
+    poStatusCounts: Record<string, number>;
+    recentPos: Array<{ id: string; po_number: string; status: string; total_ordered_amount: number | null; created_at: string }>;
+    topItems: Array<{ name: string; qty: number; value: number }>;
+    totalBilled: number;
+    totalPaid: number;
+    totalOutstanding: number;
+    billCount: number;
+    overdueCount: number;
+    overdueAmount: number;
+    avgPaymentTermDays: number | null;
+    recentBills: Array<{ id: string; bill_number: string; total_amount: number | null; amount_paid: number | null; due_date: string | null; payment_status: string; approval_status: string; created_at: string }>;
+  };
+  const [insights, setInsights] = useState<InsightsData | null>(null);
+  const [insightsLoading, setInsightsLoading] = useState(false);
+
   const emptyForm = {
     name: "", category: "general" as VendorCategory,
     contact_name: "", contact_phone: "", contact_email: "",
@@ -206,6 +227,17 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
     }
     setPricesLoading(false);
   }, [id]);
+
+  const fetchInsights = useCallback(async () => {
+    if (insights) return;
+    setInsightsLoading(true);
+    const res = await fetch(`/api/procurement/vendors/${id}/insights`);
+    if (res.ok) {
+      const { data } = await res.json();
+      setInsights(data);
+    }
+    setInsightsLoading(false);
+  }, [id, insights]);
 
   function openEdit() {
     if (!vendor) return;
@@ -349,6 +381,9 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
             {prices.length > 0 && (
               <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{prices.length}</Badge>
             )}
+          </TabsTrigger>
+          <TabsTrigger value="activity" onClick={fetchInsights}>
+            Activity &amp; Insights
           </TabsTrigger>
         </TabsList>
 
@@ -590,6 +625,249 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
               )}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Activity & Insights Tab */}
+        <TabsContent value="activity" className="mt-4 space-y-4">
+          {insightsLoading ? (
+            <div className="space-y-4">
+              {[...Array(3)].map((_, i) => (
+                <div key={i} className="animate-pulse bg-muted rounded-lg h-32" />
+              ))}
+            </div>
+          ) : !insights ? (
+            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+              <BarChart2 className="h-8 w-8" />
+              <p className="text-sm">No activity data available</p>
+            </div>
+          ) : (
+            <>
+              {/* KPI row */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {[
+                  { label: "Total PO Value", value: `₹${(insights.totalPoValue / 1000).toFixed(0)}K`, sub: `${insights.totalPoCount} orders` },
+                  { label: "Total Billed", value: `₹${(insights.totalBilled / 1000).toFixed(0)}K`, sub: `${insights.billCount} bills` },
+                  { label: "Outstanding", value: `₹${(insights.totalOutstanding / 1000).toFixed(0)}K`, sub: insights.overdueCount > 0 ? `${insights.overdueCount} overdue` : "All current", warn: insights.overdueCount > 0 },
+                  { label: "Avg Payment Terms", value: insights.avgPaymentTermDays != null ? `${insights.avgPaymentTermDays}d` : "—", sub: "invoice → due" },
+                ].map(({ label, value, sub, warn }) => (
+                  <Card key={label}>
+                    <CardContent className="p-4">
+                      <p className="text-xs text-muted-foreground mb-1">{label}</p>
+                      <p className={`text-xl font-semibold ${warn ? "text-red-600" : ""}`}>{value}</p>
+                      <p className={`text-xs mt-0.5 ${warn ? "text-red-500" : "text-muted-foreground"}`}>{sub}</p>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+
+              {/* Spend by month */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Monthly Spend (last 6 months)</CardTitle>
+                </CardHeader>
+                <CardContent>
+                  {(() => {
+                    const max = Math.max(...insights.spendByMonth.map((m) => m.amount), 1);
+                    const total6m = insights.spendByMonth.reduce((s, m) => s + m.amount, 0);
+                    return (
+                      <div className="space-y-2">
+                        {insights.spendByMonth.map((m, idx) => {
+                          const pct = (m.amount / max) * 100;
+                          const isCurrent = idx === insights.spendByMonth.length - 1;
+                          return (
+                            <div key={m.label} className="flex items-center gap-3">
+                              <span className="text-xs text-muted-foreground w-12 shrink-0">{m.label}</span>
+                              <div className="flex-1 h-6 bg-muted rounded-sm overflow-hidden">
+                                <div
+                                  className={`h-full rounded-sm transition-all ${isCurrent ? "bg-primary" : "bg-primary/40"}`}
+                                  style={{ width: `${pct}%` }}
+                                />
+                              </div>
+                              <span className="text-xs text-muted-foreground w-20 text-right shrink-0">
+                                {m.amount > 0 ? `₹${(m.amount / 1000).toFixed(1)}K` : "—"}
+                              </span>
+                            </div>
+                          );
+                        })}
+                        <div className="pt-1 text-xs text-muted-foreground text-right">
+                          6-month total: <span className="font-medium text-foreground">₹{(total6m / 1000).toFixed(1)}K</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </CardContent>
+              </Card>
+
+              {/* Top items ordered + Payment performance side by side on larger screens */}
+              <div className="grid md:grid-cols-2 gap-4">
+                {/* Top items */}
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">Top Items Ordered</CardTitle>
+                  </CardHeader>
+                  <CardContent>
+                    {insights.topItems.length === 0 ? (
+                      <p className="text-sm text-muted-foreground py-4 text-center">No items data</p>
+                    ) : (() => {
+                      const maxVal = Math.max(...insights.topItems.map((i) => i.value), 1);
+                      return (
+                        <div className="space-y-2">
+                          {insights.topItems.map((item) => {
+                            const pct = (item.value / maxVal) * 100;
+                            return (
+                              <div key={item.name}>
+                                <div className="flex items-center justify-between text-xs mb-0.5">
+                                  <span className="text-foreground truncate max-w-[160px]">{item.name}</span>
+                                  <span className="text-muted-foreground shrink-0 ml-2">₹{(item.value / 1000).toFixed(1)}K</span>
+                                </div>
+                                <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                                  <div className="h-full bg-primary/60 rounded-full" style={{ width: `${pct}%` }} />
+                                </div>
+                              </div>
+                            );
+                          })}
+                        </div>
+                      );
+                    })()}
+                  </CardContent>
+                </Card>
+
+                {/* Payment performance */}
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">Payment Performance</CardTitle>
+                  </CardHeader>
+                  <CardContent className="space-y-3">
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Total Billed</span>
+                      <span className="font-medium">₹{insights.totalBilled.toLocaleString("en-IN")}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Paid</span>
+                      <span className="font-medium text-green-700">₹{insights.totalPaid.toLocaleString("en-IN")}</span>
+                    </div>
+                    <div className="flex items-center justify-between text-sm">
+                      <span className="text-muted-foreground">Outstanding</span>
+                      <span className={`font-medium ${insights.totalOutstanding > 0 ? "text-amber-700" : "text-muted-foreground"}`}>
+                        ₹{insights.totalOutstanding.toLocaleString("en-IN")}
+                      </span>
+                    </div>
+                    {insights.overdueCount > 0 && (
+                      <div className="flex items-center gap-2 p-2.5 rounded-md bg-red-50 text-red-700 text-sm">
+                        <AlertCircle className="h-4 w-4 shrink-0" />
+                        <span>{insights.overdueCount} overdue bill{insights.overdueCount > 1 ? "s" : ""} — ₹{insights.overdueAmount.toLocaleString("en-IN")}</span>
+                      </div>
+                    )}
+                    {insights.totalBilled > 0 && (
+                      <div>
+                        <div className="flex justify-between text-xs text-muted-foreground mb-1">
+                          <span>Payment progress</span>
+                          <span>{Math.round((insights.totalPaid / insights.totalBilled) * 100)}%</span>
+                        </div>
+                        <div className="h-2 bg-muted rounded-full overflow-hidden">
+                          <div
+                            className="h-full bg-green-500 rounded-full"
+                            style={{ width: `${Math.min(100, Math.round((insights.totalPaid / insights.totalBilled) * 100))}%` }}
+                          />
+                        </div>
+                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Recent POs */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <CardTitle className="text-base">Recent Purchase Orders</CardTitle>
+                </CardHeader>
+                <CardContent className="p-0">
+                  {insights.recentPos.length === 0 ? (
+                    <p className="text-sm text-muted-foreground py-8 text-center">No purchase orders yet</p>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b bg-muted/30">
+                          <th className="px-4 py-2.5 text-left font-medium">PO Number</th>
+                          <th className="px-4 py-2.5 text-left font-medium hidden sm:table-cell">Date</th>
+                          <th className="px-4 py-2.5 text-left font-medium">Status</th>
+                          <th className="px-4 py-2.5 text-right font-medium hidden md:table-cell">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {insights.recentPos.map((po) => (
+                          <tr
+                            key={po.id}
+                            className="border-b last:border-0 hover:bg-muted/40 cursor-pointer"
+                            onClick={() => router.push(`/procurement/orders/${po.id}`)}
+                          >
+                            <td className="px-4 py-2.5 font-mono text-xs">{po.po_number}</td>
+                            <td className="px-4 py-2.5 text-muted-foreground hidden sm:table-cell">{formatDate(po.created_at)}</td>
+                            <td className="px-4 py-2.5">
+                              <Badge className={
+                                po.status === "delivered" ? "bg-green-100 text-green-800" :
+                                po.status === "ordered" ? "bg-blue-100 text-blue-800" :
+                                po.status === "cancelled" ? "bg-red-100 text-red-800" :
+                                "bg-amber-100 text-amber-800"
+                              }>
+                                {po.status}
+                              </Badge>
+                            </td>
+                            <td className="px-4 py-2.5 text-right hidden md:table-cell">
+                              {po.total_ordered_amount != null ? formatCurrency(po.total_ordered_amount) : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </CardContent>
+              </Card>
+
+              {/* Recent Bills */}
+              {insights.recentBills.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-base">Recent Bills</CardTitle>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b bg-muted/30">
+                          <th className="px-4 py-2.5 text-left font-medium">Bill #</th>
+                          <th className="px-4 py-2.5 text-left font-medium hidden sm:table-cell">Due Date</th>
+                          <th className="px-4 py-2.5 text-left font-medium">Payment</th>
+                          <th className="px-4 py-2.5 text-right font-medium hidden md:table-cell">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {insights.recentBills.map((bill) => (
+                          <tr key={bill.id} className="border-b last:border-0">
+                            <td className="px-4 py-2.5 font-mono text-xs">{bill.bill_number}</td>
+                            <td className="px-4 py-2.5 text-muted-foreground hidden sm:table-cell">
+                              {bill.due_date ? formatDate(bill.due_date) : "—"}
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <Badge className={
+                                bill.payment_status === "paid" ? "bg-green-100 text-green-800" :
+                                bill.payment_status === "partially_paid" ? "bg-amber-100 text-amber-800" :
+                                "bg-red-100 text-red-800"
+                              }>
+                                {bill.payment_status === "partially_paid" ? "Partial" : bill.payment_status}
+                              </Badge>
+                            </td>
+                            <td className="px-4 py-2.5 text-right hidden md:table-cell">
+                              {bill.total_amount != null ? formatCurrency(bill.total_amount) : "—"}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </CardContent>
+                </Card>
+              )}
+            </>
+          )}
         </TabsContent>
       </Tabs>
 

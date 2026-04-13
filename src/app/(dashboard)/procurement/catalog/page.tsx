@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { Archive, Pencil, Plus, X, Check, Search, History, AlertTriangle, TrendingUp, TrendingDown, Minus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -66,6 +67,7 @@ function detectDuplicates(items: ProcurementItem[]): Set<string> {
 // ── Component ──────────────────────────────────────────────────────────────────
 
 export default function CatalogPage() {
+  const router = useRouter();
   const [items, setItems] = useState<ProcurementItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [deptFilter, setDeptFilter] = useState("");
@@ -316,7 +318,7 @@ export default function CatalogPage() {
                         {deptItems.map((item) => {
                           const isDuplicate = duplicateNames.has(item.name.trim().toLowerCase());
                           return (
-                            <tr key={item.id} className={`border-b last:border-0 hover:bg-muted/20 ${isDuplicate ? "bg-amber-50/40" : ""}`}>
+                            <tr key={item.id} className={`border-b last:border-0 hover:bg-muted/40 cursor-pointer ${isDuplicate ? "bg-amber-50/40" : ""}`} onClick={() => router.push(`/procurement/catalog/${item.id}`)}>
                               <td className="px-4 py-2.5">
                                 <div className="flex items-center gap-2">
                                   <span className={item.is_active ? "" : "text-muted-foreground line-through"}>
@@ -352,7 +354,7 @@ export default function CatalogPage() {
                                   <Button
                                     size="sm"
                                     variant="ghost"
-                                    onClick={() => openPriceHistory(item)}
+                                    onClick={(e) => { e.stopPropagation(); openPriceHistory(item); }}
                                     title="Price history"
                                     className="h-7 w-7 p-0"
                                   >
@@ -362,7 +364,7 @@ export default function CatalogPage() {
                                   <Button
                                     size="sm"
                                     variant="ghost"
-                                    onClick={() => openEdit(item)}
+                                    onClick={(e) => { e.stopPropagation(); openEdit(item); }}
                                     title="Edit item"
                                     className="h-7 w-7 p-0"
                                   >
@@ -372,7 +374,7 @@ export default function CatalogPage() {
                                   <Button
                                     size="sm"
                                     variant="ghost"
-                                    onClick={() => toggleActive(item)}
+                                    onClick={(e) => { e.stopPropagation(); toggleActive(item); }}
                                     title={item.is_active ? "Deactivate" : "Reactivate"}
                                     className="h-7 w-7 p-0"
                                   >
