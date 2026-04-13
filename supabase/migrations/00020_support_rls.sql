@@ -7,6 +7,7 @@
 
 CREATE TABLE IF NOT EXISTS public.support_tickets (
   id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ticket_number       TEXT UNIQUE,
   subject             TEXT NOT NULL,
   description         TEXT,
   type                TEXT NOT NULL DEFAULT 'bug',
