@@ -2,6 +2,10 @@
 -- The old trigger used SELECT MAX(...) + 1 which causes duplicate key errors
 -- under concurrent inserts. Replace with a proper PostgreSQL sequence.
 
+-- 0. Ensure ticket_number column exists (may be missing on fresh staging envs
+--    where support_tickets was bootstrapped without it)
+ALTER TABLE public.support_tickets ADD COLUMN IF NOT EXISTS ticket_number TEXT UNIQUE;
+
 -- 1. Create a sequence starting after the current max ticket number
 DO $$
 DECLARE
