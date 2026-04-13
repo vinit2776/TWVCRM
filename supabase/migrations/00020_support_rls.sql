@@ -1,6 +1,34 @@
 -- ==========================================
 -- Migration 00019: Enable RLS on Support Tables
 -- ==========================================
+-- NOTE: support_tickets was originally created outside migrations.
+-- CREATE TABLE IF NOT EXISTS ensures staging environments bootstrap correctly.
+-- On production these statements are no-ops (tables already exist).
+
+CREATE TABLE IF NOT EXISTS public.support_tickets (
+  id                  UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  subject             TEXT NOT NULL,
+  description         TEXT,
+  type                TEXT NOT NULL DEFAULT 'bug',
+  priority            TEXT NOT NULL DEFAULT 'medium',
+  status              TEXT NOT NULL DEFAULT 'open',
+  page_url            TEXT,
+  user_agent          TEXT,
+  screen_resolution   TEXT,
+  screenshot_path     TEXT,
+  reported_by         UUID REFERENCES public.users(id),
+  assigned_to         UUID REFERENCES public.users(id),
+  created_at          TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at          TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE IF NOT EXISTS public.support_ticket_notes (
+  id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  ticket_id   UUID NOT NULL REFERENCES public.support_tickets(id) ON DELETE CASCADE,
+  note        TEXT NOT NULL,
+  created_by  UUID REFERENCES public.users(id),
+  created_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
 -- Fixes two Supabase Security Advisor errors:
 --   "RLS Disabled in Public" on:
 --     - public.support_tickets
