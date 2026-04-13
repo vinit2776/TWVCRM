@@ -185,12 +185,12 @@ export async function GET() {
   );
 
   // Top vendors
-  const vendorSpend: Record<string, { name: string; amount: number }> = {};
+  const vendorSpend: Record<string, { id: string; name: string; amount: number }> = {};
   for (const r of topVendorsRes.data ?? []) {
     const row = r as unknown as { vendor_id: string; total_ordered_amount?: number | null; procurement_vendors?: { name: string } | null };
     if (!row.vendor_id) continue;
     const name = row.procurement_vendors?.name ?? "Unknown";
-    if (!vendorSpend[row.vendor_id]) vendorSpend[row.vendor_id] = { name, amount: 0 };
+    if (!vendorSpend[row.vendor_id]) vendorSpend[row.vendor_id] = { id: row.vendor_id, name, amount: 0 };
     vendorSpend[row.vendor_id].amount += row.total_ordered_amount ?? 0;
   }
   const topVendors = Object.values(vendorSpend).sort((a, b) => b.amount - a.amount).slice(0, 5);

@@ -48,7 +48,7 @@ interface DashboardData {
   billsPendingValue: number;
   mrByDepartment: Record<string, number>;
   poByStatus: Record<string, number>;
-  topVendors: { name: string; amount: number }[];
+  topVendors: { id: string; name: string; amount: number }[];
   recentMrs: Array<{
     id: string; pr_number: string; department: string; status: string;
     total_estimated_amount: number; created_at: string;
@@ -147,6 +147,7 @@ const DEPT_ORDER = ["pantry", "maintenance", "administration", "asset"];
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function ProcurementDashboard() {
+  const router = useRouter();
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState("");
@@ -215,6 +216,7 @@ export default function ProcurementDashboard() {
                 label="Spend This Month"
                 value={formatCurrency(data.spendThisMonth)}
                 sub={`${data.mrThisMonth} MRs raised`}
+                href="/procurement/orders"
               />
             ) : (
               <KpiCard
@@ -503,8 +505,14 @@ export default function ProcurementDashboard() {
                   const count = data.mrByDepartment[dept] ?? 0;
                   const max = Math.max(...Object.values(data.mrByDepartment), 1);
                   return (
-                    <div key={dept} className="flex items-center gap-2">
-                      <span className="text-xs w-28 shrink-0 text-muted-foreground">{PROCUREMENT_DEPARTMENT_LABELS[dept] ?? dept}</span>
+                    <div
+                      key={dept}
+                      className="flex items-center gap-2 cursor-pointer group rounded px-1 -mx-1 hover:bg-muted/50 transition-colors"
+                      onClick={() => router.push(`/procurement/requests?department=${dept}`)}
+                    >
+                      <span className="text-xs w-28 shrink-0 text-muted-foreground group-hover:text-foreground transition-colors">
+                        {PROCUREMENT_DEPARTMENT_LABELS[dept] ?? dept}
+                      </span>
                       <div className="flex-1 bg-muted rounded-full h-2">
                         <div className="h-2 rounded-full bg-primary transition-all" style={{ width: `${Math.round((count / max) * 100)}%` }} />
                       </div>
@@ -536,7 +544,11 @@ export default function ProcurementDashboard() {
             ) : data ? (
               <div className="space-y-1.5">
                 {Object.entries(data.poByStatus).sort((a, b) => b[1] - a[1]).map(([status, count]) => (
-                  <div key={status} className="flex items-center justify-between">
+                  <div
+                    key={status}
+                    className="flex items-center justify-between cursor-pointer rounded px-2 py-0.5 -mx-2 hover:bg-muted/50 transition-colors"
+                    onClick={() => router.push(`/procurement/orders?status=${status}`)}
+                  >
                     <Badge variant="secondary" className={`text-xs ${PO_STATUS_COLORS[status] ?? ""}`}>
                       {PO_STATUS_LABELS[status] ?? status}
                     </Badge>
@@ -574,9 +586,13 @@ export default function ProcurementDashboard() {
               <table className="w-full text-sm">
                 <tbody>
                   {(data?.recentMrs ?? []).map((mr) => (
-                    <tr key={mr.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                    <tr
+                      key={mr.id}
+                      className="border-b last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
+                      onClick={() => router.push(`/procurement/requests/${mr.id}`)}
+                    >
                       <td className="px-4 py-2.5">
-                        <Link href={`/procurement/requests/${mr.id}`} className="font-mono text-xs font-medium text-primary hover:underline">{mr.pr_number}</Link>
+                        <span className="font-mono text-xs font-medium text-primary">{mr.pr_number}</span>
                       </td>
                       <td className="px-2 py-2.5">
                         <Badge variant="secondary" className={`text-xs ${PROCUREMENT_DEPARTMENT_COLORS[mr.department] ?? ""}`}>
@@ -617,9 +633,13 @@ export default function ProcurementDashboard() {
               <table className="w-full text-sm">
                 <tbody>
                   {(data?.recentPos ?? []).map((po) => (
-                    <tr key={po.id} className="border-b last:border-0 hover:bg-muted/30 transition-colors">
+                    <tr
+                      key={po.id}
+                      className="border-b last:border-0 hover:bg-muted/30 transition-colors cursor-pointer"
+                      onClick={() => router.push(`/procurement/orders/${po.id}`)}
+                    >
                       <td className="px-4 py-2.5">
-                        <Link href={`/procurement/orders/${po.id}`} className="font-mono text-xs font-medium text-primary hover:underline">{po.po_number}</Link>
+                        <span className="font-mono text-xs font-medium text-primary">{po.po_number}</span>
                       </td>
                       <td className="px-2 py-2.5 text-xs text-muted-foreground max-w-[120px] truncate">{po.procurement_vendors?.name ?? "—"}</td>
                       <td className="px-2 py-2.5">
@@ -660,9 +680,13 @@ export default function ProcurementDashboard() {
                 {(data?.topVendors ?? []).map((v, idx) => {
                   const max = data?.topVendors[0]?.amount ?? 1;
                   return (
-                    <div key={v.name} className="flex items-center gap-3">
+                    <div
+                      key={v.id}
+                      className="flex items-center gap-3 cursor-pointer group rounded px-1 -mx-1 py-0.5 hover:bg-muted/50 transition-colors"
+                      onClick={() => router.push(`/procurement/vendors/${v.id}`)}
+                    >
                       <span className="text-xs text-muted-foreground w-4 shrink-0">{idx + 1}</span>
-                      <span className="text-sm font-medium w-44 truncate shrink-0">{v.name}</span>
+                      <span className="text-sm font-medium w-44 truncate shrink-0 group-hover:text-primary transition-colors">{v.name}</span>
                       <div className="flex-1 bg-muted rounded-full h-2">
                         <div className="h-2 rounded-full bg-primary" style={{ width: `${Math.round((v.amount / max) * 100)}%` }} />
                       </div>
