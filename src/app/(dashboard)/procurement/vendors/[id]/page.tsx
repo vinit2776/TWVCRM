@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   ArrowLeft, Pencil, ShieldCheck, ShieldOff, Upload,
   Building2, Phone, Mail, MapPin, CreditCard, FileText,
-  Banknote, X, Check, Plus,
+  Banknote, X, Check, Plus, Tag, ExternalLink,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -18,8 +18,9 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
-import { VENDOR_CATEGORIES, VENDOR_CATEGORY_LABELS } from "@/lib/constants";
+import { VENDOR_CATEGORIES, VENDOR_CATEGORY_LABELS, PROCUREMENT_DEPARTMENT_LABELS } from "@/lib/constants";
 import { toast } from "sonner";
+import { formatCurrency, formatDate } from "@/lib/utils";
 import type { ProcurementVendor, VendorCategory } from "@/types";
 
 const CATEGORY_COLORS: Record<string, string> = {
@@ -157,6 +158,14 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   const [kycToggling, setKycToggling] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
 
+  // Price history
+  const [prices, setPrices] = useState<Array<{
+    id: string; item_id: string; price: number; gst_rate: number;
+    last_po_id?: string; last_po_number?: string; updated_at: string;
+    procurement_items?: { id: string; name: string; unit: string; department: string; standard_price?: number } | null;
+  }>>([]);
+  const [pricesLoading, setPricesLoading] = useState(false);
+
   const emptyForm = {
     name: "", category: "general" as VendorCategory,
     contact_name: "", contact_phone: "", contact_email: "",
@@ -187,6 +196,16 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   }, [id, router]);
 
   useEffect(() => { fetchVendor(); }, [fetchVendor]);
+
+  const fetchPrices = useCallback(async () => {
+    setPricesLoading(true);
+    const res = await fetch(`/api/procurement/vendor-prices?vendor_id=${id}`);
+    if (res.ok) {
+      const { data } = await res.json();
+      setPrices(data ?? []);
+    }
+    setPricesLoading(false);
+  }, [id]);
 
   function openEdit() {
     if (!vendor) return;
@@ -324,6 +343,12 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                 <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{uploaded}/5</Badge>
               ) : null;
             })()}
+          </TabsTrigger>
+          <TabsTrigger value="prices" onClick={() => { if (prices.length === 0) fetchPrices(); }}>
+            Price History
+            {prices.length > 0 && (
+              <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{prices.length}</Badge>
+            )}
           </TabsTrigger>
         </TabsList>
 
@@ -474,6 +499,95 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                   onUploaded={(f, path) => setDocPaths((prev) => ({ ...prev, [f]: path }))}
                 />
               ))}
+            </CardContent>
+          </Card>
+        </TabsContent>
+
+        {/* Price History Tab */}
+        <TabsContent value="prices" className="mt-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-base flex items-center gap-2">
+                <Tag className="h-4 w-4" /> Last Known Prices
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-sm text-muted-foreground mb-4">
+                Prices are recorded automatically when a Purchase Order with this vendor is marked as Ordered.
+                These are used to pre-fill the unit price on new POs.
+              </p>
+
+              {pricesLoading ? (
+                <div className="space-y-2">
+                  {[1,2,3].map((i) => (
+                    <div key={i} className="h-8 bg-muted animate-pulse rounded" />
+                  ))}
+                </div>
+              ) : prices.length === 0 ? (
+                <div className="py-8 text-center">
+                  <Tag className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">No price history yet.</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Prices will appear here after the first Purchase Order with this vendor is confirmed.
+                  </p>
+                </div>
+              ) : (
+                <div className="rounded-md border overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50">
+                        <th className="px-4 py-2.5 text-left font-medium">Item</th>
+                        <th className="px-4 py-2.5 text-left font-medium hidden sm:table-cell">Department</th>
+                        <th className="px-4 py-2.5 text-left font-medium hidden sm:table-cell">Unit</th>
+                        <th className="px-4 py-2.5 text-right font-medium">Last Price</th>
+                        <th className="px-4 py-2.5 text-right font-medium hidden md:table-cell">GST %</th>
+                        <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Last PO</th>
+                        <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Updated</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {prices.map((p) => (
+                        <tr key={p.id} className="border-b last:border-0 hover:bg-muted/20">
+                          <td className="px-4 py-2.5 font-medium">
+                            {p.procurement_items?.name ?? "—"}
+                          </td>
+                          <td className="px-4 py-2.5 hidden sm:table-cell text-muted-foreground text-xs">
+                            {p.procurement_items?.department
+                              ? (PROCUREMENT_DEPARTMENT_LABELS[p.procurement_items.department] ?? p.procurement_items.department)
+                              : "—"}
+                          </td>
+                          <td className="px-4 py-2.5 hidden sm:table-cell text-muted-foreground text-xs uppercase">
+                            {p.procurement_items?.unit ?? "—"}
+                          </td>
+                          <td className="px-4 py-2.5 text-right font-medium">
+                            {formatCurrency(p.price)}
+                            {p.procurement_items?.standard_price && p.price < p.procurement_items.standard_price && (
+                              <span className="ml-1 text-xs text-green-600">↓</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2.5 text-right hidden md:table-cell text-muted-foreground">
+                            {p.gst_rate > 0 ? `${p.gst_rate}%` : "—"}
+                          </td>
+                          <td className="px-4 py-2.5 hidden lg:table-cell">
+                            {p.last_po_number ? (
+                              <a
+                                href={`/procurement/orders/${p.last_po_id}`}
+                                className="text-primary hover:underline text-xs font-mono flex items-center gap-1"
+                              >
+                                {p.last_po_number}
+                                <ExternalLink className="h-3 w-3" />
+                              </a>
+                            ) : "—"}
+                          </td>
+                          <td className="px-4 py-2.5 hidden lg:table-cell text-muted-foreground text-xs">
+                            {formatDate(p.updated_at)}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
             </CardContent>
           </Card>
         </TabsContent>

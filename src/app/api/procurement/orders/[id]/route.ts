@@ -95,6 +95,37 @@ export async function PATCH(
         return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
       }
       updatePayload = { status: "ordered" };
+
+      // ── Auto-learn vendor prices from this PO (best-effort, non-blocking) ──
+      // Fetch catalog line items with a unit price
+      try {
+        const { data: poItems } = await supabase
+          .from("purchase_order_items")
+          .select("item_id, unit_price, gst_rate")
+          .eq("po_id", id)
+          .not("item_id", "is", null)
+          .not("unit_price", "is", null)
+          .gt("unit_price", 0);
+
+        for (const li of poItems ?? []) {
+          await supabase.from("vendor_item_prices").upsert(
+            {
+              vendor_id:      po.vendor_id,
+              item_id:        li.item_id,
+              price:          li.unit_price,
+              gst_rate:       li.gst_rate ?? 0,
+              last_po_id:     id,
+              last_po_number: po.po_number,
+              updated_by:     dbUser.id,
+              updated_at:     new Date().toISOString(),
+            },
+            { onConflict: "vendor_id,item_id" }
+          );
+        }
+      } catch {
+        // Price sync failure must never fail the status transition
+      }
+
       break;
     }
 
