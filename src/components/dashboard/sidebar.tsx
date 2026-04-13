@@ -44,6 +44,7 @@ import {
   ArrowLeftRight,
   ShieldCheck,
   UtensilsCrossed,
+  BarChart3 as BarChart3Icon,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -122,6 +123,7 @@ const navSections: NavSection[] = [
     label: "Procurement",
     icon: ShoppingCart,
     items: [
+      { href: "/procurement",              label: "Dashboard",         icon: BarChart3Icon,     roles: ["admin", "manager", "office_admin"] },
       { href: "/procurement/requests",    label: "Material Requests", icon: ClipboardListIcon, roles: ["admin", "manager", "office_admin"] },
       { href: "/procurement/orders",      label: "Purchase Orders",   icon: Package,           roles: ["admin", "manager", "office_admin"] },
       { href: "/procurement/bills",       label: "Vendor Bills",      icon: ReceiptIcon,       roles: ["admin", "manager", "office_admin"] },
