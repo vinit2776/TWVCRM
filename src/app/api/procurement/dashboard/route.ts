@@ -65,12 +65,12 @@ export async function GET() {
       .select("id, total_ordered_amount", { count: "exact" })
       .in("status", ["pending", "ordered"]),
 
-    // PO spend this month
+    // MRs approved this month → "Spent This Month"
     supabase
-      .from("purchase_orders")
-      .select("total_ordered_amount")
-      .gte("created_at", monthStart)
-      .not("status", "eq", "cancelled"),
+      .from("purchase_requests")
+      .select("total_estimated_amount")
+      .in("status", ["approved", "partially_ordered", "fully_ordered"])
+      .gte("approved_at", monthStart),
 
     // POs by status
     supabase
@@ -153,7 +153,7 @@ export async function GET() {
   );
 
   const spendThisMonth = (poThisMonthRes.data ?? []).reduce(
-    (sum: number, r: { total_ordered_amount?: number | null }) => sum + (r.total_ordered_amount ?? 0), 0
+    (sum: number, r: { total_estimated_amount?: number | null }) => sum + (r.total_estimated_amount ?? 0), 0
   );
 
   const poStatusCounts: Record<string, number> = {};
