@@ -5,11 +5,14 @@ import { sendPushToAll } from "@/lib/push";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 import { z } from "zod";
 
+const BANK_MODES = ["bank_transfer", "neft", "rtgs", "imps", "cheque"] as const;
+const ALL_PAYMENT_MODES = [...BANK_MODES, "cash"] as const;
+
 const patchBillSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("record_payment"),
     amount: z.number().positive("Payment amount must be greater than 0"),
-    payment_mode: z.enum(["cash", "upi", "bank_transfer"]),
+    payment_mode: z.enum(ALL_PAYMENT_MODES),
     payment_reference: z.string().nullish(),
     payment_date: z.string().nullish(),
   }),
@@ -62,9 +65,12 @@ export async function PATCH(
   const { data: dbUser } = await supabase.from("users").select("id, role, full_name").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+  const canAct = ["admin", "manager", "office_admin", "accounts"].includes(dbUser.role);
+  if (!canAct) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
+  // Approval actions require admin or manager
+  const canApproveOrReject = ["admin", "manager"].includes(dbUser.role);
 
   const { data: bill, error: fetchError } = await supabase
     .from("vendor_bills")
@@ -84,6 +90,26 @@ export async function PATCH(
 
   switch (parsed.data.action) {
     case "record_payment": {
+      // Role-based payment mode gate
+      // - accounts: bank modes only (primary payment processor)
+      // - admin: all modes (bank + cash, standby)
+      // - office_admin: cash only (petty cash exception, procurement context)
+      // - everyone else: no payment access
+      const mode = parsed.data.payment_mode;
+      const isBankMode = BANK_MODES.includes(mode as typeof BANK_MODES[number]);
+      if (dbUser.role === "accounts" && !isBankMode) {
+        return NextResponse.json({ error: "Accounts team can only record bank payments (NEFT, RTGS, IMPS, Bank Transfer, Cheque)" }, { status: 403 });
+      }
+      if (dbUser.role === "office_admin" && mode !== "cash") {
+        return NextResponse.json({ error: "Petty cash payments only — bank payments must be processed by the Accounts team" }, { status: 403 });
+      }
+      if (dbUser.role === "manager") {
+        return NextResponse.json({ error: "Payment recording is handled by the Accounts team (bank) or Office Admin (petty cash)" }, { status: 403 });
+      }
+      if (!["admin", "office_admin", "accounts"].includes(dbUser.role)) {
+        return NextResponse.json({ error: "You do not have permission to record payments" }, { status: 403 });
+      }
+
       // Gate: must be approved before payment
       if (bill.approval_status !== "approved") {
         return NextResponse.json(
@@ -117,6 +143,9 @@ export async function PATCH(
     }
 
     case "approve": {
+      if (!canApproveOrReject) {
+        return NextResponse.json({ error: "Only admin or manager can approve bills" }, { status: 403 });
+      }
       if (bill.approval_status !== "pending") {
         return NextResponse.json(
           { error: "Only pending bills can be approved" },
@@ -165,6 +194,9 @@ export async function PATCH(
     }
 
     case "reject": {
+      if (!canApproveOrReject) {
+        return NextResponse.json({ error: "Only admin or manager can reject bills" }, { status: 403 });
+      }
       if (bill.approval_status !== "pending") {
         return NextResponse.json(
           { error: "Only pending bills can be rejected" },

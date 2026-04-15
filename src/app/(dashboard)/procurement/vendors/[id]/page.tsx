@@ -56,11 +56,13 @@ function DocRow({
   field,
   currentPath,
   onUploaded,
+  readOnly = false,
 }: {
   vendorId: string;
   field: DocField;
   currentPath?: string | null;
   onUploaded: (field: DocField, path: string) => void;
+  readOnly?: boolean;
 }) {
   const [uploading, setUploading] = useState(false);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -110,40 +112,46 @@ function DocRow({
             <Button type="button" size="sm" variant="outline" className="h-7 text-xs" onClick={handleView}>
               View
             </Button>
-            <Button
-              type="button"
-              size="sm"
-              variant="ghost"
-              className="h-7 text-xs text-muted-foreground"
-              onClick={() => inputRef.current?.click()}
-              disabled={uploading}
-            >
-              Replace
-            </Button>
+            {!readOnly && (
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="h-7 text-xs text-muted-foreground"
+                onClick={() => inputRef.current?.click()}
+                disabled={uploading}
+              >
+                Replace
+              </Button>
+            )}
           </>
         ) : (
           <>
             <Badge variant="outline" className="text-xs text-muted-foreground">Missing</Badge>
-            <Button
-              type="button"
-              size="sm"
-              variant="outline"
-              className="h-7 text-xs"
-              onClick={() => inputRef.current?.click()}
-              disabled={uploading}
-            >
-              <Upload className="h-3 w-3 mr-1" />
-              {uploading ? "Uploading…" : "Upload"}
-            </Button>
+            {!readOnly && (
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                className="h-7 text-xs"
+                onClick={() => inputRef.current?.click()}
+                disabled={uploading}
+              >
+                <Upload className="h-3 w-3 mr-1" />
+                {uploading ? "Uploading…" : "Upload"}
+              </Button>
+            )}
           </>
         )}
-        <input
-          ref={inputRef}
-          type="file"
-          className="hidden"
-          accept=".pdf,.jpg,.jpeg,.png,.webp"
-          onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }}
-        />
+        {!readOnly && (
+          <input
+            ref={inputRef}
+            type="file"
+            className="hidden"
+            accept=".pdf,.jpg,.jpeg,.png,.webp"
+            onChange={(e) => { const f = e.target.files?.[0]; if (f) handleFile(f); e.target.value = ""; }}
+          />
+        )}
       </div>
     </div>
   );
@@ -155,6 +163,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
 
   const [vendor, setVendor] = useState<ProcurementVendor | null>(null);
   const [loading, setLoading] = useState(true);
+  const [userRole, setUserRole] = useState<string | null>(null);
   const [docPaths, setDocPaths] = useState<Partial<Record<DocField, string>>>({});
   const [kycToggling, setKycToggling] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -216,7 +225,11 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
     setLoading(false);
   }, [id, router]);
 
-  useEffect(() => { fetchVendor(); }, [fetchVendor]);
+  useEffect(() => {
+    fetchVendor();
+    fetch("/api/me").then((r) => r.json()).then((d) => setUserRole(d.role ?? null));
+  }, [fetchVendor]);
+  const isReadOnly = userRole === "accounts";
 
   const fetchPrices = useCallback(async () => {
     setPricesLoading(true);
@@ -350,16 +363,18 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
             <p className="text-sm text-muted-foreground">GSTIN: {vendor.gstin}</p>
           )}
         </div>
-        <div className="flex items-center gap-2 shrink-0">
-          <Button variant="outline" size="sm" onClick={toggleKyc} disabled={kycToggling}>
-            {vendor.kyc_verified
-              ? <><ShieldOff className="h-4 w-4 mr-1.5" /> Unmark KYC</>
-              : <><ShieldCheck className="h-4 w-4 mr-1.5" /> Mark KYC Verified</>}
-          </Button>
-          <Button size="sm" onClick={openEdit}>
-            <Pencil className="h-4 w-4 mr-1.5" /> Edit Vendor
-          </Button>
-        </div>
+        {!isReadOnly && (
+          <div className="flex items-center gap-2 shrink-0">
+            <Button variant="outline" size="sm" onClick={toggleKyc} disabled={kycToggling}>
+              {vendor.kyc_verified
+                ? <><ShieldOff className="h-4 w-4 mr-1.5" /> Unmark KYC</>
+                : <><ShieldCheck className="h-4 w-4 mr-1.5" /> Mark KYC Verified</>}
+            </Button>
+            <Button size="sm" onClick={openEdit}>
+              <Pencil className="h-4 w-4 mr-1.5" /> Edit Vendor
+            </Button>
+          </div>
+        )}
       </div>
 
       {/* Tabs */}
@@ -449,9 +464,11 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                 <div className="py-6 text-center">
                   <Banknote className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
                   <p className="text-sm text-muted-foreground">No bank details on file.</p>
-                  <Button variant="outline" size="sm" className="mt-3" onClick={openEdit}>
-                    Add Bank Details
-                  </Button>
+                  {!isReadOnly && (
+                    <Button variant="outline" size="sm" className="mt-3" onClick={openEdit}>
+                      Add Bank Details
+                    </Button>
+                  )}
                 </div>
               )}
             </CardContent>
@@ -483,11 +500,13 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                     <p className="text-sm text-muted-foreground">Not yet verified</p>
                   )}
                 </div>
-                <Button variant="outline" size="sm" onClick={toggleKyc} disabled={kycToggling}>
-                  {vendor.kyc_verified
-                    ? <><ShieldOff className="h-3.5 w-3.5 mr-1.5" /> Unmark</>
-                    : <><ShieldCheck className="h-3.5 w-3.5 mr-1.5" /> Mark as Verified</>}
-                </Button>
+                {!isReadOnly && (
+                  <Button variant="outline" size="sm" onClick={toggleKyc} disabled={kycToggling}>
+                    {vendor.kyc_verified
+                      ? <><ShieldOff className="h-3.5 w-3.5 mr-1.5" /> Unmark</>
+                      : <><ShieldCheck className="h-3.5 w-3.5 mr-1.5" /> Mark as Verified</>}
+                  </Button>
+                )}
               </div>
             </CardContent>
           </Card>
@@ -508,7 +527,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
               ) : (
                 <div className="flex items-center justify-between">
                   <p className="text-sm text-muted-foreground">No registration numbers on file.</p>
-                  <Button variant="outline" size="sm" onClick={openEdit}>Add</Button>
+                  {!isReadOnly && <Button variant="outline" size="sm" onClick={openEdit}>Add</Button>}
                 </div>
               )}
             </CardContent>
@@ -532,6 +551,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                   field={field}
                   currentPath={docPaths[field]}
                   onUploaded={(f, path) => setDocPaths((prev) => ({ ...prev, [f]: path }))}
+                  readOnly={isReadOnly}
                 />
               ))}
             </CardContent>
