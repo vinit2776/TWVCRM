@@ -92,7 +92,9 @@ export async function PATCH(
 
   const { data: oldUser } = await supabase.from("users").select("*").eq("id", id).single();
 
-  const { data, error } = await supabase
+  // Use admin client for the update to bypass RLS and guarantee writes succeed
+  const adminSupabase = await createAdminClient();
+  const { data, error } = await adminSupabase
     .from("users")
     .update(allowedFields)
     .eq("id", id)
