@@ -7,7 +7,7 @@ import {
   ClipboardList, Package, Receipt, AlertTriangle,
   CheckCircle2, Clock, BarChart3, ArrowRight,
   IndianRupee, ShoppingCart, Truck, AlertCircle,
-  CalendarClock, Users,
+  CalendarClock, Users, PieChart, Settings,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -144,6 +144,180 @@ function KpiCard({
 
 const DEPT_ORDER = ["pantry", "maintenance", "administration", "asset"];
 
+// ── Budget types ──────────────────────────────────────────────────────────────
+
+interface BudgetRow {
+  department: string;
+  monthly_budget: number | null;
+  is_active: boolean;
+  spent_this_month: number;
+  utilisation_pct: number | null;
+  is_over_budget: boolean;
+}
+
+// ── Fuel Gauge component ──────────────────────────────────────────────────────
+
+const DEPT_SHORT: Record<string, string> = {
+  pantry: "Pantry",
+  maintenance: "Maint.",
+  administration: "Admin",
+  asset: "Asset",
+};
+
+const DEPT_EMOJI: Record<string, string> = {
+  pantry: "🍽️",
+  maintenance: "🔧",
+  administration: "📋",
+  asset: "📦",
+};
+
+function FuelGauge({ row }: { row: BudgetRow }) {
+  const { department, monthly_budget, is_active, spent_this_month } = row;
+  const hasBudget = !!monthly_budget && is_active;
+  const pctRaw = hasBudget ? (spent_this_month / monthly_budget!) * 100 : 0;
+  const pct = Math.min(pctRaw, 100); // cap needle at 100 visually
+  const isOver = hasBudget && spent_this_month > monthly_budget!;
+  const remaining = hasBudget ? Math.max(0, monthly_budget! - spent_this_month) : 0;
+
+  // SVG geometry
+  const cx = 100, cy = 105, r = 78, strokeW = 13;
+  const arcLen = Math.PI * r; // ≈ 245
+
+  // Needle SVG angle: 180° = left (E/empty), 360° = right (F/full)
+  const needleDeg = hasBudget ? 180 + pct * 1.8 : 180;
+  const needleRad = (needleDeg * Math.PI) / 180;
+  const nLen = 62;
+  const nx = cx + nLen * Math.cos(needleRad);
+  const ny = cy + nLen * Math.sin(needleRad);
+
+  // Fill dash
+  const filledLen = hasBudget ? (pct / 100) * arcLen : 0;
+
+  // Color bands: green → amber → red
+  const color = !hasBudget
+    ? "#d1d5db"
+    : isOver || pctRaw >= 100
+    ? "#dc2626"
+    : pctRaw >= 90
+    ? "#ef4444"
+    : pctRaw >= 75
+    ? "#f59e0b"
+    : "#22c55e";
+
+  // Segment colours for the background track ticks (decorative)
+  const greenEnd = (75 / 100) * arcLen;
+  const amberEnd = (90 / 100) * arcLen;
+
+  const arcPath = `M ${cx - r} ${cy} A ${r} ${r} 0 0 0 ${cx + r} ${cy}`;
+
+  return (
+    <div className="flex flex-col items-center">
+      <svg viewBox="0 0 200 135" className="w-full max-w-[190px] mx-auto select-none">
+        {/* Background track */}
+        <path d={arcPath} fill="none" stroke="#f3f4f6" strokeWidth={strokeW} strokeLinecap="butt" />
+
+        {/* Coloured segment markers (decorative zones) */}
+        {hasBudget && (
+          <>
+            {/* Green zone 0–75% */}
+            <path d={arcPath} fill="none" stroke="#bbf7d0" strokeWidth={strokeW} strokeLinecap="butt"
+              strokeDasharray={`${greenEnd} ${arcLen}`} />
+            {/* Amber zone 75–90% */}
+            <path d={arcPath} fill="none" stroke="#fde68a" strokeWidth={strokeW} strokeLinecap="butt"
+              strokeDasharray={`${amberEnd - greenEnd} ${arcLen}`}
+              strokeDashoffset={-greenEnd} />
+            {/* Red zone 90–100% */}
+            <path d={arcPath} fill="none" stroke="#fecaca" strokeWidth={strokeW} strokeLinecap="butt"
+              strokeDasharray={`${arcLen - amberEnd} ${arcLen}`}
+              strokeDashoffset={-amberEnd} />
+          </>
+        )}
+
+        {/* Fill arc overlay */}
+        {hasBudget && filledLen > 0 && (
+          <path
+            d={arcPath}
+            fill="none"
+            stroke={color}
+            strokeWidth={strokeW - 4}
+            strokeLinecap="butt"
+            strokeDasharray={`${filledLen} ${arcLen}`}
+            style={{ transition: "stroke-dasharray 0.6s ease, stroke 0.5s ease" }}
+          />
+        )}
+
+        {/* Zone tick marks */}
+        {hasBudget && [0, 25, 50, 75, 90, 100].map((p) => {
+          const a = ((180 + p * 1.8) * Math.PI) / 180;
+          const x1 = cx + (r - strokeW / 2 - 2) * Math.cos(a);
+          const y1 = cy + (r - strokeW / 2 - 2) * Math.sin(a);
+          const x2 = cx + (r + strokeW / 2 + 2) * Math.cos(a);
+          const y2 = cy + (r + strokeW / 2 + 2) * Math.sin(a);
+          return (
+            <line key={p} x1={x1} y1={y1} x2={x2} y2={y2}
+              stroke="white" strokeWidth="1.5" />
+          );
+        })}
+
+        {/* E / F end labels */}
+        <text x={cx - r - 13} y={cy + 5} fontSize="9" fill="#9ca3af" textAnchor="middle" fontWeight="700">E</text>
+        <text x={cx + r + 13} y={cy + 5} fontSize="9" fill="#9ca3af" textAnchor="middle" fontWeight="700">F</text>
+
+        {/* Needle */}
+        {hasBudget && (
+          <line x1={cx} y1={cy} x2={nx} y2={ny}
+            stroke={color} strokeWidth="2.5" strokeLinecap="round"
+            style={{ transformOrigin: `${cx}px ${cy}px`, transition: "all 0.6s ease" }}
+          />
+        )}
+
+        {/* Pivot */}
+        <circle cx={cx} cy={cy} r="6" fill="white" stroke="#e5e7eb" strokeWidth="2" />
+        <circle cx={cx} cy={cy} r="3.5" fill={color} />
+
+        {/* Percentage text */}
+        <text x={cx} y={cy - 22} fontSize="18" fontWeight="800" fill={color} textAnchor="middle"
+          style={{ fontVariantNumeric: "tabular-nums" }}>
+          {hasBudget ? `${Math.round(pctRaw)}%` : "—"}
+        </text>
+
+        {/* Dept emoji + short name */}
+        <text x={cx} y={cy + 20} fontSize="11" fill="#374151" textAnchor="middle" fontWeight="600">
+          {DEPT_EMOJI[department]} {DEPT_SHORT[department] ?? department}
+        </text>
+      </svg>
+
+      {/* Amounts below gauge */}
+      <div className="text-center mt-0.5 space-y-0.5 px-2">
+        {hasBudget ? (
+          <>
+            <p className={`text-sm font-bold leading-tight ${isOver ? "text-red-700" : pctRaw >= 90 ? "text-red-600" : pctRaw >= 75 ? "text-amber-700" : "text-green-700"}`}>
+              {formatCurrency(spent_this_month)}
+            </p>
+            <p className="text-[11px] text-muted-foreground leading-tight">
+              of {formatCurrency(monthly_budget!)}
+            </p>
+            {isOver ? (
+              <p className="text-[11px] text-red-600 font-semibold">
+                ↑ {formatCurrency(spent_this_month - monthly_budget!)} over
+              </p>
+            ) : (
+              <p className="text-[11px] text-muted-foreground">
+                {formatCurrency(remaining)} left
+              </p>
+            )}
+          </>
+        ) : (
+          <>
+            <p className="text-sm font-semibold text-muted-foreground">{formatCurrency(spent_this_month)}</p>
+            <p className="text-[11px] text-muted-foreground italic">No budget set</p>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function ProcurementDashboard() {
@@ -151,6 +325,8 @@ export default function ProcurementDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [userRole, setUserRole] = useState("");
+  const [budgetRows, setBudgetRows] = useState<BudgetRow[] | null>(null);
+  const [budgetLoading, setBudgetLoading] = useState(false);
 
   const fetchData = () => {
     setLoading(true);
@@ -160,8 +336,21 @@ export default function ProcurementDashboard() {
       .finally(() => setLoading(false));
   };
 
+  const fetchBudgets = (role: string) => {
+    if (!["admin", "manager"].includes(role)) return;
+    setBudgetLoading(true);
+    fetch("/api/procurement/budget")
+      .then((r) => r.json())
+      .then((j) => { if (j.data) setBudgetRows(j.data); })
+      .finally(() => setBudgetLoading(false));
+  };
+
   useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role ?? ""));
+    fetch("/api/me").then((r) => r.json()).then((j) => {
+      const role = j.role ?? "";
+      setUserRole(role);
+      fetchBudgets(role);
+    });
     fetchData();
   }, []);
 
@@ -230,6 +419,75 @@ export default function ProcurementDashboard() {
           </>
         ) : null}
       </div>
+
+      {/* ── Department Budget Gauges (admin/manager only) ─────────────────── */}
+      {canSeePrices && (
+        <Card>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <PieChart className="h-4 w-4 text-muted-foreground" />
+                Department Budget · {currentMonth}
+              </CardTitle>
+              <Link
+                href="/settings?tab=dept-budgets"
+                className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+              >
+                <Settings className="h-3 w-3" /> Configure
+              </Link>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {budgetLoading ? (
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                {[1, 2, 3, 4].map((i) => (
+                  <div key={i} className="flex flex-col items-center gap-2">
+                    <div className="animate-pulse bg-muted rounded-full w-[150px] h-[90px]" />
+                    <div className="animate-pulse bg-muted rounded h-4 w-20" />
+                    <div className="animate-pulse bg-muted rounded h-3 w-16" />
+                  </div>
+                ))}
+              </div>
+            ) : budgetRows ? (
+              <>
+                {/* Summary strip */}
+                {budgetRows.some((r) => r.is_over_budget) && (
+                  <div className="mb-4 flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-red-600" />
+                    <span>
+                      {budgetRows.filter((r) => r.is_over_budget).map((r) => DEPT_SHORT[r.department]).join(", ")}
+                      {" "}budget{budgetRows.filter((r) => r.is_over_budget).length > 1 ? "s" : ""} exceeded — manager approval disabled for over-budget requests
+                    </span>
+                  </div>
+                )}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                  {DEPT_ORDER.map((dept) => {
+                    const row = budgetRows.find((r) => r.department === dept);
+                    if (!row) return null;
+                    return (
+                      <div
+                        key={dept}
+                        className="rounded-xl border bg-muted/20 hover:bg-muted/40 transition-colors cursor-pointer p-3"
+                        onClick={() => router.push(`/procurement/requests?department=${dept}&status=submitted`)}
+                      >
+                        <FuelGauge row={row} />
+                      </div>
+                    );
+                  })}
+                </div>
+                {budgetRows.every((r) => !r.monthly_budget || !r.is_active) && (
+                  <p className="text-xs text-muted-foreground text-center mt-2">
+                    No budgets configured yet.{" "}
+                    <Link href="/settings?tab=dept-budgets" className="underline">Set budgets in Settings</Link>
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-sm text-muted-foreground text-center py-4">Unable to load budget data.</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
 
       {/* ── Intelligence Panels ──────────────────────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
