@@ -279,47 +279,51 @@ export default function AccountingPage() {
 
       {loading ? (
         <TableSkeleton />
-      ) : summary ? (
+      ) : (
         <>
-          {/* Period status + summary cards */}
-          <PeriodStatusBar
-            period={summary.period}
-            totals={summary.totals}
-            userRole={userRole}
-            onLockToggle={handleLockToggle}
-            onExport={() => setShowExport(true)}
-            isLocking={isLocking}
-          />
+          {/* Period status + summary cards — only for roles with contract data */}
+          {summary && (
+            <>
+              <PeriodStatusBar
+                period={summary.period}
+                totals={summary.totals}
+                userRole={userRole}
+                onLockToggle={handleLockToggle}
+                onExport={() => setShowExport(true)}
+                isLocking={isLocking}
+              />
+              <AgingBuckets buckets={summary.aging_buckets} />
+              <ActionRequiredBanner
+                contracts={summary.contracts as { contract: { id: string; contract_number: string; title: string; lead?: { first_name: string; last_name: string; company?: string } }; outstanding: number }[]}
+                cashHandovers={cashHandovers.filter((c) => c.cash_handover_status === "pending_handover")}
+                gstEntries={gstEntries as { contract_id: string; contract_number: string; company: string; total_billable: number; gst_invoice_number: string | null; gst_invoice_sent_at: string | null }[]}
+                onSwitchTab={setActiveTab}
+              />
+            </>
+          )}
 
-          {/* Aging buckets */}
-          <AgingBuckets buckets={summary.aging_buckets} />
-
-          {/* Unified Action Required Banner */}
-          <ActionRequiredBanner
-            contracts={summary.contracts as { contract: { id: string; contract_number: string; title: string; lead?: { first_name: string; last_name: string; company?: string } }; outstanding: number }[]}
-            cashHandovers={cashHandovers.filter((c) => c.cash_handover_status === "pending_handover")}
-            gstEntries={gstEntries as { contract_id: string; contract_number: string; company: string; total_billable: number; gst_invoice_number: string | null; gst_invoice_sent_at: string | null }[]}
-            onSwitchTab={setActiveTab}
-          />
-
-          {/* Tabs */}
+          {/* Tabs — always rendered so Vendor Payments is always accessible */}
           <Tabs value={activeTab} onValueChange={setActiveTab}>
             <TabsList>
-              <TabsTrigger value="contracts">
-                Contracts ({summary.contracts.length})
-              </TabsTrigger>
-              <TabsTrigger value="walkin">
-                Walk-in Collections ({summary.walkin_payments.length})
-              </TabsTrigger>
-              <TabsTrigger value="cash">
-                Cash Handovers ({cashHandovers.filter((c) => c.cash_handover_status === "pending_handover").length} pending)
-              </TabsTrigger>
-              <TabsTrigger value="gst">
-                GST Invoices
-              </TabsTrigger>
-              <TabsTrigger value="petty-cash">
-                <Banknote className="h-3.5 w-3.5 mr-1" />Petty Cash
-              </TabsTrigger>
+              {summary && (
+                <>
+                  <TabsTrigger value="contracts">
+                    Contracts ({summary.contracts.length})
+                  </TabsTrigger>
+                  <TabsTrigger value="walkin">
+                    Walk-in Collections ({summary.walkin_payments.length})
+                  </TabsTrigger>
+                  <TabsTrigger value="cash">
+                    Cash Handovers ({cashHandovers.filter((c) => c.cash_handover_status === "pending_handover").length} pending)
+                  </TabsTrigger>
+                  <TabsTrigger value="gst">
+                    GST Invoices
+                  </TabsTrigger>
+                  <TabsTrigger value="petty-cash">
+                    <Banknote className="h-3.5 w-3.5 mr-1" />Petty Cash
+                  </TabsTrigger>
+                </>
+              )}
               <TabsTrigger value="vendor-payments" onClick={() => fetchVendorBills()}>
                 <Building2 className="h-3.5 w-3.5 mr-1" />Vendor Payments
                 {vendorBills.length > 0 && (
@@ -332,7 +336,9 @@ export default function AccountingPage() {
 
             {/* Tab 1: Contracts */}
             <TabsContent value="contracts" className="space-y-3 mt-4">
-              {summary.contracts.length === 0 ? (
+              {!summary ? (
+                <EmptyState icon={ScrollText} title="No data" description="Could not load accounting data for this period" />
+              ) : summary.contracts.length === 0 ? (
                 <EmptyState
                   icon={ScrollText}
                   title="No active contracts"
@@ -354,7 +360,7 @@ export default function AccountingPage() {
 
             {/* Tab 2: Walk-in Collections */}
             <TabsContent value="walkin" className="mt-4">
-              <WalkinCollectionsTable payments={summary.walkin_payments} />
+              {summary && <WalkinCollectionsTable payments={summary.walkin_payments} />}
             </TabsContent>
 
             {/* Tab 3: Cash Handovers */}
@@ -391,12 +397,6 @@ export default function AccountingPage() {
             <TabsContent value="vendor-payments" />
           </Tabs>
         </>
-      ) : (
-        <EmptyState
-          icon={Calculator}
-          title="No data"
-          description="Could not load accounting data for this period"
-        />
       )}
 
       {/* Vendor Payments — always rendered regardless of monthly summary state */}
