@@ -1666,6 +1666,8 @@ export interface VendorBill {
   approval_status: BillApprovalStatus;
   approved_by?: string;
   approved_at?: string;
+  approved_amount?: number | null;
+  approved_amount_note?: string | null;
   rejection_reason?: string;
   rejection_outcome?: RejectionOutcome;
   created_by: string;
@@ -1675,6 +1677,12 @@ export interface VendorBill {
   procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
   purchase_orders?: Pick<PurchaseOrder, "id" | "po_number" | "po_type"> | null;
   approver?: { id: string; full_name?: string } | null;
+  vendor_bill_payments?: Array<{
+    id: string; amount: number; payment_mode: string;
+    payment_reference: string | null; payment_date: string;
+    notes: string | null;
+    recorder: { id: string; full_name: string } | null;
+  }>;
 }
 
 export interface ItemHistoryEntry {
