@@ -91,8 +91,8 @@ export default function ContractDetailPage({
     setKycStatus({ allApproved, total, approved });
   }, []);
 
-  const fetchContract = useCallback(async () => {
-    setLoading(true);
+  const fetchContract = useCallback(async (showSpinner = true) => {
+    if (showSpinner) setLoading(true);
     const res = await fetch(`/api/contracts/${id}`);
     if (res.ok) {
       const json = await res.json();
@@ -107,11 +107,11 @@ export default function ContractDetailPage({
           .catch(() => setLinkedProposal(null));
       }
     }
-    setLoading(false);
+    if (showSpinner) setLoading(false);
   }, [id]);
 
   useEffect(() => {
-    fetchContract();
+    fetchContract(true);
     fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {});
   }, [fetchContract]);
 
@@ -128,7 +128,7 @@ export default function ContractDetailPage({
     if (res.ok) {
       const statusLabel = CONTRACT_STATUS_LABELS[newStatus] || newStatus;
       toast.success(`Contract marked as ${statusLabel}`);
-      fetchContract();
+      fetchContract(false);
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || `Failed to update contract status`);
@@ -154,7 +154,7 @@ export default function ContractDetailPage({
       toast.success("Contract terminated");
       setTerminateOpen(false);
       setTerminationReason("");
-      fetchContract();
+      fetchContract(false);
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || "Failed to terminate contract");
@@ -192,41 +192,64 @@ export default function ContractDetailPage({
     if (!contract) return;
     setUploadingSignedDoc(true);
 
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("title", `Signed Contract - ${contract.contract_number}`);
-    formData.append("category", "signed_contract");
-    formData.append("lead_id", contract.lead_id);
+    try {
+      // Step 1: get signed upload URL — file goes directly to Supabase, bypassing Vercel's 4.5MB limit
+      const urlRes = await fetch("/api/documents/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileName: file.name,
+          mimeType: file.type,
+          path: "signed-contracts",
+        }),
+      });
+      if (!urlRes.ok) throw new Error("Failed to get upload URL");
+      const { signedUrl, path: filePath } = await urlRes.json();
 
-    const uploadRes = await fetch("/api/documents", {
-      method: "POST",
-      body: formData,
-    });
+      // Step 2: upload directly to Supabase Storage
+      const uploadRes = await fetch(signedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      });
+      if (!uploadRes.ok) throw new Error("Storage upload failed");
 
-    if (!uploadRes.ok) {
-      const err = await uploadRes.json().catch(() => null);
-      toast.error(err?.error || "Failed to upload document");
+      // Step 3: create document DB record
+      const regRes = await fetch("/api/documents/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: `Signed Contract - ${contract.contract_number}`,
+          fileName: file.name,
+          filePath,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          category: "signed_contract",
+          leadId: contract.lead_id,
+        }),
+      });
+      if (!regRes.ok) throw new Error("Failed to register document");
+      const { data: doc } = await regRes.json();
+
+      // Step 4: link to contract
+      const patchRes = await fetch(`/api/contracts/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ signed_document_id: doc.id }),
+      });
+
+      if (patchRes.ok) {
+        toast.success("Signed contract uploaded successfully");
+        fetchContract(false);
+      } else {
+        const err = await patchRes.json().catch(() => null);
+        toast.error(err?.error || "Failed to link document to contract");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to upload document");
+    } finally {
       setUploadingSignedDoc(false);
-      return;
     }
-
-    const { data: doc } = await uploadRes.json();
-
-    const patchRes = await fetch(`/api/contracts/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ signed_document_id: doc.id }),
-    });
-
-    if (patchRes.ok) {
-      toast.success("Signed contract uploaded successfully");
-      fetchContract();
-    } else {
-      const err = await patchRes.json().catch(() => null);
-      toast.error(err?.error || "Failed to link document to contract");
-    }
-
-    setUploadingSignedDoc(false);
   };
 
   const handleViewSignedDoc = async () => {
@@ -264,7 +287,7 @@ export default function ContractDetailPage({
 
     if (res.ok) {
       toast.success("Agreement sent for e-stamping and signing");
-      fetchContract();
+      fetchContract(false);
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || "Failed to initiate signing");
@@ -290,7 +313,7 @@ export default function ContractDetailPage({
       } else {
         toast.info(`Signing status: ${status}`);
       }
-      fetchContract();
+      fetchContract(false);
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || "Failed to check signing status");

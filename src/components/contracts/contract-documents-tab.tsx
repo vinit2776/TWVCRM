@@ -70,22 +70,52 @@ export function ContractDocumentsTab({ contractId, onKycStatusChange }: Contract
 
   const handleUpload = async (docId: string, file: File) => {
     setUploading(docId);
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("document_id", docId);
+    try {
+      // Step 1: get a signed upload URL (bypasses Vercel 4.5MB body limit)
+      const urlRes = await fetch("/api/documents/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileName: file.name,
+          mimeType: file.type,
+          path: `contract-documents/${contractId}`,
+        }),
+      });
+      if (!urlRes.ok) throw new Error("Failed to get upload URL");
+      const { signedUrl, path: filePath } = await urlRes.json();
 
-    const res = await fetch(`/api/contracts/${contractId}/documents`, {
-      method: "POST",
-      body: formData,
-    });
+      // Step 2: upload directly to Supabase Storage
+      const uploadRes = await fetch(signedUrl, {
+        method: "PUT",
+        headers: { "Content-Type": file.type || "application/octet-stream" },
+        body: file,
+      });
+      if (!uploadRes.ok) throw new Error("Storage upload failed");
 
-    setUploading(null);
-    if (res.ok) {
-      toast.success("Document uploaded");
-      fetchDocs();
-    } else {
-      const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Upload failed");
+      // Step 3: register document + link to KYC slot via API
+      const res = await fetch(`/api/contracts/${contractId}/documents`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          document_id: docId,
+          filePath,
+          fileName: file.name,
+          mimeType: file.type,
+          sizeBytes: file.size,
+        }),
+      });
+
+      if (res.ok) {
+        toast.success("Document uploaded");
+        fetchDocs();
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Upload failed");
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Upload failed");
+    } finally {
+      setUploading(null);
     }
   };
 
@@ -119,11 +149,11 @@ export function ContractDocumentsTab({ contractId, onKycStatusChange }: Contract
   };
 
   const handleViewDoc = async (doc: ContractDocument) => {
-    if (!doc.document?.file_path) return;
-    const res = await fetch(`/api/cases/0/documents/0/view?path=${encodeURIComponent(doc.document.file_path)}`);
+    if (!doc.document?.id) return;
+    const res = await fetch(`/api/documents/${doc.document.id}/view`);
     if (res.ok) {
       const json = await res.json();
-      if (json.url) window.open(json.url, "_blank");
+      if (json.signedUrl) window.open(json.signedUrl, "_blank");
     } else {
       toast.error("Failed to load document");
     }

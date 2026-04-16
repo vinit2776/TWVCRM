@@ -22,7 +22,8 @@ export async function GET(_request: NextRequest, { params }: Params) {
   return NextResponse.json({ data: data || [] });
 }
 
-// POST — upload a document for a KYC slot
+// POST — register a pre-uploaded document for a KYC slot
+// Accepts JSON: { document_id, filePath, fileName, mimeType, sizeBytes }
 export async function POST(request: NextRequest, { params }: Params) {
   const { id } = await params;
   const supabase = await createClient();
@@ -30,12 +31,11 @@ export async function POST(request: NextRequest, { params }: Params) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const adminSupabase = await createAdminClient();
-  const formData = await request.formData();
-  const file = formData.get("file") as File | null;
-  const documentId = formData.get("document_id") as string | null;
+  const body = await request.json();
+  const { document_id: documentId, filePath, fileName, mimeType, sizeBytes } = body;
 
-  if (!file || !documentId) {
-    return NextResponse.json({ error: "File and document_id are required" }, { status: 400 });
+  if (!documentId || !filePath || !fileName) {
+    return NextResponse.json({ error: "document_id, filePath and fileName are required" }, { status: 400 });
   }
 
   // Validate document slot exists
@@ -48,29 +48,17 @@ export async function POST(request: NextRequest, { params }: Params) {
 
   if (!docSlot) return NextResponse.json({ error: "Document slot not found" }, { status: 404 });
 
-  // Upload file to storage
-  const ext = file.name.split(".").pop() || "pdf";
-  const filePath = `contract-documents/${id}/${docSlot.document_type}/${Date.now()}.${ext}`;
-  const arrayBuffer = await file.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
-
-  const { error: uploadError } = await adminSupabase.storage
-    .from("crm-documents")
-    .upload(filePath, buffer, { contentType: file.type, upsert: true });
-
-  if (uploadError) return NextResponse.json({ error: `Upload failed: ${uploadError.message}` }, { status: 500 });
-
-  // Create document record
   const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
 
+  // Create document record (file already in storage via signed upload URL)
   const { data: doc, error: docError } = await adminSupabase
     .from("documents")
     .insert({
       title: docSlot.label,
-      file_name: file.name,
+      file_name: fileName,
       file_path: filePath,
-      mime_type: file.type,
-      size_bytes: file.size,
+      mime_type: mimeType || "application/octet-stream",
+      size_bytes: sizeBytes || 0,
       category: "contract_kyc",
       uploaded_by: dbUser?.id,
     })
@@ -101,5 +89,3 @@ export async function POST(request: NextRequest, { params }: Params) {
 
   return NextResponse.json({ data: updated });
 }
-
-export const maxDuration = 30;
