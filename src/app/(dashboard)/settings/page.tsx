@@ -11,13 +11,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClient } from "@/lib/supabase/client"; // still needed for handleSave
 import { getInitials } from "@/lib/utils";
 import { toast } from "sonner";
-import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart, LayoutDashboard, Banknote, AlertTriangle } from "lucide-react";
+import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart, LayoutDashboard, Banknote, AlertTriangle, PieChart } from "lucide-react";
 import { PaymentGatewaySettings } from "@/components/settings/payment-gateway-settings";
 import { ProcurementSettings } from "@/components/settings/procurement-settings";
 import { DashboardSettings } from "@/components/settings/dashboard-settings";
 import { PettyCashSettings } from "@/components/settings/petty-cash-settings";
 import { ServicesSettings } from "@/components/settings/services-settings";
 import { ReorderSettings } from "@/components/settings/reorder-settings";
+import { ProcurementBudgetSettings } from "@/components/settings/procurement-budget-settings";
 import Link from "next/link";
 
 export default function SettingsPage() {
@@ -143,6 +144,11 @@ export default function SettingsPage() {
           {["admin", "manager"].includes(profile.role) && (
             <TabsTrigger value="reorder-levels" className="flex items-center gap-1.5">
               <AlertTriangle className="h-3.5 w-3.5" />Reorder Levels
+            </TabsTrigger>
+          )}
+          {["admin", "manager"].includes(profile.role) && (
+            <TabsTrigger value="dept-budgets" className="flex items-center gap-1.5">
+              <PieChart className="h-3.5 w-3.5" />Budgets
             </TabsTrigger>
           )}
         </TabsList>
@@ -326,6 +332,11 @@ export default function SettingsPage() {
         {["admin", "manager"].includes(profile.role) && (
           <TabsContent value="reorder-levels" className="mt-6">
             <ReorderSettings />
+          </TabsContent>
+        )}
+        {["admin", "manager"].includes(profile.role) && (
+          <TabsContent value="dept-budgets" className="mt-6">
+            <ProcurementBudgetSettings userRole={profile.role} />
           </TabsContent>
         )}
       </Tabs>

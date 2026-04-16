@@ -196,6 +196,22 @@ export default function PurchaseRequestDetailPage() {
   const [lifecycle, setLifecycle] = useState<LifecycleData | null>(null);
   const [lifecycleLoading, setLifecycleLoading] = useState(false);
 
+  // Budget check state
+  type BudgetCheck = {
+    has_budget: boolean;
+    monthly_budget?: number;
+    spent_so_far?: number;
+    this_mr_amount?: number;
+    projected_total?: number;
+    remaining_before_mr?: number;
+    is_over_budget?: boolean;
+    over_by?: number;
+    utilisation_before?: number;
+    utilisation_after?: number;
+  };
+  const [budgetCheck, setBudgetCheck] = useState<BudgetCheck | null>(null);
+  const [budgetLoading, setBudgetLoading] = useState(false);
+
   const fetchPr = useCallback(async () => {
     setLoading(true);
     const res = await fetch(`/api/procurement/requests/${id}`);
@@ -208,6 +224,23 @@ export default function PurchaseRequestDetailPage() {
     }
     setLoading(false);
   }, [id, router]);
+
+  // Only admins and managers are approvers — budget info is never shown to MR creators/requesters
+  const isApprover = ["admin", "manager"].includes(userRole);
+
+  const openApproveDialog = useCallback(async () => {
+    setActionDialog("approve");
+    if (!pr || !isApprover) return;
+    setBudgetLoading(true);
+    const res = await fetch(
+      `/api/procurement/budget/check?department=${pr.department}&amount=${pr.total_estimated_amount ?? 0}`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      setBudgetCheck(data);
+    }
+    setBudgetLoading(false);
+  }, [pr, isApprover]);
 
   useEffect(() => { fetchPr(); }, [fetchPr]);
   useEffect(() => {
@@ -234,7 +267,11 @@ export default function PurchaseRequestDetailPage() {
       });
       const json = await res.json();
       if (!res.ok) {
-        toast.error(json.error || "Action failed");
+        if (json.budget_exceeded) {
+          toast.error(`Budget exceeded — only admin can approve. ${json.error}`);
+        } else {
+          toast.error(json.error || "Action failed");
+        }
         return;
       }
       const successMessages: Record<ActionType, string> = {
@@ -344,7 +381,7 @@ export default function PurchaseRequestDetailPage() {
                 size="sm"
                 variant="default"
                 className="bg-green-600 hover:bg-green-700"
-                onClick={() => setActionDialog("approve")}
+                onClick={openApproveDialog}
                 disabled={actionLoading}
               >
                 <CheckCircle className="h-4 w-4 mr-1" /> Approve
@@ -1015,6 +1052,69 @@ export default function PurchaseRequestDetailPage() {
               You are about to approve <strong>{pr.pr_number}</strong> for{" "}
               <strong>{formatCurrency(pr.total_estimated_amount)}</strong>.
             </p>
+            {/* Budget check panel — approvers only (admin / manager) */}
+            {isApprover && budgetLoading && (
+              <div className="flex items-center gap-2 text-muted-foreground text-sm py-2">
+                <Loader2 className="h-4 w-4 animate-spin" /> Checking department budget…
+              </div>
+            )}
+            {isApprover && !budgetLoading && budgetCheck?.has_budget && (
+              <div className={`rounded-lg border p-3 space-y-2 ${budgetCheck.is_over_budget ? "border-red-200 bg-red-50" : budgetCheck.utilisation_after! >= 80 ? "border-amber-200 bg-amber-50" : "border-green-200 bg-green-50"}`}>
+                <p className={`text-xs font-semibold uppercase tracking-wide ${budgetCheck.is_over_budget ? "text-red-700" : budgetCheck.utilisation_after! >= 80 ? "text-amber-700" : "text-green-700"}`}>
+                  {PROCUREMENT_DEPARTMENT_LABELS[pr.department]} — Monthly Budget
+                </p>
+                <div className="space-y-1 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Monthly Budget</span>
+                    <span className="font-medium">{formatCurrency(budgetCheck.monthly_budget!)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Spent so far</span>
+                    <span>{formatCurrency(budgetCheck.spent_so_far!)}</span>
+                  </div>
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">This MR</span>
+                    <span className="font-medium">+ {formatCurrency(budgetCheck.this_mr_amount!)}</span>
+                  </div>
+                  {/* Progress bar */}
+                  <div className="w-full h-2 rounded-full bg-muted/60 mt-1 overflow-hidden">
+                    {/* Already-spent portion */}
+                    <div className="h-full flex">
+                      <div
+                        className="h-full bg-green-400 rounded-l-full"
+                        style={{ width: `${Math.min(budgetCheck.utilisation_before!, 100)}%` }}
+                      />
+                      <div
+                        className={`h-full ${budgetCheck.is_over_budget ? "bg-red-500" : "bg-amber-400"} rounded-r-full`}
+                        style={{ width: `${Math.min(Math.max((budgetCheck.utilisation_after! - budgetCheck.utilisation_before!), 0), 100 - budgetCheck.utilisation_before!)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-between border-t pt-1 mt-1">
+                    <span className={`font-semibold ${budgetCheck.is_over_budget ? "text-red-700" : "text-muted-foreground"}`}>
+                      After approval: {formatCurrency(budgetCheck.projected_total!)} ({budgetCheck.utilisation_after}%)
+                    </span>
+                    {budgetCheck.is_over_budget && (
+                      <span className="text-red-700 font-bold text-xs">
+                        ↑ Over by {formatCurrency(budgetCheck.over_by!)}
+                      </span>
+                    )}
+                  </div>
+                </div>
+                {budgetCheck.is_over_budget && (
+                  <div className={`text-xs rounded px-2 py-1.5 mt-1 ${userRole === "admin" ? "bg-amber-100 text-amber-800" : "bg-red-100 text-red-800"}`}>
+                    {userRole === "admin"
+                      ? "⚠ This approval will exceed the department budget. As admin you can still approve."
+                      : "⛔ Manager approval is not permitted when the department budget is exceeded. Only admin can approve over-budget requests."}
+                  </div>
+                )}
+              </div>
+            )}
+            {isApprover && !budgetLoading && budgetCheck?.has_budget === false && (
+              <p className="text-xs text-muted-foreground bg-muted/30 rounded px-2 py-1.5">
+                No monthly budget configured for {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}. All managers and admins can approve.
+              </p>
+            )}
             {isLargeAmount && (
               <div className="text-sm text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
                 This amount exceeds ₹{PROCUREMENT_APPROVAL_THRESHOLDS.ADMIN_REQUIRED_ABOVE.toLocaleString()}. Only admin users can approve this.
@@ -1026,7 +1126,7 @@ export default function PurchaseRequestDetailPage() {
             <Button
               className="bg-green-600 hover:bg-green-700"
               onClick={() => performAction("approve")}
-              disabled={actionLoading}
+              disabled={actionLoading || (budgetCheck?.is_over_budget === true && userRole === "manager")}
             >
               {actionLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <CheckCircle className="h-4 w-4 mr-1" />}
               Approve

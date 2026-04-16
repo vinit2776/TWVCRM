@@ -158,6 +158,58 @@ export async function PATCH(
       if (!["admin", "manager"].includes(dbUser.role)) {
         return NextResponse.json({ error: "Only managers and admins can approve PRs" }, { status: 403 });
       }
+      // ── Budget enforcement ───────────────────────────────────────────
+      // If a monthly budget is set for this department and approver is a manager,
+      // check whether this MR would push spend over the budget.
+      // If so: only admin can approve.
+      if (dbUser.role === "manager") {
+        const now = new Date();
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+        const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
+
+        const { data: budget } = await supabase
+          .from("department_budgets")
+          .select("monthly_budget, is_active")
+          .eq("department", pr.department)
+          .is("location_id", null)
+          .maybeSingle();
+
+        if (budget?.is_active && budget.monthly_budget) {
+          const monthlyBudget = Number(budget.monthly_budget);
+
+          const { data: existingMrs } = await supabase
+            .from("purchase_requests")
+            .select("total_estimated_amount")
+            .eq("department", pr.department)
+            .gte("created_at", monthStart)
+            .lte("created_at", monthEnd)
+            .not("status", "in", '("cancelled","rejected")')
+            .neq("id", id);
+
+          const spentSoFar = (existingMrs ?? []).reduce(
+            (sum, mr) => sum + Number(mr.total_estimated_amount ?? 0), 0
+          );
+          const projectedTotal = spentSoFar + Number(pr.total_estimated_amount ?? 0);
+
+          if (projectedTotal > monthlyBudget) {
+            const overBy = projectedTotal - monthlyBudget;
+            return NextResponse.json({
+              error: `Department budget exceeded — manager approval not permitted. ` +
+                `Monthly budget for ${pr.department}: ₹${monthlyBudget.toLocaleString("en-IN")}. ` +
+                `Already spent: ₹${spentSoFar.toLocaleString("en-IN")}. ` +
+                `This MR: ₹${Number(pr.total_estimated_amount).toLocaleString("en-IN")}. ` +
+                `Would exceed budget by ₹${overBy.toLocaleString("en-IN")}. ` +
+                `Only admin can approve over-budget requests.`,
+              budget_exceeded: true,
+              monthly_budget: monthlyBudget,
+              spent_so_far: spentSoFar,
+              this_mr: Number(pr.total_estimated_amount ?? 0),
+              over_by: overBy,
+            }, { status: 403 });
+          }
+        }
+      }
+      // ── End budget enforcement ────────────────────────────────────────
       const approvalCode = await generateApprovalCode(supabase, id);
       updatePayload = {
         status: "approved",
