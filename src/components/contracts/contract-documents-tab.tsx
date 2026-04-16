@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -82,15 +83,14 @@ export function ContractDocumentsTab({ contractId, onKycStatusChange }: Contract
         }),
       });
       if (!urlRes.ok) throw new Error("Failed to get upload URL");
-      const { signedUrl, path: filePath } = await urlRes.json();
+      const { token, path: filePath } = await urlRes.json();
 
-      // Step 2: upload directly to Supabase Storage
-      const uploadRes = await fetch(signedUrl, {
-        method: "PUT",
-        headers: { "Content-Type": file.type || "application/octet-stream" },
-        body: file,
-      });
-      if (!uploadRes.ok) throw new Error("Storage upload failed");
+      // Step 2: upload directly to Supabase Storage via the browser client
+      const supabase = createBrowserClient();
+      const { error: storageError } = await supabase.storage
+        .from("crm-documents")
+        .uploadToSignedUrl(filePath, token, file, { contentType: file.type || "application/octet-stream" });
+      if (storageError) throw new Error(storageError.message);
 
       // Step 3: register document + link to KYC slot via API
       const res = await fetch(`/api/contracts/${contractId}/documents`, {
