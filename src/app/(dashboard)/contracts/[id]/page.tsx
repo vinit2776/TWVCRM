@@ -206,21 +206,16 @@ export default function ContractDetailPage({
       });
       if (!urlRes.ok) {
         const urlErr = await urlRes.json().catch(() => null);
-        throw new Error(`[Step 1] ${urlErr?.error || urlRes.statusText}`);
+        throw new Error(urlErr?.error || "Failed to get upload URL");
       }
       const { token, path: filePath } = await urlRes.json();
-      console.log("[upload] got signed URL, path:", filePath);
 
       // Step 2: upload directly to Supabase Storage via the browser client
       const supabase = createBrowserClient();
       const { error: storageError } = await supabase.storage
         .from("crm-documents")
         .uploadToSignedUrl(filePath, token, file, { contentType: file.type || "application/octet-stream" });
-      if (storageError) {
-        console.error("[upload] storage error:", storageError);
-        throw new Error(`[Step 2] ${storageError.message}`);
-      }
-      console.log("[upload] file uploaded to storage");
+      if (storageError) throw new Error(storageError.message);
 
       // Step 3: create document DB record
       const regRes = await fetch("/api/documents/register", {
@@ -238,10 +233,9 @@ export default function ContractDetailPage({
       });
       if (!regRes.ok) {
         const regErr = await regRes.json().catch(() => null);
-        throw new Error(`[Step 3] ${regErr?.error || regRes.statusText}`);
+        throw new Error(regErr?.error || "Failed to register document");
       }
       const { data: doc } = await regRes.json();
-      console.log("[upload] document registered, id:", doc?.id);
 
       // Step 4: link to contract
       const patchRes = await fetch(`/api/contracts/${id}`, {
@@ -255,11 +249,10 @@ export default function ContractDetailPage({
         fetchContract(false);
       } else {
         const err = await patchRes.json().catch(() => null);
-        toast.error(`[Step 4] ${err?.error || "Failed to link document to contract"}`);
+        toast.error(err?.error || "Failed to link document to contract");
       }
     } catch (e) {
-      console.error("[upload] caught error:", e);
-      toast.error(e instanceof Error ? e.message : String(e));
+      toast.error(e instanceof Error ? e.message : "Failed to upload document");
     } finally {
       setUploadingSignedDoc(false);
     }
