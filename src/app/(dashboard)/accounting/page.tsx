@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useRouter } from "next/navigation";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -146,7 +146,6 @@ type VendorBillItem = {
 export default function AccountingPage() {
   const now = new Date();
   const router = useRouter();
-  const searchParams = useSearchParams();
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [summary, setSummary] = useState<MonthlySummary | null>(null);
@@ -156,7 +155,13 @@ export default function AccountingPage() {
   const [userRole, setUserRole] = useState<string | null>(null);
   const [isLocking, setIsLocking] = useState(false);
   const [showExport, setShowExport] = useState(false);
-  const [activeTab, setActiveTab] = useState(searchParams.get("tab") ?? "contracts");
+  // Read initial tab from URL without useSearchParams (avoids Suspense requirement)
+  const [activeTab, setActiveTab] = useState(() => {
+    if (typeof window !== "undefined") {
+      return new URLSearchParams(window.location.search).get("tab") ?? "contracts";
+    }
+    return "contracts";
+  });
 
   // Vendor payments
   const [vendorBills, setVendorBills] = useState<VendorBillItem[]>([]);
