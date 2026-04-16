@@ -138,9 +138,19 @@ interface GstEntry {
 type VendorBillItem = {
   id: string; bill_number: string; invoice_date: string; due_date: string | null;
   total_amount: number; amount_paid: number; payment_status: string;
+  approval_status: string;
+  approved_amount: number | null;
+  approved_amount_note: string | null;
+  payment_mode: string | null; payment_reference: string | null; payment_date: string | null;
   vendor_id: string; po_id: string | null;
   procurement_vendors: { id: string; name: string } | null;
   purchase_orders: { id: string; po_number: string } | null;
+  vendor_bill_payments?: Array<{
+    id: string; amount: number; payment_mode: string;
+    payment_reference: string | null; payment_date: string;
+    notes: string | null;
+    recorder: { id: string; full_name: string } | null;
+  }>;
 };
 
 export default function AccountingPage() {
@@ -220,7 +230,7 @@ export default function AccountingPage() {
   const fetchVendorBills = useCallback(async (force = false) => {
     if (billsLoaded && !force) return;
     setBillsLoading(true);
-    const res = await fetch("/api/procurement/bills?approval_status=approved&payment_status_neq=paid&limit=50");
+    const res = await fetch("/api/procurement/bills?approval_status=approved&limit=100");
     if (res.ok) {
       const { data } = await res.json();
       setVendorBills(data ?? []);
@@ -420,70 +430,131 @@ export default function AccountingPage() {
               description="All approved invoices have been paid, or no invoices are pending payment."
             />
           ) : (
-            <div className="rounded-lg border overflow-hidden">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="bg-muted/30 border-b">
-                    <th className="px-4 py-3 text-left font-medium">Bill #</th>
-                    <th className="px-4 py-3 text-left font-medium">Vendor</th>
-                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">PO</th>
-                    <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Invoice Date</th>
-                    <th className="px-4 py-3 text-left font-medium">Due Date</th>
-                    <th className="px-4 py-3 text-right font-medium">Outstanding</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {vendorBills.map((bill) => {
-                    const outstanding = Number(bill.total_amount) - Number(bill.amount_paid ?? 0);
-                    const today = new Date().toISOString().split("T")[0];
-                    const isOverdue = bill.due_date && bill.due_date < today;
-                    return (
-                      <tr
-                        key={bill.id}
-                        className="border-b last:border-0 hover:bg-muted/40 cursor-pointer"
-                        onClick={() => router.push(`/accounting/vendor-payments/${bill.id}`)}
-                      >
-                        <td className="px-4 py-3 font-mono text-xs font-medium">{bill.bill_number}</td>
-                        <td className="px-4 py-3">
-                          <p className="font-medium truncate max-w-[160px]">
-                            {(bill.procurement_vendors as { name: string } | null)?.name ?? "—"}
-                          </p>
-                        </td>
-                        <td className="px-4 py-3 hidden md:table-cell text-muted-foreground text-xs">
-                          {(bill.purchase_orders as { po_number: string } | null)?.po_number ?? "—"}
-                        </td>
-                        <td className="px-4 py-3 hidden sm:table-cell text-muted-foreground text-xs">
-                          {new Date(bill.invoice_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                        </td>
-                        <td className="px-4 py-3 text-xs">
-                          {bill.due_date ? (
-                            <span className={isOverdue ? "text-red-600 font-semibold flex items-center gap-1" : "text-muted-foreground"}>
-                              {isOverdue && <AlertCircle className="h-3 w-3" />}
-                              {new Date(bill.due_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
-                              {isOverdue && " (overdue)"}
-                            </span>
-                          ) : (
-                            <span className="text-muted-foreground">—</span>
-                          )}
-                        </td>
-                        <td className="px-4 py-3 text-right font-semibold">
-                          ₹{outstanding.toLocaleString("en-IN", { minimumFractionDigits: 0 })}
-                        </td>
+            <div className="space-y-3">
+              {/* Summary row */}
+              <div className="grid grid-cols-3 gap-3 text-sm">
+                <div className="rounded-lg border bg-red-50/50 p-3 text-center">
+                  <p className="text-xs text-muted-foreground mb-1">Unpaid</p>
+                  <p className="text-lg font-bold text-red-700">
+                    ₹{vendorBills.filter(b => b.payment_status === 'unpaid').reduce((s, b) => s + Number(b.total_amount), 0).toLocaleString('en-IN', { minimumFractionDigits: 0 })}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{vendorBills.filter(b => b.payment_status === 'unpaid').length} bills</p>
+                </div>
+                <div className="rounded-lg border bg-amber-50/50 p-3 text-center">
+                  <p className="text-xs text-muted-foreground mb-1">Part Paid</p>
+                  <p className="text-lg font-bold text-amber-700">
+                    ₹{vendorBills.filter(b => b.payment_status === 'partially_paid').reduce((s, b) => s + Math.max(0, Number(b.total_amount) - Number(b.amount_paid)), 0).toLocaleString('en-IN', { minimumFractionDigits: 0 })}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{vendorBills.filter(b => b.payment_status === 'partially_paid').length} bills</p>
+                </div>
+                <div className="rounded-lg border bg-green-50/50 p-3 text-center">
+                  <p className="text-xs text-muted-foreground mb-1">Paid This Session</p>
+                  <p className="text-lg font-bold text-green-700">
+                    ₹{vendorBills.filter(b => b.payment_status === 'paid').reduce((s, b) => s + Number(b.total_amount), 0).toLocaleString('en-IN', { minimumFractionDigits: 0 })}
+                  </p>
+                  <p className="text-xs text-muted-foreground">{vendorBills.filter(b => b.payment_status === 'paid').length} bills</p>
+                </div>
+              </div>
+
+              {/* Table with all bills (unpaid + part-paid, hide fully paid) */}
+              {vendorBills.filter(b => b.payment_status !== 'paid').length > 0 && (
+                <div className="rounded-lg border overflow-hidden">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="bg-muted/30 border-b">
+                        <th className="px-4 py-3 text-left font-medium">Bill #</th>
+                        <th className="px-4 py-3 text-left font-medium">Vendor</th>
+                        <th className="px-4 py-3 text-left font-medium hidden md:table-cell">PO</th>
+                        <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Due</th>
+                        <th className="px-4 py-3 text-right font-medium">Invoice</th>
+                        <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Paid</th>
+                        <th className="px-4 py-3 text-right font-medium">Outstanding</th>
+                        <th className="px-4 py-3 text-left font-medium">Status</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-                <tfoot>
-                  <tr className="bg-muted/20 border-t">
-                    <td colSpan={5} className="px-4 py-2.5 text-xs text-muted-foreground font-medium">
-                      {vendorBills.length} bill{vendorBills.length !== 1 ? "s" : ""} pending payment
-                    </td>
-                    <td className="px-4 py-2.5 text-right font-bold text-sm">
-                      ₹{vendorBills.reduce((s, b) => s + Math.max(0, Number(b.total_amount) - Number(b.amount_paid ?? 0)), 0).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
-                    </td>
-                  </tr>
-                </tfoot>
-              </table>
+                    </thead>
+                    <tbody>
+                      {vendorBills.filter(b => b.payment_status !== 'paid').map((bill) => {
+                        const outstanding = Math.max(0, Number(bill.total_amount) - Number(bill.amount_paid ?? 0));
+                        const approvedCeiling = Number(bill.approved_amount ?? bill.total_amount);
+                        const approvedOutstanding = Math.max(0, approvedCeiling - Number(bill.amount_paid ?? 0));
+                        const isPartialApproval = bill.approved_amount !== null && bill.approved_amount < bill.total_amount;
+                        const today = new Date().toISOString().split("T")[0];
+                        const isOverdue = bill.due_date && bill.due_date < today;
+                        return (
+                          <tr
+                            key={bill.id}
+                            className="border-b last:border-0 hover:bg-muted/40 cursor-pointer"
+                            onClick={() => router.push(`/accounting/vendor-payments/${bill.id}`)}
+                          >
+                            <td className="px-4 py-3 font-mono text-xs font-medium">{bill.bill_number}</td>
+                            <td className="px-4 py-3">
+                              <p className="font-medium truncate max-w-[140px]">
+                                {(bill.procurement_vendors as { name: string } | null)?.name ?? "—"}
+                              </p>
+                            </td>
+                            <td className="px-4 py-3 hidden md:table-cell text-muted-foreground text-xs">
+                              {(bill.purchase_orders as { po_number: string } | null)?.po_number ?? "—"}
+                            </td>
+                            <td className="px-4 py-3 hidden sm:table-cell text-xs">
+                              {bill.due_date ? (
+                                <span className={isOverdue ? "text-red-600 font-semibold flex items-center gap-1" : "text-muted-foreground"}>
+                                  {isOverdue && <AlertCircle className="h-3 w-3" />}
+                                  {new Date(bill.due_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                                </span>
+                              ) : <span className="text-muted-foreground">—</span>}
+                            </td>
+                            <td className="px-4 py-3 text-right text-xs">
+                              ₹{Number(bill.total_amount).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                            </td>
+                            <td className="px-4 py-3 text-right text-xs hidden sm:table-cell text-green-700 font-medium">
+                              {Number(bill.amount_paid ?? 0) > 0 ? `₹${Number(bill.amount_paid).toLocaleString("en-IN", { minimumFractionDigits: 0 })}` : "—"}
+                            </td>
+                            <td className="px-4 py-3 text-right font-semibold text-sm">
+                              <div>
+                                <p className={isOverdue ? "text-red-700" : ""}>
+                                  ₹{outstanding.toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                                </p>
+                                {isPartialApproval && (
+                                  <p className="text-[10px] text-amber-600 font-normal">
+                                    ₹{approvedOutstanding.toLocaleString("en-IN")} approved
+                                  </p>
+                                )}
+                              </div>
+                            </td>
+                            <td className="px-4 py-3">
+                              <div className="flex flex-col gap-0.5">
+                                {bill.payment_status === "partially_paid" && (
+                                  <span className="text-[10px] font-medium bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full w-fit">Part Paid</span>
+                                )}
+                                {bill.payment_status === "unpaid" && (
+                                  <span className="text-[10px] font-medium bg-red-100 text-red-800 px-1.5 py-0.5 rounded-full w-fit">Unpaid</span>
+                                )}
+                                {isPartialApproval && (
+                                  <span className="text-[10px] font-medium bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded-full w-fit">Part Approved</span>
+                                )}
+                                {isOverdue && (
+                                  <span className="text-[10px] font-medium bg-red-50 text-red-700 px-1.5 py-0.5 rounded-full w-fit">Overdue</span>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                    <tfoot>
+                      <tr className="bg-muted/20 border-t">
+                        <td colSpan={4} className="px-4 py-2.5 text-xs text-muted-foreground font-medium">
+                          {vendorBills.filter(b => b.payment_status !== 'paid').length} bill{vendorBills.filter(b => b.payment_status !== 'paid').length !== 1 ? "s" : ""} pending payment
+                        </td>
+                        <td colSpan={3} className="px-4 py-2.5 text-right font-bold text-sm">
+                          ₹{vendorBills.filter(b => b.payment_status !== 'paid').reduce((s, b) => s + Math.max(0, Number(b.total_amount) - Number(b.amount_paid ?? 0)), 0).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                        </td>
+                        <td />
+                      </tr>
+                    </tfoot>
+                  </table>
+                </div>
+              )}
             </div>
           )}
         </div>

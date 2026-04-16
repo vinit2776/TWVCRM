@@ -15,9 +15,15 @@ const patchBillSchema = z.discriminatedUnion("action", [
     payment_mode: z.enum(ALL_PAYMENT_MODES),
     payment_reference: z.string().nullish(),
     payment_date: z.string().nullish(),
+    notes: z.string().nullish(),
   }),
   z.object({
     action: z.literal("approve"),
+    approved_amount: z.number().positive().nullish(),
+    approved_amount_note: z.string().nullish(),
+  }),
+  z.object({
+    action: z.literal("approve_balance"),
   }),
   z.object({
     action: z.literal("reject"),
@@ -43,7 +49,8 @@ export async function GET(
     .select(
       `*, procurement_vendors(id, name, contact_name, contact_phone),
        purchase_orders(id, po_number, status, po_type, advance_status, advance_amount, advance_payment_mode, advance_payment_reference, advance_payment_date),
-       approver:users!vendor_bills_approved_by_fkey(id, full_name)`
+       approver:users!vendor_bills_approved_by_fkey(id, full_name),
+       vendor_bill_payments(id, amount, payment_mode, payment_reference, payment_date, notes, created_at, recorder:users!vendor_bill_payments_recorded_by_fkey(id, full_name))`
     )
     .eq("id", id)
     .single();
@@ -122,15 +129,39 @@ export async function PATCH(
         return NextResponse.json({ error: "This bill is already fully paid" }, { status: 422 });
       }
 
-      const newAmountPaid = Number(bill.amount_paid) + parsed.data.amount;
+      // Determine approved ceiling: approved_amount if set, else total_amount
+      const approvedCeiling = Number(bill.approved_amount ?? bill.total_amount);
+      const alreadyPaid = Number(bill.amount_paid ?? 0);
+      const remainingApproved = approvedCeiling - alreadyPaid;
+
+      if (parsed.data.amount > remainingApproved + 0.01) {
+        return NextResponse.json(
+          { error: `Payment of ₹${parsed.data.amount} exceeds the approved balance of ₹${remainingApproved.toFixed(2)}. Only the approved amount can be paid.` },
+          { status: 422 }
+        );
+      }
+
+      const newAmountPaid = alreadyPaid + parsed.data.amount;
+      // Mark as paid when approved ceiling is reached (not necessarily total_amount)
       const paymentStatus =
-        newAmountPaid >= Number(bill.total_amount)
-          ? "paid"
+        newAmountPaid >= approvedCeiling - 0.01
+          ? newAmountPaid >= Number(bill.total_amount) - 0.01 ? "paid" : "partially_paid"
           : newAmountPaid > 0
           ? "partially_paid"
           : "unpaid";
 
       const today = new Date().toISOString().split("T")[0];
+
+      // Insert payment history record
+      await supabase.from("vendor_bill_payments").insert({
+        bill_id: id,
+        amount: parsed.data.amount,
+        payment_mode: parsed.data.payment_mode,
+        payment_reference: parsed.data.payment_reference ?? null,
+        payment_date: parsed.data.payment_date ?? today,
+        notes: parsed.data.notes ?? null,
+        recorded_by: dbUser.id,
+      });
 
       updatePayload = {
         amount_paid: newAmountPaid,
@@ -153,17 +184,35 @@ export async function PATCH(
         );
       }
 
+      // Validate partial amount if provided
+      const approvedAmt = parsed.data.approved_amount ?? null;
+      if (approvedAmt !== null) {
+        if (approvedAmt > Number(bill.total_amount)) {
+          return NextResponse.json(
+            { error: `Approved amount (₹${approvedAmt}) cannot exceed invoice total (₹${bill.total_amount})` },
+            { status: 422 }
+          );
+        }
+        if (approvedAmt <= 0) {
+          return NextResponse.json({ error: "Approved amount must be greater than zero" }, { status: 422 });
+        }
+      }
+
       const { count: billApprovalCount } = await supabase
         .from("vendor_bills")
         .select("*", { count: "exact", head: true })
         .eq("approval_status", "approved");
       const billApprovalCode = generateSignedApprovalCode("bill", (billApprovalCount ?? 0) + 1, id);
 
+      const isPartialApproval = approvedAmt !== null && approvedAmt < Number(bill.total_amount);
+
       updatePayload = {
         approval_status: "approved",
         approved_by: dbUser.id,
         approved_at: new Date().toISOString(),
         approval_code: billApprovalCode,
+        approved_amount: approvedAmt ?? Number(bill.total_amount),
+        approved_amount_note: parsed.data.approved_amount_note ?? null,
         rejection_reason: null,
         rejection_outcome: null,
       };
@@ -183,12 +232,42 @@ export async function PATCH(
         }
       }
 
+      const approvalNote = isPartialApproval
+        ? `${bill.bill_number} partially approved for ₹${approvedAmt?.toLocaleString("en-IN")} by ${dbUser.full_name ?? "manager"}`
+        : `${bill.bill_number} approved by ${dbUser.full_name ?? "manager"}`;
+
       sendPushToAll({
-        title: "Invoice Approved",
-        body: `${bill.bill_number} approved by ${dbUser.full_name ?? "manager"}`,
+        title: isPartialApproval ? "Invoice Partially Approved" : "Invoice Approved",
+        body: approvalNote,
         url: `/procurement/bills/${id}`,
         tag: `bill-approval-${id}`,
       }).catch((err) => console.error("[push] approve notification failed:", err));
+
+      break;
+    }
+
+    case "approve_balance": {
+      if (!canApproveOrReject) {
+        return NextResponse.json({ error: "Only admin or manager can approve the remaining balance" }, { status: 403 });
+      }
+      if (bill.approval_status !== "approved") {
+        return NextResponse.json({ error: "Bill must already be approved to extend balance approval" }, { status: 422 });
+      }
+      if (!bill.approved_amount || Number(bill.approved_amount) >= Number(bill.total_amount)) {
+        return NextResponse.json({ error: "No balance pending approval — bill is already fully approved" }, { status: 422 });
+      }
+
+      updatePayload = {
+        approved_amount: Number(bill.total_amount),
+        approved_amount_note: null,
+      };
+
+      sendPushToAll({
+        title: "Invoice Balance Approved",
+        body: `Remaining balance on ${bill.bill_number} approved for full payment`,
+        url: `/procurement/bills/${id}`,
+        tag: `bill-approval-${id}`,
+      }).catch((err) => console.error("[push] balance approval notification failed:", err));
 
       break;
     }

@@ -46,9 +46,17 @@ type ChainData = {
     payment_mode: string | null; payment_reference: string | null; payment_date: string | null;
     notes: string | null; invoice_file_url: string | null; invoice_signed_url: string | null;
     approved_at: string | null; approval_code: string | null;
+    approved_amount: number | null;
+    approved_amount_note: string | null;
     creator: { id: string; full_name: string } | null;
     approver: { id: string; full_name: string } | null;
     vendor_id: string; po_id: string | null;
+    vendor_bill_payments?: Array<{
+      id: string; amount: number; payment_mode: string;
+      payment_reference: string | null; payment_date: string;
+      notes: string | null;
+      recorder: { id: string; full_name: string } | null;
+    }>;
   };
   vendor: {
     id: string; name: string; category: string; contact_name?: string;
@@ -178,6 +186,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const [payMode, setPayMode] = useState("");
   const [payRef, setPayRef] = useState("");
   const [payDate, setPayDate] = useState(new Date().toISOString().split("T")[0]);
+  const [payNote, setPayNote] = useState("");
   const [paying, setPaying] = useState(false);
 
   // Email dialog
@@ -191,9 +200,10 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
     if (res.ok) {
       const { data } = await res.json();
       setChain(data);
-      // Pre-fill payment amount with outstanding balance
-      const outstanding = Number(data.bill.total_amount) - Number(data.bill.amount_paid ?? 0);
-      if (outstanding > 0) setPayAmount(outstanding.toFixed(2));
+      // Pre-fill payment amount with approved outstanding balance
+      const approvedCeiling = Number(data.bill.approved_amount ?? data.bill.total_amount);
+      const approvedOutstandingPrefill = Math.max(0, approvedCeiling - Number(data.bill.amount_paid ?? 0));
+      if (approvedOutstandingPrefill > 0) setPayAmount(approvedOutstandingPrefill.toFixed(2));
     } else {
       toast.error("Failed to load bill details");
       router.push("/accounting?tab=vendor-payments");
@@ -209,6 +219,10 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const bill = chain?.bill;
   const vendor = chain?.vendor;
   const outstanding = bill ? Math.max(0, Number(bill.total_amount) - Number(bill.amount_paid ?? 0)) : 0;
+  const approvedCeiling = bill ? Number(bill.approved_amount ?? bill.total_amount) : 0;
+  const approvedOutstanding = bill ? Math.max(0, approvedCeiling - Number(bill.amount_paid ?? 0)) : 0;
+  const isPartialApproval = bill ? (bill.approved_amount !== null && Number(bill.approved_amount) < Number(bill.total_amount)) : false;
+  const balancePendingApproval = isPartialApproval && bill ? Number(bill.total_amount) - approvedCeiling : 0;
   const isFullyPaid = bill?.payment_status === "paid";
 
   // Payment modes available by role
@@ -226,8 +240,8 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   async function handleRecordPayment(andSendEmail = false) {
     if (!payMode) { toast.error("Please select a payment mode"); return; }
     if (!payAmount || Number(payAmount) <= 0) { toast.error("Enter a valid payment amount"); return; }
-    if (Number(payAmount) > outstanding + 0.01) {
-      toast.error(`Amount exceeds outstanding balance of ${formatCurrency(outstanding)}`);
+    if (Number(payAmount) > approvedOutstanding + 0.01) {
+      toast.error(`Amount exceeds approved outstanding balance of ${formatCurrency(approvedOutstanding)}`);
       return;
     }
     setPaying(true);
@@ -241,11 +255,13 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           payment_mode: payMode,
           payment_reference: payRef || null,
           payment_date: payDate || null,
+          notes: payNote || null,
         }),
       });
       const data = await res.json();
       if (!res.ok) { toast.error(data.error || "Payment failed"); setPaying(false); return; }
       toast.success("Payment recorded successfully");
+      setPayNote("");
       await fetchChain();
       if (andSendEmail) {
         setShowEmailDialog(true);
@@ -570,9 +586,26 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               <CreditCard className="h-4 w-4 text-primary" />
               Record Payment
             </CardTitle>
-            <p className="text-xs text-muted-foreground">Outstanding: <span className="font-semibold text-amber-700">{formatCurrency(outstanding)}</span></p>
+            <p className="text-xs text-muted-foreground">
+              Outstanding: <span className="font-semibold text-amber-700">{formatCurrency(outstanding)}</span>
+              {isPartialApproval && (
+                <> · Approved: <span className="font-semibold text-amber-700">{formatCurrency(approvedOutstanding)}</span></>
+              )}
+            </p>
           </CardHeader>
           <CardContent>
+            {isPartialApproval && (
+              <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm space-y-1 mb-4">
+                <p className="font-medium text-amber-800">⚠ Partial Payment Approved</p>
+                <p className="text-amber-700">
+                  Approved for payment: <strong>{formatCurrency(approvedCeiling)}</strong> of {formatCurrency(Number(bill.total_amount))} total.
+                  Balance pending approval: <strong>{formatCurrency(balancePendingApproval)}</strong>.
+                </p>
+                {bill.approved_amount_note && (
+                  <p className="text-amber-600 text-xs italic">Note: {bill.approved_amount_note}</p>
+                )}
+              </div>
+            )}
             <div className="grid sm:grid-cols-2 gap-4">
               <div className="space-y-1">
                 <Label>Amount (₹) *</Label>
@@ -580,7 +613,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                   type="number"
                   step="0.01"
                   min="0.01"
-                  max={outstanding}
+                  max={approvedOutstanding}
                   value={payAmount}
                   onChange={(e) => setPayAmount(e.target.value)}
                   placeholder="0.00"
@@ -604,6 +637,14 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               <div className="space-y-1">
                 <Label>Payment Date</Label>
                 <Input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
+              </div>
+              <div className="space-y-1 sm:col-span-2">
+                <Label>Note / Reason (optional)</Label>
+                <Input
+                  value={payNote}
+                  onChange={(e) => setPayNote(e.target.value)}
+                  placeholder="e.g. partial payment — balance on hold pending document verification"
+                />
               </div>
             </div>
 
@@ -634,6 +675,70 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 Vendor has no registered email — confirmation cannot be sent. Update vendor profile first.
               </p>
             )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Payment History */}
+      {chain && (chain.bill.vendor_bill_payments ?? []).length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <CreditCard className="h-4 w-4 text-muted-foreground" />
+              Payment History
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/30">
+                  <th className="px-4 py-2.5 text-left font-medium text-xs">Date</th>
+                  <th className="px-4 py-2.5 text-right font-medium text-xs">Amount</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-xs hidden sm:table-cell">Mode</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-xs hidden md:table-cell">Reference</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-xs hidden lg:table-cell">Recorded By</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-xs">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(chain.bill.vendor_bill_payments ?? [])
+                  .sort((a, b) => new Date(a.payment_date).getTime() - new Date(b.payment_date).getTime())
+                  .map((pmt, idx) => (
+                    <tr key={pmt.id} className={`border-b last:border-0 ${idx % 2 === 0 ? "" : "bg-muted/20"}`}>
+                      <td className="px-4 py-2.5 text-xs">{formatDate(pmt.payment_date)}</td>
+                      <td className="px-4 py-2.5 text-right font-semibold text-green-700">
+                        {formatCurrency(pmt.amount)}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground hidden sm:table-cell capitalize">
+                        {pmt.payment_mode.replace(/_/g, " ")}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs font-mono text-muted-foreground hidden md:table-cell">
+                        {pmt.payment_reference ?? "—"}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">
+                        {pmt.recorder?.full_name ?? "—"}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground italic">
+                        {pmt.notes ?? "—"}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t bg-muted/20">
+                  <td className="px-4 py-2.5 text-xs font-medium text-muted-foreground">Total Paid</td>
+                  <td className="px-4 py-2.5 text-right font-bold text-green-700">
+                    {formatCurrency(Number(bill.amount_paid ?? 0))}
+                  </td>
+                  <td colSpan={4} className="px-4 py-2.5 text-xs text-muted-foreground">
+                    {isPartialApproval
+                      ? `Balance approved: ${formatCurrency(approvedOutstanding)} · Pending approval: ${formatCurrency(balancePendingApproval)}`
+                      : `Outstanding: ${formatCurrency(outstanding)}`
+                    }
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
           </CardContent>
         </Card>
       )}

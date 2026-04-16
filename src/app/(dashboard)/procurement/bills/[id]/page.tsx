@@ -41,9 +41,17 @@ type ChainData = {
     payment_mode: string | null; payment_reference: string | null; payment_date: string | null;
     notes: string | null; invoice_file_url: string | null; invoice_signed_url: string | null;
     approved_at: string | null;
+    approved_amount: number | null;
+    approved_amount_note: string | null;
     creator: { id: string; full_name: string } | null;
     approver: { id: string; full_name: string } | null;
     vendor_id: string; po_id: string | null;
+    vendor_bill_payments?: Array<{
+      id: string; amount: number; payment_mode: string;
+      payment_reference: string | null; payment_date: string;
+      notes: string | null;
+      recorder: { id: string; full_name: string } | null;
+    }>;
   };
   vendor: {
     id: string; name: string; category: string; contact_name?: string;
@@ -188,6 +196,10 @@ export default function VendorBillDetailPage() {
 
   // Approval
   const [approveLoading, setApproveLoading] = useState(false);
+  const [approveDialog, setApproveDialog] = useState(false);
+  const [approveType, setApproveType] = useState<"full" | "partial">("full");
+  const [approveAmount, setApproveAmount] = useState("");
+  const [approveNote, setApproveNote] = useState("");
 
   // Rejection dialog
   const [rejectDialog, setRejectDialog] = useState(false);
@@ -285,18 +297,44 @@ export default function VendorBillDetailPage() {
 
   const handleApprove = async () => {
     setApproveLoading(true);
+    const body: Record<string, unknown> = { action: "approve" };
+    if (approveType === "partial") {
+      const amt = parseFloat(approveAmount);
+      if (!approveAmount || isNaN(amt) || amt <= 0) {
+        toast.error("Enter a valid partial amount");
+        setApproveLoading(false);
+        return;
+      }
+      body.approved_amount = amt;
+      body.approved_amount_note = approveNote.trim() || null;
+    }
     try {
       const res = await fetch(`/api/procurement/bills/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "approve" }),
+        body: JSON.stringify(body),
       });
       const json = await res.json();
-      if (!res.ok) {
-        toast.error(json.error || "Failed to approve invoice");
-        return;
-      }
-      toast.success("Invoice approved");
+      if (!res.ok) { toast.error(json.error || "Failed to approve invoice"); return; }
+      toast.success(approveType === "partial" ? "Invoice partially approved" : "Invoice approved");
+      setApproveDialog(false);
+      await fetchAll();
+    } finally {
+      setApproveLoading(false);
+    }
+  };
+
+  const handleApproveBalance = async () => {
+    setApproveLoading(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "approve_balance" }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Failed"); return; }
+      toast.success("Full balance approved for payment");
       await fetchAll();
     } finally {
       setApproveLoading(false);
@@ -512,7 +550,12 @@ export default function VendorBillDetailPage() {
                 <XCircle className="h-4 w-4 mr-1" /> Reject
               </Button>
               <Button
-                onClick={handleApprove}
+                onClick={() => {
+                  setApproveType("full");
+                  setApproveAmount("");
+                  setApproveNote("");
+                  setApproveDialog(true);
+                }}
                 className="bg-green-600 hover:bg-green-700"
                 disabled={approveLoading || rejectLoading}
               >
@@ -527,6 +570,21 @@ export default function VendorBillDetailPage() {
               className="bg-green-600 hover:bg-green-700"
             >
               <CreditCard className="h-4 w-4 mr-1" /> Record Payment
+            </Button>
+          )}
+          {bill.approval_status === "approved" &&
+            bill.approved_amount !== null &&
+            Number(bill.approved_amount) < Number(bill.total_amount) &&
+            canApprove && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-amber-700 border-amber-300 hover:bg-amber-50"
+              onClick={handleApproveBalance}
+              disabled={approveLoading}
+            >
+              {approveLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Approve Balance
             </Button>
           )}
           {bill.payment_status !== "unpaid" && (currentUserRole === "accounts" || currentUserRole === "admin") && (
@@ -689,6 +747,12 @@ export default function VendorBillDetailPage() {
               <span className="text-sm text-muted-foreground">Invoice Amount</span>
               <span className="text-xl font-bold">{formatCurrency(bill.total_amount)}</span>
             </div>
+            {bill.approved_amount !== null && Number(bill.approved_amount) < Number(bill.total_amount) && (
+              <div className="flex justify-between text-sm">
+                <span className="text-amber-700 font-medium">Approved for Payment</span>
+                <span className="font-medium text-amber-700">{formatCurrency(Number(bill.approved_amount))}</span>
+              </div>
+            )}
             {hasAdvanceCredit && (
               <div className="flex justify-between text-sm">
                 <span className="text-muted-foreground text-orange-700">
@@ -709,6 +773,22 @@ export default function VendorBillDetailPage() {
               <span className="text-muted-foreground">Amount Paid</span>
               <span className="font-medium text-green-700">{formatCurrency(bill.amount_paid)}</span>
             </div>
+            {bill.approved_amount !== null && Number(bill.approved_amount) < Number(bill.total_amount) && (
+              <>
+                <div className="flex justify-between text-sm">
+                  <span className="text-teal-700 font-medium">Balance Approved</span>
+                  <span className="font-medium text-teal-700">
+                    {formatCurrency(Math.max(0, Number(bill.approved_amount) - Number(bill.amount_paid)))}
+                  </span>
+                </div>
+                <div className="flex justify-between text-sm">
+                  <span className="text-amber-700 font-medium">Pending Approval</span>
+                  <span className="font-medium text-amber-700">
+                    {formatCurrency(Number(bill.total_amount) - Number(bill.approved_amount))}
+                  </span>
+                </div>
+              </>
+            )}
             <div className="flex justify-between text-sm border-t pt-2">
               <span className="font-medium">Balance Due</span>
               <span className={`font-bold ${remaining > 0 ? "text-red-600" : "text-green-600"}`}>
@@ -736,6 +816,11 @@ export default function VendorBillDetailPage() {
                   )}
                 </div>
               </>
+            )}
+            {bill.approved_amount_note && (
+              <p className="text-xs text-amber-600 italic border-t pt-2">
+                Approval note: {bill.approved_amount_note}
+              </p>
             )}
           </CardContent>
         </Card>
@@ -1107,6 +1192,70 @@ export default function VendorBillDetailPage() {
         </Card>
       )}
 
+      {/* Payment History */}
+      {chain && (chain.bill.vendor_bill_payments ?? []).length > 0 && (
+        <Card>
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base flex items-center gap-2">
+              <CreditCard className="h-4 w-4 text-muted-foreground" />
+              Payment History
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/30">
+                  <th className="px-4 py-2.5 text-left font-medium text-xs">Date</th>
+                  <th className="px-4 py-2.5 text-right font-medium text-xs">Amount</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-xs hidden sm:table-cell">Mode</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-xs hidden md:table-cell">Reference</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-xs hidden lg:table-cell">Recorded By</th>
+                  <th className="px-4 py-2.5 text-left font-medium text-xs">Note</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(chain.bill.vendor_bill_payments ?? [])
+                  .sort((a, b) => new Date(a.payment_date).getTime() - new Date(b.payment_date).getTime())
+                  .map((pmt, idx) => (
+                    <tr key={pmt.id} className={`border-b last:border-0 ${idx % 2 === 0 ? "" : "bg-muted/20"}`}>
+                      <td className="px-4 py-2.5 text-xs">{formatDate(pmt.payment_date)}</td>
+                      <td className="px-4 py-2.5 text-right font-semibold text-green-700">
+                        {formatCurrency(pmt.amount)}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground hidden sm:table-cell capitalize">
+                        {pmt.payment_mode.replace(/_/g, " ")}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs font-mono text-muted-foreground hidden md:table-cell">
+                        {pmt.payment_reference ?? "—"}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">
+                        {pmt.recorder?.full_name ?? "—"}
+                      </td>
+                      <td className="px-4 py-2.5 text-xs text-muted-foreground italic">
+                        {pmt.notes ?? "—"}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t bg-muted/20">
+                  <td className="px-4 py-2.5 text-xs font-medium text-muted-foreground">Total Paid</td>
+                  <td className="px-4 py-2.5 text-right font-bold text-green-700">
+                    {formatCurrency(Number(bill.amount_paid ?? 0))}
+                  </td>
+                  <td colSpan={4} className="px-4 py-2.5 text-xs text-muted-foreground">
+                    {bill.approved_amount !== null && Number(bill.approved_amount) < Number(bill.total_amount)
+                      ? `Balance approved: ${formatCurrency(Math.max(0, Number(bill.approved_amount) - Number(bill.amount_paid)))} · Pending approval: ${formatCurrency(Number(bill.total_amount) - Number(bill.approved_amount))}`
+                      : `Outstanding: ${formatCurrency(Math.max(0, Number(bill.total_amount) - Number(bill.amount_paid)))}`
+                    }
+                  </td>
+                </tr>
+              </tfoot>
+            </table>
+          </CardContent>
+        </Card>
+      )}
+
       {/* Record Payment Dialog */}
       <Dialog open={paymentDialog} onOpenChange={setPaymentDialog}>
         <DialogContent>
@@ -1168,6 +1317,91 @@ export default function VendorBillDetailPage() {
             >
               {paymentLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Record Payment
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Approve Invoice Dialog */}
+      <Dialog open={approveDialog} onOpenChange={setApproveDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Approve Invoice</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Invoice total: <strong>{formatCurrency(Number(bill.total_amount))}</strong>
+            </p>
+            <div className="space-y-2">
+              <Label>Approval Type</Label>
+              <div className="flex gap-3">
+                <button
+                  type="button"
+                  onClick={() => setApproveType("full")}
+                  className={`flex-1 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${
+                    approveType === "full"
+                      ? "border-green-500 bg-green-50 text-green-800"
+                      : "border-muted hover:bg-muted/50"
+                  }`}
+                >
+                  Approve Full Amount
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setApproveType("partial")}
+                  className={`flex-1 rounded-lg border px-4 py-2.5 text-sm font-medium transition-colors ${
+                    approveType === "partial"
+                      ? "border-amber-500 bg-amber-50 text-amber-800"
+                      : "border-muted hover:bg-muted/50"
+                  }`}
+                >
+                  Approve Partial Amount
+                </button>
+              </div>
+            </div>
+            {approveType === "partial" && (
+              <>
+                <div className="space-y-1.5">
+                  <Label>Approved Amount (₹) <span className="text-red-500">*</span></Label>
+                  <Input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    max={Number(bill.total_amount)}
+                    placeholder="0.00"
+                    value={approveAmount}
+                    onChange={(e) => setApproveAmount(e.target.value)}
+                  />
+                  {approveAmount && !isNaN(parseFloat(approveAmount)) && (
+                    <p className="text-xs text-amber-700">
+                      Approving {formatCurrency(parseFloat(approveAmount))} of {formatCurrency(Number(bill.total_amount))}
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Reason (optional)</Label>
+                  <Textarea
+                    placeholder="e.g. partial approval pending receipt verification..."
+                    value={approveNote}
+                    onChange={(e) => setApproveNote(e.target.value)}
+                    rows={2}
+                  />
+                </div>
+                <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
+                  Accounts team can only record payment up to the approved amount. The balance will remain pending until fully approved.
+                </div>
+              </>
+            )}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setApproveDialog(false)}>Cancel</Button>
+            <Button
+              className="bg-green-600 hover:bg-green-700"
+              onClick={handleApprove}
+              disabled={approveLoading}
+            >
+              {approveLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              {approveType === "partial" ? "Approve Partial" : "Approve Invoice"}
             </Button>
           </DialogFooter>
         </DialogContent>
