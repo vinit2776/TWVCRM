@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState, useEffect, useCallback } from "react";
+import { use, useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -72,6 +72,7 @@ export default function ContractDetailPage({
   const [checkingSigningStatus, setCheckingSigningStatus] = useState(false);
   const [copiedLessor, setCopiedLessor] = useState(false);
   const [copiedLessee, setCopiedLessee] = useState(false);
+  const signedDocInputRef = useRef<HTMLInputElement>(null);
 
   const copyToClipboard = (text: string, who: "lessor" | "lessee") => {
     navigator.clipboard.writeText(text);
@@ -782,16 +783,7 @@ export default function ContractDetailPage({
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => {
-                        const input = document.createElement("input");
-                        input.type = "file";
-                        input.accept = ".pdf,.jpg,.jpeg,.png";
-                        input.onchange = (e) => {
-                          const file = (e.target as HTMLInputElement).files?.[0];
-                          if (file) handleSignedDocUpload(file);
-                        };
-                        input.click();
-                      }}
+                      onClick={() => signedDocInputRef.current?.click()}
                       disabled={uploadingSignedDoc}
                     >
                       <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
@@ -803,15 +795,7 @@ export default function ContractDetailPage({
                 <div
                   className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-colors"
                   onClick={() => {
-                    if (uploadingSignedDoc) return;
-                    const input = document.createElement("input");
-                    input.type = "file";
-                    input.accept = ".pdf,.jpg,.jpeg,.png";
-                    input.onchange = (e) => {
-                      const file = (e.target as HTMLInputElement).files?.[0];
-                      if (file) handleSignedDocUpload(file);
-                    };
-                    input.click();
+                    if (!uploadingSignedDoc) signedDocInputRef.current?.click();
                   }}
                 >
                   {uploadingSignedDoc ? (
@@ -1094,6 +1078,19 @@ export default function ContractDetailPage({
           </Card>
         </div>
       </div>
+
+      {/* Hidden persistent file input for signed contract upload/replace — avoids detached-input accumulation bug */}
+      <input
+        ref={signedDocInputRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleSignedDocUpload(file);
+          e.target.value = "";
+        }}
+      />
 
       {/* Terminate Dialog */}
       <Dialog open={terminateOpen} onOpenChange={setTerminateOpen}>
