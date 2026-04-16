@@ -60,25 +60,53 @@ export function LeadDocumentsTab({ leadId }: LeadDocumentsTabProps) {
     if (!file) return;
 
     setUploading(true);
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("title", file.name);
-    formData.append("lead_id", leadId);
+    try {
+      // Step 1: get signed upload URL (bypasses Vercel 4.5MB body limit)
+      const urlRes = await fetch("/api/documents/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ fileName: file.name, mimeType: file.type }),
+      });
+      if (!urlRes.ok) {
+        const urlErr = await urlRes.json().catch(() => null);
+        throw new Error(urlErr?.error || "Failed to get upload URL");
+      }
+      const { token, path: filePath } = await urlRes.json();
 
-    const res = await fetch("/api/documents", {
-      method: "POST",
-      body: formData,
-    });
+      // Step 2: upload directly to Supabase Storage via browser client
+      const supabase = createClient();
+      const { error: storageError } = await supabase.storage
+        .from("crm-documents")
+        .uploadToSignedUrl(filePath, token, file, { contentType: file.type || "application/octet-stream" });
+      if (storageError) throw new Error(storageError.message);
 
-    setUploading(false);
-    if (res.ok) {
+      // Step 3: register document record + link to lead
+      const regRes = await fetch("/api/documents/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: file.name,
+          fileName: file.name,
+          filePath,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          category: "general",
+          leadId,
+        }),
+      });
+      if (!regRes.ok) {
+        const regErr = await regRes.json().catch(() => null);
+        throw new Error(regErr?.error || "Failed to register document");
+      }
+
       toast.success("Document uploaded and linked to lead");
       fetchDocuments();
-    } else {
-      const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to upload document");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to upload document");
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
     }
-    if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
   const handleDownload = async (doc: CrmDocument) => {
