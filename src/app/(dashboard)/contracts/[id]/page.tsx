@@ -87,6 +87,10 @@ export default function ContractDetailPage({
   const [kycStatus, setKycStatus] = useState<{ allApproved: boolean; total: number; approved: number }>({ allApproved: true, total: 0, approved: 0 });
   const [showOverride, setShowOverride] = useState(false);
 
+  const handleKycStatusChange = useCallback((allApproved: boolean, total: number, approved: number) => {
+    setKycStatus({ allApproved, total, approved });
+  }, []);
+
   const fetchContract = useCallback(async () => {
     setLoading(true);
     const res = await fetch(`/api/contracts/${id}`);
@@ -625,10 +629,7 @@ export default function ContractDetailPage({
           {/* KYC Documents — Upload & Approval */}
           <ContractDocumentsTab
             contractId={id}
-            onKycStatusChange={(allApproved, total, approved) => {
-              // Store KYC status for activation gate
-              setKycStatus({ allApproved, total, approved });
-            }}
+            onKycStatusChange={handleKycStatusChange}
           />
 
           {/* Line Items Table */}
