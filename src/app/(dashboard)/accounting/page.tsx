@@ -212,8 +212,8 @@ export default function AccountingPage() {
     fetchData();
   }, [fetchData]);
 
-  const fetchVendorBills = useCallback(async () => {
-    if (billsLoaded) return;
+  const fetchVendorBills = useCallback(async (force = false) => {
+    if (billsLoaded && !force) return;
     setBillsLoading(true);
     const res = await fetch("/api/procurement/bills?approval_status=approved&payment_status_neq=paid&limit=50");
     if (res.ok) {
@@ -223,6 +223,12 @@ export default function AccountingPage() {
     }
     setBillsLoading(false);
   }, [billsLoaded]);
+
+  // Auto-fetch vendor bills when tab is already active on page load (e.g. ?tab=vendor-payments)
+  useEffect(() => {
+    if (activeTab === "vendor-payments") fetchVendorBills();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const handleMonthChange = (newYear: number, newMonth: number) => {
     setYear(newYear);
@@ -314,7 +320,7 @@ export default function AccountingPage() {
               <TabsTrigger value="petty-cash">
                 <Banknote className="h-3.5 w-3.5 mr-1" />Petty Cash
               </TabsTrigger>
-              <TabsTrigger value="vendor-payments" onClick={fetchVendorBills}>
+              <TabsTrigger value="vendor-payments" onClick={() => fetchVendorBills()}>
                 <Building2 className="h-3.5 w-3.5 mr-1" />Vendor Payments
                 {vendorBills.length > 0 && (
                   <span className="ml-1.5 bg-primary text-primary-foreground text-[10px] font-semibold px-1.5 py-0.5 rounded-full leading-none">
@@ -381,88 +387,8 @@ export default function AccountingPage() {
               <PettyCashIssuance />
             </TabsContent>
 
-            {/* Tab 6: Vendor Payments */}
-            <TabsContent value="vendor-payments" className="mt-4">
-              {billsLoading ? (
-                <div className="space-y-2">
-                  {[...Array(5)].map((_, i) => (
-                    <div key={i} className="animate-pulse bg-muted rounded-lg h-14" />
-                  ))}
-                </div>
-              ) : vendorBills.length === 0 ? (
-                <EmptyState
-                  icon={Building2}
-                  title="No pending vendor payments"
-                  description="All approved invoices have been paid, or no invoices are pending payment."
-                />
-              ) : (
-                <div className="rounded-lg border overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="bg-muted/30 border-b">
-                        <th className="px-4 py-3 text-left font-medium">Bill #</th>
-                        <th className="px-4 py-3 text-left font-medium">Vendor</th>
-                        <th className="px-4 py-3 text-left font-medium hidden md:table-cell">PO</th>
-                        <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Invoice Date</th>
-                        <th className="px-4 py-3 text-left font-medium">Due Date</th>
-                        <th className="px-4 py-3 text-right font-medium">Outstanding</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {vendorBills.map((bill) => {
-                        const outstanding = Number(bill.total_amount) - Number(bill.amount_paid ?? 0);
-                        const today = new Date().toISOString().split("T")[0];
-                        const isOverdue = bill.due_date && bill.due_date < today;
-                        return (
-                          <tr
-                            key={bill.id}
-                            className="border-b last:border-0 hover:bg-muted/40 cursor-pointer"
-                            onClick={() => router.push(`/accounting/vendor-payments/${bill.id}`)}
-                          >
-                            <td className="px-4 py-3 font-mono text-xs font-medium">{bill.bill_number}</td>
-                            <td className="px-4 py-3">
-                              <p className="font-medium truncate max-w-[160px]">
-                                {(bill.procurement_vendors as { name: string } | null)?.name ?? "—"}
-                              </p>
-                            </td>
-                            <td className="px-4 py-3 hidden md:table-cell text-muted-foreground text-xs">
-                              {(bill.purchase_orders as { po_number: string } | null)?.po_number ?? "—"}
-                            </td>
-                            <td className="px-4 py-3 hidden sm:table-cell text-muted-foreground text-xs">
-                              {new Date(bill.invoice_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
-                            </td>
-                            <td className="px-4 py-3 text-xs">
-                              {bill.due_date ? (
-                                <span className={isOverdue ? "text-red-600 font-semibold flex items-center gap-1" : "text-muted-foreground"}>
-                                  {isOverdue && <AlertCircle className="h-3 w-3" />}
-                                  {new Date(bill.due_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
-                                  {isOverdue && " (overdue)"}
-                                </span>
-                              ) : (
-                                <span className="text-muted-foreground">—</span>
-                              )}
-                            </td>
-                            <td className="px-4 py-3 text-right font-semibold">
-                              ₹{outstanding.toLocaleString("en-IN", { minimumFractionDigits: 0 })}
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                    <tfoot>
-                      <tr className="bg-muted/20 border-t">
-                        <td colSpan={5} className="px-4 py-2.5 text-xs text-muted-foreground font-medium">
-                          {vendorBills.length} bill{vendorBills.length !== 1 ? "s" : ""} pending payment
-                        </td>
-                        <td className="px-4 py-2.5 text-right font-bold text-sm">
-                          ₹{vendorBills.reduce((s, b) => s + Math.max(0, Number(b.total_amount) - Number(b.amount_paid ?? 0)), 0).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
-                        </td>
-                      </tr>
-                    </tfoot>
-                  </table>
-                </div>
-              )}
-            </TabsContent>
+            {/* Tab 6: placeholder — content rendered outside summary gate below */}
+            <TabsContent value="vendor-payments" />
           </Tabs>
         </>
       ) : (
@@ -471,6 +397,91 @@ export default function AccountingPage() {
           title="No data"
           description="Could not load accounting data for this period"
         />
+      )}
+
+      {/* Vendor Payments — always rendered regardless of monthly summary state */}
+      {activeTab === "vendor-payments" && (
+        <div className="mt-2">
+          {billsLoading ? (
+            <div className="space-y-2">
+              {[...Array(5)].map((_, i) => (
+                <div key={i} className="animate-pulse bg-muted rounded-lg h-14" />
+              ))}
+            </div>
+          ) : vendorBills.length === 0 ? (
+            <EmptyState
+              icon={Building2}
+              title="No pending vendor payments"
+              description="All approved invoices have been paid, or no invoices are pending payment."
+            />
+          ) : (
+            <div className="rounded-lg border overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="bg-muted/30 border-b">
+                    <th className="px-4 py-3 text-left font-medium">Bill #</th>
+                    <th className="px-4 py-3 text-left font-medium">Vendor</th>
+                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">PO</th>
+                    <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Invoice Date</th>
+                    <th className="px-4 py-3 text-left font-medium">Due Date</th>
+                    <th className="px-4 py-3 text-right font-medium">Outstanding</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {vendorBills.map((bill) => {
+                    const outstanding = Number(bill.total_amount) - Number(bill.amount_paid ?? 0);
+                    const today = new Date().toISOString().split("T")[0];
+                    const isOverdue = bill.due_date && bill.due_date < today;
+                    return (
+                      <tr
+                        key={bill.id}
+                        className="border-b last:border-0 hover:bg-muted/40 cursor-pointer"
+                        onClick={() => router.push(`/accounting/vendor-payments/${bill.id}`)}
+                      >
+                        <td className="px-4 py-3 font-mono text-xs font-medium">{bill.bill_number}</td>
+                        <td className="px-4 py-3">
+                          <p className="font-medium truncate max-w-[160px]">
+                            {(bill.procurement_vendors as { name: string } | null)?.name ?? "—"}
+                          </p>
+                        </td>
+                        <td className="px-4 py-3 hidden md:table-cell text-muted-foreground text-xs">
+                          {(bill.purchase_orders as { po_number: string } | null)?.po_number ?? "—"}
+                        </td>
+                        <td className="px-4 py-3 hidden sm:table-cell text-muted-foreground text-xs">
+                          {new Date(bill.invoice_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                        </td>
+                        <td className="px-4 py-3 text-xs">
+                          {bill.due_date ? (
+                            <span className={isOverdue ? "text-red-600 font-semibold flex items-center gap-1" : "text-muted-foreground"}>
+                              {isOverdue && <AlertCircle className="h-3 w-3" />}
+                              {new Date(bill.due_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                              {isOverdue && " (overdue)"}
+                            </span>
+                          ) : (
+                            <span className="text-muted-foreground">—</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right font-semibold">
+                          ₹{outstanding.toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot>
+                  <tr className="bg-muted/20 border-t">
+                    <td colSpan={5} className="px-4 py-2.5 text-xs text-muted-foreground font-medium">
+                      {vendorBills.length} bill{vendorBills.length !== 1 ? "s" : ""} pending payment
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-bold text-sm">
+                      ₹{vendorBills.reduce((s, b) => s + Math.max(0, Number(b.total_amount) - Number(b.amount_paid ?? 0)), 0).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                    </td>
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
+          )}
+        </div>
       )}
 
       {/* Export dialog */}
