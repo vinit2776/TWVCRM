@@ -305,6 +305,7 @@ export interface Proposal {
   deposit_payment_received_at?: string;
   deposit_payment_amount?: number;
   deposit_payment_reference?: string;
+  deposit_payment_screenshot_url?: string;
 }
 
 // ==========================================

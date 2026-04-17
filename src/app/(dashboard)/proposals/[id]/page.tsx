@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState, useEffect, useCallback } from "react";
+import { use, useState, useEffect, useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -13,12 +13,25 @@ import {
   Clock,
   Mail,
   AlertTriangle,
+  Banknote,
+  Upload,
+  X,
+  Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/shared/loading-skeleton";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   PROPOSAL_STATUS_LABELS,
   PROPOSAL_STATUS_COLORS,
@@ -43,6 +56,15 @@ export default function ProposalDetailPage({
 
   // Email dialog state
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
+
+  // Manual deposit payment dialog state
+  const [manualPayDialogOpen, setManualPayDialogOpen] = useState(false);
+  const [manualPayAmount, setManualPayAmount] = useState("");
+  const [manualPayRef, setManualPayRef] = useState("");
+  const [manualPayNotes, setManualPayNotes] = useState("");
+  const [manualPayFile, setManualPayFile] = useState<File | null>(null);
+  const [manualPaySubmitting, setManualPaySubmitting] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchProposal = useCallback(async () => {
     setLoading(true);
@@ -110,6 +132,48 @@ export default function ProposalDetailPage({
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || "Failed to update proposal status");
+    }
+  };
+
+  const openManualPayDialog = () => {
+    setManualPayAmount(String(proposal?.security_deposit_amount || ""));
+    setManualPayRef("");
+    setManualPayNotes("");
+    setManualPayFile(null);
+    setManualPayDialogOpen(true);
+  };
+
+  const handleManualPaySubmit = async () => {
+    if (!proposal) return;
+    const amt = parseFloat(manualPayAmount);
+    if (isNaN(amt) || amt <= 0) {
+      toast.error("Please enter a valid payment amount");
+      return;
+    }
+    setManualPaySubmitting(true);
+    try {
+      const fd = new FormData();
+      fd.append("amount", String(amt));
+      if (manualPayRef.trim()) fd.append("reference", manualPayRef.trim());
+      if (manualPayNotes.trim()) fd.append("notes", manualPayNotes.trim());
+      if (manualPayFile) fd.append("payment_proof", manualPayFile);
+
+      const res = await fetch(`/api/proposals/${id}/deposit-payment`, {
+        method: "POST",
+        body: fd,
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success("Deposit payment recorded. Confirmation email sent to customer.");
+        setManualPayDialogOpen(false);
+        fetchProposal();
+      } else {
+        toast.error(json.error || "Failed to record payment");
+      }
+    } catch {
+      toast.error("Unexpected error recording payment");
+    } finally {
+      setManualPaySubmitting(false);
     }
   };
 
@@ -679,9 +743,26 @@ export default function ProposalDetailPage({
                     )}
                     {proposal.deposit_payment_reference && (
                       <div className="flex justify-between">
-                        <span className="text-green-700">Reference</span>
+                        <span className="text-green-700">Reference / UTR</span>
                         <span className="font-mono text-xs text-green-800">{proposal.deposit_payment_reference}</span>
                       </div>
+                    )}
+                    {proposal.deposit_payment_received_at && (
+                      <div className="flex justify-between">
+                        <span className="text-green-700">Received</span>
+                        <span className="text-green-800 text-xs">{formatDate(proposal.deposit_payment_received_at)}</span>
+                      </div>
+                    )}
+                    {proposal.deposit_payment_screenshot_url && (
+                      <a
+                        href={proposal.deposit_payment_screenshot_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="flex items-center gap-1.5 text-xs text-green-700 underline mt-1"
+                      >
+                        <Upload className="h-3 w-3" />
+                        View payment proof
+                      </a>
                     )}
                   </>
                 )}
@@ -702,6 +783,19 @@ export default function ProposalDetailPage({
                     }}
                   >
                     Send Deposit Link
+                  </Button>
+                )}
+
+                {/* Manual payment recording */}
+                {proposal.deposit_payment_status === "pending" && ["sent", "viewed", "accepted"].includes(proposal.status) && (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="w-full mt-1 border-amber-300 text-amber-800 hover:bg-amber-50"
+                    onClick={openManualPayDialog}
+                  >
+                    <Banknote className="mr-2 h-3.5 w-3.5" />
+                    Record Bank Transfer
                   </Button>
                 )}
 
@@ -798,6 +892,115 @@ export default function ProposalDetailPage({
         }}
         onSuccess={fetchProposal}
       />
+
+      {/* Manual Deposit Payment Dialog */}
+      <Dialog open={manualPayDialogOpen} onOpenChange={setManualPayDialogOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Banknote className="h-5 w-5 text-amber-600" />
+              Record Bank Transfer Payment
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">{proposal.proposal_number} — Security Deposit</p>
+          </DialogHeader>
+
+          <div className="space-y-4">
+            <div className="space-y-1.5">
+              <Label htmlFor="mp-amount">Amount Received (₹) <span className="text-destructive">*</span></Label>
+              <Input
+                id="mp-amount"
+                type="number"
+                min={0}
+                step={0.01}
+                value={manualPayAmount}
+                onChange={(e) => setManualPayAmount(e.target.value)}
+                placeholder="e.g. 22000"
+              />
+              <p className="text-xs text-muted-foreground">
+                Expected deposit: ₹{Number(proposal.security_deposit_amount || 0).toLocaleString("en-IN")}
+              </p>
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="mp-ref">Payment Reference / UTR</Label>
+              <Input
+                id="mp-ref"
+                value={manualPayRef}
+                onChange={(e) => setManualPayRef(e.target.value)}
+                placeholder="e.g. UTR12345678 or transaction ID"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="mp-notes">Notes (optional)</Label>
+              <Textarea
+                id="mp-notes"
+                value={manualPayNotes}
+                onChange={(e) => setManualPayNotes(e.target.value)}
+                placeholder="Any additional notes about the payment"
+                rows={2}
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <Label>Payment Proof (screenshot / PDF)</Label>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="image/*,application/pdf"
+                className="hidden"
+                onChange={(e) => setManualPayFile(e.target.files?.[0] || null)}
+              />
+              {manualPayFile ? (
+                <div className="flex items-center justify-between rounded-md border px-3 py-2 text-sm">
+                  <span className="truncate text-muted-foreground">{manualPayFile.name}</span>
+                  <button
+                    type="button"
+                    onClick={() => { setManualPayFile(null); if (fileInputRef.current) fileInputRef.current.value = ""; }}
+                    className="ml-2 text-muted-foreground hover:text-destructive"
+                  >
+                    <X className="h-4 w-4" />
+                  </button>
+                </div>
+              ) : (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={() => fileInputRef.current?.click()}
+                >
+                  <Upload className="mr-2 h-4 w-4" />
+                  Upload proof of payment
+                </Button>
+              )}
+              <p className="text-xs text-muted-foreground">Optional — JPEG, PNG or PDF, max 10 MB</p>
+            </div>
+
+            <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+              A confirmation email will automatically be sent to the customer once you save.
+            </div>
+
+            <div className="flex justify-end gap-2 pt-1">
+              <Button
+                variant="outline"
+                onClick={() => setManualPayDialogOpen(false)}
+                disabled={manualPaySubmitting}
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleManualPaySubmit}
+                disabled={manualPaySubmitting}
+                className="bg-amber-600 hover:bg-amber-700 text-white"
+              >
+                {manualPaySubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                {manualPaySubmitting ? "Saving…" : "Mark as Paid & Notify Customer"}
+              </Button>
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
