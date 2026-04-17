@@ -101,10 +101,20 @@ export function EmailDocumentDialog({
       });
 
       if (res.ok) {
+        const json = await res.json().catch(() => null);
         const docLabel = documentType === "proposal" ? "Proposal" : documentType === "contract" ? "Agreement" : "Invoice";
         toast.success(
           `${docLabel} sent to ${recipients.length} recipient${recipients.length > 1 ? "s" : ""}`
         );
+        // Warn if deposit link creation failed — user needs to generate it manually
+        if (json?.deposit_link_failed) {
+          setTimeout(() => {
+            toast.warning(
+              "⚠️ Deposit payment link could not be created — please generate it manually from the proposal page.",
+              { duration: 8000 }
+            );
+          }, 500);
+        }
         onOpenChange(false);
         onSuccess?.();
       } else {

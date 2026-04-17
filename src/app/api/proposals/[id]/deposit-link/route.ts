@@ -25,8 +25,11 @@ export async function POST(
 
   if (!proposal) return NextResponse.json({ error: "Proposal not found" }, { status: 404 });
 
-  if (proposal.status !== "accepted") {
-    return NextResponse.json({ error: "Proposal must be accepted before collecting deposit" }, { status: 400 });
+  // Allow deposit link generation for any status >= "sent"
+  // (draft proposals haven't been shared with the customer yet)
+  const ALLOWED_STATUSES = ["sent", "viewed", "accepted"];
+  if (!ALLOWED_STATUSES.includes(proposal.status)) {
+    return NextResponse.json({ error: "Proposal must be sent to the customer before generating a deposit link" }, { status: 400 });
   }
 
   if (proposal.deposit_payment_status !== "pending") {

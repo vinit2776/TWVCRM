@@ -686,7 +686,7 @@ export default function ProposalDetailPage({
                   </>
                 )}
 
-                {proposal.deposit_payment_status === "pending" && proposal.status === "accepted" && !proposal.deposit_razorpay_link_url && (
+                {proposal.deposit_payment_status === "pending" && ["sent", "viewed", "accepted"].includes(proposal.status) && !proposal.deposit_razorpay_link_url && (
                   <Button
                     size="sm"
                     className="w-full mt-2"

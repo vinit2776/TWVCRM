@@ -87,6 +87,7 @@ export async function POST(
   // The deposit link is the primary payment sent with the proposal.
   // Monthly charge link is generated separately (manual trigger).
   let depositLinkUrl: string | null = proposal.deposit_razorpay_link_url || null;
+  let depositLinkFailed = false;
   const depositAmount = Number(proposal.security_deposit_amount || 0);
   const hasDeposit = depositAmount > 0 && proposal.deposit_payment_status === "pending";
 
@@ -152,10 +153,12 @@ export async function POST(
         } else {
           const rzpErr = await rzpRes.json().catch(() => null);
           console.error("[proposal email] Razorpay deposit link creation failed:", rzpErr);
+          depositLinkFailed = true;
         }
       }
     } catch (err) {
       console.error("[proposal email] Razorpay error:", err);
+      depositLinkFailed = true;
     }
   }
 
@@ -253,6 +256,7 @@ export async function POST(
     return NextResponse.json({
       message: "Email sent successfully",
       deposit_link_url: depositLinkUrl,
+      deposit_link_failed: depositLinkFailed,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
