@@ -50,12 +50,13 @@ export const EMAIL_REPLY_TO = "space@theworkvilla.com";
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 function trackEmail(success: boolean) {
-  createAdminClient()
-    .then((client) => {
-      const today = new Date().toISOString().slice(0, 10);
-      void client.rpc("increment_email_count", { p_date: today, p_success: success });
-    })
-    .catch(() => {});
+  try {
+    const client = createAdminClient();
+    const today = new Date().toISOString().slice(0, 10);
+    void client.rpc("increment_email_count", { p_date: today, p_success: success });
+  } catch {
+    // non-fatal
+  }
 }
 
 // ─── Unified send interface ──────────────────────────────────────────────────
