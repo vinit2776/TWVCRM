@@ -326,7 +326,12 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       {/* Invoices Section */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-base">Proforma Invoices</CardTitle>
+          <div>
+            <CardTitle className="text-base">Proforma Invoices</CardTitle>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              For adhoc or additional charges only — not for security deposit or monthly rentals
+            </p>
+          </div>
           <Button size="sm" onClick={() => setInvoiceFormOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
             New Invoice
