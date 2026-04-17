@@ -5,10 +5,11 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, Pencil, ShieldCheck, ShieldOff, Upload,
-  Building2, Phone, Mail, MapPin, CreditCard, FileText,
-  Banknote, X, Check, Plus, Tag, ExternalLink,
-  TrendingUp, TrendingDown, Minus, BarChart2, AlertCircle,
+  Building2, CreditCard, FileText,
+  Banknote, Check, Tag, ExternalLink,
+  BarChart2, AlertCircle, ShoppingCart, ChevronRight, ChevronDown,
 } from "lucide-react";
+import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -177,12 +178,35 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   const [pricesLoading, setPricesLoading] = useState(false);
 
   // Activity & Insights
+  type PoDisplayRow = {
+    id: string;
+    po_number: string;
+    po_type: string;
+    status: string;
+    total_ordered_amount: number | null;
+    ordered_at: string | null;
+    created_at: string;
+    pr_id: string | null;
+    pr: { pr_number: string; department: string } | null;
+    item_count: number;
+    top_items: string[];
+  };
+  type MonthBucket = {
+    label: string;
+    amount: number;
+    year: number;
+    month: number;
+    start: string;
+    end: string;
+    count: number;
+  };
   type InsightsData = {
-    spendByMonth: { label: string; amount: number }[];
+    spendByMonth: MonthBucket[];
     totalPoValue: number;
     totalPoCount: number;
     poStatusCounts: Record<string, number>;
-    recentPos: Array<{ id: string; po_number: string; status: string; total_ordered_amount: number | null; created_at: string }>;
+    recentPos: PoDisplayRow[];
+    allPosForDisplay: PoDisplayRow[];
     topItems: Array<{ name: string; qty: number; value: number }>;
     totalBilled: number;
     totalPaid: number;
@@ -195,6 +219,8 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   };
   const [insights, setInsights] = useState<InsightsData | null>(null);
   const [insightsLoading, setInsightsLoading] = useState(false);
+  const [drillMonth, setDrillMonth] = useState<MonthBucket | null>(null);
+  const [poFilter, setPoFilter] = useState<string>("all");
 
   const emptyForm = {
     name: "", category: "general" as VendorCategory,
@@ -395,6 +421,12 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
             Price History
             {prices.length > 0 && (
               <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{prices.length}</Badge>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="po-analytics" onClick={fetchInsights}>
+            PO Analytics
+            {insights && (
+              <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{insights.totalPoCount}</Badge>
             )}
           </TabsTrigger>
           <TabsTrigger value="activity" onClick={fetchInsights}>
@@ -647,6 +679,298 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
           </Card>
         </TabsContent>
 
+        {/* PO Analytics Tab */}
+        <TabsContent value="po-analytics" className="mt-4 space-y-4">
+          {insightsLoading ? (
+            <div className="space-y-4">
+              {[...Array(3)].map((_, i) => (
+                <div key={i} className="animate-pulse bg-muted rounded-lg h-32" />
+              ))}
+            </div>
+          ) : !insights ? (
+            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+              <ShoppingCart className="h-8 w-8" />
+              <p className="text-sm">No PO data available</p>
+            </div>
+          ) : (
+            <>
+              {/* KPI summary */}
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                {[
+                  { label: "Total POs", value: String(insights.totalPoCount), sub: "excl. cancelled" },
+                  { label: "Total PO Value", value: `₹${(insights.totalPoValue / 1000).toFixed(1)}K`, sub: "all time" },
+                  { label: "Active (Ordered)", value: String(insights.poStatusCounts["ordered"] ?? 0), sub: "awaiting delivery" },
+                  { label: "Delivered", value: String(insights.poStatusCounts["delivered"] ?? 0 + (insights.poStatusCounts["completed"] ?? 0)), sub: "completed" },
+                ].map(({ label, value, sub }) => (
+                  <Card key={label}>
+                    <CardContent className="p-4">
+                      <p className="text-xs text-muted-foreground mb-1">{label}</p>
+                      <p className="text-xl font-semibold">{value}</p>
+                      <p className="text-xs mt-0.5 text-muted-foreground">{sub}</p>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+
+              {/* 12-month spend chart */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base">Monthly PO Value — Last 12 Months</CardTitle>
+                    <p className="text-xs text-muted-foreground">Click any bar to drill down</p>
+                  </div>
+                </CardHeader>
+                <CardContent>
+                  {(() => {
+                    const max = Math.max(...insights.spendByMonth.map((m) => m.amount), 1);
+                    const total12m = insights.spendByMonth.reduce((s, m) => s + m.amount, 0);
+                    const currentIdx = insights.spendByMonth.length - 1;
+                    return (
+                      <div className="space-y-1.5">
+                        {insights.spendByMonth.map((m, idx) => {
+                          const pct = (m.amount / max) * 100;
+                          const isCurrent = idx === currentIdx;
+                          const hasData = m.amount > 0 || m.count > 0;
+                          return (
+                            <button
+                              key={m.label}
+                              className={`w-full flex items-center gap-3 rounded px-1 py-0.5 transition-colors text-left ${hasData ? "hover:bg-muted/60 cursor-pointer" : "cursor-default"}`}
+                              onClick={() => hasData && setDrillMonth(m)}
+                              disabled={!hasData}
+                            >
+                              <span className="text-xs text-muted-foreground w-12 shrink-0 tabular-nums">{m.label}</span>
+                              <div className="flex-1 h-7 bg-muted rounded overflow-hidden relative">
+                                <div
+                                  className={`h-full rounded transition-all ${isCurrent ? "bg-primary" : "bg-primary/45"}`}
+                                  style={{ width: `${pct}%` }}
+                                />
+                                {m.count > 0 && (
+                                  <span className="absolute right-2 top-1/2 -translate-y-1/2 text-[10px] text-muted-foreground">
+                                    {m.count} PO{m.count > 1 ? "s" : ""}
+                                  </span>
+                                )}
+                              </div>
+                              <span className="text-xs w-20 text-right shrink-0 tabular-nums font-medium">
+                                {m.amount > 0 ? `₹${(m.amount / 1000).toFixed(1)}K` : "—"}
+                              </span>
+                              {hasData && <ChevronRight className="h-3 w-3 text-muted-foreground shrink-0" />}
+                            </button>
+                          );
+                        })}
+                        <div className="pt-1 text-xs text-muted-foreground text-right border-t mt-2">
+                          12-month total: <span className="font-semibold text-foreground">₹{(total12m / 1000).toFixed(1)}K</span>
+                        </div>
+                      </div>
+                    );
+                  })()}
+                </CardContent>
+              </Card>
+
+              {/* Full PO list */}
+              <Card>
+                <CardHeader className="pb-2">
+                  <div className="flex items-center justify-between flex-wrap gap-2">
+                    <CardTitle className="text-base">
+                      All Purchase Orders
+                      <span className="ml-2 text-sm font-normal text-muted-foreground">({insights.allPosForDisplay.length})</span>
+                    </CardTitle>
+                    {/* Status filter */}
+                    <div className="flex gap-1 flex-wrap">
+                      {["all", "draft", "ordered", "delivered", "cancelled"].map((s) => (
+                        <button
+                          key={s}
+                          onClick={() => setPoFilter(s)}
+                          className={`text-[11px] px-2 py-1 rounded-full border transition-colors ${poFilter === s ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}
+                        >
+                          {s === "all" ? `All (${insights.allPosForDisplay.length})` : (
+                            `${s.charAt(0).toUpperCase() + s.slice(1)} (${insights.allPosForDisplay.filter((p) => p.status === s).length})`
+                          )}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </CardHeader>
+                <CardContent className="p-0">
+                  {(() => {
+                    const filtered = poFilter === "all"
+                      ? insights.allPosForDisplay
+                      : insights.allPosForDisplay.filter((p) => p.status === poFilter);
+                    if (filtered.length === 0) {
+                      return <p className="text-sm text-muted-foreground py-8 text-center">No purchase orders found</p>;
+                    }
+                    return (
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead>
+                            <tr className="border-b bg-muted/30">
+                              <th className="px-4 py-2.5 text-left font-medium">PO Number</th>
+                              <th className="px-4 py-2.5 text-left font-medium hidden sm:table-cell">Department</th>
+                              <th className="px-4 py-2.5 text-left font-medium hidden md:table-cell">Items</th>
+                              <th className="px-4 py-2.5 text-left font-medium">Status</th>
+                              <th className="px-4 py-2.5 text-left font-medium hidden sm:table-cell">Date</th>
+                              <th className="px-4 py-2.5 text-right font-medium">Amount</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {filtered.map((po) => (
+                              <tr
+                                key={po.id}
+                                className="border-b last:border-0 hover:bg-muted/30 cursor-pointer"
+                                onClick={() => router.push(`/procurement/orders/${po.id}`)}
+                              >
+                                <td className="px-4 py-2.5">
+                                  <div className="flex items-center gap-1.5">
+                                    <span className="font-mono text-xs font-semibold">{po.po_number}</span>
+                                    <ExternalLink className="h-3 w-3 text-muted-foreground" />
+                                  </div>
+                                  {po.pr?.pr_number && (
+                                    <p className="text-[10px] text-muted-foreground mt-0.5">MR: {po.pr.pr_number}</p>
+                                  )}
+                                </td>
+                                <td className="px-4 py-2.5 hidden sm:table-cell text-xs text-muted-foreground capitalize">
+                                  {po.pr?.department
+                                    ? po.pr.department.charAt(0).toUpperCase() + po.pr.department.slice(1)
+                                    : "—"}
+                                </td>
+                                <td className="px-4 py-2.5 hidden md:table-cell">
+                                  <div className="flex flex-col gap-0.5">
+                                    {po.top_items.slice(0, 2).map((name, i) => (
+                                      <span key={i} className="text-[11px] text-muted-foreground truncate max-w-[160px]">{name}</span>
+                                    ))}
+                                    {po.item_count > 2 && (
+                                      <span className="text-[10px] text-muted-foreground">+{po.item_count - 2} more</span>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-2.5">
+                                  <Badge className={
+                                    po.status === "delivered" || po.status === "completed" ? "bg-green-100 text-green-800" :
+                                    po.status === "ordered" ? "bg-blue-100 text-blue-800" :
+                                    po.status === "cancelled" ? "bg-red-100 text-red-800" :
+                                    po.status === "draft" ? "bg-gray-100 text-gray-700" :
+                                    "bg-amber-100 text-amber-800"
+                                  } variant="secondary">
+                                    {po.status.charAt(0).toUpperCase() + po.status.slice(1)}
+                                  </Badge>
+                                </td>
+                                <td className="px-4 py-2.5 hidden sm:table-cell text-xs text-muted-foreground tabular-nums">
+                                  {formatDate(po.created_at)}
+                                </td>
+                                <td className="px-4 py-2.5 text-right font-medium tabular-nums">
+                                  {po.total_ordered_amount != null ? formatCurrency(po.total_ordered_amount) : "—"}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                          <tfoot>
+                            <tr className="border-t bg-muted/20">
+                              <td colSpan={5} className="px-4 py-2 text-xs text-muted-foreground font-medium">
+                                {filtered.length} order{filtered.length !== 1 ? "s" : ""}
+                              </td>
+                              <td className="px-4 py-2 text-right text-xs font-semibold tabular-nums">
+                                {formatCurrency(filtered.reduce((s, p) => s + Number(p.total_ordered_amount ?? 0), 0))}
+                              </td>
+                            </tr>
+                          </tfoot>
+                        </table>
+                      </div>
+                    );
+                  })()}
+                </CardContent>
+              </Card>
+            </>
+          )}
+
+          {/* Drill-down Sheet — POs for selected month */}
+          <Sheet open={!!drillMonth} onOpenChange={(v) => { if (!v) setDrillMonth(null); }}>
+            <SheetContent side="right" className="w-full sm:max-w-xl flex flex-col p-0 gap-0">
+              <SheetHeader className="px-5 pt-5 pb-3 border-b shrink-0">
+                <SheetTitle className="text-base flex items-center gap-2">
+                  <ShoppingCart className="h-4 w-4" />
+                  POs for {drillMonth?.label ?? ""}
+                </SheetTitle>
+                {drillMonth && (
+                  <div className="flex gap-4 mt-2 text-sm">
+                    <span className="text-muted-foreground">
+                      <span className="font-semibold text-foreground">{drillMonth.count}</span> order{drillMonth.count !== 1 ? "s" : ""}
+                    </span>
+                    <span className="text-muted-foreground">
+                      Total: <span className="font-semibold text-foreground">{formatCurrency(drillMonth.amount)}</span>
+                    </span>
+                  </div>
+                )}
+              </SheetHeader>
+
+              <div className="flex-1 overflow-y-auto px-4 py-4">
+                {drillMonth && insights && (() => {
+                  const monthPos = insights.allPosForDisplay.filter(
+                    (po) => po.created_at >= drillMonth.start && po.created_at < drillMonth.end
+                  );
+                  if (monthPos.length === 0) {
+                    return <p className="text-sm text-muted-foreground text-center py-8">No purchase orders found for this month.</p>;
+                  }
+                  return (
+                    <div className="space-y-2.5">
+                      {monthPos.map((po) => (
+                        <div
+                          key={po.id}
+                          className="border rounded-lg p-3 hover:bg-muted/40 cursor-pointer transition-colors"
+                          onClick={() => router.push(`/procurement/orders/${po.id}`)}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <span className="font-mono text-sm font-semibold">{po.po_number}</span>
+                              <Badge className={
+                                po.status === "delivered" || po.status === "completed" ? "bg-green-100 text-green-800" :
+                                po.status === "ordered" ? "bg-blue-100 text-blue-800" :
+                                po.status === "cancelled" ? "bg-red-100 text-red-800" :
+                                po.status === "draft" ? "bg-gray-100 text-gray-700" :
+                                "bg-amber-100 text-amber-800"
+                              } variant="secondary">
+                                {po.status}
+                              </Badge>
+                            </div>
+                            <span className="font-semibold text-sm tabular-nums shrink-0">
+                              {po.total_ordered_amount != null ? formatCurrency(po.total_ordered_amount) : "—"}
+                            </span>
+                          </div>
+
+                          <div className="mt-1.5 flex flex-wrap gap-x-4 gap-y-0.5 text-xs text-muted-foreground">
+                            {po.pr?.department && (
+                              <span className="capitalize">
+                                Dept: {po.pr.department}
+                              </span>
+                            )}
+                            {po.pr?.pr_number && (
+                              <span>MR: {po.pr.pr_number}</span>
+                            )}
+                            <span>{formatDate(po.created_at)}</span>
+                          </div>
+
+                          {po.top_items.length > 0 && (
+                            <div className="mt-2 flex flex-wrap gap-1">
+                              {po.top_items.map((name, i) => (
+                                <span key={i} className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground">{name}</span>
+                              ))}
+                              {po.item_count > po.top_items.length && (
+                                <span className="text-[10px] bg-muted px-1.5 py-0.5 rounded text-muted-foreground">+{po.item_count - po.top_items.length} more</span>
+                              )}
+                            </div>
+                          )}
+
+                          <div className="mt-2 flex items-center justify-end text-xs text-primary gap-1">
+                            View PO <ExternalLink className="h-3 w-3" />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            </SheetContent>
+          </Sheet>
+        </TabsContent>
+
         {/* Activity & Insights Tab */}
         <TabsContent value="activity" className="mt-4 space-y-4">
           {insightsLoading ? (
@@ -680,22 +1004,40 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                 ))}
               </div>
 
-              {/* Spend by month */}
+              {/* Spend by month — last 6 of the 12 shown here, full 12 in PO Analytics tab */}
               <Card>
                 <CardHeader className="pb-2">
-                  <CardTitle className="text-base">Monthly Spend (last 6 months)</CardTitle>
+                  <div className="flex items-center justify-between">
+                    <CardTitle className="text-base">Monthly Spend (last 6 months)</CardTitle>
+                    <button
+                      className="text-xs text-primary hover:underline flex items-center gap-0.5"
+                      onClick={() => {
+                        const tab = document.querySelector('[data-value="po-analytics"]') as HTMLElement;
+                        tab?.click();
+                      }}
+                    >
+                      Full 12-month view →
+                    </button>
+                  </div>
                 </CardHeader>
                 <CardContent>
                   {(() => {
-                    const max = Math.max(...insights.spendByMonth.map((m) => m.amount), 1);
-                    const total6m = insights.spendByMonth.reduce((s, m) => s + m.amount, 0);
+                    const last6 = insights.spendByMonth.slice(-6);
+                    const max = Math.max(...last6.map((m) => m.amount), 1);
+                    const total6m = last6.reduce((s, m) => s + m.amount, 0);
                     return (
                       <div className="space-y-2">
-                        {insights.spendByMonth.map((m, idx) => {
+                        {last6.map((m, idx) => {
                           const pct = (m.amount / max) * 100;
-                          const isCurrent = idx === insights.spendByMonth.length - 1;
+                          const isCurrent = idx === last6.length - 1;
+                          const hasData = m.amount > 0 || m.count > 0;
                           return (
-                            <div key={m.label} className="flex items-center gap-3">
+                            <button
+                              key={m.label}
+                              className={`w-full flex items-center gap-3 rounded px-1 py-0.5 text-left transition-colors ${hasData ? "hover:bg-muted/60 cursor-pointer" : "cursor-default"}`}
+                              onClick={() => hasData && setDrillMonth(m)}
+                              disabled={!hasData}
+                            >
                               <span className="text-xs text-muted-foreground w-12 shrink-0">{m.label}</span>
                               <div className="flex-1 h-6 bg-muted rounded-sm overflow-hidden">
                                 <div
@@ -703,10 +1045,10 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                                   style={{ width: `${pct}%` }}
                                 />
                               </div>
-                              <span className="text-xs text-muted-foreground w-20 text-right shrink-0">
+                              <span className="text-xs text-muted-foreground w-20 text-right shrink-0 tabular-nums">
                                 {m.amount > 0 ? `₹${(m.amount / 1000).toFixed(1)}K` : "—"}
                               </span>
-                            </div>
+                            </button>
                           );
                         })}
                         <div className="pt-1 text-xs text-muted-foreground text-right">

@@ -20,6 +20,7 @@ import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog"
 import {
   PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS,
   ITEM_UNITS,
+  EXPENDITURE_TYPES, EXPENDITURE_TYPE_LABELS, EXPENDITURE_TYPE_DESCRIPTIONS,
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import type { ProcurementItem, Location, ProcurementDepartment, ItemUnit } from "@/types";
@@ -54,6 +55,13 @@ export default function NewPurchaseRequestPage() {
   const router = useRouter();
   const [department, setDepartment] = useState<ProcurementDepartment>("pantry");
   const [locationId, setLocationId] = useState<string>("");
+  const [expenditureType, setExpenditureType] = useState<"operational" | "amc">("operational");
+
+  // Reset expenditure type to operational whenever department changes away from maintenance
+  const handleDepartmentChange = (v: ProcurementDepartment) => {
+    setDepartment(v);
+    if (v !== "maintenance") setExpenditureType("operational");
+  };
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<LineItem[]>([emptyItem()]);
   const [submitting, setSubmitting] = useState(false);
@@ -144,6 +152,7 @@ export default function NewPurchaseRequestPage() {
   const buildPayload = (submit: boolean) => ({
     department,
     location_id: locationId || null,
+    expenditure_type: expenditureType,
     notes: notes.trim() || undefined,
     submit,
     items: items.map((li) => ({
@@ -234,7 +243,7 @@ export default function NewPurchaseRequestPage() {
             <Label htmlFor="department">Department <span className="text-red-500">*</span></Label>
             <Select
               value={department}
-              onValueChange={(v) => setDepartment(v as ProcurementDepartment)}
+              onValueChange={(v) => handleDepartmentChange(v as ProcurementDepartment)}
             >
               <SelectTrigger id="department">
                 <SelectValue />
@@ -261,6 +270,28 @@ export default function NewPurchaseRequestPage() {
               </SelectContent>
             </Select>
           </div>
+
+          {department === "maintenance" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="expenditure-type">Expenditure Type <span className="text-red-500">*</span></Label>
+              <Select
+                value={expenditureType}
+                onValueChange={(v) => setExpenditureType(v as "operational" | "amc")}
+              >
+                <SelectTrigger id="expenditure-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {EXPENDITURE_TYPES.map((t) => (
+                    <SelectItem key={t} value={t}>
+                      {EXPENDITURE_TYPE_LABELS[t]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">{EXPENDITURE_TYPE_DESCRIPTIONS[expenditureType]}</p>
+            </div>
+          )}
 
           <div className="space-y-1.5 sm:col-span-2">
             <Label htmlFor="notes">Notes <span className="text-xs text-muted-foreground font-normal">(will carry forward to Purchase Order)</span></Label>

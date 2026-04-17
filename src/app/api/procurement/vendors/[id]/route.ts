@@ -58,11 +58,31 @@ export async function PATCH(
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
+
+  const body = await request.json();
+
+  // Accounts role may only update contact_email (e.g. when saving from bill payment dialog)
+  if (dbUser.role === "accounts") {
+    const keys = Object.keys(body);
+    if (keys.length !== 1 || !("contact_email" in body)) {
+      return NextResponse.json({ error: "Accounts role can only update vendor email" }, { status: 403 });
+    }
+    const email = body.contact_email?.trim();
+    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      return NextResponse.json({ error: "Invalid email address" }, { status: 400 });
+    }
+    const { error: updateErr } = await supabase
+      .from("procurement_vendors")
+      .update({ contact_email: email })
+      .eq("id", id);
+    if (updateErr) return NextResponse.json({ error: updateErr.message }, { status: 500 });
+    return NextResponse.json({ message: "Email updated" });
+  }
+
   if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
-  const body = await request.json();
   const parsed = updateVendorSchema.safeParse(body);
   if (!parsed.success) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });

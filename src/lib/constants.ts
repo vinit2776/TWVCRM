@@ -1525,3 +1525,22 @@ export const CORRECTION_TYPE_LABELS: Record<string, string> = {
   adjust: "Adjust Quantity",
   relog: "Re-log (Void & Replace)",
 };
+
+// ── Expenditure Types ─────────────────────────────────────────────────────────
+export const EXPENDITURE_TYPES = ["operational", "amc"] as const;
+export type ExpenditureType = (typeof EXPENDITURE_TYPES)[number];
+
+export const EXPENDITURE_TYPE_LABELS: Record<string, string> = {
+  operational: "Operational",
+  amc: "AMC / Annual Contract",
+};
+
+export const EXPENDITURE_TYPE_DESCRIPTIONS: Record<string, string> = {
+  operational: "Counts against monthly department budget",
+  amc: "Annual maintenance contract — excluded from monthly budget",
+};
+
+export const EXPENDITURE_TYPE_COLORS: Record<string, string> = {
+  operational: "bg-blue-100 text-blue-800",
+  amc: "bg-purple-100 text-purple-800",
+};

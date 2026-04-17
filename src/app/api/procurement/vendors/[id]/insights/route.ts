@@ -19,14 +19,14 @@ export async function GET(
   const now = new Date();
   const todayStr = now.toISOString().split("T")[0];
 
-  // Build 6-month windows
-  const months: { label: string; start: string; end: string }[] = [];
-  for (let i = 5; i >= 0; i--) {
+  // Build 12-month windows
+  const months: { label: string; start: string; end: string; year: number; month: number }[] = [];
+  for (let i = 11; i >= 0; i--) {
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const start = d.toISOString();
     const end = new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString();
     const label = d.toLocaleString("en-IN", { month: "short", year: "2-digit" });
-    months.push({ label, start, end });
+    months.push({ label, start, end, year: d.getFullYear(), month: d.getMonth() + 1 });
   }
 
   const [
@@ -35,28 +35,29 @@ export async function GET(
     billsRes,
     itemPricesRes,
   ] = await Promise.all([
-    // Vendor detail
     supabase
       .from("procurement_vendors")
       .select("id, name, category, is_approved")
       .eq("id", id)
       .single(),
 
-    // All POs for this vendor (with items for spend breakdown)
+    // All POs for this vendor — include PR info for department linkback
     supabase
       .from("purchase_orders")
-      .select("id, po_number, status, total_ordered_amount, created_at, purchase_order_items(id, item_id, item_name, quantity_ordered, unit_price, total_amount)")
+      .select(`
+        id, po_number, po_type, status, total_ordered_amount, ordered_at, created_at, pr_id,
+        pr:purchase_requests!purchase_orders_pr_id_fkey(pr_number, department),
+        purchase_order_items(id, item_id, item_name, quantity_ordered, unit_price, total_amount)
+      `)
       .eq("vendor_id", id)
       .order("created_at", { ascending: false }),
 
-    // All bills for this vendor
     supabase
       .from("vendor_bills")
       .select("id, bill_number, total_amount, amount_paid, due_date, invoice_date, payment_status, approval_status, created_at")
       .eq("vendor_id", id)
       .order("created_at", { ascending: false }),
 
-    // Items this vendor has priced
     supabase
       .from("vendor_item_prices")
       .select("id, item_id, price, gst_rate, last_po_number, updated_at, procurement_items(id, name, department, unit, standard_price)")
@@ -69,12 +70,13 @@ export async function GET(
   const allPos = allPosRes.data ?? [];
   const bills = billsRes.data ?? [];
 
-  // ── PO spend by month ─────────────────────────────────────────────────────
-  const spendByMonth = months.map(({ label, start, end }) => {
-    const amount = allPos
-      .filter((po) => po.created_at >= start && po.created_at < end && po.status !== "cancelled")
-      .reduce((sum, po) => sum + Number(po.total_ordered_amount ?? 0), 0);
-    return { label, amount };
+  // ── PO spend by month (12 months) ─────────────────────────────────────────
+  const spendByMonth = months.map(({ label, start, end, year, month }) => {
+    const monthPos = allPos.filter(
+      (po) => po.created_at >= start && po.created_at < end && po.status !== "cancelled"
+    );
+    const amount = monthPos.reduce((sum, po) => sum + Number(po.total_ordered_amount ?? 0), 0);
+    return { label, amount, year, month, start, end, count: monthPos.length };
   });
 
   // ── Overall PO stats ──────────────────────────────────────────────────────
@@ -82,14 +84,10 @@ export async function GET(
   const totalPoValue = nonCancelledPos.reduce((sum, po) => sum + Number(po.total_ordered_amount ?? 0), 0);
   const totalPoCount = nonCancelledPos.length;
 
-  // PO status breakdown
   const poStatusCounts: Record<string, number> = {};
   for (const po of allPos) {
     poStatusCounts[po.status] = (poStatusCounts[po.status] ?? 0) + 1;
   }
-
-  // Recent 10 POs for table
-  const recentPos = allPos.slice(0, 10);
 
   // ── Items ordered breakdown ───────────────────────────────────────────────
   type PoItem = {
@@ -130,7 +128,6 @@ export async function GET(
     0
   );
 
-  // Average days to pay (for paid bills with due_date)
   const daysToPayList = paidBills
     .filter((b) => b.due_date && b.invoice_date)
     .map((b) => {
@@ -142,19 +139,35 @@ export async function GET(
     ? Math.round(daysToPayList.reduce((a, b) => a + b, 0) / daysToPayList.length)
     : null;
 
+  // Prepare all POs for display (strip heavy purchase_order_items for the list, keep count)
+  const allPosForDisplay = allPos.map((po) => {
+    const items = (po.purchase_order_items ?? []) as unknown as PoItem[];
+    return {
+      id: po.id,
+      po_number: po.po_number,
+      po_type: po.po_type,
+      status: po.status,
+      total_ordered_amount: po.total_ordered_amount,
+      ordered_at: po.ordered_at ?? null,
+      created_at: po.created_at,
+      pr_id: po.pr_id ?? null,
+      pr: po.pr ?? null,
+      item_count: items.length,
+      top_items: items.slice(0, 3).map((i) => i.item_name),
+    };
+  });
+
   return NextResponse.json({
     data: {
       vendor: vendorRes.data,
-      // Spend over time
       spendByMonth,
       totalPoValue,
       totalPoCount,
       poStatusCounts,
-      recentPos,
-      // Item breakdown
+      recentPos: allPosForDisplay.slice(0, 10), // keep for backward compat
+      allPosForDisplay,
       topItems,
       itemPrices: itemPricesRes.data ?? [],
-      // Payment performance
       totalBilled,
       totalPaid,
       totalOutstanding,

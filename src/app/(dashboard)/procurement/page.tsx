@@ -151,6 +151,7 @@ interface BudgetRow {
   monthly_budget: number | null;
   is_active: boolean;
   spent_this_month: number;
+  amc_spent_this_month: number;
   utilisation_pct: number | null;
   is_over_budget: boolean;
 }
@@ -172,7 +173,7 @@ const DEPT_EMOJI: Record<string, string> = {
 };
 
 function FuelGauge({ row }: { row: BudgetRow }) {
-  const { department, monthly_budget, is_active, spent_this_month } = row;
+  const { department, monthly_budget, is_active, spent_this_month, amc_spent_this_month } = row;
   const hasBudget = !!monthly_budget && is_active;
   const pctRaw = hasBudget ? (spent_this_month / monthly_budget!) * 100 : 0;
   const pct = Math.min(pctRaw, 100); // cap needle at 100 visually
@@ -312,6 +313,11 @@ function FuelGauge({ row }: { row: BudgetRow }) {
             <p className="text-sm font-semibold text-muted-foreground">{formatCurrency(spent_this_month)}</p>
             <p className="text-[11px] text-muted-foreground italic">No budget set</p>
           </>
+        )}
+        {amc_spent_this_month > 0 && (
+          <p className="text-[10px] text-purple-600 mt-0.5" title="AMC / Annual Contract spend — not counted in budget">
+            + {formatCurrency(amc_spent_this_month)} AMC
+          </p>
         )}
       </div>
     </div>

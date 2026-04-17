@@ -28,25 +28,40 @@ export async function GET(request: NextRequest) {
     .select("*, creator:users!department_budgets_created_by_fkey(id, full_name), updater:users!department_budgets_updated_by_fkey(id, full_name)")
     .order("department");
 
-  // Fetch MR spend per department for this month (exclude cancelled/rejected)
+  // Fetch operational MR spend per department for this month (AMC excluded from budget)
   const { data: mrSpend } = await supabase
     .from("purchase_requests")
     .select("department, total_estimated_amount, status")
+    .eq("expenditure_type", "operational")
+    .gte("created_at", monthStart)
+    .lte("created_at", monthEnd)
+    .not("status", "in", '("cancelled","rejected")');
+
+  // Fetch AMC spend per department for this month (informational only)
+  const { data: amcSpend } = await supabase
+    .from("purchase_requests")
+    .select("department, total_estimated_amount, status")
+    .eq("expenditure_type", "amc")
     .gte("created_at", monthStart)
     .lte("created_at", monthEnd)
     .not("status", "in", '("cancelled","rejected")');
 
   // Aggregate spend per department
   const spendMap: Record<string, number> = {};
-  for (const dept of DEPARTMENTS) spendMap[dept] = 0;
+  const amcMap: Record<string, number> = {};
+  for (const dept of DEPARTMENTS) { spendMap[dept] = 0; amcMap[dept] = 0; }
   for (const mr of mrSpend ?? []) {
     spendMap[mr.department] = (spendMap[mr.department] ?? 0) + Number(mr.total_estimated_amount ?? 0);
+  }
+  for (const mr of amcSpend ?? []) {
+    amcMap[mr.department] = (amcMap[mr.department] ?? 0) + Number(mr.total_estimated_amount ?? 0);
   }
 
   // Merge budgets with spend
   const result = DEPARTMENTS.map((dept) => {
     const budget = (budgets ?? []).find((b) => b.department === dept && b.location_id == null);
     const spent = spendMap[dept] ?? 0;
+    const amcSpentThisMonth = amcMap[dept] ?? 0;
     const budgetAmount = budget?.monthly_budget ? Number(budget.monthly_budget) : null;
     const utilisation = budgetAmount ? Math.round((spent / budgetAmount) * 100) : null;
     return {
@@ -56,6 +71,7 @@ export async function GET(request: NextRequest) {
       notes: budget?.notes ?? null,
       id: budget?.id ?? null,
       spent_this_month: spent,
+      amc_spent_this_month: amcSpentThisMonth,
       utilisation_pct: utilisation,
       is_over_budget: budgetAmount != null && spent > budgetAmount,
       creator: budget?.creator ?? null,
@@ -79,26 +95,60 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json();
-  // body = Array<{ department, monthly_budget, is_active, notes }>
   if (!Array.isArray(body.budgets)) {
     return NextResponse.json({ error: "Expected { budgets: [...] }" }, { status: 400 });
   }
 
-  const upserts = body.budgets.map((b: { department: string; monthly_budget: number | null; is_active: boolean; notes?: string }) => ({
-    department: b.department,
-    location_id: null,
-    monthly_budget: b.monthly_budget ?? 0,
-    is_active: b.is_active,
-    notes: b.notes ?? null,
-    created_by: dbUser.id,
-    updated_by: dbUser.id,
-  }));
-
-  const { error } = await supabase
+  // Fetch existing rows by ID first — upsert with onConflict: "department,location_id" silently
+  // inserts new rows when location_id IS NULL because PostgreSQL treats NULL != NULL in unique
+  // index matching. We must explicitly update by primary key instead.
+  const { data: existing } = await supabase
     .from("department_budgets")
-    .upsert(upserts, { onConflict: "department,location_id" });
+    .select("id, department")
+    .is("location_id", null);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  const existingByDept: Record<string, string> = {};
+  for (const e of existing ?? []) {
+    // If somehow duplicates exist (from the old broken upsert), prefer the first (oldest) row
+    if (!existingByDept[e.department]) existingByDept[e.department] = e.id;
+  }
 
+  let lastError: string | null = null;
+
+  for (const b of body.budgets as Array<{
+    department: string;
+    monthly_budget: number | null;
+    is_active: boolean;
+    notes?: string;
+  }>) {
+    const existingId = existingByDept[b.department];
+    if (existingId) {
+      const { error } = await supabase
+        .from("department_budgets")
+        .update({
+          monthly_budget: b.monthly_budget ?? 0,
+          is_active: b.is_active,
+          notes: b.notes ?? null,
+          updated_by: dbUser.id,
+        })
+        .eq("id", existingId);
+      if (error) lastError = error.message;
+    } else {
+      const { error } = await supabase
+        .from("department_budgets")
+        .insert({
+          department: b.department,
+          location_id: null,
+          monthly_budget: b.monthly_budget ?? 0,
+          is_active: b.is_active,
+          notes: b.notes ?? null,
+          created_by: dbUser.id,
+          updated_by: dbUser.id,
+        });
+      if (error) lastError = error.message;
+    }
+  }
+
+  if (lastError) return NextResponse.json({ error: lastError }, { status: 500 });
   return NextResponse.json({ message: "Budgets saved successfully" });
 }

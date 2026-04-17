@@ -213,6 +213,7 @@ export default function VendorBillDetailPage() {
   const [sendingEmail, setSendingEmail] = useState(false);
   const [newVendorEmail, setNewVendorEmail] = useState("");
   const [savingEmail, setSavingEmail] = useState(false);
+  const [vendorEmailLoading, setVendorEmailLoading] = useState(false);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -288,8 +289,8 @@ export default function VendorBillDetailPage() {
       }
       toast.success("Payment recorded successfully");
       setPaymentDialog(false);
-      setShowEmailDialog(true);
       await fetchAll();
+      openEmailDialog();
     } finally {
       setPaymentLoading(false);
     }
@@ -382,6 +383,28 @@ export default function VendorBillDetailPage() {
     }
   };
 
+  // Re-fetch just the vendor email from DB (used when opening dialog to ensure freshness)
+  async function refreshVendorEmail() {
+    if (!chain?.vendor?.id) return;
+    setVendorEmailLoading(true);
+    const res = await fetch(`/api/procurement/vendors/${chain.vendor.id}`);
+    if (res.ok) {
+      const json = await res.json();
+      const latestEmail = json.data?.contact_email ?? null;
+      // Patch the chain state in-place so the dialog reflects the latest email
+      setChain((prev) => prev ? { ...prev, vendor: { ...prev.vendor!, contact_email: latestEmail } } : prev);
+    }
+    setVendorEmailLoading(false);
+  }
+
+  async function openEmailDialog() {
+    setNewVendorEmail("");
+    setEmailCc("");
+    setShowEmailDialog(true);
+    // Always re-fetch vendor email when opening so edits made elsewhere are reflected
+    await refreshVendorEmail();
+  }
+
   async function handleSaveVendorEmail() {
     const email = newVendorEmail.trim();
     if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
@@ -400,7 +423,9 @@ export default function VendorBillDetailPage() {
       toast.error(data.error || "Failed to save email");
     } else {
       toast.success("Email saved to vendor profile");
-      await fetchAll();
+      setNewVendorEmail("");
+      // Update chain state immediately so dialog reflects the saved email
+      setChain((prev) => prev ? { ...prev, vendor: { ...prev.vendor!, contact_email: email } } : prev);
     }
     setSavingEmail(false);
   }
@@ -592,7 +617,7 @@ export default function VendorBillDetailPage() {
               variant="outline"
               size="sm"
               className="gap-2"
-              onClick={() => setShowEmailDialog(true)}
+              onClick={() => openEmailDialog()}
             >
               <Send className="h-4 w-4" /> Send Confirmation
             </Button>
@@ -1182,7 +1207,7 @@ export default function VendorBillDetailPage() {
                 variant="outline"
                 size="sm"
                 className="gap-2 shrink-0"
-                onClick={() => setShowEmailDialog(true)}
+                onClick={() => openEmailDialog()}
               >
                 <Send className="h-3.5 w-3.5" />
                 Send Confirmation
@@ -1467,7 +1492,12 @@ export default function VendorBillDetailPage() {
             {/* Show where the email goes */}
             <div className="p-3 rounded-lg bg-muted/50 text-sm space-y-1">
               <p className="text-muted-foreground text-xs uppercase tracking-wide font-medium">Email will be sent to</p>
-              {chain?.vendor?.contact_email ? (
+              {vendorEmailLoading ? (
+                <div className="flex items-center gap-1.5 text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  <span className="text-xs">Checking vendor email…</span>
+                </div>
+              ) : chain?.vendor?.contact_email ? (
                 <p className="font-medium">{chain.vendor.contact_email}</p>
               ) : (
                 <p className="text-amber-700 text-sm flex items-center gap-1.5">
@@ -1516,7 +1546,7 @@ export default function VendorBillDetailPage() {
             <Button variant="outline" onClick={() => { setShowEmailDialog(false); setEmailCc(""); }}>Cancel</Button>
             <Button
               onClick={handleSendEmail}
-              disabled={sendingEmail || !chain?.vendor?.contact_email}
+              disabled={sendingEmail || vendorEmailLoading || !chain?.vendor?.contact_email}
               className="gap-2"
             >
               <Send className="h-4 w-4" />

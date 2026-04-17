@@ -17,6 +17,7 @@ const createPrSchema = z.object({
   department: z.enum(["pantry", "maintenance", "administration", "asset"]),
   location_id: z.string().uuid().optional().nullable(),
   notes: z.string().optional(),
+  expenditure_type: z.enum(["operational", "amc"]).default("operational"),
   items: z.array(createPrItemSchema).min(1, "At least one item is required"),
   submit: z.boolean().optional(), // If true, create in "submitted" state
 });
@@ -60,9 +61,14 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
+  const fromDate = searchParams.get("from_date");
+  const toDate = searchParams.get("to_date");
+
   if (status) query = query.eq("status", status);
   if (department) query = query.eq("department", department);
   if (locationId) query = query.eq("location_id", locationId);
+  if (fromDate) query = query.gte("created_at", fromDate);
+  if (toDate) query = query.lte("created_at", toDate);
 
   // Search: require ≥3 chars to prevent full-table scans on short terms
   if (search.length >= 3) {

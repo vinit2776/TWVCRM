@@ -33,11 +33,12 @@ export async function GET(request: NextRequest) {
 
   const monthlyBudget = Number(budget.monthly_budget);
 
-  // Fetch spend this month
+  // Fetch spend this month (operational only — AMC excluded from budget)
   const { data: mrs } = await supabase
     .from("purchase_requests")
     .select("total_estimated_amount")
     .eq("department", department)
+    .eq("expenditure_type", "operational")
     .gte("created_at", monthStart)
     .lte("created_at", monthEnd)
     .not("status", "in", '("cancelled","rejected")');

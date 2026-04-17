@@ -25,6 +25,7 @@ import {
   PO_STATUS_LABELS, PO_STATUS_COLORS,
   BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
+  EXPENDITURE_TYPE_LABELS, EXPENDITURE_TYPE_COLORS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { PurchaseRequest } from "@/types";
@@ -230,7 +231,8 @@ export default function PurchaseRequestDetailPage() {
 
   const openApproveDialog = useCallback(async () => {
     setActionDialog("approve");
-    if (!pr || !isApprover) return;
+    // AMC MRs bypass budget — no need to fetch budget check
+    if (!pr || !isApprover || pr.expenditure_type === "amc") return;
     setBudgetLoading(true);
     const res = await fetch(
       `/api/procurement/budget/check?department=${pr.department}&amount=${pr.total_estimated_amount ?? 0}`
@@ -336,6 +338,11 @@ export default function PurchaseRequestDetailPage() {
               <Badge variant="secondary" className={PROCUREMENT_DEPARTMENT_COLORS[pr.department]}>
                 {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}
               </Badge>
+              {pr.expenditure_type && pr.expenditure_type !== "operational" && (
+                <Badge variant="secondary" className={EXPENDITURE_TYPE_COLORS[pr.expenditure_type] ?? "bg-gray-100 text-gray-800"}>
+                  {EXPENDITURE_TYPE_LABELS[pr.expenditure_type]}
+                </Badge>
+              )}
               {canSeePrices && isLargeAmount && pr.status === "submitted" && (
                 <Badge variant="secondary" className="bg-amber-100 text-amber-800 text-xs">
                   Requires admin approval

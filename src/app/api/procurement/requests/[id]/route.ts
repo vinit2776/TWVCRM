@@ -159,10 +159,11 @@ export async function PATCH(
         return NextResponse.json({ error: "Only managers and admins can approve PRs" }, { status: 403 });
       }
       // ── Budget enforcement ───────────────────────────────────────────
+      // AMC / Annual Contract MRs are excluded from monthly budget checks.
       // If a monthly budget is set for this department and approver is a manager,
-      // check whether this MR would push spend over the budget.
+      // check whether this MR would push operational spend over the budget.
       // If so: only admin can approve.
-      if (dbUser.role === "manager") {
+      if (dbUser.role === "manager" && pr.expenditure_type !== "amc") {
         const now = new Date();
         const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
         const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
@@ -181,6 +182,7 @@ export async function PATCH(
             .from("purchase_requests")
             .select("total_estimated_amount")
             .eq("department", pr.department)
+            .eq("expenditure_type", "operational")
             .gte("created_at", monthStart)
             .lte("created_at", monthEnd)
             .not("status", "in", '("cancelled","rejected")')

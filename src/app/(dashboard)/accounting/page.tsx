@@ -15,7 +15,7 @@ import { GstInvoiceEntry } from "@/components/accounting/gst-invoice-entry";
 import { ExportSummaryDialog } from "@/components/accounting/export-summary-dialog";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
-import { Calculator, ScrollText, Banknote, HandCoins, Building2, AlertCircle } from "lucide-react";
+import { Calculator, ScrollText, Banknote, Building2, AlertCircle, Search, ChevronDown, History } from "lucide-react";
 import { PettyCashIssuance } from "@/components/accounting/petty-cash-issuance";
 import { ActionRequiredBanner } from "@/components/accounting/action-required-banner";
 
@@ -177,6 +177,8 @@ export default function AccountingPage() {
   const [vendorBills, setVendorBills] = useState<VendorBillItem[]>([]);
   const [billsLoading, setBillsLoading] = useState(false);
   const [billsLoaded, setBillsLoaded] = useState(false);
+  const [billSearch, setBillSearch] = useState("");
+  const [historyLimit, setHistoryLimit] = useState(10);
 
   // Get user role
   useEffect(() => {
@@ -230,7 +232,7 @@ export default function AccountingPage() {
   const fetchVendorBills = useCallback(async (force = false) => {
     if (billsLoaded && !force) return;
     setBillsLoading(true);
-    const res = await fetch("/api/procurement/bills?approval_status=approved&limit=100");
+    const res = await fetch("/api/procurement/bills?approval_status=approved&limit=300");
     if (res.ok) {
       const { data } = await res.json();
       setVendorBills(data ?? []);
@@ -341,9 +343,9 @@ export default function AccountingPage() {
               )}
               <TabsTrigger value="vendor-payments" onClick={() => fetchVendorBills()}>
                 <Building2 className="h-3.5 w-3.5 mr-1" />Vendor Payments
-                {vendorBills.length > 0 && (
+                {vendorBills.filter(b => b.payment_status !== "paid").length > 0 && (
                   <span className="ml-1.5 bg-primary text-primary-foreground text-[10px] font-semibold px-1.5 py-0.5 rounded-full leading-none">
-                    {vendorBills.length}
+                    {vendorBills.filter(b => b.payment_status !== "paid").length}
                   </span>
                 )}
               </TabsTrigger>
@@ -415,150 +417,262 @@ export default function AccountingPage() {
       )}
 
       {/* Vendor Payments — always rendered regardless of monthly summary state */}
-      {activeTab === "vendor-payments" && (
-        <div className="mt-2">
-          {billsLoading ? (
-            <div className="space-y-2">
-              {[...Array(5)].map((_, i) => (
-                <div key={i} className="animate-pulse bg-muted rounded-lg h-14" />
-              ))}
-            </div>
-          ) : vendorBills.length === 0 ? (
-            <EmptyState
-              icon={Building2}
-              title="No pending vendor payments"
-              description="All approved invoices have been paid, or no invoices are pending payment."
-            />
-          ) : (
-            <div className="space-y-3">
-              {/* Summary row */}
-              <div className="grid grid-cols-3 gap-3 text-sm">
-                <div className="rounded-lg border bg-red-50/50 p-3 text-center">
-                  <p className="text-xs text-muted-foreground mb-1">Unpaid</p>
-                  <p className="text-lg font-bold text-red-700">
-                    ₹{vendorBills.filter(b => b.payment_status === 'unpaid').reduce((s, b) => s + Number(b.total_amount), 0).toLocaleString('en-IN', { minimumFractionDigits: 0 })}
-                  </p>
-                  <p className="text-xs text-muted-foreground">{vendorBills.filter(b => b.payment_status === 'unpaid').length} bills</p>
-                </div>
-                <div className="rounded-lg border bg-amber-50/50 p-3 text-center">
-                  <p className="text-xs text-muted-foreground mb-1">Part Paid</p>
-                  <p className="text-lg font-bold text-amber-700">
-                    ₹{vendorBills.filter(b => b.payment_status === 'partially_paid').reduce((s, b) => s + Math.max(0, Number(b.total_amount) - Number(b.amount_paid)), 0).toLocaleString('en-IN', { minimumFractionDigits: 0 })}
-                  </p>
-                  <p className="text-xs text-muted-foreground">{vendorBills.filter(b => b.payment_status === 'partially_paid').length} bills</p>
-                </div>
-                <div className="rounded-lg border bg-green-50/50 p-3 text-center">
-                  <p className="text-xs text-muted-foreground mb-1">Paid This Session</p>
-                  <p className="text-lg font-bold text-green-700">
-                    ₹{vendorBills.filter(b => b.payment_status === 'paid').reduce((s, b) => s + Number(b.total_amount), 0).toLocaleString('en-IN', { minimumFractionDigits: 0 })}
-                  </p>
-                  <p className="text-xs text-muted-foreground">{vendorBills.filter(b => b.payment_status === 'paid').length} bills</p>
-                </div>
-              </div>
+      {activeTab === "vendor-payments" && (() => {
+        const matchSearch = (bill: VendorBillItem) => {
+          if (!billSearch.trim()) return true;
+          const q = billSearch.toLowerCase();
+          return (
+            bill.bill_number.toLowerCase().includes(q) ||
+            ((bill.procurement_vendors as { name: string } | null)?.name ?? "").toLowerCase().includes(q)
+          );
+        };
+        const pendingBills = vendorBills.filter(b => b.payment_status !== "paid" && matchSearch(b));
+        const allPaidBills = vendorBills.filter(b => b.payment_status === "paid" && matchSearch(b));
+        const visiblePaidBills = allPaidBills.slice(0, historyLimit);
 
-              {/* Table with all bills (unpaid + part-paid, hide fully paid) */}
-              {vendorBills.filter(b => b.payment_status !== 'paid').length > 0 && (
-                <div className="rounded-lg border overflow-hidden">
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="bg-muted/30 border-b">
-                        <th className="px-4 py-3 text-left font-medium">Bill #</th>
-                        <th className="px-4 py-3 text-left font-medium">Vendor</th>
-                        <th className="px-4 py-3 text-left font-medium hidden md:table-cell">PO</th>
-                        <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Due</th>
-                        <th className="px-4 py-3 text-right font-medium">Invoice</th>
-                        <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Paid</th>
-                        <th className="px-4 py-3 text-right font-medium">Outstanding</th>
-                        <th className="px-4 py-3 text-left font-medium">Status</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {vendorBills.filter(b => b.payment_status !== 'paid').map((bill) => {
-                        const outstanding = Math.max(0, Number(bill.total_amount) - Number(bill.amount_paid ?? 0));
-                        const approvedCeiling = Number(bill.approved_amount ?? bill.total_amount);
-                        const approvedOutstanding = Math.max(0, approvedCeiling - Number(bill.amount_paid ?? 0));
-                        const isPartialApproval = bill.approved_amount !== null && bill.approved_amount < bill.total_amount;
-                        const today = new Date().toISOString().split("T")[0];
-                        const isOverdue = bill.due_date && bill.due_date < today;
-                        return (
-                          <tr
-                            key={bill.id}
-                            className="border-b last:border-0 hover:bg-muted/40 cursor-pointer"
-                            onClick={() => router.push(`/accounting/vendor-payments/${bill.id}`)}
-                          >
-                            <td className="px-4 py-3 font-mono text-xs font-medium">{bill.bill_number}</td>
-                            <td className="px-4 py-3">
-                              <p className="font-medium truncate max-w-[140px]">
-                                {(bill.procurement_vendors as { name: string } | null)?.name ?? "—"}
-                              </p>
-                            </td>
-                            <td className="px-4 py-3 hidden md:table-cell text-muted-foreground text-xs">
-                              {(bill.purchase_orders as { po_number: string } | null)?.po_number ?? "—"}
-                            </td>
-                            <td className="px-4 py-3 hidden sm:table-cell text-xs">
-                              {bill.due_date ? (
-                                <span className={isOverdue ? "text-red-600 font-semibold flex items-center gap-1" : "text-muted-foreground"}>
-                                  {isOverdue && <AlertCircle className="h-3 w-3" />}
-                                  {new Date(bill.due_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
-                                </span>
-                              ) : <span className="text-muted-foreground">—</span>}
-                            </td>
-                            <td className="px-4 py-3 text-right text-xs">
-                              ₹{Number(bill.total_amount).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
-                            </td>
-                            <td className="px-4 py-3 text-right text-xs hidden sm:table-cell text-green-700 font-medium">
-                              {Number(bill.amount_paid ?? 0) > 0 ? `₹${Number(bill.amount_paid).toLocaleString("en-IN", { minimumFractionDigits: 0 })}` : "—"}
-                            </td>
-                            <td className="px-4 py-3 text-right font-semibold text-sm">
-                              <div>
-                                <p className={isOverdue ? "text-red-700" : ""}>
-                                  ₹{outstanding.toLocaleString("en-IN", { minimumFractionDigits: 0 })}
-                                </p>
-                                {isPartialApproval && (
-                                  <p className="text-[10px] text-amber-600 font-normal">
-                                    ₹{approvedOutstanding.toLocaleString("en-IN")} approved
-                                  </p>
-                                )}
-                              </div>
-                            </td>
-                            <td className="px-4 py-3">
-                              <div className="flex flex-col gap-0.5">
-                                {bill.payment_status === "partially_paid" && (
-                                  <span className="text-[10px] font-medium bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full w-fit">Part Paid</span>
-                                )}
-                                {bill.payment_status === "unpaid" && (
-                                  <span className="text-[10px] font-medium bg-red-100 text-red-800 px-1.5 py-0.5 rounded-full w-fit">Unpaid</span>
-                                )}
-                                {isPartialApproval && (
-                                  <span className="text-[10px] font-medium bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded-full w-fit">Part Approved</span>
-                                )}
-                                {isOverdue && (
-                                  <span className="text-[10px] font-medium bg-red-50 text-red-700 px-1.5 py-0.5 rounded-full w-fit">Overdue</span>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                    <tfoot>
-                      <tr className="bg-muted/20 border-t">
-                        <td colSpan={4} className="px-4 py-2.5 text-xs text-muted-foreground font-medium">
-                          {vendorBills.filter(b => b.payment_status !== 'paid').length} bill{vendorBills.filter(b => b.payment_status !== 'paid').length !== 1 ? "s" : ""} pending payment
-                        </td>
-                        <td colSpan={3} className="px-4 py-2.5 text-right font-bold text-sm">
-                          ₹{vendorBills.filter(b => b.payment_status !== 'paid').reduce((s, b) => s + Math.max(0, Number(b.total_amount) - Number(b.amount_paid ?? 0)), 0).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
-                        </td>
-                        <td />
-                      </tr>
-                    </tfoot>
-                  </table>
+        return (
+          <div className="mt-2 space-y-4">
+            {billsLoading ? (
+              <div className="space-y-2">
+                {[...Array(5)].map((_, i) => (
+                  <div key={i} className="animate-pulse bg-muted rounded-lg h-14" />
+                ))}
+              </div>
+            ) : (
+              <>
+                {/* Search bar */}
+                <div className="relative">
+                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+                  <input
+                    type="text"
+                    placeholder="Search by vendor name or bill number…"
+                    value={billSearch}
+                    onChange={e => { setBillSearch(e.target.value); setHistoryLimit(10); }}
+                    className="w-full pl-9 pr-4 py-2 text-sm border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-ring"
+                  />
                 </div>
-              )}
-            </div>
-          )}
-        </div>
-      )}
+
+                {/* Summary tiles */}
+                <div className="grid grid-cols-3 gap-3 text-sm">
+                  <div className="rounded-lg border bg-red-50/50 p-3 text-center">
+                    <p className="text-xs text-muted-foreground mb-1">Unpaid</p>
+                    <p className="text-lg font-bold text-red-700">
+                      ₹{vendorBills.filter(b => b.payment_status === "unpaid").reduce((s, b) => s + Number(b.total_amount), 0).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                    </p>
+                    <p className="text-xs text-muted-foreground">{vendorBills.filter(b => b.payment_status === "unpaid").length} bills</p>
+                  </div>
+                  <div className="rounded-lg border bg-amber-50/50 p-3 text-center">
+                    <p className="text-xs text-muted-foreground mb-1">Part Paid</p>
+                    <p className="text-lg font-bold text-amber-700">
+                      ₹{vendorBills.filter(b => b.payment_status === "partially_paid").reduce((s, b) => s + Math.max(0, Number(b.total_amount) - Number(b.amount_paid)), 0).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                    </p>
+                    <p className="text-xs text-muted-foreground">{vendorBills.filter(b => b.payment_status === "partially_paid").length} bills</p>
+                  </div>
+                  <div className="rounded-lg border bg-green-50/50 p-3 text-center">
+                    <p className="text-xs text-muted-foreground mb-1">Total Paid</p>
+                    <p className="text-lg font-bold text-green-700">
+                      ₹{vendorBills.filter(b => b.payment_status === "paid").reduce((s, b) => s + Number(b.total_amount), 0).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                    </p>
+                    <p className="text-xs text-muted-foreground">{vendorBills.filter(b => b.payment_status === "paid").length} bills</p>
+                  </div>
+                </div>
+
+                {/* Pending bills table */}
+                {pendingBills.length === 0 && !billSearch && (
+                  <EmptyState
+                    icon={Building2}
+                    title="No pending vendor payments"
+                    description="All approved invoices have been paid."
+                  />
+                )}
+                {pendingBills.length > 0 && (
+                  <div>
+                    <h3 className="text-sm font-semibold text-muted-foreground uppercase mb-2">Pending Payment</h3>
+                    <div className="rounded-lg border overflow-hidden">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="bg-muted/30 border-b">
+                            <th className="px-4 py-3 text-left font-medium">Bill #</th>
+                            <th className="px-4 py-3 text-left font-medium">Vendor</th>
+                            <th className="px-4 py-3 text-left font-medium hidden md:table-cell">PO</th>
+                            <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Due</th>
+                            <th className="px-4 py-3 text-right font-medium">Invoice</th>
+                            <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Paid</th>
+                            <th className="px-4 py-3 text-right font-medium">Outstanding</th>
+                            <th className="px-4 py-3 text-left font-medium">Status</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {pendingBills.map((bill) => {
+                            const outstanding = Math.max(0, Number(bill.total_amount) - Number(bill.amount_paid ?? 0));
+                            const approvedCeiling = Number(bill.approved_amount ?? bill.total_amount);
+                            const approvedOutstanding = Math.max(0, approvedCeiling - Number(bill.amount_paid ?? 0));
+                            const isPartialApproval = bill.approved_amount !== null && bill.approved_amount < bill.total_amount;
+                            const today = new Date().toISOString().split("T")[0];
+                            const isOverdue = bill.due_date && bill.due_date < today;
+                            return (
+                              <tr
+                                key={bill.id}
+                                className="border-b last:border-0 hover:bg-muted/40 cursor-pointer"
+                                onClick={() => router.push(`/accounting/vendor-payments/${bill.id}`)}
+                              >
+                                <td className="px-4 py-3 font-mono text-xs font-medium">{bill.bill_number}</td>
+                                <td className="px-4 py-3">
+                                  <p className="font-medium truncate max-w-[140px]">
+                                    {(bill.procurement_vendors as { name: string } | null)?.name ?? "—"}
+                                  </p>
+                                </td>
+                                <td className="px-4 py-3 hidden md:table-cell text-muted-foreground text-xs">
+                                  {(bill.purchase_orders as { po_number: string } | null)?.po_number ?? "—"}
+                                </td>
+                                <td className="px-4 py-3 hidden sm:table-cell text-xs">
+                                  {bill.due_date ? (
+                                    <span className={isOverdue ? "text-red-600 font-semibold flex items-center gap-1" : "text-muted-foreground"}>
+                                      {isOverdue && <AlertCircle className="h-3 w-3" />}
+                                      {new Date(bill.due_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                                    </span>
+                                  ) : <span className="text-muted-foreground">—</span>}
+                                </td>
+                                <td className="px-4 py-3 text-right text-xs">
+                                  ₹{Number(bill.total_amount).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                                </td>
+                                <td className="px-4 py-3 text-right text-xs hidden sm:table-cell text-green-700 font-medium">
+                                  {Number(bill.amount_paid ?? 0) > 0 ? `₹${Number(bill.amount_paid).toLocaleString("en-IN", { minimumFractionDigits: 0 })}` : "—"}
+                                </td>
+                                <td className="px-4 py-3 text-right font-semibold text-sm">
+                                  <div>
+                                    <p className={isOverdue ? "text-red-700" : ""}>
+                                      ₹{outstanding.toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                                    </p>
+                                    {isPartialApproval && (
+                                      <p className="text-[10px] text-amber-600 font-normal">
+                                        ₹{approvedOutstanding.toLocaleString("en-IN")} approved
+                                      </p>
+                                    )}
+                                  </div>
+                                </td>
+                                <td className="px-4 py-3">
+                                  <div className="flex flex-col gap-0.5">
+                                    {bill.payment_status === "partially_paid" && (
+                                      <span className="text-[10px] font-medium bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full w-fit">Part Paid</span>
+                                    )}
+                                    {bill.payment_status === "unpaid" && (
+                                      <span className="text-[10px] font-medium bg-red-100 text-red-800 px-1.5 py-0.5 rounded-full w-fit">Unpaid</span>
+                                    )}
+                                    {isPartialApproval && (
+                                      <span className="text-[10px] font-medium bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded-full w-fit">Part Approved</span>
+                                    )}
+                                    {isOverdue && (
+                                      <span className="text-[10px] font-medium bg-red-50 text-red-700 px-1.5 py-0.5 rounded-full w-fit">Overdue</span>
+                                    )}
+                                  </div>
+                                </td>
+                              </tr>
+                            );
+                          })}
+                        </tbody>
+                        <tfoot>
+                          <tr className="bg-muted/20 border-t">
+                            <td colSpan={4} className="px-4 py-2.5 text-xs text-muted-foreground font-medium">
+                              {pendingBills.length} bill{pendingBills.length !== 1 ? "s" : ""} pending payment
+                            </td>
+                            <td colSpan={3} className="px-4 py-2.5 text-right font-bold text-sm">
+                              ₹{pendingBills.reduce((s, b) => s + Math.max(0, Number(b.total_amount) - Number(b.amount_paid ?? 0)), 0).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                            </td>
+                            <td />
+                          </tr>
+                        </tfoot>
+                      </table>
+                    </div>
+                  </div>
+                )}
+
+                {/* Payment History */}
+                {(allPaidBills.length > 0 || billSearch) && (
+                  <div>
+                    <div className="flex items-center gap-2 mb-2">
+                      <History className="h-4 w-4 text-muted-foreground" />
+                      <h3 className="text-sm font-semibold text-muted-foreground uppercase">
+                        Payment History
+                      </h3>
+                      <span className="text-xs text-muted-foreground">
+                        ({allPaidBills.length} bill{allPaidBills.length !== 1 ? "s" : ""})
+                      </span>
+                    </div>
+
+                    {allPaidBills.length === 0 ? (
+                      <p className="text-sm text-muted-foreground py-4 text-center border rounded-lg">No paid bills match your search.</p>
+                    ) : (
+                      <>
+                        <div className="rounded-lg border overflow-hidden">
+                          <table className="w-full text-sm">
+                            <thead>
+                              <tr className="bg-muted/20 border-b">
+                                <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground">Bill #</th>
+                                <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground">Vendor</th>
+                                <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground hidden md:table-cell">PO</th>
+                                <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground hidden sm:table-cell">Invoice Date</th>
+                                <th className="px-4 py-2.5 text-right font-medium text-xs text-muted-foreground">Amount</th>
+                                <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground hidden sm:table-cell">Payment Date</th>
+                                <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground">Status</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {visiblePaidBills.map((bill) => (
+                                <tr
+                                  key={bill.id}
+                                  className="border-b last:border-0 hover:bg-muted/30 cursor-pointer"
+                                  onClick={() => router.push(`/accounting/vendor-payments/${bill.id}`)}
+                                >
+                                  <td className="px-4 py-2.5 font-mono text-xs font-medium">{bill.bill_number}</td>
+                                  <td className="px-4 py-2.5">
+                                    <p className="font-medium truncate max-w-[140px] text-xs">
+                                      {(bill.procurement_vendors as { name: string } | null)?.name ?? "—"}
+                                    </p>
+                                  </td>
+                                  <td className="px-4 py-2.5 hidden md:table-cell text-muted-foreground text-xs">
+                                    {(bill.purchase_orders as { po_number: string } | null)?.po_number ?? "—"}
+                                  </td>
+                                  <td className="px-4 py-2.5 hidden sm:table-cell text-xs text-muted-foreground">
+                                    {bill.invoice_date
+                                      ? new Date(bill.invoice_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "2-digit" })
+                                      : "—"}
+                                  </td>
+                                  <td className="px-4 py-2.5 text-right text-xs font-medium">
+                                    ₹{Number(bill.total_amount).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                                  </td>
+                                  <td className="px-4 py-2.5 hidden sm:table-cell text-xs text-muted-foreground">
+                                    {bill.payment_date
+                                      ? new Date(bill.payment_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "2-digit" })
+                                      : "—"}
+                                  </td>
+                                  <td className="px-4 py-2.5">
+                                    <span className="text-[10px] font-medium bg-green-100 text-green-800 px-1.5 py-0.5 rounded-full">Paid</span>
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+
+                        {allPaidBills.length > historyLimit && (
+                          <button
+                            className="mt-3 w-full flex items-center justify-center gap-1.5 text-xs text-muted-foreground hover:text-foreground py-2 border border-dashed rounded-lg hover:border-border transition-colors"
+                            onClick={() => setHistoryLimit(prev => prev + 10)}
+                          >
+                            <ChevronDown className="h-3.5 w-3.5" />
+                            Show more ({allPaidBills.length - historyLimit} remaining)
+                          </button>
+                        )}
+                      </>
+                    )}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Export dialog */}
       <ExportSummaryDialog
