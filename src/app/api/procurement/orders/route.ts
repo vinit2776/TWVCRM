@@ -159,6 +159,14 @@ export async function POST(request: NextRequest) {
     const totalAmount = parsed.data.unit_cost_per_cycle * parsed.data.cycle_count;
     const svcGstRate = parsed.data.gst_rate ?? 0;
     const svcGstAmount = Math.round(totalAmount * svcGstRate) / 100;
+    const totalWithGst = totalAmount + svcGstAmount;
+
+    // Advance cannot exceed PO total (including GST)
+    if (parsed.data.advance_amount && parsed.data.advance_amount > totalWithGst) {
+      return NextResponse.json({
+        error: `Advance amount (₹${parsed.data.advance_amount.toLocaleString("en-IN")}) cannot exceed PO total (₹${totalWithGst.toLocaleString("en-IN")})`
+      }, { status: 422 });
+    }
 
     const hasAdvance = !!parsed.data.advance_amount;
     // Compute initial amc_status if AMC dates were provided
@@ -329,7 +337,15 @@ export async function POST(request: NextRequest) {
 
   const poNumber = generatePoNumber(existingCount ?? 0);
 
-  // ── 4. Insert purchase order ──
+  // ── 4. Validate advance amount ≤ PO total ──
+  const goodsTotalWithGst = totalOrderedAmount + totalGstAmount;
+  if (parsed.data.advance_amount && parsed.data.advance_amount > goodsTotalWithGst) {
+    return NextResponse.json({
+      error: `Advance amount (₹${parsed.data.advance_amount.toLocaleString("en-IN")}) cannot exceed PO total (₹${goodsTotalWithGst.toLocaleString("en-IN")})`
+    }, { status: 422 });
+  }
+
+  // ── 5. Insert purchase order ──
   const hasAdvance = !!parsed.data.advance_amount;
   const { data: po, error: poError } = await supabase
     .from("purchase_orders")

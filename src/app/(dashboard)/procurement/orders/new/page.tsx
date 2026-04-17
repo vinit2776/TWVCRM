@@ -295,6 +295,10 @@ function NewPurchaseOrderFormWithPr({
       if (!advanceAmount || isNaN(parseFloat(advanceAmount)) || parseFloat(advanceAmount) <= 0)
         return "Advance amount must be a positive number";
       if (!advanceMode) return "Please select a payment mode for the advance";
+      const poTotal = totalOrdered + totalGst;
+      if (poTotal > 0 && parseFloat(advanceAmount) > poTotal) {
+        return `Advance amount (₹${parseFloat(advanceAmount).toLocaleString("en-IN")}) cannot exceed PO total (₹${poTotal.toLocaleString("en-IN")})`;
+      }
     }
     const orderable = activeItems.filter(li => parseFloat(li.quantity_ordered) > 0);
     if (orderable.length === 0) return "At least one item must have a quantity greater than 0";

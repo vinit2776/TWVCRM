@@ -128,6 +128,10 @@ function NewServicePOForm() {
         toast.error("Advance amount must be a positive number"); return;
       }
       if (!advanceMode) { toast.error("Please select a payment mode for the advance"); return; }
+      if (totalWithGst > 0 && parseFloat(advanceAmount) > totalWithGst) {
+        toast.error(`Advance amount (${formatCurrency(parseFloat(advanceAmount))}) cannot exceed the PO total (${formatCurrency(totalWithGst)})`);
+        return;
+      }
     }
 
     // AMC warning (non-blocking)
@@ -573,7 +577,13 @@ function NewServicePOForm() {
                       placeholder="e.g. 5000"
                       value={advanceAmount}
                       onChange={(e) => setAdvanceAmount(e.target.value)}
+                      className={totalWithGst > 0 && parseFloat(advanceAmount) > totalWithGst ? "border-red-400 focus-visible:ring-red-400" : ""}
                     />
+                    {totalWithGst > 0 && parseFloat(advanceAmount) > 0 && parseFloat(advanceAmount) > totalWithGst && (
+                      <p className="text-xs text-red-600 mt-0.5">
+                        Exceeds PO total ({formatCurrency(totalWithGst)})
+                      </p>
+                    )}
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="advance_mode">Payment Mode <span className="text-red-500">*</span></Label>
