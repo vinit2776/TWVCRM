@@ -53,7 +53,7 @@ export async function POST(
   const customerPhone = lead?.phone || lead?.mobile;
 
   // Create Razorpay link
-  const adminSupabase = await createAdminClient();
+  const adminSupabase = createAdminClient();
   const { data: rzpSettings } = await adminSupabase
     .from("app_settings")
     .select("key, value")
@@ -74,7 +74,7 @@ export async function POST(
     amount: Math.round(depositAmount * 100),
     currency: "INR",
     description: `Security Deposit — ${proposal.proposal_number} — The WorkVilla`,
-    reference_id: `${proposal.proposal_number}-DEP`,
+    reference_id: `${proposal.proposal_number}-DEP-${Date.now()}`,
     expire_by: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60, // 30 days
     notify: { sms: !!customerPhone, email: !!customerEmail },
     reminder_enable: true,

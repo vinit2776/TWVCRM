@@ -100,7 +100,7 @@ export async function POST(
     let rzpError: string | null = null;
 
     try {
-      const adminSupabase = await createAdminClient();
+      const adminSupabase = createAdminClient();
       const { data: rzpSettings } = await adminSupabase
         .from("app_settings")
         .select("key, value")

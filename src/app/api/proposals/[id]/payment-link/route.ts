@@ -36,7 +36,7 @@ export async function POST(
   }
 
   // Check Razorpay settings
-  const adminSupabase = await createAdminClient();
+  const adminSupabase = createAdminClient();
   const { data: rzpSettings } = await adminSupabase
     .from("app_settings")
     .select("key, value")

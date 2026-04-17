@@ -671,6 +671,24 @@ export default function ProposalDetailPage({
                     </>
                   )}
 
+                  {/* Monthly payment link — always visible once created, for sharing with customer */}
+                  {!invoiceSent && proposal.payment_status !== "paid" && proposal.razorpay_payment_link_url && (
+                    <div className="rounded bg-blue-50 border border-blue-200 p-2 space-y-1">
+                      <p className="text-xs text-blue-700 font-medium">Monthly charge payment link</p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          readOnly
+                          value={proposal.razorpay_payment_link_url}
+                          className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-blue-800"
+                        />
+                        <Button size="sm" variant="outline" className="text-xs h-7 shrink-0"
+                          onClick={() => { navigator.clipboard.writeText(proposal.razorpay_payment_link_url!); toast.success("Payment link copied"); }}>
+                          Copy
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
                   {/* Send GST Invoice button */}
                   {!invoiceSent && proposal.payment_status !== "paid" && (
                     <>
