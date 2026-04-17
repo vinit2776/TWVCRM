@@ -48,6 +48,13 @@ const createServicePoSchema = z.object({
   notes: z.string().nullish(),
   payment_terms: z.string().nullish(),
   terms_and_conditions: z.string().nullish(),
+  // AMC fields (optional — for AMC contracts)
+  amc_start_date: z.string().nullish(),
+  amc_end_date: z.string().nullish(),
+  amc_visits_covered: z.number().int().positive().nullish(),
+  amc_contact_name: z.string().nullish(),
+  amc_helpline_number: z.string().nullish(),
+  amc_contact_email: z.string().email().nullish().or(z.literal("").transform(() => null)),
 }).merge(advancePaymentSchema);
 
 function generatePoNumber(count: number): string {
@@ -154,6 +161,26 @@ export async function POST(request: NextRequest) {
     const svcGstAmount = Math.round(totalAmount * svcGstRate) / 100;
 
     const hasAdvance = !!parsed.data.advance_amount;
+    // Compute initial amc_status if AMC dates were provided
+    const amcStart = parsed.data.amc_start_date ?? null;
+    const amcEnd = parsed.data.amc_end_date ?? null;
+    const amcVisitsCovered = parsed.data.amc_visits_covered ?? null;
+    let amcStatus = "inactive";
+    if (amcStart) {
+      const today = new Date();
+      const start = new Date(amcStart);
+      if (today >= start) {
+        if (amcEnd && today > new Date(amcEnd)) {
+          amcStatus = "expired";
+        } else if (amcEnd) {
+          const daysLeft = Math.floor((new Date(amcEnd).getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+          amcStatus = daysLeft <= 60 ? "expiring" : "active";
+        } else {
+          amcStatus = "active";
+        }
+      }
+    }
+
     const { data: po, error: poError } = await supabase
       .from("purchase_orders")
       .insert({
@@ -177,6 +204,15 @@ export async function POST(request: NextRequest) {
         advance_payment_mode: parsed.data.advance_payment_mode ?? null,
         advance_payment_reference: parsed.data.advance_payment_reference ?? null,
         advance_notes: parsed.data.advance_notes ?? null,
+        // AMC fields
+        amc_start_date: amcStart,
+        amc_end_date: amcEnd,
+        amc_visits_covered: amcVisitsCovered,
+        amc_visits_used: 0,
+        amc_contact_name: parsed.data.amc_contact_name ?? null,
+        amc_helpline_number: parsed.data.amc_helpline_number ?? null,
+        amc_contact_email: parsed.data.amc_contact_email ?? null,
+        amc_status: amcStatus,
         advance_status: hasAdvance ? "pending" : "not_required",
       })
       .select("id, po_number")

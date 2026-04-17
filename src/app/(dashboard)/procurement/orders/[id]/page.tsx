@@ -7,7 +7,8 @@ import {
   ChevronLeft, Loader2, Truck, MapPin, User, Calendar,
   FileText, PackageOpen, Receipt, Download, CreditCard,
   Clock, Paperclip, X, CheckCircle2, Package, ClipboardList, Info,
-  AlertTriangle, Undo2, Mail,
+  AlertTriangle, Undo2, Mail, Wrench, Phone, CalendarDays,
+  XCircle, Edit3, Save,
 } from "lucide-react";
 import { generatePurchaseOrderPDF } from "@/lib/po-pdf-generator";
 import { Button } from "@/components/ui/button";
@@ -29,7 +30,8 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
-import type { PurchaseOrder, AuditLog, PoServiceReport } from "@/types";
+import type { PurchaseOrder, AuditLog, PoServiceReport, AmcServiceEvent, AmcStatus } from "@/types";
+import { AmcEventDialog } from "@/components/procurement/amc-event-dialog";
 
 const ACCEPTED_FILE_TYPES = ["application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -327,6 +329,22 @@ export default function PurchaseOrderDetailPage() {
   const [srUploading, setSrUploading] = useState(false);
   const srFileRef = useRef<HTMLInputElement>(null);
 
+  // AMC Events
+  const [amcEvents, setAmcEvents] = useState<AmcServiceEvent[]>([]);
+  const [amcEventsLoaded, setAmcEventsLoaded] = useState(false);
+  const [amcEventsLoading, setAmcEventsLoading] = useState(false);
+  const [showAmcEventDialog, setShowAmcEventDialog] = useState(false);
+  // AMC contact edit mode
+  const [amcEditMode, setAmcEditMode] = useState(false);
+  const [amcContactName, setAmcContactName] = useState("");
+  const [amcHelpline, setAmcHelpline] = useState("");
+  const [amcContactEmail, setAmcContactEmail] = useState("");
+  const [amcStartDate, setAmcStartDate] = useState("");
+  const [amcEndDate, setAmcEndDate] = useState("");
+  const [amcVisitsCovered, setAmcVisitsCovered] = useState("");
+  const [amcUnlimited, setAmcUnlimited] = useState(false);
+  const [amcSaving, setAmcSaving] = useState(false);
+
   const today = new Date().toISOString().split("T")[0];
 
   const fetchPo = useCallback(async () => {
@@ -344,6 +362,48 @@ export default function PurchaseOrderDetailPage() {
   }, [id, router]);
 
   useEffect(() => { fetchPo(); }, [fetchPo]);
+
+  // Load AMC events (called on demand when AMC section is first rendered)
+  const fetchAmcEvents = useCallback(async () => {
+    if (amcEventsLoaded) return;
+    setAmcEventsLoading(true);
+    try {
+      const res = await fetch(`/api/procurement/amc/${id}/events`);
+      const data = await res.json();
+      setAmcEvents(data.data ?? []);
+      setAmcEventsLoaded(true);
+    } catch {
+      toast.error("Failed to load AMC service events");
+    } finally {
+      setAmcEventsLoading(false);
+    }
+  }, [id, amcEventsLoaded]);
+
+  const saveAmcDetails = async () => {
+    setAmcSaving(true);
+    try {
+      const res = await fetch(`/api/procurement/orders/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "update_amc_details",
+          amc_start_date: amcStartDate || null,
+          amc_end_date: amcEndDate || null,
+          amc_visits_covered: amcUnlimited ? null : amcVisitsCovered ? parseInt(amcVisitsCovered) : null,
+          amc_contact_name: amcContactName || null,
+          amc_helpline_number: amcHelpline || null,
+          amc_contact_email: amcContactEmail || null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Failed to save AMC details"); return; }
+      toast.success("AMC details saved");
+      setAmcEditMode(false);
+      await fetchPo();
+    } finally {
+      setAmcSaving(false);
+    }
+  };
 
   // Check if a vendor bill exists for this PO when status is invoice_received
   useEffect(() => {
@@ -630,6 +690,27 @@ export default function PurchaseOrderDetailPage() {
   } | null;
 
   const timelineItems = buildTimeline(po, auditEvents);
+
+  // Determine if this is an AMC PO
+  const isAmcPo =
+    po.purchase_requests?.expenditure_type === "amc" || !!po.amc_start_date;
+
+  const AMC_STATUS_LABELS: Record<AmcStatus, string> = {
+    inactive: "Inactive", active: "Active", expiring: "Expiring Soon",
+    exhausted: "Exhausted", expired: "Expired",
+  };
+  const AMC_STATUS_BADGE: Record<AmcStatus, string> = {
+    inactive: "bg-gray-100 text-gray-600",
+    active:   "bg-green-100 text-green-700",
+    expiring: "bg-amber-100 text-amber-700",
+    exhausted:"bg-red-100 text-red-700",
+    expired:  "bg-red-100 text-red-600",
+  };
+
+  const amcStatus = (po.amc_status ?? "inactive") as AmcStatus;
+  const amcVisitsUsed = po.amc_visits_used ?? 0;
+  const amcVisitsCoveredNum = po.amc_visits_covered ?? null;
+  const amcVisitPct = amcVisitsCoveredNum ? Math.min(100, Math.round((amcVisitsUsed / amcVisitsCoveredNum) * 100)) : 0;
 
   return (
     <div className="space-y-6 max-w-4xl mx-auto">
@@ -961,6 +1042,299 @@ export default function PurchaseOrderDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* ── AMC Contract Panel ─────────────────────────────────────────── */}
+      {isAmcPo && (() => {
+        // Lazy-load events when this section first renders
+        if (!amcEventsLoaded && !amcEventsLoading) fetchAmcEvents();
+
+        const missingInfo = !po.amc_start_date || (!po.amc_contact_name && !po.amc_helpline_number);
+
+        return (
+          <Card className="border-blue-200">
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Wrench className="h-4 w-4 text-blue-600" />
+                  <CardTitle className="text-base">AMC Contract</CardTitle>
+                  <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full font-medium ${AMC_STATUS_BADGE[amcStatus]}`}>
+                    {AMC_STATUS_LABELS[amcStatus]}
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  {!amcEditMode && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => {
+                        setAmcContactName(po.amc_contact_name ?? "");
+                        setAmcHelpline(po.amc_helpline_number ?? "");
+                        setAmcContactEmail(po.amc_contact_email ?? "");
+                        setAmcStartDate(po.amc_start_date ?? "");
+                        setAmcEndDate(po.amc_end_date ?? "");
+                        setAmcUnlimited(po.amc_visits_covered == null && !!po.amc_start_date);
+                        setAmcVisitsCovered(po.amc_visits_covered ? String(po.amc_visits_covered) : "");
+                        setAmcEditMode(true);
+                      }}
+                    >
+                      <Edit3 className="h-3.5 w-3.5 mr-1" /> Edit
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    className="bg-blue-600 hover:bg-blue-700"
+                    onClick={() => setShowAmcEventDialog(true)}
+                  >
+                    <Wrench className="h-3.5 w-3.5 mr-1" />
+                    Log Service Event
+                  </Button>
+                </div>
+              </div>
+            </CardHeader>
+
+            <CardContent className="space-y-5">
+              {/* Missing info warning */}
+              {missingInfo && (
+                <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+                  <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-amber-600" />
+                  <span>
+                    {!po.amc_start_date
+                      ? "AMC contract dates are not set. Add start/end dates to activate tracking."
+                      : "AMC contact details are missing. Add helpline/contact info before issuing."}
+                  </span>
+                </div>
+              )}
+
+              {/* Edit form */}
+              {amcEditMode ? (
+                <div className="space-y-4 rounded-lg border bg-muted/30 p-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Contract Start Date</Label>
+                      <Input type="date" value={amcStartDate} onChange={(e) => setAmcStartDate(e.target.value)} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Contract End Date</Label>
+                      <Input type="date" value={amcEndDate} onChange={(e) => setAmcEndDate(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="space-y-2">
+                    <Label className="text-xs">Visits / Calls Covered</Label>
+                    <div className="flex items-center gap-3">
+                      <Input
+                        type="number"
+                        min={1}
+                        placeholder="e.g. 12"
+                        value={amcUnlimited ? "" : amcVisitsCovered}
+                        onChange={(e) => setAmcVisitsCovered(e.target.value)}
+                        disabled={amcUnlimited}
+                        className="w-28"
+                      />
+                      <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={amcUnlimited}
+                          onChange={(e) => {
+                            setAmcUnlimited(e.target.checked);
+                            if (e.target.checked) setAmcVisitsCovered("");
+                          }}
+                          className="rounded"
+                        />
+                        Unlimited
+                      </label>
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">AMC Contact Name</Label>
+                      <Input placeholder="e.g. Rajesh Kumar" value={amcContactName} onChange={(e) => setAmcContactName(e.target.value)} />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label className="text-xs">Helpline / Support No.</Label>
+                      <Input placeholder="+91 98400 12345" value={amcHelpline} onChange={(e) => setAmcHelpline(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label className="text-xs">AMC Contact Email</Label>
+                    <Input type="email" placeholder="amc@vendor.com" value={amcContactEmail} onChange={(e) => setAmcContactEmail(e.target.value)} />
+                  </div>
+                  <div className="flex gap-2 pt-1">
+                    <Button size="sm" onClick={saveAmcDetails} disabled={amcSaving}>
+                      {amcSaving && <Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />}
+                      <Save className="h-3.5 w-3.5 mr-1" /> Save
+                    </Button>
+                    <Button size="sm" variant="outline" onClick={() => setAmcEditMode(false)} disabled={amcSaving}>
+                      Cancel
+                    </Button>
+                  </div>
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-5">
+                  {/* Contract period */}
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-2.5">
+                      <CalendarDays className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                      <div>
+                        <p className="text-xs text-muted-foreground mb-0.5">Contract Period</p>
+                        {po.amc_start_date ? (
+                          <p className="text-sm font-medium">
+                            {formatDate(po.amc_start_date)} – {po.amc_end_date ? formatDate(po.amc_end_date) : "Open-ended"}
+                          </p>
+                        ) : (
+                          <p className="text-sm text-amber-600">Not set</p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Visits counter */}
+                    <div className="flex items-start gap-2.5">
+                      <Wrench className="h-4 w-4 text-muted-foreground mt-0.5 flex-shrink-0" />
+                      <div className="flex-1">
+                        <p className="text-xs text-muted-foreground mb-1">Visits / Calls</p>
+                        {amcVisitsCoveredNum === null ? (
+                          <p className="text-sm font-medium">
+                            {amcVisitsUsed} used · <span className="text-blue-600">∞ unlimited</span>
+                          </p>
+                        ) : (
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-xs">
+                              <span className="font-medium">{amcVisitsUsed} / {amcVisitsCoveredNum} used</span>
+                              <span className={amcVisitPct >= 100 ? "text-red-600 font-medium" : "text-muted-foreground"}>{amcVisitPct}%</span>
+                            </div>
+                            <div className="h-1.5 bg-muted rounded-full overflow-hidden">
+                              <div
+                                className={`h-full rounded-full ${amcVisitPct >= 100 ? "bg-red-500" : amcVisitPct >= 80 ? "bg-amber-500" : "bg-green-500"}`}
+                                style={{ width: `${amcVisitPct}%` }}
+                              />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Contact details */}
+                  <div className="space-y-3">
+                    {po.amc_contact_name && (
+                      <div className="flex items-center gap-2.5">
+                        <User className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-0.5">AMC Contact</p>
+                          <p className="text-sm font-medium">{po.amc_contact_name}</p>
+                        </div>
+                      </div>
+                    )}
+                    {po.amc_helpline_number && (
+                      <div className="flex items-center gap-2.5">
+                        <Phone className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-0.5">Helpline</p>
+                          <a href={`tel:${po.amc_helpline_number}`} className="text-sm font-medium text-primary hover:underline">
+                            {po.amc_helpline_number}
+                          </a>
+                        </div>
+                      </div>
+                    )}
+                    {po.amc_contact_email && (
+                      <div className="flex items-center gap-2.5">
+                        <Mail className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+                        <div>
+                          <p className="text-xs text-muted-foreground mb-0.5">AMC Email</p>
+                          <a href={`mailto:${po.amc_contact_email}`} className="text-sm font-medium text-primary hover:underline">
+                            {po.amc_contact_email}
+                          </a>
+                        </div>
+                      </div>
+                    )}
+                    {!po.amc_contact_name && !po.amc_helpline_number && !po.amc_contact_email && (
+                      <p className="text-sm text-muted-foreground">No contact details — click Edit to add.</p>
+                    )}
+                  </div>
+                </div>
+              )}
+
+              {/* Service Events List */}
+              <div>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm font-medium">Service Events</p>
+                  {amcEventsLoaded && (
+                    <span className="text-xs text-muted-foreground">{amcEvents.length} event{amcEvents.length !== 1 ? "s" : ""} logged</span>
+                  )}
+                </div>
+
+                {amcEventsLoading ? (
+                  <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+                    <Loader2 className="h-4 w-4 animate-spin" /> Loading events...
+                  </div>
+                ) : amcEvents.length === 0 ? (
+                  <div className="rounded-lg border border-dashed p-4 text-center">
+                    <p className="text-sm text-muted-foreground">No service events logged yet.</p>
+                    <p className="text-xs text-muted-foreground mt-1">
+                      Click &ldquo;Log Service Event&rdquo; above when AMC services are used.
+                    </p>
+                  </div>
+                ) : (
+                  <div className="relative pl-5 space-y-4">
+                    <div className="absolute left-[7px] top-2 bottom-2 w-px bg-border" />
+                    {amcEvents.map((ev) => {
+                      const typeColors: Record<string, string> = {
+                        breakdown: "bg-red-500",
+                        preventive: "bg-green-500",
+                        remote_support: "bg-blue-500",
+                        annual_service: "bg-purple-500",
+                      };
+                      const typeLabels: Record<string, string> = {
+                        breakdown: "Breakdown",
+                        preventive: "Preventive Visit",
+                        remote_support: "Remote Support",
+                        annual_service: "Annual Service",
+                      };
+                      return (
+                        <div key={ev.id} className="relative flex gap-3">
+                          <div className={`absolute -left-5 mt-1 h-3.5 w-3.5 rounded-full border-2 border-background ${typeColors[ev.event_type] ?? "bg-gray-400"}`} />
+                          <div className="ml-1 min-w-0 flex-1">
+                            <div className="flex items-start justify-between gap-2">
+                              <div>
+                                <p className="text-sm font-medium leading-snug">
+                                  #{ev.event_number} · {typeLabels[ev.event_type] ?? ev.event_type}
+                                </p>
+                                <p className="text-xs text-muted-foreground mt-0.5">
+                                  {formatDate(ev.event_date)}
+                                  {ev.technician_name ? ` · ${ev.technician_name}` : ""}
+                                  {ev.logger?.full_name ? ` · Logged by ${ev.logger.full_name}` : ""}
+                                </p>
+                              </div>
+                              {ev.report_file_url && (
+                                <a
+                                  href={ev.report_file_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-xs text-primary hover:underline flex items-center gap-1 flex-shrink-0"
+                                >
+                                  <Paperclip className="h-3 w-3" /> Job Card
+                                </a>
+                              )}
+                            </div>
+                            <p className="text-sm text-muted-foreground mt-1">{ev.issue_description}</p>
+                            {ev.resolution_notes && (
+                              <p className="text-xs text-muted-foreground mt-0.5 italic">{ev.resolution_notes}</p>
+                            )}
+                            {ev.next_scheduled_date && (
+                              <p className="text-xs text-blue-600 mt-0.5">
+                                Next visit: {formatDate(ev.next_scheduled_date)}
+                              </p>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
+        );
+      })()}
 
       {/* Advance Payment */}
       {(po.advance_amount ?? 0) > 0 && (
@@ -2027,6 +2401,23 @@ export default function PurchaseOrderDetailPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* AMC Service Event Dialog */}
+      {isAmcPo && (
+        <AmcEventDialog
+          open={showAmcEventDialog}
+          onOpenChange={setShowAmcEventDialog}
+          poId={po.id}
+          eventNumber={(amcEvents.length) + 1}
+          visitsCovered={amcVisitsCoveredNum}
+          visitsUsed={amcVisitsUsed}
+          onSuccess={() => {
+            setAmcEventsLoaded(false);
+            fetchAmcEvents();
+            fetchPo();
+          }}
+        />
+      )}
     </div>
   );
 }

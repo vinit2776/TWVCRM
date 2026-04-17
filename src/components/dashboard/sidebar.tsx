@@ -46,6 +46,7 @@ import {
   UtensilsCrossed,
   BarChart3 as BarChart3Icon,
   UsersRound,
+  Wrench,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -135,6 +136,7 @@ const navSections: NavSection[] = [
       { href: "/procurement/inventory",   label: "Inventory",         icon: Warehouse,         roles: ["admin", "manager", "office_admin"] },
       { href: "/procurement/transfers",   label: "Transfers",         icon: ArrowLeftRight,    roles: ["admin", "manager", "office_admin"] },
       { href: "/procurement/consumption", label: "Consumption",       icon: UtensilsCrossed,   roles: ["admin", "manager", "office_admin"] },
+      { href: "/procurement/amc",         label: "AMC Contracts",     icon: Wrench,            roles: ["admin", "manager", "office_admin"] },
       { href: "/procurement/verify",      label: "Verify Approval",   icon: ShieldCheck,       roles: ["admin", "manager", "office_admin"] },
     ],
   },

@@ -1615,6 +1615,25 @@ export interface PoBillSummary {
 
 export type PoAdvanceStatus = "not_required" | "pending" | "processed";
 
+export type AmcStatus = "inactive" | "active" | "expiring" | "exhausted" | "expired";
+export type AmcEventType = "breakdown" | "preventive" | "remote_support" | "annual_service";
+
+export interface AmcServiceEvent {
+  id: string;
+  po_id: string;
+  event_number: number;
+  event_type: AmcEventType;
+  event_date: string;
+  technician_name?: string | null;
+  issue_description: string;
+  resolution_notes?: string | null;
+  next_scheduled_date?: string | null;
+  report_file_url?: string | null;
+  logged_by?: string | null;
+  created_at: string;
+  logger?: { id: string; full_name?: string } | null;
+}
+
 export interface PurchaseOrder {
   id: string;
   po_number: string;
@@ -1646,18 +1665,28 @@ export interface PurchaseOrder {
   advance_processed_by?: string | null;
   advance_processed_at?: string | null;
   advance_payment_date?: string | null;
+  // AMC fields
+  amc_start_date?: string | null;
+  amc_end_date?: string | null;
+  amc_visits_covered?: number | null;  // null = unlimited
+  amc_visits_used?: number;
+  amc_contact_name?: string | null;
+  amc_helpline_number?: string | null;
+  amc_contact_email?: string | null;
+  amc_status?: AmcStatus;
   created_at: string;
   updated_at: string;
   // Joined fields
   procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
   locations?: { id: string; name: string } | null;
   orderer?: { id: string; full_name?: string; email?: string } | null;
-  purchase_requests?: (Pick<PurchaseRequest, "id" | "pr_number" | "department" | "approval_code" | "approved_at"> & {
+  purchase_requests?: (Pick<PurchaseRequest, "id" | "pr_number" | "department" | "approval_code" | "approved_at" | "expenditure_type"> & {
     approver?: { id: string; full_name?: string; email?: string } | null;
   }) | null;
   purchase_order_items?: PurchaseOrderItem[];
   po_delivery_receipts?: PoDeliveryReceipt[];
   po_service_reports?: PoServiceReport[];
+  amc_service_events?: AmcServiceEvent[];
   vendor_bills?: PoBillSummary[];
 }
 

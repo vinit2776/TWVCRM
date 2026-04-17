@@ -22,6 +22,15 @@ const patchPoSchema = z.discriminatedUnion("action", [
     action: z.literal("process_advance"),
     advance_payment_date: z.string().min(1, "Payment date is required"),
   }),
+  z.object({
+    action: z.literal("update_amc_details"),
+    amc_start_date: z.string().nullable().optional(),
+    amc_end_date: z.string().nullable().optional(),
+    amc_visits_covered: z.number().int().positive().nullable().optional(),
+    amc_contact_name: z.string().nullable().optional(),
+    amc_helpline_number: z.string().nullable().optional(),
+    amc_contact_email: z.string().email().nullable().optional().or(z.literal("").transform(() => null)),
+  }),
 ]);
 
 export async function GET(
@@ -39,7 +48,7 @@ export async function GET(
   const { data, error } = await supabase
     .from("purchase_orders")
     .select(
-      `*, purchase_order_items(*, procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), purchase_requests(id, pr_number, department, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), po_service_reports(*, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, approval_status, service_report_id, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
+      `*, purchase_order_items(*, procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), purchase_requests(id, pr_number, department, expenditure_type, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), po_service_reports(*, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, approval_status, service_report_id, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
     )
     .eq("id", id)
     .single();
@@ -267,6 +276,43 @@ export async function PATCH(
         advance_processed_by: dbUser.id,
         advance_processed_at: new Date().toISOString(),
         advance_payment_date: parsed.data.advance_payment_date,
+      };
+      break;
+    }
+
+    case "update_amc_details": {
+      if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+        return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
+      }
+      const { amc_start_date, amc_end_date, amc_visits_covered, amc_contact_name, amc_helpline_number, amc_contact_email } = parsed.data;
+
+      // Compute amc_status from new values
+      const today = new Date();
+      const start = amc_start_date ? new Date(amc_start_date) : null;
+      const end = amc_end_date ? new Date(amc_end_date) : null;
+      const visitsUsed = Number(po.amc_visits_used ?? 0);
+      let newAmcStatus = "inactive";
+      if (start && today >= start) {
+        if (end && today > end) {
+          newAmcStatus = "expired";
+        } else if (amc_visits_covered !== undefined && amc_visits_covered !== null && visitsUsed >= amc_visits_covered) {
+          newAmcStatus = "exhausted";
+        } else if (end) {
+          const daysLeft = Math.floor((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+          newAmcStatus = daysLeft <= 60 ? "expiring" : "active";
+        } else {
+          newAmcStatus = "active";
+        }
+      }
+
+      updatePayload = {
+        amc_start_date: amc_start_date ?? null,
+        amc_end_date: amc_end_date ?? null,
+        amc_visits_covered: amc_visits_covered ?? null,
+        amc_contact_name: amc_contact_name ?? null,
+        amc_helpline_number: amc_helpline_number ?? null,
+        amc_contact_email: amc_contact_email ?? null,
+        amc_status: newAmcStatus,
       };
       break;
     }
