@@ -66,6 +66,28 @@ export default function ProposalDetailPage({
   const [manualPaySubmitting, setManualPaySubmitting] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Deposit email preview dialog
+  const [depositEmailOpen, setDepositEmailOpen] = useState(false);
+  const [depositEmailLoading, setDepositEmailLoading] = useState(false);
+  const [depositEmailSending, setDepositEmailSending] = useState(false);
+  const [depositEmailPreview, setDepositEmailPreview] = useState<{
+    subject: string; html: string; to: string[]; deposit_link_url: string | null; amount: number; link_already_exists: boolean;
+  } | null>(null);
+
+  // GST invoice preview dialog
+  const [gstDialogOpen, setGstDialogOpen] = useState(false);
+  const [gstDate, setGstDate] = useState<string>("");
+  const [gstPreviewLoading, setGstPreviewLoading] = useState(false);
+  const [gstSending, setGstSending] = useState(false);
+  const [gstIsRevise, setGstIsRevise] = useState(false);
+  const [gstPreview, setGstPreview] = useState<{
+    subject: string; html: string; to: string[]; invoiceNumber: string;
+    proratedSubtotal: number; taxAmount: number; totalAmount: number;
+    daysRemaining: number; daysInMonth: number; prorationFactor: number;
+    periodLabel: string; startLabel: string; endLabel: string;
+    razorpayUrl: string | null; previous_occupation_start_date: string | null;
+  } | null>(null);
+
   const fetchProposal = useCallback(async () => {
     setLoading(true);
     const res = await fetch(`/api/proposals/${id}`);
@@ -141,6 +163,117 @@ export default function ProposalDetailPage({
     setManualPayNotes("");
     setManualPayFile(null);
     setManualPayDialogOpen(true);
+  };
+
+  // ── Deposit email preview + send ─────────────────────────────────────────
+  const openDepositEmailDialog = async () => {
+    setDepositEmailOpen(true);
+    setDepositEmailPreview(null);
+    setDepositEmailLoading(true);
+    try {
+      const res = await fetch(`/api/proposals/${id}/deposit-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ preview: true }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        setDepositEmailPreview(json);
+      } else {
+        toast.error(json.error || "Failed to generate preview");
+        setDepositEmailOpen(false);
+      }
+    } catch {
+      toast.error("Unexpected error generating preview");
+      setDepositEmailOpen(false);
+    } finally {
+      setDepositEmailLoading(false);
+    }
+  };
+
+  const handleSendDepositEmail = async () => {
+    setDepositEmailSending(true);
+    try {
+      const res = await fetch(`/api/proposals/${id}/deposit-link`, { method: "POST" });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(`Deposit email sent to ${json.sent_to || "customer"}`);
+        setDepositEmailOpen(false);
+        fetchProposal();
+      } else {
+        toast.error(json.error || "Failed to send deposit email");
+      }
+    } catch {
+      toast.error("Unexpected error sending email");
+    } finally {
+      setDepositEmailSending(false);
+    }
+  };
+
+  // ── GST invoice preview + send ──────────────────────────────────────────
+  const openGstDialog = (forRevise = false) => {
+    const initialDate = forRevise && proposal?.occupation_start_date
+      ? proposal.occupation_start_date
+      : new Date().toISOString().slice(0, 10);
+    setGstDate(initialDate);
+    setGstPreview(null);
+    setGstIsRevise(forRevise);
+    setGstDialogOpen(true);
+  };
+
+  const refreshGstPreview = async () => {
+    if (!gstDate || !/^\d{4}-\d{2}-\d{2}$/.test(gstDate)) {
+      toast.error("Enter a valid date (YYYY-MM-DD)");
+      return;
+    }
+    setGstPreviewLoading(true);
+    try {
+      const res = await fetch(`/api/proposals/${id}/send-invoice`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ occupation_start_date: gstDate, preview: true }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        setGstPreview(json);
+      } else {
+        toast.error(json.error || "Failed to generate preview");
+      }
+    } catch {
+      toast.error("Unexpected error generating preview");
+    } finally {
+      setGstPreviewLoading(false);
+    }
+  };
+
+  const handleSendGstInvoice = async () => {
+    if (!gstDate) { toast.error("Date is required"); return; }
+    setGstSending(true);
+    try {
+      const res = await fetch(`/api/proposals/${id}/send-invoice`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ occupation_start_date: gstDate }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        const verb = json.is_revise ? "resent" : "sent";
+        toast.success(
+          json.prorationFactor < 1
+            ? `GST invoice ${verb} (prorated: ${json.daysRemaining}/${json.daysInMonth} days = ₹${json.totalAmount.toLocaleString("en-IN")})`
+            : `GST invoice ${verb}: ₹${json.totalAmount.toLocaleString("en-IN")}`,
+          { duration: 8000 }
+        );
+        setGstDialogOpen(false);
+        fetchProposal();
+      } else {
+        toast.error(json.error || "Failed to send invoice");
+      }
+    } catch {
+      toast.error("Unexpected error sending invoice");
+    } finally {
+      setGstSending(false);
+    }
   };
 
   const handleManualPaySubmit = async () => {
@@ -668,6 +801,15 @@ export default function ProposalDetailPage({
                           </Button>
                         </div>
                       )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full border-blue-300 text-blue-700 hover:bg-blue-100"
+                        onClick={() => openGstDialog(true)}
+                      >
+                        <Mail className="mr-2 h-3.5 w-3.5" />
+                        Revise Start Date & Resend Invoice
+                      </Button>
                     </>
                   )}
 
@@ -701,34 +843,10 @@ export default function ProposalDetailPage({
                         size="sm"
                         className="w-full"
                         disabled={!canSendInvoice}
-                        onClick={() => {
-                          const dateStr = window.prompt("Enter the occupation start date (YYYY-MM-DD):", new Date().toISOString().slice(0, 10));
-                          if (!dateStr) return;
-                          if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) { toast.error("Invalid date format. Use YYYY-MM-DD"); return; }
-
-                          fetch(`/api/proposals/${proposal.id}/send-invoice`, {
-                            method: "POST",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ occupation_start_date: dateStr }),
-                          })
-                            .then(r => r.json().then(j => ({ ok: r.ok, json: j })))
-                            .then(({ ok, json }) => {
-                              if (ok) {
-                                const factor = json.prorationFactor;
-                                toast.success(
-                                  factor < 1
-                                    ? `GST invoice sent (prorated: ${json.daysRemaining}/${json.daysInMonth} days = ₹${json.totalAmount.toLocaleString("en-IN")})`
-                                    : `GST invoice sent: ₹${json.totalAmount.toLocaleString("en-IN")}`,
-                                  { duration: 8000 }
-                                );
-                                fetchProposal();
-                              } else {
-                                toast.error(json.error || "Failed to send invoice");
-                              }
-                            });
-                        }}
+                        onClick={() => openGstDialog(false)}
                       >
-                        Send GST Invoice
+                        <Mail className="mr-2 h-3.5 w-3.5" />
+                        Preview & Send GST Invoice
                       </Button>
                     </>
                   )}
@@ -785,22 +903,14 @@ export default function ProposalDetailPage({
                   </>
                 )}
 
-                {proposal.deposit_payment_status === "pending" && ["sent", "viewed", "accepted"].includes(proposal.status) && !proposal.deposit_razorpay_link_url && (
+                {proposal.deposit_payment_status === "pending" && ["sent", "viewed", "accepted"].includes(proposal.status) && (
                   <Button
                     size="sm"
                     className="w-full mt-2"
-                    onClick={async () => {
-                      const res = await fetch(`/api/proposals/${proposal.id}/deposit-link`, { method: "POST" });
-                      const json = await res.json();
-                      if (res.ok) {
-                        toast.success(`Deposit link sent: ₹${Number(proposal.security_deposit_amount).toLocaleString("en-IN")}`);
-                        fetchProposal();
-                      } else {
-                        toast.error(json.error || "Failed to create deposit link");
-                      }
-                    }}
+                    onClick={openDepositEmailDialog}
                   >
-                    Send Deposit Link
+                    <Mail className="mr-2 h-3.5 w-3.5" />
+                    {proposal.deposit_razorpay_link_url ? "Preview & Resend Deposit Email" : "Preview & Send Deposit Email"}
                   </Button>
                 )}
 
@@ -910,6 +1020,189 @@ export default function ProposalDetailPage({
         }}
         onSuccess={fetchProposal}
       />
+
+      {/* Deposit Email Preview Dialog */}
+      <Dialog open={depositEmailOpen} onOpenChange={setDepositEmailOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail className="h-5 w-5 text-primary" />
+              Security Deposit Email Preview
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              {proposal.proposal_number} — Refundable deposit ₹{Number(proposal.security_deposit_amount || 0).toLocaleString("en-IN")}
+            </p>
+          </DialogHeader>
+
+          {depositEmailLoading && (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <span className="ml-2 text-sm text-muted-foreground">Loading preview…</span>
+            </div>
+          )}
+
+          {depositEmailPreview && (
+            <div className="flex-1 min-h-0 flex flex-col gap-3">
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="space-y-0.5">
+                  <p className="font-medium text-muted-foreground">To</p>
+                  <p className="font-mono text-foreground">{depositEmailPreview.to.join(", ") || "—"}</p>
+                </div>
+                <div className="space-y-0.5">
+                  <p className="font-medium text-muted-foreground">Subject</p>
+                  <p className="font-medium text-foreground">{depositEmailPreview.subject}</p>
+                </div>
+              </div>
+
+              {depositEmailPreview.link_already_exists ? (
+                <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+                  This proposal already has an active Razorpay deposit link — the existing link will be used.
+                </div>
+              ) : (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  A new Razorpay payment link will be created and inserted into the email when you click <strong>Send Now</strong>.
+                </div>
+              )}
+
+              <div className="flex-1 min-h-0 overflow-auto rounded-md border bg-white p-1">
+                <iframe
+                  title="Deposit email preview"
+                  srcDoc={depositEmailPreview.html}
+                  className="w-full h-[420px] border-0"
+                  sandbox=""
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <Button variant="outline" onClick={() => setDepositEmailOpen(false)} disabled={depositEmailSending}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleSendDepositEmail}
+                  disabled={depositEmailSending || !depositEmailPreview.to.length}
+                  className="bg-primary hover:bg-primary/90"
+                >
+                  {depositEmailSending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  <Send className="mr-2 h-4 w-4" />
+                  {depositEmailSending ? "Sending…" : "Send Now"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      {/* GST Invoice Preview Dialog */}
+      <Dialog open={gstDialogOpen} onOpenChange={setGstDialogOpen}>
+        <DialogContent className="max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Mail className="h-5 w-5 text-primary" />
+              {gstIsRevise ? "Revise & Resend GST Invoice" : "Preview & Send GST Invoice"}
+            </DialogTitle>
+            <p className="text-sm text-muted-foreground">
+              {proposal.proposal_number} — Monthly charge ₹{Number(proposal.total_amount).toLocaleString("en-IN")}
+              {gstIsRevise && proposal.occupation_start_date && (
+                <span className="ml-2 text-xs text-blue-600">
+                  (currently set to {new Date(proposal.occupation_start_date + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })})
+                </span>
+              )}
+            </p>
+          </DialogHeader>
+
+          <div className="flex items-end gap-2">
+            <div className="flex-1 space-y-1.5">
+              <Label htmlFor="gst-date">Occupation Start Date</Label>
+              <Input
+                id="gst-date"
+                type="date"
+                value={gstDate}
+                onChange={(e) => { setGstDate(e.target.value); setGstPreview(null); }}
+              />
+              <p className="text-xs text-muted-foreground">The invoice is prorated from this date to month-end.</p>
+            </div>
+            <Button
+              variant="outline"
+              onClick={refreshGstPreview}
+              disabled={gstPreviewLoading || !gstDate}
+            >
+              {gstPreviewLoading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              {gstPreview ? "Refresh Preview" : "Generate Preview"}
+            </Button>
+          </div>
+
+          {gstPreviewLoading && !gstPreview && (
+            <div className="flex items-center justify-center py-12">
+              <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              <span className="ml-2 text-sm text-muted-foreground">Calculating…</span>
+            </div>
+          )}
+
+          {gstPreview && (
+            <div className="flex-1 min-h-0 flex flex-col gap-3">
+              <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+                <div className="rounded-md border bg-muted/30 px-3 py-2">
+                  <p className="text-muted-foreground">Invoice No.</p>
+                  <p className="font-mono font-semibold text-foreground">{gstPreview.invoiceNumber}</p>
+                </div>
+                <div className="rounded-md border bg-muted/30 px-3 py-2">
+                  <p className="text-muted-foreground">Period</p>
+                  <p className="font-semibold text-foreground">{gstPreview.daysRemaining}/{gstPreview.daysInMonth} days</p>
+                </div>
+                <div className="rounded-md border bg-muted/30 px-3 py-2">
+                  <p className="text-muted-foreground">Subtotal</p>
+                  <p className="font-semibold text-foreground">₹{gstPreview.proratedSubtotal.toLocaleString("en-IN")}</p>
+                </div>
+                <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2">
+                  <p className="text-muted-foreground">Total Payable</p>
+                  <p className="font-bold text-primary">₹{gstPreview.totalAmount.toLocaleString("en-IN")}</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-2 text-xs">
+                <div className="space-y-0.5">
+                  <p className="font-medium text-muted-foreground">To</p>
+                  <p className="font-mono text-foreground">{gstPreview.to.join(", ") || "—"}</p>
+                </div>
+                <div className="space-y-0.5">
+                  <p className="font-medium text-muted-foreground">Subject</p>
+                  <p className="font-medium text-foreground truncate">{gstPreview.subject}</p>
+                </div>
+              </div>
+
+              {gstIsRevise && (
+                <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800">
+                  <strong>Revise & Resend:</strong> A new GST invoice number will be issued and a fresh email (with the new PDF) will be sent to the customer. The previous invoice will not be automatically cancelled.
+                </div>
+              )}
+
+              <div className="flex-1 min-h-0 overflow-auto rounded-md border bg-white p-1">
+                <iframe
+                  title="GST invoice email preview"
+                  srcDoc={gstPreview.html}
+                  className="w-full h-[400px] border-0"
+                  sandbox=""
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-1">
+                <Button variant="outline" onClick={() => setGstDialogOpen(false)} disabled={gstSending}>
+                  Cancel
+                </Button>
+                <Button
+                  onClick={handleSendGstInvoice}
+                  disabled={gstSending || !gstPreview.to.length}
+                  className="bg-primary hover:bg-primary/90"
+                >
+                  {gstSending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+                  <Send className="mr-2 h-4 w-4" />
+                  {gstSending ? "Sending…" : gstIsRevise ? "Resend Invoice" : "Send Invoice"}
+                </Button>
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       {/* Manual Deposit Payment Dialog */}
       <Dialog open={manualPayDialogOpen} onOpenChange={setManualPayDialogOpen}>
