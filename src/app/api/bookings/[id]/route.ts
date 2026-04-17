@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
+import { messaging } from "@/lib/whatsapp";
 
 const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile), facilities:booking_facilities(*)";
 
@@ -439,6 +440,20 @@ export async function PATCH(
         description: activity.description,
         created_by: dbUser.id,
       });
+    }
+  }
+
+  // WhatsApp check-in / check-out notifications (fire-and-forget)
+  if (body.status === "checked_in" || body.status === "checked_out") {
+    const spaceName = (updated?.space as { name?: string } | null)?.name ?? "The Work Villa";
+    const guestName = booking.guest_name ?? "Guest";
+    const bookingNum = booking.booking_number ?? id;
+    const phones = [...new Set([booking.guest_phone, booking.booker_phone].filter(Boolean))] as string[];
+    for (const phone of phones) {
+      const fn = body.status === "checked_in"
+        ? messaging.bookingCheckin(phone, guestName, spaceName, bookingNum, id)
+        : messaging.bookingCheckout(phone, guestName, spaceName, bookingNum, id);
+      fn.catch((e: unknown) => console.error("[messaging] checkin/checkout WA failed:", e));
     }
   }
 

@@ -38,14 +38,13 @@ const WA_SENDER     = process.env.MSG91_WHATSAPP_SENDER;
 
 const WA_API_URL    = "https://control.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/";
 const SMS_API_URL   = "https://control.msg91.com/api/v5/flow/";
-const SMS_SEND_URL  = "https://control.msg91.com/api/v5/flow/";
 
-// SMS flow IDs (created in MSG91 dashboard after DLT registration)
+// SMS flow IDs — must match MSG91_SMS_DLT_FLOW_* env vars set in Vercel
 const SMS_FLOWS = {
-  booking:  process.env.MSG91_SMS_FLOW_BOOKING,
-  billing:  process.env.MSG91_SMS_FLOW_BILLING,
-  reminder: process.env.MSG91_SMS_FLOW_REMINDER,
-} as const;
+  booking:  process.env.MSG91_SMS_DLT_FLOW_BOOKING          as string | undefined,
+  billing:  undefined                                        as string | undefined, // no billing-specific DLT SMS flow
+  reminder: process.env.MSG91_SMS_DLT_FLOW_PAYMENT_REMINDER as string | undefined,
+};
 
 // ---------------------------------------------------------------------------
 // DLT SMS Configuration (Jio TrueConnect)
@@ -329,7 +328,7 @@ export async function sendDltSms(
   let result: SendResult = { success: false, error: "Unknown error", channel: "sms" };
 
   try {
-    const res = await fetch(SMS_SEND_URL, {
+    const res = await fetch(SMS_API_URL, {
       method: "POST",
       headers: {
         authkey: AUTH_KEY,
@@ -478,6 +477,46 @@ export const messaging = {
       params: [leadName, company, source],
       entityType: "lead",
       entityId: leadId,
+    });
+  },
+
+  /**
+   * Check-in confirmation → guest / booker phone.
+   * "Hi {{1}}, you're now checked in at {{2}} (Booking #{{3}}). Have a great session! – The Work Villa"
+   */
+  bookingCheckin(
+    to: string,
+    guestName: string,
+    spaceName: string,
+    bookingNumber: string,
+    bookingId: string
+  ) {
+    return sendWhatsApp({
+      to,
+      template: "booking_checkin",
+      params: [guestName, spaceName, bookingNumber],
+      entityType: "booking",
+      entityId: bookingId,
+    });
+  },
+
+  /**
+   * Check-out confirmation → guest / booker phone.
+   * "Hi {{1}}, you've checked out of {{2}} (Booking #{{3}}). Thank you for visiting The Work Villa!"
+   */
+  bookingCheckout(
+    to: string,
+    guestName: string,
+    spaceName: string,
+    bookingNumber: string,
+    bookingId: string
+  ) {
+    return sendWhatsApp({
+      to,
+      template: "booking_checkout",
+      params: [guestName, spaceName, bookingNumber],
+      entityType: "booking",
+      entityId: bookingId,
     });
   },
 };
