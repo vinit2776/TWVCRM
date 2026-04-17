@@ -22,11 +22,13 @@ export async function POST(
   // Support both FormData (binary PDF) and JSON (base64 PDF) for backwards compat
   let recipients: string[];
   let pdfBuffer: Buffer;
+  let forceSendWithoutLink = false;
 
   const contentType = request.headers.get("content-type") || "";
   if (contentType.includes("multipart/form-data")) {
     const formData = await request.formData();
     recipients = JSON.parse(formData.get("recipients") as string || "[]");
+    forceSendWithoutLink = formData.get("force_send_without_link") === "true";
     const pdfFile = formData.get("pdf") as File;
     if (!pdfFile) {
       return NextResponse.json({ error: "PDF file is required" }, { status: 400 });
@@ -35,6 +37,7 @@ export async function POST(
   } else {
     const body = await request.json();
     recipients = body.recipients;
+    forceSendWithoutLink = body.force_send_without_link === true;
     pdfBuffer = Buffer.from(body.pdfBase64, "base64");
   }
 
@@ -87,11 +90,15 @@ export async function POST(
   // The deposit link is the primary payment sent with the proposal.
   // Monthly charge link is generated separately (manual trigger).
   let depositLinkUrl: string | null = proposal.deposit_razorpay_link_url || null;
-  let depositLinkFailed = false;
   const depositAmount = Number(proposal.security_deposit_amount || 0);
   const hasDeposit = depositAmount > 0 && proposal.deposit_payment_status === "pending";
 
+  // ── Auto-create deposit payment link when sending ──────────────────────────
+  // If creation fails and the user hasn't explicitly overridden, we block the
+  // send so the customer never receives a proposal without a payment link.
   if (hasDeposit && !proposal.deposit_razorpay_link_id) {
+    let rzpError: string | null = null;
+
     try {
       const adminSupabase = await createAdminClient();
       const { data: rzpSettings } = await adminSupabase
@@ -102,7 +109,9 @@ export async function POST(
       const rzpMap: Record<string, string> = {};
       (rzpSettings || []).forEach((s) => { rzpMap[s.key] = s.value; });
 
-      if (rzpMap.razorpay_enabled === "true" && rzpMap.razorpay_key_id && rzpMap.razorpay_key_secret) {
+      if (rzpMap.razorpay_enabled !== "true" || !rzpMap.razorpay_key_id || !rzpMap.razorpay_key_secret) {
+        rzpError = "Razorpay is not enabled in Settings — payment link cannot be created.";
+      } else {
         const auth = Buffer.from(`${rzpMap.razorpay_key_id}:${rzpMap.razorpay_key_secret}`).toString("base64");
         const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
 
@@ -113,10 +122,10 @@ export async function POST(
 
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const payload: Record<string, any> = {
-          amount: Math.round(depositAmount * 100), // paise — deposit amount, not total
+          amount: Math.round(depositAmount * 100),
           currency: "INR",
           description: `Security Deposit — ${proposal.proposal_number} — The WorkVilla`,
-          reference_id: `${proposal.proposal_number}-DEP`,
+          reference_id: `${proposal.proposal_number}-DEP-${Date.now()}`, // unique suffix prevents duplicate-id conflicts
           expire_by: expireBy,
           notify: { sms: !!customerPhone, email: !!customerEmail },
           reminder_enable: true,
@@ -141,8 +150,6 @@ export async function POST(
         if (rzpRes.ok) {
           const linkData = await rzpRes.json();
           depositLinkUrl = linkData.short_url;
-
-          // Store deposit link on proposal
           await supabase
             .from("proposals")
             .update({
@@ -152,13 +159,25 @@ export async function POST(
             .eq("id", id);
         } else {
           const rzpErr = await rzpRes.json().catch(() => null);
+          rzpError = rzpErr?.error?.description || rzpErr?.error?.reason || "Razorpay returned an error";
           console.error("[proposal email] Razorpay deposit link creation failed:", rzpErr);
-          depositLinkFailed = true;
         }
       }
     } catch (err) {
+      rzpError = err instanceof Error ? err.message : "Unexpected error contacting Razorpay";
       console.error("[proposal email] Razorpay error:", err);
-      depositLinkFailed = true;
+    }
+
+    // Block the send if link creation failed and user hasn't explicitly overridden
+    if (rzpError && !forceSendWithoutLink) {
+      return NextResponse.json(
+        {
+          error: `Security deposit payment link could not be created: ${rzpError}`,
+          deposit_link_failed: true,
+          razorpay_error: rzpError,
+        },
+        { status: 422 }
+      );
     }
   }
 
@@ -256,7 +275,6 @@ export async function POST(
     return NextResponse.json({
       message: "Email sent successfully",
       deposit_link_url: depositLinkUrl,
-      deposit_link_failed: depositLinkFailed,
     });
   } catch (error) {
     const message = error instanceof Error ? error.message : "Unknown error";
