@@ -227,7 +227,7 @@ export default function CatalogPage() {
               The following names appear more than once and must be made unique before a uniqueness constraint can be enforced:{" "}
               {[...duplicateNames].map((n, i) => (
                 <span key={n}>
-                  <span className="font-medium">"{n}"</span>
+                  <span className="font-medium">&quot;{n}&quot;</span>
                   {i < duplicateNames.size - 1 ? ", " : ""}
                 </span>
               ))}

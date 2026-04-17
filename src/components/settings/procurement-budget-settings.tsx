@@ -1,18 +1,36 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import Link from "next/link";
+import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { Switch } from "@/components/ui/switch";
-import { Loader2, TrendingUp, AlertTriangle, CheckCircle2, IndianRupee, RefreshCw } from "lucide-react";
+import { Separator } from "@/components/ui/separator";
+import {
+  Sheet, SheetContent, SheetHeader, SheetTitle,
+} from "@/components/ui/sheet";
+import {
+  Loader2, IndianRupee, RefreshCw, ZoomIn, ChevronDown, ChevronRight,
+  ExternalLink, PackageOpen, ShoppingCart, FileText, CreditCard,
+  CheckCircle2, XCircle, Clock, ArrowRight,
+} from "lucide-react";
 import { toast } from "sonner";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+  PR_STATUS_LABELS, PR_STATUS_COLORS,
+  PO_STATUS_LABELS, PO_STATUS_COLORS,
+  BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
+  BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
+  EXPENDITURE_TYPE_LABELS, EXPENDITURE_TYPE_COLORS,
+} from "@/lib/constants";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 const DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
 
@@ -30,6 +48,11 @@ const DEPT_ICONS: Record<string, string> = {
   asset: "📦",
 };
 
+const MONTHS = [
+  "January","February","March","April","May","June",
+  "July","August","September","October","November","December",
+];
+
 type BudgetRow = {
   department: string;
   monthly_budget: number | null;
@@ -37,16 +60,454 @@ type BudgetRow = {
   notes: string | null;
   id: string | null;
   spent_this_month: number;
+  amc_spent_this_month: number;
   utilisation_pct: number | null;
   is_over_budget: boolean;
   updated_at: string | null;
   updater: { full_name: string } | null;
 };
 
-const MONTHS = [
-  "January","February","March","April","May","June",
-  "July","August","September","October","November","December"
-];
+type MrRow = {
+  id: string;
+  pr_number: string;
+  status: string;
+  department: string;
+  expenditure_type: string;
+  total_estimated_amount: number;
+  created_at: string;
+  requester: { id: string; full_name?: string } | null;
+};
+
+type LinkedPo = {
+  id: string;
+  po_number: string;
+  po_type: string;
+  status: string;
+  total_amount: number;
+  created_at: string;
+  expected_delivery_date?: string;
+  ordered_at?: string;
+  procurement_vendors: { id: string; name: string } | null;
+  po_delivery_receipts: Array<{
+    id: string; received_at: string; status: string;
+    receiver: { id: string; full_name?: string } | null;
+  }>;
+  po_service_reports: Array<{ id: string; service_date: string; notes?: string }>;
+  vendor_bills: Array<{
+    id: string; bill_number: string; invoice_date: string;
+    total_amount: number; payment_status: string; approval_status: string;
+    approved_at?: string; payment_date?: string;
+    approver: { id: string; full_name?: string } | null;
+  }>;
+};
+
+type AuditEvent = {
+  id: string;
+  entity_type: string;
+  entity_id: string;
+  action: string;
+  created_at: string;
+  entity_label: string;
+  performer: { id: string; full_name?: string } | null;
+};
+
+type LifecycleData = {
+  mr: { id: string; pr_number: string; status: string; created_at: string; approved_at?: string; rejection_reason?: string; requester?: { full_name?: string } | null; approver?: { full_name?: string } | null };
+  linked_pos: LinkedPo[];
+  audit_trail: AuditEvent[];
+};
+
+// ── Lifecycle inline view ─────────────────────────────────────────────────────
+
+function LifecycleView({ data }: { data: LifecycleData }) {
+  const { mr, linked_pos, audit_trail } = data;
+
+  // Build milestone list
+  const milestones: { label: string; done: boolean; date?: string; actor?: string; color: string; icon: React.ReactNode }[] = [];
+
+  milestones.push({
+    label: "MR Created",
+    done: true,
+    date: mr.created_at,
+    actor: mr.requester?.full_name,
+    color: "bg-blue-500",
+    icon: <FileText className="h-3 w-3" />,
+  });
+
+  const submitted = audit_trail.find((e) => e.entity_id === mr.id && e.action === "submit");
+  milestones.push({
+    label: "Submitted for Approval",
+    done: !!submitted || ["approved","partially_ordered","po_created","fully_ordered","closed"].includes(mr.status),
+    date: submitted?.created_at,
+    actor: submitted?.performer?.full_name,
+    color: "bg-indigo-500",
+    icon: <ArrowRight className="h-3 w-3" />,
+  });
+
+  const approved = mr.status !== "rejected" && mr.status !== "cancelled" && mr.approved_at;
+  milestones.push({
+    label: mr.status === "rejected" ? "Rejected" : "Approved",
+    done: !!approved || mr.status === "rejected",
+    date: mr.approved_at,
+    actor: mr.approver?.full_name,
+    color: mr.status === "rejected" ? "bg-red-500" : "bg-green-500",
+    icon: mr.status === "rejected" ? <XCircle className="h-3 w-3" /> : <CheckCircle2 className="h-3 w-3" />,
+  });
+
+  const hasPo = linked_pos.length > 0;
+  milestones.push({
+    label: `PO${linked_pos.length > 1 ? "s" : ""} Created${hasPo ? ` (${linked_pos.length})` : ""}`,
+    done: hasPo,
+    date: hasPo ? linked_pos[0].created_at : undefined,
+    color: "bg-amber-500",
+    icon: <ShoppingCart className="h-3 w-3" />,
+  });
+
+  const allReceipts = linked_pos.flatMap((p) => p.po_delivery_receipts ?? []);
+  const allServices = linked_pos.flatMap((p) => p.po_service_reports ?? []);
+  const hasDelivery = allReceipts.length > 0 || allServices.length > 0;
+  milestones.push({
+    label: "Goods Received / Service Done",
+    done: hasDelivery,
+    date: allReceipts[0]?.received_at ?? allServices[0]?.service_date,
+    actor: allReceipts[0]?.receiver?.full_name,
+    color: "bg-teal-500",
+    icon: <PackageOpen className="h-3 w-3" />,
+  });
+
+  const allBills = linked_pos.flatMap((p) => p.vendor_bills ?? []);
+  const hasBill = allBills.length > 0;
+  milestones.push({
+    label: `Invoice${allBills.length > 1 ? "s" : ""} Received${hasBill ? ` (${allBills.length})` : ""}`,
+    done: hasBill,
+    date: hasBill ? allBills[0].invoice_date : undefined,
+    color: "bg-violet-500",
+    icon: <FileText className="h-3 w-3" />,
+  });
+
+  const approvedBill = allBills.find((b) => b.approval_status === "approved");
+  milestones.push({
+    label: "Invoice Approved",
+    done: !!approvedBill,
+    date: approvedBill?.approved_at,
+    actor: approvedBill?.approver?.full_name,
+    color: "bg-purple-500",
+    icon: <CheckCircle2 className="h-3 w-3" />,
+  });
+
+  const paidBill = allBills.find((b) => b.payment_status === "paid" || b.payment_status === "partially_paid");
+  milestones.push({
+    label: "Payment Made",
+    done: !!paidBill,
+    date: paidBill?.payment_date,
+    color: "bg-emerald-600",
+    icon: <CreditCard className="h-3 w-3" />,
+  });
+
+  return (
+    <div className="space-y-4 pt-2">
+      {/* Milestone timeline */}
+      <div>
+        <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-2">Lifecycle Milestones</p>
+        <div className="relative">
+          {/* vertical connector */}
+          <div className="absolute left-[11px] top-3 bottom-3 w-px bg-border" />
+          <div className="space-y-2">
+            {milestones.map((m, i) => (
+              <div key={i} className="flex items-start gap-2.5 relative">
+                <div className={`mt-0.5 h-6 w-6 rounded-full flex items-center justify-center shrink-0 z-10 ${m.done ? m.color : "bg-muted border border-border"} text-white`}>
+                  {m.done ? m.icon : <Clock className="h-3 w-3 text-muted-foreground" />}
+                </div>
+                <div className="flex-1 min-w-0 pb-1">
+                  <p className={`text-xs font-medium leading-tight ${m.done ? "" : "text-muted-foreground"}`}>{m.label}</p>
+                  {m.done && (m.date || m.actor) && (
+                    <p className="text-[10px] text-muted-foreground mt-0.5">
+                      {m.date ? formatDate(m.date) : ""}
+                      {m.actor ? ` · ${m.actor}` : ""}
+                    </p>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* Linked POs summary */}
+      {linked_pos.length > 0 && (
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Linked Purchase Orders</p>
+          <div className="space-y-1.5">
+            {linked_pos.map((po) => (
+              <div key={po.id} className="flex items-center gap-2 rounded border px-2.5 py-1.5 bg-background text-xs">
+                <span className="font-mono font-semibold">{po.po_number}</span>
+                <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${PO_STATUS_COLORS[po.status] ?? "bg-gray-100 text-gray-800"}`}>
+                  {PO_STATUS_LABELS[po.status] ?? po.status}
+                </Badge>
+                <span className="text-muted-foreground ml-auto">{formatCurrency(po.total_amount)}</span>
+                {po.procurement_vendors && (
+                  <span className="text-muted-foreground truncate max-w-[100px]">{po.procurement_vendors.name}</span>
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Bills summary */}
+      {allBills.length > 0 && (
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Vendor Invoices</p>
+          <div className="space-y-1.5">
+            {allBills.map((bill) => (
+              <div key={bill.id} className="flex items-center gap-2 rounded border px-2.5 py-1.5 bg-background text-xs">
+                <span className="font-mono font-semibold">{bill.bill_number}</span>
+                <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${BILL_APPROVAL_STATUS_COLORS[bill.approval_status] ?? ""}`}>
+                  {BILL_APPROVAL_STATUS_LABELS[bill.approval_status] ?? bill.approval_status}
+                </Badge>
+                <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${BILL_PAYMENT_STATUS_COLORS[bill.payment_status] ?? ""}`}>
+                  {BILL_PAYMENT_STATUS_LABELS[bill.payment_status] ?? bill.payment_status}
+                </Badge>
+                <span className="ml-auto text-muted-foreground">{formatCurrency(bill.total_amount)}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Audit trail */}
+      {audit_trail.length > 0 && (
+        <div>
+          <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground mb-1.5">Activity Log</p>
+          <div className="space-y-1">
+            {audit_trail.map((e) => (
+              <div key={e.id} className="flex items-start gap-2 text-[10px] text-muted-foreground">
+                <span className="shrink-0 w-[70px] text-right tabular-nums">{formatDate(e.created_at)}</span>
+                <span className="font-mono text-foreground/70">{e.entity_label}</span>
+                <span className="capitalize">{e.action.replace(/_/g, " ")}</span>
+                {e.performer?.full_name && <span className="ml-auto shrink-0">— {e.performer.full_name}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div className="pt-1">
+        <Link
+          href={`/procurement/requests/${data.mr.id}`}
+          target="_blank"
+          className="inline-flex items-center gap-1 text-xs text-primary hover:underline"
+        >
+          Open full MR details <ExternalLink className="h-3 w-3" />
+        </Link>
+      </div>
+    </div>
+  );
+}
+
+// ── MR row with expandable lifecycle ─────────────────────────────────────────
+
+function MrDrillRow({ mr }: { mr: MrRow }) {
+  const [expanded, setExpanded] = useState(false);
+  const [lifecycle, setLifecycle] = useState<LifecycleData | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const toggleExpand = async () => {
+    if (!expanded && !lifecycle) {
+      setLoading(true);
+      const res = await fetch(`/api/procurement/requests/${mr.id}/lifecycle`);
+      if (res.ok) {
+        const data = await res.json();
+        setLifecycle(data);
+      }
+      setLoading(false);
+    }
+    setExpanded((v) => !v);
+  };
+
+  return (
+    <div className="border rounded-lg overflow-hidden">
+      {/* Header row */}
+      <button
+        onClick={toggleExpand}
+        className="w-full flex items-center gap-3 px-3 py-2.5 hover:bg-muted/50 transition-colors text-left"
+      >
+        <div className="shrink-0 text-muted-foreground">
+          {loading ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : expanded ? (
+            <ChevronDown className="h-4 w-4" />
+          ) : (
+            <ChevronRight className="h-4 w-4" />
+          )}
+        </div>
+
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center gap-2 flex-wrap">
+            <span className="font-mono text-sm font-semibold">{mr.pr_number}</span>
+            <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${PR_STATUS_COLORS[mr.status] ?? "bg-gray-100 text-gray-800"}`}>
+              {PR_STATUS_LABELS[mr.status] ?? mr.status}
+            </Badge>
+            {mr.expenditure_type && mr.expenditure_type !== "operational" && (
+              <Badge variant="secondary" className={`text-[10px] px-1.5 py-0 ${EXPENDITURE_TYPE_COLORS[mr.expenditure_type] ?? ""}`}>
+                {EXPENDITURE_TYPE_LABELS[mr.expenditure_type]}
+              </Badge>
+            )}
+          </div>
+          <div className="flex items-center gap-2 mt-0.5 text-[11px] text-muted-foreground">
+            <span>{formatDate(mr.created_at)}</span>
+            {mr.requester?.full_name && <span>· {mr.requester.full_name}</span>}
+          </div>
+        </div>
+
+        <span className="shrink-0 font-semibold text-sm tabular-nums">
+          {formatCurrency(mr.total_estimated_amount)}
+        </span>
+      </button>
+
+      {/* Lifecycle panel */}
+      {expanded && (
+        <div className="border-t bg-muted/20 px-4 pb-4">
+          {lifecycle ? (
+            <LifecycleView data={lifecycle} />
+          ) : loading ? (
+            <div className="flex items-center gap-2 py-4 text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading lifecycle…
+            </div>
+          ) : (
+            <p className="py-4 text-sm text-muted-foreground">Failed to load lifecycle data.</p>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Deep-dive Sheet ───────────────────────────────────────────────────────────
+
+function DeptDrilldownSheet({
+  dept, year, month, budgetAmt, open, onClose,
+}: {
+  dept: string | null;
+  year: number;
+  month: number;
+  budgetAmt: number | null;
+  open: boolean;
+  onClose: () => void;
+}) {
+  const [mrs, setMrs] = useState<MrRow[]>([]);
+  const [loading, setLoading] = useState(false);
+
+  useEffect(() => {
+    if (!open || !dept) return;
+    setMrs([]);
+    setLoading(true);
+
+    const fromDate = new Date(year, month - 1, 1).toISOString();
+    const toDate = new Date(year, month, 0, 23, 59, 59).toISOString();
+
+    fetch(
+      `/api/procurement/requests?department=${dept}&from_date=${encodeURIComponent(fromDate)}&to_date=${encodeURIComponent(toDate)}&limit=50`
+    )
+      .then((r) => r.json())
+      .then((j) => setMrs(j.data ?? []))
+      .finally(() => setLoading(false));
+  }, [open, dept, year, month]);
+
+  if (!dept) return null;
+
+  const operationalMrs = mrs.filter((m) => m.expenditure_type !== "amc");
+  const amcMrs = mrs.filter((m) => m.expenditure_type === "amc");
+  const operationalTotal = operationalMrs.reduce((s, m) => s + Number(m.total_estimated_amount ?? 0), 0);
+  const amcTotal = amcMrs.reduce((s, m) => s + Number(m.total_estimated_amount ?? 0), 0);
+
+  return (
+    <Sheet open={open} onOpenChange={(v) => { if (!v) onClose(); }}>
+      <SheetContent side="right" className="w-full sm:max-w-2xl flex flex-col p-0 gap-0">
+        {/* Sheet header */}
+        <SheetHeader className="px-5 pt-5 pb-3 border-b shrink-0">
+          <div className="flex items-center gap-3">
+            <span className="text-2xl">{DEPT_ICONS[dept]}</span>
+            <div>
+              <SheetTitle className="text-base">
+                {DEPT_LABELS[dept]} — {MONTHS[month - 1]} {year}
+              </SheetTitle>
+              <p className="text-xs text-muted-foreground mt-0.5">All purchase requests for this department this month</p>
+            </div>
+          </div>
+
+          {/* Summary row */}
+          {!loading && mrs.length > 0 && (
+            <div className="flex flex-wrap gap-3 mt-3">
+              <div className="rounded-lg border bg-muted/40 px-3 py-2 flex-1 min-w-[120px]">
+                <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">Operational Spend</p>
+                <p className="text-sm font-bold mt-0.5">{formatCurrency(operationalTotal)}</p>
+                {budgetAmt && (
+                  <p className="text-[10px] text-muted-foreground">of {formatCurrency(budgetAmt)} budget</p>
+                )}
+              </div>
+              {amcTotal > 0 && (
+                <div className="rounded-lg border bg-purple-50 border-purple-200 px-3 py-2 flex-1 min-w-[120px]">
+                  <p className="text-[10px] text-purple-700 font-medium uppercase tracking-wide">AMC / Annual Contracts</p>
+                  <p className="text-sm font-bold text-purple-800 mt-0.5">{formatCurrency(amcTotal)}</p>
+                  <p className="text-[10px] text-purple-600">Excluded from budget</p>
+                </div>
+              )}
+              <div className="rounded-lg border bg-muted/40 px-3 py-2 flex-1 min-w-[80px]">
+                <p className="text-[10px] text-muted-foreground font-medium uppercase tracking-wide">Total MRs</p>
+                <p className="text-sm font-bold mt-0.5">{mrs.length}</p>
+              </div>
+            </div>
+          )}
+        </SheetHeader>
+
+        {/* MR list */}
+        <div className="flex-1 overflow-y-auto px-5 py-4">
+          {loading ? (
+            <div className="flex items-center gap-2 py-10 justify-center text-sm text-muted-foreground">
+              <Loader2 className="h-4 w-4 animate-spin" /> Loading requests…
+            </div>
+          ) : mrs.length === 0 ? (
+            <div className="py-10 text-center text-sm text-muted-foreground">
+              No material requests found for {DEPT_LABELS[dept]} in {MONTHS[month - 1]} {year}.
+            </div>
+          ) : (
+            <div className="space-y-3">
+              {/* Operational MRs */}
+              {operationalMrs.length > 0 && (
+                <>
+                  {amcMrs.length > 0 && (
+                    <p className="text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
+                      Operational ({operationalMrs.length})
+                    </p>
+                  )}
+                  {operationalMrs.map((mr) => (
+                    <MrDrillRow key={mr.id} mr={mr} />
+                  ))}
+                </>
+              )}
+
+              {/* AMC MRs */}
+              {amcMrs.length > 0 && (
+                <>
+                  <Separator className="my-2" />
+                  <p className="text-[11px] font-semibold uppercase tracking-wide text-purple-700">
+                    AMC / Annual Contracts ({amcMrs.length}) — excluded from budget
+                  </p>
+                  {amcMrs.map((mr) => (
+                    <MrDrillRow key={mr.id} mr={mr} />
+                  ))}
+                </>
+              )}
+            </div>
+          )}
+        </div>
+      </SheetContent>
+    </Sheet>
+  );
+}
+
+// ── Main component ────────────────────────────────────────────────────────────
 
 export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
   const now = new Date();
@@ -56,19 +517,22 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
+  // Drill-down state
+  const [drillDept, setDrillDept] = useState<string | null>(null);
+
   // Local editable state: keyed by department
   const [edits, setEdits] = useState<Record<string, { monthly_budget: string; is_active: boolean; notes: string }>>({});
 
   const isCurrentMonth = year === now.getFullYear() && month === (now.getMonth() + 1);
   const isAdmin = userRole === "admin";
 
+  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const fetchBudgets = useCallback(async () => {
     setLoading(true);
     const res = await fetch(`/api/procurement/budget?year=${year}&month=${month}`);
     if (res.ok) {
       const { data } = await res.json();
       setRows(data);
-      // Initialise edits from fetched data
       const initial: Record<string, { monthly_budget: string; is_active: boolean; notes: string }> = {};
       for (const row of data as BudgetRow[]) {
         initial[row.department] = {
@@ -122,6 +586,11 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
     return "bg-green-500";
   };
 
+  // Find the budget row for the drill dept (for passing budgetAmt to sheet)
+  const drillRow = rows.find((r) => r.department === drillDept);
+  const drillEdit = drillDept ? edits[drillDept] : undefined;
+  const drillBudgetAmt = drillEdit?.monthly_budget ? parseFloat(drillEdit.monthly_budget) : null;
+
   return (
     <div className="space-y-6">
       {/* Header controls */}
@@ -129,7 +598,7 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
         <div>
           <h3 className="font-semibold text-base">Department Procurement Budgets</h3>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Set monthly spending limits per department. MRs that exceed the budget require admin approval.
+            Set monthly spending limits per department. Click the spend figure to investigate individual MRs.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -176,6 +645,7 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
             const budgetAmt = parseFloat(edit.monthly_budget) || null;
             const pct = budgetAmt ? Math.min(Math.round((row.spent_this_month / budgetAmt) * 100), 110) : null;
             const isOver = budgetAmt != null && row.spent_this_month > budgetAmt;
+            const hasSpend = row.spent_this_month > 0 || row.amc_spent_this_month > 0;
 
             return (
               <Card key={row.department} className={isOver ? "border-red-200 bg-red-50/20" : ""}>
@@ -222,13 +692,29 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
                       </div>
                     </div>
 
-                    {/* Spend this month */}
+                    {/* Spend this month — clickable deep-dive */}
                     <div className="flex-1 min-w-[160px] space-y-1">
-                      <p className="text-xs text-muted-foreground">Spent This Month</p>
-                      <p className={`text-sm font-semibold ${utilColour(pct, isOver)}`}>
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-xs text-muted-foreground">Spent This Month</p>
+                        {hasSpend && (
+                          <button
+                            onClick={() => setDrillDept(row.department)}
+                            className="text-[10px] text-primary flex items-center gap-0.5 hover:underline"
+                            title="Deep dive — view all MRs"
+                          >
+                            <ZoomIn className="h-3 w-3" /> Drill down
+                          </button>
+                        )}
+                      </div>
+                      <button
+                        className={`text-sm font-semibold text-left ${utilColour(pct, isOver)} ${hasSpend ? "hover:underline cursor-pointer" : "cursor-default"}`}
+                        onClick={() => hasSpend && setDrillDept(row.department)}
+                        disabled={!hasSpend}
+                      >
                         {formatCurrency(row.spent_this_month)}
                         {budgetAmt && <span className="text-xs font-normal ml-1">/ {formatCurrency(budgetAmt)}</span>}
-                      </p>
+                      </button>
+
                       {budgetAmt ? (
                         <div className="w-full h-1.5 rounded-full bg-muted mt-1">
                           <div
@@ -239,10 +725,22 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
                       ) : (
                         <p className="text-xs text-muted-foreground italic">No budget set</p>
                       )}
+
                       {pct != null && (
                         <p className={`text-xs font-medium ${utilColour(pct, isOver)}`}>
                           {isOver ? `${pct}% — ₹${(row.spent_this_month - (budgetAmt ?? 0)).toLocaleString("en-IN")} over` : `${pct}% used`}
                         </p>
+                      )}
+
+                      {/* AMC footnote */}
+                      {row.amc_spent_this_month > 0 && (
+                        <button
+                          className="text-[10px] text-purple-600 hover:underline cursor-pointer"
+                          onClick={() => setDrillDept(row.department)}
+                          title="View AMC requests"
+                        >
+                          + {formatCurrency(row.amc_spent_this_month)} AMC (excluded)
+                        </button>
                       )}
                     </div>
 
@@ -300,6 +798,16 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
           )}
         </div>
       )}
+
+      {/* Deep-dive Sheet */}
+      <DeptDrilldownSheet
+        dept={drillDept}
+        year={year}
+        month={month}
+        budgetAmt={drillBudgetAmt}
+        open={!!drillDept}
+        onClose={() => setDrillDept(null)}
+      />
     </div>
   );
 }
