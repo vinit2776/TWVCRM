@@ -19,6 +19,18 @@
     {
       "path": "/api/cron/storage-backup",
       "schedule": "30 20 * * *"
+    },
+    {
+      "path": "/api/cron/headcount-reminder",
+      "schedule": "30 4 * * 1-6"
+    },
+    {
+      "path": "/api/cron/headcount-reminder",
+      "schedule": "30 8 * * 1-6"
+    },
+    {
+      "path": "/api/cron/headcount-reminder",
+      "schedule": "30 12 * * 1-6"
     }
   ],
   "headers": [

@@ -1,6 +1,14 @@
 // ==========================================
 // Location Types
 // ==========================================
+
+export interface LocationCapacityConfig {
+  open_desk?: number;       // Open floor / hot desk seats
+  private_cabin?: number;   // Private cabins / offices
+  meeting_room?: number;    // Small meeting room seats
+  conference_room?: number; // Large conference room seats
+}
+
 export interface Location {
   id: string;
   name: string;
@@ -9,6 +17,8 @@ export interface Location {
   city?: string;
   state?: string;
   is_active: boolean;
+  capacity_config?: LocationCapacityConfig;
+  requires_headcount: boolean;
   created_at: string;
   updated_at: string;
 }
@@ -1975,4 +1985,23 @@ export interface ConsumptionLog {
   logger?: { id: string; full_name?: string } | null;
   consumption_log_items?: ConsumptionLogItem[];
   consumption_corrections?: ConsumptionCorrection[];
+}
+
+// ==========================================
+// Headcount Types
+// ==========================================
+export interface SpaceHeadcount {
+  id: string;
+  location_id: string;
+  location?: { id: string; name: string; code: string; capacity_config?: LocationCapacityConfig } | null;
+  recorded_at: string;
+  recorded_by?: string | null;
+  recorder?: { id: string; full_name: string } | null;
+  open_desk?: number | null;
+  private_cabin?: number | null;
+  meeting_room?: number | null;
+  conference_room?: number | null;
+  total_count: number;
+  notes?: string | null;
+  created_at: string;
 }

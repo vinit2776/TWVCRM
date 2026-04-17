@@ -44,12 +44,14 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json();
-  const { name, code, address, city, state } = body as {
+  const { name, code, address, city, state, capacity_config, requires_headcount } = body as {
     name: string;
     code: string;
     address?: string;
     city?: string;
     state?: string;
+    capacity_config?: Record<string, number>;
+    requires_headcount?: boolean;
   };
 
   if (!name || !code) {
@@ -64,6 +66,8 @@ export async function POST(request: NextRequest) {
       address: address || null,
       city: city || null,
       state: state || null,
+      capacity_config: capacity_config || {},
+      requires_headcount: requires_headcount ?? false,
     })
     .select()
     .single();

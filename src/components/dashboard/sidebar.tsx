@@ -45,6 +45,7 @@ import {
   ShieldCheck,
   UtensilsCrossed,
   BarChart3 as BarChart3Icon,
+  UsersRound,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -103,10 +104,11 @@ const navSections: NavSection[] = [
     label: "Operations",
     icon: CalendarClock,
     items: [
-      { href: "/bookings", label: "Bookings", icon: CalendarClock, roles: [...LEGACY_ROLES, "office_admin"] },
-      { href: "/spaces",   label: "Spaces",   icon: DoorOpen,      roles: ["admin", "manager", "floor_manager", "office_admin"] },
-      { href: "/packages", label: "Packages", icon: TicketCheck,   roles: [...LEGACY_ROLES, "office_admin"] },
-      { href: "/vouchers", label: "Vouchers", icon: Wifi,          roles: [...LEGACY_ROLES, "office_admin"] },
+      { href: "/bookings",   label: "Bookings",   icon: CalendarClock, roles: [...LEGACY_ROLES, "office_admin"] },
+      { href: "/spaces",     label: "Spaces",     icon: DoorOpen,      roles: ["admin", "manager", "floor_manager", "office_admin"] },
+      { href: "/headcount",  label: "Headcount",  icon: UsersRound,    roles: ["admin", "manager", "floor_manager", "office_admin"] },
+      { href: "/packages",   label: "Packages",   icon: TicketCheck,   roles: [...LEGACY_ROLES, "office_admin"] },
+      { href: "/vouchers",   label: "Vouchers",   icon: Wifi,          roles: [...LEGACY_ROLES, "office_admin"] },
     ],
   },
   {
