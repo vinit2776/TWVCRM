@@ -634,7 +634,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           )}
           {booking.status === "checked_out" && !booking.feedback && (
             <Button variant="outline" size="sm" onClick={() => setFeedbackDialogOpen(true)}>
-              <Star className="mr-1 h-4 w-4 text-amber-500" />Give Feedback
+              <Star className="mr-1 h-4 w-4 text-amber-500" />Rate Customer
             </Button>
           )}
           {/* Log Charge — available for checked-out and no-show bookings */}
@@ -1336,9 +1336,40 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           </Card>
         )}
 
-        {/* Customer Feedback */}
-        {booking.feedback && !Array.isArray(booking.feedback) && (
-          <FeedbackCard feedback={booking.feedback} />
+        {/* Customer Review (submitted via feedback link) */}
+        {booking.customer_feedback
+          ? <CustomerReviewCard feedback={booking.customer_feedback} />
+          : booking.status === "checked_out" && (
+            <Card className="border-dashed">
+              <CardContent className="py-4 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm text-muted-foreground">
+                  <Star className="h-4 w-4 text-amber-400" />
+                  Waiting for customer review
+                </div>
+                <div className="flex items-center gap-2">
+                  {booking.feedback_token && (
+                    <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleCopyFeedbackLink}>
+                      <Copy className="mr-1 h-3 w-3" />Copy Link
+                    </Button>
+                  )}
+                  <Button variant="ghost" size="sm" className="text-xs h-7" onClick={() => {
+                    if (!booking.lead?.email && !booking.guest_email) {
+                      toast.error("No customer email on file");
+                      return;
+                    }
+                    handleSendFeedbackLink();
+                  }}>
+                    <Mail className="mr-1 h-3 w-3" />Resend Email
+                  </Button>
+                </div>
+              </CardContent>
+            </Card>
+          )
+        }
+
+        {/* Staff Rating */}
+        {booking.feedback && (
+          <StaffFeedbackCard feedback={booking.feedback} />
         )}
       </div>
 
@@ -1452,24 +1483,91 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   );
 }
 
-function FeedbackCard({ feedback }: { feedback: BookingFeedback }) {
-  const overallColor =
-    (feedback.overall_rating ?? 0) >= 4
-      ? "bg-green-100 text-green-800"
-      : (feedback.overall_rating ?? 0) >= 3
-        ? "bg-amber-100 text-amber-800"
-        : "bg-red-100 text-red-800";
+// Customer-friendly labels for the public dimensions
+const CUSTOMER_DIMENSION_LABELS: Record<string, string> = {
+  space_etiquette:    "Cleanliness & Ambiance",
+  payment_discipline: "Service Quality",
+  community_behavior: "Staff Friendliness",
+  guest_management:   "Facilities & Amenities",
+  resource_usage:     "Value for Money",
+  renewal_likelihood: "Would Return?",
+};
 
+function sentimentInfo(rating: number) {
+  if (rating >= 4) return { label: "Positive",  className: "bg-green-100 text-green-800" };
+  if (rating >= 3) return { label: "Neutral",   className: "bg-amber-100 text-amber-800" };
+  return               { label: "Negative",  className: "bg-red-100 text-red-800"   };
+}
+
+function StarRow({ value }: { value: number }) {
+  return (
+    <div className="flex gap-0.5">
+      {[1, 2, 3, 4, 5].map(s => (
+        <Star key={s} className={`h-3.5 w-3.5 ${s <= value ? "fill-amber-400 text-amber-400" : "fill-none text-gray-200"}`} />
+      ))}
+    </div>
+  );
+}
+
+function CustomerReviewCard({ feedback }: { feedback: BookingFeedback }) {
+  const rating = feedback.overall_rating ?? 0;
+  const s = sentimentInfo(rating);
+  return (
+    <Card className="border-blue-200 bg-blue-50/30">
+      <CardHeader className="pb-3">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Star className="h-4 w-4 text-blue-500" />
+          Customer Review
+          {rating > 0 && (
+            <>
+              <Badge variant="secondary" className={s.className}>{s.label}</Badge>
+              <span className="text-xs text-muted-foreground ml-auto">{rating.toFixed(1)} / 5</span>
+            </>
+          )}
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2.5 text-sm">
+        {Object.keys(CUSTOMER_DIMENSION_LABELS).map(key => {
+          const val = feedback[key as keyof BookingFeedback] as number | null;
+          if (val == null) return null;
+          return (
+            <div key={key} className="flex items-center justify-between">
+              <span className="text-muted-foreground">{CUSTOMER_DIMENSION_LABELS[key]}</span>
+              <StarRow value={val} />
+            </div>
+          );
+        })}
+        {feedback.notes && (
+          <>
+            <Separator />
+            <div>
+              <span className="text-muted-foreground text-xs">Their comment</span>
+              <p className="mt-0.5 whitespace-pre-wrap text-sm italic">&ldquo;{feedback.notes}&rdquo;</p>
+            </div>
+          </>
+        )}
+        <div className="text-xs text-muted-foreground pt-1 border-t">
+          Submitted by customer on {formatDate(feedback.created_at)}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
+function StaffFeedbackCard({ feedback }: { feedback: BookingFeedback }) {
+  const rating = feedback.overall_rating ?? 0;
+  const s = sentimentInfo(rating);
   return (
     <Card className="border-amber-200">
-      <CardHeader>
+      <CardHeader className="pb-3">
         <CardTitle className="text-sm flex items-center gap-2">
           <Star className="h-4 w-4 text-amber-500" />
-          Customer Feedback
-          {feedback.overall_rating != null && (
-            <Badge variant="secondary" className={overallColor}>
-              {feedback.overall_rating.toFixed(1)} / 5
-            </Badge>
+          Staff Rating
+          {rating > 0 && (
+            <>
+              <Badge variant="secondary" className={s.className}>{s.label}</Badge>
+              <span className="text-xs text-muted-foreground ml-auto">{rating.toFixed(1)} / 5</span>
+            </>
           )}
         </CardTitle>
       </CardHeader>
@@ -1480,18 +1578,7 @@ function FeedbackCard({ feedback }: { feedback: BookingFeedback }) {
           return (
             <div key={dim.key} className="flex items-center justify-between">
               <span className="text-muted-foreground">{dim.label}</span>
-              <div className="flex gap-0.5">
-                {[1, 2, 3, 4, 5].map((s) => (
-                  <Star
-                    key={s}
-                    className={`h-3.5 w-3.5 ${
-                      s <= val
-                        ? "fill-amber-400 text-amber-400"
-                        : "fill-none text-gray-300"
-                    }`}
-                  />
-                ))}
-              </div>
+              <StarRow value={val} />
             </div>
           );
         })}

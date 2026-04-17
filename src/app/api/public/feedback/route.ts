@@ -65,11 +65,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid or expired feedback link" }, { status: 404 });
   }
 
-  // Check if feedback already exists
+  // Check if customer feedback already exists
   const { data: existing } = await supabase
     .from("booking_feedbacks")
     .select("id")
     .eq("booking_id", booking.id)
+    .eq("source", "customer")
     .maybeSingle();
 
   if (existing) {
@@ -84,13 +85,14 @@ export async function POST(request: NextRequest) {
     .insert({
       booking_id: booking.id,
       lead_id: booking.lead_id,
+      source: "customer",
       space_etiquette: space_etiquette ?? null,
       payment_discipline: payment_discipline ?? null,
       community_behavior: community_behavior ?? null,
       guest_management: guest_management ?? null,
       resource_usage: resource_usage ?? null,
       renewal_likelihood: renewal_likelihood ?? null,
-      overall_rating: overallRating ? Math.round(overallRating * 10) / 10 : null,
+      overall_rating: overallRating ? parseFloat((overallRating).toFixed(2)) : null,
       notes: notes || null,
     })
     .select()

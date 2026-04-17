@@ -758,7 +758,8 @@ export interface Booking {
   created_at: string;
   updated_at: string;
   facilities?: BookingFacility[];
-  feedback?: BookingFeedback | BookingFeedback[] | null;
+  feedback?: BookingFeedback | null;          // staff rating (backward compat)
+  customer_feedback?: BookingFeedback | null; // customer-submitted via link
 }
 
 export interface BookingFacility {
@@ -777,6 +778,7 @@ export interface BookingFeedback {
   id: string;
   booking_id: string;
   lead_id: string;
+  source: "staff" | "customer";
   space_etiquette: number | null;
   payment_discipline: number | null;
   community_behavior: number | null;
@@ -1536,6 +1538,7 @@ export interface PurchaseRequest {
   approval_code?: string;
   rejection_reason?: string;
   notes?: string;
+  expenditure_type: "operational" | "amc";
   total_estimated_amount: number;
   created_at: string;
   updated_at: string;

@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
+import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 
 const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile), facilities:booking_facilities(*)";
 
@@ -29,14 +30,16 @@ export async function GET(
     .eq("booking_id", id)
     .eq("is_active", true);
 
-  // Fetch feedback for this booking (if any)
-  const { data: feedback } = await supabase
+  // Fetch all feedback for this booking (staff + customer)
+  const { data: allFeedbacks } = await supabase
     .from("booking_feedbacks")
     .select("*, rater:users!booking_feedbacks_rated_by_fkey(id, full_name)")
-    .eq("booking_id", id)
-    .maybeSingle();
+    .eq("booking_id", id);
 
-  return NextResponse.json({ data: { ...data, voucher_issuances: vouchers || [], feedback: feedback || null } });
+  const staff_feedback = allFeedbacks?.find(f => f.source === "staff") ?? null;
+  const customer_feedback = allFeedbacks?.find(f => f.source === "customer") ?? null;
+
+  return NextResponse.json({ data: { ...data, voucher_issuances: vouchers || [], feedback: staff_feedback, customer_feedback } });
 }
 
 export async function PATCH(
@@ -454,6 +457,51 @@ export async function PATCH(
         ? messaging.bookingCheckin(phone, guestName, spaceName, bookingNum, id)
         : messaging.bookingCheckout(phone, guestName, spaceName, bookingNum, id);
       fn.catch((e: unknown) => console.error("[messaging] checkin/checkout WA failed:", e));
+    }
+  }
+
+  // Auto-send customer feedback link email on checkout (fire-and-forget)
+  if (body.status === "checked_out") {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const u = updated as any;
+    const customerEmail = u?.lead?.email || u?.guest_email;
+    const feedbackToken = u?.feedback_token;
+    if (customerEmail && feedbackToken) {
+      const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app";
+      const feedbackUrl = `${appUrl}/feedback/${feedbackToken}`;
+      const spaceName = u?.space?.name || "The WorkVilla";
+      const customerName = u?.lead?.first_name
+        ? `${u.lead.first_name} ${u.lead.last_name || ""}`.trim()
+        : (u?.guest_name || "Guest");
+      const bookingNumber = u?.booking_number || id;
+
+      resend.emails.send({
+        from: EMAIL_FROM,
+        replyTo: EMAIL_REPLY_TO,
+        to: customerEmail,
+        subject: `How was your experience? — ${bookingNumber} — The WorkVilla`,
+        html: `
+<div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+  <div style="background:#015E65;padding:20px 32px;">
+    <h1 style="color:white;margin:0;font-size:20px;">The WorkVilla</h1>
+    <p style="color:#00AE6C;margin:4px 0 0;font-size:12px;">Empower your business with flexible workspaces</p>
+  </div>
+  <div style="padding:32px;">
+    <p style="color:#1a1b1e;font-size:15px;">Dear ${customerName},</p>
+    <p style="color:#333;font-size:14px;">Thank you for visiting The WorkVilla! We hope your session at <strong>${spaceName}</strong> was productive.</p>
+    <p style="color:#333;font-size:14px;">We'd love to hear about your experience — it only takes a minute and helps us serve you better.</p>
+    <div style="text-align:center;margin:28px 0;">
+      <a href="${feedbackUrl}" style="background:#015E65;color:white;padding:14px 36px;text-decoration:none;border-radius:8px;font-weight:bold;font-size:15px;display:inline-block;">Share Your Feedback</a>
+    </div>
+    <p style="color:#666;font-size:13px;">Booking: <strong>${bookingNumber}</strong> · Space: ${spaceName}</p>
+    <p style="color:#333;font-size:14px;margin-top:20px;">Warm regards,<br/><strong>The WorkVilla Team</strong></p>
+  </div>
+  <div style="background:#015E65;padding:16px 32px;text-align:center;">
+    <p style="color:#fff;margin:0;font-size:11px;">SREE DESIGN INFRASTRUCTURE PVT LTD</p>
+    <p style="color:rgba(255,255,255,0.7);margin:4px 0 0;font-size:10px;">Prakash Presidium, 110, MG Road, Nungambakkam, Chennai - 600034</p>
+  </div>
+</div>`,
+      }).catch((e: unknown) => console.error("[checkout] feedback email failed:", e));
     }
   }
 
