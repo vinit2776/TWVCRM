@@ -19,6 +19,8 @@ export interface Location {
   is_active: boolean;
   capacity_config?: LocationCapacityConfig;
   requires_headcount: boolean;
+  latitude?: number | null;
+  longitude?: number | null;
   created_at: string;
   updated_at: string;
 }

@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   Users, Plus, ChevronLeft, ChevronRight, Trash2, History, ClipboardEdit,
+  MapPin, Navigation, X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -58,6 +59,24 @@ function utilColor(pct: number | null) {
   return "bg-[#015E65]";
 }
 
+// Haversine distance in metres between two lat/lng pairs
+function distanceMetres(lat1: number, lng1: number, lat2: number, lng2: number): number {
+  const R = 6_371_000;
+  const toRad = (d: number) => (d * Math.PI) / 180;
+  const dLat = toRad(lat2 - lat1);
+  const dLng = toRad(lng2 - lng1);
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(lat1)) * Math.cos(toRad(lat2)) * Math.sin(dLng / 2) ** 2;
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function formatDistance(m: number): string {
+  return m < 1000 ? `${Math.round(m)} m away` : `${(m / 1000).toFixed(1)} km away`;
+}
+
+const GEO_AUTO_SELECT_THRESHOLD_M = 500; // metres
+
 // ─── Sub-components ──────────────────────────────────────────────────────────
 
 function UtilBar({ label, emoji, count, capacity }: {
@@ -93,6 +112,12 @@ export default function HeadcountPage() {
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
+  // ── Geolocation suggestion ──
+  type GeoSuggestion = { locationId: string; name: string; distanceM: number } | null;
+  const [geoStatus, setGeoStatus] = useState<"idle" | "detecting" | "done" | "denied" | "unavailable">("idle");
+  const [geoSuggestion, setGeoSuggestion] = useState<GeoSuggestion>(null);
+  const [suggestionDismissed, setSuggestionDismissed] = useState(false);
+
   // ── Today's readings (right panel) ──
   const [todayReadings, setTodayReadings] = useState<SpaceHeadcount[]>([]);
   const [todayLoading, setTodayLoading] = useState(false);
@@ -115,12 +140,47 @@ export default function HeadcountPage() {
     fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {});
   }, []);
 
-  // ── Default to first active location ──
+  // ── Geolocation detection — runs once when locations are loaded ──
   useEffect(() => {
-    if (locations.length > 0 && !locationId) {
-      setLocationId(locations[0].id);
+    if (locations.length === 0 || geoStatus !== "idle") return;
+
+    if (!navigator.geolocation) {
+      setGeoStatus("unavailable");
+      if (locations.length > 0 && !locationId) setLocationId(locations[0].id);
+      return;
     }
-  }, [locations, locationId]);
+
+    setGeoStatus("detecting");
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const { latitude: userLat, longitude: userLng } = pos.coords;
+
+        // Find nearest location that has coordinates stored
+        let nearest: GeoSuggestion = null;
+        let nearestDist = Infinity;
+        for (const loc of locations) {
+          if (loc.latitude == null || loc.longitude == null) continue;
+          const d = distanceMetres(userLat, userLng, loc.latitude, loc.longitude);
+          if (d < nearestDist) { nearestDist = d; nearest = { locationId: loc.id, name: loc.name, distanceM: d }; }
+        }
+
+        setGeoStatus("done");
+        if (nearest && nearest.distanceM <= GEO_AUTO_SELECT_THRESHOLD_M) {
+          setGeoSuggestion(nearest);
+          // Don't auto-select — show suggestion card and wait for user to confirm
+        } else {
+          // Outside threshold or no coords on any location — fall back to first
+          if (!locationId && locations.length > 0) setLocationId(locations[0].id);
+        }
+      },
+      () => {
+        setGeoStatus("denied");
+        if (!locationId && locations.length > 0) setLocationId(locations[0].id);
+      },
+      { enableHighAccuracy: true, timeout: 8000 }
+    );
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [locations]);
 
   const selectedLocation = useMemo(
     () => locations.find(l => l.id === locationId) ?? null,
@@ -304,11 +364,61 @@ export default function HeadcountPage() {
             </div>
 
             <div className="p-5 space-y-5">
+
+              {/* ── Geolocation suggestion banner ── */}
+              {geoStatus === "detecting" && (
+                <div className="flex items-center gap-2 text-sm text-muted-foreground bg-muted/50 border rounded-lg px-3 py-2.5">
+                  <span className="h-3.5 w-3.5 border-2 border-muted-foreground border-t-transparent rounded-full animate-spin shrink-0" />
+                  Detecting your location…
+                </div>
+              )}
+
+              {geoSuggestion && !suggestionDismissed && !locationId && (
+                <div className="flex items-start gap-3 bg-[#015E65]/5 border border-[#015E65]/25 rounded-lg px-4 py-3">
+                  <Navigation className="h-4 w-4 text-[#015E65] mt-0.5 shrink-0" />
+                  <div className="flex-1 min-w-0">
+                    <p className="text-sm font-medium text-[#015E65]">
+                      You appear to be at <strong>{geoSuggestion.name}</strong>
+                    </p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      {formatDistance(geoSuggestion.distanceM)} · Tap below to use this location
+                    </p>
+                    <div className="flex gap-2 mt-2.5">
+                      <Button
+                        type="button"
+                        size="sm"
+                        className="bg-[#015E65] hover:bg-[#014a50] text-white h-8 px-4 text-xs"
+                        onClick={() => {
+                          setLocationId(geoSuggestion.locationId);
+                          setSuggestionDismissed(true);
+                        }}
+                      >
+                        <MapPin className="h-3.5 w-3.5 mr-1.5" />
+                        Yes, use {geoSuggestion.name}
+                      </Button>
+                      <Button
+                        type="button"
+                        variant="ghost"
+                        size="sm"
+                        className="h-8 px-3 text-xs text-muted-foreground"
+                        onClick={() => {
+                          setSuggestionDismissed(true);
+                          if (locations.length > 0 && !locationId) setLocationId(locations[0].id);
+                        }}
+                      >
+                        <X className="h-3.5 w-3.5 mr-1" />
+                        Different location
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               {/* Location + Date/Time */}
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div className="space-y-2">
                   <Label>Location *</Label>
-                  <Select value={locationId} onValueChange={v => { setLocationId(v); setAreas({}); setTotalCount(""); setTotalOverridden(false); }}>
+                  <Select value={locationId} onValueChange={v => { setLocationId(v); setAreas({}); setTotalCount(""); setTotalOverridden(false); setSuggestionDismissed(true); }}>
                     <SelectTrigger>
                       <SelectValue placeholder="Select location" />
                     </SelectTrigger>

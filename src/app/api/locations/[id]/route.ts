@@ -42,7 +42,7 @@ export async function PUT(
   }
 
   const body = await request.json();
-  const { name, code, address, city, state, is_active, capacity_config, requires_headcount } = body as {
+  const { name, code, address, city, state, is_active, capacity_config, requires_headcount, latitude, longitude } = body as {
     name?: string;
     code?: string;
     address?: string;
@@ -51,6 +51,8 @@ export async function PUT(
     is_active?: boolean;
     capacity_config?: Record<string, number>;
     requires_headcount?: boolean;
+    latitude?: number | null;
+    longitude?: number | null;
   };
 
   const updates: Record<string, unknown> = {};
@@ -62,6 +64,8 @@ export async function PUT(
   if (is_active !== undefined) updates.is_active = is_active;
   if (capacity_config !== undefined) updates.capacity_config = capacity_config;
   if (requires_headcount !== undefined) updates.requires_headcount = requires_headcount;
+  if (latitude !== undefined) updates.latitude = latitude;
+  if (longitude !== undefined) updates.longitude = longitude;
 
   const { data, error } = await supabase
     .from("locations")

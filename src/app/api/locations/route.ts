@@ -44,7 +44,7 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json();
-  const { name, code, address, city, state, capacity_config, requires_headcount } = body as {
+  const { name, code, address, city, state, capacity_config, requires_headcount, latitude, longitude } = body as {
     name: string;
     code: string;
     address?: string;
@@ -52,6 +52,8 @@ export async function POST(request: NextRequest) {
     state?: string;
     capacity_config?: Record<string, number>;
     requires_headcount?: boolean;
+    latitude?: number | null;
+    longitude?: number | null;
   };
 
   if (!name || !code) {
@@ -68,6 +70,8 @@ export async function POST(request: NextRequest) {
       state: state || null,
       capacity_config: capacity_config || {},
       requires_headcount: requires_headcount ?? false,
+      latitude: latitude ?? null,
+      longitude: longitude ?? null,
     })
     .select()
     .single();

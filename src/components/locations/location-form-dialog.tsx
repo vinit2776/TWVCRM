@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2 } from "lucide-react";
+import { Loader2, MapPin, LocateFixed } from "lucide-react";
 import { toast } from "sonner";
 import type { Location, LocationCapacityConfig } from "@/types";
 
@@ -43,6 +43,9 @@ export function LocationFormDialog({
   const [isActive, setIsActive] = useState(true);
   const [requiresHeadcount, setRequiresHeadcount] = useState(false);
   const [capacityConfig, setCapacityConfig] = useState<Record<string, string>>({});
+  const [latitude, setLatitude]   = useState<string>("");
+  const [longitude, setLongitude] = useState<string>("");
+  const [detectingGeo, setDetectingGeo] = useState(false);
   const [saving, setSaving]   = useState(false);
 
   const isEdit = !!location;
@@ -63,16 +66,40 @@ export function LocationFormDialog({
           AREA_TYPES.map(a => [a.key, cfg[a.key] != null ? String(cfg[a.key]) : ""])
         )
       );
+      setLatitude(location.latitude != null ? String(location.latitude) : "");
+      setLongitude(location.longitude != null ? String(location.longitude) : "");
     } else {
       setName(""); setCode(""); setAddress(""); setCity(""); setState("");
       setIsActive(true);
       setRequiresHeadcount(false);
       setCapacityConfig({});
+      setLatitude(""); setLongitude("");
     }
   }, [location, open]);
 
   const handleCapacity = (key: string, val: string) => {
     setCapacityConfig(prev => ({ ...prev, [key]: val }));
+  };
+
+  const handleDetectLocation = () => {
+    if (!navigator.geolocation) {
+      toast.error("Geolocation is not supported by your browser");
+      return;
+    }
+    setDetectingGeo(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setLatitude(String(pos.coords.latitude));
+        setLongitude(String(pos.coords.longitude));
+        setDetectingGeo(false);
+        toast.success("Location coordinates captured");
+      },
+      () => {
+        setDetectingGeo(false);
+        toast.error("Could not detect location — please enter coordinates manually");
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -96,6 +123,8 @@ export function LocationFormDialog({
         is_active: isActive,
         requires_headcount: requiresHeadcount,
         capacity_config,
+        latitude:  latitude  !== "" ? parseFloat(latitude)  : null,
+        longitude: longitude !== "" ? parseFloat(longitude) : null,
       };
 
       const res = isEdit
@@ -222,6 +251,66 @@ export function LocationFormDialog({
           </div>
 
           }
+
+          {/* GPS Coordinates */}
+          <div className="space-y-2">
+            <div className="flex items-center justify-between">
+              <div>
+                <Label className="flex items-center gap-1.5"><MapPin className="h-3.5 w-3.5" />GPS Coordinates</Label>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Used to auto-suggest this location in the Headcount screen.
+                </p>
+              </div>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={handleDetectLocation}
+                disabled={detectingGeo}
+                className="shrink-0 gap-1.5"
+              >
+                {detectingGeo
+                  ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  : <LocateFixed className="h-3.5 w-3.5" />}
+                {detectingGeo ? "Detecting…" : "Detect my location"}
+              </Button>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label htmlFor="loc-lat" className="text-xs text-muted-foreground">Latitude</Label>
+                <Input
+                  id="loc-lat"
+                  type="number"
+                  step="any"
+                  value={latitude}
+                  onChange={e => setLatitude(e.target.value)}
+                  placeholder="e.g. 12.9716"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label htmlFor="loc-lng" className="text-xs text-muted-foreground">Longitude</Label>
+                <Input
+                  id="loc-lng"
+                  type="number"
+                  step="any"
+                  value={longitude}
+                  onChange={e => setLongitude(e.target.value)}
+                  placeholder="e.g. 77.5946"
+                />
+              </div>
+            </div>
+            {latitude && longitude && (
+              <a
+                href={`https://www.google.com/maps?q=${latitude},${longitude}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-[#015E65] hover:underline mt-0.5"
+              >
+                <MapPin className="h-3 w-3" />
+                Verify on Google Maps
+              </a>
+            )}
+          </div>
 
           {/* Active toggle (edit only) */}
           {isEdit && (
