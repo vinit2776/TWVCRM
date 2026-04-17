@@ -161,6 +161,12 @@ function ConsumptionPageContent() {
           duration: 8000,
         });
       }
+      if (data.stock_warnings && data.stock_warnings.length > 0) {
+        toast.warning(
+          `Stock discrepancy noted — ${data.stock_warnings.length} item(s) consumed beyond system stock. Please verify delivery receipts are linked to this location.`,
+          { duration: 10000 }
+        );
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : t("status.error", lang));
     } finally {
@@ -260,23 +266,28 @@ function ConsumptionPageContent() {
                 {filteredItems.map((item) => {
                   const isOutOfStock = item.quantity_on_hand === 0;
                   const isBelowReorder = item.quantity_on_hand > 0 && item.quantity_on_hand <= item.reorder_level;
+                  const enteredQty = parseFloat(entries[item.id]?.quantity || "0") || 0;
+                  const exceedsStock = enteredQty > item.quantity_on_hand && item.quantity_on_hand > 0;
                   return (
                     <tr
                       key={item.id}
-                      className={isOutOfStock ? "opacity-50 bg-muted/30" : ""}
+                      className={isOutOfStock ? "bg-muted/20" : ""}
                     >
                       <td className="p-3">
-                        <div className="flex items-center gap-2">
-                          <span className={isOutOfStock ? "text-muted-foreground" : ""}>
-                            {item.item_name}
-                          </span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span>{item.item_name}</span>
                           {isBelowReorder && (
                             <AlertTriangle className="h-3.5 w-3.5 text-amber-500" />
+                          )}
+                          {isOutOfStock && (
+                            <span className="text-[10px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded">
+                              system: 0 stock
+                            </span>
                           )}
                         </div>
                       </td>
                       <td className="p-3">
-                        <span className={isBelowReorder ? "text-amber-600 font-medium" : ""}>
+                        <span className={isBelowReorder ? "text-amber-600 font-medium" : isOutOfStock ? "text-muted-foreground" : ""}>
                           {item.quantity_on_hand}
                         </span>
                         <span className="text-muted-foreground ml-1 text-xs">{item.unit}</span>
@@ -285,18 +296,18 @@ function ConsumptionPageContent() {
                         <Input
                           type="number"
                           min={0}
-                          max={item.quantity_on_hand}
                           step="any"
-                          disabled={isOutOfStock}
                           placeholder="0"
                           value={entries[item.id]?.quantity || ""}
                           onChange={(e) => updateEntry(item.id, "quantity", e.target.value)}
-                          className="h-8"
+                          className={`h-8 ${exceedsStock ? "border-amber-400" : ""}`}
                         />
+                        {exceedsStock && (
+                          <p className="text-[10px] text-amber-600 mt-0.5">Exceeds tracked stock</p>
+                        )}
                       </td>
                       <td className="p-3">
                         <Input
-                          disabled={isOutOfStock}
                           placeholder={t("table.notes", lang)}
                           value={entries[item.id]?.notes || ""}
                           onChange={(e) => updateEntry(item.id, "notes", e.target.value)}
