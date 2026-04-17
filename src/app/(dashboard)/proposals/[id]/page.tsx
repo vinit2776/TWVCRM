@@ -17,6 +17,10 @@ import {
   Upload,
   X,
   Loader2,
+  ChevronDown,
+  FileText,
+  ShieldCheck,
+  ReceiptText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -32,6 +36,13 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuSeparator,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import {
   PROPOSAL_STATUS_LABELS,
   PROPOSAL_STATUS_COLORS,
@@ -434,10 +445,104 @@ export default function ProposalDetailPage({
               </Button>
             </>
           )}
-          <Button variant="outline" size="sm" onClick={handleEmailProposal}>
-            <Mail className="mr-2 h-4 w-4" />
-            Email
-          </Button>
+          {/* Smart Email dropdown ----------------------------------------- */}
+          {(() => {
+            const isActive = !["draft", "rejected"].includes(proposal.status);
+            const hasDeposit = Number(proposal.security_deposit_months || 0) > 0;
+            const depositPaid = proposal.deposit_payment_status === "paid";
+            const depositPending = proposal.deposit_payment_status === "pending";
+            const monthlyPaid = proposal.payment_status === "paid";
+            const invoiceSentAlready = !!proposal.occupation_start_date;
+
+            return (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <Button variant="outline" size="sm">
+                    <Mail className="mr-2 h-4 w-4" />
+                    Email
+                    <ChevronDown className="ml-1 h-3.5 w-3.5 opacity-60" />
+                  </Button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="w-64">
+                  {/* ── Send Proposal ─────────────────────────────────── */}
+                  <DropdownMenuItem onClick={handleEmailProposal}>
+                    <FileText className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
+                    <div>
+                      <p className="font-medium">Send Proposal</p>
+                      <p className="text-xs text-muted-foreground">Proposal PDF + deposit payment link</p>
+                    </div>
+                  </DropdownMenuItem>
+
+                  {/* Only show payment-specific options once proposal is shared */}
+                  {isActive && (hasDeposit || true) && (
+                    <>
+                      <DropdownMenuSeparator />
+
+                      {/* ── Security Deposit ──────────────────────────── */}
+                      {hasDeposit && (
+                        depositPaid ? (
+                          <DropdownMenuItem disabled className="opacity-50 cursor-default">
+                            <ShieldCheck className="mr-2 h-4 w-4 shrink-0 text-green-600" />
+                            <div>
+                              <p className="font-medium flex items-center gap-1.5">
+                                Security Deposit
+                                <span className="text-[10px] font-semibold bg-green-100 text-green-700 px-1.5 py-0.5 rounded">PAID</span>
+                              </p>
+                              <p className="text-xs text-muted-foreground">Deposit received — no email needed</p>
+                            </div>
+                          </DropdownMenuItem>
+                        ) : (
+                          <DropdownMenuItem
+                            onClick={depositPending ? openDepositEmailDialog : undefined}
+                            disabled={!depositPending}
+                          >
+                            <ShieldCheck className="mr-2 h-4 w-4 shrink-0 text-amber-600" />
+                            <div>
+                              <p className="font-medium">Security Deposit Request</p>
+                              <p className="text-xs text-muted-foreground">
+                                ₹{Number(proposal.security_deposit_amount || 0).toLocaleString("en-IN")} · Razorpay link included
+                              </p>
+                            </div>
+                          </DropdownMenuItem>
+                        )
+                      )}
+
+                      {/* ── GST Invoice ───────────────────────────────── */}
+                      {monthlyPaid ? (
+                        <DropdownMenuItem disabled className="opacity-50 cursor-default">
+                          <ReceiptText className="mr-2 h-4 w-4 shrink-0 text-green-600" />
+                          <div>
+                            <p className="font-medium flex items-center gap-1.5">
+                              GST Invoice
+                              <span className="text-[10px] font-semibold bg-green-100 text-green-700 px-1.5 py-0.5 rounded">PAID</span>
+                            </p>
+                            <p className="text-xs text-muted-foreground">Monthly charge paid — no email needed</p>
+                          </div>
+                        </DropdownMenuItem>
+                      ) : (
+                        <DropdownMenuItem
+                          onClick={() => openGstDialog(invoiceSentAlready)}
+                          disabled={hasDeposit && !depositPaid}
+                        >
+                          <ReceiptText className="mr-2 h-4 w-4 shrink-0 text-blue-600" />
+                          <div>
+                            <p className="font-medium">
+                              {invoiceSentAlready ? "Revise & Resend GST Invoice" : "GST Invoice — First Month"}
+                            </p>
+                            <p className="text-xs text-muted-foreground">
+                              {hasDeposit && !depositPaid
+                                ? "Deposit must be paid first"
+                                : `₹${Number(proposal.total_amount).toLocaleString("en-IN")}/month · Prorated · PDF attached`}
+                            </p>
+                          </div>
+                        </DropdownMenuItem>
+                      )}
+                    </>
+                  )}
+                </DropdownMenuContent>
+              </DropdownMenu>
+            );
+          })()}
           <Button variant="outline" size="sm" onClick={handleDownloadPDF}>
             <Download className="mr-2 h-4 w-4" />
             Download PDF
