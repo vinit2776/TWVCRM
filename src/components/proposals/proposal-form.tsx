@@ -13,7 +13,7 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LineItemsEditor, type LineItemData } from "@/components/shared/line-items-editor";
-import { Loader2 } from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { DEFAULT_PROPOSAL_TERMS } from "@/lib/constants";
 import { LocationSelector } from "@/components/shared/location-selector";
@@ -235,6 +235,19 @@ export function ProposalForm({
             {locationId && availableServices.length === 0 && (
               <p className="text-xs text-muted-foreground py-2">No services configured for this location. Add them in Settings → Services.</p>
             )}
+            {locationId && availableServices.length > 0 && complimentaryItems.length === 0 && (
+              <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5">
+                <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
+                <div className="text-xs text-amber-800">
+                  <p className="font-semibold">Amenities not included in this proposal</p>
+                  <p className="mt-0.5">
+                    This location has {availableServices.length} service{availableServices.length > 1 ? "s" : ""} configured.
+                    Use the <span className="font-medium">+ Add service</span> dropdown above to include them — free or paid — so they appear correctly in the proposal PDF.
+                    Do not list amenities in the Terms &amp; Conditions.
+                  </p>
+                </div>
+              </div>
+            )}
             {complimentaryItems.length > 0 && (
               <div className="space-y-2">
                 <div className="grid grid-cols-12 gap-2 text-xs text-muted-foreground font-medium">
@@ -381,6 +394,9 @@ export function ProposalForm({
               placeholder="Add terms and conditions..."
               rows={3}
             />
+            <p className="text-xs text-muted-foreground">
+              List legal and commercial terms here only. To include amenities (conference room hours, prints, etc.), use the <span className="font-medium">Complimentary Services</span> section above.
+            </p>
           </div>
 
           <div className="space-y-2">
