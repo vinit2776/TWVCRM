@@ -306,6 +306,10 @@ export interface Proposal {
   deposit_payment_amount?: number;
   deposit_payment_reference?: string;
   deposit_payment_screenshot_url?: string;
+  // Accounting
+  deposit_accounted?: boolean;
+  deposit_accounted_at?: string;
+  deposit_accounted_by?: string;
 }
 
 // ==========================================
@@ -342,6 +346,10 @@ export interface ProformaInvoice {
   gst_invoice_number?: string;
   gst_invoice_sent_at?: string;
   gst_invoice_sent_to?: string;
+  // Accounting
+  accounted?: boolean;
+  accounted_at?: string;
+  accounted_by?: string;
 }
 
 // ==========================================

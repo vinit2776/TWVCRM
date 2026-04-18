@@ -15,9 +15,10 @@ import { GstInvoiceEntry } from "@/components/accounting/gst-invoice-entry";
 import { ExportSummaryDialog } from "@/components/accounting/export-summary-dialog";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
-import { Calculator, ScrollText, Banknote, Building2, AlertCircle, Search, ChevronDown, History } from "lucide-react";
+import { Calculator, ScrollText, Banknote, Building2, AlertCircle, Search, ChevronDown, History, Receipt } from "lucide-react";
 import { PettyCashIssuance } from "@/components/accounting/petty-cash-issuance";
 import { ActionRequiredBanner } from "@/components/accounting/action-required-banner";
+import { ProposalPaymentsTab } from "@/components/accounting/proposal-payments-tab";
 
 interface MonthlySummary {
   period: {
@@ -349,6 +350,9 @@ export default function AccountingPage() {
                   </span>
                 )}
               </TabsTrigger>
+              <TabsTrigger value="proposal-payments">
+                <Receipt className="h-3.5 w-3.5 mr-1" />Proposal Payments
+              </TabsTrigger>
             </TabsList>
 
             {/* Tab 1: Contracts */}
@@ -412,6 +416,11 @@ export default function AccountingPage() {
 
             {/* Tab 6: placeholder — content rendered outside summary gate below */}
             <TabsContent value="vendor-payments" />
+
+            {/* Tab 7: Proposal Payments — inline content (no summary dependency) */}
+            <TabsContent value="proposal-payments" className="mt-4">
+              <ProposalPaymentsTab month={`${year}-${String(month).padStart(2, "0")}`} />
+            </TabsContent>
           </Tabs>
         </>
       )}

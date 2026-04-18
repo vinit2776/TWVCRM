@@ -10,7 +10,6 @@ import {
   Eye,
   CheckCircle2,
   XCircle,
-  Clock,
   Mail,
   AlertTriangle,
   Banknote,
@@ -52,6 +51,7 @@ import {
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { generateProposalPDF } from "@/lib/pdf-generator";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
+import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
 import { toast } from "sonner";
 import type { Proposal, Lead } from "@/types";
 
@@ -778,55 +778,13 @@ export default function ProposalDetailPage({
             </CardContent>
           </Card>
 
-          {/* Timeline */}
+          {/* Lifecycle Timeline */}
           <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <Clock className="h-4 w-4" />
-                Timeline
-              </CardTitle>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Lifecycle</CardTitle>
             </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Created</span>
-                <span>{formatDate(proposal.created_at)}</span>
-              </div>
-              {proposal.sent_at && (
-                <>
-                  <Separator />
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Sent</span>
-                    <span>{formatDate(proposal.sent_at)}</span>
-                  </div>
-                </>
-              )}
-              {proposal.viewed_at && (
-                <>
-                  <Separator />
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Viewed</span>
-                    <span>{formatDate(proposal.viewed_at)}</span>
-                  </div>
-                </>
-              )}
-              {proposal.accepted_at && (
-                <>
-                  <Separator />
-                  <div className="flex justify-between text-green-600">
-                    <span>Accepted</span>
-                    <span>{formatDate(proposal.accepted_at)}</span>
-                  </div>
-                </>
-              )}
-              {proposal.rejected_at && (
-                <>
-                  <Separator />
-                  <div className="flex justify-between text-red-600">
-                    <span>Rejected</span>
-                    <span>{formatDate(proposal.rejected_at)}</span>
-                  </div>
-                </>
-              )}
+            <CardContent className="pt-0">
+              <ProposalLifecycle proposal={proposal} />
             </CardContent>
           </Card>
 
