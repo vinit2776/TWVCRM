@@ -13,7 +13,7 @@ export async function GET(_request: NextRequest, { params }: Params) {
 
   const { data, error } = await supabase
     .from("contract_documents")
-    .select("*, document:documents!contract_documents_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes), reviewer:users!contract_documents_reviewed_by_fkey(id, full_name, email)")
+    .select("*, document:documents!contract_documents_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes), reviewer:users!contract_documents_reviewed_by_fkey(id, full_name, email), deferrer:users!contract_documents_deferred_by_fkey(id, full_name)")
     .eq("contract_id", id)
     .order("is_required", { ascending: false })
     .order("created_at");

@@ -1227,7 +1227,7 @@ export type CaseStatus =
   | "client_approved" | "signing_in_progress" | "executed"
   | "invoiced" | "active" | "renewal_due" | "renewed" | "lapsed";
 
-export type CaseDocStatus = "pending" | "uploaded" | "approved" | "rejected";
+export type CaseDocStatus = "pending" | "uploaded" | "approved" | "rejected" | "deferred";
 
 export type ComplianceCheckStatus = "pending" | "passed" | "failed" | "waived";
 
@@ -1333,12 +1333,18 @@ export interface ContractDocument {
   document_type: string;
   label: string;
   is_required: boolean;
-  status: CaseDocStatus; // reuse same enum: pending, uploaded, approved, rejected
+  status: CaseDocStatus; // pending | uploaded | approved | rejected | deferred
   reviewed_by?: string;
   reviewer?: User;
   reviewed_at?: string;
   rejection_reason?: string;
   notes?: string;
+  // deferral fields
+  deferred_by?: string;
+  deferrer?: { id: string; full_name: string };
+  deferred_at?: string;
+  deferred_reason?: string;
+  deferred_until?: string;
   created_at: string;
   updated_at: string;
 }

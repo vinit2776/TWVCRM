@@ -86,11 +86,12 @@ export default function ContractDetailPage({
   const [linkedProposal, setLinkedProposal] = useState<any>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
-  const [kycStatus, setKycStatus] = useState<{ allApproved: boolean; total: number; approved: number }>({ allApproved: true, total: 0, approved: 0 });
+  const [kycStatus, setKycStatus] = useState<{ allSatisfied: boolean; total: number; approved: number; deferred: number }>({ allSatisfied: true, total: 0, approved: 0, deferred: 0 });
   const [showOverride, setShowOverride] = useState(false);
+  const [deferredActivateOpen, setDeferredActivateOpen] = useState(false);
 
-  const handleKycStatusChange = useCallback((allApproved: boolean, total: number, approved: number) => {
-    setKycStatus({ allApproved, total, approved });
+  const handleKycStatusChange = useCallback((allSatisfied: boolean, total: number, approved: number, deferred: number) => {
+    setKycStatus({ allSatisfied, total, approved, deferred });
   }, []);
 
   const fetchContract = useCallback(async (showSpinner = true) => {
@@ -430,13 +431,19 @@ export default function ContractDetailPage({
           {contract.status === "accepted" && (() => {
             const proposalPaid = !linkedProposal || linkedProposal.payment_status === "paid";
             const depositPaid = !linkedProposal || linkedProposal.deposit_payment_status !== "pending";
-            const kycComplete = kycStatus.total === 0 || kycStatus.allApproved;
+            const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
             const canActivate = proposalPaid && depositPaid && kycComplete;
+            const hasDeferred = kycStatus.deferred > 0;
 
             return canActivate ? (
-              <Button variant="outline" onClick={() => handleStatusUpdate("active")} disabled={statusUpdating}>
+              <Button
+                variant="outline"
+                onClick={() => hasDeferred ? setDeferredActivateOpen(true) : handleStatusUpdate("active")}
+                disabled={statusUpdating}
+                className={hasDeferred ? "border-amber-400 text-amber-800 hover:bg-amber-50" : ""}
+              >
                 {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-                Activate
+                Activate{hasDeferred ? " (KYC Pending)" : ""}
               </Button>
             ) : (
               <div className="space-y-2">
@@ -449,7 +456,9 @@ export default function ContractDetailPage({
                     <p className="font-semibold mb-1">Cannot activate until:</p>
                     {!proposalPaid && <p>• Proposal payment collected</p>}
                     {!depositPaid && <p>• Security deposit collected</p>}
-                    {!kycComplete && <p>• KYC documents approved ({kycStatus.approved}/{kycStatus.total})</p>}
+                    {!kycComplete && (
+                      <p>• KYC documents — {kycStatus.approved} approved, {kycStatus.deferred} deferred, {kycStatus.total - kycStatus.approved - kycStatus.deferred} still missing ({kycStatus.approved + kycStatus.deferred}/{kycStatus.total} satisfied)</p>
+                    )}
                   </div>
                 </div>
                 {userRole === "admin" && (
@@ -659,6 +668,7 @@ export default function ContractDetailPage({
           {/* KYC Documents — Upload & Approval */}
           <ContractDocumentsTab
             contractId={id}
+            userRole={userRole}
             onKycStatusChange={handleKycStatusChange}
           />
 
@@ -1132,6 +1142,43 @@ export default function ContractDetailPage({
           e.target.value = "";
         }}
       />
+
+      {/* Deferred-KYC Activation Confirmation */}
+      <Dialog open={deferredActivateOpen} onOpenChange={setDeferredActivateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              Activate with Deferred KYC Documents
+            </DialogTitle>
+            <DialogDescription>
+              {kycStatus.deferred} KYC document{kycStatus.deferred > 1 ? "s are" : " is"} deferred.
+              The account will not be fully KYC-compliant until{" "}
+              {kycStatus.deferred > 1 ? "they are" : "it is"} collected.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+            <p className="font-semibold mb-1">Deferred documents must still be collected.</p>
+            <p className="text-xs">
+              Activating this contract does not waive the deferred requirements. They will remain
+              visible across all lead interactions until fulfilled.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeferredActivateOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+              disabled={statusUpdating}
+              onClick={() => { setDeferredActivateOpen(false); handleStatusUpdate("active"); }}
+            >
+              {statusUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Activate Anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Terminate Dialog */}
       <Dialog open={terminateOpen} onOpenChange={setTerminateOpen}>
