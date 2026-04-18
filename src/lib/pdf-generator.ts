@@ -64,7 +64,150 @@ interface PDFOptions {
   upiId?: string; // UPI ID text to show alongside QR
   razorpayPaymentLink?: string; // Razorpay payment link URL
   preparedBy?: { name: string; email?: string; phone?: string }; // Sales rep info
+  showServicesIncluded?: boolean; // Show the "What's Included" icon strip (proposals only)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// "What's Included" service icon strip — drawn with jsPDF primitives so no
+// external icon font or image assets are required.
+// All icon functions accept (cx, cy) as the visual centre of the icon and
+// s as the icon half-size (radius) in mm.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Draw a series of line segments approximating an arc of a circle. */
+function arcSegments(
+  doc: jsPDF,
+  cx: number, cy: number, r: number,
+  startDeg: number, endDeg: number,
+  steps = 16
+): void {
+  for (let i = 0; i < steps; i++) {
+    const a1 = ((startDeg + (endDeg - startDeg) * i / steps) * Math.PI) / 180;
+    const a2 = ((startDeg + (endDeg - startDeg) * (i + 1) / steps) * Math.PI) / 180;
+    doc.line(
+      cx + r * Math.cos(a1), cy + r * Math.sin(a1),
+      cx + r * Math.cos(a2), cy + r * Math.sin(a2)
+    );
+  }
+}
+
+/** Wi-Fi arcs (3 concentric arcs opening upward + centre dot). */
+function iconWifi(doc: jsPDF, cx: number, cy: number, s: number): void {
+  doc.setDrawColor(...BRAND_TEAL);
+  doc.setFillColor(...BRAND_TEAL);
+  doc.setLineWidth(0.55);
+  // Centre dot sits at the bottom of the symbol
+  doc.circle(cx, cy + s * 0.18, s * 0.1, "F");
+  // Three arcs — 210° → 330° puts them opening upward in jsPDF's Y-down coords
+  [0.36, 0.63, 0.90].forEach((rf) =>
+    arcSegments(doc, cx, cy + s * 0.18, s * rf, 210, 330)
+  );
+}
+
+/** Pantry / coffee cup (body, handle, saucer, three steam dots). */
+function iconCoffee(doc: jsPDF, cx: number, cy: number, s: number): void {
+  doc.setDrawColor(...BRAND_TEAL);
+  doc.setFillColor(...BRAND_TEAL);
+  doc.setLineWidth(0.55);
+  const bw = s * 0.9, bh = s * 0.9;
+  // Cup body
+  doc.rect(cx - bw / 2, cy - bh * 0.28, bw, bh, "S");
+  // Handle — C-curve on the right side (-75° → 75°)
+  arcSegments(doc, cx + bw / 2, cy + bh * 0.22, s * 0.28, -75, 75, 14);
+  // Saucer line
+  doc.setLineWidth(0.7);
+  doc.line(cx - bw * 0.65, cy + bh * 0.72, cx + bw * 0.65, cy + bh * 0.72);
+  // Steam dots (three small filled circles above cup)
+  doc.setLineWidth(0.55);
+  [-0.28, 0, 0.28].forEach((dx) =>
+    doc.circle(cx + dx * s, cy - bh * 0.48, s * 0.07, "F")
+  );
+}
+
+/** Printer (input tray, filled body with green LED, output paper). */
+function iconPrinter(doc: jsPDF, cx: number, cy: number, s: number): void {
+  const bw = s * 1.2, bh = s * 0.62, pw = s * 0.72;
+  doc.setFillColor(...BRAND_TEAL);
+  doc.setDrawColor(...BRAND_TEAL);
+  doc.setLineWidth(0.55);
+  // Input paper tray (top, stroked only)
+  doc.rect(cx - pw / 2, cy - bh / 2 - s * 0.28, pw, s * 0.28, "S");
+  // Printer body (filled)
+  doc.rect(cx - bw / 2, cy - bh / 2, bw, bh, "F");
+  // Paper-slot highlight (white slot on front of body)
+  doc.setFillColor(255, 255, 255);
+  doc.rect(cx - pw / 2 + s * 0.07, cy + bh / 2 - s * 0.1, pw - s * 0.14, s * 0.1, "F");
+  doc.setFillColor(...BRAND_TEAL);
+  // Output paper hanging below (stroked)
+  doc.rect(cx - pw / 2 + s * 0.07, cy + bh / 2, pw - s * 0.14, s * 0.3, "S");
+  // Green status LED on top-right of body
+  doc.setFillColor(...BRAND_GREEN);
+  doc.circle(cx + bw / 2 - s * 0.23, cy - s * 0.04, s * 0.09, "F");
+  doc.setFillColor(...BRAND_TEAL);
+}
+
+/** Conference room (filled table + 6 seat circles). */
+function iconMeeting(doc: jsPDF, cx: number, cy: number, s: number): void {
+  doc.setFillColor(...BRAND_TEAL);
+  doc.setDrawColor(...BRAND_TEAL);
+  // Table (filled rounded rect)
+  doc.roundedRect(cx - s * 0.5, cy - s * 0.22, s * 1.0, s * 0.44, s * 0.08, s * 0.08, "F");
+  // Six seat circles around the table
+  const r = s * 0.12;
+  [
+    [cx - s * 0.28, cy - s * 0.58],
+    [cx + s * 0.28, cy - s * 0.58],
+    [cx - s * 0.28, cy + s * 0.58],
+    [cx + s * 0.28, cy + s * 0.58],
+    [cx - s * 0.70, cy],
+    [cx + s * 0.70, cy],
+  ].forEach(([px, py]) => doc.circle(px, py, r, "F"));
+}
+
+/**
+ * Renders the "What's Included" icon strip.
+ * Returns the new Y cursor after the section.
+ */
+function addServicesIncludedSection(doc: jsPDF, startY: number): number {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const sectionH = 28;
+
+  // Light teal background band
+  doc.setFillColor(240, 250, 245);
+  doc.rect(14, startY, pageWidth - 28, sectionH, "F");
+
+  // Section label
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text("FEATURED AMENITIES", 16, startY + 5);
+
+  const cellW = (pageWidth - 28) / 4;
+  const s = 4.5;           // icon half-size in mm
+  const iconY = startY + 15; // icon vertical centre
+  const textY = startY + 23.5;
+
+  const SERVICES: Array<{ label: string; fn: (cx: number, cy: number) => void }> = [
+    { label: "High-speed Wi-Fi & LAN",      fn: (cx, cy) => iconWifi(doc, cx, cy, s) },
+    { label: "Pantry Services",              fn: (cx, cy) => iconCoffee(doc, cx, cy, s) },
+    { label: "Printing Facilities",          fn: (cx, cy) => iconPrinter(doc, cx, cy, s) },
+    { label: "Conference & Meeting Rooms",   fn: (cx, cy) => iconMeeting(doc, cx, cy, s) },
+  ];
+
+  SERVICES.forEach((svc, i) => {
+    const cx = 14 + cellW * i + cellW / 2;
+    svc.fn(cx, iconY);
+
+    doc.setFontSize(7.5);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...BRAND_TEAL);
+    doc.text(svc.label, cx, textY, { align: "center" });
+  });
+
+  return startY + sectionH + 4;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function addLogoToDoc(doc: jsPDF): number {
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -238,6 +381,11 @@ function generatePDF(options: PDFOptions): jsPDF {
     }
 
     y = Math.max(leftY, rightY) + 4;
+  }
+
+  // ── Services Included Strip (proposals only) ──
+  if (options.showServicesIncluded) {
+    y = addServicesIncludedSection(doc, y);
   }
 
   // ── Line Items Table ──
@@ -542,6 +690,7 @@ export function generateProposalPDF(
     upiId: paymentOptions?.upiId,
     razorpayPaymentLink: paymentOptions?.razorpayPaymentLink,
     preparedBy,
+    showServicesIncluded: true,
   });
 }
 
