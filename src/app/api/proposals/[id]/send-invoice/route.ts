@@ -3,6 +3,8 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { messaging } from "@/lib/whatsapp";
+import { logWhatsAppActivity } from "@/lib/audit";
 
 /**
  * POST /api/proposals/[id]/send-invoice
@@ -26,6 +28,9 @@ export async function POST(
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data: dbUser } = await supabase
+    .from("users").select("id").eq("auth_id", user.id).single();
 
   const body = await request.json();
   const { occupation_start_date, preview } = body;
@@ -298,6 +303,30 @@ export async function POST(
       html,
       attachments: [{ filename: `${invoiceNumber.replace(/\//g, "-")}.pdf`, content: pdfBuffer, contentType: "application/pdf" }],
     }).catch(console.error);
+  }
+
+  // WhatsApp — fire to phone if available (fire-and-forget)
+  const customerPhone = lead?.phone || lead?.mobile;
+  if (customerPhone && razorpayUrl) {
+    const amountFormatted = totalAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 });
+    messaging.proposalInvoice(
+      customerPhone,
+      customerName,
+      invoiceNumber,
+      amountFormatted,
+      razorpayUrl,
+      id
+    ).catch((e: unknown) => console.error("[messaging] invoice WhatsApp failed:", e));
+
+    // Log in lead activities
+    if (proposal.lead_id && dbUser?.id) {
+      logWhatsAppActivity(supabase, {
+        leadId: proposal.lead_id,
+        subject: `Invoice ${invoiceNumber} sent`,
+        description: `Prorated GST invoice ${invoiceNumber} for ₹${amountFormatted} sent via WhatsApp to ${customerPhone}. Payment link: ${razorpayUrl}`,
+        createdBy: dbUser.id,
+      });
+    }
   }
 
   return NextResponse.json({

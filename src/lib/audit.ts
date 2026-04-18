@@ -53,6 +53,33 @@ export async function logEmailActivity(
 }
 
 /**
+ * Log a WhatsApp-send event as a lead activity (stored as a note so it appears
+ * in the lead timeline without requiring a schema change).
+ * Fires and forgets — does not throw on failure so it never blocks the main operation.
+ */
+export async function logWhatsAppActivity(
+  supabase: SupabaseClient,
+  params: {
+    leadId: string;
+    subject: string;
+    description: string;
+    createdBy: string;
+  }
+) {
+  const { leadId, subject, description, createdBy } = params;
+
+  await supabase.from("activities").insert({
+    lead_id: leadId,
+    type: "note",
+    subject: `📱 WhatsApp: ${subject}`,
+    description,
+    created_by: createdBy,
+  }).then(({ error }) => {
+    if (error) console.error("Failed to log WhatsApp activity:", error.message);
+  });
+}
+
+/**
  * Compute a diff between two objects, returning only the fields that changed.
  */
 export function diffChanges(

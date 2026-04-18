@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { messaging } from "@/lib/whatsapp";
+import { logWhatsAppActivity } from "@/lib/audit";
 
 /**
  * POST /api/proposals/[id]/deposit-link
@@ -20,6 +22,9 @@ export async function POST(
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data: dbUser } = await supabase
+    .from("users").select("id").eq("auth_id", user.id).single();
 
   let isPreview = false;
   try {
@@ -195,6 +200,29 @@ export async function POST(
     subject,
     html,
   }).catch(console.error);
+
+  // WhatsApp — fire to phone if available (fire-and-forget)
+  if (customerPhone && depositLinkUrl) {
+    const amountFormatted = `${depositAmount.toLocaleString("en-IN")}`;
+    messaging.proposalDepositRequest(
+      customerPhone,
+      customerName,
+      amountFormatted,
+      proposal.proposal_number,
+      depositLinkUrl,
+      id
+    ).catch((e: unknown) => console.error("[messaging] deposit WhatsApp failed:", e));
+
+    // Log in lead activities
+    if (proposal.lead_id && dbUser?.id) {
+      logWhatsAppActivity(supabase, {
+        leadId: proposal.lead_id,
+        subject: `Security deposit payment link sent`,
+        description: `Security deposit of ₹${amountFormatted} for ${proposal.proposal_number} sent via WhatsApp to ${customerPhone}. Payment link: ${depositLinkUrl}`,
+        createdBy: dbUser.id,
+      });
+    }
+  }
 
   return NextResponse.json({
     deposit_link_url: depositLinkUrl,
