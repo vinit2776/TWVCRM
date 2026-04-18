@@ -17,6 +17,16 @@ interface Stage {
   isRejected?: boolean;
 }
 
+/** Descriptive badge text shown on the active step instead of generic "Pending" */
+const AWAITING_LABEL: Record<string, string> = {
+  sent: "Awaiting Send",
+  viewed: "Awaiting View",
+  accepted: "Awaiting Decision",
+  deposit: "Awaiting Payment",
+  invoice: "Awaiting Invoice",
+  paid: "Awaiting Payment",
+};
+
 function fmt(dateStr?: string | null) {
   if (!dateStr) return null;
   return new Date(dateStr).toLocaleDateString("en-IN", {
@@ -176,7 +186,7 @@ export function ProposalLifecycle({ proposal }: Props) {
                     {stage.label}
                     {stage.state === "active" && (
                       <span className="ml-1.5 text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full align-middle">
-                        Pending
+                        {AWAITING_LABEL[stage.key] ?? "In Progress"}
                       </span>
                     )}
                   </p>

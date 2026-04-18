@@ -51,6 +51,7 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { generateMembershipAgreementPDF } from "@/lib/pdf-generator";
+import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
 import { toast } from "sonner";
 import type { Contract } from "@/types";
 
@@ -778,6 +779,16 @@ export default function ContractDetailPage({
                 <span className="text-muted-foreground">Seats</span>
                 <span>{contract.seats}</span>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Contract Lifecycle */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Agreement Journey</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ContractLifecycle contract={contract} />
             </CardContent>
           </Card>
 

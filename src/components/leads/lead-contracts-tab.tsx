@@ -35,6 +35,7 @@ import { formatDate, formatCurrency } from "@/lib/utils";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import type { Contract } from "@/types";
+import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
 
 interface LeadContractsTabProps {
   leadId: string;
@@ -260,6 +261,31 @@ export function LeadContractsTab({ leadId }: LeadContractsTabProps) {
           )}
         </CardContent>
       </Card>
+
+      {/* Contract Lifecycle cards — one per contract */}
+      {contracts.length > 0 && (
+        <div className="space-y-4">
+          {contracts.map((c) => (
+            <Card key={`lifecycle-${c.id}`}>
+              <CardHeader
+                className="flex flex-row items-center justify-between pb-2 cursor-pointer"
+                onClick={() => router.push(`/contracts/${c.id}`)}
+              >
+                <div>
+                  <CardTitle className="text-sm font-mono">{c.contract_number}</CardTitle>
+                  <p className="text-xs text-muted-foreground mt-0.5">{c.title}</p>
+                </div>
+                <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[c.status]}>
+                  {CONTRACT_STATUS_LABELS[c.status]}
+                </Badge>
+              </CardHeader>
+              <CardContent>
+                <ContractLifecycle contract={c} />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
 
       {/* Create Contract Dialog */}
       <CreateContractDialog
