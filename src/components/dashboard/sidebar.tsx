@@ -93,11 +93,10 @@ const navSections: NavSection[] = [
     label: "Finance",
     icon: IndianRupee,
     items: [
-      { href: "/invoices",   label: "Proforma Invoices", icon: Receipt,     roles: LEGACY_ROLES },
-      { href: "/contracts",  label: "Contracts",          icon: ScrollText,  roles: [...LEGACY_ROLES, "accounts"] },
-      { href: "/billing",    label: "Billing",            icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
-      { href: "/accounting", label: "Accounting",         icon: Calculator,  roles: [...LEGACY_ROLES, "accounts"] },
-      { href: "/petty-cash", label: "Petty Cash",         icon: Banknote,    roles: null },
+      { href: "/invoices",   label: "Proforma Invoices",       icon: Receipt,     roles: LEGACY_ROLES },
+      { href: "/contracts",  label: "Contracts",               icon: ScrollText,  roles: [...LEGACY_ROLES, "accounts"] },
+      { href: "/billing",    label: "Billing - Acc Receivables", icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
+      { href: "/accounting", label: "Acc Payables",             icon: Calculator,  roles: [...LEGACY_ROLES, "accounts"] },
     ],
   },
   {
