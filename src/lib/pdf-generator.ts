@@ -63,6 +63,7 @@ interface PDFOptions {
   qrCodeBase64?: string; // Base64 image data (PNG/JPEG) for UPI QR code
   upiId?: string; // UPI ID text to show alongside QR
   razorpayPaymentLink?: string; // Razorpay payment link URL
+  preparedBy?: { name: string; email?: string; phone?: string }; // Sales rep info
 }
 
 function addLogoToDoc(doc: jsPDF): number {
@@ -152,47 +153,91 @@ function generatePDF(options: PDFOptions): jsPDF {
 
   y += 8;
 
-  // ── Prepared For (Lead Info) ──
-  if (options.lead) {
-    // Section header with teal accent
-    doc.setFillColor(240, 250, 245); // light green-gray bg
+  // ── Prepared For / Point of Contact ──
+  if (options.lead || options.preparedBy) {
+    const hasBoth = !!(options.lead && options.preparedBy);
+    const col1X = 16;
+    const col2X = hasBoth ? (pageWidth / 2 + 4) : 16;
+
+    // Section header band
+    doc.setFillColor(240, 250, 245);
     doc.rect(14, y - 4, pageWidth - 28, 6, "F");
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(...BRAND_TEAL);
-    doc.text("PREPARED FOR", 16, y);
+
+    if (options.lead) {
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(...BRAND_TEAL);
+      doc.text("PREPARED FOR", col1X, y);
+    }
+    if (options.preparedBy) {
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(...BRAND_TEAL);
+      doc.text("YOUR POINT OF CONTACT", col2X, y);
+    }
     y += 6;
 
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(...BRAND_DARK);
-    const leadName = `${options.lead.first_name || ""} ${options.lead.last_name || ""}`.trim();
-    if (leadName) {
+    let leftY = y;
+    let rightY = y;
+
+    // Left column: Lead info
+    if (options.lead) {
+      const leadName = `${options.lead.first_name || ""} ${options.lead.last_name || ""}`.trim();
+      if (leadName) {
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.setTextColor(...BRAND_DARK);
+        doc.text(leadName, col1X, leftY);
+        doc.setFont("helvetica", "normal");
+        leftY += 5;
+      }
+      doc.setFontSize(9);
+      if (options.lead.company) {
+        doc.setTextColor(...BRAND_DARK);
+        doc.text(options.lead.company, col1X, leftY);
+        leftY += 5;
+      }
+      if (options.lead.email) {
+        doc.setTextColor(100, 100, 100);
+        doc.text(options.lead.email, col1X, leftY);
+        leftY += 5;
+      }
+      if (options.lead.phone || options.lead.mobile) {
+        doc.setTextColor(100, 100, 100);
+        doc.text(options.lead.phone || options.lead.mobile || "", col1X, leftY);
+        leftY += 5;
+      }
+      if (options.location?.name) {
+        doc.setTextColor(...BRAND_TEAL);
+        doc.setFont("helvetica", "bold");
+        doc.text(`Location: ${options.location.name}`, col1X, leftY);
+        doc.setFont("helvetica", "normal");
+        leftY += 5;
+      }
+    }
+
+    // Right column: Rep / point of contact info
+    if (options.preparedBy) {
       doc.setFont("helvetica", "bold");
-      doc.text(leadName, 16, y);
+      doc.setFontSize(10);
+      doc.setTextColor(...BRAND_DARK);
+      doc.text(options.preparedBy.name, col2X, rightY);
       doc.setFont("helvetica", "normal");
-      y += 5;
+      rightY += 5;
+      doc.setFontSize(9);
+      if (options.preparedBy.email) {
+        doc.setTextColor(100, 100, 100);
+        doc.text(options.preparedBy.email, col2X, rightY);
+        rightY += 5;
+      }
+      if (options.preparedBy.phone) {
+        doc.setTextColor(100, 100, 100);
+        doc.text(options.preparedBy.phone, col2X, rightY);
+        rightY += 5;
+      }
     }
-    if (options.lead.company) {
-      doc.text(options.lead.company, 16, y);
-      y += 5;
-    }
-    if (options.lead.email) {
-      doc.setTextColor(100, 100, 100);
-      doc.text(options.lead.email, 16, y);
-      y += 5;
-    }
-    if (options.lead.phone || options.lead.mobile) {
-      doc.text(options.lead.phone || options.lead.mobile || "", 16, y);
-      y += 5;
-    }
-    if (options.location?.name) {
-      doc.setTextColor(...BRAND_TEAL);
-      doc.setFont("helvetica", "bold");
-      doc.text(`Location: ${options.location.name}`, 16, y);
-      doc.setFont("helvetica", "normal");
-      y += 5;
-    }
-    y += 4;
+
+    y = Math.max(leftY, rightY) + 4;
   }
 
   // ── Line Items Table ──
@@ -469,7 +514,8 @@ function generatePDF(options: PDFOptions): jsPDF {
 export function generateProposalPDF(
   proposal: Proposal & { location?: Partial<Location> },
   lead?: Partial<Lead>,
-  paymentOptions?: { qrCodeBase64?: string; upiId?: string; razorpayPaymentLink?: string }
+  paymentOptions?: { qrCodeBase64?: string; upiId?: string; razorpayPaymentLink?: string },
+  preparedBy?: { name: string; email?: string; phone?: string }
 ): jsPDF {
   return generatePDF({
     title: "PRO-FORMA INVOICE / PROPOSAL",
@@ -495,6 +541,7 @@ export function generateProposalPDF(
     qrCodeBase64: paymentOptions?.qrCodeBase64,
     upiId: paymentOptions?.upiId,
     razorpayPaymentLink: paymentOptions?.razorpayPaymentLink,
+    preparedBy,
   });
 }
 

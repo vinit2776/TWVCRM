@@ -20,6 +20,7 @@ import {
   FileText,
   ShieldCheck,
   ReceiptText,
+  ScrollText,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -52,6 +53,8 @@ import { formatDate, formatCurrency } from "@/lib/utils";
 import { generateProposalPDF } from "@/lib/pdf-generator";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
+import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
+import { CreateContractDialog } from "@/components/contracts/create-contract-dialog";
 import { toast } from "sonner";
 import type { Proposal, Lead } from "@/types";
 
@@ -64,6 +67,9 @@ export default function ProposalDetailPage({
   const router = useRouter();
   const [proposal, setProposal] = useState<Proposal & { lead?: Lead } | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Current user (rep) profile for PDF/email attribution
+  const [currentUser, setCurrentUser] = useState<{ full_name: string; email: string; phone: string } | null>(null);
 
   // Email dialog state
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
@@ -84,6 +90,12 @@ export default function ProposalDetailPage({
   const [depositEmailPreview, setDepositEmailPreview] = useState<{
     subject: string; html: string; to: string[]; deposit_link_url: string | null; amount: number; link_already_exists: boolean;
   } | null>(null);
+
+  // Booking confirmation dialog (accept flow)
+  const [bookingConfirmOpen, setBookingConfirmOpen] = useState(false);
+
+  // Create Contract dialog
+  const [createContractOpen, setCreateContractOpen] = useState(false);
 
   // GST invoice preview dialog
   const [gstDialogOpen, setGstDialogOpen] = useState(false);
@@ -124,15 +136,26 @@ export default function ProposalDetailPage({
 
   useEffect(() => {
     fetchProposal();
+    fetch("/api/me")
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data?.full_name) setCurrentUser({ full_name: data.full_name, email: data.email || "", phone: data.phone || "" });
+      })
+      .catch(() => {});
   }, [fetchProposal]);
 
   const handleDownloadPDF = async () => {
     if (!proposal) return;
 
+    const preparedBy = currentUser?.full_name
+      ? { name: currentUser.full_name, email: currentUser.email || undefined, phone: currentUser.phone || undefined }
+      : undefined;
+
     const doc = generateProposalPDF(
       proposal,
       proposal.lead || undefined,
-      { razorpayPaymentLink: proposal.razorpay_payment_link_url || undefined }
+      { razorpayPaymentLink: proposal.razorpay_payment_link_url || undefined },
+      preparedBy
     );
     doc.save(`${proposal.proposal_number}.pdf`);
   };
@@ -422,7 +445,7 @@ export default function ProposalDetailPage({
               <Button
                 size="sm"
                 className="bg-green-600 hover:bg-green-700 text-white"
-                onClick={() => handleUpdateStatus("accepted", "Accepted")}
+                onClick={() => setBookingConfirmOpen(true)}
               >
                 <CheckCircle2 className="mr-2 h-4 w-4" />
                 Accept
@@ -469,7 +492,7 @@ export default function ProposalDetailPage({
                     <FileText className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
                     <div>
                       <p className="font-medium">Send Proposal</p>
-                      <p className="text-xs text-muted-foreground">Proposal PDF + deposit payment link</p>
+                      <p className="text-xs text-muted-foreground">Proposal PDF · negotiation phase</p>
                     </div>
                   </DropdownMenuItem>
 
@@ -547,6 +570,19 @@ export default function ProposalDetailPage({
             <Download className="mr-2 h-4 w-4" />
             Download PDF
           </Button>
+          {/* Create Contract — visible only when deposit is paid (or no deposit required) */}
+          {proposal.status === "accepted" &&
+            (proposal.deposit_payment_status === "paid" || Number(proposal.security_deposit_months || 0) === 0) && (
+            <Button
+              size="sm"
+              variant="outline"
+              className="border-primary text-primary hover:bg-primary/5"
+              onClick={() => setCreateContractOpen(true)}
+            >
+              <ScrollText className="mr-2 h-4 w-4" />
+              Create Contract
+            </Button>
+          )}
         </div>
       </div>
 
@@ -1066,6 +1102,30 @@ export default function ProposalDetailPage({
         </div>
       </div>
 
+      {/* Booking Confirmation Dialog (accept flow) */}
+      {bookingConfirmOpen && (
+        <BookingConfirmationDialog
+          open={bookingConfirmOpen}
+          onOpenChange={setBookingConfirmOpen}
+          proposal={proposal}
+          onSuccess={fetchProposal}
+        />
+      )}
+
+      {/* Create Contract Dialog */}
+      {proposal.lead_id && createContractOpen && (
+        <CreateContractDialog
+          open={createContractOpen}
+          onOpenChange={setCreateContractOpen}
+          leadId={proposal.lead_id}
+          defaultProposalId={proposal.id}
+          onSuccess={() => {
+            setCreateContractOpen(false);
+            fetchProposal();
+          }}
+        />
+      )}
+
       {/* Email Dialog */}
       <EmailDocumentDialog
         open={emailDialogOpen}
@@ -1075,9 +1135,12 @@ export default function ProposalDetailPage({
         documentNumber={proposal.proposal_number}
         leadEmail={proposal.lead?.email || undefined}
         onGeneratePDF={() => {
-          const doc = generateProposalPDF(proposal, proposal.lead || undefined, {
-            razorpayPaymentLink: proposal.razorpay_payment_link_url || undefined,
-          });
+          // Negotiation-phase proposal — no deposit payment link included.
+          // The deposit link is only sent after acceptance via the /accept route.
+          const preparedBy = currentUser?.full_name
+            ? { name: currentUser.full_name, email: currentUser.email || undefined, phone: currentUser.phone || undefined }
+            : undefined;
+          const doc = generateProposalPDF(proposal, proposal.lead || undefined, undefined, preparedBy);
           const base64 = doc.output("datauristring").split(",")[1];
           return base64;
         }}

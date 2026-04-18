@@ -315,8 +315,8 @@ export default function TeamPage() {
   // --- Create user ---
   const handleCreateUser = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!createForm.email || !createForm.full_name || !createForm.password) {
-      toast.error("Please fill all required fields");
+    if (!createForm.email || !createForm.full_name || !createForm.password || !createForm.phone.trim()) {
+      toast.error("Please fill all required fields including mobile number");
       return;
     }
     if (createForm.password.length < 6) {
@@ -814,9 +814,12 @@ export default function TeamPage() {
               </div>
             </div>
             <div className="space-y-2">
-              <Label htmlFor="create-phone">Phone</Label>
+              <Label htmlFor="create-phone">
+                Mobile Number <span className="text-destructive">*</span>
+              </Label>
               <Input
                 id="create-phone"
+                type="tel"
                 value={createForm.phone}
                 onChange={(e) =>
                   setCreateForm({ ...createForm, phone: e.target.value })
