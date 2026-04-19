@@ -13,6 +13,7 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
+import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import {
   Loader2,
   ExternalLink,
@@ -169,12 +170,13 @@ export function MyTicketDetailDialog({
   }
 
   async function handleAttachFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !ticketId) return;
-    if (file.size > 10 * 1024 * 1024) { toast.error("File must be under 10MB"); return; }
+    const raw = e.target.files?.[0];
+    if (!raw || !ticketId) return;
 
     setUploading(true);
     try {
+      const file = await prepareUpload(raw);
+      if (!file) { setUploading(false); e.target.value = ""; return; }
       const formData = new FormData();
       formData.append("file", file);
       const res = await fetch(`/api/support-tickets/${ticketId}/screenshot`, { method: "POST", body: formData });
@@ -190,7 +192,8 @@ export function MyTicketDetailDialog({
         setTicket(data);
       }
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Upload failed");
+      if (err instanceof UploadTooLargeError) { toast.error(err.message); }
+      else { toast.error(err instanceof Error ? err.message : "Upload failed"); }
     } finally {
       setUploading(false);
       e.target.value = "";

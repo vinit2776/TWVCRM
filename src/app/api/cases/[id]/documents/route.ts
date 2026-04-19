@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { normalizeUploadServer, UploadValidationError } from "@/lib/uploads/normalize-upload-server";
 
 /**
  * GET: List all document slots for a case
@@ -77,16 +78,24 @@ export async function POST(
     );
   }
 
-  // Upload file to Supabase Storage
-  const fileExt = file.name.split(".").pop() || "pdf";
-  const storagePath = `case-documents/${caseId}/${docSlot.document_type}/${Date.now()}.${fileExt}`;
+  // Normalize (images → JPEG Q82 @ 2048px, PDF pass-through, 50MB hard cap).
+  let normalized;
+  try {
+    normalized = await normalizeUploadServer(file);
+  } catch (err) {
+    if (err instanceof UploadValidationError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
+  }
 
-  const fileBuffer = Buffer.from(await file.arrayBuffer());
+  // Upload file to Supabase Storage
+  const storagePath = `case-documents/${caseId}/${docSlot.document_type}/${Date.now()}.${normalized.ext}`;
 
   const { error: uploadError } = await adminSupabase.storage
     .from("crm-documents")
-    .upload(storagePath, fileBuffer, {
-      contentType: file.type,
+    .upload(storagePath, normalized.buffer, {
+      contentType: normalized.mimeType,
       upsert: true,
     });
 
@@ -110,8 +119,8 @@ export async function POST(
       title: file.name,
       file_name: file.name,
       file_path: storagePath,
-      mime_type: file.type,
-      size_bytes: file.size,
+      mime_type: normalized.mimeType,
+      size_bytes: normalized.finalBytes,
       category: "case_document",
       uploaded_by: dbUser?.id,
     })

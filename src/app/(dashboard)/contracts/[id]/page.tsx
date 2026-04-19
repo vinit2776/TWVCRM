@@ -50,9 +50,9 @@ import {
   ENTITY_TYPE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import { generateMembershipAgreementPDF } from "@/lib/pdf-generator";
 import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
 import { toast } from "sonner";
+import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import type { Contract } from "@/types";
 
 export default function ContractDetailPage({
@@ -165,8 +165,9 @@ export default function ContractDetailPage({
     setTerminating(false);
   };
 
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
     if (!contract) return;
+    const { generateMembershipAgreementPDF } = await import("@/lib/pdf-generator");
     const doc = generateMembershipAgreementPDF(
       contract,
       contract.lead || undefined,
@@ -175,8 +176,9 @@ export default function ContractDetailPage({
     doc.save(`${contract.contract_number}.pdf`);
   };
 
-  const handleGeneratePDFBase64 = (): string => {
+  const handleGeneratePDFBase64 = async (): Promise<string> => {
     if (!contract) return "";
+    const { generateMembershipAgreementPDF } = await import("@/lib/pdf-generator");
     const doc = generateMembershipAgreementPDF(
       contract,
       contract.lead || undefined,
@@ -191,11 +193,15 @@ export default function ContractDetailPage({
     return btoa(binary);
   };
 
-  const handleSignedDocUpload = async (file: File) => {
+  const handleSignedDocUpload = async (raw: File) => {
     if (!contract) return;
     setUploadingSignedDoc(true);
 
     try {
+      // Normalize before upload: PDFs → stripped, images → JPEG 2048px.
+      const file = await prepareUpload(raw);
+      if (!file) return;
+
       // Step 1: get signed upload URL — file goes directly to Supabase, bypassing Vercel's 4.5MB limit
       const urlRes = await fetch("/api/documents/upload-url", {
         method: "POST",
@@ -254,7 +260,11 @@ export default function ContractDetailPage({
         toast.error(err?.error || "Failed to link document to contract");
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to upload document");
+      if (e instanceof UploadTooLargeError) {
+        toast.error(e.message);
+      } else {
+        toast.error(e instanceof Error ? e.message : "Failed to upload document");
+      }
     } finally {
       setUploadingSignedDoc(false);
     }
@@ -280,7 +290,7 @@ export default function ContractDetailPage({
     setInitiatingSigning(true);
 
     // Generate PDF client-side (jsPDF is browser-only)
-    const pdfBase64 = handleGeneratePDFBase64();
+    const pdfBase64 = await handleGeneratePDFBase64();
     if (!pdfBase64) {
       toast.error("Failed to generate PDF");
       setInitiatingSigning(false);

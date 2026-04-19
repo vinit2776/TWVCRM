@@ -17,6 +17,7 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { formatDate } from "@/lib/utils";
 import type { CrmDocument } from "@/types";
 import { createClient } from "@/lib/supabase/client";
+import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { toast } from "sonner";
 
 function formatFileSize(bytes: number): string {
@@ -56,11 +57,16 @@ export function LeadDocumentsTab({ leadId }: LeadDocumentsTabProps) {
   }, [fetchDocuments]);
 
   const handleUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+    const raw = e.target.files?.[0];
+    if (!raw) return;
 
     setUploading(true);
     try {
+      // Normalize on the client before any network call: images → JPEG 2048px,
+      // PDFs → metadata-stripped. Rejects > 50 MB, warns > 15 MB after normalizing.
+      const file = await prepareUpload(raw);
+      if (!file) return; // user declined the "still large" warning
+
       // Step 1: get signed upload URL (bypasses Vercel 4.5MB body limit)
       const urlRes = await fetch("/api/documents/upload-url", {
         method: "POST",
@@ -102,7 +108,11 @@ export function LeadDocumentsTab({ leadId }: LeadDocumentsTabProps) {
       toast.success("Document uploaded and linked to lead");
       fetchDocuments();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Failed to upload document");
+      if (err instanceof UploadTooLargeError) {
+        toast.error(err.message);
+      } else {
+        toast.error(err instanceof Error ? err.message : "Failed to upload document");
+      }
     } finally {
       setUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = "";

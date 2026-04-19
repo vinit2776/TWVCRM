@@ -20,6 +20,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import {
   Loader2,
   ExternalLink,
@@ -227,11 +228,12 @@ export function TicketDetailDialog({
   }
 
   async function handleAttachFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0];
-    if (!file || !ticketId) return;
-    if (file.size > 10 * 1024 * 1024) { toast.error("File must be under 10MB"); return; }
+    const raw = e.target.files?.[0];
+    if (!raw || !ticketId) return;
     setUploading(true);
     try {
+      const file = await prepareUpload(raw);
+      if (!file) { setUploading(false); e.target.value = ""; return; }
       const formData = new FormData();
       formData.append("file", file);
       const res = await fetch(`/api/support-tickets/${ticketId}/screenshot`, { method: "POST", body: formData });
@@ -239,7 +241,10 @@ export function TicketDetailDialog({
       toast.success("Attachment uploaded");
       const ticketRes = await fetch(`/api/support-tickets/${ticketId}`);
       if (ticketRes.ok) { const { data } = await ticketRes.json(); setTicket(data); setStatus(data.status); setPriority(data.priority); setAssignedTo(data.assigned_to || ""); }
-    } catch (err) { toast.error(err instanceof Error ? err.message : "Upload failed"); }
+    } catch (err) {
+      if (err instanceof UploadTooLargeError) { toast.error(err.message); }
+      else { toast.error(err instanceof Error ? err.message : "Upload failed"); }
+    }
     finally { setUploading(false); e.target.value = ""; }
   }
 

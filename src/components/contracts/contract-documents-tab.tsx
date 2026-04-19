@@ -36,6 +36,7 @@ import {
   RotateCcw,
 } from "lucide-react";
 import { toast } from "sonner";
+import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { formatDate } from "@/lib/utils";
 import type { ContractDocument } from "@/types";
 
@@ -135,9 +136,13 @@ export function ContractDocumentsTab({
     onKycStatusChange(allSatisfied, required.length, approved, deferred);
   }, [docs, onKycStatusChange]);
 
-  const handleUpload = async (docId: string, file: File) => {
+  const handleUpload = async (docId: string, raw: File) => {
     setUploading(docId);
     try {
+      // Normalize before upload: images → JPEG 2048px, PDFs → stripped.
+      const file = await prepareUpload(raw);
+      if (!file) return;
+
       const urlRes = await fetch("/api/documents/upload-url", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -176,7 +181,11 @@ export function ContractDocumentsTab({
         toast.error(err?.error || "Upload failed");
       }
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Upload failed");
+      if (e instanceof UploadTooLargeError) {
+        toast.error(e.message);
+      } else {
+        toast.error(e instanceof Error ? e.message : "Upload failed");
+      }
     } finally {
       setUploading(null);
     }
