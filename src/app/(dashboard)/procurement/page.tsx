@@ -156,7 +156,7 @@ interface BudgetRow {
   is_over_budget: boolean;
 }
 
-// ── Fuel Gauge component ──────────────────────────────────────────────────────
+// ── Budget Bar component ──────────────────────────────────────────────────────
 
 const DEPT_SHORT: Record<string, string> = {
   pantry: "Pantry",
@@ -172,153 +172,147 @@ const DEPT_EMOJI: Record<string, string> = {
   asset: "📦",
 };
 
-function FuelGauge({ row }: { row: BudgetRow }) {
+// Horizontal progress bar with a dashed "pace" marker showing where spending
+// SHOULD be on today's date within the month. Answers "are we ahead or behind
+// pace?" — a more actionable question than raw utilization %.
+function BudgetBar({ row }: { row: BudgetRow }) {
   const { department, monthly_budget, is_active, spent_this_month, amc_spent_this_month } = row;
   const hasBudget = !!monthly_budget && is_active;
-  const pctRaw = hasBudget ? (spent_this_month / monthly_budget!) * 100 : 0;
-  const pct = Math.min(pctRaw, 100); // cap needle at 100 visually
+
+  const spentPct = hasBudget ? (spent_this_month / monthly_budget!) * 100 : 0;
   const isOver = hasBudget && spent_this_month > monthly_budget!;
   const remaining = hasBudget ? Math.max(0, monthly_budget! - spent_this_month) : 0;
+  const overAmount = isOver ? spent_this_month - monthly_budget! : 0;
 
-  // SVG geometry
-  const cx = 100, cy = 105, r = 78, strokeW = 13;
-  const arcLen = Math.PI * r; // ≈ 245
+  // Pace: linear expected spend for today's day-of-month.
+  const now = new Date();
+  const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+  const pacePct = (now.getDate() / daysInMonth) * 100;
+  // Positive delta = spending slower than pace = GOOD.
+  const paceDelta = pacePct - spentPct;
 
-  // Needle SVG angle: 180° = left (E/empty), 360° = right (F/full)
-  const needleDeg = hasBudget ? 180 + pct * 1.8 : 180;
-  const needleRad = (needleDeg * Math.PI) / 180;
-  const nLen = 62;
-  const nx = cx + nLen * Math.cos(needleRad);
-  const ny = cy + nLen * Math.sin(needleRad);
+  // Fill width caps at 100 for the "in-budget" bar; overflow is rendered separately.
+  const fillPct = Math.min(spentPct, 100);
+  const overflowPct = isOver ? Math.min(spentPct - 100, 25) : 0; // cap visual overflow at +25%
 
-  // Fill dash
-  const filledLen = hasBudget ? (pct / 100) * arcLen : 0;
+  const fillColor = !hasBudget
+    ? "bg-gray-300"
+    : isOver || spentPct >= 100
+    ? "bg-red-500"
+    : spentPct >= 90
+    ? "bg-red-400"
+    : spentPct >= 75
+    ? "bg-amber-500"
+    : "bg-emerald-500";
 
-  // Color bands: green → amber → red
-  const color = !hasBudget
-    ? "#d1d5db"
-    : isOver || pctRaw >= 100
-    ? "#dc2626"
-    : pctRaw >= 90
-    ? "#ef4444"
-    : pctRaw >= 75
-    ? "#f59e0b"
-    : "#22c55e";
-
-  // Segment colours for the background track ticks (decorative)
-  const greenEnd = (75 / 100) * arcLen;
-  const amberEnd = (90 / 100) * arcLen;
-
-  const arcPath = `M ${cx - r} ${cy} A ${r} ${r} 0 0 0 ${cx + r} ${cy}`;
+  const pctTextColor = !hasBudget
+    ? "text-muted-foreground"
+    : isOver
+    ? "text-red-700"
+    : spentPct >= 90
+    ? "text-red-600"
+    : spentPct >= 75
+    ? "text-amber-700"
+    : "text-emerald-700";
 
   return (
-    <div className="flex flex-col items-center">
-      <svg viewBox="0 0 200 135" className="w-full max-w-[190px] mx-auto select-none">
-        {/* Background track */}
-        <path d={arcPath} fill="none" stroke="#f3f4f6" strokeWidth={strokeW} strokeLinecap="butt" />
+    <div className="space-y-2">
+      {/* Header row: dept name + totals */}
+      <div className="flex items-baseline justify-between gap-2">
+        <div className="flex items-center gap-2 min-w-0">
+          <span className="text-base shrink-0" aria-hidden>{DEPT_EMOJI[department]}</span>
+          <span className="font-semibold text-sm truncate">{DEPT_SHORT[department] ?? department}</span>
+          {hasBudget && (
+            <span className={`text-xs font-bold tabular-nums ${pctTextColor}`}>
+              {Math.round(spentPct)}%
+            </span>
+          )}
+        </div>
+        <div className="text-xs tabular-nums shrink-0">
+          {hasBudget ? (
+            <>
+              <span className={`font-semibold ${pctTextColor}`}>{formatCurrency(spent_this_month)}</span>
+              <span className="text-muted-foreground"> / {formatCurrency(monthly_budget!)}</span>
+            </>
+          ) : (
+            <span className="text-muted-foreground italic">No budget</span>
+          )}
+        </div>
+      </div>
 
-        {/* Coloured segment markers (decorative zones) */}
-        {hasBudget && (
-          <>
-            {/* Green zone 0–75% */}
-            <path d={arcPath} fill="none" stroke="#bbf7d0" strokeWidth={strokeW} strokeLinecap="butt"
-              strokeDasharray={`${greenEnd} ${arcLen}`} />
-            {/* Amber zone 75–90% */}
-            <path d={arcPath} fill="none" stroke="#fde68a" strokeWidth={strokeW} strokeLinecap="butt"
-              strokeDasharray={`${amberEnd - greenEnd} ${arcLen}`}
-              strokeDashoffset={-greenEnd} />
-            {/* Red zone 90–100% */}
-            <path d={arcPath} fill="none" stroke="#fecaca" strokeWidth={strokeW} strokeLinecap="butt"
-              strokeDasharray={`${arcLen - amberEnd} ${arcLen}`}
-              strokeDashoffset={-amberEnd} />
-          </>
-        )}
+      {/* Bar row: 80% in-budget track + 20% over-budget gutter */}
+      <div className="flex items-stretch gap-0.5">
+        {/* In-budget track (80%) */}
+        <div className="relative h-2.5 flex-1 rounded-l-full bg-gray-100 overflow-visible">
+          {hasBudget && fillPct > 0 && (
+            <div
+              className={`absolute inset-y-0 left-0 rounded-l-full transition-[width] duration-500 ${fillColor} ${fillPct < 100 ? "rounded-r-full" : ""}`}
+              style={{ width: `${fillPct}%` }}
+            />
+          )}
+          {!hasBudget && (
+            <div className="absolute inset-0 rounded-l-full border border-dashed border-gray-300" />
+          )}
+          {/* Pace marker */}
+          {hasBudget && (
+            <div
+              className="absolute top-[-4px] bottom-[-4px] w-px bg-gray-500"
+              style={{ left: `${Math.min(pacePct, 100)}%` }}
+              title={`Pace: day ${now.getDate()} of ${daysInMonth} (${Math.round(pacePct)}%)`}
+            >
+              <span className="absolute top-[-12px] left-1/2 -translate-x-1/2 text-[9px] text-gray-500 whitespace-nowrap font-medium">
+                pace
+              </span>
+            </div>
+          )}
+        </div>
 
-        {/* Fill arc overlay */}
-        {hasBudget && filledLen > 0 && (
-          <path
-            d={arcPath}
-            fill="none"
-            stroke={color}
-            strokeWidth={strokeW - 4}
-            strokeLinecap="butt"
-            strokeDasharray={`${filledLen} ${arcLen}`}
-            style={{ transition: "stroke-dasharray 0.6s ease, stroke 0.5s ease" }}
-          />
-        )}
+        {/* Over-budget gutter (20%) — shows overflow beyond 100% */}
+        <div className="relative h-2.5 w-[20%] rounded-r-full bg-gray-100 overflow-hidden">
+          {isOver && (
+            <div
+              className="absolute inset-y-0 left-0 rounded-r-full bg-red-600"
+              style={{ width: `${(overflowPct / 25) * 100}%` }}
+            />
+          )}
+          {/* 100% boundary tick */}
+          <div className="absolute inset-y-0 left-0 w-px bg-gray-400" />
+        </div>
+      </div>
 
-        {/* Zone tick marks */}
-        {hasBudget && [0, 25, 50, 75, 90, 100].map((p) => {
-          const a = ((180 + p * 1.8) * Math.PI) / 180;
-          const x1 = cx + (r - strokeW / 2 - 2) * Math.cos(a);
-          const y1 = cy + (r - strokeW / 2 - 2) * Math.sin(a);
-          const x2 = cx + (r + strokeW / 2 + 2) * Math.cos(a);
-          const y2 = cy + (r + strokeW / 2 + 2) * Math.sin(a);
-          return (
-            <line key={p} x1={x1} y1={y1} x2={x2} y2={y2}
-              stroke="white" strokeWidth="1.5" />
-          );
-        })}
-
-        {/* E / F end labels */}
-        <text x={cx - r - 13} y={cy + 5} fontSize="9" fill="#9ca3af" textAnchor="middle" fontWeight="700">E</text>
-        <text x={cx + r + 13} y={cy + 5} fontSize="9" fill="#9ca3af" textAnchor="middle" fontWeight="700">F</text>
-
-        {/* Needle */}
-        {hasBudget && (
-          <line x1={cx} y1={cy} x2={nx} y2={ny}
-            stroke={color} strokeWidth="2.5" strokeLinecap="round"
-            style={{ transformOrigin: `${cx}px ${cy}px`, transition: "all 0.6s ease" }}
-          />
-        )}
-
-        {/* Pivot */}
-        <circle cx={cx} cy={cy} r="6" fill="white" stroke="#e5e7eb" strokeWidth="2" />
-        <circle cx={cx} cy={cy} r="3.5" fill={color} />
-
-        {/* Percentage text */}
-        <text x={cx} y={cy - 22} fontSize="18" fontWeight="800" fill={color} textAnchor="middle"
-          style={{ fontVariantNumeric: "tabular-nums" }}>
-          {hasBudget ? `${Math.round(pctRaw)}%` : "—"}
-        </text>
-
-        {/* Dept emoji + short name */}
-        <text x={cx} y={cy + 20} fontSize="11" fill="#374151" textAnchor="middle" fontWeight="600">
-          {DEPT_EMOJI[department]} {DEPT_SHORT[department] ?? department}
-        </text>
-      </svg>
-
-      {/* Amounts below gauge */}
-      <div className="text-center mt-0.5 space-y-0.5 px-2">
+      {/* Delta + remaining/over */}
+      <div className="flex items-center justify-between gap-2 text-[11px]">
         {hasBudget ? (
-          <>
-            <p className={`text-sm font-bold leading-tight ${isOver ? "text-red-700" : pctRaw >= 90 ? "text-red-600" : pctRaw >= 75 ? "text-amber-700" : "text-green-700"}`}>
-              {formatCurrency(spent_this_month)}
-            </p>
-            <p className="text-[11px] text-muted-foreground leading-tight">
-              of {formatCurrency(monthly_budget!)}
-            </p>
-            {isOver ? (
-              <p className="text-[11px] text-red-600 font-semibold">
-                ↑ {formatCurrency(spent_this_month - monthly_budget!)} over
-              </p>
-            ) : (
-              <p className="text-[11px] text-muted-foreground">
-                {formatCurrency(remaining)} left
-              </p>
-            )}
-          </>
+          isOver ? (
+            <span className="text-red-700 font-semibold">
+              ✖ {formatCurrency(overAmount)} over budget
+            </span>
+          ) : Math.abs(paceDelta) < 3 ? (
+            <span className="text-emerald-700 font-medium">● On pace</span>
+          ) : paceDelta > 0 ? (
+            <span className="text-emerald-700 font-medium">
+              ● {Math.round(paceDelta)}% ahead of pace
+            </span>
+          ) : (
+            <span className="text-amber-700 font-medium">
+              ⚠ {Math.round(-paceDelta)}% behind pace
+            </span>
+          )
         ) : (
-          <>
-            <p className="text-sm font-semibold text-muted-foreground">{formatCurrency(spent_this_month)}</p>
-            <p className="text-[11px] text-muted-foreground italic">No budget set</p>
-          </>
+          <span className="text-muted-foreground italic">
+            {formatCurrency(spent_this_month)} spent
+          </span>
         )}
-        {amc_spent_this_month > 0 && (
-          <p className="text-[10px] text-purple-600 mt-0.5" title="AMC / Annual Contract spend — not counted in budget">
-            + {formatCurrency(amc_spent_this_month)} AMC
-          </p>
-        )}
+        <div className="flex items-center gap-2 shrink-0">
+          {amc_spent_this_month > 0 && (
+            <span className="text-purple-600" title="AMC / Annual Contract spend — not counted in budget">
+              +{formatCurrency(amc_spent_this_month)} AMC
+            </span>
+          )}
+          {hasBudget && !isOver && (
+            <span className="text-muted-foreground">{formatCurrency(remaining)} left</span>
+          )}
+        </div>
       </div>
     </div>
   );
@@ -445,12 +439,15 @@ export default function ProcurementDashboard() {
           </CardHeader>
           <CardContent>
             {budgetLoading ? (
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+              <div className="space-y-3">
                 {[1, 2, 3, 4].map((i) => (
-                  <div key={i} className="flex flex-col items-center gap-2">
-                    <div className="animate-pulse bg-muted rounded-full w-[150px] h-[90px]" />
-                    <div className="animate-pulse bg-muted rounded h-4 w-20" />
-                    <div className="animate-pulse bg-muted rounded h-3 w-16" />
+                  <div key={i} className="space-y-2">
+                    <div className="flex justify-between">
+                      <div className="animate-pulse bg-muted rounded h-4 w-24" />
+                      <div className="animate-pulse bg-muted rounded h-3 w-28" />
+                    </div>
+                    <div className="animate-pulse bg-muted rounded-full h-2.5" />
+                    <div className="animate-pulse bg-muted rounded h-3 w-32" />
                   </div>
                 ))}
               </div>
@@ -466,17 +463,17 @@ export default function ProcurementDashboard() {
                     </span>
                   </div>
                 )}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div className="space-y-2">
                   {DEPT_ORDER.map((dept) => {
                     const row = budgetRows.find((r) => r.department === dept);
                     if (!row) return null;
                     return (
                       <div
                         key={dept}
-                        className="rounded-xl border bg-muted/20 hover:bg-muted/40 transition-colors cursor-pointer p-3"
+                        className="rounded-xl border bg-muted/20 hover:bg-muted/40 transition-colors cursor-pointer p-3 pt-4"
                         onClick={() => router.push(`/procurement/requests?department=${dept}&status=submitted`)}
                       >
-                        <FuelGauge row={row} />
+                        <BudgetBar row={row} />
                       </div>
                     );
                   })}
