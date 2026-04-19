@@ -7,7 +7,6 @@ import {
   FileText, Download, CheckCircle2, XCircle, Truck, PackageCheck,
   AlertTriangle,
 } from "lucide-react";
-import { generateTransferChallanPDF } from "@/lib/transfer-challan-pdf";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -129,8 +128,9 @@ export default function TransferDetailPage() {
 
   const handleDispatch = () => handleAction("dispatch");
 
-  const handleDownloadChallan = () => {
+  const handleDownloadChallan = async () => {
     if (!transfer) return;
+    const { generateTransferChallanPDF } = await import("@/lib/transfer-challan-pdf");
     const pdf = generateTransferChallanPDF(transfer);
     pdf.save(`challan-${transfer.transfer_number}.pdf`);
   };

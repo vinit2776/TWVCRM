@@ -50,7 +50,6 @@ import {
   ENTITY_TYPE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import { generateProposalPDF } from "@/lib/pdf-generator";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
@@ -151,6 +150,8 @@ export default function ProposalDetailPage({
       ? { name: currentUser.full_name, email: currentUser.email || undefined, phone: currentUser.phone || undefined }
       : undefined;
 
+    // Dynamic import: jsPDF + autotable load only when the user clicks download.
+    const { generateProposalPDF } = await import("@/lib/pdf-generator");
     const doc = generateProposalPDF(
       proposal,
       proposal.lead || undefined,
@@ -1134,15 +1135,15 @@ export default function ProposalDetailPage({
         documentId={proposal.id}
         documentNumber={proposal.proposal_number}
         leadEmail={proposal.lead?.email || undefined}
-        onGeneratePDF={() => {
+        onGeneratePDF={async () => {
           // Negotiation-phase proposal — no deposit payment link included.
           // The deposit link is only sent after acceptance via the /accept route.
           const preparedBy = currentUser?.full_name
             ? { name: currentUser.full_name, email: currentUser.email || undefined, phone: currentUser.phone || undefined }
             : undefined;
+          const { generateProposalPDF } = await import("@/lib/pdf-generator");
           const doc = generateProposalPDF(proposal, proposal.lead || undefined, undefined, preparedBy);
-          const base64 = doc.output("datauristring").split(",")[1];
-          return base64;
+          return doc.output("datauristring").split(",")[1];
         }}
         onSuccess={fetchProposal}
       />

@@ -183,7 +183,6 @@ function LiveEnquiriesWidget() {
 
 export default function DashboardPage() {
   const [stats, setStats] = useState<DashboardStats | null>(null);
-  const [statsLoading, setStatsLoading] = useState(true);
   const [locationFilter, setLocationFilter] = useState<string | null>(null);
   const [userRole, setUserRole] = useState<UserRole | null>(null);
   const [widgetConfig, setWidgetConfig] = useState<WidgetId[]>([]);
@@ -205,7 +204,6 @@ export default function DashboardPage() {
   }, []);
 
   const fetchStats = useCallback(async () => {
-    setStatsLoading(true);
     const params = new URLSearchParams();
     if (locationFilter) params.set("location_id", locationFilter);
     const res = await fetch(`/api/dashboard?${params}`);
@@ -213,7 +211,6 @@ export default function DashboardPage() {
       const json = await res.json();
       setStats(json.data);
     }
-    setStatsLoading(false);
   }, [locationFilter]);
 
   useEffect(() => {
@@ -222,8 +219,11 @@ export default function DashboardPage() {
 
   const widgetIds = widgetConfig;
 
-  // Loading skeleton
-  if (!userRole || statsLoading) {
+  // Only block on role/widget config — that's what gates widget layout.
+  // Stats-dependent widgets self-render null until stats load; widgets that
+  // don't need stats start their own fetches in parallel, so first paint is
+  // limited by the slowest widget, not by /api/dashboard alone.
+  if (!userRole) {
     return (
       <div className="space-y-6">
         <h1 className="text-2xl font-bold">Dashboard</h1>

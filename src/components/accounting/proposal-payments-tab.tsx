@@ -9,8 +9,6 @@ import {
   FileText, RotateCcw, AlertCircle, Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
-import jsPDF from "jspdf";
-import autoTable from "jspdf-autotable";
 
 interface DepositRow {
   id: string;
@@ -136,6 +134,9 @@ export function ProposalPaymentsTab({ month }: Props) {
       if (!res.ok) { toast.error("Failed to fetch GST data"); return; }
       const gst = await res.json();
 
+      // Dynamic imports keep jsPDF + autotable out of the initial bundle.
+      const { default: jsPDF } = await import("jspdf");
+      const { default: autoTable } = await import("jspdf-autotable");
       const doc = new jsPDF({ orientation: "landscape" });
       const title = `GST Outward Supply Report — ${month}`;
       doc.setFontSize(14);

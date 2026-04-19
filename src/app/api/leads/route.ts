@@ -41,9 +41,12 @@ export async function GET(request: NextRequest) {
 
   let query = supabase
     .from("leads")
-    .select("*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code)", {
-      count: "exact",
-    });
+    .select(
+      // Embed pending followup activities so we don't need a second round-trip after pagination.
+      // We keep the FK to the activities table; filtering to is_follow_up_done=false happens in JS below.
+      "*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code), _pending_followups:activities!activities_lead_id_fkey(follow_up_date, is_follow_up_done)",
+      { count: "exact" }
+    );
 
   if (status) query = query.eq("status", status);
   if (source) query = query.eq("source", source);
@@ -71,30 +74,29 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // Attach followup status flags for each lead
+  // Attach followup status flags for each lead — followups were embedded in the main select.
   const leads = data || [];
   if (leads.length > 0) {
-    const leadIds = leads.map((l: { id: string }) => l.id);
-    const { data: followups } = await supabase
-      .from("activities")
-      .select("lead_id, follow_up_date")
-      .in("lead_id", leadIds)
-      .eq("is_follow_up_done", false)
-      .not("follow_up_date", "is", null);
+    const today = new Date().toISOString().slice(0, 10);
+    type Followup = { follow_up_date: string | null; is_follow_up_done: boolean };
+    type LeadRow = { id: string; _pending_followups?: Followup[]; _followup?: unknown };
 
-    if (followups && followups.length > 0) {
-      const today = new Date().toISOString().slice(0, 10);
-      const fMap: Record<string, { overdue: boolean; due_today: boolean; upcoming: boolean }> = {};
-      for (const f of followups) {
-        const d = (f.follow_up_date as string).slice(0, 10);
-        if (!fMap[f.lead_id]) fMap[f.lead_id] = { overdue: false, due_today: false, upcoming: false };
-        if (d < today) fMap[f.lead_id].overdue = true;
-        else if (d === today) fMap[f.lead_id].due_today = true;
-        else fMap[f.lead_id].upcoming = true;
+    for (const l of leads as LeadRow[]) {
+      const pending = (l._pending_followups || []).filter(
+        (f) => !f.is_follow_up_done && f.follow_up_date
+      );
+      if (pending.length > 0) {
+        const flags = { overdue: false, due_today: false, upcoming: false };
+        for (const f of pending) {
+          const d = (f.follow_up_date as string).slice(0, 10);
+          if (d < today) flags.overdue = true;
+          else if (d === today) flags.due_today = true;
+          else flags.upcoming = true;
+        }
+        l._followup = flags;
       }
-      leads.forEach((l: { id: string; _followup?: unknown }) => {
-        l._followup = fMap[l.id] || null;
-      });
+      // Remove raw embed from the response — downstream code doesn't need it
+      delete l._pending_followups;
     }
 
     // Sort: overdue first → due today → upcoming → rest (preserves DB order within each group)

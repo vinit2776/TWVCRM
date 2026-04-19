@@ -10,7 +10,6 @@ import {
   AlertTriangle, Undo2, Mail, Wrench, Phone, CalendarDays,
   XCircle, Edit3, Save,
 } from "lucide-react";
-import { generatePurchaseOrderPDF } from "@/lib/po-pdf-generator";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -24,6 +23,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+// Type-only import — compiles away, no runtime cost. Keeps Parameters<typeof ...> working.
+import type { generatePurchaseOrderPDF } from "@/lib/po-pdf-generator";
 import {
   PO_STATUS_LABELS, PO_STATUS_COLORS, BILLING_CYCLE_LABELS,
   PO_ADVANCE_STATUS_LABELS, PO_ADVANCE_STATUS_COLORS, PO_ADVANCE_PAYMENT_MODE_LABELS,
@@ -740,7 +741,8 @@ export default function PurchaseOrderDetailPage() {
               variant="outline"
               size="sm"
               onClick={async () => {
-                const pdf = await generatePurchaseOrderPDF(po as Parameters<typeof generatePurchaseOrderPDF>[0]);
+                const { generatePurchaseOrderPDF: gen } = await import("@/lib/po-pdf-generator");
+                const pdf = await gen(po as Parameters<typeof generatePurchaseOrderPDF>[0]);
                 pdf.save(`${po.po_number}.pdf`);
               }}
             >
@@ -2253,7 +2255,8 @@ export default function PurchaseOrderDetailPage() {
                 }
                 setEmailSending(true);
                 try {
-                  const pdf = await generatePurchaseOrderPDF(po as Parameters<typeof generatePurchaseOrderPDF>[0]);
+                  const { generatePurchaseOrderPDF: gen } = await import("@/lib/po-pdf-generator");
+                  const pdf = await gen(po as Parameters<typeof generatePurchaseOrderPDF>[0]);
                   const pdfBlob = pdf.output("blob");
                   const formData = new FormData();
                   formData.append("recipients", JSON.stringify([email]));

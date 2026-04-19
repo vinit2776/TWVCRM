@@ -24,7 +24,6 @@ import {
   INVOICE_STATUS_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import { generateProposalPDF, generateInvoicePDF } from "@/lib/pdf-generator";
 import { toast } from "sonner";
 import type { Proposal, ProformaInvoice, Lead } from "@/types";
 
@@ -56,7 +55,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
     id: string;
     number: string;
     leadEmail?: string;
-    generatePDF: () => string;
+    generatePDF: () => Promise<string>;
   } | null>(null);
 
   // Lead info for PDF generation
@@ -94,13 +93,15 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
   };
 
   // ── Download Proposal PDF ──
-  const handleDownloadProposalPDF = (p: Proposal) => {
+  const handleDownloadProposalPDF = async (p: Proposal) => {
+    const { generateProposalPDF } = await import("@/lib/pdf-generator");
     const doc = generateProposalPDF(p, lead || undefined);
     doc.save(`${p.proposal_number}.pdf`);
   };
 
   // ── Download Invoice PDF ──
-  const handleDownloadInvoicePDF = (inv: ProformaInvoice) => {
+  const handleDownloadInvoicePDF = async (inv: ProformaInvoice) => {
+    const { generateInvoicePDF } = await import("@/lib/pdf-generator");
     const doc = generateInvoicePDF(inv, lead || undefined);
     doc.save(`${inv.invoice_number}.pdf`);
   };
@@ -112,11 +113,11 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       id: p.id,
       number: p.proposal_number,
       leadEmail: lead?.email || undefined,
-      generatePDF: () => {
+      generatePDF: async () => {
+        const { generateProposalPDF } = await import("@/lib/pdf-generator");
         const doc = generateProposalPDF(p, lead || undefined);
         // Get base64 without data URI prefix
-        const base64 = doc.output("datauristring").split(",")[1];
-        return base64;
+        return doc.output("datauristring").split(",")[1];
       },
     });
     setEmailDialogOpen(true);
@@ -129,10 +130,10 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       id: inv.id,
       number: inv.invoice_number,
       leadEmail: lead?.email || undefined,
-      generatePDF: () => {
+      generatePDF: async () => {
+        const { generateInvoicePDF } = await import("@/lib/pdf-generator");
         const doc = generateInvoicePDF(inv, lead || undefined);
-        const base64 = doc.output("datauristring").split(",")[1];
-        return base64;
+        return doc.output("datauristring").split(",")[1];
       },
     });
     setEmailDialogOpen(true);

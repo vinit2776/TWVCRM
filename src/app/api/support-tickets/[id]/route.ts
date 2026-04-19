@@ -19,24 +19,19 @@ export async function GET(
 
   const adminSupabase = await createAdminClient();
 
-  const { data: currentUser } = await adminSupabase
-    .from("users")
-    .select("id, role")
-    .eq("auth_id", user.id)
-    .single();
+  // Fetch user + ticket in parallel — neither depends on the other.
+  const [{ data: currentUser }, { data: ticket, error }] = await Promise.all([
+    adminSupabase.from("users").select("id, role").eq("auth_id", user.id).single(),
+    adminSupabase
+      .from("support_tickets")
+      .select(`*, reporter:reported_by(id, full_name, email, role), assignee:assigned_to(id, full_name, email)`)
+      .eq("id", id)
+      .single(),
+  ]);
 
   if (!currentUser) {
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
-
-  const { data: ticket, error } = await adminSupabase
-    .from("support_tickets")
-    .select(
-      `*, reporter:reported_by(id, full_name, email, role), assignee:assigned_to(id, full_name, email)`
-    )
-    .eq("id", id)
-    .single();
-
   if (error || !ticket) {
     return NextResponse.json({ error: "Ticket not found" }, { status: 404 });
   }
@@ -46,32 +41,28 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Get notes
-  const { data: notes } = await adminSupabase
-    .from("support_ticket_notes")
-    .select(`*, author:created_by(id, full_name, email)`)
-    .eq("ticket_id", id)
-    .order("created_at", { ascending: true });
-
-  // Get screenshot signed URL if present (legacy)
-  let screenshotUrl = null;
-  if (ticket.screenshot_path) {
-    const { data: urlData } = await adminSupabase.storage
-      .from("crm-documents")
-      .createSignedUrl(ticket.screenshot_path, 3600);
-    screenshotUrl = urlData?.signedUrl || null;
-  }
-
-  // Generate signed URLs for all attachments
+  // Notes + legacy screenshot URL + all attachment URLs — none depend on each other.
   const rawAttachments = (ticket as { attachments?: { path: string; name: string; uploaded_at: string }[] }).attachments || [];
-  const attachmentsWithUrls = await Promise.all(
-    rawAttachments.map(async (att) => {
-      const { data: urlData } = await adminSupabase.storage
-        .from("crm-documents")
-        .createSignedUrl(att.path, 3600);
-      return { ...att, url: urlData?.signedUrl || null };
-    })
-  );
+  const [notesResult, screenshotSigned, attachmentsWithUrls] = await Promise.all([
+    adminSupabase
+      .from("support_ticket_notes")
+      .select(`*, author:created_by(id, full_name, email)`)
+      .eq("ticket_id", id)
+      .order("created_at", { ascending: true }),
+    ticket.screenshot_path
+      ? adminSupabase.storage.from("crm-documents").createSignedUrl(ticket.screenshot_path, 3600)
+      : Promise.resolve({ data: null }),
+    Promise.all(
+      rawAttachments.map(async (att) => {
+        const { data: urlData } = await adminSupabase.storage
+          .from("crm-documents")
+          .createSignedUrl(att.path, 3600);
+        return { ...att, url: urlData?.signedUrl || null };
+      })
+    ),
+  ]);
+  const notes = notesResult.data;
+  const screenshotUrl = screenshotSigned.data?.signedUrl || null;
 
   return NextResponse.json({
     data: { ...ticket, notes: notes || [], screenshot_url: screenshotUrl, attachments_with_urls: attachmentsWithUrls },
