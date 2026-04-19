@@ -284,6 +284,12 @@ export async function POST(
   const storagePath = `invoices/${invoiceNumber.replace(/\//g, "-")}.pdf`;
   await adminSupabase.storage.from("crm-documents").upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
 
+  // Generate a long-lived signed URL for WhatsApp document delivery
+  const { data: signedUrlData } = await adminSupabase.storage
+    .from("crm-documents")
+    .createSignedUrl(storagePath, 365 * 24 * 3600);
+  const invoicePdfUrl = signedUrlData?.signedUrl ?? null;
+
   await supabase.from("proposals").update({ occupation_start_date }).eq("id", id);
 
   if (customerEmail) {
@@ -326,6 +332,19 @@ export async function POST(
         description: `Prorated GST invoice ${invoiceNumber} for ₹${amountFormatted} sent via WhatsApp to ${customerPhone}. Payment link: ${razorpayUrl}`,
         createdBy: dbUser.id,
       });
+    }
+
+    // WhatsApp document (invoice PDF) — fire-and-forget
+    if (invoicePdfUrl) {
+      messaging.invoiceDocument(
+        customerPhone,
+        customerName,
+        invoiceNumber,
+        amountFormatted,
+        razorpayUrl,
+        invoicePdfUrl,
+        id
+      ).catch((e: unknown) => console.error("[messaging] invoice WA doc failed:", e));
     }
   }
 

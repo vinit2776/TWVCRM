@@ -30,6 +30,12 @@ interface CreateContractDialogProps {
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
   leadId: string;
+  /**
+   * When provided (e.g. opened from a proposal detail page), the dialog
+   * automatically switches to "From Proposal" mode and pre-selects this
+   * proposal ID so the user doesn't have to hunt for it.
+   */
+  defaultProposalId?: string;
 }
 
 export function CreateContractDialog({
@@ -37,6 +43,7 @@ export function CreateContractDialog({
   onOpenChange,
   onSuccess,
   leadId,
+  defaultProposalId,
 }: CreateContractDialogProps) {
   const [lead, setLead] = useState<Lead | null>(null);
   const [proposals, setProposals] = useState<Proposal[]>([]);
@@ -108,12 +115,22 @@ export function CreateContractDialog({
             if (l.seat_capacity) setSeats(l.seat_capacity);
             if (l.location_id) setLocationId(l.location_id);
           }
-          setProposals(proposalsJson.data || []);
+          const loaded: Proposal[] = proposalsJson.data || [];
+          setProposals(loaded);
+
+          // Auto-select proposal if opened from a proposal detail page
+          if (defaultProposalId) {
+            const match = loaded.find((p) => p.id === defaultProposalId);
+            if (match) {
+              setSource("proposal");
+              setSelectedProposalId(defaultProposalId);
+            }
+          }
         })
         .catch(() => {})
         .finally(() => setLoadingData(false));
     }
-  }, [open, leadId]);
+  }, [open, leadId, defaultProposalId]);
 
   const selectedProposal = useMemo(
     () => proposals.find((p) => p.id === selectedProposalId) || null,

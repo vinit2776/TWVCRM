@@ -136,6 +136,29 @@ export interface SendTemplateOptions {
   entityId?: string;
 }
 
+export interface SendDocumentOptions {
+  /** Recipient phone — any format, auto-normalised to E.164 */
+  to: string;
+  /**
+   * Approved MSG91 template name. The template must have been created with a
+   * "Document" header type in the Meta Business Manager / MSG91 dashboard.
+   *
+   * Templates needed (create in MSG91 → WhatsApp → Templates):
+   *   proposal_send_doc        — Header: Document | Body: "Hi {{1}}, please find the proposal {{2}} from The Work Villa."
+   *   booking_confirmation_doc — Header: Document | Body: "Hi {{1}}, your proposal {{2}} is accepted. Pay security deposit of Rs.{{3}} here: {{4}}"
+   *   gst_invoice_doc          — Header: Document | Body: "Hi {{1}}, invoice {{2}} of Rs.{{3}} from The Work Villa is attached. Pay here: {{4}}"
+   */
+  template: string;
+  /** Public URL of the PDF document that MSG91/WhatsApp will fetch and deliver */
+  documentUrl: string;
+  /** Filename shown to the recipient (e.g. "TWV-2025-001.pdf") */
+  documentFilename: string;
+  /** Body variable values in order */
+  params?: string[];
+  entityType?: string;
+  entityId?: string;
+}
+
 export interface SendResult {
   success: boolean;
   requestId?: string;
@@ -199,6 +222,93 @@ export async function sendWhatsApp(options: SendTemplateOptions): Promise<SendRe
     }
   } catch (err) {
     console.error("[messaging] WhatsApp network error:", err);
+    result = { success: false, error: String(err), channel: "whatsapp" };
+  }
+
+  await logMessage({
+    waMessageId:  result.requestId,
+    channel:      "whatsapp",
+    direction:    "outbound",
+    toNumber,
+    templateName: template,
+    status:       result.success ? "sent" : "failed",
+    entityType,
+    entityId,
+    errorMessage: result.error,
+  });
+
+  return result;
+}
+
+// ---------------------------------------------------------------------------
+// WhatsApp document template via MSG91
+// ---------------------------------------------------------------------------
+
+/**
+ * Sends a WhatsApp template message that has a Document header.
+ * The template must be created in MSG91 with header_type = "document".
+ *
+ * MSG91 component map for document templates:
+ *   "header" → { type: "document", document: { link, filename } }
+ *   "body_N" → { type: "text", value }
+ */
+export async function sendWhatsAppDocument(options: SendDocumentOptions): Promise<SendResult> {
+  const { to, template, documentUrl, documentFilename, params = [], entityType, entityId } = options;
+
+  if (!AUTH_KEY || !WA_SENDER) {
+    console.warn("[messaging] MSG91_AUTH_KEY or MSG91_WHATSAPP_SENDER not set — WhatsApp disabled.");
+    return { success: false, error: "WhatsApp not configured", channel: "whatsapp" };
+  }
+
+  const toNumber = normalisePhone(to);
+
+  // Build component map: document header + body variables
+  const components: Record<string, unknown> = {
+    header: {
+      type: "document",
+      document: { link: documentUrl, filename: documentFilename },
+    },
+  };
+  params.forEach((value, i) => {
+    components[`body_${i + 1}`] = { type: "text", value };
+  });
+
+  const payload = {
+    integrated_number: WA_SENDER,
+    content_type: "template",
+    payload: {
+      type: "template",
+      template: {
+        name: template,
+        language: { code: "en", policy: "deterministic" },
+        to_and_components: [{ to: [toNumber], components }],
+      },
+      messaging_product: "whatsapp",
+    },
+  };
+
+  let result: SendResult = { success: false, error: "Unknown error", channel: "whatsapp" };
+
+  try {
+    const res = await fetch(WA_API_URL, {
+      method: "POST",
+      headers: {
+        authkey: AUTH_KEY,
+        "Content-Type": "application/json",
+        accept: "application/json",
+      },
+      body: JSON.stringify(payload),
+    });
+
+    const json = await res.json() as Record<string, unknown>;
+
+    if (json.hasError === false || json.status === "success") {
+      result = { success: true, requestId: json.request_id as string, channel: "whatsapp" };
+    } else {
+      result = { success: false, error: JSON.stringify(json.errors ?? json), channel: "whatsapp" };
+    }
+  } catch (err) {
+    console.error("[messaging] WhatsApp document network error:", err);
     result = { success: false, error: String(err), channel: "whatsapp" };
   }
 
@@ -556,6 +666,83 @@ export const messaging = {
     return sendWhatsApp({
       to,
       template: "proposal_invoice",
+      params: [customerName, invoiceNumber, totalAmount, paymentLink],
+      entityType: "proposal",
+      entityId: proposalId,
+    });
+  },
+
+  // ── Document (PDF) wrappers ────────────────────────────────────────────────
+  // Each requires a matching MSG91 template with a Document header.
+  // Create in MSG91 → WhatsApp → Templates (Utility category, Document header).
+
+  /**
+   * Proposal PDF → lead phone during negotiation phase.
+   * Template: proposal_send_doc
+   * Header: Document  |  Body: "Hi {{1}}, please find attached proposal {{2}} from The Work Villa."
+   */
+  proposalDocument(
+    to: string,
+    customerName: string,
+    proposalNumber: string,
+    pdfUrl: string,
+    proposalId: string
+  ) {
+    return sendWhatsAppDocument({
+      to,
+      template: "proposal_send_doc",
+      documentUrl: pdfUrl,
+      documentFilename: `${proposalNumber}.pdf`,
+      params: [customerName, proposalNumber],
+      entityType: "proposal",
+      entityId: proposalId,
+    });
+  },
+
+  /**
+   * Booking confirmation PDF → lead phone after acceptance.
+   * Template: booking_confirmation_doc
+   * Header: Document  |  Body: "Hi {{1}}, your proposal {{2}} is accepted. Pay security deposit of Rs.{{3}} here: {{4}}"
+   */
+  bookingConfirmationDocument(
+    to: string,
+    customerName: string,
+    proposalNumber: string,
+    depositAmount: string,
+    depositLink: string,
+    pdfUrl: string,
+    proposalId: string
+  ) {
+    return sendWhatsAppDocument({
+      to,
+      template: "booking_confirmation_doc",
+      documentUrl: pdfUrl,
+      documentFilename: `${proposalNumber}-booking.pdf`,
+      params: [customerName, proposalNumber, depositAmount, depositLink],
+      entityType: "proposal",
+      entityId: proposalId,
+    });
+  },
+
+  /**
+   * GST invoice PDF → lead phone.
+   * Template: gst_invoice_doc
+   * Header: Document  |  Body: "Hi {{1}}, invoice {{2}} of Rs.{{3}} from The Work Villa is attached. Pay here: {{4}}"
+   */
+  invoiceDocument(
+    to: string,
+    customerName: string,
+    invoiceNumber: string,
+    totalAmount: string,
+    paymentLink: string,
+    pdfUrl: string,
+    proposalId: string
+  ) {
+    return sendWhatsAppDocument({
+      to,
+      template: "gst_invoice_doc",
+      documentUrl: pdfUrl,
+      documentFilename: `${invoiceNumber.replace(/\//g, "-")}.pdf`,
       params: [customerName, invoiceNumber, totalAmount, paymentLink],
       entityType: "proposal",
       entityId: proposalId,
