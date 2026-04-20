@@ -261,6 +261,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                     <th className="px-4 py-3 text-left font-medium">Proposal #</th>
                     <th className="px-4 py-3 text-left font-medium">Title</th>
                     <th className="px-4 py-3 text-left font-medium">Status</th>
+                    <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Opened</th>
                     <th className="px-4 py-3 text-right font-medium">Amount</th>
                     <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Created</th>
                     <th className="px-4 py-3 text-left font-medium w-16">Actions</th>
@@ -275,6 +276,18 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                         <Badge variant="secondary" className={PROPOSAL_STATUS_COLORS[p.status]}>
                           {PROPOSAL_STATUS_LABELS[p.status]}
                         </Badge>
+                      </td>
+                      <td className="px-4 py-3 hidden sm:table-cell">
+                        {p.viewed_at ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-green-700 font-medium">
+                            <CheckCircle2 className="h-3 w-3" />
+                            {formatDate(p.viewed_at)}
+                          </span>
+                        ) : p.status === "sent" ? (
+                          <span className="text-xs text-muted-foreground">Not yet opened</span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right font-medium">
                         {formatCurrency(p.total_amount)}
@@ -311,10 +324,10 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                                 Mark as Sent
                               </DropdownMenuItem>
                             )}
-                            {(p.status === "sent") && (
-                              <DropdownMenuItem onClick={() => handleUpdateProposalStatus(p.id, "viewed", "Viewed")}>
-                                <Eye className="mr-2 h-4 w-4" />
-                                Mark as Viewed
+                            {p.status === "sent" && (
+                              <DropdownMenuItem disabled className="text-xs text-muted-foreground opacity-60 cursor-default select-none">
+                                <Eye className="mr-2 h-3.5 w-3.5" />
+                                {p.viewed_at ? `Opened ${formatDate(p.viewed_at)}` : "Opens when customer clicks email link"}
                               </DropdownMenuItem>
                             )}
                             {(p.status === "sent" || p.status === "viewed") && (

@@ -285,6 +285,7 @@ export interface Proposal {
   accepted_at?: string;
   rejected_at?: string;
   rejection_reason?: string;
+  pdf_storage_path?: string;
   created_by?: string;
   created_at: string;
   updated_at: string;

@@ -96,24 +96,32 @@ export async function POST(
   const customerName = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Client";
   const customerPhone = lead?.phone || lead?.mobile;
 
-  // ── Store PDF to Supabase for WhatsApp document delivery ────────────────────
-  // The public URL is passed to MSG91 when sending the document template.
+  // ── Store PDF to Supabase for WhatsApp delivery + tracking redirect ─────────
+  // The storage path is saved on the proposal so the public tracking link can
+  // serve the PDF directly when the customer clicks "Review Your Proposal".
   let pdfPublicUrl: string | null = null;
+  let pdfStoragePath: string | null = null;
   try {
     const adminSupabase = createAdminClient();
-    const storagePath = `proposals/${id}/proposal-${Date.now()}.pdf`;
+    // Use a stable path (overwrite on resend) so the tracking link always serves the latest version
+    pdfStoragePath = `proposals/${id}/proposal-latest.pdf`;
     await adminSupabase.storage
       .from("crm-documents")
-      .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
+      .upload(pdfStoragePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
 
     const { data: signedData } = await adminSupabase.storage
       .from("crm-documents")
-      .createSignedUrl(storagePath, 365 * 24 * 3600); // 1 year — sufficient for WA delivery
+      .createSignedUrl(pdfStoragePath, 365 * 24 * 3600); // 1 year — sufficient for WA delivery
     pdfPublicUrl = signedData?.signedUrl ?? null;
   } catch (err) {
     // Storage failure is non-blocking; WhatsApp doc send will be skipped
     console.error("[proposal email] PDF storage error:", err);
+    pdfStoragePath = null;
   }
+
+  // ── Build tracking URL ──────────────────────────────────────────────────────
+  const appBaseUrl = process.env.NEXT_PUBLIC_APP_URL || "https://crm.theworkvilla.com";
+  const trackingUrl = `${appBaseUrl}/api/proposals/${id}/track`;
 
   // ── Build email HTML ────────────────────────────────────────────────────────
   // Step 1 email: clean proposal — no deposit payment button.
@@ -182,6 +190,19 @@ export async function POST(
           ${proposal.valid_until ? `<tr><td style="padding: 10px 16px; color: #666;">Valid Until</td><td style="padding: 10px 16px; color: #333;">${new Date(proposal.valid_until).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}</td></tr>` : ""}
         </table>
 
+        <!-- Tracking CTA — clicking this marks the proposal as "viewed" server-side -->
+        <div style="text-align:center;margin:24px 0;">
+          <a href="${trackingUrl}"
+             style="display:inline-block;background:#015E65;color:#ffffff;text-decoration:none;
+                    font-size:15px;font-weight:700;padding:14px 36px;border-radius:8px;
+                    letter-spacing:0.3px;">
+            Review Your Proposal →
+          </a>
+          <p style="color:#999;font-size:11px;margin:8px 0 0;">
+            Clicking opens the proposal PDF. Your review is automatically noted.
+          </p>
+        </div>
+
         ${nextStepsHtml}
 
         <p style="color: #015E65; font-size: 13px; font-weight: 700; margin: 20px 0 8px; letter-spacing: 0.3px;">BANK TRANSFER DETAILS</p>
@@ -232,11 +253,10 @@ export async function POST(
 
     console.log("Proposal email sent:", emailResult?.id, "to:", recipients);
 
-    // Update proposal status to "sent"
-    await supabase
-      .from("proposals")
-      .update({ status: "sent", sent_at: new Date().toISOString() })
-      .eq("id", id);
+    // Update proposal status to "sent" and store the PDF path for tracking redirect
+    const sentUpdate: Record<string, unknown> = { status: "sent", sent_at: new Date().toISOString() };
+    if (pdfStoragePath) sentUpdate.pdf_storage_path = pdfStoragePath;
+    await supabase.from("proposals").update(sentUpdate).eq("id", id);
 
     // Log email activity
     if (proposal.lead_id && sender?.id) {

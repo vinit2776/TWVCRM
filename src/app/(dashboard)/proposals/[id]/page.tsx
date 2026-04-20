@@ -432,14 +432,12 @@ export default function ProposalDetailPage({
             </Button>
           )}
           {proposal.status === "sent" && (
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => handleUpdateStatus("viewed", "Viewed")}
-            >
-              <Eye className="mr-2 h-4 w-4" />
-              Mark as Viewed
-            </Button>
+            <div className="inline-flex items-center gap-1.5 text-xs text-muted-foreground border rounded px-3 py-1.5 bg-muted/30">
+              <Eye className="h-3.5 w-3.5" />
+              {proposal.viewed_at
+                ? <span className="text-green-700 font-medium">Opened {formatDate(proposal.viewed_at)}</span>
+                : <span>Waiting for customer to open email link</span>}
+            </div>
           )}
           {(proposal.status === "sent" || proposal.status === "viewed") && (
             <>
