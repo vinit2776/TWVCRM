@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logEmailActivity } from "@/lib/audit";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
+import { messaging } from "@/lib/whatsapp";
 
 export const maxDuration = 30;
 
@@ -47,8 +48,10 @@ export async function POST(
     return NextResponse.json({ error: "Invoice not found" }, { status: 404 });
 
   const { data: sender } = await supabase
-    .from("users").select("id, full_name").eq("auth_id", user.id).single();
+    .from("users").select("id, full_name, email, phone").eq("auth_id", user.id).single();
   const senderName = sender?.full_name || "TWV Team";
+  const senderEmail = sender?.email || "contact@theworkvilla.com";
+  const senderPhone = sender?.phone || "+91 97910 97900";
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lead = invoice.lead as any;
@@ -119,6 +122,22 @@ export async function POST(
     }
   }
 
+  // ── Store PDF to Supabase for WhatsApp document delivery ─────────────────────
+  let pdfPublicUrl: string | null = null;
+  try {
+    const adminSupabase = createAdminClient();
+    const storagePath = `invoices/${id}/invoice-${Date.now()}.pdf`;
+    await adminSupabase.storage
+      .from("crm-documents")
+      .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
+    const { data: signedData } = await adminSupabase.storage
+      .from("crm-documents")
+      .createSignedUrl(storagePath, 365 * 24 * 3600); // 1 year — sufficient for WA delivery
+    pdfPublicUrl = signedData?.signedUrl ?? null;
+  } catch (err) {
+    console.error("[invoice email] PDF storage error:", err);
+  }
+
   // ── Build email ───────────────────────────────────────────────────────────────
   const totalFormatted = `₹${Number(invoice.total_amount).toLocaleString("en-IN")}`;
 
@@ -171,7 +190,7 @@ export async function POST(
 
             <p style="color:#333;font-size:14px;">Once we confirm receipt of payment, a GST tax invoice will be issued to you.</p>
             <p style="color:#333;font-size:14px;margin-top:16px;">Warm regards,<br/><strong>${senderName}</strong><br/>The WorkVilla</p>
-            <p style="color:#666;font-size:12px;margin-top:16px;">For queries, email <a href="mailto:contact@theworkvilla.com" style="color:#015E65;">contact@theworkvilla.com</a> or call <strong>+91 97910 97900</strong>.</p>
+            <p style="color:#666;font-size:12px;margin-top:16px;">You can reach me directly at <a href="mailto:${senderEmail}" style="color:#015E65;">${senderEmail}</a> or call <strong>${senderPhone}</strong>.</p>
           </div>
           <div style="background:#015E65;padding:16px 32px;text-align:center;">
             <p style="color:#fff;margin:0;font-size:11px;">SREE DESIGN INFRASTRUCTURE PVT LTD</p>
@@ -210,6 +229,19 @@ export async function POST(
         description: `Proforma Invoice "${invoice.title}" (${invoice.invoice_number}) emailed to ${recipients.join(", ")}${paymentLinkUrl ? " with Razorpay payment link" : ""}`,
         createdBy: sender.id,
       });
+    }
+
+    // ── WhatsApp invoice document (PDF + payment link) — fire-and-forget ────────
+    if (customerPhone && pdfPublicUrl) {
+      messaging.invoiceDocument(
+        customerPhone,
+        customerName,
+        invoice.invoice_number,
+        totalFormatted,
+        paymentLinkUrl || "",
+        pdfPublicUrl,
+        id
+      ).catch((e: unknown) => console.error("[messaging] invoice WA doc failed:", e));
     }
 
     return NextResponse.json({

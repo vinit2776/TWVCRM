@@ -712,6 +712,8 @@ export function generateInvoicePDF(
     createdAt: invoice.created_at,
     dueDate: invoice.due_date,
     notes: invoice.notes,
+    // Include payment link when available so the downloaded PDF is self-contained
+    razorpayPaymentLink: invoice.razorpay_link_url || undefined,
   });
 }
 
