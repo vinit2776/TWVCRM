@@ -29,7 +29,7 @@ interface Stage {
 /** Badge text for the currently-active step */
 const AWAITING_LABEL: Record<string, string> = {
   sent: "Awaiting Send",
-  viewed: "Awaiting Review",
+  viewed: "Awaiting Client Acknowledgement",
   accepted: "Awaiting Acceptance",
   active: "Pending Activation",
   outcome: "In Effect",
@@ -65,11 +65,11 @@ export function ContractLifecycle({ contract }: Props) {
       : "done",
   });
 
-  // 3. Viewed by Client — only show if we know it was viewed or sending happened
+  // 3. Acknowledged by Client — manually updated by staff when client confirms receipt
   if (contract.viewed_at || (!isRejected && contract.sent_at)) {
     stages.push({
       key: "viewed",
-      label: "Viewed by Client",
+      label: "Client Acknowledged",
       date: contract.viewed_at,
       state: contract.viewed_at
         ? "done"

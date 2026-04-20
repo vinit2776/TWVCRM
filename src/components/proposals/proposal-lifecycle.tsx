@@ -20,7 +20,7 @@ interface Stage {
 /** Descriptive badge text shown on the active step instead of generic "Pending" */
 const AWAITING_LABEL: Record<string, string> = {
   sent: "Awaiting Send",
-  viewed: "Awaiting View",
+  viewed: "Awaiting Email Open",
   accepted: "Awaiting Decision",
   deposit: "Awaiting Payment",
   invoice: "Awaiting Invoice",
@@ -60,12 +60,17 @@ export function ProposalLifecycle({ proposal }: Props) {
       : "done",
   });
 
-  // 3. Viewed (optional — show as done or skipped gracefully)
+  // 3. Opened by Customer — auto-tracked when they click "Review Your Proposal" link in email
   if (proposal.viewed_at || (!isRejected && proposal.sent_at)) {
     stages.push({
       key: "viewed",
-      label: "Viewed by Customer",
+      label: "Opened by Customer",
       date: proposal.viewed_at,
+      sub: proposal.viewed_at
+        ? "Auto-tracked via email link"
+        : !isRejected && proposal.status === "sent"
+        ? "Tracked automatically when customer clicks the email link"
+        : undefined,
       state: proposal.viewed_at ? "done"
         : isRejected ? "skipped"
         : proposal.status === "sent" ? "active"
