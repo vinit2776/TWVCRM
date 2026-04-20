@@ -533,17 +533,47 @@ function generatePDF(options: PDFOptions): jsPDF {
     y += 4.5;
   });
 
-  // ── Razorpay Payment Link (below bank details, above QR) ──
+  // ── Razorpay Payment Link — button + raw URL ──────────────────────────────
   if (options.razorpayPaymentLink) {
-    y += 2;
-    doc.setFontSize(9);
+    y += 5;
+
+    // Section label in small grey caps
+    doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(...BRAND_TEAL);
-    doc.text("Pay Online:", 14, y);
+    doc.setTextColor(100, 100, 100);
+    doc.text("ONLINE PAYMENT", 14, y);
+    y += 5;
+
+    // Filled teal button — shows amount so customer knows exactly what they're paying
+    const btnX = 14;
+    const btnW = 92;
+    const btnH = 10;
+    doc.setFillColor(...BRAND_TEAL);
+    doc.roundedRect(btnX, y, btnW, btnH, 2, 2, "F");
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(255, 255, 255);
+    doc.text(
+      `Pay ${formatCurrencyPDF(options.totalAmount)} Online`,
+      btnX + btnW / 2,
+      y + 7,        // baseline ~70% down the 10mm button
+      { align: "center" }
+    );
+    // Make the entire button rectangle a clickable hyperlink
+    doc.link(btnX, y, btnW, btnH, { url: options.razorpayPaymentLink });
+    y += btnH + 3;
+
+    // Raw URL below button — visible for copy-paste or print
+    doc.setFontSize(7.5);
     doc.setFont("helvetica", "normal");
-    doc.setTextColor(0, 0, 200);
-    doc.textWithLink(options.razorpayPaymentLink, 42, y, { url: options.razorpayPaymentLink });
-    y += 6;
+    doc.setTextColor(30, 80, 200);
+    doc.textWithLink(
+      options.razorpayPaymentLink,
+      14,
+      y,
+      { url: options.razorpayPaymentLink }
+    );
+    y += 7;
   }
 
   // ── UPI QR Code (right side, next to bank details) ──
