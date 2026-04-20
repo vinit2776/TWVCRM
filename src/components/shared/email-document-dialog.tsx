@@ -12,6 +12,8 @@ import {
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
 import { Loader2, Plus, X, Mail, AlertTriangle, SendHorizonal } from "lucide-react";
+import { Checkbox } from "@/components/ui/checkbox";
+import { MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 
 interface EmailDocumentDialogProps {
@@ -21,6 +23,8 @@ interface EmailDocumentDialogProps {
   documentId: string;
   documentNumber: string;
   leadEmail?: string;
+  /** If provided, shows the "Also send via WhatsApp" checkbox */
+  leadPhone?: string;
   onGeneratePDF: () => string | Promise<string>; // Returns base64 string (sync or async)
   onSuccess?: () => void;
 }
@@ -32,6 +36,7 @@ export function EmailDocumentDialog({
   documentId,
   documentNumber,
   leadEmail,
+  leadPhone,
   onGeneratePDF,
   onSuccess,
 }: EmailDocumentDialogProps) {
@@ -40,6 +45,7 @@ export function EmailDocumentDialog({
   );
   const [newEmail, setNewEmail] = useState("");
   const [sending, setSending] = useState(false);
+  const [sendWhatsApp, setSendWhatsApp] = useState(false);
 
   // ── Deposit link failure state ─────────────────────────────────────────────
   // When the API returns 422 + deposit_link_failed, we switch to a warning
@@ -110,6 +116,9 @@ export function EmailDocumentDialog({
       if (forceSendWithoutLink) {
         formData.append("force_send_without_link", "true");
       }
+      if (sendWhatsApp && leadPhone) {
+        formData.append("send_via_whatsapp", "true");
+      }
 
       const res = await fetch(apiPath, { method: "POST", body: formData });
 
@@ -149,6 +158,7 @@ export function EmailDocumentDialog({
       setNewEmail("");
       setDepositLinkError(null);
       setCachedPdfBlob(null);
+      setSendWhatsApp(false);
     }
     onOpenChange(isOpen);
   };
@@ -248,6 +258,22 @@ export function EmailDocumentDialog({
                 Press Enter or click + to add more recipients
               </p>
             </div>
+
+            {/* WhatsApp opt-in — only shown when phone is available */}
+            {leadPhone && (
+              <div className="flex items-center gap-2.5 rounded-md border bg-muted/40 px-3 py-2.5">
+                <Checkbox
+                  id="send-whatsapp"
+                  checked={sendWhatsApp}
+                  onCheckedChange={(v) => setSendWhatsApp(!!v)}
+                />
+                <label htmlFor="send-whatsapp" className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                  <MessageCircle className="h-4 w-4 text-green-600" />
+                  Also send PDF via WhatsApp
+                  <span className="text-muted-foreground text-xs">({leadPhone})</span>
+                </label>
+              </div>
+            )}
 
             {/* Actions */}
             <div className="flex justify-end gap-2 pt-2">

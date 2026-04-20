@@ -16,6 +16,7 @@ interface GstEntry {
   company: string;
   lead_email?: string;
   lead_secondary_email?: string;
+  lead_phone?: string;
   total_billable: number;
   total_paid: number;
   payment_id: string | null;
@@ -291,6 +292,7 @@ export function GstInvoiceEntry({ entries, onRefresh }: GstInvoiceEntryProps) {
           company={emailDialogEntry.company}
           leadEmail={emailDialogEntry.lead_email}
           leadSecondaryEmail={emailDialogEntry.lead_secondary_email}
+          leadPhone={emailDialogEntry.lead_phone}
           onSuccess={onRefresh}
         />
       )}

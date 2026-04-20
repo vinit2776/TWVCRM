@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
   const { data: contracts } = await supabase
     .from("contracts")
     .select(
-      "id, contract_number, title, status, start_date, monthly_membership_fee, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, secondary_email)"
+      "id, contract_number, title, status, start_date, monthly_membership_fee, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, secondary_email, phone, mobile)"
     )
     .lte("start_date", periodEnd)
     .in("status", ["active", "completed"]);
@@ -77,6 +77,7 @@ export async function GET(request: NextRequest) {
       company: contract.lead?.company || `${contract.lead?.first_name} ${contract.lead?.last_name}`,
       lead_email: contract.lead?.email,
       lead_secondary_email: contract.lead?.secondary_email,
+      lead_phone: contract.lead?.phone || contract.lead?.mobile || null,
       total_billable: totalBillable,
       total_paid: totalPaid,
       payment_id: gstPayment?.id || contractPayments[0]?.id || null,

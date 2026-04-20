@@ -11,7 +11,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, Mail } from "lucide-react";
+import { Loader2, Mail, MessageCircle } from "lucide-react";
 import { toast } from "sonner";
 
 interface GstInvoiceEmailDialogProps {
@@ -22,6 +22,8 @@ interface GstInvoiceEmailDialogProps {
   company: string;
   leadEmail?: string;
   leadSecondaryEmail?: string;
+  /** If provided, shows the "Also send via WhatsApp" checkbox */
+  leadPhone?: string;
   onSuccess: () => void;
 }
 
@@ -33,12 +35,14 @@ export function GstInvoiceEmailDialog({
   company,
   leadEmail,
   leadSecondaryEmail,
+  leadPhone,
   onSuccess,
 }: GstInvoiceEmailDialogProps) {
   const [selectedEmails, setSelectedEmails] = useState<Set<string>>(
     new Set([leadEmail, leadSecondaryEmail].filter(Boolean) as string[])
   );
   const [sending, setSending] = useState(false);
+  const [sendWhatsApp, setSendWhatsApp] = useState(false);
 
   const availableEmails = [leadEmail, leadSecondaryEmail].filter(Boolean) as string[];
 
@@ -65,7 +69,10 @@ export function GstInvoiceEmailDialog({
       const res = await fetch(`/api/accounting/gst-invoices/${paymentId}/email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ recipients: Array.from(selectedEmails) }),
+        body: JSON.stringify({
+          recipients: Array.from(selectedEmails),
+          send_via_whatsapp: sendWhatsApp && !!leadPhone,
+        }),
       });
 
       if (!res.ok) {
@@ -125,6 +132,21 @@ export function GstInvoiceEmailDialog({
             </p>
           )}
         </div>
+
+        {leadPhone && (
+          <div className="flex items-center gap-2.5 rounded-md border bg-muted/40 px-3 py-2.5">
+            <Checkbox
+              id="gst-send-whatsapp"
+              checked={sendWhatsApp}
+              onCheckedChange={(v) => setSendWhatsApp(!!v)}
+            />
+            <label htmlFor="gst-send-whatsapp" className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+              <MessageCircle className="h-4 w-4 text-green-600" />
+              Also send invoice via WhatsApp
+              <span className="text-muted-foreground text-xs">({leadPhone})</span>
+            </label>
+          </div>
+        )}
 
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)}>

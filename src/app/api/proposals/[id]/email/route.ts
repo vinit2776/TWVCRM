@@ -34,11 +34,13 @@ export async function POST(
   // Support both FormData (binary PDF) and JSON (base64 PDF)
   let recipients: string[];
   let pdfBuffer: Buffer;
+  let sendViaWhatsApp = false;
 
   const contentType = request.headers.get("content-type") || "";
   if (contentType.includes("multipart/form-data")) {
     const formData = await request.formData();
     recipients = JSON.parse(formData.get("recipients") as string || "[]");
+    sendViaWhatsApp = formData.get("send_via_whatsapp") === "true";
     const pdfFile = formData.get("pdf") as File;
     if (!pdfFile) {
       return NextResponse.json({ error: "PDF file is required" }, { status: 400 });
@@ -47,6 +49,7 @@ export async function POST(
   } else {
     const body = await request.json();
     recipients = body.recipients;
+    sendViaWhatsApp = body.send_via_whatsapp === true;
     pdfBuffer = Buffer.from(body.pdfBase64, "base64");
   }
 
@@ -268,8 +271,8 @@ export async function POST(
       });
     }
 
-    // ── WhatsApp document (PDF) — fire-and-forget ───────────────────────────
-    if (customerPhone && pdfPublicUrl) {
+    // ── WhatsApp document (PDF) — only when explicitly requested ───────────
+    if (sendViaWhatsApp && customerPhone && pdfPublicUrl) {
       messaging.proposalDocument(
         customerPhone,
         customerName,

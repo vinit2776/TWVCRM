@@ -136,15 +136,47 @@ export async function POST(request: NextRequest) {
         }
       }
     } else if (fromNumber && text) {
-      // Inbound message — log it for potential future auto-reply handling
+      // Inbound message — link to lead if phone matches, log activity, alert dashboard
       const channel = (event.channel as string | undefined) ?? "whatsapp";
+      const inboundChannel = channel === "sms" ? "sms" : "whatsapp";
+
+      // Normalise from_number to last 10 digits for fuzzy phone matching
+      const digits = fromNumber.replace(/\D/g, "");
+      const last10 = digits.slice(-10);
+
+      // Find a matching lead by phone or mobile (suffix match on last 10 digits)
+      let matchedLeadId: string | null = null;
+      if (last10.length === 10) {
+        const { data: leads } = await supabase
+          .from("leads")
+          .select("id, phone, mobile")
+          .or(`phone.ilike.%${last10},mobile.ilike.%${last10}`)
+          .limit(1);
+        matchedLeadId = leads?.[0]?.id ?? null;
+      }
+
+      // Insert inbound message record
       await supabase.from("whatsapp_messages").insert({
         direction:    "inbound",
-        channel:      channel === "sms" ? "sms" : "whatsapp",
+        channel:      inboundChannel,
         from_number:  fromNumber,
         message_body: text,
         status:       "delivered",
+        entity_type:  matchedLeadId ? "lead" : null,
+        entity_id:    matchedLeadId ?? null,
       });
+
+      // Log activity on the lead timeline so the team can see the reply
+      if (matchedLeadId) {
+        await supabase.from("activities").insert({
+          lead_id:     matchedLeadId,
+          type:        "note",
+          subject:     `WhatsApp reply received`,
+          description: `Customer replied via WhatsApp from ${fromNumber}: "${text.substring(0, 200)}${text.length > 200 ? "…" : ""}"`,
+        }).then(({ error }) => {
+          if (error) console.error("[webhook] inbound activity insert failed:", error.message);
+        });
+      }
     }
   }
 

@@ -1133,6 +1133,7 @@ export default function ProposalDetailPage({
         documentId={proposal.id}
         documentNumber={proposal.proposal_number}
         leadEmail={proposal.lead?.email || undefined}
+        leadPhone={proposal.lead?.phone || proposal.lead?.mobile || undefined}
         onGeneratePDF={async () => {
           // Negotiation-phase proposal — no deposit payment link included.
           // The deposit link is only sent after acceptance via the /accept route.

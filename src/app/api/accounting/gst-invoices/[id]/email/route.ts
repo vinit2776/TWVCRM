@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logAudit, logEmailActivity } from "@/lib/audit";
+import { messaging } from "@/lib/whatsapp";
 
 // POST — Email GST invoice PDF to selected recipients
 export async function POST(
@@ -22,7 +23,7 @@ export async function POST(
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
 
   const body = await request.json();
-  const { recipients } = body as { recipients: string[] };
+  const { recipients, send_via_whatsapp } = body as { recipients: string[]; send_via_whatsapp?: boolean };
 
   if (!recipients || recipients.length === 0) {
     return NextResponse.json({ error: "At least one recipient email is required" }, { status: 400 });
@@ -32,7 +33,7 @@ export async function POST(
   const { data: payment, error: fetchError } = await supabase
     .from("contract_payments")
     .select(
-      "*, contract:contracts!contract_payments_contract_id_fkey(id, contract_number, title, lead_id, monthly_membership_fee, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company))"
+      "*, contract:contracts!contract_payments_contract_id_fkey(id, contract_number, title, lead_id, monthly_membership_fee, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, phone, mobile))"
     )
     .eq("id", id)
     .single();
@@ -152,6 +153,30 @@ export async function POST(
         description: `GST Invoice for ${paymentData.contract?.contract_number || "contract"} (₹${Number(paymentData.amount).toLocaleString("en-IN")}) emailed to ${recipients.join(", ")}`,
         createdBy: dbUser.id,
       });
+    }
+
+    // ── WhatsApp document (PDF) — only when explicitly requested ──────────────
+    const customerPhone = lead?.phone || lead?.mobile;
+    if (send_via_whatsapp && customerPhone && paymentData.gst_invoice_path) {
+      // Get a signed URL for the PDF (valid 1 hour — long enough for WA delivery)
+      supabase.storage
+        .from("crm-documents")
+        .createSignedUrl(paymentData.gst_invoice_path, 3600)
+        .then(({ data: signed }) => {
+          if (!signed?.signedUrl) return;
+          messaging
+            .invoiceDocument(
+              customerPhone,
+              customerName,
+              paymentData.gst_invoice_number || paymentData.contract?.contract_number || "Invoice",
+              Number(paymentData.amount).toLocaleString("en-IN"),
+              "https://theworkvilla.com",
+              signed.signedUrl,
+              id
+            )
+            .catch((e: unknown) => console.error("[messaging] GST invoice WA doc failed:", e));
+        })
+        .catch((e: unknown) => console.error("[messaging] GST invoice WA signed URL failed:", e));
     }
 
     return NextResponse.json({ message: "GST invoice emailed successfully" });

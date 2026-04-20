@@ -5,10 +5,11 @@ import {
   useEnquiryNotificationsCore,
   type EnquiryNotificationItem,
   type EnquiryAlert,
+  type WhatsAppInboundItem,
 } from "@/hooks/use-enquiry-notifications";
 
 // Re-export types for consumers
-export type { EnquiryNotificationItem, EnquiryAlert };
+export type { EnquiryNotificationItem, EnquiryAlert, WhatsAppInboundItem };
 
 type EnquiryNotificationsContextType = ReturnType<typeof useEnquiryNotificationsCore>;
 
