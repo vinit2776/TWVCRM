@@ -172,145 +172,108 @@ const DEPT_EMOJI: Record<string, string> = {
   asset: "📦",
 };
 
-// Horizontal progress bar with a dashed "pace" marker showing where spending
-// SHOULD be on today's date within the month. Answers "are we ahead or behind
-// pace?" — a more actionable question than raw utilization %.
 function BudgetBar({ row }: { row: BudgetRow }) {
   const { department, monthly_budget, is_active, spent_this_month, amc_spent_this_month } = row;
   const hasBudget = !!monthly_budget && is_active;
 
-  const spentPct = hasBudget ? (spent_this_month / monthly_budget!) * 100 : 0;
+  const rawPct = hasBudget ? (spent_this_month / monthly_budget!) * 100 : 0;
+  const fillPct = Math.min(rawPct, 100);
   const isOver = hasBudget && spent_this_month > monthly_budget!;
   const remaining = hasBudget ? Math.max(0, monthly_budget! - spent_this_month) : 0;
   const overAmount = isOver ? spent_this_month - monthly_budget! : 0;
 
-  // Pace: linear expected spend for today's day-of-month.
+  // Pace: expected linear spend for today's day-of-month.
   const now = new Date();
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   const pacePct = (now.getDate() / daysInMonth) * 100;
-  // Positive delta = spending slower than pace = GOOD.
-  const paceDelta = pacePct - spentPct;
-
-  // Fill width caps at 100 for the "in-budget" bar; overflow is rendered separately.
-  const fillPct = Math.min(spentPct, 100);
-  const overflowPct = isOver ? Math.min(spentPct - 100, 25) : 0; // cap visual overflow at +25%
+  const paceDelta = pacePct - rawPct; // positive = ahead of pace (good)
 
   const fillColor = !hasBudget
     ? "bg-gray-300"
-    : isOver || spentPct >= 100
+    : isOver || rawPct >= 100
     ? "bg-red-500"
-    : spentPct >= 90
+    : rawPct >= 90
     ? "bg-red-400"
-    : spentPct >= 75
+    : rawPct >= 75
     ? "bg-amber-500"
     : "bg-emerald-500";
 
-  const pctTextColor = !hasBudget
+  const amountColor = !hasBudget
     ? "text-muted-foreground"
     : isOver
     ? "text-red-700"
-    : spentPct >= 90
+    : rawPct >= 90
     ? "text-red-600"
-    : spentPct >= 75
+    : rawPct >= 75
     ? "text-amber-700"
     : "text-emerald-700";
 
+  // Pace as a text badge — no hairline on the bar
+  const paceBadge = hasBudget && !isOver
+    ? Math.abs(paceDelta) < 3
+      ? <span className="text-emerald-700 font-medium">● On pace</span>
+      : paceDelta > 0
+        ? <span className="text-emerald-700 font-medium">● {Math.round(paceDelta)}% ahead</span>
+        : <span className="text-amber-700 font-medium">⚠ {Math.round(-paceDelta)}% behind</span>
+    : null;
+
   return (
-    <div className="space-y-2">
-      {/* Header row: dept name + totals */}
+    <div className="space-y-1.5">
+      {/* Row 1: dept name (left) + spend / budget (right) */}
       <div className="flex items-baseline justify-between gap-2">
-        <div className="flex items-center gap-2 min-w-0">
+        <div className="flex items-center gap-1.5 min-w-0">
           <span className="text-base shrink-0" aria-hidden>{DEPT_EMOJI[department]}</span>
           <span className="font-semibold text-sm truncate">{DEPT_SHORT[department] ?? department}</span>
-          {hasBudget && (
-            <span className={`text-xs font-bold tabular-nums ${pctTextColor}`}>
-              {Math.round(spentPct)}%
-            </span>
-          )}
         </div>
         <div className="text-xs tabular-nums shrink-0">
           {hasBudget ? (
             <>
-              <span className={`font-semibold ${pctTextColor}`}>{formatCurrency(spent_this_month)}</span>
+              <span className={`font-semibold ${amountColor}`}>{formatCurrency(spent_this_month)}</span>
               <span className="text-muted-foreground"> / {formatCurrency(monthly_budget!)}</span>
             </>
           ) : (
-            <span className="text-muted-foreground italic">No budget</span>
+            <span className="text-muted-foreground italic">No budget set</span>
           )}
         </div>
       </div>
 
-      {/* Bar row: 80% in-budget track + 20% over-budget gutter */}
-      <div className="flex items-stretch gap-0.5">
-        {/* In-budget track (80%) */}
-        <div className="relative h-2.5 flex-1 rounded-l-full bg-gray-100 overflow-visible">
-          {hasBudget && fillPct > 0 && (
-            <div
-              className={`absolute inset-y-0 left-0 rounded-l-full transition-[width] duration-500 ${fillColor} ${fillPct < 100 ? "rounded-r-full" : ""}`}
-              style={{ width: `${fillPct}%` }}
-            />
-          )}
-          {!hasBudget && (
-            <div className="absolute inset-0 rounded-l-full border border-dashed border-gray-300" />
-          )}
-          {/* Pace marker */}
-          {hasBudget && (
-            <div
-              className="absolute top-[-4px] bottom-[-4px] w-px bg-gray-500"
-              style={{ left: `${Math.min(pacePct, 100)}%` }}
-              title={`Pace: day ${now.getDate()} of ${daysInMonth} (${Math.round(pacePct)}%)`}
-            >
-              <span className="absolute top-[-12px] left-1/2 -translate-x-1/2 text-[9px] text-gray-500 whitespace-nowrap font-medium">
-                pace
-              </span>
-            </div>
-          )}
-        </div>
-
-        {/* Over-budget gutter (20%) — shows overflow beyond 100% */}
-        <div className="relative h-2.5 w-[20%] rounded-r-full bg-gray-100 overflow-hidden">
-          {isOver && (
-            <div
-              className="absolute inset-y-0 left-0 rounded-r-full bg-red-600"
-              style={{ width: `${(overflowPct / 25) * 100}%` }}
-            />
-          )}
-          {/* 100% boundary tick */}
-          <div className="absolute inset-y-0 left-0 w-px bg-gray-400" />
-        </div>
-      </div>
-
-      {/* Delta + remaining/over */}
-      <div className="flex items-center justify-between gap-2 text-[11px]">
+      {/* Row 2: single clean progress bar */}
+      <div className="h-2 w-full rounded-full bg-gray-100 overflow-hidden">
         {hasBudget ? (
-          isOver ? (
-            <span className="text-red-700 font-semibold">
-              ✖ {formatCurrency(overAmount)} over budget
-            </span>
-          ) : Math.abs(paceDelta) < 3 ? (
-            <span className="text-emerald-700 font-medium">● On pace</span>
-          ) : paceDelta > 0 ? (
-            <span className="text-emerald-700 font-medium">
-              ● {Math.round(paceDelta)}% ahead of pace
+          <div
+            className={`h-full rounded-full transition-[width] duration-500 ${fillColor}`}
+            style={{ width: `${fillPct}%` }}
+          />
+        ) : (
+          <div className="h-full w-full rounded-full border border-dashed border-gray-300" />
+        )}
+      </div>
+
+      {/* Row 3: % + status badge (left) · AMC + remaining (right) */}
+      <div className="flex items-center justify-between gap-2 text-[11px]">
+        <div className="flex items-center gap-2">
+          {hasBudget && (
+            <span className={`font-bold tabular-nums ${amountColor}`}>{Math.round(rawPct)}%</span>
+          )}
+          {isOver ? (
+            <span className="bg-red-100 text-red-700 font-semibold px-1.5 py-0.5 rounded-full text-[10px]">
+              ↑ {formatCurrency(overAmount)} over budget
             </span>
           ) : (
-            <span className="text-amber-700 font-medium">
-              ⚠ {Math.round(-paceDelta)}% behind pace
-            </span>
-          )
-        ) : (
-          <span className="text-muted-foreground italic">
-            {formatCurrency(spent_this_month)} spent
-          </span>
-        )}
-        <div className="flex items-center gap-2 shrink-0">
+            paceBadge
+          )}
+          {!hasBudget && (
+            <span className="text-muted-foreground italic">{formatCurrency(spent_this_month)} spent</span>
+          )}
+        </div>
+        <div className="flex items-center gap-2 text-muted-foreground shrink-0">
           {amc_spent_this_month > 0 && (
             <span className="text-purple-600" title="AMC / Annual Contract spend — not counted in budget">
               +{formatCurrency(amc_spent_this_month)} AMC
             </span>
           )}
           {hasBudget && !isOver && (
-            <span className="text-muted-foreground">{formatCurrency(remaining)} left</span>
+            <span>{formatCurrency(remaining)} left</span>
           )}
         </div>
       </div>
