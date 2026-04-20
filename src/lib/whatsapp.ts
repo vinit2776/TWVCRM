@@ -146,7 +146,7 @@ export interface SendDocumentOptions {
    * Templates needed (create in MSG91 → WhatsApp → Templates):
    *   proposal_send_doc        — Header: Document | Body: "Hi {{1}}, please find the proposal {{2}} from The Work Villa."
    *   booking_confirmation_doc — Header: Document | Body: "Hi {{1}}, your proposal {{2}} is accepted. Pay security deposit of Rs.{{3}} here: {{4}}"
-   *   gst_invoice_doc          — Header: Document | Body: "Hi {{1}}, invoice {{2}} of Rs.{{3}} from The Work Villa is attached. Pay here: {{4}}"
+   *   gst_invoice_doc          — Header: Document | Body: "Hi {{1}}, invoice {{2}} of Rs.{{3}} from The Work Villa is attached. Click to pay: {{4}}. Thank you!"
    */
   template: string;
   /** Public URL of the PDF document that MSG91/WhatsApp will fetch and deliver */
