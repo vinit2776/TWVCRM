@@ -10,7 +10,7 @@ export const BRAND_TEAL: [number, number, number] = [1, 94, 101];
 export const BRAND_GREEN: [number, number, number] = [0, 174, 108];
 export const BRAND_DARK: [number, number, number] = [26, 27, 30];
 
-export const COMPANY_NAME = "SREE DESIGN INFRASTRUCTURE PVT LTD";
+export const COMPANY_NAME = "SREE DESIGN INFRASTRUCTURE PRIVATE LIMITED";
 export const BRAND_NAME = "The WorkVilla";
 export const COMPANY_ADDRESS = [
   "Prakash Presidium, 110, Mahatma Gandhi Road,",

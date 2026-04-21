@@ -129,8 +129,10 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
       lessee_signatory_designation: String(vars.lessee_signatory_designation || ""),
       witness_1_name: String(vars.witness_1_name || ""),
       witness_1_aadhaar_last4: String(vars.witness_1_aadhaar_last4 || ""),
+      witness_1_mobile: String(vars.witness_1_mobile || ""),
       witness_2_name: String(vars.witness_2_name || ""),
       witness_2_aadhaar_last4: String(vars.witness_2_aadhaar_last4 || ""),
+      witness_2_mobile: String(vars.witness_2_mobile || ""),
       estamp_value: String(vars.estamp_value || ""),
     });
     setEditOpen(true);
@@ -181,8 +183,10 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
         lessee_signatory_designation: editVars.lessee_signatory_designation,
         witness_1_name: editVars.witness_1_name,
         witness_1_aadhaar_last4: editVars.witness_1_aadhaar_last4,
+        witness_1_mobile: editVars.witness_1_mobile,
         witness_2_name: editVars.witness_2_name,
         witness_2_aadhaar_last4: editVars.witness_2_aadhaar_last4,
+        witness_2_mobile: editVars.witness_2_mobile,
         estamp_value: estampValue,
         estamp_value_formatted: estampValue ? fmtCurrency(estampValue) : undefined,
       };
@@ -531,12 +535,20 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
               <Input id="ll-w1-aadhaar" maxLength={4} value={editVars.witness_1_aadhaar_last4} onChange={(e) => setEditVars((v) => ({ ...v, witness_1_aadhaar_last4: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
+              <Label htmlFor="ll-w1-mobile">Witness 1 Aadhaar Linked Mobile</Label>
+              <Input id="ll-w1-mobile" maxLength={10} value={editVars.witness_1_mobile} onChange={(e) => setEditVars((v) => ({ ...v, witness_1_mobile: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
               <Label htmlFor="ll-w2-name">Witness 2 Name</Label>
               <Input id="ll-w2-name" value={editVars.witness_2_name} onChange={(e) => setEditVars((v) => ({ ...v, witness_2_name: e.target.value }))} />
             </div>
             <div className="space-y-1.5">
               <Label htmlFor="ll-w2-aadhaar">Witness 2 Aadhaar (last 4)</Label>
               <Input id="ll-w2-aadhaar" maxLength={4} value={editVars.witness_2_aadhaar_last4} onChange={(e) => setEditVars((v) => ({ ...v, witness_2_aadhaar_last4: e.target.value }))} />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="ll-w2-mobile">Witness 2 Aadhaar Linked Mobile</Label>
+              <Input id="ll-w2-mobile" maxLength={10} value={editVars.witness_2_mobile} onChange={(e) => setEditVars((v) => ({ ...v, witness_2_mobile: e.target.value }))} />
             </div>
           </div>
           <p className="text-xs text-muted-foreground mt-2">
