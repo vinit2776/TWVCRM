@@ -182,11 +182,11 @@ function BudgetBar({ row }: { row: BudgetRow }) {
   const remaining = hasBudget ? Math.max(0, monthly_budget! - spent_this_month) : 0;
   const overAmount = isOver ? spent_this_month - monthly_budget! : 0;
 
-  // Pace: expected linear spend for today's day-of-month.
+  // Pace: expected linear spend for today's day-of-month
   const now = new Date();
   const daysInMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
   const pacePct = (now.getDate() / daysInMonth) * 100;
-  const paceDelta = pacePct - rawPct; // positive = ahead of pace (good)
+  const paceDelta = pacePct - rawPct; // positive = under budget relative to pace (good)
 
   const fillColor = !hasBudget
     ? "bg-gray-300"
@@ -198,7 +198,7 @@ function BudgetBar({ row }: { row: BudgetRow }) {
     ? "bg-amber-500"
     : "bg-emerald-500";
 
-  const amountColor = !hasBudget
+  const pctColor = !hasBudget
     ? "text-muted-foreground"
     : isOver
     ? "text-red-700"
@@ -208,19 +208,18 @@ function BudgetBar({ row }: { row: BudgetRow }) {
     ? "text-amber-700"
     : "text-emerald-700";
 
-  // Pace as a text badge — no hairline on the bar
-  const paceBadge = hasBudget && !isOver
+  const paceLabel = hasBudget && !isOver
     ? Math.abs(paceDelta) < 3
-      ? <span className="text-emerald-700 font-medium">● On pace</span>
+      ? { text: "On pace", color: "text-emerald-600" }
       : paceDelta > 0
-        ? <span className="text-emerald-700 font-medium">● {Math.round(paceDelta)}% ahead</span>
-        : <span className="text-amber-700 font-medium">⚠ {Math.round(-paceDelta)}% behind</span>
+      ? { text: `${Math.round(paceDelta)}% ahead of pace`, color: "text-emerald-600" }
+      : { text: `${Math.round(-paceDelta)}% behind pace`, color: "text-amber-600" }
     : null;
 
   return (
-    <div className="space-y-1.5">
+    <div className="space-y-2">
       {/* Row 1: dept name (left) + spend / budget (right) */}
-      <div className="flex items-baseline justify-between gap-2">
+      <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5 min-w-0">
           <span className="text-base shrink-0" aria-hidden>{DEPT_EMOJI[department]}</span>
           <span className="font-semibold text-sm truncate">{DEPT_SHORT[department] ?? department}</span>
@@ -228,52 +227,65 @@ function BudgetBar({ row }: { row: BudgetRow }) {
         <div className="text-xs tabular-nums shrink-0">
           {hasBudget ? (
             <>
-              <span className={`font-semibold ${amountColor}`}>{formatCurrency(spent_this_month)}</span>
+              <span className={`font-semibold ${pctColor}`}>{formatCurrency(spent_this_month)}</span>
               <span className="text-muted-foreground"> / {formatCurrency(monthly_budget!)}</span>
             </>
           ) : (
-            <span className="text-muted-foreground italic">No budget set</span>
+            <span className="text-muted-foreground italic text-[11px]">No budget set</span>
           )}
         </div>
       </div>
 
-      {/* Row 2: single clean progress bar */}
-      <div className="h-2 w-full rounded-full bg-gray-100 overflow-hidden">
+      {/* Row 2: thick bar with pace tick mark */}
+      <div className="relative h-4 w-full rounded-full bg-gray-100 overflow-hidden">
         {hasBudget ? (
-          <div
-            className={`h-full rounded-full transition-[width] duration-500 ${fillColor}`}
-            style={{ width: `${fillPct}%` }}
-          />
+          <>
+            {/* Fill */}
+            <div
+              className={`h-full rounded-full transition-[width] duration-500 ${fillColor}`}
+              style={{ width: `${fillPct}%` }}
+            />
+            {/* Pace tick — white line with subtle outline so it reads on both fill and bg */}
+            <div
+              className="absolute top-0 bottom-0 w-0.5 bg-white/80"
+              style={{
+                left: `${Math.min(Math.max(pacePct, 1), 98)}%`,
+                boxShadow: "0 0 0 1px rgba(0,0,0,0.13)",
+              }}
+            />
+          </>
         ) : (
           <div className="h-full w-full rounded-full border border-dashed border-gray-300" />
         )}
       </div>
 
-      {/* Row 3: % + status badge (left) · AMC + remaining (right) */}
-      <div className="flex items-center justify-between gap-2 text-[11px]">
+      {/* Row 3: bold % + pace label (left) · AMC · remaining (right) */}
+      <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
           {hasBudget && (
-            <span className={`font-bold tabular-nums ${amountColor}`}>{Math.round(rawPct)}%</span>
+            <span className={`text-sm font-bold tabular-nums ${pctColor}`}>
+              {Math.round(rawPct)}%
+            </span>
           )}
           {isOver ? (
             <span className="bg-red-100 text-red-700 font-semibold px-1.5 py-0.5 rounded-full text-[10px]">
               ↑ {formatCurrency(overAmount)} over budget
             </span>
-          ) : (
-            paceBadge
-          )}
+          ) : paceLabel ? (
+            <span className={`text-[11px] font-medium ${paceLabel.color}`}>{paceLabel.text}</span>
+          ) : null}
           {!hasBudget && (
-            <span className="text-muted-foreground italic">{formatCurrency(spent_this_month)} spent</span>
+            <span className="text-[11px] text-muted-foreground">{formatCurrency(spent_this_month)} spent</span>
           )}
         </div>
-        <div className="flex items-center gap-2 text-muted-foreground shrink-0">
+        <div className="flex items-center gap-3 text-[11px] shrink-0">
           {amc_spent_this_month > 0 && (
-            <span className="text-purple-600" title="AMC / Annual Contract spend — not counted in budget">
+            <span className="text-purple-600 font-medium" title="AMC / Annual Contract — excluded from budget">
               +{formatCurrency(amc_spent_this_month)} AMC
             </span>
           )}
           {hasBudget && !isOver && (
-            <span>{formatCurrency(remaining)} left</span>
+            <span className="font-medium text-foreground">{formatCurrency(remaining)} left</span>
           )}
         </div>
       </div>

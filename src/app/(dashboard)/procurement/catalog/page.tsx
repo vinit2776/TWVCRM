@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Archive, Pencil, Plus, X, Check, Search, History, AlertTriangle, TrendingUp, TrendingDown, Minus } from "lucide-react";
+import { Archive, Pencil, Plus, X, Check, Search, History, AlertTriangle, TrendingUp, TrendingDown, Minus, Sparkles, CheckCheck, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -68,6 +68,10 @@ function detectDuplicates(items: ProcurementItem[]): Set<string> {
 
 export default function CatalogPage() {
   const router = useRouter();
+  const [activeTab, setActiveTab] = useState<"catalog" | "suggested">("catalog");
+  const [userRole, setUserRole] = useState<string>("");
+
+  // Catalog state
   const [items, setItems] = useState<ProcurementItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [deptFilter, setDeptFilter] = useState("");
@@ -85,6 +89,21 @@ export default function CatalogPage() {
   const [historyData, setHistoryData] = useState<PriceHistoryEntry[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
 
+  // Suggested items state
+  const [suggestedItems, setSuggestedItems] = useState<ProcurementItem[]>([]);
+  const [suggestedLoading, setSuggestedLoading] = useState(false);
+  const [activatingItem, setActivatingItem] = useState<ProcurementItem | null>(null);
+  const [activateForm, setActivateForm] = useState({ name: "", standard_price: "", gst_rate: "0", description: "" });
+  const [activating, setActivating] = useState(false);
+
+  // ── Role fetch ───────────────────────────────────────────────────────────────
+
+  useEffect(() => {
+    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role || ""));
+  }, []);
+
+  const isPrivileged = ["admin", "manager"].includes(userRole);
+
   // ── Data fetching ────────────────────────────────────────────────────────────
 
   const fetchItems = useCallback(async () => {
@@ -99,6 +118,17 @@ export default function CatalogPage() {
   }, [deptFilter, includeInactive, search]);
 
   useEffect(() => { fetchItems(); }, [fetchItems]);
+
+  const fetchSuggested = useCallback(async () => {
+    setSuggestedLoading(true);
+    const res = await fetch("/api/procurement/items?suggested=true");
+    if (res.ok) { const json = await res.json(); setSuggestedItems(json.data || []); }
+    setSuggestedLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "suggested") fetchSuggested();
+  }, [activeTab, fetchSuggested]);
 
   // Always fetch all items (without search filter) to detect duplicates globally
   const [allItems, setAllItems] = useState<ProcurementItem[]>([]);
@@ -188,7 +218,61 @@ export default function CatalogPage() {
     }
   }
 
-  // ── Grouping ─────────────────────────────────────────────────────────────────
+  // ── Suggested items — activate / dismiss ─────────────────────────────────────
+
+  function openActivate(item: ProcurementItem) {
+    setActivatingItem(item);
+    setActivateForm({
+      name: item.name,
+      standard_price: item.standard_price != null ? String(item.standard_price) : "",
+      gst_rate: item.gst_rate != null ? String(item.gst_rate) : "0",
+      description: item.description || "",
+    });
+  }
+
+  async function handleActivate() {
+    if (!activatingItem) return;
+    if (!activateForm.name.trim()) { toast.error("Item name is required"); return; }
+    setActivating(true);
+    const res = await fetch(`/api/procurement/items/${activatingItem.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        name: activateForm.name.trim(),
+        standard_price: activateForm.standard_price ? Number(activateForm.standard_price) : undefined,
+        gst_rate: Number(activateForm.gst_rate) || 0,
+        description: activateForm.description || undefined,
+        is_active: true,
+        is_suggested: false,
+      }),
+    });
+    if (res.ok) {
+      toast.success(`"${activateForm.name.trim()}" added to the catalog`);
+      setActivatingItem(null);
+      fetchSuggested();
+      fetchItems();
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Failed to activate item");
+    }
+    setActivating(false);
+  }
+
+  async function handleDismissSuggestion(item: ProcurementItem) {
+    const res = await fetch(`/api/procurement/items/${item.id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ is_suggested: false }),
+    });
+    if (res.ok) {
+      toast.success("Suggestion dismissed");
+      fetchSuggested();
+    } else {
+      toast.error("Failed to dismiss suggestion");
+    }
+  }
+
+  // ── Grouping ──────────────────────────────────────────────────────────────────
 
   const grouped = PROCUREMENT_DEPARTMENTS.reduce<Record<string, ProcurementItem[]>>((acc, dept) => {
     acc[dept] = items.filter((i) => i.department === dept);
@@ -217,170 +301,108 @@ export default function CatalogPage() {
         </Button>
       </div>
 
-      {/* Duplicate names warning banner */}
-      {hasDuplicates && (
-        <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
-          <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
-          <div className="flex-1 text-sm">
-            <p className="font-semibold text-amber-800">Duplicate item names detected</p>
-            <p className="text-amber-700 mt-0.5">
-              The following names appear more than once and must be made unique before a uniqueness constraint can be enforced:{" "}
-              {[...duplicateNames].map((n, i) => (
-                <span key={n}>
-                  <span className="font-medium">&quot;{n}&quot;</span>
-                  {i < duplicateNames.size - 1 ? ", " : ""}
-                </span>
-              ))}
-            </p>
-            <p className="text-amber-600 mt-1 text-xs">
-              Edit or deactivate the duplicate entries using the pencil icon below.
-            </p>
-          </div>
+      {/* Tab bar — Suggested tab only for admin/manager */}
+      {isPrivileged && (
+        <div className="flex gap-1 border-b pb-0">
+          <button
+            onClick={() => setActiveTab("catalog")}
+            className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t transition-colors border-b-2 -mb-px ${
+              activeTab === "catalog"
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Archive className="h-3.5 w-3.5" />
+            Catalog
+          </button>
+          <button
+            onClick={() => setActiveTab("suggested")}
+            className={`flex items-center gap-1.5 px-4 py-2 text-sm font-medium rounded-t transition-colors border-b-2 -mb-px ${
+              activeTab === "suggested"
+                ? "border-primary text-primary"
+                : "border-transparent text-muted-foreground hover:text-foreground"
+            }`}
+          >
+            <Sparkles className="h-3.5 w-3.5" />
+            Suggested
+            {suggestedItems.length > 0 && (
+              <span className="ml-1 bg-orange-100 text-orange-700 text-[10px] font-bold rounded-full px-1.5 py-0.5 leading-none">
+                {suggestedItems.length}
+              </span>
+            )}
+          </button>
         </div>
       )}
 
-      {/* Filters */}
-      <div className="flex flex-col sm:flex-row gap-2">
-        <div className="relative flex-1 max-w-sm">
-          <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Search items..."
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-9"
-          />
-          {search && (
-            <button
-              onClick={() => setSearch("")}
-              className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-            >
-              <X className="h-4 w-4" />
-            </button>
-          )}
-        </div>
-        <Select value={deptFilter} onValueChange={(v) => setDeptFilter(v === "all" ? "" : v)}>
-          <SelectTrigger className="w-[200px]"><SelectValue placeholder="All Departments" /></SelectTrigger>
-          <SelectContent>
-            <SelectItem value="all">All Departments</SelectItem>
-            {PROCUREMENT_DEPARTMENTS.map((d) => (
-              <SelectItem key={d} value={d}>{PROCUREMENT_DEPARTMENT_LABELS[d]}</SelectItem>
-            ))}
-          </SelectContent>
-        </Select>
-        <Button
-          variant={includeInactive ? "default" : "outline"}
-          size="sm"
-          onClick={() => setIncludeInactive((v) => !v)}
-        >
-          {includeInactive ? "Hide Inactive" : "Show Inactive"}
-        </Button>
-      </div>
-
-      {/* Content */}
-      {loading ? <TableSkeleton rows={8} /> : items.length === 0 ? (
-        <EmptyState
-          icon={Archive}
-          title="No items found"
-          description="The item catalog is pre-seeded. Adjust filters or add a new item."
-        />
-      ) : (
-        <div className="space-y-6">
-          {activeDepts.map((dept) => {
-            const deptItems = grouped[dept] || [];
-            if (deptItems.length === 0) return null;
-            return (
-              <Card key={dept}>
-                <CardHeader className="pb-2">
-                  <CardTitle className="flex items-center gap-2 text-base">
-                    <Badge className={PROCUREMENT_DEPARTMENT_COLORS[dept]}>
-                      {PROCUREMENT_DEPARTMENT_LABELS[dept]}
-                    </Badge>
-                    <span className="text-muted-foreground text-sm font-normal">
-                      {deptItems.length} item{deptItems.length !== 1 ? "s" : ""}
-                    </span>
-                  </CardTitle>
-                </CardHeader>
+      {/* ── Suggested Items View ── */}
+      {activeTab === "suggested" && isPrivileged && (
+        <div className="space-y-3 pt-1">
+          {suggestedLoading ? (
+            <TableSkeleton rows={4} />
+          ) : suggestedItems.length === 0 ? (
+            <EmptyState
+              icon={Sparkles}
+              title="No pending suggestions"
+              description="When staff add custom items to purchase requests and check 'Suggest adding to catalog', they will appear here for your review."
+            />
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground">
+                {suggestedItems.length} item{suggestedItems.length !== 1 ? "s" : ""} pending review — activate to publish, or dismiss to discard.
+              </p>
+              <Card>
                 <CardContent className="p-0">
                   <div className="overflow-x-auto">
                     <table className="w-full text-sm">
-                      <thead className="border-y bg-muted/30">
+                      <thead className="border-b bg-muted/30">
                         <tr>
-                          <th className="text-left px-4 py-2 font-medium">Item Name</th>
-                          <th className="text-left px-4 py-2 font-medium hidden sm:table-cell">Type</th>
-                          <th className="text-left px-4 py-2 font-medium">Unit</th>
-                          <th className="text-left px-4 py-2 font-medium hidden md:table-cell">Std. Price</th>
-                          <th className="text-left px-4 py-2 font-medium hidden md:table-cell">GST</th>
-                          <th className="text-left px-4 py-2 font-medium">Status</th>
-                          <th className="px-4 py-2" />
+                          <th className="text-left px-4 py-2.5 font-medium">Item Name</th>
+                          <th className="text-left px-4 py-2.5 font-medium hidden sm:table-cell">Dept</th>
+                          <th className="text-left px-4 py-2.5 font-medium">Unit</th>
+                          <th className="text-left px-4 py-2.5 font-medium hidden md:table-cell">Suggested Price</th>
+                          <th className="text-left px-4 py-2.5 font-medium hidden md:table-cell">Suggested By</th>
+                          <th className="px-4 py-2.5" />
                         </tr>
                       </thead>
                       <tbody>
-                        {deptItems.map((item) => {
-                          const isDuplicate = duplicateNames.has(item.name.trim().toLowerCase());
+                        {suggestedItems.map((item) => {
+                          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                          const creator = (item as any).creator;
                           return (
-                            <tr key={item.id} className={`border-b last:border-0 hover:bg-muted/40 cursor-pointer ${isDuplicate ? "bg-amber-50/40" : ""}`} onClick={() => router.push(`/procurement/catalog/${item.id}`)}>
-                              <td className="px-4 py-2.5">
-                                <div className="flex items-center gap-2">
-                                  <span className={item.is_active ? "" : "text-muted-foreground line-through"}>
-                                    {item.name}
-                                  </span>
-                                  {isDuplicate && (
-                                    <Badge className="text-[10px] bg-amber-100 text-amber-800 border-amber-200 border px-1.5 py-0">
-                                      duplicate
-                                    </Badge>
-                                  )}
-                                </div>
-                              </td>
-                              <td className="px-4 py-2.5 hidden sm:table-cell">
-                                <Badge className={item.item_type === "service" ? "bg-blue-100 text-blue-800" : "bg-gray-100 text-gray-700"}>
-                                  {ITEM_TYPE_LABELS[item.item_type ?? "goods"]}
+                            <tr key={item.id} className="border-b last:border-0 hover:bg-muted/30">
+                              <td className="px-4 py-3 font-medium">{item.name}</td>
+                              <td className="px-4 py-3 hidden sm:table-cell">
+                                <Badge className={PROCUREMENT_DEPARTMENT_COLORS[item.department]}>
+                                  {PROCUREMENT_DEPARTMENT_LABELS[item.department]}
                                 </Badge>
                               </td>
-                              <td className="px-4 py-2.5 text-muted-foreground">{item.unit}</td>
-                              <td className="px-4 py-2.5 hidden md:table-cell text-muted-foreground">
+                              <td className="px-4 py-3 text-muted-foreground">{item.unit}</td>
+                              <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
                                 {item.standard_price != null ? formatCurrency(item.standard_price) : "—"}
                               </td>
-                              <td className="px-4 py-2.5 hidden md:table-cell text-muted-foreground">
-                                {item.gst_rate ? `${item.gst_rate}%` : "—"}
+                              <td className="px-4 py-3 hidden md:table-cell text-muted-foreground text-xs">
+                                {creator?.full_name || "—"}
+                                <span className="block text-muted-foreground/60">{formatDate(item.created_at)}</span>
                               </td>
-                              <td className="px-4 py-2.5">
-                                <Badge className={item.is_active ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-500"}>
-                                  {item.is_active ? "Active" : "Inactive"}
-                                </Badge>
-                              </td>
-                              <td className="px-4 py-2.5">
-                                <div className="flex items-center gap-0.5">
-                                  {/* Price history */}
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-1.5">
                                   <Button
                                     size="sm"
-                                    variant="ghost"
-                                    onClick={(e) => { e.stopPropagation(); openPriceHistory(item); }}
-                                    title="Price history"
-                                    className="h-7 w-7 p-0"
+                                    variant="outline"
+                                    className="h-7 text-xs border-green-300 text-green-700 hover:bg-green-50"
+                                    onClick={() => openActivate(item)}
                                   >
-                                    <History className="h-3.5 w-3.5 text-muted-foreground" />
+                                    <CheckCheck className="h-3 w-3 mr-1" />
+                                    Activate
                                   </Button>
-                                  {/* Edit */}
                                   <Button
                                     size="sm"
                                     variant="ghost"
-                                    onClick={(e) => { e.stopPropagation(); openEdit(item); }}
-                                    title="Edit item"
-                                    className="h-7 w-7 p-0"
+                                    className="h-7 w-7 p-0 text-destructive hover:text-destructive"
+                                    onClick={() => handleDismissSuggestion(item)}
+                                    title="Dismiss suggestion"
                                   >
-                                    <Pencil className="h-3 w-3 text-muted-foreground" />
-                                  </Button>
-                                  {/* Toggle active */}
-                                  <Button
-                                    size="sm"
-                                    variant="ghost"
-                                    onClick={(e) => { e.stopPropagation(); toggleActive(item); }}
-                                    title={item.is_active ? "Deactivate" : "Reactivate"}
-                                    className="h-7 w-7 p-0"
-                                  >
-                                    {item.is_active
-                                      ? <X className="h-3 w-3 text-red-500" />
-                                      : <Check className="h-3 w-3 text-green-600" />}
+                                    <Trash2 className="h-3.5 w-3.5" />
                                   </Button>
                                 </div>
                               </td>
@@ -392,9 +414,194 @@ export default function CatalogPage() {
                   </div>
                 </CardContent>
               </Card>
-            );
-          })}
+            </>
+          )}
         </div>
+      )}
+
+      {/* ── Catalog View ── */}
+      {activeTab === "catalog" && (
+        <>
+          {/* Duplicate names warning banner */}
+          {hasDuplicates && (
+            <div className="flex items-start gap-3 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="flex-1 text-sm">
+                <p className="font-semibold text-amber-800">Duplicate item names detected</p>
+                <p className="text-amber-700 mt-0.5">
+                  The following names appear more than once and must be made unique before a uniqueness constraint can be enforced:{" "}
+                  {[...duplicateNames].map((n, i) => (
+                    <span key={n}>
+                      <span className="font-medium">&quot;{n}&quot;</span>
+                      {i < duplicateNames.size - 1 ? ", " : ""}
+                    </span>
+                  ))}
+                </p>
+                <p className="text-amber-600 mt-1 text-xs">
+                  Edit or deactivate the duplicate entries using the pencil icon below.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Filters */}
+          <div className="flex flex-col sm:flex-row gap-2">
+            <div className="relative flex-1 max-w-sm">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
+              <Input
+                placeholder="Search items..."
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                className="pl-9"
+              />
+              {search && (
+                <button
+                  onClick={() => setSearch("")}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              )}
+            </div>
+            <Select value={deptFilter} onValueChange={(v) => setDeptFilter(v === "all" ? "" : v)}>
+              <SelectTrigger className="w-[200px]"><SelectValue placeholder="All Departments" /></SelectTrigger>
+              <SelectContent>
+                <SelectItem value="all">All Departments</SelectItem>
+                {PROCUREMENT_DEPARTMENTS.map((d) => (
+                  <SelectItem key={d} value={d}>{PROCUREMENT_DEPARTMENT_LABELS[d]}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Button
+              variant={includeInactive ? "default" : "outline"}
+              size="sm"
+              onClick={() => setIncludeInactive((v) => !v)}
+            >
+              {includeInactive ? "Hide Inactive" : "Show Inactive"}
+            </Button>
+          </div>
+
+          {/* Content */}
+          {loading ? <TableSkeleton rows={8} /> : items.length === 0 ? (
+            <EmptyState
+              icon={Archive}
+              title="No items found"
+              description="The item catalog is pre-seeded. Adjust filters or add a new item."
+            />
+          ) : (
+            <div className="space-y-6">
+              {activeDepts.map((dept) => {
+                const deptItems = grouped[dept] || [];
+                if (deptItems.length === 0) return null;
+                return (
+                  <Card key={dept}>
+                    <CardHeader className="pb-2">
+                      <CardTitle className="flex items-center gap-2 text-base">
+                        <Badge className={PROCUREMENT_DEPARTMENT_COLORS[dept]}>
+                          {PROCUREMENT_DEPARTMENT_LABELS[dept]}
+                        </Badge>
+                        <span className="text-muted-foreground text-sm font-normal">
+                          {deptItems.length} item{deptItems.length !== 1 ? "s" : ""}
+                        </span>
+                      </CardTitle>
+                    </CardHeader>
+                    <CardContent className="p-0">
+                      <div className="overflow-x-auto">
+                        <table className="w-full text-sm">
+                          <thead className="border-y bg-muted/30">
+                            <tr>
+                              <th className="text-left px-4 py-2 font-medium">Item Name</th>
+                              <th className="text-left px-4 py-2 font-medium hidden sm:table-cell">Type</th>
+                              <th className="text-left px-4 py-2 font-medium">Unit</th>
+                              <th className="text-left px-4 py-2 font-medium hidden md:table-cell">Std. Price</th>
+                              <th className="text-left px-4 py-2 font-medium hidden md:table-cell">GST</th>
+                              <th className="text-left px-4 py-2 font-medium">Status</th>
+                              <th className="px-4 py-2" />
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {deptItems.map((item) => {
+                              const isDuplicate = duplicateNames.has(item.name.trim().toLowerCase());
+                              return (
+                                <tr key={item.id} className={`border-b last:border-0 hover:bg-muted/40 cursor-pointer ${isDuplicate ? "bg-amber-50/40" : ""}`} onClick={() => router.push(`/procurement/catalog/${item.id}`)}>
+                                  <td className="px-4 py-2.5">
+                                    <div className="flex items-center gap-2">
+                                      <span className={item.is_active ? "" : "text-muted-foreground line-through"}>
+                                        {item.name}
+                                      </span>
+                                      {isDuplicate && (
+                                        <Badge className="text-[10px] bg-amber-100 text-amber-800 border-amber-200 border px-1.5 py-0">
+                                          duplicate
+                                        </Badge>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="px-4 py-2.5 hidden sm:table-cell">
+                                    <Badge className={item.item_type === "service" ? "bg-blue-100 text-blue-800" : "bg-gray-100 text-gray-700"}>
+                                      {ITEM_TYPE_LABELS[item.item_type ?? "goods"]}
+                                    </Badge>
+                                  </td>
+                                  <td className="px-4 py-2.5 text-muted-foreground">{item.unit}</td>
+                                  <td className="px-4 py-2.5 hidden md:table-cell text-muted-foreground">
+                                    {item.standard_price != null ? formatCurrency(item.standard_price) : "—"}
+                                  </td>
+                                  <td className="px-4 py-2.5 hidden md:table-cell text-muted-foreground">
+                                    {item.gst_rate ? `${item.gst_rate}%` : "—"}
+                                  </td>
+                                  <td className="px-4 py-2.5">
+                                    <Badge className={item.is_active ? "bg-green-100 text-green-800" : "bg-gray-100 text-gray-500"}>
+                                      {item.is_active ? "Active" : "Inactive"}
+                                    </Badge>
+                                  </td>
+                                  <td className="px-4 py-2.5">
+                                    <div className="flex items-center gap-0.5">
+                                      {/* Price history */}
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={(e) => { e.stopPropagation(); openPriceHistory(item); }}
+                                        title="Price history"
+                                        className="h-7 w-7 p-0"
+                                      >
+                                        <History className="h-3.5 w-3.5 text-muted-foreground" />
+                                      </Button>
+                                      {/* Edit */}
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={(e) => { e.stopPropagation(); openEdit(item); }}
+                                        title="Edit item"
+                                        className="h-7 w-7 p-0"
+                                      >
+                                        <Pencil className="h-3 w-3 text-muted-foreground" />
+                                      </Button>
+                                      {/* Toggle active */}
+                                      <Button
+                                        size="sm"
+                                        variant="ghost"
+                                        onClick={(e) => { e.stopPropagation(); toggleActive(item); }}
+                                        title={item.is_active ? "Deactivate" : "Reactivate"}
+                                        className="h-7 w-7 p-0"
+                                      >
+                                        {item.is_active
+                                          ? <X className="h-3 w-3 text-red-500" />
+                                          : <Check className="h-3 w-3 text-green-600" />}
+                                      </Button>
+                                    </div>
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    </CardContent>
+                  </Card>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
 
       {/* ── Add / Edit Item Dialog ── */}
@@ -518,6 +725,70 @@ export default function CatalogPage() {
               {saving
                 ? (editItem ? "Saving..." : "Adding...")
                 : (editItem ? "Save Changes" : "Add Item")}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Activate Suggestion Dialog ── */}
+      <Dialog
+        open={!!activatingItem}
+        onOpenChange={(open) => { if (!open) setActivatingItem(null); }}
+      >
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CheckCheck className="h-4 w-4 text-green-600" />
+              Activate Catalog Item
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Review and adjust the details before publishing this item to the active catalog.
+            </p>
+            <div className="space-y-1">
+              <Label>Item Name *</Label>
+              <Input
+                value={activateForm.name}
+                onChange={(e) => setActivateForm((f) => ({ ...f, name: e.target.value }))}
+              />
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1">
+                <Label>Standard Price (₹) <span className="text-muted-foreground text-xs font-normal">optional</span></Label>
+                <Input
+                  type="number" min="0" step="0.01"
+                  value={activateForm.standard_price}
+                  onChange={(e) => setActivateForm((f) => ({ ...f, standard_price: e.target.value }))}
+                  placeholder="0.00"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label>GST Rate</Label>
+                <Select value={activateForm.gst_rate} onValueChange={(v) => setActivateForm((f) => ({ ...f, gst_rate: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {GST_RATES.map((r) => (
+                      <SelectItem key={r} value={String(r)}>{GST_RATE_LABELS[r]}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label>Notes</Label>
+              <Textarea
+                value={activateForm.description}
+                onChange={(e) => setActivateForm((f) => ({ ...f, description: e.target.value }))}
+                placeholder="Handling instructions, specifications..."
+                rows={2}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setActivatingItem(null)} disabled={activating}>Cancel</Button>
+            <Button onClick={handleActivate} disabled={activating} className="bg-green-700 hover:bg-green-800">
+              {activating ? "Publishing..." : "Publish to Catalog"}
             </Button>
           </DialogFooter>
         </DialogContent>

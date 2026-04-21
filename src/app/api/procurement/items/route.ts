@@ -11,6 +11,8 @@ const createItemSchema = z.object({
   standard_price: z.number().min(0).optional(),
   gst_rate: z.number().min(0).max(28).default(0),
   description: z.string().optional(),
+  is_active: z.boolean().optional(),
+  is_suggested: z.boolean().optional(),
 });
 
 export async function GET(request: NextRequest) {
@@ -23,14 +25,21 @@ export async function GET(request: NextRequest) {
   const search = searchParams.get("search");
   const itemType = searchParams.get("item_type");
   const includeInactive = searchParams.get("include_inactive") === "true";
+  const suggestedOnly = searchParams.get("suggested") === "true";
 
   let query = supabase
     .from("procurement_items")
-    .select("*", { count: "exact" })
+    .select("*, creator:users!procurement_items_created_by_fkey(id, full_name)", { count: "exact" })
     .order("department")
     .order("name");
 
-  if (!includeInactive) query = query.eq("is_active", true);
+  if (suggestedOnly) {
+    // Return only pending catalog suggestions (is_suggested=true, is_active=false)
+    query = query.eq("is_suggested", true).eq("is_active", false);
+  } else if (!includeInactive) {
+    // Normal catalog view: only active, non-suggested items
+    query = query.eq("is_active", true).eq("is_suggested", false);
+  }
   if (department) query = query.eq("department", department);
   if (itemType) query = query.eq("item_type", itemType);
   if (search?.trim()) query = query.ilike("name", `%${search.trim()}%`);
@@ -48,9 +57,8 @@ export async function POST(request: NextRequest) {
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
-  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Access denied" }, { status: 403 });
-  }
+
+  const isPrivileged = ["admin", "manager", "office_admin"].includes(dbUser.role);
 
   const body = await request.json();
   const parsed = createItemSchema.safeParse(body);
@@ -58,23 +66,43 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
-  // ── Uniqueness check (case-insensitive) ─────────────────────────────
-  const { data: existing } = await supabase
-    .from("procurement_items")
-    .select("id, name")
-    .ilike("name", parsed.data.name.trim())
-    .maybeSingle();
-
-  if (existing) {
-    return NextResponse.json(
-      { error: `An item named "${existing.name}" already exists in the catalog. Item names must be unique.` },
-      { status: 409 }
-    );
+  // Non-privileged users can only create catalog suggestions (is_active: false, is_suggested: true).
+  // Privileged users can create active catalog items directly.
+  if (!isPrivileged && parsed.data.is_suggested !== true) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
+
+  // Force suggestion mode for non-privileged users regardless of payload
+  const isSuggestion = !isPrivileged || parsed.data.is_suggested === true;
+  const insertIsActive = isSuggestion ? false : (parsed.data.is_active ?? true);
+  const insertIsSuggested = isSuggestion;
+
+  // ── Uniqueness check (case-insensitive, only for active catalog items) ─────
+  // Skip name collision check for suggestions — they may have the same name;
+  // admin will resolve duplicates during review.
+  if (!isSuggestion) {
+    const { data: existing } = await supabase
+      .from("procurement_items")
+      .select("id, name")
+      .ilike("name", parsed.data.name.trim())
+      .eq("is_active", true)
+      .eq("is_suggested", false)
+      .maybeSingle();
+
+    if (existing) {
+      return NextResponse.json(
+        { error: `An item named "${existing.name}" already exists in the catalog. Item names must be unique.` },
+        { status: 409 }
+      );
+    }
+  }
+
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  const { is_active: _ia, is_suggested: _is, ...coreData } = parsed.data;
 
   const { data: item, error } = await supabase
     .from("procurement_items")
-    .insert({ ...parsed.data, created_by: dbUser.id })
+    .insert({ ...coreData, is_active: insertIsActive, is_suggested: insertIsSuggested, created_by: dbUser.id })
     .select("*")
     .single();
 

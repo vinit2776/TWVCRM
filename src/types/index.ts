@@ -1526,6 +1526,7 @@ export interface ProcurementItem {
   gst_rate?: number;
   description?: string;
   is_active: boolean;
+  is_suggested: boolean;
   created_by?: string;
   created_at: string;
   updated_at: string;

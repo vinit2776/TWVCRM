@@ -12,6 +12,7 @@ const updateItemSchema = z.object({
   gst_rate: z.number().min(0).max(28).optional(),
   description: z.string().optional(),
   is_active: z.boolean().optional(),
+  is_suggested: z.boolean().optional(),
 });
 
 export async function GET(

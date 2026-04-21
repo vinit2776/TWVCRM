@@ -219,6 +219,8 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   };
   const [insights, setInsights] = useState<InsightsData | null>(null);
   const [insightsLoading, setInsightsLoading] = useState(false);
+  const [insightsError, setInsightsError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState("general");
   const [drillMonth, setDrillMonth] = useState<MonthBucket | null>(null);
   const [poFilter, setPoFilter] = useState<string>("all");
 
@@ -268,15 +270,38 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   }, [id]);
 
   const fetchInsights = useCallback(async () => {
-    if (insights) return;
+    if (insights || insightsLoading) return;
     setInsightsLoading(true);
-    const res = await fetch(`/api/procurement/vendors/${id}/insights`);
-    if (res.ok) {
-      const { data } = await res.json();
-      setInsights(data);
+    setInsightsError(null);
+    try {
+      const res = await fetch(`/api/procurement/vendors/${id}/insights`);
+      if (res.ok) {
+        const { data } = await res.json();
+        setInsights(data);
+      } else {
+        const err = await res.json().catch(() => null);
+        const msg = err?.error || `Failed to load analytics (${res.status})`;
+        setInsightsError(msg);
+        toast.error(msg);
+      }
+    } catch {
+      setInsightsError("Network error loading analytics");
+      toast.error("Network error loading analytics");
+    } finally {
+      setInsightsLoading(false);
     }
-    setInsightsLoading(false);
-  }, [id, insights]);
+  }, [id, insights, insightsLoading]);
+
+  // Trigger lazy-loads when tab changes (more reliable than onClick on each trigger)
+  useEffect(() => {
+    if ((activeTab === "po-analytics" || activeTab === "activity") && !insights && !insightsLoading) {
+      fetchInsights();
+    }
+    if (activeTab === "prices" && prices.length === 0 && !pricesLoading) {
+      fetchPrices();
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
 
   function openEdit() {
     if (!vendor) return;
@@ -404,7 +429,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
       </div>
 
       {/* Tabs */}
-      <Tabs defaultValue="general">
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
           <TabsTrigger value="general">General</TabsTrigger>
           <TabsTrigger value="bank">Bank Details</TabsTrigger>
@@ -417,19 +442,19 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
               ) : null;
             })()}
           </TabsTrigger>
-          <TabsTrigger value="prices" onClick={() => { if (prices.length === 0) fetchPrices(); }}>
+          <TabsTrigger value="prices">
             Price History
             {prices.length > 0 && (
               <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{prices.length}</Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="po-analytics" onClick={fetchInsights}>
+          <TabsTrigger value="po-analytics">
             PO Analytics
             {insights && (
               <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{insights.totalPoCount}</Badge>
             )}
           </TabsTrigger>
-          <TabsTrigger value="activity" onClick={fetchInsights}>
+          <TabsTrigger value="activity">
             Activity &amp; Insights
           </TabsTrigger>
         </TabsList>
@@ -686,6 +711,11 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
               {[...Array(3)].map((_, i) => (
                 <div key={i} className="animate-pulse bg-muted rounded-lg h-32" />
               ))}
+            </div>
+          ) : insightsError ? (
+            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+              <AlertCircle className="h-8 w-8 text-red-400" />
+              <p className="text-sm text-red-600">{insightsError}</p>
             </div>
           ) : !insights ? (
             <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
@@ -979,6 +1009,11 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                 <div key={i} className="animate-pulse bg-muted rounded-lg h-32" />
               ))}
             </div>
+          ) : insightsError ? (
+            <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
+              <AlertCircle className="h-8 w-8 text-red-400" />
+              <p className="text-sm text-red-600">{insightsError}</p>
+            </div>
           ) : !insights ? (
             <div className="flex flex-col items-center justify-center py-16 text-muted-foreground gap-2">
               <BarChart2 className="h-8 w-8" />
@@ -1011,10 +1046,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                     <CardTitle className="text-base">Monthly Spend (last 6 months)</CardTitle>
                     <button
                       className="text-xs text-primary hover:underline flex items-center gap-0.5"
-                      onClick={() => {
-                        const tab = document.querySelector('[data-value="po-analytics"]') as HTMLElement;
-                        tab?.click();
-                      }}
+                      onClick={() => setActiveTab("po-analytics")}
                     >
                       Full 12-month view →
                     </button>
