@@ -27,9 +27,11 @@ import {
   BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
   REJECTION_OUTCOME_LABELS, PO_ADVANCE_PAYMENT_MODE_LABELS,
   PROCUREMENT_DEPARTMENT_LABELS,
+  PAYMENT_BATCH_TYPE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import type { VendorBill } from "@/types";
+import { computeBatchDate, formatBatchDate } from "@/lib/payment-batch";
+import type { VendorBill, PaymentBatchType } from "@/types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -200,6 +202,7 @@ export default function VendorBillDetailPage() {
   const [approveType, setApproveType] = useState<"full" | "partial">("full");
   const [approveAmount, setApproveAmount] = useState("");
   const [approveNote, setApproveNote] = useState("");
+  const [batchType, setBatchType] = useState<PaymentBatchType | "">("");
 
   // Rejection dialog
   const [rejectDialog, setRejectDialog] = useState(false);
@@ -297,8 +300,12 @@ export default function VendorBillDetailPage() {
   };
 
   const handleApprove = async () => {
+    if (!batchType) {
+      toast.error("Select a payment batch schedule before approving");
+      return;
+    }
     setApproveLoading(true);
-    const body: Record<string, unknown> = { action: "approve" };
+    const body: Record<string, unknown> = { action: "approve", batch_type: batchType };
     if (approveType === "partial") {
       const amt = parseFloat(approveAmount);
       if (!approveAmount || isNaN(amt) || amt <= 0) {
@@ -319,6 +326,7 @@ export default function VendorBillDetailPage() {
       if (!res.ok) { toast.error(json.error || "Failed to approve invoice"); return; }
       toast.success(approveType === "partial" ? "Invoice partially approved" : "Invoice approved");
       setApproveDialog(false);
+      setBatchType("");
       await fetchAll();
     } finally {
       setApproveLoading(false);
@@ -1357,6 +1365,41 @@ export default function VendorBillDetailPage() {
             <p className="text-sm text-muted-foreground">
               Invoice total: <strong>{formatCurrency(Number(bill.total_amount))}</strong>
             </p>
+
+            {/* ── Payment Batch Schedule ───────────────────────── */}
+            <div className="space-y-2">
+              <Label>
+                Payment Batch Schedule <span className="text-red-500">*</span>
+              </Label>
+              <p className="text-xs text-muted-foreground -mt-1">
+                When should accounts process this payment?
+              </p>
+              <div className="grid grid-cols-3 gap-2">
+                {(["immediate", "15th", "25th"] as PaymentBatchType[]).map((bt) => {
+                  const d = computeBatchDate(bt);
+                  const dateStr = formatBatchDate(d);
+                  const isSelected = batchType === bt;
+                  return (
+                    <button
+                      key={bt}
+                      type="button"
+                      onClick={() => setBatchType(bt)}
+                      className={`rounded-lg border px-3 py-3 text-left transition-colors ${
+                        isSelected
+                          ? "border-blue-500 bg-blue-50 text-blue-900"
+                          : "border-muted hover:bg-muted/50"
+                      }`}
+                    >
+                      <p className="text-sm font-semibold">{PAYMENT_BATCH_TYPE_LABELS[bt]}</p>
+                      <p className={`text-xs mt-0.5 ${isSelected ? "text-blue-700" : "text-muted-foreground"}`}>
+                        {dateStr}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
             <div className="space-y-2">
               <Label>Approval Type</Label>
               <div className="flex gap-3">

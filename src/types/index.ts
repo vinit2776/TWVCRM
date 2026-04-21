@@ -1477,6 +1477,20 @@ export type PoStatus = "pending" | "ordered" | "partially_received" | "received"
 export type BillPaymentStatus = "unpaid" | "partially_paid" | "paid";
 export type BillApprovalStatus = "pending" | "approved" | "rejected";
 export type RejectionOutcome = "return" | "replacement" | "void";
+export type PaymentBatchType = "immediate" | "15th" | "25th";
+
+export interface VendorBillBatchChange {
+  id: string;
+  vendor_bill_id: string;
+  changed_by?: string;
+  changed_at: string;
+  old_batch_type?: PaymentBatchType | null;
+  new_batch_type?: PaymentBatchType | null;
+  old_batch_date?: string | null;
+  new_batch_date?: string | null;
+  reason?: string | null;
+  changer?: { id: string; full_name?: string } | null;
+}
 
 export interface ProcurementVendor {
   id: string;
@@ -1738,6 +1752,11 @@ export interface VendorBill {
   approved_amount_note?: string | null;
   rejection_reason?: string;
   rejection_outcome?: RejectionOutcome;
+  // Payment batch scheduling
+  payment_batch_type?: PaymentBatchType | null;
+  payment_batch_date?: string | null;
+  payment_batch_assigned_by?: string | null;
+  payment_batch_assigned_at?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -1745,6 +1764,7 @@ export interface VendorBill {
   procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
   purchase_orders?: Pick<PurchaseOrder, "id" | "po_number" | "po_type"> | null;
   approver?: { id: string; full_name?: string } | null;
+  vendor_bill_batch_changes?: VendorBillBatchChange[];
   vendor_bill_payments?: Array<{
     id: string; amount: number; payment_mode: string;
     payment_reference: string | null; payment_date: string;

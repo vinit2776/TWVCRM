@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
+import { computeBatchDate, toISODateString } from "@/lib/payment-batch";
 import { z } from "zod";
 
 const BANK_MODES = ["bank_transfer", "neft", "rtgs", "imps", "cheque"] as const;
@@ -21,6 +22,12 @@ const patchBillSchema = z.discriminatedUnion("action", [
     action: z.literal("approve"),
     approved_amount: z.number().positive().nullish(),
     approved_amount_note: z.string().nullish(),
+    batch_type: z.enum(["immediate", "15th", "25th"]),
+  }),
+  z.object({
+    action: z.literal("override_batch"),
+    batch_type: z.enum(["immediate", "15th", "25th"]),
+    reason: z.string().nullish(),
   }),
   z.object({
     action: z.literal("approve_balance"),
@@ -50,7 +57,8 @@ export async function GET(
       `*, procurement_vendors(id, name, contact_name, contact_phone),
        purchase_orders(id, po_number, status, po_type, advance_status, advance_amount, advance_payment_mode, advance_payment_reference, advance_payment_date),
        approver:users!vendor_bills_approved_by_fkey(id, full_name),
-       vendor_bill_payments(id, amount, payment_mode, payment_reference, payment_date, notes, created_at, recorder:users!vendor_bill_payments_recorded_by_fkey(id, full_name))`
+       vendor_bill_payments(id, amount, payment_mode, payment_reference, payment_date, notes, created_at, recorder:users!vendor_bill_payments_recorded_by_fkey(id, full_name)),
+       vendor_bill_batch_changes(id, changed_at, old_batch_type, new_batch_type, old_batch_date, new_batch_date, reason, changer:users!vendor_bill_batch_changes_changed_by_fkey(id, full_name))`
     )
     .eq("id", id)
     .single();
@@ -206,6 +214,8 @@ export async function PATCH(
 
       const isPartialApproval = approvedAmt !== null && approvedAmt < Number(bill.total_amount);
 
+      const batchDate = computeBatchDate(parsed.data.batch_type);
+
       updatePayload = {
         approval_status: "approved",
         approved_by: dbUser.id,
@@ -215,6 +225,10 @@ export async function PATCH(
         approved_amount_note: parsed.data.approved_amount_note ?? null,
         rejection_reason: null,
         rejection_outcome: null,
+        payment_batch_type: parsed.data.batch_type,
+        payment_batch_date: toISODateString(batchDate),
+        payment_batch_assigned_by: dbUser.id,
+        payment_batch_assigned_at: new Date().toISOString(),
       };
 
       // For goods POs: advance status to invoice_approved
@@ -243,6 +257,43 @@ export async function PATCH(
         tag: `bill-approval-${id}`,
       }).catch((err) => console.error("[push] approve notification failed:", err));
 
+      break;
+    }
+
+    case "override_batch": {
+      // Any of: admin, manager, accounts can re-slot a batch date
+      const canOverride = ["admin", "manager", "accounts"].includes(dbUser.role);
+      if (!canOverride) {
+        return NextResponse.json({ error: "Only admin, manager or accounts can change the payment batch" }, { status: 403 });
+      }
+      if (bill.approval_status !== "approved") {
+        return NextResponse.json({ error: "Only approved bills can have their batch date changed" }, { status: 422 });
+      }
+      if (bill.payment_status === "paid") {
+        return NextResponse.json({ error: "Paid bills cannot be re-scheduled" }, { status: 422 });
+      }
+
+      const newBatchDate = computeBatchDate(parsed.data.batch_type);
+      const newBatchDateStr = toISODateString(newBatchDate);
+
+      // Log the change before updating
+      await supabase.from("vendor_bill_batch_changes").insert({
+        vendor_bill_id: id,
+        changed_by: dbUser.id,
+        changed_at: new Date().toISOString(),
+        old_batch_type: bill.payment_batch_type ?? null,
+        new_batch_type: parsed.data.batch_type,
+        old_batch_date: bill.payment_batch_date ?? null,
+        new_batch_date: newBatchDateStr,
+        reason: parsed.data.reason ?? null,
+      });
+
+      updatePayload = {
+        payment_batch_type: parsed.data.batch_type,
+        payment_batch_date: newBatchDateStr,
+        payment_batch_assigned_by: dbUser.id,
+        payment_batch_assigned_at: new Date().toISOString(),
+      };
       break;
     }
 

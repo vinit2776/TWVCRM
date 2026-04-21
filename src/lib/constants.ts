@@ -1343,6 +1343,21 @@ export const REJECTION_OUTCOME_LABELS: Record<string, string> = {
   void: "Void (Service Invoice)",
 };
 
+// Payment Batch Scheduling
+export const PAYMENT_BATCH_TYPES = ["immediate", "15th", "25th"] as const;
+
+export const PAYMENT_BATCH_TYPE_LABELS: Record<string, string> = {
+  immediate: "Immediate",
+  "15th": "15th of Month",
+  "25th": "25th of Month",
+};
+
+export const PAYMENT_BATCH_TYPE_COLORS: Record<string, string> = {
+  immediate: "bg-blue-100 text-blue-800",
+  "15th": "bg-violet-100 text-violet-800",
+  "25th": "bg-indigo-100 text-indigo-800",
+};
+
 export const ITEM_TYPES = ["goods", "service"] as const;
 export type ItemType = (typeof ITEM_TYPES)[number];
 
