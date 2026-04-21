@@ -223,28 +223,34 @@ export function EmailDocumentDialog({
 
               {recipients.length > 0 && (
                 <div className="flex flex-wrap gap-2">
-                  {recipients.map((email) => (
-                    <Badge
-                      key={email}
-                      variant="secondary"
-                      className="flex items-center gap-1 px-2 py-1"
-                    >
-                      {email}
-                      <button
-                        type="button"
-                        onClick={() => removeRecipient(email)}
-                        className="ml-1 rounded-full hover:bg-muted p-0.5"
+                  {recipients.map((email, idx) => {
+                    const isPrimary = idx === 0;
+                    return (
+                      <Badge
+                        key={email}
+                        variant="secondary"
+                        className={`flex items-center gap-1 px-2 py-1 ${isPrimary ? "bg-primary/10 text-primary border border-primary/20" : "bg-muted text-muted-foreground"}`}
                       >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </Badge>
-                  ))}
+                        <span className={`text-[10px] font-bold uppercase mr-0.5 ${isPrimary ? "text-primary" : "text-muted-foreground"}`}>
+                          {isPrimary ? "To" : "CC"}
+                        </span>
+                        {email}
+                        <button
+                          type="button"
+                          onClick={() => removeRecipient(email)}
+                          className="ml-1 rounded-full hover:bg-muted p-0.5"
+                        >
+                          <X className="h-3 w-3" />
+                        </button>
+                      </Badge>
+                    );
+                  })}
                 </div>
               )}
 
               <div className="flex gap-2">
                 <Input
-                  placeholder="Add email address..."
+                  placeholder="Add CC recipient..."
                   value={newEmail}
                   onChange={(e) => setNewEmail(e.target.value)}
                   onKeyDown={handleKeyDown}
@@ -255,7 +261,7 @@ export function EmailDocumentDialog({
                 </Button>
               </div>
               <p className="text-xs text-muted-foreground">
-                Press Enter or click + to add more recipients
+                First recipient is <strong>To</strong>. Additional recipients are added as <strong>CC</strong>.
               </p>
             </div>
 

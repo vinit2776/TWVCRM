@@ -100,8 +100,6 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
 
   // Payment records + gateway config
   const [existingPayments, setExistingPayments] = useState<BookingPayment[]>([]);
-  const [razorpayEnabled, setRazorpayEnabled] = useState(false);
-  const [razorpayKeyId, setRazorpayKeyId] = useState("");
   const [upiId, setUpiId] = useState("");
   const [upiQrCodePath, setUpiQrCodePath] = useState("");
 
@@ -143,8 +141,6 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     if (settingsRes.ok) {
       const sJson = await settingsRes.json();
       const settings = sJson.data || {};
-      setRazorpayEnabled(settings.razorpay_enabled === "true");
-      setRazorpayKeyId(settings.razorpay_key_id || "");
       setUpiId(settings.upi_id || "");
       setUpiQrCodePath(settings.upi_qr_code_path || "");
     }
@@ -1413,10 +1409,9 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         open={paymentDialogOpen}
         onOpenChange={setPaymentDialogOpen}
         bookingId={booking.id}
+        bookingReference={booking.booking_number || ""}
         totalAmount={Number(booking.total_amount_with_gst) || Number(booking.total_amount)}
         onSuccess={fetchBooking}
-        razorpayEnabled={razorpayEnabled}
-        razorpayKeyId={razorpayKeyId}
         upiId={upiId}
         upiQrCodePath={upiQrCodePath}
       />

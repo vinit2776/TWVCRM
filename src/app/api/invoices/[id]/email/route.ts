@@ -152,7 +152,8 @@ export async function POST(
     const { data: emailResult, error: emailError } = await resend.emails.send({
       from: EMAIL_FROM,
       replyTo: EMAIL_REPLY_TO,
-      to: recipients,
+      to: [recipients[0]],
+      ...(recipients.length > 1 ? { cc: recipients.slice(1) } : {}),
       subject: `Invoice ${invoice.invoice_number} — ${invoice.title} — The WorkVilla`,
       html: `
         <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">

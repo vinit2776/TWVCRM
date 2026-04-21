@@ -234,7 +234,8 @@ export async function POST(
     const { data: emailResult, error: emailError } = await resend.emails.send({
       from: EMAIL_FROM,
       replyTo: EMAIL_REPLY_TO,
-      to: recipients,
+      to: [recipients[0]],
+      ...(recipients.length > 1 ? { cc: recipients.slice(1) } : {}),
       subject: `Proposal ${proposal.proposal_number} — ${proposal.title} | The WorkVilla`,
       html,
       attachments: [
