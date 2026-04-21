@@ -27,6 +27,7 @@ import {
   Briefcase,
   Handshake,
   Wallet,
+  Bell,
   type LucideIcon,
 } from "lucide-react";
 
@@ -44,10 +45,12 @@ export interface HelpStep {
   title: string;
   description: string;
   hint?: string; // Friendly callout — shown as a highlighted tip below the description
+  screenshot?: string; // Path to a screenshot image, e.g. /help/login.png
 }
 
 export interface HelpWorkflow {
   title: string;
+  screenshot?: string; // Optional hero screenshot shown above the steps list
   steps: HelpStep[];
 }
 
@@ -56,6 +59,7 @@ export interface HelpSection {
   title: string;
   icon: LucideIcon;
   overview: string;
+  screenshot?: string; // Optional hero screenshot shown at the top of the section card
   workflows: HelpWorkflow[];
   tips: string[];
   faqs: HelpFaqItem[];
@@ -100,14 +104,15 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Getting Started",
       icon: Rocket,
       overview:
-        "Welcome to The WorkVilla CRM! This app helps you manage leads, bookings, contracts, invoices, and day-to-day operations across all coworking locations. It works in any browser and can also be installed as a Progressive Web App (PWA) on your phone or desktop — so it feels just like a native app. Use the sidebar to navigate modules, or press Cmd+K to jump anywhere instantly.",
+        "Welcome to The WorkVilla CRM! This is your central hub for managing leads, bookings, contracts, invoices, and daily operations across all coworking locations. It works in any browser and can also be installed on your phone like a regular app (called a PWA). Use the sidebar on the left to navigate between modules, or press Cmd+K to search for anything instantly.",
       workflows: [
         {
           title: "Logging In",
+          screenshot: "/help/login.png",
           steps: [
-            { step: 1, title: "Open the application", description: "Visit the CRM URL in your browser. You will see The WorkVilla login page with the logo.", hint: "Tip: Bookmark the URL or install it as a PWA (see below) so you can open it in one tap." },
-            { step: 2, title: "Enter your credentials", description: "Type the email and password provided by your admin. Click 'Sign In'.", hint: "If you've forgotten your password, click the 'Forgot Password?' link below the password field — a reset link will be emailed to you." },
-            { step: 3, title: "Access the dashboard", description: "After login you land on the Dashboard showing key metrics, recent leads, and follow-up reminders.", hint: "Bookmark this page after login so your browser remembers the session for next time." },
+            { step: 1, title: "Open the application", description: "Visit the CRM URL in your browser. You will see The WorkVilla login page with the logo and two fields: Email and Password.", hint: "Bookmark the URL or install it as an app on your phone (see below) so you can open it in one tap next time." },
+            { step: 2, title: "Enter your credentials", description: "Type the email address and password provided by your Admin. Then click the green 'Sign In' button.", hint: "If you've forgotten your password, click the 'Forgot password?' link above the password field — a reset link will be emailed to you within a minute." },
+            { step: 3, title: "You're in!", description: "After signing in you land on the Dashboard — your home screen showing today's tasks, recent leads, and follow-up reminders.", hint: "The CRM stays signed in for a long time. You won't need to sign in again unless you sign out or clear your browser." },
           ],
         },
         {
@@ -146,6 +151,46 @@ export const HELP_CONTENT: HelpContentData = {
     },
 
     /* ============================================================== */
+    /*  1b. What's New                                                 */
+    /* ============================================================== */
+    {
+      id: "whats-new",
+      title: "What's New",
+      icon: Bell,
+      overview:
+        "This section highlights the latest features and improvements added to The WorkVilla CRM. Check here when you hear about a new feature — each update is explained in plain language with simple steps to get started.",
+      workflows: [
+        {
+          title: "✨ WhatsApp Document Delivery (April 2025)",
+          steps: [
+            { step: 1, title: "What it is", description: "You can now send Proposals, Proforma Invoices, and GST Invoices directly to a customer's WhatsApp as a PDF — in addition to email." },
+            { step: 2, title: "How to use it", description: "Click 'Email' on any Proposal, Invoice, or GST Invoice. In the dialog that opens, look for the green 'Also send via WhatsApp' checkbox at the bottom. Tick it, then click Send.", hint: "The checkbox only appears if the lead has a phone number saved. Make sure the lead's phone is filled in." },
+            { step: 3, title: "Is it automatic?", description: "No. The checkbox is OFF by default. WhatsApp will never be used unless you tick it. This is completely your choice each time you send.", hint: "Use it for clients who respond faster on WhatsApp than email — great for GST invoice delivery and payment follow-up." },
+          ],
+        },
+        {
+          title: "🔔 Real-Time Enquiry Notifications (April 2025)",
+          steps: [
+            { step: 1, title: "What it is", description: "A notification bell (🔔) is now visible in the top bar on every page. It lights up with a red badge whenever a new lead arrives from Google Ads, Meta Ads, or the Walk-in form — and when you receive a WhatsApp message." },
+            { step: 2, title: "How to use it", description: "Click the bell icon to see a list of new enquiries and incoming WhatsApp messages. Click any row to jump straight to the related lead.", hint: "A chime sound plays when a new lead arrives so you can act immediately even without looking at the screen." },
+            { step: 3, title: "WhatsApp inbound messages", description: "When a customer messages your WhatsApp Business number, it appears in the bell dropdown under 'WhatsApp'. Click it to see a preview and go to the matched lead.", hint: "If no lead is matched, the customer may be new — create a lead for them so their inquiry is tracked." },
+          ],
+        },
+      ],
+      tips: [
+        "The WhatsApp checkbox is off by default — you decide when to use it.",
+        "Make sure leads have a phone number saved, otherwise the WhatsApp option won't appear.",
+        "The notification bell works on all pages — you don't need to stay on the Dashboard.",
+        "Mute/unmute your device to control the new-lead chime sound.",
+      ],
+      faqs: [
+        { question: "Where is the WhatsApp checkbox?", answer: "It appears in the email send dialog when you click 'Email' on a Proposal, Proforma Invoice, or GST Invoice — at the bottom, just above the Cancel/Send buttons. It only shows if the lead has a phone number." },
+        { question: "Does the notification bell show notifications from the past?", answer: "Yes, it shows recent unread enquiries from the current session and the last few hours. Older notifications are dismissed once you've viewed the lead." },
+      ],
+      roles: null,
+    },
+
+    /* ============================================================== */
     /*  2. Dashboard                                                   */
     /* ============================================================== */
     {
@@ -153,7 +198,7 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Dashboard",
       icon: LayoutDashboard,
       overview:
-        "The Dashboard is your home screen. It shows key performance indicators (KPIs) like total leads, conversion rate, tasks due today, and pending follow-ups. A Follow-ups widget highlights overdue and upcoming follow-up actions so nothing slips through. Recent team activities are shown in a live feed. Use the location filter to focus on a specific coworking center. Admins can configure which widgets are visible for each role, so different team members see the most relevant information.",
+        "The Dashboard is your home screen. It shows key performance indicators (KPIs) like total leads, conversion rate, tasks due today, and pending follow-ups. A Follow-ups widget highlights overdue and upcoming follow-up actions so nothing slips through. Recent team activities are shown in a live feed. Use the location filter to focus on a specific coworking center. A live notification bell (🔔) at the top of the screen alerts you instantly when a new lead arrives from Google Ads, Meta Ads, or Walk-in forms — and shows incoming WhatsApp messages. Admins can configure which widgets are visible for each role.",
       workflows: [
         {
           title: "Reading Your Dashboard",
@@ -163,6 +208,15 @@ export const HELP_CONTENT: HelpContentData = {
             { step: 3, title: "Check the Recent Leads widget", description: "The Recent Leads widget shows the last 10 leads added to the system with their current status and latest activity at a glance.", hint: "Click any lead row to open their full detail page directly." },
             { step: 4, title: "View recent activities", description: "The Recent Activities feed shows the last team actions (calls, emails, meetings, notes) with who did what and when.", hint: "This is a live feed — refresh the page to see the very latest team activity." },
             { step: 5, title: "Filter by location", description: "Use the location dropdown at the top to filter all dashboard metrics for a specific coworking center.", hint: "If you manage one location, set the filter as your default to keep the view focused on your center." },
+          ],
+        },
+        {
+          title: "Real-Time Enquiry Notifications (New 🔔)",
+          steps: [
+            { step: 1, title: "Spot the bell icon", description: "Look for the 🔔 bell icon in the top navigation bar (top-right corner of every page). A red badge appears on it whenever there are new unread alerts.", hint: "The bell is always visible — you don't need to be on the Dashboard to see new lead alerts." },
+            { step: 2, title: "Click the bell to see alerts", description: "Click the bell icon to open a dropdown. It shows two sections: 'New Enquiries' (fresh leads from Google Ads, Meta Ads, or Walk-in forms) and 'WhatsApp Messages' (incoming customer WhatsApp messages).", hint: "A chime sound plays when a new lead arrives so you don't miss it even when focused on another task." },
+            { step: 3, title: "Click an enquiry to open the lead", description: "Click any row in the dropdown to jump straight to that lead's detail page. The alert is automatically dismissed once you view it.", hint: "Act on new enquiries quickly — leads are more likely to convert if contacted within the first few minutes of inquiry." },
+            { step: 4, title: "WhatsApp inbound messages", description: "The 'WhatsApp' section in the bell dropdown shows messages sent to your WhatsApp business number. Each shows a preview and links to the related lead (if matched).", hint: "If a WhatsApp message doesn't link to a lead, the customer may be new — create a lead for them manually." },
           ],
         },
         {
@@ -185,6 +239,8 @@ export const HELP_CONTENT: HelpContentData = {
         { question: "How often does the dashboard refresh?", answer: "The dashboard fetches fresh data each time you visit the page or refresh your browser. There is no auto-refresh interval." },
         { question: "What does the Follow-ups widget show?", answer: "It lists leads whose scheduled follow-up date has passed (overdue) or is coming up soon, sorted by urgency. Click any row to open the lead and take action." },
         { question: "I can't see a widget my colleague can see. Why?", answer: "Admins can configure which widgets are visible per role. If a widget is missing, ask your admin to enable it for your role in Settings → Dashboard Widgets." },
+        { question: "What is the notification bell?", answer: "The bell icon (🔔) in the top navigation bar shows real-time alerts for new leads arriving from Google Ads, Meta Ads, or Walk-in forms, and incoming WhatsApp messages. A red badge shows the unread count. Click it to see the list and jump to any lead." },
+        { question: "I'm not hearing the chime for new leads. Why?", answer: "The chime uses your browser's audio system. Check that your device is not on silent/mute and that your browser has permission to play audio. Refreshing the page will re-initialize the notification listener." },
       ],
       roles: null,
     },
@@ -351,7 +407,8 @@ export const HELP_CONTENT: HelpContentData = {
             { step: 3, title: "Configure the proposal", description: "Add a title, set the workspace type, pricing, duration, and any special terms. You can also add a UPI QR code for easy payment reference.", hint: "Use the Notes field for any special conditions or custom terms you've negotiated — they'll appear on the proposal PDF." },
             { step: 4, title: "Generate a Razorpay payment link", description: "In the proposal form, you can generate a dedicated Razorpay payment link for the security deposit. The client receives a direct link to pay online.", hint: "A dedicated payment link per proposal ensures payment tracking is linked to the right deal — no confusion about which deposit payment is for which client." },
             { step: 5, title: "Save as draft", description: "Save the proposal. It starts in 'Draft' status — nothing is sent yet.", hint: "Review the PDF preview while in draft to catch any formatting issues before emailing." },
-            { step: 6, title: "Email to the client", description: "Click 'Email'. Add recipient(s) — the lead's email is pre-filled. Click Send. The PDF is attached automatically.", hint: "Add your manager or colleague as a CC recipient if you want them looped in on the conversation." },
+            { step: 6, title: "Email to the client", description: "Click 'Email'. A dialog opens with the lead's primary email pre-filled. You can type more email addresses and press Enter to add them. Then click 'Send'. The PDF is attached automatically.", hint: "Add your manager or colleague's email as an extra recipient if you want them to see the proposal too." },
+            { step: 7, title: "Optionally also send via WhatsApp (New ✨)", description: "If the lead has a phone number on file, you will see a green 'Also send PDF via WhatsApp' checkbox in the email dialog. Tick it before clicking Send and the proposal PDF is also delivered to the lead's WhatsApp — in addition to email.", hint: "This WhatsApp checkbox is OFF by default — you choose when to use it. WhatsApp delivery is especially useful for leads who check WhatsApp more often than email." },
           ],
         },
         {
@@ -379,12 +436,14 @@ export const HELP_CONTENT: HelpContentData = {
         "Proposal PDFs include a UPI QR code from the payment module, making it easy for clients to pay directly by scanning.",
         "Always log a rejection reason — this data helps identify why deals are lost and improve future pitches.",
         "Proposals that receive no response can be manually set to 'Expired'.",
+        "If the lead has a phone number, you can tick the WhatsApp checkbox in the email dialog to send the proposal PDF to their WhatsApp as well.",
       ],
       faqs: [
         { question: "Can I edit a proposal after sending it?", answer: "Yes, you can edit the proposal content. However, the previously sent PDF will not update in the recipient's inbox. You would need to re-send the updated version." },
         { question: "What email address are proposals sent from?", answer: "All emails are sent from contact@theworkvilla.com via Google Workspace. Recipients can reply directly to this address." },
         { question: "Can I send a proposal to multiple people?", answer: "Yes. In the email dialog, type each additional email address and press Enter to add them. All recipients will receive the same email with the proposal PDF attached." },
         { question: "Is a rejection reason mandatory?", answer: "Yes. When rejecting a proposal, you must enter a reason. This ensures there is always an explanation on record for why an opportunity was lost." },
+        { question: "How does the WhatsApp send option work?", answer: "When you open the email dialog, a green 'Also send PDF via WhatsApp' checkbox appears if the lead has a phone number saved. Tick it before clicking Send — the proposal PDF is sent to their WhatsApp number in addition to email. It is not ticked by default, so WhatsApp is only used when you deliberately choose it." },
       ],
       roles: null,
     },
@@ -394,18 +453,20 @@ export const HELP_CONTENT: HelpContentData = {
     /* ============================================================== */
     {
       id: "invoices",
-      title: "Invoices",
+      title: "Invoices (Proforma)",
       icon: Receipt,
       overview:
-        "The Invoices module lets you generate proforma invoices for your clients. Each invoice is auto-numbered, linked to a lead, and can be emailed as a PDF. Track invoice status from Draft through to Paid or Overdue.",
+        "The Invoices module lets you generate proforma invoices for clients — used for quoting before a deal is finalised. Each invoice is auto-numbered, linked to a lead, and can be emailed as a PDF. Track invoice status from Draft through to Paid or Overdue.",
       workflows: [
         {
-          title: "Creating and Sending an Invoice",
+          title: "Creating and Sending a Proforma Invoice",
           steps: [
-            { step: 1, title: "Go to Invoices", description: "Navigate to the Invoices page from the sidebar." },
+            { step: 1, title: "Go to Invoices", description: "Navigate to the Invoices page from the sidebar under Finance." },
             { step: 2, title: "Click 'New Invoice'", description: "Click the create button to start a new proforma invoice." },
             { step: 3, title: "Fill in details", description: "Select the lead, add line items with descriptions and amounts, and set the due date." },
-            { step: 4, title: "Save and send", description: "Save the invoice, then click 'Email' to send the PDF to the client." },
+            { step: 4, title: "Save the invoice", description: "Save to create the invoice as a Draft. You can preview the PDF before sending." },
+            { step: 5, title: "Email to the client", description: "Click 'Email' to open the send dialog. The lead's email is pre-filled. Click Send to deliver the PDF.", hint: "The invoice PDF automatically includes your company bank details so the client knows how to pay." },
+            { step: 6, title: "Optionally also send via WhatsApp (New ✨)", description: "If the lead has a phone number, a green 'Also send PDF via WhatsApp' checkbox appears in the email dialog. Tick it to send the invoice to their WhatsApp in addition to email.", hint: "The WhatsApp checkbox is OFF by default. Only tick it when you want to reach the client through WhatsApp as well." },
           ],
         },
       ],
@@ -413,10 +474,12 @@ export const HELP_CONTENT: HelpContentData = {
         "Overdue invoices are highlighted in red so they stand out in the list.",
         "Use the status filter to quickly find all unpaid or overdue invoices.",
         "The invoice PDF includes your company bank details for payment.",
+        "If the lead has a phone number, use the WhatsApp checkbox in the email dialog to send the invoice to their WhatsApp as well.",
       ],
       faqs: [
-        { question: "What is the difference between an Invoice and a GST Invoice?", answer: "The Invoices module creates proforma invoices for quoting. GST Invoices in the Accounting module are official tax invoices used for compliance and filing." },
+        { question: "What is the difference between a Proforma Invoice and a GST Invoice?", answer: "A Proforma Invoice (this module) is a preliminary quote or request for payment — used before the service starts or when you need a document for the client before a formal contract. A GST Invoice in the Accounting module is the official tax invoice issued after billing, used for GST compliance and tax filing." },
         { question: "Can I mark an invoice as paid?", answer: "Yes. Open the invoice and change its status to 'Paid' when payment is confirmed." },
+        { question: "How does the WhatsApp send option work on invoices?", answer: "In the email send dialog, a green 'Also send PDF via WhatsApp' checkbox appears if the lead has a phone number. Tick it before clicking Send and the invoice PDF is also sent to their WhatsApp. This is opt-in — unticked by default." },
       ],
       roles: null,
     },
@@ -507,7 +570,7 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Accounting",
       icon: Calculator,
       overview:
-        "The Accounting module provides a monthly financial overview. Select a month and see all contract revenue, walk-in collections, cash handovers, GST invoices, and petty cash in one place. An 'Action Required' banner at the top aggregates all pending items so nothing is missed. Auto-billing generates GST invoice PDFs, Razorpay payment links, and sends them to clients automatically each billing cycle. Periods can be locked after reconciliation.",
+        "The Accounting module provides a monthly financial overview. Select a month and see all contract revenue, walk-in collections, cash handovers, GST invoices, and petty cash in one place. An orange 'Action Required' banner at the top aggregates all pending items so nothing is missed. Auto-billing generates GST invoice PDFs, Razorpay payment links, and sends them to clients automatically each billing cycle. GST invoices can also be manually sent via email — and optionally via WhatsApp as well. Periods can be locked after reconciliation.",
       workflows: [
         {
           title: "Reviewing a Monthly Period",
@@ -517,7 +580,7 @@ export const HELP_CONTENT: HelpContentData = {
             { step: 3, title: "Review Contracts tab", description: "See all active contract-based revenue, facility usage charges, and payment status for the month.", hint: "The summary cards at the top show totals: Billable, Collected, Outstanding, and Aging (30/60/90-day overdue)." },
             { step: 4, title: "Check Walk-in Collections", description: "Switch to the Walk-in tab to see one-time payments from walk-in customers.", hint: "Walk-in collections are added by front desk staff when a customer pays for a day pass or meeting room." },
             { step: 5, title: "Review Cash Handovers", description: "Check the Cash Handovers tab for pending and completed cash transfers from the front desk to accounts.", hint: "Pending handovers show in the Action Required banner — action them quickly to keep the cash reconciliation clean." },
-            { step: 6, title: "Manage GST Invoices", description: "The GST Invoices tab shows all tax invoices for the period. Auto-billed invoices are generated automatically with a PDF and Razorpay payment link.", hint: "Auto-generated invoices are emailed to the client automatically — you can see delivery status in the invoice details." },
+            { step: 6, title: "Manage GST Invoices", description: "The GST Invoices tab shows all tax invoices for the period. Auto-billed invoices are generated automatically with a PDF and Razorpay payment link. For any invoice, click the email icon (✉️) to send or re-send it manually.", hint: "In the email dialog, tick the green 'Also send via WhatsApp' checkbox to also deliver the invoice PDF to the client's WhatsApp. This is opt-in and off by default." },
             { step: 7, title: "Lock the period", description: "Once reconciliation is complete, click 'Lock Period' to prevent further changes. Only Admins and Managers can lock.", hint: "Locked periods show a blue bar at the top with the locker's name and timestamp — a clear audit trail." },
           ],
         },
@@ -538,12 +601,14 @@ export const HELP_CONTENT: HelpContentData = {
         "The aging analysis shows current vs 30/60/90-day overdue amounts — prioritize the oldest outstanding amounts.",
         "Locked periods display a status bar showing who locked them and when — great for audit accountability.",
         "The Petty Cash tab inside Accounting shows all books, approvals, and pending fund issuances.",
+        "When manually sending a GST invoice by email, tick the 'Also send via WhatsApp' checkbox to also deliver the PDF to the client's WhatsApp.",
       ],
       faqs: [
         { question: "Can I unlock a locked period?", answer: "Yes. An Admin or Manager can unlock a period to make corrections, then lock it again. The unlock action is logged in the audit trail." },
         { question: "What does the 'Carried Forward' amount mean?", answer: "It represents outstanding balances from previous periods that are still unpaid. These carry into the current month's outstanding total." },
         { question: "What is the Action Required banner?", answer: "An orange banner at the top of the Accounting page aggregating all pending items: outstanding contract payments, pending cash handovers, GST invoices to send, petty cash funds to issue, and expenses awaiting admin approval. Click any item to jump to the relevant tab. It hides when there are no pending items." },
         { question: "How does auto-billing work?", answer: "When a contract's billing cycle is due, the system automatically generates a GST invoice PDF, creates a Razorpay payment link, and emails both to the client. You can monitor invoice status and payment from the GST Invoices tab." },
+        { question: "Can I send a GST invoice via WhatsApp?", answer: "Yes. Click the email icon (✉️) on any GST invoice row to open the send dialog. Tick the green 'Also send via WhatsApp' checkbox at the bottom of the dialog, then click Send Invoice. The PDF will be delivered to the client's WhatsApp in addition to email. This is opt-in and off by default." },
       ],
       roles: null,
     },
@@ -887,10 +952,10 @@ export const HELP_CONTENT: HelpContentData = {
     /* ============================================================== */
     {
       id: "email-system",
-      title: "Email & SMS System",
+      title: "Email, SMS & WhatsApp",
       icon: Mail,
       overview:
-        "The CRM sends emails via Google Workspace SMTP from contact@theworkvilla.com for proposals, contracts, invoices, booking confirmations, payment reminders, and more. All sent emails are logged automatically. A daily business digest is sent at 8:30 PM IST to keep the management team informed. DLT-compliant transactional SMS is sent via MSG91 for key customer touchpoints using TRAI-registered templates.",
+        "The CRM communicates with customers through three channels: Email (from contact@theworkvilla.com), DLT-compliant SMS via MSG91, and WhatsApp (via MSG91 WhatsApp Business). Emails are sent for proposals, contracts, GST invoices, booking confirmations, and payment reminders — all logged automatically as activities. SMS is sent automatically at key touchpoints (booking confirmation, payment receipt, etc.) using TRAI-registered templates. WhatsApp is opt-in: when sending a proposal, proforma invoice, or GST invoice, you can tick a checkbox to also deliver the PDF to the customer's WhatsApp. A daily business digest is sent at 8:30 PM IST to keep the management team informed.",
       workflows: [
         {
           title: "Sending an Email from the CRM",
@@ -899,6 +964,15 @@ export const HELP_CONTENT: HelpContentData = {
             { step: 2, title: "Click 'Email'", description: "Click the Email button. A dialog opens with the lead's email address pre-filled.", hint: "Double-check the email address before sending — it's pulled from the lead's profile and may need updating." },
             { step: 3, title: "Add extra recipients", description: "The lead's email is the default. Type additional email addresses and press Enter to add them as CCs.", hint: "You can add your own email as a BCC to keep a copy in your inbox for reference." },
             { step: 4, title: "Send", description: "Click Send. The PDF is generated and attached automatically. The send action is logged as an activity.", hint: "After sending, check the Activities tab on the lead's page to confirm delivery and see all recipients." },
+          ],
+        },
+        {
+          title: "Sending Documents via WhatsApp (New ✨)",
+          steps: [
+            { step: 1, title: "Open the email send dialog", description: "When you click 'Email' on a Proposal, Proforma Invoice, or GST Invoice, a dialog opens with the recipient email field.", hint: "The WhatsApp option only appears if the lead has a phone number saved in their profile." },
+            { step: 2, title: "Look for the WhatsApp checkbox", description: "At the bottom of the dialog, you will see a green WhatsApp section with a checkbox: 'Also send PDF via WhatsApp (phone number)'. The phone number is shown in grey next to it.", hint: "This checkbox is OFF by default. WhatsApp will NOT be used unless you tick it." },
+            { step: 3, title: "Tick the checkbox if desired", description: "Tick the checkbox if you want to send the document to the customer's WhatsApp as well. Leave it unticked to send by email only.", hint: "Use WhatsApp for customers who are more responsive on WhatsApp than email — especially for payment reminders and GST invoice delivery." },
+            { step: 4, title: "Click Send", description: "Click the Send button. The document PDF is emailed as normal. If you ticked WhatsApp, it is also delivered to the customer's WhatsApp as a document message.", hint: "WhatsApp delivery happens in the background — the dialog closes immediately even before WhatsApp delivery completes." },
           ],
         },
         {
@@ -916,13 +990,18 @@ export const HELP_CONTENT: HelpContentData = {
         "SMS messages are sent automatically for bookings, payment confirmations, and key events — no manual action needed.",
         "Check the Activities tab on any lead to see every email sent to that client, including the recipient list.",
         "If a client says they didn't receive an email, first ask them to check spam, then verify the email address in their lead profile.",
+        "WhatsApp delivery is opt-in — always a checkbox you tick. It is never sent automatically without your choice.",
+        "For customers who prefer WhatsApp, use the WhatsApp checkbox when sending GST invoices and proposals for faster acknowledgement.",
       ],
       faqs: [
         { question: "What email address do emails come from?", answer: "All CRM emails are sent from 'The WorkVilla <contact@theworkvilla.com>' via Google Workspace SMTP." },
         { question: "Can recipients reply to CRM emails?", answer: "Yes. The reply-to address is set to contact@theworkvilla.com. Replies go to the Google Workspace inbox." },
         { question: "An email was not received. What should I check?", answer: "Ask the recipient to check their spam/junk folder. Verify the email address is correct in the lead profile. Check the lead's activity timeline to confirm the send was logged." },
         { question: "What is the daily digest?", answer: "An automated summary email sent at 8:30 PM IST to Admins and Managers. It covers new leads, bookings, payments, pending follow-ups, and outstanding vendor bills — a one-page snapshot of the day's business." },
-        { question: "What is DLT-compliant SMS?", answer: "DLT (Distributed Ledger Technology) is TRAI's mandatory framework for commercial SMS in India. The CRM's templates are pre-registered with the regulator via MSG91 for guaranteed deliverability. These cover 6 key customer-facing events like booking confirmation and payment receipt." },
+        { question: "What is DLT-compliant SMS?", answer: "DLT (Distributed Ledger Technology) is TRAI's mandatory framework for commercial SMS in India. The CRM's templates are pre-registered with the regulator via MSG91 for guaranteed deliverability. These cover key customer-facing events like booking confirmation and payment receipt." },
+        { question: "How do I send a document via WhatsApp?", answer: "When you click 'Email' on a Proposal, Proforma Invoice, or GST Invoice, the send dialog has a green 'Also send via WhatsApp' checkbox at the bottom (only visible if the lead has a phone number). Tick it before clicking Send. The PDF will be delivered to the customer's WhatsApp business number in addition to email." },
+        { question: "Is WhatsApp sent automatically?", answer: "No. WhatsApp sending is always opt-in. The checkbox is OFF by default. WhatsApp is only used when you deliberately tick the checkbox in the email dialog." },
+        { question: "Does the customer need to save our number to receive WhatsApp messages?", answer: "No. WhatsApp Business API (which we use via MSG91) can deliver messages even if the customer hasn't saved the number. However, if the customer has not interacted with our number before, the message arrives as a business message notification." },
       ],
       roles: null,
     },
@@ -1363,6 +1442,8 @@ export const HELP_CONTENT: HelpContentData = {
     { question: "Can I undo a change?", answer: "There is no undo button. However, Admins can review the Audit Logs to see what changed and manually reverse it if needed." },
     { question: "Why can I not see certain modules in the sidebar?", answer: "Your access is determined by your role. Sales Reps have limited access. Managers and Admins see additional modules. Ask your Admin to check your role if you believe access is incorrect." },
     { question: "How do I contact support?", answer: "Email contact@theworkvilla.com or call +91 97910 97900 during business hours." },
+    { question: "Can I send documents to customers on WhatsApp?", answer: "Yes! When emailing a Proposal, Proforma Invoice, or GST Invoice, the send dialog has a green 'Also send via WhatsApp' checkbox. Tick it to also deliver the PDF to the customer's WhatsApp. This requires the lead to have a phone number saved, and is always opt-in (off by default)." },
+    { question: "How do I get notified about new leads in real time?", answer: "The 🔔 bell icon in the top navigation bar lights up with a red badge whenever a new lead arrives from Google Ads, Meta Ads, or the Walk-in form. A chime also plays. Click the bell to see the new enquiries and jump to the lead directly." },
   ],
 
   /* ================================================================ */
