@@ -3,6 +3,8 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { pingCronHealth } from "@/lib/cron-ping";
 
+export const maxDuration = 60;
+
 /**
  * GET /api/digest
  * Daily business digest email — triggered by Vercel cron at 8:30 PM IST.
@@ -53,11 +55,12 @@ export async function GET(request: Request) {
     fetchMetrics(supabase, lastYear),
   ]);
 
-  // Today-only: location breakdown, attention items, portfolio snapshot
-  const [locations, attention, portfolio] = await Promise.all([
+  // Today-only: location breakdown, attention items, portfolio snapshot, extended data
+  const [locations, attention, portfolio, extended] = await Promise.all([
     fetchLocationBreakdown(supabase, todayIST),
     fetchAttentionItems(supabase, todayIST),
     fetchPortfolio(supabase),
+    fetchExtended(supabase, todayIST),
   ]);
 
   // Build and send email
@@ -68,7 +71,7 @@ export async function GET(request: Request) {
     year: "numeric",
   });
 
-  const html = buildDigestHtml(dateLabel, todayIST, today, lw, ly, locations, attention, portfolio);
+  const html = buildDigestHtml(dateLabel, todayIST, today, lw, ly, locations, attention, portfolio, extended);
 
   let sent = 0;
   for (const email of recipients) {
@@ -86,6 +89,8 @@ export async function GET(request: Request) {
     }
   }
 
+  await pingCronHealth("digest", "ok", { sent, recipients: recipients.length });
+
   return NextResponse.json({
     date: todayIST,
     recipients: recipients.length,
@@ -94,8 +99,8 @@ export async function GET(request: Request) {
     locations,
     attention,
     portfolio,
+    extended,
   });
-  await pingCronHealth("digest", "ok", { sent, recipients: recipients.length });
 }
 
 // ---------------------------------------------------------------------------
@@ -140,81 +145,68 @@ async function fetchMetrics(supabase: any, date: string): Promise<Metrics> {
     contracts,
     tickets,
   ] = await Promise.all([
-    // Collections (contract payments)
     supabase
       .from("contract_payments")
       .select("amount")
       .eq("status", "verified")
       .eq("payment_date", date),
-    // Booking revenue
     supabase
       .from("booking_payments")
       .select("amount")
       .eq("status", "verified")
       .gte("created_at", dayStart)
       .lte("created_at", dayEnd),
-    // Invoices
     supabase
       .from("proforma_invoices")
       .select("total_amount")
       .gte("created_at", dayStart)
       .lte("created_at", dayEnd),
-    // Petty cash spend
     supabase
       .from("petty_cash_entries")
       .select("amount")
       .eq("status", "approved")
       .eq("date", date),
-    // Purchase orders
     supabase
       .from("purchase_orders")
       .select("total_ordered_amount")
       .gte("created_at", dayStart)
       .lte("created_at", dayEnd),
-    // New leads
     supabase
       .from("leads")
       .select("id", { count: "exact", head: true })
       .gte("created_at", dayStart)
       .lte("created_at", dayEnd),
-    // Won leads
     supabase
       .from("leads")
       .select("id", { count: "exact", head: true })
       .gte("converted_at", dayStart)
       .lte("converted_at", dayEnd),
-    // Lost leads
     supabase
       .from("leads")
       .select("id", { count: "exact", head: true })
       .gte("lost_at", dayStart)
       .lte("lost_at", dayEnd),
-    // Activities
     supabase
       .from("activities")
       .select("id", { count: "exact", head: true })
       .gte("created_at", dayStart)
       .lte("created_at", dayEnd),
-    // Tasks completed
     supabase
       .from("tasks")
       .select("id", { count: "exact", head: true })
       .gte("completed_at", dayStart)
       .lte("completed_at", dayEnd),
-    // New bookings
     supabase
       .from("bookings")
       .select("id", { count: "exact", head: true })
       .eq("booking_date", date)
       .in("status", ["confirmed", "checked_in", "checked_out", "completed"]),
-    // New contracts
     supabase
       .from("contracts")
       .select("id", { count: "exact", head: true })
       .eq("status", "active")
       .gte("created_at", dayStart)
       .lte("created_at", dayEnd),
-    // Support tickets
     supabase
       .from("support_tickets")
       .select("id", { count: "exact", head: true })
@@ -256,7 +248,6 @@ async function fetchLocationBreakdown(supabase: any, date: string): Promise<Loca
   const dayStart = `${date}T00:00:00`;
   const dayEnd = `${date}T23:59:59`;
 
-  // Get all active locations
   const { data: locs } = await supabase
     .from("locations")
     .select("id, name")
@@ -267,7 +258,6 @@ async function fetchLocationBreakdown(supabase: any, date: string): Promise<Loca
 
   const results: LocationRow[] = [];
 
-  // Fetch all verified payments for the date with contract's location
   const { data: allPayments } = await supabase
     .from("contract_payments")
     .select("amount, contract:contracts!contract_payments_contract_id_fkey(location_id)")
@@ -367,6 +357,7 @@ async function fetchAttentionItems(supabase: any, date: string): Promise<Attenti
     due_date: b.due_date,
     payment_status: b.payment_status,
   }));
+
   return {
     overdueTasks: overdue.count || 0,
     unpaidBills: billRows,
@@ -400,7 +391,227 @@ async function fetchPortfolio(supabase: any): Promise<Portfolio> {
 }
 
 // ---------------------------------------------------------------------------
-// HTML email builder
+// Extended data — today's wins, pipeline funnel, stuck items, team, client invoices
+// ---------------------------------------------------------------------------
+
+interface TodayWin {
+  label: string;
+  sub?: string;
+}
+
+interface StuckProposal {
+  proposalNumber: string;
+  clientName: string;
+  daysSince: number;
+}
+
+interface StuckNegotiation {
+  clientName: string;
+  daysSince: number;
+}
+
+interface TeamMember {
+  name: string;
+  count: number;
+}
+
+interface PendingClientInvoice {
+  number: string;
+  clientName: string;
+  amount: number;
+  dueDate: string | null;
+  isOverdue: boolean;
+  daysOverdue?: number;
+}
+
+interface ExtendedData {
+  todayWins: TodayWin[];
+  pipeline: {
+    newLeads: number;
+    contacted: number;
+    tour: number;
+    proposalSent: number;
+    negotiating: number;
+  };
+  stuckProposals: StuckProposal[];
+  stuckNegotiations: StuckNegotiation[];
+  teamActivity: TeamMember[];
+  pendingClientInvoices: PendingClientInvoice[];
+  pendingClientTotal: number;
+  activeProposals: number;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchExtended(supabase: any, date: string): Promise<ExtendedData> {
+  const dayStart = `${date}T00:00:00`;
+  const dayEnd = `${date}T23:59:59`;
+  const fiveDaysAgo = new Date(new Date(date).getTime() - 5 * 86400000).toISOString().slice(0, 10);
+  const sevenDaysAgo = new Date(new Date(date).getTime() - 7 * 86400000).toISOString().slice(0, 10);
+
+  const [
+    wonsToday,
+    activatedToday,
+    pipelineNew,
+    pipelineContacted,
+    pipelineTour,
+    pipelineProposal,
+    pipelineNeg,
+    stuckPropRaw,
+    stuckNegRaw,
+    teamRaw,
+    pendingInvRaw,
+    activeProposalsCount,
+  ] = await Promise.all([
+    // Leads won today
+    supabase
+      .from("leads")
+      .select("first_name, last_name, company")
+      .gte("converted_at", dayStart)
+      .lte("converted_at", dayEnd),
+    // Contracts activated today
+    supabase
+      .from("contracts")
+      .select("contract_number, title, lead:leads!contracts_lead_id_fkey(first_name, last_name, company)")
+      .gte("activated_at", dayStart)
+      .lte("activated_at", dayEnd),
+    // Pipeline funnel counts
+    supabase.from("leads").select("id", { count: "exact", head: true }).eq("status", "new"),
+    supabase.from("leads").select("id", { count: "exact", head: true }).eq("status", "contacted"),
+    supabase.from("leads").select("id", { count: "exact", head: true }).in("status", ["tour_scheduled", "tour_completed"]),
+    supabase.from("leads").select("id", { count: "exact", head: true }).eq("status", "proposal_sent"),
+    supabase.from("leads").select("id", { count: "exact", head: true }).eq("status", "negotiating"),
+    // Stuck proposals — sent more than 5 days ago, still open
+    supabase
+      .from("proposals")
+      .select("proposal_number, lead:leads!proposals_lead_id_fkey(first_name, last_name, company), sent_at")
+      .in("status", ["sent", "viewed"])
+      .lt("sent_at", `${fiveDaysAgo}T23:59:59`)
+      .order("sent_at", { ascending: true })
+      .limit(6),
+    // Stuck negotiations — lead not updated in 7+ days
+    supabase
+      .from("leads")
+      .select("first_name, last_name, company, updated_at")
+      .eq("status", "negotiating")
+      .lt("updated_at", `${sevenDaysAgo}T23:59:59`)
+      .order("updated_at", { ascending: true })
+      .limit(6),
+    // Team activity today — activities grouped by user
+    supabase
+      .from("activities")
+      .select("created_by, user:users!activities_created_by_fkey(full_name)")
+      .gte("created_at", dayStart)
+      .lte("created_at", dayEnd),
+    // Pending client invoices (proforma) that are sent or overdue
+    supabase
+      .from("proforma_invoices")
+      .select("invoice_number, total_amount, due_date, status, lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company)")
+      .in("status", ["sent", "overdue"])
+      .order("due_date", { ascending: true })
+      .limit(10),
+    // Active proposals count
+    supabase
+      .from("proposals")
+      .select("id", { count: "exact", head: true })
+      .in("status", ["sent", "viewed", "accepted"]),
+  ]);
+
+  // Build today's wins
+  const todayWins: TodayWin[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const lead of (wonsToday.data || []) as any[]) {
+    const name = [lead.first_name, lead.last_name].filter(Boolean).join(" ") || lead.company || "Lead";
+    todayWins.push({ label: `${name} — Lead Converted`, sub: lead.company || undefined });
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const c of (activatedToday.data || []) as any[]) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lead = c.lead as any;
+    const clientName = lead ? [lead.first_name, lead.last_name].filter(Boolean).join(" ") || lead.company : "";
+    todayWins.push({
+      label: `${c.contract_number} — Contract Activated`,
+      sub: clientName || c.title || undefined,
+    });
+  }
+
+  // Stuck proposals
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stuckProposals: StuckProposal[] = (stuckPropRaw.data || []).map((p: any) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lead = p.lead as any;
+    const clientName = lead
+      ? [lead.first_name, lead.last_name].filter(Boolean).join(" ") || lead.company || "Unknown"
+      : "Unknown";
+    const sentDate = new Date(p.sent_at);
+    const daysSince = Math.floor((new Date(date).getTime() - sentDate.getTime()) / 86400000);
+    return { proposalNumber: p.proposal_number, clientName, daysSince };
+  });
+
+  // Stuck negotiations
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const stuckNegotiations: StuckNegotiation[] = (stuckNegRaw.data || []).map((l: any) => {
+    const clientName = [l.first_name, l.last_name].filter(Boolean).join(" ") || l.company || "Unknown";
+    const updatedDate = new Date(l.updated_at);
+    const daysSince = Math.floor((new Date(date).getTime() - updatedDate.getTime()) / 86400000);
+    return { clientName, daysSince };
+  });
+
+  // Team activity — aggregate by user
+  const teamMap: Record<string, number> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const row of (teamRaw.data || []) as any[]) {
+    const name = row.user?.full_name || "Unknown";
+    teamMap[name] = (teamMap[name] || 0) + 1;
+  }
+  const teamActivity: TeamMember[] = Object.entries(teamMap)
+    .map(([name, count]) => ({ name, count }))
+    .sort((a, b) => b.count - a.count)
+    .slice(0, 8);
+
+  // Pending client invoices
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const pendingClientInvoices: PendingClientInvoice[] = (pendingInvRaw.data || []).map((inv: any) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lead = inv.lead as any;
+    const clientName = lead
+      ? [lead.first_name, lead.last_name].filter(Boolean).join(" ") || lead.company || "Unknown"
+      : "Unknown";
+    const isOverdue = inv.due_date ? inv.due_date < date : false;
+    const daysOverdue = isOverdue && inv.due_date
+      ? Math.floor((new Date(date).getTime() - new Date(inv.due_date).getTime()) / 86400000)
+      : undefined;
+    return {
+      number: inv.invoice_number,
+      clientName,
+      amount: Number(inv.total_amount || 0),
+      dueDate: inv.due_date,
+      isOverdue,
+      daysOverdue,
+    };
+  });
+
+  const pendingClientTotal = pendingClientInvoices.reduce((s, i) => s + i.amount, 0);
+
+  return {
+    todayWins,
+    pipeline: {
+      newLeads: pipelineNew.count || 0,
+      contacted: pipelineContacted.count || 0,
+      tour: pipelineTour.count || 0,
+      proposalSent: pipelineProposal.count || 0,
+      negotiating: pipelineNeg.count || 0,
+    },
+    stuckProposals,
+    stuckNegotiations,
+    teamActivity,
+    pendingClientInvoices,
+    pendingClientTotal,
+    activeProposals: activeProposalsCount.count || 0,
+  };
+}
+
+// ---------------------------------------------------------------------------
+// HTML helpers
 // ---------------------------------------------------------------------------
 
 function fmt(n: number): string {
@@ -448,6 +659,38 @@ function tableHeader(): string {
     </tr>`;
 }
 
+function sectionHeader(title: string): string {
+  return `<h2 style="color:#015E65;font-size:15px;margin:0 0 12px;border-bottom:2px solid #015E65;padding-bottom:6px;">${title}</h2>`;
+}
+
+// Compact KPI tile used in the top summary row
+function kpiTile(label: string, value: string, sub?: string, accent?: boolean): string {
+  return `
+    <td style="padding:14px 16px;text-align:center;border-right:1px solid #d1fae5;background:${accent ? "#e6f7f0" : "#f0faf5"};">
+      <p style="margin:0;color:#666;font-size:10px;text-transform:uppercase;letter-spacing:0.5px;">${label}</p>
+      <p style="margin:4px 0 0;color:#015E65;font-size:22px;font-weight:700;line-height:1;">${value}</p>
+      ${sub ? `<p style="margin:4px 0 0;color:#888;font-size:10px;">${sub}</p>` : ""}
+    </td>`;
+}
+
+// Pipeline stage pill
+function stagePill(label: string, count: number, isWarn: boolean): string {
+  const bg = isWarn ? "#fef3c7" : "#f0faf5";
+  const color = isWarn ? "#92400e" : "#015E65";
+  const border = isWarn ? "#fcd34d" : "#d1fae5";
+  return `
+    <td style="text-align:center;padding:0 4px;">
+      <div style="background:${bg};border:1px solid ${border};border-radius:8px;padding:8px 10px;min-width:60px;">
+        <p style="margin:0;font-size:18px;font-weight:700;color:${color};">${count}</p>
+        <p style="margin:2px 0 0;font-size:10px;color:${color};opacity:0.8;">${label}</p>
+      </div>
+    </td>`;
+}
+
+// ---------------------------------------------------------------------------
+// Main HTML builder
+// ---------------------------------------------------------------------------
+
 function buildDigestHtml(
   dateLabel: string,
   todayIST: string,
@@ -456,8 +699,123 @@ function buildDigestHtml(
   ly: Metrics,
   locations: LocationRow[],
   attention: AttentionItems,
-  portfolio: Portfolio
+  portfolio: Portfolio,
+  extended: ExtendedData
 ): string {
+  const revenueToday = today.collections + today.bookingRevenue;
+
+  // ── KPI row ──────────────────────────────────────────────────────────────
+  const stuckCount = extended.stuckProposals.length + extended.stuckNegotiations.length;
+  const kpiHtml = `
+    <table style="width:100%;border-collapse:collapse;margin-bottom:24px;border:1px solid #d1fae5;border-radius:8px;overflow:hidden;">
+      <tr>
+        ${kpiTile("Revenue In", revenueToday > 0 ? rupees(revenueToday) : "—", "collections + bookings")}
+        ${kpiTile("New Leads", `${today.newLeads}`, today.newLeads > 0 ? `${today.leadsWon} won · ${today.leadsLost} lost` : "none today")}
+        ${kpiTile("Active Proposals", `${extended.activeProposals}`, stuckCount > 0 ? `⚠ ${stuckCount} stuck` : "pipeline healthy", stuckCount > 0)}
+        ${kpiTile("Active Contracts", `${portfolio.activeContracts}`, `MRR ${rupees(portfolio.totalMRR)}`)}
+      </tr>
+    </table>`;
+
+  // ── Today's Wins (only shown if there are wins) ───────────────────────────
+  const winsHtml = extended.todayWins.length > 0 ? `
+    <div style="background:#ecfdf5;border:1px solid #6ee7b7;border-left:4px solid #10b981;border-radius:0 8px 8px 0;padding:16px 20px;margin-bottom:24px;">
+      <p style="margin:0 0 10px;font-weight:700;color:#065f46;font-size:14px;">🏆 Today's Wins</p>
+      ${extended.todayWins.map(w => `
+        <div style="margin-bottom:6px;">
+          <span style="color:#065f46;font-size:13px;font-weight:600;">✓ ${w.label}</span>
+          ${w.sub ? `<span style="color:#6ee7b7;font-size:11px;"> · ${w.sub}</span>` : ""}
+        </div>`).join("")}
+    </div>` : "";
+
+  // ── Pipeline at a glance ─────────────────────────────────────────────────
+  const p = extended.pipeline;
+  const totalInPipeline = p.newLeads + p.contacted + p.tour + p.proposalSent + p.negotiating;
+  const pipelineHtml = `
+    ${sectionHeader("Pipeline at a Glance")}
+    <table style="width:100%;border-collapse:collapse;margin-bottom:8px;">
+      <tr>
+        ${stagePill("New", p.newLeads, false)}
+        <td style="text-align:center;color:#ccc;font-size:16px;padding:0;">→</td>
+        ${stagePill("Contacted", p.contacted, false)}
+        <td style="text-align:center;color:#ccc;font-size:16px;padding:0;">→</td>
+        ${stagePill("Tour", p.tour, false)}
+        <td style="text-align:center;color:#ccc;font-size:16px;padding:0;">→</td>
+        ${stagePill("Proposal Out", p.proposalSent, p.proposalSent > 0 && extended.stuckProposals.length > 0)}
+        <td style="text-align:center;color:#ccc;font-size:16px;padding:0;">→</td>
+        ${stagePill("Negotiating", p.negotiating, p.negotiating > 0 && extended.stuckNegotiations.length > 0)}
+      </tr>
+    </table>
+    <p style="color:#888;font-size:11px;margin:0 0 24px;text-align:right;">${totalInPipeline} active leads in pipeline</p>`;
+
+  // ── Stuck Pipeline ─────────────────────────────────────────────────────
+  const hasStuck = extended.stuckProposals.length > 0 || extended.stuckNegotiations.length > 0;
+  const stuckHtml = hasStuck ? `
+    <div style="background:#fffbeb;border:1px solid #fcd34d;border-left:4px solid #f59e0b;border-radius:0 8px 8px 0;padding:16px 20px;margin-bottom:24px;">
+      <p style="margin:0 0 10px;font-weight:700;color:#92400e;font-size:14px;">⚠ Stuck Pipeline — Needs Follow-Up</p>
+      ${extended.stuckProposals.length > 0 ? `
+        <p style="margin:0 0 6px;color:#78350f;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">Proposals with no response (${extended.stuckProposals.length > 5 ? "top 5 of " + extended.stuckProposals.length : extended.stuckProposals.length})</p>
+        ${extended.stuckProposals.slice(0, 5).map(sp => `
+          <p style="margin:3px 0;color:#78350f;font-size:13px;">• <strong>${sp.proposalNumber}</strong> · ${sp.clientName} · <span style="color:#b45309;">${sp.daysSince}d since sent</span></p>`).join("")}
+      ` : ""}
+      ${extended.stuckNegotiations.length > 0 ? `
+        <p style="margin:${extended.stuckProposals.length > 0 ? "10px" : "0"} 0 6px;color:#78350f;font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">Stalled Negotiations (${extended.stuckNegotiations.length > 5 ? "top 5 of " + extended.stuckNegotiations.length : extended.stuckNegotiations.length})</p>
+        ${extended.stuckNegotiations.slice(0, 5).map(sn => `
+          <p style="margin:3px 0;color:#78350f;font-size:13px;">• <strong>${sn.clientName}</strong> · <span style="color:#b45309;">${sn.daysSince}d since last activity</span></p>`).join("")}
+      ` : ""}
+    </div>` : "";
+
+  // ── Needs Attention (3-tier) ─────────────────────────────────────────────
+  const overdueItems: string[] = [];
+  const thisWeekItems: string[] = [];
+
+  // Act Today
+  if (attention.overdueTasks > 0)
+    overdueItems.push(`${attention.overdueTasks} overdue task${attention.overdueTasks > 1 ? "s" : ""}`);
+
+  const overdueInvoices = extended.pendingClientInvoices.filter(i => i.isOverdue);
+  if (overdueInvoices.length > 0)
+    overdueItems.push(`${overdueInvoices.length} client invoice${overdueInvoices.length > 1 ? "s" : ""} overdue (${rupees(overdueInvoices.reduce((s, i) => s + i.amount, 0))})`);
+
+  const overdueBills = attention.unpaidBills.filter(b => b.due_date && b.due_date <= todayIST);
+  if (overdueBills.length > 0)
+    overdueItems.push(`${overdueBills.length} vendor bill${overdueBills.length > 1 ? "s" : ""} overdue (${rupees(overdueBills.reduce((s, b) => s + (b.total_amount - b.amount_paid), 0))})`);
+
+  // This Week
+  if (attention.expiringContracts > 0)
+    thisWeekItems.push(`${attention.expiringContracts} contract${attention.expiringContracts > 1 ? "s" : ""} expiring in 30 days`);
+  if (attention.pendingFollowups > 0)
+    thisWeekItems.push(`${attention.pendingFollowups} follow-up${attention.pendingFollowups > 1 ? "s" : ""} pending`);
+
+  const upcomingBills = attention.unpaidBills.filter(b => b.due_date && b.due_date > todayIST);
+  if (upcomingBills.length > 0)
+    thisWeekItems.push(`${upcomingBills.length} upcoming vendor bill${upcomingBills.length > 1 ? "s" : ""} (${rupees(upcomingBills.reduce((s, b) => s + (b.total_amount - b.amount_paid), 0))})`);
+
+  const attentionHtml = (overdueItems.length > 0 || thisWeekItems.length > 0) ? `
+    ${sectionHeader("Needs Attention")}
+    ${overdueItems.length > 0 ? `
+      <div style="background:#fff5f5;border-left:3px solid #e53e3e;padding:12px 16px;margin-bottom:10px;border-radius:0 6px 6px 0;">
+        <p style="margin:0 0 6px;font-weight:700;color:#c53030;font-size:12px;text-transform:uppercase;letter-spacing:0.4px;">🔴 Act Today</p>
+        ${overdueItems.map(i => `<p style="margin:3px 0;color:#742a2a;font-size:13px;">• ${i}</p>`).join("")}
+      </div>` : ""}
+    ${thisWeekItems.length > 0 ? `
+      <div style="background:#fffbeb;border-left:3px solid #f59e0b;padding:12px 16px;margin-bottom:24px;border-radius:0 6px 6px 0;">
+        <p style="margin:0 0 6px;font-weight:700;color:#b45309;font-size:12px;text-transform:uppercase;letter-spacing:0.4px;">🟡 This Week</p>
+        ${thisWeekItems.map(i => `<p style="margin:3px 0;color:#78350f;font-size:13px;">• ${i}</p>`).join("")}
+      </div>` : `<div style="margin-bottom:24px;"></div>`}
+  ` : "";
+
+  // ── Team Activity ──────────────────────────────────────────────────────
+  const teamHtml = extended.teamActivity.length > 0 ? `
+    <div style="background:#f7f8fa;border:1px solid #e5e7eb;border-radius:8px;padding:12px 16px;margin-bottom:24px;">
+      <p style="margin:0 0 8px;font-weight:600;color:#015E65;font-size:12px;text-transform:uppercase;letter-spacing:0.4px;">Team Activity Today</p>
+      <p style="margin:0;color:#333;font-size:13px;">
+        ${extended.teamActivity.map((m, i) =>
+          `<span style="color:#015E65;font-weight:600;">${m.name}</span> <span style="color:#888;">${m.count} ${m.count === 1 ? "activity" : "activities"}</span>${i < extended.teamActivity.length - 1 ? ' <span style="color:#d1d5db;margin:0 6px;">·</span>' : ""}`
+        ).join("")}
+      </p>
+    </div>` : "";
+
+  // ── Financial Summary ───────────────────────────────────────────────────
   const financialRows = [
     metricRow("Collections", rupees(today.collections), rupees(lw.collections), rupees(ly.collections), today.collections, lw.collections),
     metricRow("Booking Revenue", rupees(today.bookingRevenue), rupees(lw.bookingRevenue), rupees(ly.bookingRevenue), today.bookingRevenue, lw.bookingRevenue),
@@ -466,6 +824,7 @@ function buildDigestHtml(
     metricRow("POs Raised", `${today.posRaised} (${rupees(today.poAmount)})`, `${lw.posRaised}`, `${ly.posRaised}`, today.posRaised, lw.posRaised),
   ].join("");
 
+  // ── Operations ──────────────────────────────────────────────────────────
   const opsRows = [
     metricRow("New Leads", `${today.newLeads}`, `${lw.newLeads}`, `${ly.newLeads}`, today.newLeads, lw.newLeads),
     metricRow("Won / Lost", `${today.leadsWon} / ${today.leadsLost}`, `${lw.leadsWon} / ${lw.leadsLost}`, `${ly.leadsWon} / ${ly.leadsLost}`, today.leadsWon, lw.leadsWon),
@@ -476,28 +835,45 @@ function buildDigestHtml(
     metricRow("Support Tickets", `${today.supportTickets}`, `${lw.supportTickets}`, `${ly.supportTickets}`, today.supportTickets, lw.supportTickets),
   ].join("");
 
-  const locationRows = locations
-    .map(
-      (l) => `
+  // ── Center-wise ─────────────────────────────────────────────────────────
+  const locationRows = locations.map(l => `
     <tr>
       <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:13px;">${l.name}</td>
       <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#015E65;font-size:13px;text-align:right;">${rupees(l.collections)}</td>
       <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:13px;text-align:right;">${l.leads}</td>
       <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:13px;text-align:right;">${l.bookings}</td>
-    </tr>`
-    )
-    .join("");
+    </tr>`).join("");
 
-  const attentionList: string[] = [];
-  if (attention.overdueTasks > 0) attentionList.push(`${attention.overdueTasks} overdue task${attention.overdueTasks > 1 ? "s" : ""}`);
-  if (attention.expiringContracts > 0) attentionList.push(`${attention.expiringContracts} contract${attention.expiringContracts > 1 ? "s" : ""} expiring in 30 days`);
-  if (attention.pendingFollowups > 0) attentionList.push(`${attention.pendingFollowups} pending follow-up${attention.pendingFollowups > 1 ? "s" : ""}`);
+  // ── Outstanding Client Invoices ─────────────────────────────────────────
+  const clientInvHtml = extended.pendingClientInvoices.length > 0 ? `
+    ${sectionHeader(`Outstanding Client Invoices (${extended.pendingClientInvoices.length})`)}
+    <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
+      <tr style="background:#f7f8fa;">
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Client</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Invoice #</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Amount</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Due</td>
+      </tr>
+      ${extended.pendingClientInvoices.map(inv => `
+      <tr>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;">${inv.clientName}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;">${inv.number}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-weight:600;color:${inv.isOverdue ? "#e53e3e" : "#015E65"};font-size:12px;text-align:right;">${rupees(inv.amount)}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:12px;color:${inv.isOverdue ? "#e53e3e" : "#333"};">
+          ${inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—"}
+          ${inv.isOverdue && inv.daysOverdue ? `<span style="font-size:10px;color:#e53e3e;"> (${inv.daysOverdue}d overdue)</span>` : ""}
+        </td>
+      </tr>`).join("")}
+      <tr style="background:#f7f8fa;">
+        <td colspan="2" style="padding:8px 12px;font-weight:600;color:#333;font-size:12px;">Total Outstanding</td>
+        <td style="padding:8px 12px;font-weight:700;color:#e53e3e;font-size:13px;text-align:right;">${rupees(extended.pendingClientTotal)}</td>
+        <td></td>
+      </tr>
+    </table>` : "";
 
-  // Pending vendor bills table
-  const billsTableHtml =
-    attention.unpaidBills.length > 0
-      ? `
-    <h2 style="color:#015E65;font-size:15px;margin:0 0 12px;border-bottom:2px solid #015E65;padding-bottom:6px;">Pending Vendor Bills (${attention.unpaidBills.length})</h2>
+  // ── Vendor Obligations ──────────────────────────────────────────────────
+  const billsTableHtml = attention.unpaidBills.length > 0 ? `
+    ${sectionHeader(`Vendor Obligations (${attention.unpaidBills.length})`)}
     <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
       <tr style="background:#f7f8fa;">
         <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Vendor</td>
@@ -505,11 +881,9 @@ function buildDigestHtml(
         <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Amount</td>
         <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Paid</td>
         <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Balance</td>
-        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Due Date</td>
+        <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Due</td>
       </tr>
-      ${attention.unpaidBills
-        .map(
-          (b) => `
+      ${attention.unpaidBills.map(b => `
       <tr>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;">${b.vendor_name}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;">${b.invoice_number}</td>
@@ -517,28 +891,18 @@ function buildDigestHtml(
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;text-align:right;">${rupees(b.amount_paid)}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#e53e3e;font-size:12px;text-align:right;">${rupees(b.total_amount - b.amount_paid)}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:${b.due_date && b.due_date <= todayIST ? "#e53e3e" : "#333"};font-size:12px;">${b.due_date ? new Date(b.due_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—"}</td>
-      </tr>`
-        )
-        .join("")}
+      </tr>`).join("")}
       <tr style="background:#f7f8fa;">
         <td colspan="4" style="padding:8px 12px;font-weight:600;color:#333;font-size:12px;">Total Outstanding</td>
         <td style="padding:8px 12px;font-weight:700;color:#e53e3e;font-size:13px;text-align:right;">${rupees(attention.unpaidBillsTotal)}</td>
         <td></td>
       </tr>
-    </table>`
-      : "";
+    </table>` : "";
 
-  const attentionHtml =
-    attentionList.length > 0
-      ? `
-    <div style="background:#fef3c7;border-left:4px solid #f59e0b;padding:16px 20px;border-radius:0 8px 8px 0;margin:24px 0;">
-      <p style="margin:0 0 8px;font-weight:700;color:#92400e;font-size:14px;">Attention Items</p>
-      ${attentionList.map((item) => `<p style="margin:4px 0;color:#78350f;font-size:13px;">• ${item}</p>`).join("")}
-    </div>`
-      : "";
-
+  // ── Assemble ────────────────────────────────────────────────────────────
   return `
-<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:640px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;background:#ffffff;">
+<div style="font-family:'Segoe UI',Arial,sans-serif;max-width:660px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;background:#ffffff;">
+
   <!-- Header -->
   <div style="background:#015E65;padding:24px 32px;">
     <h1 style="color:#ffffff;margin:0;font-size:20px;font-weight:700;">The WorkVilla</h1>
@@ -548,34 +912,40 @@ function buildDigestHtml(
 
   <div style="padding:28px 32px;">
 
-    <!-- Portfolio Snapshot -->
-    <div style="display:flex;gap:0;margin-bottom:24px;">
-      <div style="flex:1;background:#f0faf5;padding:16px;border-radius:8px 0 0 8px;border:1px solid #d1fae5;text-align:center;">
-        <p style="margin:0;color:#666;font-size:11px;text-transform:uppercase;">Active Contracts</p>
-        <p style="margin:4px 0 0;color:#015E65;font-size:24px;font-weight:700;">${portfolio.activeContracts}</p>
-      </div>
-      <div style="flex:1;background:#f0faf5;padding:16px;border-radius:0 8px 8px 0;border:1px solid #d1fae5;border-left:0;text-align:center;">
-        <p style="margin:0;color:#666;font-size:11px;text-transform:uppercase;">Monthly Recurring Revenue</p>
-        <p style="margin:4px 0 0;color:#015E65;font-size:24px;font-weight:700;">${rupees(portfolio.totalMRR)}</p>
-      </div>
-    </div>
+    <!-- KPI Snapshot -->
+    ${kpiHtml}
 
-    <!-- Financial Highlights -->
-    <h2 style="color:#015E65;font-size:15px;margin:0 0 12px;border-bottom:2px solid #015E65;padding-bottom:6px;">Financial Highlights</h2>
+    <!-- Today's Wins -->
+    ${winsHtml}
+
+    <!-- Pipeline -->
+    ${pipelineHtml}
+
+    <!-- Stuck Pipeline -->
+    ${stuckHtml}
+
+    <!-- Needs Attention -->
+    ${attentionHtml}
+
+    <!-- Team Activity -->
+    ${teamHtml}
+
+    <!-- Financial Summary -->
+    ${sectionHeader("Financial Summary")}
     <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
       ${tableHeader()}
       ${financialRows}
     </table>
 
     <!-- Operations -->
-    <h2 style="color:#015E65;font-size:15px;margin:0 0 12px;border-bottom:2px solid #015E65;padding-bottom:6px;">Operations</h2>
+    ${sectionHeader("Operations")}
     <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
       ${tableHeader()}
       ${opsRows}
     </table>
 
     <!-- Center-wise -->
-    <h2 style="color:#015E65;font-size:15px;margin:0 0 12px;border-bottom:2px solid #015E65;padding-bottom:6px;">Center-wise (Today)</h2>
+    ${sectionHeader("Center-wise (Today)")}
     <table style="width:100%;border-collapse:collapse;margin-bottom:24px;">
       <tr style="background:#f7f8fa;">
         <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Center</td>
@@ -586,8 +956,10 @@ function buildDigestHtml(
       ${locationRows}
     </table>
 
-    ${attentionHtml}
+    <!-- Outstanding Client Invoices -->
+    ${clientInvHtml}
 
+    <!-- Vendor Obligations -->
     ${billsTableHtml}
 
   </div>
@@ -598,7 +970,6 @@ function buildDigestHtml(
     <p style="color:rgba(255,255,255,0.7);margin:4px 0 0;font-size:10px;">Prakash Presidium, 110, MG Road, Nungambakkam, Chennai - 600034 | +91 97910 97900</p>
     <p style="color:#00AE6C;margin:4px 0 0;font-size:10px;">www.theworkvilla.com</p>
   </div>
+
 </div>`;
 }
-
-export const maxDuration = 60;
