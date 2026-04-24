@@ -28,6 +28,13 @@ export async function GET(request: Request) {
   const lastWeek = lastWeekDate.toISOString().slice(0, 10);
   const lastYear = lastYearDate.toISOString().slice(0, 10);
 
+  // Week-to-date: Monday of the current IST week → today
+  const dayOfWeek = todayDate.getUTCDay(); // 0=Sun, 1=Mon … 6=Sat
+  const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+  const weekStart = new Date(todayDate.getTime() - daysFromMonday * 86400000)
+    .toISOString()
+    .slice(0, 10);
+
   const supabase = await createAdminClient();
 
   // Fetch recipients
@@ -48,11 +55,12 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: "No digest recipients configured" }, { status: 400 });
   }
 
-  // Aggregate data for 3 date windows
-  const [today, lw, ly] = await Promise.all([
+  // Aggregate data for 3 date windows + week-to-date
+  const [today, lw, ly, wtd] = await Promise.all([
     fetchMetrics(supabase, todayIST),
     fetchMetrics(supabase, lastWeek),
     fetchMetrics(supabase, lastYear),
+    fetchMetricsRange(supabase, weekStart, todayIST),
   ]);
 
   // Today-only: location breakdown, attention items, portfolio snapshot, extended data
@@ -71,7 +79,7 @@ export async function GET(request: Request) {
     year: "numeric",
   });
 
-  const html = buildDigestHtml(dateLabel, todayIST, today, lw, ly, locations, attention, portfolio, extended);
+  const html = buildDigestHtml(dateLabel, todayIST, weekStart, today, lw, ly, wtd, locations, attention, portfolio, extended);
 
   let sent = 0;
   for (const email of recipients) {
@@ -95,7 +103,7 @@ export async function GET(request: Request) {
     date: todayIST,
     recipients: recipients.length,
     sent,
-    metrics: { today, lastWeek: lw, lastYear: ly },
+    metrics: { today, weekToDate: wtd, lastWeek: lw, lastYear: ly },
     locations,
     attention,
     portfolio,
@@ -125,10 +133,20 @@ interface Metrics {
   supportTickets: number;
 }
 
+/** Single-day shorthand — delegates to the range version */
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function fetchMetrics(supabase: any, date: string): Promise<Metrics> {
-  const dayStart = `${date}T00:00:00`;
-  const dayEnd = `${date}T23:59:59`;
+  return fetchMetricsRange(supabase, date, date);
+}
+
+/**
+ * Aggregate metrics across an inclusive date range [fromDate … toDate].
+ * Both dates are YYYY-MM-DD strings. Single-day: pass the same date for both.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchMetricsRange(supabase: any, fromDate: string, toDate: string): Promise<Metrics> {
+  const rangeStart = `${fromDate}T00:00:00`;
+  const rangeEnd = `${toDate}T23:59:59`;
 
   const [
     collections,
@@ -149,69 +167,72 @@ async function fetchMetrics(supabase: any, date: string): Promise<Metrics> {
       .from("contract_payments")
       .select("amount")
       .eq("status", "verified")
-      .eq("payment_date", date),
+      .gte("payment_date", fromDate)
+      .lte("payment_date", toDate),
     supabase
       .from("booking_payments")
       .select("amount")
       .eq("status", "verified")
-      .gte("created_at", dayStart)
-      .lte("created_at", dayEnd),
+      .gte("created_at", rangeStart)
+      .lte("created_at", rangeEnd),
     supabase
       .from("proforma_invoices")
       .select("total_amount")
-      .gte("created_at", dayStart)
-      .lte("created_at", dayEnd),
+      .gte("created_at", rangeStart)
+      .lte("created_at", rangeEnd),
     supabase
       .from("petty_cash_entries")
       .select("amount")
       .eq("status", "approved")
-      .eq("date", date),
+      .gte("date", fromDate)
+      .lte("date", toDate),
     supabase
       .from("purchase_orders")
       .select("total_ordered_amount")
-      .gte("created_at", dayStart)
-      .lte("created_at", dayEnd),
+      .gte("created_at", rangeStart)
+      .lte("created_at", rangeEnd),
     supabase
       .from("leads")
       .select("id", { count: "exact", head: true })
-      .gte("created_at", dayStart)
-      .lte("created_at", dayEnd),
+      .gte("created_at", rangeStart)
+      .lte("created_at", rangeEnd),
     supabase
       .from("leads")
       .select("id", { count: "exact", head: true })
-      .gte("converted_at", dayStart)
-      .lte("converted_at", dayEnd),
+      .gte("converted_at", rangeStart)
+      .lte("converted_at", rangeEnd),
     supabase
       .from("leads")
       .select("id", { count: "exact", head: true })
-      .gte("lost_at", dayStart)
-      .lte("lost_at", dayEnd),
+      .gte("lost_at", rangeStart)
+      .lte("lost_at", rangeEnd),
     supabase
       .from("activities")
       .select("id", { count: "exact", head: true })
-      .gte("created_at", dayStart)
-      .lte("created_at", dayEnd),
+      .gte("created_at", rangeStart)
+      .lte("created_at", rangeEnd),
     supabase
       .from("tasks")
       .select("id", { count: "exact", head: true })
-      .gte("completed_at", dayStart)
-      .lte("completed_at", dayEnd),
+      .gte("completed_at", rangeStart)
+      .lte("completed_at", rangeEnd),
     supabase
       .from("bookings")
       .select("id", { count: "exact", head: true })
-      .eq("booking_date", date)
+      .gte("booking_date", fromDate)
+      .lte("booking_date", toDate)
       .in("status", ["confirmed", "checked_in", "checked_out", "completed"]),
     supabase
       .from("contracts")
       .select("id", { count: "exact", head: true })
       .eq("status", "active")
-      .gte("created_at", dayStart)
-      .lte("created_at", dayEnd),
+      .gte("created_at", rangeStart)
+      .lte("created_at", rangeEnd),
     supabase
       .from("support_tickets")
       .select("id", { count: "exact", head: true })
-      .gte("created_at", dayStart)
-      .lte("created_at", dayEnd),
+      .gte("created_at", rangeStart)
+      .lte("created_at", rangeEnd),
   ]);
 
   const sum = (rows: { amount?: number; total_amount?: number; total_ordered_amount?: number }[] | null, field: string) =>
@@ -635,6 +656,7 @@ function trend(today: number, compare: number): string {
 function metricRow(
   label: string,
   todayVal: string,
+  wtdVal: string,
   lwVal: string,
   lyVal: string,
   todayNum: number,
@@ -642,20 +664,22 @@ function metricRow(
 ): string {
   return `
     <tr>
-      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:13px;">${label}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#015E65;font-size:13px;text-align:right;">${todayVal}${trend(todayNum, lwNum)}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#666;font-size:13px;text-align:right;">${lwVal}</td>
-      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#666;font-size:13px;text-align:right;">${lyVal}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;">${label}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#015E65;font-size:12px;text-align:right;">${todayVal}${trend(todayNum, lwNum)}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #e5e7eb;font-size:12px;color:#015E65;text-align:right;opacity:0.75;">${wtdVal}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #e5e7eb;color:#999;font-size:12px;text-align:right;">${lwVal}</td>
+      <td style="padding:7px 10px;border-bottom:1px solid #e5e7eb;color:#bbb;font-size:11px;text-align:right;">${lyVal}</td>
     </tr>`;
 }
 
 function tableHeader(): string {
   return `
     <tr style="background:#f7f8fa;">
-      <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Metric</td>
-      <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Today</td>
-      <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Last Week</td>
-      <td style="padding:8px 12px;font-weight:600;color:#666;font-size:11px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Last Year</td>
+      <td style="padding:7px 10px;font-weight:600;color:#666;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;">Metric</td>
+      <td style="padding:7px 10px;font-weight:600;color:#666;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Today</td>
+      <td style="padding:7px 10px;font-weight:600;color:#666;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">This Week</td>
+      <td style="padding:7px 10px;font-weight:600;color:#666;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Last Week</td>
+      <td style="padding:7px 10px;font-weight:600;color:#666;font-size:10px;text-transform:uppercase;border-bottom:2px solid #e5e7eb;text-align:right;">Last Year</td>
     </tr>`;
 }
 
@@ -691,12 +715,31 @@ function stagePill(label: string, count: number, isWarn: boolean): string {
 // Main HTML builder
 // ---------------------------------------------------------------------------
 
+/** Format a short date like "Mon 21 Apr" for the WTD label */
+function shortDate(iso: string): string {
+  return new Date(iso + "T00:00:00").toLocaleDateString("en-IN", {
+    weekday: "short", day: "numeric", month: "short",
+  });
+}
+
+/** Render one WTD metric cell (week total + today's contribution) */
+function wtdCell(label: string, weekVal: string, todayVal: string, todayIsZero?: boolean): string {
+  return `
+    <td style="text-align:center;padding:8px 6px;border-right:1px solid #e5e7eb;">
+      <p style="margin:0;font-size:17px;font-weight:700;color:#015E65;">${weekVal}</p>
+      <p style="margin:2px 0 0;font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.3px;">${label}</p>
+      <p style="margin:3px 0 0;font-size:10px;font-weight:600;color:${todayIsZero ? "#bbb" : "#00AE6C"};">${todayIsZero ? "—" : `+${todayVal} today`}</p>
+    </td>`;
+}
+
 function buildDigestHtml(
   dateLabel: string,
   todayIST: string,
+  weekStart: string,
   today: Metrics,
   lw: Metrics,
   ly: Metrics,
+  wtd: Metrics,
   locations: LocationRow[],
   attention: AttentionItems,
   portfolio: Portfolio,
@@ -715,6 +758,30 @@ function buildDigestHtml(
         ${kpiTile("Active Contracts", `${portfolio.activeContracts}`, `MRR ${rupees(portfolio.totalMRR)}`)}
       </tr>
     </table>`;
+
+  // ── Week to Date strip ────────────────────────────────────────────────────
+  const wtdRevenue = wtd.collections + wtd.bookingRevenue;
+  const isMonday = weekStart === todayIST; // first day of week — WTD = today, no strip needed
+  const wtdHtml = !isMonday ? `
+    <div style="background:#f7f8fa;border:1px solid #e5e7eb;border-radius:8px;padding:12px 14px;margin-bottom:24px;">
+      <p style="margin:0 0 10px;font-size:11px;font-weight:700;color:#015E65;text-transform:uppercase;letter-spacing:0.4px;">
+        Week to Date &nbsp;·&nbsp; ${shortDate(weekStart)} – ${shortDate(todayIST)}
+      </p>
+      <table style="width:100%;border-collapse:collapse;">
+        <tr>
+          ${wtdCell("Revenue", wtdRevenue > 0 ? rupees(wtdRevenue) : "—", rupees(revenueToday), revenueToday === 0)}
+          ${wtdCell("New Leads", `${wtd.newLeads}`, `${today.newLeads}`, today.newLeads === 0)}
+          ${wtdCell("Won", `${wtd.leadsWon}`, `${today.leadsWon}`, today.leadsWon === 0)}
+          ${wtdCell("Activities", `${wtd.activities}`, `${today.activities}`, today.activities === 0)}
+          ${wtdCell("Bookings", `${wtd.newBookings}`, `${today.newBookings}`, today.newBookings === 0)}
+          <td style="text-align:center;padding:8px 6px;">
+            <p style="margin:0;font-size:17px;font-weight:700;color:#015E65;">${wtd.invoiceAmount > 0 ? rupees(wtd.invoiceAmount) : "—"}</p>
+            <p style="margin:2px 0 0;font-size:10px;color:#888;text-transform:uppercase;letter-spacing:0.3px;">Invoiced</p>
+            <p style="margin:3px 0 0;font-size:10px;font-weight:600;color:${today.invoiceCount === 0 ? "#bbb" : "#00AE6C"};">${today.invoiceCount === 0 ? "—" : `+${today.invoiceCount} today`}</p>
+          </td>
+        </tr>
+      </table>
+    </div>` : "";
 
   // ── Today's Wins (only shown if there are wins) ───────────────────────────
   const winsHtml = extended.todayWins.length > 0 ? `
@@ -817,22 +884,22 @@ function buildDigestHtml(
 
   // ── Financial Summary ───────────────────────────────────────────────────
   const financialRows = [
-    metricRow("Collections", rupees(today.collections), rupees(lw.collections), rupees(ly.collections), today.collections, lw.collections),
-    metricRow("Booking Revenue", rupees(today.bookingRevenue), rupees(lw.bookingRevenue), rupees(ly.bookingRevenue), today.bookingRevenue, lw.bookingRevenue),
-    metricRow("Invoices Raised", `${today.invoiceCount} (${rupees(today.invoiceAmount)})`, `${lw.invoiceCount}`, `${ly.invoiceCount}`, today.invoiceCount, lw.invoiceCount),
-    metricRow("Petty Cash Spend", rupees(today.pettyCashSpend), rupees(lw.pettyCashSpend), rupees(ly.pettyCashSpend), today.pettyCashSpend, lw.pettyCashSpend),
-    metricRow("POs Raised", `${today.posRaised} (${rupees(today.poAmount)})`, `${lw.posRaised}`, `${ly.posRaised}`, today.posRaised, lw.posRaised),
+    metricRow("Collections", rupees(today.collections), rupees(wtd.collections), rupees(lw.collections), rupees(ly.collections), today.collections, lw.collections),
+    metricRow("Booking Revenue", rupees(today.bookingRevenue), rupees(wtd.bookingRevenue), rupees(lw.bookingRevenue), rupees(ly.bookingRevenue), today.bookingRevenue, lw.bookingRevenue),
+    metricRow("Invoices Raised", `${today.invoiceCount} (${rupees(today.invoiceAmount)})`, `${wtd.invoiceCount} (${rupees(wtd.invoiceAmount)})`, `${lw.invoiceCount}`, `${ly.invoiceCount}`, today.invoiceCount, lw.invoiceCount),
+    metricRow("Petty Cash Spend", rupees(today.pettyCashSpend), rupees(wtd.pettyCashSpend), rupees(lw.pettyCashSpend), rupees(ly.pettyCashSpend), today.pettyCashSpend, lw.pettyCashSpend),
+    metricRow("POs Raised", `${today.posRaised} (${rupees(today.poAmount)})`, `${wtd.posRaised} (${rupees(wtd.poAmount)})`, `${lw.posRaised}`, `${ly.posRaised}`, today.posRaised, lw.posRaised),
   ].join("");
 
   // ── Operations ──────────────────────────────────────────────────────────
   const opsRows = [
-    metricRow("New Leads", `${today.newLeads}`, `${lw.newLeads}`, `${ly.newLeads}`, today.newLeads, lw.newLeads),
-    metricRow("Won / Lost", `${today.leadsWon} / ${today.leadsLost}`, `${lw.leadsWon} / ${lw.leadsLost}`, `${ly.leadsWon} / ${ly.leadsLost}`, today.leadsWon, lw.leadsWon),
-    metricRow("Activities Logged", `${today.activities}`, `${lw.activities}`, `${ly.activities}`, today.activities, lw.activities),
-    metricRow("Tasks Completed", `${today.tasksCompleted}`, `${lw.tasksCompleted}`, `${ly.tasksCompleted}`, today.tasksCompleted, lw.tasksCompleted),
-    metricRow("Bookings", `${today.newBookings}`, `${lw.newBookings}`, `${ly.newBookings}`, today.newBookings, lw.newBookings),
-    metricRow("New Contracts", `${today.newContracts}`, `${lw.newContracts}`, `${ly.newContracts}`, today.newContracts, lw.newContracts),
-    metricRow("Support Tickets", `${today.supportTickets}`, `${lw.supportTickets}`, `${ly.supportTickets}`, today.supportTickets, lw.supportTickets),
+    metricRow("New Leads", `${today.newLeads}`, `${wtd.newLeads}`, `${lw.newLeads}`, `${ly.newLeads}`, today.newLeads, lw.newLeads),
+    metricRow("Won / Lost", `${today.leadsWon} / ${today.leadsLost}`, `${wtd.leadsWon} / ${wtd.leadsLost}`, `${lw.leadsWon} / ${lw.leadsLost}`, `${ly.leadsWon} / ${ly.leadsLost}`, today.leadsWon, lw.leadsWon),
+    metricRow("Activities Logged", `${today.activities}`, `${wtd.activities}`, `${lw.activities}`, `${ly.activities}`, today.activities, lw.activities),
+    metricRow("Tasks Completed", `${today.tasksCompleted}`, `${wtd.tasksCompleted}`, `${lw.tasksCompleted}`, `${ly.tasksCompleted}`, today.tasksCompleted, lw.tasksCompleted),
+    metricRow("Bookings", `${today.newBookings}`, `${wtd.newBookings}`, `${lw.newBookings}`, `${ly.newBookings}`, today.newBookings, lw.newBookings),
+    metricRow("New Contracts", `${today.newContracts}`, `${wtd.newContracts}`, `${lw.newContracts}`, `${ly.newContracts}`, today.newContracts, lw.newContracts),
+    metricRow("Support Tickets", `${today.supportTickets}`, `${wtd.supportTickets}`, `${lw.supportTickets}`, `${ly.supportTickets}`, today.supportTickets, lw.supportTickets),
   ].join("");
 
   // ── Center-wise ─────────────────────────────────────────────────────────
@@ -914,6 +981,9 @@ function buildDigestHtml(
 
     <!-- KPI Snapshot -->
     ${kpiHtml}
+
+    <!-- Week to Date -->
+    ${wtdHtml}
 
     <!-- Today's Wins -->
     ${winsHtml}
