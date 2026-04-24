@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge";
 import type { LocationFloor, SpaceUnit, SpaceUnitType } from "@/types";
 
@@ -61,94 +61,90 @@ function rectsOverlap(
 }
 
 export function FloorCanvas({ floor, units, mode, onCellSelect, onUnitClick, onUnitMove }: Props) {
-  const dragRef = useRef<DragState | null>(null);
   const svgRef = useRef<HTMLDivElement>(null);
+  const [drag, setDrag] = useState<DragState | null>(null);
 
-  // Force re-render during drag to show ghost/preview
-  const [, setTick] = useState(0);
-  const rerender = useCallback(() => setTick(t => t + 1), []);
-
-  // Use a stable ref for rerender to use inside event listeners
-  const rerenderRef = useRef(rerender);
-  rerenderRef.current = rerender;
-
-  const handleMouseMove = useCallback((e: MouseEvent) => {
-    const ds = dragRef.current;
-    if (!ds) return;
-    const container = svgRef.current;
-    if (!container) return;
-
-    const rect = container.getBoundingClientRect();
-    const relX = e.clientX - rect.left;
-    const relY = e.clientY - rect.top;
-    const col = Math.max(1, Math.min(floor.grid_cols, Math.floor(relX / CELL_SIZE) + 1));
-    const row = Math.max(1, Math.min(floor.grid_rows, Math.floor(relY / CELL_SIZE) + 1));
-
-    if (ds.type === "new-selection") {
-      dragRef.current = { ...ds, endCol: col, endRow: row };
-    } else if (ds.type === "move-unit") {
-      const newCol = Math.max(1, Math.min(floor.grid_cols - ds.unit.grid_col_span + 1, col - ds.offsetCol));
-      const newRow = Math.max(1, Math.min(floor.grid_rows - ds.unit.grid_row_span + 1, row - ds.offsetRow));
-      dragRef.current = { ...ds, currentCol: newCol, currentRow: newRow };
-    }
-    rerenderRef.current();
-  }, [floor.grid_cols, floor.grid_rows]);
-
-  const handleMouseUp = useCallback(() => {
-    const ds = dragRef.current;
-    if (!ds) return;
-    dragRef.current = null;
-
-    if (ds.type === "new-selection") {
-      const colStart = Math.min(ds.startCol, ds.endCol);
-      const rowStart = Math.min(ds.startRow, ds.endRow);
-      const colSpan  = Math.abs(ds.endCol - ds.startCol) + 1;
-      const rowSpan  = Math.abs(ds.endRow - ds.startRow) + 1;
-      onCellSelect?.({ gridCol: colStart, gridRow: rowStart, gridColSpan: colSpan, gridRowSpan: rowSpan });
-    } else if (ds.type === "move-unit") {
-      const newCol = ds.currentCol;
-      const newRow = ds.currentRow;
-      // Collision check
-      const hasCollision = units.some((u) => {
-        if (u.id === ds.unit.id) return false;
-        return rectsOverlap(
-          newCol, newRow, ds.unit.grid_col_span, ds.unit.grid_row_span,
-          u.grid_col, u.grid_row, u.grid_col_span, u.grid_row_span
-        );
-      });
-      if (!hasCollision) {
-        onUnitMove?.(ds.unit, newCol, newRow);
-      }
-    }
-    rerenderRef.current();
-  }, [units, onCellSelect, onUnitMove]);
+  // Capture stable refs for latest values so document listeners don't use stale closures
+  const dragStateRef = useRef<DragState | null>(null);
+  const unitsRef = useRef(units);
+  const onCellSelectRef = useRef(onCellSelect);
+  const onUnitMoveRef = useRef(onUnitMove);
+  useEffect(() => { dragStateRef.current = drag; }, [drag]);
+  useEffect(() => { unitsRef.current = units; }, [units]);
+  useEffect(() => { onCellSelectRef.current = onCellSelect; }, [onCellSelect]);
+  useEffect(() => { onUnitMoveRef.current = onUnitMove; }, [onUnitMove]);
 
   useEffect(() => {
-    document.addEventListener("mousemove", handleMouseMove);
-    document.addEventListener("mouseup", handleMouseUp);
-    return () => {
-      document.removeEventListener("mousemove", handleMouseMove);
-      document.removeEventListener("mouseup", handleMouseUp);
+    const handleMove = (e: MouseEvent) => {
+      const ds = dragStateRef.current;
+      if (!ds) return;
+      const container = svgRef.current;
+      if (!container) return;
+
+      const rect = container.getBoundingClientRect();
+      const relX = e.clientX - rect.left;
+      const relY = e.clientY - rect.top;
+      const col = Math.max(1, Math.min(floor.grid_cols, Math.floor(relX / CELL_SIZE) + 1));
+      const row = Math.max(1, Math.min(floor.grid_rows, Math.floor(relY / CELL_SIZE) + 1));
+
+      if (ds.type === "new-selection") {
+        setDrag({ ...ds, endCol: col, endRow: row });
+      } else {
+        const newCol = Math.max(1, Math.min(floor.grid_cols - ds.unit.grid_col_span + 1, col - ds.offsetCol));
+        const newRow = Math.max(1, Math.min(floor.grid_rows - ds.unit.grid_row_span + 1, row - ds.offsetRow));
+        setDrag({ ...ds, currentCol: newCol, currentRow: newRow });
+      }
     };
-  }, [handleMouseMove, handleMouseUp]);
 
-  const currentDrag = dragRef.current;
+    const handleUp = () => {
+      const ds = dragStateRef.current;
+      if (!ds) return;
+      setDrag(null);
 
-  // Build ghost unit for move preview
-  const ghostUnit = currentDrag?.type === "move-unit"
-    ? { ...currentDrag.unit, grid_col: currentDrag.currentCol, grid_row: currentDrag.currentRow }
+      if (ds.type === "new-selection") {
+        const colStart = Math.min(ds.startCol, ds.endCol);
+        const rowStart = Math.min(ds.startRow, ds.endRow);
+        const colSpan  = Math.abs(ds.endCol - ds.startCol) + 1;
+        const rowSpan  = Math.abs(ds.endRow - ds.startRow) + 1;
+        onCellSelectRef.current?.({ gridCol: colStart, gridRow: rowStart, gridColSpan: colSpan, gridRowSpan: rowSpan });
+      } else {
+        const newCol = ds.currentCol;
+        const newRow = ds.currentRow;
+        const hasCollision = unitsRef.current.some((u) => {
+          if (u.id === ds.unit.id) return false;
+          return rectsOverlap(
+            newCol, newRow, ds.unit.grid_col_span, ds.unit.grid_row_span,
+            u.grid_col, u.grid_row, u.grid_col_span, u.grid_row_span
+          );
+        });
+        if (!hasCollision) {
+          onUnitMoveRef.current?.(ds.unit, newCol, newRow);
+        }
+      }
+    };
+
+    document.addEventListener("mousemove", handleMove);
+    document.addEventListener("mouseup", handleUp);
+    return () => {
+      document.removeEventListener("mousemove", handleMove);
+      document.removeEventListener("mouseup", handleUp);
+    };
+  }, [floor.grid_cols, floor.grid_rows]);
+
+  // Build ghost unit for move preview (from state — safe to access during render)
+  const ghostUnit = drag?.type === "move-unit"
+    ? { ...drag.unit, grid_col: drag.currentCol, grid_row: drag.currentRow }
     : null;
 
   // Selection preview bounds
-  let selPreview: { c1: number; r1: number; c2: number; r2: number } | null = null;
-  if (currentDrag?.type === "new-selection") {
-    selPreview = {
-      c1: Math.min(currentDrag.startCol, currentDrag.endCol),
-      r1: Math.min(currentDrag.startRow, currentDrag.endRow),
-      c2: Math.max(currentDrag.startCol, currentDrag.endCol),
-      r2: Math.max(currentDrag.startRow, currentDrag.endRow),
-    };
-  }
+  const selPreview = drag?.type === "new-selection"
+    ? {
+        c1: Math.min(drag.startCol, drag.endCol),
+        r1: Math.min(drag.startRow, drag.endRow),
+        c2: Math.max(drag.startCol, drag.endCol),
+        r2: Math.max(drag.startRow, drag.endRow),
+      }
+    : null;
 
   return (
     <div
@@ -169,7 +165,7 @@ export function FloorCanvas({ floor, units, mode, onCellSelect, onUnitClick, onU
           const col = c + 1;
           const row = r + 1;
           const isOccupied = units.some((u) =>
-            u.id !== (currentDrag?.type === "move-unit" ? currentDrag.unit.id : null) &&
+            u.id !== (drag?.type === "move-unit" ? drag.unit.id : null) &&
             col >= u.grid_col && col < u.grid_col + u.grid_col_span &&
             row >= u.grid_row && row < u.grid_row + u.grid_row_span
           );
@@ -187,8 +183,7 @@ export function FloorCanvas({ floor, units, mode, onCellSelect, onUnitClick, onU
               onMouseDown={(e) => {
                 if (isOccupied) return;
                 e.preventDefault();
-                dragRef.current = { type: "new-selection", startCol: col, startRow: row, endCol: col, endRow: row };
-                rerenderRef.current();
+                setDrag({ type: "new-selection", startCol: col, startRow: row, endCol: col, endRow: row });
               }}
             />
           );
@@ -197,7 +192,7 @@ export function FloorCanvas({ floor, units, mode, onCellSelect, onUnitClick, onU
 
       {/* Existing space units */}
       {units.map((unit) => {
-        const isBeingMoved = currentDrag?.type === "move-unit" && currentDrag.unit.id === unit.id;
+        const isBeingMoved = drag?.type === "move-unit" && drag.unit.id === unit.id;
         if (isBeingMoved) return null; // render ghost instead
         const bg = unit.color || COLOR_MAP[unit.type];
         const border = BORDER_MAP[unit.type];
@@ -229,15 +224,14 @@ export function FloorCanvas({ floor, units, mode, onCellSelect, onUnitClick, onU
               const relY = e.clientY - rect.top;
               const clickCol = Math.floor(relX / CELL_SIZE) + 1;
               const clickRow = Math.floor(relY / CELL_SIZE) + 1;
-              dragRef.current = {
+              setDrag({
                 type: "move-unit",
                 unit,
                 offsetCol: clickCol - unit.grid_col,
                 offsetRow: clickRow - unit.grid_row,
                 currentCol: unit.grid_col,
                 currentRow: unit.grid_row,
-              };
-              rerenderRef.current();
+              });
             }}
           >
             <div>
