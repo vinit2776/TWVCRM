@@ -76,6 +76,7 @@ export function CreateContractDialog({
   const [startDate, setStartDate] = useState("");
   const [tenureMonths, setTenureMonths] = useState<number>(12);
   const [lockInMonths, setLockInMonths] = useState<number>(10);
+  const [noticePeriodMonths, setNoticePeriodMonths] = useState<number>(2);
   const [securityDepositMonths, setSecurityDepositMonths] = useState<number>(3.0);
   const [escalationPercentage, setEscalationPercentage] = useState<number>(10.0);
 
@@ -183,12 +184,22 @@ export function CreateContractDialog({
   }, [startDate, tenureMonths]);
 
   const ifrsdAmount = monthlyFee * securityDepositMonths;
-  const noticePeriodMonths = Math.max(0, tenureMonths - lockInMonths);
+  const maxNoticePeriod = Math.max(0, tenureMonths - lockInMonths);
 
   const handleTenureChange = (val: string) => {
     const t = parseInt(val);
+    const newLockIn = Math.min(lockInMonths, t);
     setTenureMonths(t);
-    if (lockInMonths > t) setLockInMonths(t);
+    setLockInMonths(newLockIn);
+    const newMax = Math.max(0, t - newLockIn);
+    if (noticePeriodMonths > newMax) setNoticePeriodMonths(newMax);
+  };
+
+  const handleLockInChange = (val: string) => {
+    const l = parseInt(val);
+    setLockInMonths(l);
+    const newMax = Math.max(0, tenureMonths - l);
+    if (noticePeriodMonths > newMax) setNoticePeriodMonths(newMax);
   };
 
   const missingCompany = !company.trim();
@@ -215,6 +226,7 @@ export function CreateContractDialog({
     setStartDate("");
     setTenureMonths(12);
     setLockInMonths(10);
+    setNoticePeriodMonths(2);
     setSecurityDepositMonths(3.0);
     setEscalationPercentage(10.0);
     setSignatoryName("");
@@ -606,7 +618,7 @@ export function CreateContractDialog({
                 <Label>
                   Lock-in Period <span className="text-destructive">*</span>
                 </Label>
-                <Select value={String(lockInMonths)} onValueChange={(v) => setLockInMonths(parseInt(v))}>
+                <Select value={String(lockInMonths)} onValueChange={handleLockInChange}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -618,6 +630,26 @@ export function CreateContractDialog({
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>
+                  Notice Period <span className="text-destructive">*</span>
+                </Label>
+                <Select value={String(noticePeriodMonths)} onValueChange={(v) => setNoticePeriodMonths(parseInt(v))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: maxNoticePeriod + 1 }, (_, i) => i).map((m) => (
+                      <SelectItem key={m} value={String(m)}>
+                        {m === 0 ? "None (0 months)" : `${m} month${m !== 1 ? "s" : ""}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {maxNoticePeriod === 0 && (
+                  <p className="text-xs text-muted-foreground">Lock-in equals tenure — no notice period available.</p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label>Security Deposit (x Monthly Fee)</Label>

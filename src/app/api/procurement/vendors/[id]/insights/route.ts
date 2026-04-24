@@ -37,7 +37,7 @@ export async function GET(
   ] = await Promise.all([
     supabase
       .from("procurement_vendors")
-      .select("id, name, category, is_approved")
+      .select("id, name, category, kyc_verified")
       .eq("id", id)
       .single(),
 
