@@ -480,6 +480,48 @@ export const messaging = {
       entityId: leadId,
     });
   },
+
+  /**
+   * Proposal deposit request → customer phone.
+   * Sent on proposal acceptance when a security deposit is required.
+   */
+  proposalDepositRequest(
+    to: string,
+    customerName: string,
+    amount: string,
+    proposalNumber: string,
+    depositLinkUrl: string,
+    proposalId: string
+  ) {
+    return sendWhatsApp({
+      to,
+      template: "proposal_deposit_request",
+      params: [customerName, amount, proposalNumber, depositLinkUrl],
+      entityType: "proposal",
+      entityId: proposalId,
+    });
+  },
+
+  /**
+   * Booking confirmation document → customer phone (WhatsApp document message with PDF).
+   */
+  bookingConfirmationDocument(
+    to: string,
+    customerName: string,
+    proposalNumber: string,
+    amount: string,
+    depositLinkUrl: string,
+    pdfUrl: string,
+    proposalId: string
+  ) {
+    return sendWhatsApp({
+      to,
+      template: "booking_confirmation_document",
+      params: [customerName, proposalNumber, amount, depositLinkUrl, pdfUrl],
+      entityType: "proposal",
+      entityId: proposalId,
+    });
+  },
 };
 
 // ---------------------------------------------------------------------------
