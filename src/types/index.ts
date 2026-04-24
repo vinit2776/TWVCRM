@@ -627,7 +627,10 @@ export type AuditEntityType =
   | "prepaid_package"
   | "location"
   | "stock_transfer"
-  | "consumption_log";
+  | "consumption_log"
+  | "location_floor"
+  | "space_unit"
+  | "contract_space_allocation";
 
 export interface AuditLog {
   id: string;
@@ -1964,4 +1967,120 @@ export interface ConsumptionLog {
   logger?: { id: string; full_name?: string } | null;
   consumption_log_items?: ConsumptionLogItem[];
   consumption_corrections?: ConsumptionCorrection[];
+}
+
+// ==========================================
+// Space Management Types
+// ==========================================
+
+export type SpaceUnitType =
+  | "hot_desk"
+  | "dedicated_desk"
+  | "private_cabin"
+  | "managed_office";
+
+export interface LocationFloor {
+  id: string;
+  location_id: string;
+  location?: Location;
+  name: string;
+  floor_number?: number | null;
+  total_area_sqft: number;
+  leasable_area_sqft: number;
+  grid_cols: number;
+  grid_rows: number;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  space_units?: SpaceUnit[];
+}
+
+export interface SpaceUnit {
+  id: string;
+  location_id: string;
+  location?: Location;
+  floor_id?: string | null;
+  floor?: LocationFloor;
+  name: string;
+  code: string;
+  type: SpaceUnitType;
+  capacity: number;
+  area_sqft?: number | null;
+  monthly_rate: number;
+  daily_rate?: number | null;
+  amenities: string[];
+  is_active: boolean;
+  notes?: string | null;
+  grid_col: number;
+  grid_row: number;
+  grid_col_span: number;
+  grid_row_span: number;
+  color?: string | null;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+  active_allocations?: ContractSpaceAllocation[];
+}
+
+export interface ContractSpaceAllocation {
+  id: string;
+  contract_id: string;
+  contract?: {
+    id: string;
+    contract_number: string;
+    title: string;
+    status: string;
+    start_date: string;
+    end_date?: string | null;
+  };
+  space_unit_id: string;
+  space_unit?: SpaceUnit;
+  allocated_at: string;
+  start_date: string;
+  end_date?: string | null;
+  status: "active" | "ended";
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FloorCUF {
+  floor_id: string;
+  floor_name: string;
+  total_area_sqft: number;
+  leasable_area_sqft: number;
+  cuf: number; // leasable / total, 0–1
+}
+
+export interface SpaceTypeOccupancy {
+  type: SpaceUnitType;
+  total_units: number;
+  total_capacity: number;
+  contracted_units: number;
+  contracted_capacity: number;
+  occupancy_rate: number; // 0–1
+}
+
+export interface SpaceRevenueRow {
+  type: SpaceUnitType;
+  total_units: number;
+  contracted_units: number;
+  monthly_revenue_contracted: number;
+  monthly_revenue_potential: number;
+  units: {
+    unit_id: string;
+    unit_name: string;
+    unit_code: string;
+    monthly_rate: number;
+    contract_number?: string;
+    contract_status?: string;
+  }[];
+}
+
+export interface SpaceAnalytics {
+  floors: FloorCUF[];
+  overall_cuf: number;
+  occupancy: SpaceTypeOccupancy[];
+  revenue: SpaceRevenueRow[];
+  idle_units: SpaceUnit[];
 }

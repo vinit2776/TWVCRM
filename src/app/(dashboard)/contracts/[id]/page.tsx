@@ -51,7 +51,8 @@ import {
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { generateMembershipAgreementPDF } from "@/lib/pdf-generator";
 import { toast } from "sonner";
-import type { Contract } from "@/types";
+import { LayoutGrid, Trash2 } from "lucide-react";
+import type { Contract, ContractSpaceAllocation } from "@/types";
 
 export default function ContractDetailPage({
   params,
@@ -86,6 +87,37 @@ export default function ContractDetailPage({
   const [kycStatus, setKycStatus] = useState<{ allApproved: boolean; total: number; approved: number }>({ allApproved: true, total: 0, approved: 0 });
   const [showOverride, setShowOverride] = useState(false);
 
+  // Assigned spaces
+  const [spaceAllocations, setSpaceAllocations] = useState<ContractSpaceAllocation[]>([]);
+  const [spacesLoading, setSpacesLoading] = useState(false);
+  const [unlinkingId, setUnlinkingId] = useState<string | null>(null);
+
+  const fetchSpaceAllocations = useCallback(async () => {
+    setSpacesLoading(true);
+    const res = await fetch(`/api/contracts/${id}/space-allocations`);
+    if (res.ok) {
+      const json = await res.json();
+      setSpaceAllocations((json.data || []).filter((a: ContractSpaceAllocation) => a.status === "active"));
+    }
+    setSpacesLoading(false);
+  }, [id]);
+
+  const handleUnlinkSpace = async (allocationId: string) => {
+    if (!window.confirm("Unlink this space unit from the contract?")) return;
+    setUnlinkingId(allocationId);
+    const res = await fetch(`/api/contracts/${id}/space-allocations?allocation_id=${allocationId}`, {
+      method: "DELETE",
+    });
+    if (res.ok) {
+      toast.success("Space unit unlinked");
+      setSpaceAllocations((prev) => prev.filter((a) => a.id !== allocationId));
+    } else {
+      const json = await res.json().catch(() => null);
+      toast.error(json?.error || "Failed to unlink space unit");
+    }
+    setUnlinkingId(null);
+  };
+
   const fetchContract = useCallback(async () => {
     setLoading(true);
     const res = await fetch(`/api/contracts/${id}`);
@@ -107,8 +139,9 @@ export default function ContractDetailPage({
 
   useEffect(() => {
     fetchContract();
+    fetchSpaceAllocations();
     fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {});
-  }, [fetchContract]);
+  }, [fetchContract, fetchSpaceAllocations]);
 
   const handleStatusUpdate = async (newStatus: string, paymentOverrideReason?: string) => {
     setStatusUpdating(true);
@@ -1090,6 +1123,62 @@ export default function ContractDetailPage({
                 <span className="text-muted-foreground">Last Updated</span>
                 <span>{formatDate(contract.updated_at)}</span>
               </div>
+            </CardContent>
+          </Card>
+
+          {/* Assigned Spaces Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base flex items-center gap-2">
+                <LayoutGrid className="h-4 w-4" />
+                Assigned Spaces
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              {spacesLoading ? (
+                <div className="space-y-2">
+                  {[1, 2].map((i) => (
+                    <div key={i} className="h-10 bg-muted animate-pulse rounded" />
+                  ))}
+                </div>
+              ) : spaceAllocations.length === 0 ? (
+                <p className="text-xs text-muted-foreground text-center py-2">
+                  No space units assigned to this contract.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {spaceAllocations.map((alloc) => {
+                    const unit = alloc.space_unit;
+                    return (
+                      <div key={alloc.id} className="flex items-center justify-between gap-2 p-2 rounded-md border bg-muted/20">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-1.5">
+                            <code className="text-[10px] font-mono bg-muted px-1 py-0.5 rounded">{unit?.code}</code>
+                            <span className="text-xs font-medium truncate">{unit?.name}</span>
+                          </div>
+                          <p className="text-[10px] text-muted-foreground mt-0.5 capitalize">
+                            {unit?.type?.replace(/_/g, " ")} · {unit?.capacity} seat{(unit?.capacity ?? 1) !== 1 ? "s" : ""}
+                          </p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-6 w-6 text-destructive hover:text-destructive shrink-0"
+                          disabled={unlinkingId === alloc.id}
+                          onClick={() => handleUnlinkSpace(alloc.id)}
+                          title="Unlink space unit"
+                        >
+                          {unlinkingId === alloc.id ? (
+                            <Loader2 className="h-3 w-3 animate-spin" />
+                          ) : (
+                            <Trash2 className="h-3 w-3" />
+                          )}
+                        </Button>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
             </CardContent>
           </Card>
         </div>

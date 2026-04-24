@@ -3,7 +3,8 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { MapPin, Plus, Pencil } from "lucide-react";
+import { MapPin, Plus, Pencil, Eye } from "lucide-react";
+import Link from "next/link";
 import { useLocations } from "@/hooks/use-locations";
 import { LocationFormDialog } from "@/components/locations/location-form-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -56,7 +57,7 @@ export default function LocationsPage() {
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">City</th>
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Address</th>
                 <th className="px-4 py-3 text-left font-medium">Status</th>
-                <th className="px-4 py-3 text-left font-medium w-[80px]">Actions</th>
+                <th className="px-4 py-3 text-left font-medium w-[120px]">Actions</th>
               </tr>
             </thead>
             <tbody>
@@ -76,13 +77,21 @@ export default function LocationsPage() {
                     </Badge>
                   </td>
                   <td className="px-4 py-3">
-                    <Button
-                      variant="ghost"
-                      size="icon"
-                      onClick={() => handleEdit(loc)}
-                    >
-                      <Pencil className="h-4 w-4" />
-                    </Button>
+                    <div className="flex items-center gap-1">
+                      <Link href={`/locations/${loc.id}`}>
+                        <Button variant="ghost" size="icon" title="View location">
+                          <Eye className="h-4 w-4" />
+                        </Button>
+                      </Link>
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => handleEdit(loc)}
+                        title="Edit location"
+                      >
+                        <Pencil className="h-4 w-4" />
+                      </Button>
+                    </div>
                   </td>
                 </tr>
               ))}

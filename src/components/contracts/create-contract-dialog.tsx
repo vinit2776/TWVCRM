@@ -23,6 +23,7 @@ import { toast } from "sonner";
 import { BILLING_CYCLES, BILLING_CYCLE_LABELS, KYC_DOCUMENTS, ENTITY_TYPE_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import { LocationSelector } from "@/components/shared/location-selector";
+import { SpaceAllocationSelector } from "@/components/spaces/space-allocation-selector";
 import type { Proposal, Lead } from "@/types";
 
 interface CreateContractDialogProps {
@@ -84,6 +85,10 @@ export function CreateContractDialog({
   // Notes
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // Space allocation
+  const [selectedSpaceUnitIds, setSelectedSpaceUnitIds] = useState<string[]>([]);
+  const [spaceAssignmentOpen, setSpaceAssignmentOpen] = useState(false);
 
   // Fetch lead data and accepted proposals when dialog opens
   useEffect(() => {
@@ -205,6 +210,8 @@ export function CreateContractDialog({
     setSignatoryPan("");
     setAgreementDate(new Date().toISOString().split("T")[0]);
     setNotes("");
+    setSelectedSpaceUnitIds([]);
+    setSpaceAssignmentOpen(false);
     setLead(null);
     setProposals([]);
   };
@@ -311,16 +318,37 @@ export function CreateContractDialog({
       body: JSON.stringify(body),
     });
 
-    setSubmitting(false);
-    if (res.ok) {
-      toast.success("Membership Agreement created successfully");
-      resetForm();
-      onOpenChange(false);
-      onSuccess();
-    } else {
+    if (!res.ok) {
+      setSubmitting(false);
       const err = await res.json().catch(() => null);
       toast.error(err?.error || "Failed to create agreement");
+      return;
     }
+
+    const contractJson = await res.json();
+    const newContractId: string = contractJson.data?.id;
+
+    // Create space allocations if any units were selected
+    if (newContractId && selectedSpaceUnitIds.length > 0) {
+      await Promise.all(
+        selectedSpaceUnitIds.map((unitId) =>
+          fetch(`/api/contracts/${newContractId}/space-allocations`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              space_unit_id: unitId,
+              start_date: startDate,
+            }),
+          })
+        )
+      );
+    }
+
+    setSubmitting(false);
+    toast.success("Membership Agreement created successfully");
+    resetForm();
+    onOpenChange(false);
+    onSuccess();
   };
 
   const handleOpenChange = (value: boolean) => {
@@ -750,6 +778,36 @@ export function CreateContractDialog({
               rows={2}
             />
           </div>
+
+          {/* Space Assignment — optional, only when location has units */}
+          {locationId && (
+            <div className="rounded-md border bg-muted/20">
+              <button
+                type="button"
+                className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-left"
+                onClick={() => setSpaceAssignmentOpen((o) => !o)}
+              >
+                <span>
+                  Space Unit Assignment
+                  {selectedSpaceUnitIds.length > 0 && (
+                    <span className="ml-2 text-xs font-normal text-[#015E65]">
+                      ({selectedSpaceUnitIds.length} unit{selectedSpaceUnitIds.length !== 1 ? "s" : ""} selected)
+                    </span>
+                  )}
+                </span>
+                <span className="text-muted-foreground text-xs">{spaceAssignmentOpen ? "▲" : "▼"} optional</span>
+              </button>
+              {spaceAssignmentOpen && (
+                <div className="px-4 pb-4">
+                  <SpaceAllocationSelector
+                    locationId={locationId}
+                    selectedUnitIds={selectedSpaceUnitIds}
+                    onChange={setSelectedSpaceUnitIds}
+                  />
+                </div>
+              )}
+            </div>
+          )}
 
           {/* KYC Documents Required */}
           {lead?.entity_type && KYC_DOCUMENTS[lead.entity_type] && (
