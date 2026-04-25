@@ -310,6 +310,14 @@ export default function VendorBillDetailPage() {
               <CreditCard className="h-4 w-4 mr-1" /> Record Payment
             </Button>
           )}
+          {bill.approval_status === "rejected" && bill.rejection_outcome === "replacement" && bill.po_id && (
+            <Button
+              onClick={() => router.push(`/procurement/bills/new?po_id=${bill.po_id}&replaces=${bill.id}`)}
+              className="bg-orange-600 hover:bg-orange-700 text-white"
+            >
+              <FilePlus className="h-4 w-4 mr-1" /> Re-upload Replacement Invoice
+            </Button>
+          )}
         </div>
       </div>
 

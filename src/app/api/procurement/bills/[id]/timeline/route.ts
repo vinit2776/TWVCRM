@@ -25,10 +25,10 @@ export async function GET(
   // on audit_trail / cross-table joins. Auth was already enforced above.
   const admin = await createAdminClient();
 
-  // Fetch the current bill (need vendor_id, total_amount, created_at to find predecessor)
+  // Fetch the current bill (need vendor_id, total_amount, created_at, replaces_bill_id)
   const { data: bill } = await admin
     .from("vendor_bills")
-    .select("id, vendor_id, total_amount, created_at, po_id")
+    .select("id, vendor_id, total_amount, created_at, po_id, replaces_bill_id")
     .eq("id", id)
     .single();
   if (!bill) return NextResponse.json({ error: "Bill not found" }, { status: 404 });
@@ -56,8 +56,30 @@ export async function GET(
     performer: e.performed_by ? performerMap.get(e.performed_by) ?? null : null,
   }));
 
-  // ── Detect possible predecessor (rejected bill this one replaces) ──────────
-  // Heuristic: same vendor (or same vendor name), same total, status=rejected,
+  // ── 1. Deterministic lookup via replaces_bill_id ────────────────────────────
+  // If the bill explicitly records what it replaces, use that as the source of truth.
+  if (bill.replaces_bill_id) {
+    const { data: explicitPredecessor } = await admin
+      .from("vendor_bills")
+      .select(`
+        id, bill_number, total_amount, rejection_reason, rejection_outcome,
+        approved_at, vendor_id, po_id,
+        purchase_orders(id, po_number, pr_id,
+          pr:purchase_requests!purchase_orders_pr_id_fkey(id, pr_number))
+      `)
+      .eq("id", bill.replaces_bill_id)
+      .single();
+    if (explicitPredecessor) {
+      return NextResponse.json({
+        events,
+        predecessor: explicitPredecessor,
+        predecessors: [explicitPredecessor],
+      });
+    }
+  }
+
+  // ── 2. Heuristic fallback (legacy bills without replaces_bill_id) ───────────
+  // Same vendor (or same vendor name), same total, status=rejected,
   // rejection_outcome=replacement, created within 90 days BEFORE this bill.
   const ninetyDaysBefore = new Date(new Date(bill.created_at).getTime() - 90 * 24 * 60 * 60 * 1000).toISOString();
 

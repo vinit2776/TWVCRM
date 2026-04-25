@@ -1671,6 +1671,7 @@ export interface VendorBill {
   approved_at?: string;
   rejection_reason?: string;
   rejection_outcome?: RejectionOutcome;
+  replaces_bill_id?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
