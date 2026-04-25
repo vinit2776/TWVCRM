@@ -46,7 +46,7 @@ CREATE INDEX IF NOT EXISTS idx_location_floors_location ON location_floors(locat
 DO $$ BEGIN
   CREATE TRIGGER update_location_floors_updated_at
     BEFORE UPDATE ON location_floors
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 ALTER TABLE location_floors ENABLE ROW LEVEL SECURITY;
@@ -130,7 +130,7 @@ CREATE INDEX IF NOT EXISTS idx_space_units_active   ON space_units(is_active);
 DO $$ BEGIN
   CREATE TRIGGER update_space_units_updated_at
     BEFORE UPDATE ON space_units
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 ALTER TABLE space_units ENABLE ROW LEVEL SECURITY;
@@ -201,7 +201,7 @@ CREATE INDEX IF NOT EXISTS idx_csa_status      ON contract_space_allocations(sta
 DO $$ BEGIN
   CREATE TRIGGER update_csa_updated_at
     BEFORE UPDATE ON contract_space_allocations
-    FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+    FOR EACH ROW EXECUTE FUNCTION update_updated_at();
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 ALTER TABLE contract_space_allocations ENABLE ROW LEVEL SECURITY;
