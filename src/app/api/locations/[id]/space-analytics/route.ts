@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import type { SpaceUnitType, SpaceUnit, SpaceAnalytics, FloorCUF, SpaceTypeOccupancy, SpaceRevenueRow } from "@/types";
 
-const UNIT_TYPES: SpaceUnitType[] = ["hot_desk", "dedicated_desk", "private_cabin", "managed_office"];
+const UNIT_TYPES: SpaceUnitType[] = ["hot_desk", "dedicated_desk", "private_cabin", "managed_office", "business_centre"];
+const HOURLY_TYPES: ReadonlySet<SpaceUnitType> = new Set(["business_centre"]);
 
 export async function GET(
   _request: NextRequest,
@@ -77,20 +78,26 @@ export async function GET(
   });
 
   // ── Revenue per type ──────────────────────────────────────────────────────
+  // Hourly types (business_centre) don't contribute to monthly recurring revenue.
   const revenue: SpaceRevenueRow[] = UNIT_TYPES.map((type) => {
     const typeUnits = units.filter((u) => u.type === type);
+    const isHourly = HOURLY_TYPES.has(type);
     let contracted = 0;
     let potential = 0;
     const unitRows = typeUnits.map((u) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const activeAlloc = (u.active_allocations || []).find((a: any) => a.status === "active");
-      potential += Number(u.monthly_rate);
-      if (activeAlloc) contracted += Number(u.monthly_rate);
+      const monthly = u.monthly_rate ? Number(u.monthly_rate) : 0;
+      if (!isHourly) {
+        potential += monthly;
+        if (activeAlloc) contracted += monthly;
+      }
       return {
         unit_id: u.id,
         unit_name: u.name,
         unit_code: u.code,
-        monthly_rate: Number(u.monthly_rate),
+        monthly_rate: u.monthly_rate ? Number(u.monthly_rate) : null,
+        hourly_rate: u.hourly_rate ? Number(u.hourly_rate) : null,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         contract_number: (activeAlloc as any)?.contract?.contract_number,
         // eslint-disable-next-line @typescript-eslint/no-explicit-any

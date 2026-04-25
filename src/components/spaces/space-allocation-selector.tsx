@@ -11,6 +11,7 @@ const TYPE_LABELS: Record<SpaceUnitType, string> = {
   dedicated_desk: "Dedicated Desk",
   private_cabin:  "Private Cabin",
   managed_office: "Managed Office",
+  business_centre:"Business Centre",
 };
 
 const TYPE_COLORS: Record<SpaceUnitType, string> = {
@@ -18,7 +19,10 @@ const TYPE_COLORS: Record<SpaceUnitType, string> = {
   dedicated_desk: "bg-blue-100 text-blue-700 border-blue-200",
   private_cabin:  "bg-violet-100 text-violet-700 border-violet-200",
   managed_office: "bg-pink-100 text-pink-700 border-pink-200",
+  business_centre:"bg-amber-100 text-amber-700 border-amber-200",
 };
+
+const HOURLY_TYPES: ReadonlySet<SpaceUnitType> = new Set(["business_centre"]);
 
 interface Props {
   locationId: string;
@@ -86,7 +90,9 @@ export function SpaceAllocationSelector({ locationId, selectedUnitIds, onChange 
 
   const selectedUnits = units.filter((u) => selectedUnitIds.includes(u.id));
   const totalSeats = selectedUnits.reduce((s, u) => s + u.capacity, 0);
-  const totalRate  = selectedUnits.reduce((s, u) => s + u.monthly_rate, 0);
+  // Hourly types don't contribute to the combined monthly rate.
+  const totalRate  = selectedUnits.reduce((s, u) => s + (HOURLY_TYPES.has(u.type) || !u.monthly_rate ? 0 : u.monthly_rate), 0);
+  const hasHourlySelected = selectedUnits.some((u) => HOURLY_TYPES.has(u.type));
 
   return (
     <div className="space-y-3">
@@ -120,8 +126,17 @@ export function SpaceAllocationSelector({ locationId, selectedUnitIds, onChange 
                     </div>
                   </div>
                   <div className="text-right shrink-0">
-                    <p className="text-sm font-semibold">₹{u.monthly_rate.toLocaleString("en-IN")}</p>
-                    <p className="text-[10px] text-muted-foreground">/ month</p>
+                    {HOURLY_TYPES.has(u.type) ? (
+                      <>
+                        <p className="text-sm font-semibold">₹{(u.hourly_rate ?? 0).toLocaleString("en-IN")}</p>
+                        <p className="text-[10px] text-muted-foreground">/ hour</p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="text-sm font-semibold">₹{(u.monthly_rate ?? 0).toLocaleString("en-IN")}</p>
+                        <p className="text-[10px] text-muted-foreground">/ month</p>
+                      </>
+                    )}
                   </div>
                 </label>
               );
@@ -143,6 +158,11 @@ export function SpaceAllocationSelector({ locationId, selectedUnitIds, onChange 
             <span className="text-xs text-muted-foreground">Combined monthly rate</span>
             <span className="font-bold text-[#015E65]">₹{totalRate.toLocaleString("en-IN")}</span>
           </div>
+          {hasHourlySelected && (
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Note: Business centre units are billed hourly and not included in the combined monthly rate.
+            </p>
+          )}
         </div>
       )}
     </div>

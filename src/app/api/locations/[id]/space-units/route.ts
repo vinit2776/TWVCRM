@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
-const VALID_TYPES = ["hot_desk", "dedicated_desk", "private_cabin", "managed_office"];
+const VALID_TYPES = ["hot_desk", "dedicated_desk", "private_cabin", "managed_office", "business_centre"];
+const HOURLY_TYPES = new Set(["business_centre"]);
 
 export async function GET(
   request: NextRequest,
@@ -63,7 +64,7 @@ export async function POST(
 
   const body = await request.json();
   const {
-    floor_id, name, code, type, capacity, area_sqft, monthly_rate, daily_rate,
+    floor_id, name, code, type, capacity, area_sqft, monthly_rate, daily_rate, hourly_rate,
     amenities, notes, grid_col, grid_row, grid_col_span, grid_row_span, color, sort_order,
   } = body;
 
@@ -76,8 +77,15 @@ export async function POST(
   if (!type || !VALID_TYPES.includes(type)) {
     return NextResponse.json({ error: `Type must be one of: ${VALID_TYPES.join(", ")}` }, { status: 400 });
   }
-  if (!monthly_rate && monthly_rate !== 0) {
-    return NextResponse.json({ error: "monthly_rate is required" }, { status: 400 });
+  const isHourly = HOURLY_TYPES.has(type);
+  if (isHourly) {
+    if (!hourly_rate && hourly_rate !== 0) {
+      return NextResponse.json({ error: "hourly_rate is required for business_centre" }, { status: 400 });
+    }
+  } else {
+    if (!monthly_rate && monthly_rate !== 0) {
+      return NextResponse.json({ error: "monthly_rate is required" }, { status: 400 });
+    }
   }
 
   // Validate grid bounds against floor
@@ -112,8 +120,9 @@ export async function POST(
       type,
       capacity: Number(capacity ?? 1),
       area_sqft: area_sqft ? Number(area_sqft) : null,
-      monthly_rate: Number(monthly_rate),
+      monthly_rate: isHourly ? null : (monthly_rate != null ? Number(monthly_rate) : null),
       daily_rate: daily_rate ? Number(daily_rate) : null,
+      hourly_rate: hourly_rate != null ? Number(hourly_rate) : null,
       amenities: amenities || [],
       notes: notes || null,
       grid_col: Number(grid_col ?? 1),

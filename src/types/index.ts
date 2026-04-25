@@ -1977,7 +1977,8 @@ export type SpaceUnitType =
   | "hot_desk"
   | "dedicated_desk"
   | "private_cabin"
-  | "managed_office";
+  | "managed_office"
+  | "business_centre";
 
 export interface LocationFloor {
   id: string;
@@ -2006,8 +2007,9 @@ export interface SpaceUnit {
   type: SpaceUnitType;
   capacity: number;
   area_sqft?: number | null;
-  monthly_rate: number;
+  monthly_rate: number | null;          // null for business_centre (hourly-only)
   daily_rate?: number | null;
+  hourly_rate?: number | null;          // primary rate for business_centre
   amenities: string[];
   is_active: boolean;
   notes?: string | null;
@@ -2071,7 +2073,8 @@ export interface SpaceRevenueRow {
     unit_id: string;
     unit_name: string;
     unit_code: string;
-    monthly_rate: number;
+    monthly_rate: number | null;
+    hourly_rate?: number | null;
     contract_number?: string;
     contract_status?: string;
   }[];

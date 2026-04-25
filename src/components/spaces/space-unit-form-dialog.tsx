@@ -11,12 +11,17 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { toast } from "sonner";
 import type { SpaceUnit, SpaceUnitType, LocationFloor } from "@/types";
 
-const UNIT_TYPES: { value: SpaceUnitType; label: string; defaultCap: number }[] = [
-  { value: "hot_desk",       label: "Hot Desk",          defaultCap: 1 },
-  { value: "dedicated_desk", label: "Dedicated Desk",    defaultCap: 1 },
-  { value: "private_cabin",  label: "Private Cabin",     defaultCap: 2 },
-  { value: "managed_office", label: "Managed Office",    defaultCap: 8 },
+const UNIT_TYPES: { value: SpaceUnitType; label: string; defaultCap: number; isHourly: boolean }[] = [
+  { value: "hot_desk",        label: "Hot Desk",          defaultCap: 1, isHourly: false },
+  { value: "dedicated_desk",  label: "Dedicated Desk",    defaultCap: 1, isHourly: false },
+  { value: "private_cabin",   label: "Private Cabin",     defaultCap: 2, isHourly: false },
+  { value: "managed_office",  label: "Managed Office",    defaultCap: 8, isHourly: false },
+  { value: "business_centre", label: "Business Centre",   defaultCap: 1, isHourly: true  },
 ];
+
+function isHourlyType(t: SpaceUnitType): boolean {
+  return UNIT_TYPES.find((u) => u.value === t)?.isHourly === true;
+}
 
 const AMENITIES_OPTIONS = ["AC", "Whiteboard", "TV / Screen", "Phone", "Storage", "Standing Desk", "Natural Light", "Soundproofing"];
 
@@ -53,6 +58,7 @@ export function SpaceUnitFormDialog({ open, onOpenChange, locationId, floor, uni
     area_sqft: "",
     monthly_rate: "",
     daily_rate: "",
+    hourly_rate: "",
     amenities: [] as string[],
     notes: "",
     color: PALETTE[2],
@@ -71,8 +77,9 @@ export function SpaceUnitFormDialog({ open, onOpenChange, locationId, floor, uni
         type: unit.type,
         capacity: String(unit.capacity),
         area_sqft: unit.area_sqft ? String(unit.area_sqft) : "",
-        monthly_rate: String(unit.monthly_rate),
+        monthly_rate: unit.monthly_rate ? String(unit.monthly_rate) : "",
         daily_rate: unit.daily_rate ? String(unit.daily_rate) : "",
+        hourly_rate: unit.hourly_rate ? String(unit.hourly_rate) : "",
         amenities: unit.amenities || [],
         notes: unit.notes || "",
         color: unit.color || PALETTE[2],
@@ -91,6 +98,7 @@ export function SpaceUnitFormDialog({ open, onOpenChange, locationId, floor, uni
         area_sqft: "",
         monthly_rate: "",
         daily_rate: "",
+        hourly_rate: "",
         amenities: [],
         notes: "",
         color: PALETTE[2],
@@ -112,11 +120,17 @@ export function SpaceUnitFormDialog({ open, onOpenChange, locationId, floor, uni
     }));
   }
 
+  const hourly = isHourlyType(form.type);
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (!form.name.trim()) { toast.error("Name is required"); return; }
     if (!form.code.trim()) { toast.error("Code is required"); return; }
-    if (!form.monthly_rate || isNaN(Number(form.monthly_rate))) { toast.error("Monthly rate is required"); return; }
+    if (hourly) {
+      if (!form.hourly_rate || isNaN(Number(form.hourly_rate))) { toast.error("Hourly rate is required"); return; }
+    } else {
+      if (!form.monthly_rate || isNaN(Number(form.monthly_rate))) { toast.error("Monthly rate is required"); return; }
+    }
 
     setLoading(true);
     try {
@@ -132,8 +146,9 @@ export function SpaceUnitFormDialog({ open, onOpenChange, locationId, floor, uni
         type: form.type,
         capacity: Number(form.capacity),
         area_sqft: form.area_sqft ? Number(form.area_sqft) : null,
-        monthly_rate: Number(form.monthly_rate),
+        monthly_rate: hourly ? null : Number(form.monthly_rate),
         daily_rate: form.daily_rate ? Number(form.daily_rate) : null,
+        hourly_rate: form.hourly_rate ? Number(form.hourly_rate) : null,
         amenities: form.amenities,
         notes: form.notes || null,
         color: form.color || null,
@@ -198,17 +213,35 @@ export function SpaceUnitFormDialog({ open, onOpenChange, locationId, floor, uni
             </div>
           </div>
 
-          {/* Rates */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label>Monthly Rate (₹) *</Label>
-              <Input type="number" value={form.monthly_rate} onChange={set("monthly_rate")} placeholder="18000" min={0} />
+          {/* Rates — switches between monthly and hourly based on type */}
+          {hourly ? (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Hourly Rate (₹) *</Label>
+                <Input type="number" value={form.hourly_rate} onChange={set("hourly_rate")} placeholder="350" min={0} />
+              </div>
+              <div className="space-y-1">
+                <Label>Daily Rate (₹)</Label>
+                <Input type="number" value={form.daily_rate} onChange={set("daily_rate")} placeholder="Optional" min={0} />
+              </div>
             </div>
-            <div className="space-y-1">
-              <Label>Daily Rate (₹)</Label>
-              <Input type="number" value={form.daily_rate} onChange={set("daily_rate")} placeholder="Optional" min={0} />
+          ) : (
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label>Monthly Rate (₹) *</Label>
+                <Input type="number" value={form.monthly_rate} onChange={set("monthly_rate")} placeholder="18000" min={0} />
+              </div>
+              <div className="space-y-1">
+                <Label>Daily Rate (₹)</Label>
+                <Input type="number" value={form.daily_rate} onChange={set("daily_rate")} placeholder="Optional" min={0} />
+              </div>
             </div>
-          </div>
+          )}
+          {hourly && (
+            <p className="text-xs text-muted-foreground -mt-2">
+              Business centres are billed hourly — typically used for short-term, walk-in, or pay-per-use bookings.
+            </p>
+          )}
 
           {/* Area */}
           <div className="space-y-1">

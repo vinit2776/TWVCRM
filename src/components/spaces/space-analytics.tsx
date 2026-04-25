@@ -4,18 +4,22 @@ import { Badge } from "@/components/ui/badge";
 import type { SpaceAnalytics, SpaceUnitType } from "@/types";
 
 const TYPE_LABELS: Record<SpaceUnitType, string> = {
-  hot_desk:      "Hot Desks",
-  dedicated_desk:"Dedicated Desks",
-  private_cabin: "Private Cabins",
-  managed_office:"Managed Offices",
+  hot_desk:       "Hot Desks",
+  dedicated_desk: "Dedicated Desks",
+  private_cabin:  "Private Cabins",
+  managed_office: "Managed Offices",
+  business_centre:"Business Centre",
 };
 
 const TYPE_COLORS: Record<SpaceUnitType, string> = {
-  hot_desk:      "bg-sky-200",
-  dedicated_desk:"bg-blue-300",
-  private_cabin: "bg-violet-200",
-  managed_office:"bg-pink-200",
+  hot_desk:       "bg-sky-200",
+  dedicated_desk: "bg-blue-300",
+  private_cabin:  "bg-violet-200",
+  managed_office: "bg-pink-200",
+  business_centre:"bg-amber-200",
 };
+
+const HOURLY_TYPES: ReadonlySet<SpaceUnitType> = new Set(["business_centre"]);
 
 function pct(val: number) {
   return `${Math.round(val * 100)}%`;
@@ -136,24 +140,34 @@ export function SpaceAnalyticsPanel({ analytics }: Props) {
               </tr>
             </thead>
             <tbody>
-              {revenue.filter((r) => r.total_units > 0).map((r) => (
-                <tr key={r.type} className="border-b hover:bg-muted/20">
-                  <td className="px-4 py-2.5">
-                    <div className="flex items-center gap-2">
-                      <div className={`w-2.5 h-2.5 rounded-full ${TYPE_COLORS[r.type]}`} />
-                      {TYPE_LABELS[r.type]}
-                    </div>
-                  </td>
-                  <td className="px-4 py-2.5 text-right text-muted-foreground">{r.total_units}</td>
-                  <td className="px-4 py-2.5 text-right text-muted-foreground">{r.contracted_units}</td>
-                  <td className="px-4 py-2.5 text-right font-semibold text-green-700">{rupees(r.monthly_revenue_contracted)}</td>
-                  <td className="px-4 py-2.5 text-right text-amber-600">
-                    {r.monthly_revenue_potential - r.monthly_revenue_contracted > 0
-                      ? rupees(r.monthly_revenue_potential - r.monthly_revenue_contracted)
-                      : "—"}
-                  </td>
-                </tr>
-              ))}
+              {revenue.filter((r) => r.total_units > 0).map((r) => {
+                const isHourly = HOURLY_TYPES.has(r.type);
+                return (
+                  <tr key={r.type} className="border-b hover:bg-muted/20">
+                    <td className="px-4 py-2.5">
+                      <div className="flex items-center gap-2">
+                        <div className={`w-2.5 h-2.5 rounded-full ${TYPE_COLORS[r.type]}`} />
+                        {TYPE_LABELS[r.type]}
+                        {isHourly && (
+                          <Badge variant="outline" className="text-[9px] px-1 py-0 h-4 leading-none ml-1">Hourly</Badge>
+                        )}
+                      </div>
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-muted-foreground">{r.total_units}</td>
+                    <td className="px-4 py-2.5 text-right text-muted-foreground">{isHourly ? "—" : r.contracted_units}</td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-green-700">
+                      {isHourly ? <span className="text-muted-foreground font-normal">pay-per-use</span> : rupees(r.monthly_revenue_contracted)}
+                    </td>
+                    <td className="px-4 py-2.5 text-right text-amber-600">
+                      {isHourly
+                        ? "—"
+                        : r.monthly_revenue_potential - r.monthly_revenue_contracted > 0
+                          ? rupees(r.monthly_revenue_potential - r.monthly_revenue_contracted)
+                          : "—"}
+                    </td>
+                  </tr>
+                );
+              })}
             </tbody>
             <tfoot>
               <tr className="bg-muted/40 font-semibold">
@@ -175,14 +189,20 @@ export function SpaceAnalyticsPanel({ analytics }: Props) {
             Idle Units ({idle_units.length})
           </h3>
           <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
-            {idle_units.map((u) => (
-              <div key={u.id} className="border rounded-lg p-3 bg-amber-50 border-amber-200">
-                <p className="font-mono text-xs font-bold">{u.code}</p>
-                <p className="text-xs text-muted-foreground truncate">{u.name}</p>
-                <p className="text-xs text-amber-700 mt-1 font-medium">{TYPE_LABELS[u.type]}</p>
-                <p className="text-xs text-muted-foreground">{rupees(u.monthly_rate)}/mo</p>
-              </div>
-            ))}
+            {idle_units.map((u) => {
+              const isHourly = HOURLY_TYPES.has(u.type);
+              return (
+                <div key={u.id} className="border rounded-lg p-3 bg-amber-50 border-amber-200">
+                  <p className="font-mono text-xs font-bold">{u.code}</p>
+                  <p className="text-xs text-muted-foreground truncate">{u.name}</p>
+                  <p className="text-xs text-amber-700 mt-1 font-medium">{TYPE_LABELS[u.type]}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {isHourly && u.hourly_rate ? `${rupees(u.hourly_rate)}/hr` :
+                     u.monthly_rate ? `${rupees(u.monthly_rate)}/mo` : "—"}
+                  </p>
+                </div>
+              );
+            })}
           </div>
         </div>
       )}

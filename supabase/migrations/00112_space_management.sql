@@ -13,9 +13,13 @@ DO $$ BEGIN
     'hot_desk',
     'dedicated_desk',
     'private_cabin',
-    'managed_office'
+    'managed_office',
+    'business_centre'
   );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- Idempotently add 'business_centre' for DBs created from earlier 4-value enum
+ALTER TYPE space_unit_type ADD VALUE IF NOT EXISTS 'business_centre';
 
 DO $$ BEGIN
   CREATE TYPE space_allocation_status AS ENUM ('active', 'ended');
@@ -105,8 +109,9 @@ CREATE TABLE IF NOT EXISTS space_units (
   type             space_unit_type NOT NULL,
   capacity         INTEGER NOT NULL DEFAULT 1,  -- seats
   area_sqft        NUMERIC(10,2),
-  monthly_rate     NUMERIC(12,2) NOT NULL DEFAULT 0,
+  monthly_rate     NUMERIC(12,2),               -- nullable: business_centre is hourly-only
   daily_rate       NUMERIC(12,2),
+  hourly_rate      NUMERIC(10,2),               -- primary rate for business_centre
   amenities        TEXT[] DEFAULT '{}',
   is_active        BOOLEAN NOT NULL DEFAULT true,
   notes            TEXT,

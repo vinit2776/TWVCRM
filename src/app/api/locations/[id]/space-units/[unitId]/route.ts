@@ -51,15 +51,16 @@ export async function PUT(
   const body = await request.json();
   const updates: Record<string, unknown> = {};
 
-  const VALID_TYPES = ["hot_desk", "dedicated_desk", "private_cabin", "managed_office"];
+  const VALID_TYPES = ["hot_desk", "dedicated_desk", "private_cabin", "managed_office", "business_centre"];
 
   if (body.name !== undefined)         updates.name = String(body.name).trim();
   if (body.code !== undefined)         updates.code = String(body.code).trim().toUpperCase();
   if (body.type !== undefined && VALID_TYPES.includes(body.type)) updates.type = body.type;
   if (body.capacity !== undefined)     updates.capacity = Number(body.capacity);
   if (body.area_sqft !== undefined)    updates.area_sqft = body.area_sqft ? Number(body.area_sqft) : null;
-  if (body.monthly_rate !== undefined) updates.monthly_rate = Number(body.monthly_rate);
+  if (body.monthly_rate !== undefined) updates.monthly_rate = body.monthly_rate == null ? null : Number(body.monthly_rate);
   if (body.daily_rate !== undefined)   updates.daily_rate = body.daily_rate ? Number(body.daily_rate) : null;
+  if (body.hourly_rate !== undefined)  updates.hourly_rate = body.hourly_rate == null ? null : Number(body.hourly_rate);
   if (body.amenities !== undefined)    updates.amenities = body.amenities;
   if (body.notes !== undefined)        updates.notes = body.notes || null;
   if (body.color !== undefined)        updates.color = body.color || null;

@@ -5,24 +5,27 @@ import { Badge } from "@/components/ui/badge";
 import type { LocationFloor, SpaceUnit, SpaceUnitType } from "@/types";
 
 const COLOR_MAP: Record<SpaceUnitType, string> = {
-  hot_desk:      "#e0f2fe",
-  dedicated_desk:"#bfdbfe",
-  private_cabin: "#ede9fe",
-  managed_office:"#fce7f3",
+  hot_desk:       "#e0f2fe",
+  dedicated_desk: "#bfdbfe",
+  private_cabin:  "#ede9fe",
+  managed_office: "#fce7f3",
+  business_centre:"#fef3c7",
 };
 
 const BORDER_MAP: Record<SpaceUnitType, string> = {
-  hot_desk:      "#7dd3fc",
-  dedicated_desk:"#93c5fd",
-  private_cabin: "#c4b5fd",
-  managed_office:"#f9a8d4",
+  hot_desk:       "#7dd3fc",
+  dedicated_desk: "#93c5fd",
+  private_cabin:  "#c4b5fd",
+  managed_office: "#f9a8d4",
+  business_centre:"#fcd34d",
 };
 
 const LABEL_MAP: Record<SpaceUnitType, string> = {
-  hot_desk:      "Hot Desk",
-  dedicated_desk:"Dedicated",
-  private_cabin: "Cabin",
-  managed_office:"Office",
+  hot_desk:       "Hot Desk",
+  dedicated_desk: "Dedicated",
+  private_cabin:  "Cabin",
+  managed_office: "Office",
+  business_centre:"Bus. Centre",
 };
 
 const CELL_SIZE = 44; // px
@@ -294,7 +297,7 @@ export function FloorCanvas({ floor, units, mode, onCellSelect, onUnitClick, onU
 // ── Legend ────────────────────────────────────────────────────────────────────
 
 export function CanvasLegend() {
-  const types: SpaceUnitType[] = ["hot_desk", "dedicated_desk", "private_cabin", "managed_office"];
+  const types: SpaceUnitType[] = ["hot_desk", "dedicated_desk", "private_cabin", "managed_office", "business_centre"];
   return (
     <div className="flex flex-wrap gap-3 mt-2">
       {types.map((t) => (

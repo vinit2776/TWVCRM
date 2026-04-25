@@ -499,7 +499,7 @@ export default function LocationDetailPage({
                         <th className="px-4 py-2.5 text-left font-medium">Name</th>
                         <th className="px-4 py-2.5 text-left font-medium hidden sm:table-cell">Type</th>
                         <th className="px-4 py-2.5 text-right font-medium hidden sm:table-cell">Seats</th>
-                        <th className="px-4 py-2.5 text-right font-medium">Monthly</th>
+                        <th className="px-4 py-2.5 text-right font-medium">Rate</th>
                         <th className="px-4 py-2.5 text-center font-medium">Status</th>
                         <th className="px-4 py-2.5 text-right font-medium">Actions</th>
                       </tr>
@@ -519,7 +519,11 @@ export default function LocationDetailPage({
                             </td>
                             <td className="px-4 py-2.5 text-right hidden sm:table-cell">{u.capacity}</td>
                             <td className="px-4 py-2.5 text-right font-medium">
-                              ₹{u.monthly_rate.toLocaleString("en-IN")}
+                              {u.type === "business_centre" ? (
+                                <>₹{(u.hourly_rate ?? 0).toLocaleString("en-IN")}<span className="text-xs text-muted-foreground font-normal"> /hr</span></>
+                              ) : (
+                                <>₹{(u.monthly_rate ?? 0).toLocaleString("en-IN")}<span className="text-xs text-muted-foreground font-normal"> /mo</span></>
+                              )}
                             </td>
                             <td className="px-4 py-2.5 text-center">
                               <Badge
