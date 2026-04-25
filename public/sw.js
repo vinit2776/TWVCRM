@@ -6,7 +6,7 @@
  *  2. Offline caching with app-shell strategy
  */
 
-const CACHE_NAME = "twv-crm-v1";
+const CACHE_NAME = "twv-crm-v2";
 const OFFLINE_URL = "/offline";
 
 // ─── Install: precache app shell ───────────────────────────────────────────────

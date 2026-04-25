@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ChevronLeft, Loader2, Truck, FileText, Calendar, CreditCard, Package, ExternalLink,
-  CheckCircle2, XCircle, Clock,
+  CheckCircle2, XCircle, Clock, History, FilePlus, AlertTriangle, ArrowRight,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -29,6 +29,30 @@ import {
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { VendorBill } from "@/types";
 
+// ── Timeline types ────────────────────────────────────────────────────────────
+interface TimelineEvent {
+  id: string;
+  action: string;
+  changes: Record<string, { old: unknown; new: unknown }> | null;
+  created_at: string;
+  performer: { id: string; full_name?: string; role?: string } | null;
+}
+interface PredecessorBill {
+  id: string;
+  bill_number: string;
+  total_amount: number;
+  rejection_reason: string | null;
+  rejection_outcome: string | null;
+  approved_at: string | null;
+  po_id: string | null;
+  purchase_orders?: {
+    id: string;
+    po_number: string;
+    pr_id?: string | null;
+    pr?: { id: string; pr_number: string } | null;
+  } | null;
+}
+
 export default function VendorBillDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
@@ -36,6 +60,10 @@ export default function VendorBillDetailPage() {
   const [bill, setBill] = useState<VendorBill | null>(null);
   const [loading, setLoading] = useState(true);
   const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
+
+  // Timeline + predecessor detection
+  const [events, setEvents] = useState<TimelineEvent[]>([]);
+  const [predecessor, setPredecessor] = useState<PredecessorBill | null>(null);
 
   // Payment dialog
   const [paymentDialog, setPaymentDialog] = useState(false);
@@ -78,7 +106,22 @@ export default function VendorBillDetailPage() {
     setLoading(false);
   }, [id, router]);
 
-  useEffect(() => { fetchBill(); }, [fetchBill]);
+  const fetchTimeline = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/procurement/bills/${id}/timeline`);
+      if (!res.ok) {
+        console.error("[timeline] HTTP", res.status, await res.text().catch(() => ""));
+        return;
+      }
+      const json = await res.json();
+      setEvents(json.events ?? []);
+      setPredecessor(json.predecessor ?? null);
+    } catch (err) {
+      console.error("[timeline] fetch failed:", err);
+    }
+  }, [id]);
+
+  useEffect(() => { fetchBill(); fetchTimeline(); }, [fetchBill, fetchTimeline]);
 
   const openPaymentDialog = () => {
     if (!bill) return;
@@ -117,7 +160,7 @@ export default function VendorBillDetailPage() {
       }
       toast.success("Payment recorded successfully");
       setPaymentDialog(false);
-      await fetchBill();
+      await Promise.all([fetchBill(), fetchTimeline()]);
     } finally {
       setPaymentLoading(false);
     }
@@ -137,7 +180,7 @@ export default function VendorBillDetailPage() {
         return;
       }
       toast.success("Invoice approved");
-      await fetchBill();
+      await Promise.all([fetchBill(), fetchTimeline()]);
     } finally {
       setApproveLoading(false);
     }
@@ -178,7 +221,7 @@ export default function VendorBillDetailPage() {
         navigated = true;
         router.push("/procurement/bills");
       } else {
-        await fetchBill();
+        await Promise.all([fetchBill(), fetchTimeline()]);
       }
     } finally {
       if (!navigated) setRejectLoading(false);
@@ -197,7 +240,9 @@ export default function VendorBillDetailPage() {
 
   const vendor = bill.procurement_vendors as { id: string; name: string; contact_name?: string; contact_phone?: string } | null;
   const remaining = Number(bill.total_amount) - Number(bill.amount_paid);
-  const canApprove = ["admin", "manager"].includes(currentUserRole ?? "");
+  // Approval permission must match the PATCH API gate in /api/procurement/bills/[id]
+  // (admin, manager, accounts, fms). office_admin can upload bills but not approve.
+  const canApprove = ["admin", "manager", "accounts", "fms"].includes(currentUserRole ?? "");
   const isGoodsPo = bill.purchase_orders && (bill.purchase_orders as { po_type?: string }).po_type !== "service";
 
   const linkedPo = bill.purchase_orders as {
@@ -274,6 +319,65 @@ export default function VendorBillDetailPage() {
           <Clock className="h-5 w-5 text-yellow-600 flex-shrink-0" />
           <p className="text-sm text-yellow-800">
             This invoice is awaiting approval from a manager or admin before payment can be recorded.
+          </p>
+        </div>
+      )}
+
+      {/* Predecessor banner — possible replacement of a previously rejected bill */}
+      {predecessor && (
+        <div className="rounded-md border border-orange-200 bg-orange-50 px-4 py-3 flex items-start gap-3">
+          <AlertTriangle className="h-5 w-5 text-orange-600 flex-shrink-0 mt-0.5" />
+          <div className="text-sm text-orange-900 flex-1">
+            <p className="font-medium mb-1">This bill may replace a previously rejected invoice</p>
+            <p className="text-orange-800">
+              <Link
+                href={`/procurement/bills/${predecessor.id}`}
+                className="font-mono font-semibold underline hover:no-underline"
+              >
+                {predecessor.bill_number}
+              </Link>
+              {" "}— same vendor, same amount ({formatCurrency(predecessor.total_amount)}), rejected
+              {predecessor.approved_at && ` on ${formatDate(predecessor.approved_at)}`}
+              {predecessor.rejection_outcome === "replacement" && " with outcome: replacement requested"}.
+              {predecessor.rejection_reason && (
+                <span className="block text-xs text-orange-700 mt-1">
+                  Reason: &ldquo;{predecessor.rejection_reason}&rdquo;
+                </span>
+              )}
+              {(predecessor.purchase_orders?.po_number || predecessor.purchase_orders?.pr?.pr_number) && (
+                <span className="block text-xs text-orange-800 mt-1.5">
+                  Original lineage:{" "}
+                  {predecessor.purchase_orders?.pr?.pr_number && (
+                    <Link
+                      href={`/procurement/requests/${predecessor.purchase_orders.pr.id}`}
+                      className="font-mono font-semibold underline hover:no-underline"
+                    >
+                      {predecessor.purchase_orders.pr.pr_number}
+                    </Link>
+                  )}
+                  {predecessor.purchase_orders?.pr?.pr_number && predecessor.purchase_orders?.po_number && " → "}
+                  {predecessor.purchase_orders?.po_number && (
+                    <Link
+                      href={`/procurement/orders/${predecessor.purchase_orders.id}`}
+                      className="font-mono font-semibold underline hover:no-underline"
+                    >
+                      {predecessor.purchase_orders.po_number}
+                    </Link>
+                  )}
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Direct-expense notice when bill has no linked PO */}
+      {!bill.purchase_orders && (
+        <div className="rounded-md border border-blue-200 bg-blue-50/50 px-4 py-2.5 flex items-start gap-2.5 text-xs text-blue-900">
+          <FileText className="h-4 w-4 text-blue-600 flex-shrink-0 mt-0.5" />
+          <p>
+            <span className="font-medium">Direct expense</span> — this bill is not linked to a Purchase Request or Purchase Order.
+            {predecessor && " See the orange banner above for the original PR/PO this replaces."}
           </p>
         </div>
       )}
@@ -466,6 +570,96 @@ export default function VendorBillDetailPage() {
           </CardContent>
         </Card>
       </div>
+
+      {/* Timeline / Lifecycle */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+            <History className="h-4 w-4" /> Timeline
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {events.length === 0 ? (
+            <p className="text-sm text-muted-foreground italic">No events recorded yet.</p>
+          ) : (
+            <div className="space-y-0 relative">
+              {events.map((ev, idx) => {
+                const isCreate = ev.action === "create";
+                const newStatus = ev.changes?.approval_status?.new as string | undefined;
+                const isApproval = newStatus === "approved";
+                const isRejection = newStatus === "rejected";
+                const isPayment = !!ev.changes?.amount_paid;
+                const isLast = idx === events.length - 1;
+
+                let icon = <FilePlus className="h-3.5 w-3.5" />;
+                let iconClass = "bg-gray-100 text-gray-600";
+                let title = "Bill created";
+                let subtitle: string | null = null;
+
+                if (isCreate) {
+                  const billNum = ev.changes?.bill_number?.new as string | undefined;
+                  const total = ev.changes?.total_amount?.new as number | undefined;
+                  title = `Bill created${billNum ? ` — ${billNum}` : ""}`;
+                  subtitle = total != null ? `Amount: ${formatCurrency(total)}` : null;
+                  icon = <FilePlus className="h-3.5 w-3.5" />;
+                  iconClass = "bg-blue-100 text-blue-700";
+                } else if (isApproval) {
+                  title = "Invoice approved";
+                  icon = <CheckCircle2 className="h-3.5 w-3.5" />;
+                  iconClass = "bg-green-100 text-green-700";
+                } else if (isRejection) {
+                  const reason = ev.changes?.rejection_reason?.new as string | undefined;
+                  const outcome = ev.changes?.rejection_outcome?.new as string | undefined;
+                  title = "Invoice rejected";
+                  subtitle = [reason && `Reason: ${reason}`, outcome && `Outcome: ${outcome}`]
+                    .filter(Boolean)
+                    .join(" · ") || null;
+                  icon = <XCircle className="h-3.5 w-3.5" />;
+                  iconClass = "bg-red-100 text-red-700";
+                } else if (isPayment) {
+                  const newPaid = Number(ev.changes?.amount_paid?.new ?? 0);
+                  const oldPaid = Number(ev.changes?.amount_paid?.old ?? 0);
+                  title = "Payment recorded";
+                  subtitle = `${formatCurrency(newPaid - oldPaid)} paid`;
+                  icon = <CreditCard className="h-3.5 w-3.5" />;
+                  iconClass = "bg-emerald-100 text-emerald-700";
+                } else {
+                  title = `Updated`;
+                  icon = <ArrowRight className="h-3.5 w-3.5" />;
+                  iconClass = "bg-gray-100 text-gray-600";
+                }
+
+                return (
+                  <div key={ev.id} className="flex gap-3 pb-4 relative">
+                    {!isLast && (
+                      <div className="absolute left-[11px] top-7 bottom-0 w-px bg-border" />
+                    )}
+                    <div className={`h-6 w-6 rounded-full flex items-center justify-center flex-shrink-0 ${iconClass}`}>
+                      {icon}
+                    </div>
+                    <div className="flex-1 min-w-0 pt-0.5">
+                      <p className="text-sm font-medium">{title}</p>
+                      {subtitle && <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>}
+                      <p className="text-xs text-muted-foreground mt-1">
+                        {ev.performer?.full_name ?? "System"}
+                        {ev.performer?.role && (
+                          <span className="text-muted-foreground/70"> · {ev.performer.role}</span>
+                        )}
+                        {" · "}
+                        {formatDate(ev.created_at)}
+                        {" "}
+                        <span className="text-muted-foreground/70">
+                          {new Date(ev.created_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                        </span>
+                      </p>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* Record Payment Dialog */}
       <Dialog open={paymentDialog} onOpenChange={setPaymentDialog}>
