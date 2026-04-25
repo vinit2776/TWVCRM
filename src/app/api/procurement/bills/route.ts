@@ -14,6 +14,7 @@ const createBillSchema = z.object({
   notes: z.string().nullish(),
   invoice_file_url: z.string().url().nullish(),
   service_report_id: z.string().uuid().nullish(),
+  replaces_bill_id: z.string().uuid().nullish(),
 });
 
 function generateBillNumber(count: number): string {
@@ -246,6 +247,7 @@ export async function POST(request: NextRequest) {
       amount_paid: poAdvanceCredit,
       payment_status: initialPaymentStatus,
       approval_status: "pending",
+      replaces_bill_id: parsed.data.replaces_bill_id ?? null,
       created_by: dbUser.id,
     })
     .select("id, bill_number")

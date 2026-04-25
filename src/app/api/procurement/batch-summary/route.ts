@@ -44,7 +44,7 @@ export async function GET() {
   const bills = (data ?? []).map((b) => ({
     id: b.id,
     bill_number: b.bill_number,
-    vendor_name: (b.procurement_vendors as { name: string } | null)?.name ?? "—",
+    vendor_name: (b.procurement_vendors as unknown as { name: string } | null)?.name ?? "—",
     total_amount: Number(b.total_amount),
     payment_batch_type: b.payment_batch_type,
   }));

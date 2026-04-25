@@ -1757,6 +1757,8 @@ export interface VendorBill {
   payment_batch_date?: string | null;
   payment_batch_assigned_by?: string | null;
   payment_batch_assigned_at?: string | null;
+  // Replacement lineage — when this bill replaces a previously rejected one
+  replaces_bill_id?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;

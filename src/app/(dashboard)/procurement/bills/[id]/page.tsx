@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   ChevronLeft, Loader2, Truck, FileText, Calendar, CreditCard, Package, ExternalLink,
   CheckCircle2, XCircle, Clock, Send, AlertCircle, Activity, CheckCircle,
-  ClipboardList, ChevronDown, ChevronUp,
+  ClipboardList, ChevronDown, ChevronUp, FilePlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -628,6 +628,14 @@ export default function VendorBillDetailPage() {
               onClick={() => openEmailDialog()}
             >
               <Send className="h-4 w-4" /> Send Confirmation
+            </Button>
+          )}
+          {bill.approval_status === "rejected" && bill.rejection_outcome === "replacement" && bill.po_id && (
+            <Button
+              onClick={() => router.push(`/procurement/bills/new?po_id=${bill.po_id}&replaces=${bill.id}`)}
+              className="bg-orange-600 hover:bg-orange-700 text-white"
+            >
+              <FilePlus className="h-4 w-4 mr-1" /> Re-upload Replacement Invoice
             </Button>
           )}
         </div>

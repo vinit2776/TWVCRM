@@ -39,6 +39,7 @@ function NewVendorBillForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const poId = searchParams.get("po_id");
+  const replacesId = searchParams.get("replaces");
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -59,11 +60,38 @@ function NewVendorBillForm() {
   const [loadingPo, setLoadingPo] = useState(false);
   const [vendorLocked, setVendorLocked] = useState(false);
 
+  // Replacement-bill mode
+  const [replacesBill, setReplacesBill] = useState<{
+    id: string;
+    bill_number: string;
+    rejection_reason: string | null;
+  } | null>(null);
+
   useEffect(() => {
     fetch("/api/procurement/vendors").then((r) => r.json()).then((j) => {
       setVendors(j.data || []);
     });
   }, []);
+
+  // When ?replaces=<id> is present, fetch the predecessor bill so we can show its
+  // number + rejection reason and prefill notes
+  useEffect(() => {
+    if (!replacesId) return;
+    fetch(`/api/procurement/bills/${replacesId}`)
+      .then((r) => r.json())
+      .then((json) => {
+        const b = json.data;
+        if (!b) return;
+        setReplacesBill({ id: b.id, bill_number: b.bill_number, rejection_reason: b.rejection_reason });
+        // Pre-fill notes with reference to the rejected bill so accounts has context
+        setNotes((prev) =>
+          prev.trim()
+            ? prev
+            : `Replaces ${b.bill_number}${b.rejection_reason ? ` (rejected: ${b.rejection_reason})` : ""}`
+        );
+      })
+      .catch(() => {});
+  }, [replacesId]);
 
   useEffect(() => {
     if (!poId) return;
@@ -173,6 +201,7 @@ function NewVendorBillForm() {
         total_amount: parseFloat(totalAmount),
         notes: notes.trim() || null,
         invoice_file_url: invoiceFileUrl,
+        replaces_bill_id: replacesBill?.id ?? null,
       };
 
       const res = await fetch("/api/procurement/bills", {
@@ -222,6 +251,26 @@ function NewVendorBillForm() {
           {Number(poData.total_ordered_amount) > 0 && (
             <> PO value: <strong>{formatCurrency(poData.total_ordered_amount)}</strong>.</>
           )}
+        </div>
+      )}
+
+      {/* Replacement banner — when replacing a previously rejected bill */}
+      {replacesBill && (
+        <div className="rounded-lg border border-orange-200 bg-orange-50 px-4 py-3 text-sm text-orange-900 flex items-start gap-3">
+          <FileText className="h-4 w-4 flex-shrink-0 mt-0.5 text-orange-600" />
+          <div>
+            <p className="font-medium">
+              Replacing rejected invoice <span className="font-mono">{replacesBill.bill_number}</span>
+            </p>
+            {replacesBill.rejection_reason && (
+              <p className="text-xs text-orange-800 mt-0.5">
+                Original rejection: &ldquo;{replacesBill.rejection_reason}&rdquo;
+              </p>
+            )}
+            <p className="text-xs text-orange-800 mt-1">
+              The new invoice will be linked to {replacesBill.bill_number} for full lineage tracking.
+            </p>
+          </div>
         </div>
       )}
 
