@@ -118,9 +118,14 @@ CREATE TABLE IF NOT EXISTS space_units (
   color            VARCHAR(20),
   sort_order       INTEGER NOT NULL DEFAULT 0,
   created_at       TIMESTAMPTZ DEFAULT NOW(),
-  updated_at       TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE (location_id, code)
+  updated_at       TIMESTAMPTZ DEFAULT NOW()
 );
+
+-- Code only needs to be unique among ACTIVE units, so a soft-deleted
+-- unit doesn't permanently block its code from being reused.
+CREATE UNIQUE INDEX IF NOT EXISTS idx_space_units_location_code_active
+  ON space_units (location_id, code)
+  WHERE is_active = true;
 
 CREATE INDEX IF NOT EXISTS idx_space_units_location ON space_units(location_id);
 CREATE INDEX IF NOT EXISTS idx_space_units_floor    ON space_units(floor_id);
