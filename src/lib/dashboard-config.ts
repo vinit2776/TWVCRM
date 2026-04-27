@@ -98,4 +98,14 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   fms: [
     "procurement_summary",
   ],
+
+  // Office Admin: location-level admin handling bookings, vouchers, vendor bills.
+  office_admin: [
+    "live_enquiries",
+    "booking_summary",
+    "kpi_stats",
+    "procurement_summary",
+    "followups",
+    "notes",
+  ],
 };
