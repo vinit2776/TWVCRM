@@ -65,9 +65,8 @@ type NavSection = {
 // Roles that existed before the accounts/fms additions — used as a shorthand below.
 const LEGACY_ROLES = ["admin", "manager", "sales_rep", "floor_manager"];
 
-// Operations menu (Bookings, Spaces, Packages, Vouchers): everyone EXCEPT floor_manager.
-// Floor managers operate from a dedicated floor-ops surface, not the desk-bound CRM menu.
-const OPERATIONS_ROLES = ["admin", "manager", "sales_rep", "accounts", "fms", "office_admin"];
+// Operations menu (Bookings, Spaces, Packages, Vouchers): all active roles.
+const OPERATIONS_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin"];
 
 // Top-level items — always visible, never grouped
 const topNavItems: NavItem[] = [
