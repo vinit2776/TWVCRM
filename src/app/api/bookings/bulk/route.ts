@@ -14,7 +14,7 @@ export async function POST(request: NextRequest) {
     .eq("auth_id", user.id)
     .single();
 
-  if (!dbUser || !["admin", "manager", "floor_manager"].includes(dbUser.role)) {
+  if (!dbUser || !["admin", "manager", "floor_manager", "sales_rep", "accounts", "fms", "office_admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
   }
 
