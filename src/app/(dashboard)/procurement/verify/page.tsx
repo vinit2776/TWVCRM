@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 
 const TYPE_LABELS: Record<string, string> = {
-  purchase_request: "Purchase Request Approval",
+  purchase_request: "Material Request Approval",
   vendor_bill: "Vendor Bill Approval",
   stock_transfer: "Stock Transfer Approval",
 };

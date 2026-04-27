@@ -82,9 +82,9 @@ function NewPurchaseOrderForm() {
           <CardContent className="pt-6 flex gap-3">
             <AlertTriangle className="h-5 w-5 text-amber-600 flex-shrink-0 mt-0.5" />
             <div>
-              <p className="font-medium text-amber-800">Purchase Request Required</p>
+              <p className="font-medium text-amber-800">Material Request Required</p>
               <p className="text-sm text-amber-700 mt-1">
-                Purchase Orders can only be created from an approved Purchase Request. Please select an
+                Purchase Orders can only be created from an approved Material Request. Please select an
                 approved request first, then use the &ldquo;Create PO&rdquo; button.
               </p>
               <Button
@@ -371,7 +371,7 @@ function NewPurchaseOrderFormWithPr({
       {allItemsFullyOrdered && (
         <div className="rounded-lg border border-amber-200 bg-amber-50/50 px-4 py-3 text-sm text-amber-800 flex items-center gap-2">
           <AlertTriangle className="h-4 w-4 flex-shrink-0" />
-          All items from this Purchase Request have already been fully ordered. No additional POs are needed.
+          All items from this Material Request have already been fully ordered. No additional POs are needed.
         </div>
       )}
 

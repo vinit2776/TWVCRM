@@ -65,6 +65,10 @@ type NavSection = {
 // Roles that existed before the accounts/fms additions — used as a shorthand below.
 const LEGACY_ROLES = ["admin", "manager", "sales_rep", "floor_manager"];
 
+// Operations menu (Bookings, Spaces, Packages, Vouchers): everyone EXCEPT floor_manager.
+// Floor managers operate from a dedicated floor-ops surface, not the desk-bound CRM menu.
+const OPERATIONS_ROLES = ["admin", "manager", "sales_rep", "accounts", "fms"];
+
 // Top-level items — always visible, never grouped
 const topNavItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
@@ -102,10 +106,10 @@ const navSections: NavSection[] = [
     label: "Operations",
     icon: CalendarClock,
     items: [
-      { href: "/bookings", label: "Bookings", icon: CalendarClock, roles: LEGACY_ROLES },
-      { href: "/spaces",   label: "Spaces",   icon: DoorOpen,      roles: ["admin", "manager", "floor_manager"] },
-      { href: "/packages", label: "Packages", icon: TicketCheck,   roles: LEGACY_ROLES },
-      { href: "/vouchers", label: "Vouchers", icon: Wifi,          roles: LEGACY_ROLES },
+      { href: "/bookings", label: "Bookings", icon: CalendarClock, roles: OPERATIONS_ROLES },
+      { href: "/spaces",   label: "Spaces",   icon: DoorOpen,      roles: OPERATIONS_ROLES },
+      { href: "/packages", label: "Packages", icon: TicketCheck,   roles: OPERATIONS_ROLES },
+      { href: "/vouchers", label: "Vouchers", icon: Wifi,          roles: OPERATIONS_ROLES },
     ],
   },
   {
@@ -122,7 +126,7 @@ const navSections: NavSection[] = [
     label: "Procurement",
     icon: ShoppingCart,
     items: [
-      { href: "/procurement/requests", label: "Purchase Requests", icon: ClipboardListIcon, roles: null },
+      { href: "/procurement/requests", label: "Material Requests", icon: ClipboardListIcon, roles: null },
       { href: "/procurement/orders",   label: "Purchase Orders",   icon: Package,           roles: null },
       { href: "/procurement/bills",    label: "Vendor Bills",      icon: ReceiptIcon,       roles: ["admin", "manager", "accounts", "fms"] },
       { href: "/procurement/payables", label: "Payables",          icon: IndianRupee,       roles: ["admin", "manager", "accounts", "fms"] },

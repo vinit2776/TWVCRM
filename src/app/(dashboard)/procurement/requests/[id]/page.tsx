@@ -46,7 +46,7 @@ export default function PurchaseRequestDetailPage() {
       const json = await res.json();
       setPr(json.data);
     } else {
-      toast.error("Failed to load purchase request");
+      toast.error("Failed to load material request");
       router.push("/procurement/requests");
     }
     setLoading(false);
@@ -477,7 +477,7 @@ export default function PurchaseRequestDetailPage() {
       <Dialog open={actionDialog === "approve"} onOpenChange={() => setActionDialog(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Approve Purchase Request</DialogTitle>
+            <DialogTitle>Approve Material Request</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <p className="text-sm text-muted-foreground">
@@ -508,7 +508,7 @@ export default function PurchaseRequestDetailPage() {
       <Dialog open={actionDialog === "reject"} onOpenChange={() => { setActionDialog(null); setRejectionReason(""); }}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Reject Purchase Request</DialogTitle>
+            <DialogTitle>Reject Material Request</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 py-2">
             <p className="text-sm text-muted-foreground">
@@ -544,7 +544,7 @@ export default function PurchaseRequestDetailPage() {
       <Dialog open={actionDialog === "cancel"} onOpenChange={() => setActionDialog(null)}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Cancel Purchase Request</DialogTitle>
+            <DialogTitle>Cancel Material Request</DialogTitle>
           </DialogHeader>
           <p className="text-sm text-muted-foreground py-2">
             Are you sure you want to cancel <strong>{pr.pr_number}</strong>? This action cannot be undone.

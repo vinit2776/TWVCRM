@@ -134,7 +134,7 @@ export function ProcurementSettings() {
           ) : (
             <>
               <p className="text-sm text-muted-foreground">
-                Purchase Requests at or below this amount can be approved by a <strong>Manager</strong>.
+                Material Requests at or below this amount can be approved by a <strong>Manager</strong>.
                 Requests exceeding this amount require an <strong>Admin</strong> to approve.
               </p>
 

@@ -384,7 +384,7 @@ export default function VendorBillDetailPage() {
         <div className="rounded-md border border-blue-200 bg-blue-50/50 px-4 py-2.5 flex items-start gap-2.5 text-xs text-blue-900">
           <FileText className="h-4 w-4 text-blue-600 flex-shrink-0 mt-0.5" />
           <p>
-            <span className="font-medium">Direct expense</span> — this bill is not linked to a Purchase Request or Purchase Order.
+            <span className="font-medium">Direct expense</span> — this bill is not linked to a Material Request or Purchase Order.
             {predecessor && " See the orange banner above for the original PR/PO this replaces."}
           </p>
         </div>
