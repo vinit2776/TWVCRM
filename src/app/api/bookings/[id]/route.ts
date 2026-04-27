@@ -214,7 +214,7 @@ export async function PATCH(
   // Status transitions
   if (body.status) {
     const { status: newStatus } = body;
-    const canManage = ["admin", "manager", "floor_manager"].includes(dbUser.role);
+    const canManage = ["admin", "manager", "floor_manager", "sales_rep", "accounts", "fms", "office_admin"].includes(dbUser.role);
 
     switch (newStatus) {
       case "checked_in": {

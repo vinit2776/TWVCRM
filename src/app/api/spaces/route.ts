@@ -50,8 +50,8 @@ export async function POST(request: NextRequest) {
     .eq("auth_id", user.id)
     .single();
 
-  if (!dbUser || !["admin", "manager", "floor_manager"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Only admins, managers, and floor managers can create spaces" }, { status: 403 });
+  if (!dbUser || !["admin", "manager", "floor_manager", "sales_rep", "accounts", "fms", "office_admin"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Insufficient permissions to create spaces" }, { status: 403 });
   }
 
   const body = await request.json();

@@ -36,7 +36,7 @@ export async function POST(
     .eq("auth_id", user.id)
     .single();
 
-  if (!dbUser || !["admin", "manager", "floor_manager"].includes(dbUser.role)) {
+  if (!dbUser || !["admin", "manager", "floor_manager", "sales_rep", "accounts", "fms", "office_admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
   }
 
@@ -81,7 +81,7 @@ export async function DELETE(
     .eq("auth_id", user.id)
     .single();
 
-  if (!dbUser || !["admin", "manager", "floor_manager"].includes(dbUser.role)) {
+  if (!dbUser || !["admin", "manager", "floor_manager", "sales_rep", "accounts", "fms", "office_admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
   }
 

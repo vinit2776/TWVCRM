@@ -68,6 +68,9 @@ type NavSection = {
 // Roles that existed before the accounts/fms additions — used as a shorthand below.
 const LEGACY_ROLES = ["admin", "manager", "sales_rep", "floor_manager"];
 
+// Operations menu (Bookings, Spaces, Packages, Vouchers): all active roles.
+const OPERATIONS_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin"];
+
 // Top-level items — always visible, never grouped
 const topNavItems: NavItem[] = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard, roles: null },
@@ -104,11 +107,11 @@ const navSections: NavSection[] = [
     label: "Operations",
     icon: CalendarClock,
     items: [
-      { href: "/bookings",   label: "Bookings",   icon: CalendarClock, roles: [...LEGACY_ROLES, "office_admin"] },
-      { href: "/spaces",     label: "Spaces",     icon: DoorOpen,      roles: ["admin", "manager", "floor_manager", "office_admin"] },
-      { href: "/headcount",  label: "Headcount",  icon: UsersRound,    roles: ["admin", "manager", "floor_manager", "office_admin"] },
-      { href: "/packages",   label: "Packages",   icon: TicketCheck,   roles: [...LEGACY_ROLES, "office_admin"] },
-      { href: "/vouchers",   label: "Vouchers",   icon: Wifi,          roles: [...LEGACY_ROLES, "office_admin"] },
+      { href: "/bookings",  label: "Bookings",  icon: CalendarClock, roles: OPERATIONS_ROLES },
+      { href: "/spaces",    label: "Spaces",    icon: DoorOpen,      roles: OPERATIONS_ROLES },
+      { href: "/headcount", label: "Headcount", icon: UsersRound,    roles: OPERATIONS_ROLES },
+      { href: "/packages",  label: "Packages",  icon: TicketCheck,   roles: OPERATIONS_ROLES },
+      { href: "/vouchers",  label: "Vouchers",  icon: Wifi,          roles: OPERATIONS_ROLES },
     ],
   },
   {
