@@ -25,6 +25,7 @@ import { SpaceUnitFormDialog } from "@/components/spaces/space-unit-form-dialog"
 import { SpaceAnalyticsPanel } from "@/components/spaces/space-analytics";
 import { LocationFormDialog } from "@/components/locations/location-form-dialog";
 import type { Location, LocationFloor, SpaceUnit, SpaceAnalytics } from "@/types";
+import type { PendingSpaceUnit } from "@/components/spaces/space-unit-form-dialog";
 
 type Tab = "overview" | "spaces" | "analytics";
 
@@ -55,9 +56,8 @@ export default function LocationDetailPage({
   const [editFloor, setEditFloor] = useState<LocationFloor | null>(null);
   const [unitDialogOpen, setUnitDialogOpen] = useState(false);
   const [editUnit, setEditUnit] = useState<SpaceUnit | null>(null);
-  const [gridSelection, setGridSelection] = useState<{
-    gridCol: number; gridRow: number; gridColSpan: number; gridRowSpan: number;
-  } | null>(null);
+  /** Pending unit waiting to be placed on canvas (add wizard completed, awaiting click-to-place) */
+  const [pendingUnit, setPendingUnit] = useState<PendingSpaceUnit | null>(null);
 
   // Analytics
   const [analytics, setAnalytics] = useState<SpaceAnalytics | null>(null);
@@ -153,15 +153,40 @@ export default function LocationDetailPage({
   };
 
   const handleUnitClick = (unit: SpaceUnit) => {
+    if (pendingUnit) return; // ignore clicks on existing units during placement
     setEditUnit(unit);
-    setGridSelection(null);
     setUnitDialogOpen(true);
   };
 
-  const handleCellSelect = (sel: { gridCol: number; gridRow: number; gridColSpan: number; gridRowSpan: number }) => {
-    setEditUnit(null);
-    setGridSelection(sel);
-    setUnitDialogOpen(true);
+  /** Wizard completed → enter placement mode */
+  const handleReadyToPlace = (data: PendingSpaceUnit) => {
+    setPendingUnit(data);
+    setUnitDialogOpen(false);
+  };
+
+  /** Canvas click-to-place → POST API with final position */
+  const handlePlaceUnit = async (col: number, row: number) => {
+    if (!pendingUnit || !selectedFloor) return;
+    const payload = {
+      ...pendingUnit,
+      floor_id: selectedFloor.id,
+      grid_col: col,
+      grid_row: row,
+    };
+    const res = await fetch(`/api/locations/${id}/space-units`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    if (res.ok) {
+      const json = await res.json();
+      setUnits((prev) => [...prev, json.data]);
+      setPendingUnit(null);
+      toast.success(`${pendingUnit.name} placed on canvas`);
+    } else {
+      const json = await res.json().catch(() => null);
+      toast.error(json?.error || "Failed to place unit");
+    }
   };
 
   const handleUnitMove = async (unit: SpaceUnit, newCol: number, newRow: number) => {
@@ -424,16 +449,16 @@ export default function LocationDetailPage({
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  {editMode && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={() => { setEditUnit(null); setGridSelection(null); setUnitDialogOpen(true); }}
-                    >
-                      <Plus className="mr-1.5 h-3.5 w-3.5" />
-                      Add Unit
-                    </Button>
-                  )}
+                  {/* Add Unit always available when a floor is selected */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => { setEditUnit(null); setUnitDialogOpen(true); }}
+                    disabled={!!pendingUnit}
+                  >
+                    <Plus className="mr-1.5 h-3.5 w-3.5" />
+                    Add Unit
+                  </Button>
                   <Button
                     variant="outline"
                     size="sm"
@@ -465,9 +490,9 @@ export default function LocationDetailPage({
               </div>
 
               {/* Hint for edit mode */}
-              {editMode && (
+              {editMode && !pendingUnit && (
                 <p className="text-xs text-muted-foreground">
-                  Drag across empty cells to add a new unit · Drag an existing unit to move it
+                  Drag an existing unit to reposition it · Use <strong>Add Unit</strong> to place a new one
                 </p>
               )}
 
@@ -480,7 +505,9 @@ export default function LocationDetailPage({
                     floor={selectedFloor}
                     units={units}
                     mode={editMode ? "edit" : "view"}
-                    onCellSelect={handleCellSelect}
+                    pendingUnit={pendingUnit}
+                    onPlaceUnit={handlePlaceUnit}
+                    onCancelPlacement={() => setPendingUnit(null)}
                     onUnitClick={handleUnitClick}
                     onUnitMove={handleUnitMove}
                   />
@@ -635,13 +662,15 @@ export default function LocationDetailPage({
         open={unitDialogOpen}
         onOpenChange={(open) => {
           setUnitDialogOpen(open);
-          if (!open) { setEditUnit(null); setGridSelection(null); }
+          if (!open) setEditUnit(null);
         }}
         locationId={id}
-        floor={selectedFloor}
+        floor={selectedFloor ?? null}
+        existingUnits={units}
         unit={editUnit}
-        gridSelection={gridSelection}
+        onReadyToPlace={handleReadyToPlace}
         onSuccess={handleUnitSaved}
+        onDelete={handleUnitDelete}
       />
     </div>
   );

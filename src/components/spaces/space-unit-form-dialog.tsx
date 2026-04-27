@@ -1,40 +1,155 @@
 "use client";
 
+/**
+ * SpaceUnitFormDialog
+ *
+ * ADD mode (no `unit` prop):
+ *   2-step wizard:
+ *     Step 1 — Pick type (visual cards)
+ *     Step 2 — Details (name, code, seats stepper, rate, area) + live block-size preview against floor grid
+ *   On "Place on Canvas" → calls onReadyToPlace(data) — NO API call yet.
+ *   The canvas then handles positioning via click-to-place.
+ *
+ * EDIT mode (`unit` prop present):
+ *   Compact form → PUT API call → calls onSuccess(updated).
+ */
+
 import { useState, useEffect } from "react";
-import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Checkbox } from "@/components/ui/checkbox";
+import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
+import { ChevronRight, Minus, Plus, Check, MapPin, Loader2 } from "lucide-react";
 import type { SpaceUnit, SpaceUnitType, LocationFloor } from "@/types";
 
-const UNIT_TYPES: { value: SpaceUnitType; label: string; defaultCap: number; isHourly: boolean }[] = [
-  { value: "hot_desk",        label: "Hot Desk",          defaultCap: 1, isHourly: false },
-  { value: "dedicated_desk",  label: "Dedicated Desk",    defaultCap: 1, isHourly: false },
-  { value: "private_cabin",   label: "Private Cabin",     defaultCap: 2, isHourly: false },
-  { value: "managed_office",  label: "Managed Office",    defaultCap: 8, isHourly: false },
-  { value: "business_centre", label: "Business Centre",   defaultCap: 1, isHourly: true  },
+// ── Constants ──────────────────────────────────────────────────────────────
+
+const COLOR_MAP: Record<SpaceUnitType, string> = {
+  hot_desk:        "#e0f2fe",
+  dedicated_desk:  "#bfdbfe",
+  private_cabin:   "#ede9fe",
+  managed_office:  "#fce7f3",
+  business_centre: "#fef3c7",
+};
+const BORDER_MAP: Record<SpaceUnitType, string> = {
+  hot_desk:        "#7dd3fc",
+  dedicated_desk:  "#93c5fd",
+  private_cabin:   "#c4b5fd",
+  managed_office:  "#f9a8d4",
+  business_centre: "#fcd34d",
+};
+
+const TYPE_META: {
+  value: SpaceUnitType;
+  label: string;
+  emoji: string;
+  description: string;
+  seatRange: string;
+  isHourly: boolean;
+}[] = [
+  {
+    value: "hot_desk", label: "Hot Desk", emoji: "🪑",
+    description: "Open, flexible seating. Booked daily or shared.",
+    seatRange: "1 – 20+ seats", isHourly: false,
+  },
+  {
+    value: "dedicated_desk", label: "Dedicated Desk", emoji: "🖥️",
+    description: "Fixed, named desks. Reserved for one person.",
+    seatRange: "1 – 10 seats", isHourly: false,
+  },
+  {
+    value: "private_cabin", label: "Private Cabin", emoji: "🚪",
+    description: "Enclosed private office for small teams.",
+    seatRange: "1 – 6 seats", isHourly: false,
+  },
+  {
+    value: "managed_office", label: "Managed Office", emoji: "🏢",
+    description: "Fully managed suite for larger teams.",
+    seatRange: "5 – 50+ seats", isHourly: false,
+  },
+  {
+    value: "business_centre", label: "Business Centre", emoji: "⏱️",
+    description: "Pay-per-hour, walk-in, or meeting use.",
+    seatRange: "1 – 8 seats", isHourly: true,
+  },
 ];
 
-function isHourlyType(t: SpaceUnitType): boolean {
-  return UNIT_TYPES.find((u) => u.value === t)?.isHourly === true;
+const AMENITIES_OPTIONS = [
+  "AC", "Whiteboard", "TV / Screen", "Phone",
+  "Storage", "Standing Desk", "Natural Light", "Soundproofing",
+];
+
+// ── Size suggestion ─────────────────────────────────────────────────────────
+
+export function suggestBlockSize(type: SpaceUnitType, capacity: number): { cols: number; rows: number } {
+  switch (type) {
+    case "hot_desk":
+      if (capacity <= 1) return { cols: 2, rows: 2 };
+      if (capacity <= 4) return { cols: 4, rows: 2 };
+      if (capacity <= 8) return { cols: 5, rows: 2 };
+      return { cols: 6, rows: 3 };
+    case "dedicated_desk":
+      if (capacity <= 1) return { cols: 2, rows: 2 };
+      if (capacity <= 3) return { cols: 3, rows: 2 };
+      if (capacity <= 6) return { cols: 4, rows: 3 };
+      return { cols: 5, rows: 3 };
+    case "private_cabin":
+      if (capacity <= 2) return { cols: 3, rows: 3 };
+      if (capacity <= 4) return { cols: 4, rows: 3 };
+      return { cols: 5, rows: 4 };
+    case "managed_office":
+      if (capacity <= 8)  return { cols: 5, rows: 4 };
+      if (capacity <= 15) return { cols: 7, rows: 4 };
+      return { cols: 8, rows: 5 };
+    case "business_centre":
+      return { cols: 4, rows: 3 };
+    default:
+      return { cols: 2, rows: 2 };
+  }
 }
 
-const AMENITIES_OPTIONS = ["AC", "Whiteboard", "TV / Screen", "Phone", "Storage", "Standing Desk", "Natural Light", "Soundproofing"];
+function suggestCode(type: SpaceUnitType, existingUnits: SpaceUnit[]): string {
+  const prefixes: Record<SpaceUnitType, string> = {
+    hot_desk: "HD", dedicated_desk: "DD", private_cabin: "CB",
+    managed_office: "MO", business_centre: "BC",
+  };
+  const n = existingUnits.filter((u) => u.type === type).length + 1;
+  return `${prefixes[type]}-${String(n).padStart(2, "0")}`;
+}
 
-const PALETTE = [
-  "#e0f2fe", "#bfdbfe", "#ede9fe", "#fce7f3",
-  "#dcfce7", "#fef9c3", "#ffedd5", "#f1f5f9",
-];
+function suggestName(type: SpaceUnitType, existingUnits: SpaceUnit[]): string {
+  const n = existingUnits.filter((u) => u.type === type).length + 1;
+  const p = String(n).padStart(2, "0");
+  switch (type) {
+    case "hot_desk":        return `Hot Desk ${p}`;
+    case "dedicated_desk":  return `Dedicated Desk ${p}`;
+    case "private_cabin":   return `Cabin ${p}`;
+    case "managed_office":  return `Office Suite ${p}`;
+    case "business_centre": return `Business Centre ${p}`;
+  }
+}
 
-interface GridSelection {
-  gridCol: number;
-  gridRow: number;
-  gridColSpan: number;
-  gridRowSpan: number;
+// ── Types ───────────────────────────────────────────────────────────────────
+
+export interface PendingSpaceUnit {
+  floor_id: string | null;
+  type: SpaceUnitType;
+  name: string;
+  code: string;
+  capacity: number;
+  area_sqft: number | null;
+  monthly_rate: number | null;
+  daily_rate: number | null;
+  hourly_rate: number | null;
+  amenities: string[];
+  notes: string;
+  color: string;
+  grid_col_span: number;
+  grid_row_span: number;
 }
 
 interface Props {
@@ -42,280 +157,549 @@ interface Props {
   onOpenChange: (open: boolean) => void;
   locationId: string;
   floor: LocationFloor | null;
+  /** Existing units on this floor — used for code/name auto-suggestion */
+  existingUnits: SpaceUnit[];
+  /** Edit mode — present when editing an existing unit */
   unit?: SpaceUnit | null;
-  gridSelection?: GridSelection | null;
-  onSuccess: (unit: SpaceUnit) => void;
+  /** ADD mode: called after wizard completes; canvas then handles placement */
+  onReadyToPlace?: (data: PendingSpaceUnit) => void;
+  /** EDIT mode: called after PUT API succeeds */
+  onSuccess?: (unit: SpaceUnit) => void;
+  /** EDIT mode: called when user deletes from the dialog */
+  onDelete?: (unit: SpaceUnit) => void;
 }
 
-export function SpaceUnitFormDialog({ open, onOpenChange, locationId, floor, unit, gridSelection, onSuccess }: Props) {
-  const isEdit = Boolean(unit);
-  const [loading, setLoading] = useState(false);
-  const [form, setForm] = useState({
-    name: "",
-    code: "",
-    type: "private_cabin" as SpaceUnitType,
-    capacity: "2",
-    area_sqft: "",
-    monthly_rate: "",
-    daily_rate: "",
-    hourly_rate: "",
-    amenities: [] as string[],
-    notes: "",
-    color: PALETTE[2],
-    grid_col: "1",
-    grid_row: "1",
-    grid_col_span: "2",
-    grid_row_span: "2",
-  });
+// ── Mini floor grid preview ─────────────────────────────────────────────────
 
+function MiniFloorPreview({
+  floor, type, colSpan, rowSpan,
+}: { floor: LocationFloor; type: SpaceUnitType; colSpan: number; rowSpan: number }) {
+  const MINI = Math.min(8, Math.floor(240 / floor.grid_cols)); // px per cell, max 8
+  const w = floor.grid_cols * MINI;
+  const h = floor.grid_rows * MINI;
+  const pct = Math.round((colSpan * rowSpan * 100) / (floor.grid_cols * floor.grid_rows));
+
+  return (
+    <div className="space-y-1.5">
+      <div
+        style={{
+          width: w, height: h,
+          display: "grid",
+          gridTemplateColumns: `repeat(${floor.grid_cols}, ${MINI}px)`,
+          gridTemplateRows: `repeat(${floor.grid_rows}, ${MINI}px)`,
+          backgroundImage:
+            `linear-gradient(${MINI}px, #e5e7eb ${MINI}px, transparent ${MINI}px),
+             linear-gradient(90deg, ${MINI}px, #e5e7eb ${MINI}px, transparent ${MINI}px)`,
+          backgroundSize: `${MINI}px ${MINI}px`,
+          border: "1px solid #e5e7eb",
+          borderRadius: 4,
+          backgroundColor: "#f9fafb",
+          overflow: "hidden",
+        }}
+      >
+        <div
+          style={{
+            gridColumn: `1 / span ${Math.min(colSpan, floor.grid_cols)}`,
+            gridRow: `1 / span ${Math.min(rowSpan, floor.grid_rows)}`,
+            backgroundColor: COLOR_MAP[type],
+            border: `1px solid ${BORDER_MAP[type]}`,
+            borderRadius: 2,
+          }}
+        />
+      </div>
+      <p className="text-xs text-muted-foreground">
+        {colSpan} × {rowSpan} block &nbsp;·&nbsp; ~{pct}% of {floor.name} floor
+      </p>
+    </div>
+  );
+}
+
+// ── Stepper ─────────────────────────────────────────────────────────────────
+
+function Stepper({ value, onChange, min = 1, max = 100 }: {
+  value: number; onChange: (n: number) => void; min?: number; max?: number;
+}) {
+  return (
+    <div className="flex items-center gap-2">
+      <button
+        type="button"
+        onClick={() => onChange(Math.max(min, value - 1))}
+        className="h-8 w-8 rounded border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+      >
+        <Minus className="h-3.5 w-3.5" />
+      </button>
+      <span className="w-10 text-center font-semibold tabular-nums">{value}</span>
+      <button
+        type="button"
+        onClick={() => onChange(Math.min(max, value + 1))}
+        className="h-8 w-8 rounded border flex items-center justify-center text-muted-foreground hover:text-foreground hover:bg-muted transition-colors"
+      >
+        <Plus className="h-3.5 w-3.5" />
+      </button>
+    </div>
+  );
+}
+
+// ── Main component ──────────────────────────────────────────────────────────
+
+export function SpaceUnitFormDialog({
+  open, onOpenChange, locationId, floor, existingUnits, unit, onReadyToPlace, onSuccess, onDelete,
+}: Props) {
+  const isEdit = !!unit;
+
+  // Wizard state (add mode)
+  const [step, setStep] = useState<"type" | "details">("type");
+  const [type, setType] = useState<SpaceUnitType>("private_cabin");
+
+  // Form fields
+  const [name, setName]         = useState("");
+  const [code, setCode]         = useState("");
+  const [capacity, setCapacity] = useState(2);
+  const [rate, setRate]         = useState("");
+  const [dailyRate, setDailyRate] = useState("");
+  const [areaSqft, setAreaSqft] = useState("");
+  const [notes, setNotes]       = useState("");
+  const [amenities, setAmenities] = useState<string[]>([]);
+  const [colSpan, setColSpan]   = useState(3);
+  const [rowSpan, setRowSpan]   = useState(3);
+
+  // Edit loading
+  const [saving, setSaving] = useState(false);
+
+  const isHourly = type === "business_centre";
+
+  // Auto-size when type or capacity changes (add mode only)
+  useEffect(() => {
+    if (isEdit) return;
+    const s = suggestBlockSize(type, capacity);
+    setColSpan(s.cols);
+    setRowSpan(s.rows);
+  }, [type, capacity, isEdit]);
+
+  // Reset on open
   useEffect(() => {
     if (!open) return;
     if (unit) {
-      setForm({
-        name: unit.name,
-        code: unit.code,
-        type: unit.type,
-        capacity: String(unit.capacity),
-        area_sqft: unit.area_sqft ? String(unit.area_sqft) : "",
-        monthly_rate: unit.monthly_rate ? String(unit.monthly_rate) : "",
-        daily_rate: unit.daily_rate ? String(unit.daily_rate) : "",
-        hourly_rate: unit.hourly_rate ? String(unit.hourly_rate) : "",
-        amenities: unit.amenities || [],
-        notes: unit.notes || "",
-        color: unit.color || PALETTE[2],
-        grid_col: String(unit.grid_col),
-        grid_row: String(unit.grid_row),
-        grid_col_span: String(unit.grid_col_span),
-        grid_row_span: String(unit.grid_row_span),
-      });
+      // Edit mode — prefill from unit
+      setType(unit.type);
+      setName(unit.name);
+      setCode(unit.code);
+      setCapacity(unit.capacity);
+      setRate(String(unit.monthly_rate ?? unit.hourly_rate ?? ""));
+      setDailyRate(String(unit.daily_rate ?? ""));
+      setAreaSqft(String(unit.area_sqft ?? ""));
+      setNotes(unit.notes ?? "");
+      setAmenities(unit.amenities ?? []);
+      setColSpan(unit.grid_col_span);
+      setRowSpan(unit.grid_row_span);
     } else {
-      const defaultType = UNIT_TYPES[2];
-      setForm({
-        name: "",
-        code: "",
-        type: defaultType.value,
-        capacity: String(defaultType.defaultCap),
-        area_sqft: "",
-        monthly_rate: "",
-        daily_rate: "",
-        hourly_rate: "",
-        amenities: [],
-        notes: "",
-        color: PALETTE[2],
-        grid_col: String(gridSelection?.gridCol ?? 1),
-        grid_row: String(gridSelection?.gridRow ?? 1),
-        grid_col_span: String(gridSelection?.gridColSpan ?? 2),
-        grid_row_span: String(gridSelection?.gridRowSpan ?? 2),
-      });
+      // Add mode — smart defaults
+      const defaultType: SpaceUnitType = "private_cabin";
+      setStep("type");
+      setType(defaultType);
+      setCapacity(2);
+      setName(suggestName(defaultType, existingUnits));
+      setCode(suggestCode(defaultType, existingUnits));
+      setRate(""); setDailyRate(""); setAreaSqft(""); setNotes("");
+      setAmenities([]);
+      const s = suggestBlockSize(defaultType, 2);
+      setColSpan(s.cols); setRowSpan(s.rows);
     }
-  }, [unit, gridSelection, open]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, unit]);
 
-  const set = (field: keyof typeof form) => (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) =>
-    setForm((f) => ({ ...f, [field]: e.target.value }));
+  // When type changes in add wizard, re-suggest name+code
+  const handleTypeSelect = (t: SpaceUnitType) => {
+    setType(t);
+    const defaultCap = t === "managed_office" ? 8 : t === "business_centre" ? 1 : 2;
+    setCapacity(defaultCap);
+    setName(suggestName(t, existingUnits));
+    setCode(suggestCode(t, existingUnits));
+    const s = suggestBlockSize(t, defaultCap);
+    setColSpan(s.cols); setRowSpan(s.rows);
+    setStep("details");
+  };
 
-  function toggleAmenity(a: string) {
-    setForm((f) => ({
-      ...f,
-      amenities: f.amenities.includes(a) ? f.amenities.filter((x) => x !== a) : [...f.amenities, a],
-    }));
-  }
+  // ── Add mode: "Place on Canvas" ──────────────────────────────────────────
+  const handleReadyToPlace = () => {
+    if (!name.trim()) { toast.error("Name is required"); return; }
+    if (!code.trim()) { toast.error("Code is required"); return; }
+    const rateVal = parseFloat(rate);
+    if (isNaN(rateVal) || rateVal < 0) { toast.error(`${isHourly ? "Hourly" : "Monthly"} rate is required`); return; }
 
-  const hourly = isHourlyType(form.type);
+    onReadyToPlace?.({
+      floor_id: floor?.id ?? null,
+      type,
+      name: name.trim(),
+      code: code.trim().toUpperCase(),
+      capacity,
+      area_sqft: areaSqft ? Number(areaSqft) : null,
+      monthly_rate: isHourly ? null : rateVal,
+      daily_rate: dailyRate ? Number(dailyRate) : null,
+      hourly_rate: isHourly ? rateVal : (dailyRate ? null : null),
+      amenities,
+      notes: notes.trim(),
+      color: COLOR_MAP[type],
+      grid_col_span: colSpan,
+      grid_row_span: rowSpan,
+    });
+    onOpenChange(false);
+  };
 
-  async function handleSubmit(e: React.FormEvent) {
+  // ── Edit mode: submit ─────────────────────────────────────────────────────
+  const handleEditSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!form.name.trim()) { toast.error("Name is required"); return; }
-    if (!form.code.trim()) { toast.error("Code is required"); return; }
-    if (hourly) {
-      if (!form.hourly_rate || isNaN(Number(form.hourly_rate))) { toast.error("Hourly rate is required"); return; }
-    } else {
-      if (!form.monthly_rate || isNaN(Number(form.monthly_rate))) { toast.error("Monthly rate is required"); return; }
-    }
+    if (!unit) return;
+    if (!name.trim()) { toast.error("Name is required"); return; }
+    const rateVal = parseFloat(rate);
+    if (isNaN(rateVal) || rateVal < 0) { toast.error("Rate is required"); return; }
 
-    setLoading(true);
+    setSaving(true);
     try {
-      const url = isEdit
-        ? `/api/locations/${locationId}/space-units/${unit!.id}`
-        : `/api/locations/${locationId}/space-units`;
-      const method = isEdit ? "PUT" : "POST";
-
-      const payload = {
-        floor_id: floor?.id ?? null,
-        name: form.name.trim(),
-        code: form.code.trim(),
-        type: form.type,
-        capacity: Number(form.capacity),
-        area_sqft: form.area_sqft ? Number(form.area_sqft) : null,
-        monthly_rate: hourly ? null : Number(form.monthly_rate),
-        daily_rate: form.daily_rate ? Number(form.daily_rate) : null,
-        hourly_rate: form.hourly_rate ? Number(form.hourly_rate) : null,
-        amenities: form.amenities,
-        notes: form.notes || null,
-        color: form.color || null,
-        grid_col: Number(form.grid_col),
-        grid_row: Number(form.grid_row),
-        grid_col_span: Number(form.grid_col_span),
-        grid_row_span: Number(form.grid_row_span),
-      };
-
-      const res = await fetch(url, { method, headers: { "Content-Type": "application/json" }, body: JSON.stringify(payload) });
+      const res = await fetch(`/api/locations/${locationId}/space-units/${unit.id}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          name: name.trim(),
+          code: code.trim().toUpperCase(),
+          type,
+          capacity,
+          area_sqft: areaSqft ? Number(areaSqft) : null,
+          monthly_rate: isHourly ? null : rateVal,
+          daily_rate: dailyRate ? Number(dailyRate) : null,
+          hourly_rate: isHourly ? rateVal : null,
+          amenities,
+          notes: notes.trim(),
+          grid_col_span: colSpan,
+          grid_row_span: rowSpan,
+        }),
+      });
       const json = await res.json();
-      if (!res.ok) { toast.error(json.error || "Failed to save space unit"); return; }
-
-      toast.success(isEdit ? "Space unit updated" : "Space unit added");
-      onSuccess(json.data);
+      if (!res.ok) { toast.error(json.error || "Failed to update"); return; }
+      toast.success("Space unit updated");
+      onSuccess?.(json.data);
       onOpenChange(false);
-    } catch {
-      toast.error("Something went wrong");
-    } finally {
-      setLoading(false);
-    }
-  }
+    } finally { setSaving(false); }
+  };
+
+  // ── Render: Step 1 — Type selection ──────────────────────────────────────
+  const StepType = () => (
+    <div className="space-y-3">
+      <p className="text-sm text-muted-foreground">
+        Select the type of space you want to add to this floor.
+      </p>
+      <div className="space-y-2">
+        {TYPE_META.map((t) => (
+          <button
+            key={t.value}
+            type="button"
+            onClick={() => handleTypeSelect(t.value)}
+            className="w-full flex items-center gap-3 p-3 rounded-lg border text-left hover:bg-muted/40 hover:border-[#015E65]/40 transition-all group"
+          >
+            {/* Color swatch + emoji */}
+            <div
+              className="h-10 w-10 rounded-md flex items-center justify-center text-xl shrink-0"
+              style={{ backgroundColor: COLOR_MAP[t.value], border: `1.5px solid ${BORDER_MAP[t.value]}` }}
+            >
+              {t.emoji}
+            </div>
+            <div className="flex-1 min-w-0">
+              <div className="flex items-center gap-2">
+                <span className="font-semibold text-sm">{t.label}</span>
+                {t.isHourly && (
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0 h-4">Hourly</Badge>
+                )}
+              </div>
+              <p className="text-xs text-muted-foreground mt-0.5">{t.description}</p>
+              <p className="text-[11px] text-muted-foreground/70 mt-0.5">{t.seatRange}</p>
+            </div>
+            <ChevronRight className="h-4 w-4 text-muted-foreground shrink-0 group-hover:text-[#015E65]" />
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  // ── Render: Step 2 — Details + preview ───────────────────────────────────
+  const selectedMeta = TYPE_META.find((t) => t.value === type)!;
+
+  const StepDetails = () => (
+    <div className="space-y-4">
+      {/* Type chip — click to go back */}
+      <button
+        type="button"
+        onClick={() => setStep("type")}
+        className="flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground group"
+      >
+        <div
+          className="h-7 w-7 rounded-md flex items-center justify-center text-base"
+          style={{ backgroundColor: COLOR_MAP[type], border: `1.5px solid ${BORDER_MAP[type]}` }}
+        >
+          {selectedMeta.emoji}
+        </div>
+        <span className="font-medium">{selectedMeta.label}</span>
+        <span className="text-xs text-[#015E65] group-hover:underline">Change type</span>
+      </button>
+
+      {/* Name + Code */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="su-name">Name <span className="text-destructive">*</span></Label>
+          <Input
+            id="su-name"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder={`e.g. ${suggestName(type, existingUnits)}`}
+            autoFocus
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="su-code">Code <span className="text-destructive">*</span></Label>
+          <Input
+            id="su-code"
+            value={code}
+            onChange={(e) => setCode(e.target.value.toUpperCase())}
+            placeholder={`e.g. ${suggestCode(type, existingUnits)}`}
+            className="font-mono"
+          />
+        </div>
+      </div>
+
+      {/* Seats */}
+      <div className="space-y-1.5">
+        <Label>How many seats?</Label>
+        <div className="flex items-center gap-4">
+          <Stepper value={capacity} onChange={setCapacity} min={1} max={100} />
+          <span className="text-sm text-muted-foreground">
+            seat{capacity !== 1 ? "s" : ""}
+          </span>
+        </div>
+      </div>
+
+      {/* Rate */}
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label htmlFor="su-rate">
+            {isHourly ? "Hourly Rate (₹)" : "Monthly Rate (₹)"}
+            <span className="text-destructive"> *</span>
+          </Label>
+          <Input
+            id="su-rate"
+            type="number"
+            value={rate}
+            onChange={(e) => setRate(e.target.value)}
+            placeholder={isHourly ? "350" : "18000"}
+            min={0}
+          />
+        </div>
+        <div className="space-y-1.5">
+          <Label htmlFor="su-area">Area (sqft)</Label>
+          <Input
+            id="su-area"
+            type="number"
+            value={areaSqft}
+            onChange={(e) => setAreaSqft(e.target.value)}
+            placeholder="e.g. 180"
+            min={0}
+          />
+        </div>
+      </div>
+
+      {/* Block size + mini-preview */}
+      {floor && (
+        <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+          <div className="flex items-center justify-between">
+            <div>
+              <p className="text-sm font-medium">Canvas Block Size</p>
+              <p className="text-xs text-muted-foreground">
+                Auto-sized from seat count · adjust if needed
+              </p>
+            </div>
+            <div className="flex items-center gap-4">
+              <div className="text-center">
+                <p className="text-[10px] text-muted-foreground mb-1">Width</p>
+                <Stepper
+                  value={colSpan}
+                  onChange={setColSpan}
+                  min={1}
+                  max={floor.grid_cols}
+                />
+              </div>
+              <span className="text-muted-foreground text-sm mt-3">×</span>
+              <div className="text-center">
+                <p className="text-[10px] text-muted-foreground mb-1">Height</p>
+                <Stepper
+                  value={rowSpan}
+                  onChange={setRowSpan}
+                  min={1}
+                  max={floor.grid_rows}
+                />
+              </div>
+            </div>
+          </div>
+          <MiniFloorPreview
+            floor={floor}
+            type={type}
+            colSpan={colSpan}
+            rowSpan={rowSpan}
+          />
+        </div>
+      )}
+
+      {/* Notes */}
+      <div className="space-y-1.5">
+        <Label htmlFor="su-notes">Notes <span className="text-xs text-muted-foreground">(optional)</span></Label>
+        <Textarea
+          id="su-notes"
+          value={notes}
+          onChange={(e) => setNotes(e.target.value)}
+          placeholder="Any extra info about this space…"
+          rows={2}
+        />
+      </div>
+
+      {/* Amenities — collapsible */}
+      <details className="group">
+        <summary className="cursor-pointer text-sm text-muted-foreground hover:text-foreground select-none">
+          ▸ Amenities (optional)
+        </summary>
+        <div className="grid grid-cols-2 gap-2 mt-2">
+          {AMENITIES_OPTIONS.map((a) => (
+            <div key={a} className="flex items-center gap-2">
+              <Checkbox
+                id={`am-${a}`}
+                checked={amenities.includes(a)}
+                onCheckedChange={() =>
+                  setAmenities((prev) =>
+                    prev.includes(a) ? prev.filter((x) => x !== a) : [...prev, a]
+                  )
+                }
+              />
+              <label htmlFor={`am-${a}`} className="text-sm cursor-pointer">{a}</label>
+            </div>
+          ))}
+        </div>
+      </details>
+
+      {/* Actions */}
+      <div className="flex items-center justify-between pt-1">
+        <Button type="button" variant="ghost" onClick={() => setStep("type")}>
+          ← Back
+        </Button>
+        <div className="flex gap-2">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>
+            Cancel
+          </Button>
+          <Button
+            type="button"
+            onClick={handleReadyToPlace}
+            className="gap-1.5"
+            style={{ backgroundColor: "#015E65", color: "white" }}
+          >
+            <MapPin className="h-4 w-4" />
+            Place on Canvas
+          </Button>
+        </div>
+      </div>
+    </div>
+  );
+
+  // ── Edit mode render ──────────────────────────────────────────────────────
+  const EditForm = () => (
+    <form onSubmit={handleEditSubmit} className="space-y-4">
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label>Name *</Label>
+          <Input value={name} onChange={(e) => setName(e.target.value)} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Code *</Label>
+          <Input value={code} onChange={(e) => setCode(e.target.value.toUpperCase())} className="font-mono" />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label>Seats</Label>
+          <Stepper value={capacity} onChange={setCapacity} min={1} max={100} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>{isHourly ? "Hourly Rate (₹) *" : "Monthly Rate (₹) *"}</Label>
+          <Input type="number" value={rate} onChange={(e) => setRate(e.target.value)} min={0} />
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div className="space-y-1.5">
+          <Label>Area (sqft)</Label>
+          <Input type="number" value={areaSqft} onChange={(e) => setAreaSqft(e.target.value)} />
+        </div>
+        <div className="space-y-1.5">
+          <Label>Daily Rate (₹)</Label>
+          <Input type="number" value={dailyRate} onChange={(e) => setDailyRate(e.target.value)} />
+        </div>
+      </div>
+
+      {/* Block size for edit */}
+      {floor && (
+        <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
+          <p className="text-sm font-medium">Canvas Block Size</p>
+          <div className="flex items-center gap-4">
+            <div className="text-center">
+              <p className="text-[10px] text-muted-foreground mb-1">Width</p>
+              <Stepper value={colSpan} onChange={setColSpan} min={1} max={floor.grid_cols} />
+            </div>
+            <span className="text-muted-foreground text-sm mt-3">×</span>
+            <div className="text-center">
+              <p className="text-[10px] text-muted-foreground mb-1">Height</p>
+              <Stepper value={rowSpan} onChange={setRowSpan} min={1} max={floor.grid_rows} />
+            </div>
+          </div>
+          <MiniFloorPreview floor={floor} type={type} colSpan={colSpan} rowSpan={rowSpan} />
+        </div>
+      )}
+
+      <div className="space-y-1.5">
+        <Label>Notes</Label>
+        <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />
+      </div>
+
+      <div className="flex items-center justify-between pt-1">
+        {onDelete && unit && (
+          <Button
+            type="button"
+            variant="ghost"
+            className="text-destructive hover:text-destructive text-sm"
+            onClick={() => { onDelete(unit!); onOpenChange(false); }}
+          >
+            Remove Unit
+          </Button>
+        )}
+        <div className="flex gap-2 ml-auto">
+          <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
+          <Button type="submit" disabled={saving}>
+            {saving ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Check className="mr-2 h-4 w-4" />}
+            Save Changes
+          </Button>
+        </div>
+      </div>
+    </form>
+  );
+
+  // ── Dialog shell ──────────────────────────────────────────────────────────
+  const title = isEdit ? `Edit — ${unit?.name}` : step === "type" ? "What type of space?" : "Space Details";
+  const subtitle = isEdit ? null : step === "type" ? "Step 1 of 2" : "Step 2 of 2";
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>{isEdit ? "Edit Space Unit" : "Add Space Unit"}</DialogTitle>
+          <DialogTitle>{title}</DialogTitle>
+          {subtitle && <p className="text-xs text-muted-foreground mt-0.5">{subtitle}</p>}
         </DialogHeader>
-
-        <form onSubmit={handleSubmit} className="space-y-4">
-          {/* Identity */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label>Unit Name *</Label>
-              <Input value={form.name} onChange={set("name")} placeholder="e.g. Cabin 03" />
-            </div>
-            <div className="space-y-1">
-              <Label>Code *</Label>
-              <Input value={form.code} onChange={set("code")} placeholder="C-03" className="uppercase"
-                onBlur={(e) => setForm((f) => ({ ...f, code: e.target.value.toUpperCase() }))} />
-            </div>
-          </div>
-
-          {/* Type + Capacity */}
-          <div className="grid grid-cols-2 gap-3">
-            <div className="space-y-1">
-              <Label>Type *</Label>
-              <Select value={form.type} onValueChange={(v) => {
-                const def = UNIT_TYPES.find((t) => t.value === v);
-                setForm((f) => ({ ...f, type: v as SpaceUnitType, capacity: def ? String(def.defaultCap) : f.capacity }));
-              }}>
-                <SelectTrigger><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  {UNIT_TYPES.map((t) => <SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label>Capacity (seats) *</Label>
-              <Input type="number" value={form.capacity} onChange={set("capacity")} min={1} />
-            </div>
-          </div>
-
-          {/* Rates — switches between monthly and hourly based on type */}
-          {hourly ? (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label>Hourly Rate (₹) *</Label>
-                <Input type="number" value={form.hourly_rate} onChange={set("hourly_rate")} placeholder="350" min={0} />
-              </div>
-              <div className="space-y-1">
-                <Label>Daily Rate (₹)</Label>
-                <Input type="number" value={form.daily_rate} onChange={set("daily_rate")} placeholder="Optional" min={0} />
-              </div>
-            </div>
-          ) : (
-            <div className="grid grid-cols-2 gap-3">
-              <div className="space-y-1">
-                <Label>Monthly Rate (₹) *</Label>
-                <Input type="number" value={form.monthly_rate} onChange={set("monthly_rate")} placeholder="18000" min={0} />
-              </div>
-              <div className="space-y-1">
-                <Label>Daily Rate (₹)</Label>
-                <Input type="number" value={form.daily_rate} onChange={set("daily_rate")} placeholder="Optional" min={0} />
-              </div>
-            </div>
-          )}
-          {hourly && (
-            <p className="text-xs text-muted-foreground -mt-2">
-              Business centres are billed hourly — typically used for short-term, walk-in, or pay-per-use bookings.
-            </p>
-          )}
-
-          {/* Area */}
-          <div className="space-y-1">
-            <Label>Area (sqft)</Label>
-            <Input type="number" value={form.area_sqft} onChange={set("area_sqft")} placeholder="e.g. 180" min={0} />
-          </div>
-
-          {/* Amenities */}
-          <div className="space-y-2">
-            <Label>Amenities</Label>
-            <div className="grid grid-cols-2 gap-2">
-              {AMENITIES_OPTIONS.map((a) => (
-                <div key={a} className="flex items-center gap-2">
-                  <Checkbox id={`am-${a}`} checked={form.amenities.includes(a)} onCheckedChange={() => toggleAmenity(a)} />
-                  <label htmlFor={`am-${a}`} className="text-sm cursor-pointer">{a}</label>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* Color */}
-          <div className="space-y-2">
-            <Label>Colour</Label>
-            <div className="flex gap-2 flex-wrap">
-              {PALETTE.map((c) => (
-                <button
-                  key={c} type="button"
-                  className={`w-7 h-7 rounded-full border-2 transition-transform ${form.color === c ? "border-gray-900 scale-110" : "border-gray-300"}`}
-                  style={{ backgroundColor: c }}
-                  onClick={() => setForm((f) => ({ ...f, color: c }))}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* Grid position — read-only from canvas, but editable for manual entry */}
-          <div className="rounded border bg-muted/30 p-3 space-y-2">
-            <Label className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Grid Position</Label>
-            <div className="grid grid-cols-4 gap-2">
-              <div className="space-y-0.5">
-                <p className="text-xs text-muted-foreground">Col</p>
-                <Input type="number" value={form.grid_col} onChange={set("grid_col")} min={1} max={floor?.grid_cols ?? 30} className="text-sm" />
-              </div>
-              <div className="space-y-0.5">
-                <p className="text-xs text-muted-foreground">Row</p>
-                <Input type="number" value={form.grid_row} onChange={set("grid_row")} min={1} max={floor?.grid_rows ?? 20} className="text-sm" />
-              </div>
-              <div className="space-y-0.5">
-                <p className="text-xs text-muted-foreground">Width</p>
-                <Input type="number" value={form.grid_col_span} onChange={set("grid_col_span")} min={1} max={floor?.grid_cols ?? 30} className="text-sm" />
-              </div>
-              <div className="space-y-0.5">
-                <p className="text-xs text-muted-foreground">Height</p>
-                <Input type="number" value={form.grid_row_span} onChange={set("grid_row_span")} min={1} max={floor?.grid_rows ?? 20} className="text-sm" />
-              </div>
-            </div>
-            {floor && (
-              <p className="text-xs text-muted-foreground">
-                Floor: {floor.name} ({floor.grid_cols}×{floor.grid_rows} grid)
-              </p>
-            )}
-          </div>
-
-          {/* Notes */}
-          <div className="space-y-1">
-            <Label>Notes</Label>
-            <Textarea value={form.notes} onChange={set("notes")} placeholder="Any additional notes…" rows={2} />
-          </div>
-
-          <DialogFooter>
-            <Button type="button" variant="outline" onClick={() => onOpenChange(false)}>Cancel</Button>
-            <Button type="submit" disabled={loading}>{loading ? "Saving…" : isEdit ? "Save Changes" : "Add Unit"}</Button>
-          </DialogFooter>
-        </form>
+        <div className="mt-2">
+          {isEdit ? <EditForm /> : step === "type" ? <StepType /> : <StepDetails />}
+        </div>
       </DialogContent>
     </Dialog>
   );
