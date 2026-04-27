@@ -54,6 +54,7 @@ import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
 import { toast } from "sonner";
 import { LayoutGrid, Trash2 } from "lucide-react";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
+import { SeatOccupantsPanel } from "@/components/spaces/seat-occupants-panel";
 import type { Contract, ContractSpaceAllocation } from "@/types";
 
 export default function ContractDetailPage({
@@ -1222,6 +1223,14 @@ export default function ContractDetailPage({
                       </div>
                     );
                   })}
+                  {/* Seat-level occupant tracking */}
+                  {contract?.location_id && (
+                    <SeatOccupantsPanel
+                      contractId={id}
+                      locationId={contract.location_id}
+                      allocations={spaceAllocations}
+                    />
+                  )}
                 </div>
               )}
             </CardContent>

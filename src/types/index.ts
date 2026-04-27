@@ -659,7 +659,8 @@ export type AuditEntityType =
   | "consumption_log"
   | "location_floor"
   | "space_unit"
-  | "contract_space_allocation";
+  | "contract_space_allocation"
+  | "space_seat_occupant";
 
 export interface AuditLog {
   id: string;
@@ -2185,6 +2186,31 @@ export interface SpaceAnalytics {
   occupancy: SpaceTypeOccupancy[];
   revenue: SpaceRevenueRow[];
   idle_units: SpaceUnit[];
+}
+
+// ==========================================
+// Seat Occupant Types
+// ==========================================
+export type SeatOccupantStatus = "active" | "ended" | "transferred";
+
+export interface SpaceSeatOccupant {
+  id: string;
+  space_unit_id: string;
+  space_unit?: SpaceUnit;
+  contract_id: string;
+  location_id: string;
+  seat_label?: string;
+  occupant_name: string;
+  occupant_email?: string;
+  occupant_phone?: string;
+  start_date: string;
+  end_date?: string;
+  status: SeatOccupantStatus;
+  transferred_to_id?: string;
+  transferred_to?: SpaceSeatOccupant;
+  notes?: string;
+  created_at: string;
+  updated_at: string;
 }
 
 // ==========================================
