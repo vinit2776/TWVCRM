@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Bell } from "lucide-react";
+import { Bell, MessageSquare } from "lucide-react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
@@ -11,7 +11,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
-import type { EnquiryNotificationItem } from "@/providers/enquiry-notifications-provider";
+import type { EnquiryNotificationItem, WhatsAppInboundItem } from "@/providers/enquiry-notifications-provider";
 
 function timeAgo(iso: string): string {
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -54,10 +54,43 @@ function NotificationRow({
   );
 }
 
+function WhatsAppRow({
+  item,
+  onClose,
+}: {
+  item: WhatsAppInboundItem;
+  onClose: () => void;
+}) {
+  const router = useRouter();
+
+  function handleClick() {
+    onClose();
+    if (item.leadId) router.push(`/leads/${item.leadId}`);
+  }
+
+  return (
+    <button
+      onClick={handleClick}
+      className="w-full flex items-start gap-2 px-3 py-2 rounded-md text-left hover:bg-muted transition-colors"
+    >
+      <MessageSquare className="h-3.5 w-3.5 text-green-600 mt-0.5 shrink-0" />
+      <div className="min-w-0 flex-1">
+        <p className="text-sm font-medium truncate">+{item.fromNumber}</p>
+        <p className="text-xs text-muted-foreground truncate">{item.messagePreview || "(no text)"}</p>
+        <p className="text-[10px] text-muted-foreground mt-0.5">{timeAgo(item.time)}</p>
+      </div>
+      {item.leadId && <span className="text-muted-foreground mt-0.5 shrink-0 text-xs">→</span>}
+    </button>
+  );
+}
+
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
-  const { totalCount, newLeadCount, reEnquiryCount, recentItems, markReEnquiriesSeen, dismissReEnquiryItem } =
-    useEnquiryNotifications();
+  const {
+    totalCount, newLeadCount, reEnquiryCount, recentItems,
+    markReEnquiriesSeen, dismissReEnquiryItem,
+    waInboundCount, waInboundItems, markWhatsAppSeen,
+  } = useEnquiryNotifications();
 
   const newLeadItems = recentItems.filter((i) => i.type === "lead");
   const reEnquiryItems = recentItems.filter((i) => i.type === "activity");
@@ -66,8 +99,13 @@ export function NotificationBell() {
     setOpen(false);
   }
 
+  function handleOpen(val: boolean) {
+    setOpen(val);
+    if (val && waInboundCount > 0) markWhatsAppSeen();
+  }
+
   return (
-    <DropdownMenu open={open} onOpenChange={setOpen}>
+    <DropdownMenu open={open} onOpenChange={handleOpen}>
       <DropdownMenuTrigger asChild>
         <Button variant="ghost" size="icon" className="relative" title="Enquiry notifications">
           <Bell className="h-4 w-4" />
@@ -124,11 +162,26 @@ export function NotificationBell() {
             </div>
           )}
 
+          {/* WhatsApp Replies section */}
+          {waInboundItems.length > 0 && (
+            <div className={`px-3 py-2 ${recentItems.length > 0 ? "border-t" : ""}`}>
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1">
+                <MessageSquare className="h-3 w-3 text-green-600" />
+                WhatsApp Replies ({waInboundCount > 0 ? waInboundCount : waInboundItems.length})
+              </p>
+              <div className="space-y-0.5">
+                {waInboundItems.map((item) => (
+                  <WhatsAppRow key={item.id} item={item} onClose={handleClose} />
+                ))}
+              </div>
+            </div>
+          )}
+
           {/* Empty state */}
-          {recentItems.length === 0 && (
+          {recentItems.length === 0 && waInboundItems.length === 0 && (
             <div className="px-3 py-6 text-center">
               <Bell className="h-8 w-8 mx-auto mb-2 text-muted-foreground/40" />
-              <p className="text-sm text-muted-foreground">No enquiries yet</p>
+              <p className="text-sm text-muted-foreground">No notifications</p>
             </div>
           )}
         </div>

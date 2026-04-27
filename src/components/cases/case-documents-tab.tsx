@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { StatusBadge } from "@/components/shared/status-badge";
 import { useCaseDocuments } from "@/hooks/use-cases";
+import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { toast } from "sonner";
 
 interface CaseDocumentsTabProps {
@@ -59,9 +60,13 @@ export function CaseDocumentsTab({ caseId }: CaseDocumentsTabProps) {
     }
   };
 
-  const handleUpload = async (docId: string, file: File) => {
+  const handleUpload = async (docId: string, raw: File) => {
     setUploading(docId);
     try {
+      // Normalize before sending: images → JPEG 2048px, PDFs → stripped.
+      const file = await prepareUpload(raw);
+      if (!file) return;
+
       const formData = new FormData();
       formData.append("file", file);
       formData.append("document_id", docId);
@@ -79,7 +84,11 @@ export function CaseDocumentsTab({ caseId }: CaseDocumentsTabProps) {
       toast.success("Document uploaded successfully");
       refetch();
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Upload failed");
+      if (err instanceof UploadTooLargeError) {
+        toast.error(err.message);
+      } else {
+        toast.error(err instanceof Error ? err.message : "Upload failed");
+      }
     } finally {
       setUploading(null);
     }

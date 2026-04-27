@@ -99,13 +99,9 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "procurement_summary",
   ],
 
-  // Office Admin: location-level admin handling bookings, vouchers, vendor bills.
+  // Office Administrator — procurement + operations focus
   office_admin: [
-    "live_enquiries",
-    "booking_summary",
-    "kpi_stats",
     "procurement_summary",
-    "followups",
-    "notes",
+    "booking_summary",
   ],
 };

@@ -47,6 +47,7 @@ import { LeadContractsTab } from "@/components/leads/lead-contracts-tab";
 import { LeadDocumentsTab } from "@/components/leads/lead-documents-tab";
 import { LeadTasksTab } from "@/components/leads/lead-tasks-tab";
 import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
+import { LeadLifecycle } from "@/components/leads/lead-lifecycle";
 
 export default function LeadDetailPage({
   params,
@@ -363,49 +364,20 @@ export default function LeadDetailPage({
 
             {/* Sidebar */}
             <div className="space-y-4">
+              {/* Lead Journey — visual lifecycle stepper */}
               <Card>
                 <CardHeader>
-                  <CardTitle className="text-base">Quick Info</CardTitle>
+                  <CardTitle className="text-base">Lead Journey</CardTitle>
                 </CardHeader>
-                <CardContent className="space-y-3 text-sm">
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Created</span>
-                    <span>{formatDate(lead.created_at)}</span>
+                <CardContent>
+                  <LeadLifecycle lead={lead} />
+                  <Separator className="my-3" />
+                  <div className="space-y-1 text-xs text-muted-foreground">
+                    <div className="flex justify-between">
+                      <span>Last updated</span>
+                      <span>{formatDate(lead.updated_at)}</span>
+                    </div>
                   </div>
-                  <Separator />
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground">Updated</span>
-                    <span>{formatDate(lead.updated_at)}</span>
-                  </div>
-                  {lead.converted_at && (
-                    <>
-                      <Separator />
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Converted</span>
-                        <span>{formatDate(lead.converted_at)}</span>
-                      </div>
-                    </>
-                  )}
-                  {lead.lost_at && (
-                    <>
-                      <Separator />
-                      <div className="flex justify-between">
-                        <span className="text-muted-foreground">Lost</span>
-                        <span>{formatDate(lead.lost_at)}</span>
-                      </div>
-                    </>
-                  )}
-                  {lead.lost_reason && (
-                    <>
-                      <Separator />
-                      <div>
-                        <span className="text-muted-foreground block mb-1">
-                          Lost Reason
-                        </span>
-                        <span>{lead.lost_reason}</span>
-                      </div>
-                    </>
-                  )}
                 </CardContent>
               </Card>
 

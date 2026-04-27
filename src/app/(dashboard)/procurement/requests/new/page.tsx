@@ -2,13 +2,14 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Trash2, ChevronLeft, Search, Package } from "lucide-react";
+import { Plus, Trash2, ChevronLeft, Search, Package, PenLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Checkbox } from "@/components/ui/checkbox";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
@@ -20,6 +21,7 @@ import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog"
 import {
   PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS,
   ITEM_UNITS,
+  EXPENDITURE_TYPES, EXPENDITURE_TYPE_LABELS, EXPENDITURE_TYPE_DESCRIPTIONS,
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import type { ProcurementItem, Location, ProcurementDepartment, ItemUnit } from "@/types";
@@ -31,7 +33,10 @@ interface LineItem {
   quantity: string;
   unit: ItemUnit;
   estimated_price: string;
+  catalog_standard_price: number | null; // price ceiling — cannot exceed this (catalog items only)
   notes: string;
+  isCustom: boolean;       // true = free-text item, not from catalog
+  suggestCatalog: boolean; // true = POST to catalog as draft after PR submission
 }
 
 function generateLocalId() {
@@ -45,17 +50,34 @@ const emptyItem = (): LineItem => ({
   quantity: "",
   unit: "piece",
   estimated_price: "",
+  catalog_standard_price: null,
   notes: "",
+  isCustom: false,
+  suggestCatalog: false,
 });
 
 export default function NewPurchaseRequestPage() {
   const router = useRouter();
   const [department, setDepartment] = useState<ProcurementDepartment>("pantry");
   const [locationId, setLocationId] = useState<string>("");
+  const [expenditureType, setExpenditureType] = useState<"operational" | "amc">("operational");
+
+  // Reset expenditure type to operational whenever department changes away from maintenance
+  const handleDepartmentChange = (v: ProcurementDepartment) => {
+    setDepartment(v);
+    if (v !== "maintenance") setExpenditureType("operational");
+  };
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<LineItem[]>([emptyItem()]);
   const [submitting, setSubmitting] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [userRole, setUserRole] = useState<string>("");
+
+  const canSeePrices = ["admin", "manager"].includes(userRole);
+
+  useEffect(() => {
+    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role || ""));
+  }, []);
 
   // Catalog picker
   const [catalogOpen, setCatalogOpen] = useState(false);
@@ -90,6 +112,7 @@ export default function NewPurchaseRequestPage() {
   };
 
   const selectCatalogItem = (catalogItem: ProcurementItem) => {
+    const stdPrice = catalogItem.standard_price != null ? Number(catalogItem.standard_price) : null;
     setItems((prev) =>
       prev.map((li) =>
         li.id === targetItemId
@@ -98,7 +121,13 @@ export default function NewPurchaseRequestPage() {
               item_id: catalogItem.id,
               item_name: catalogItem.name,
               unit: catalogItem.unit,
-              estimated_price: catalogItem.standard_price ? String(catalogItem.standard_price) : li.estimated_price,
+              catalog_standard_price: stdPrice,
+              isCustom: false,
+              suggestCatalog: false,
+              // Pre-fill price only if current entry is blank or higher than catalog ceiling
+              estimated_price: stdPrice != null
+                ? String(stdPrice)
+                : li.estimated_price,
             }
           : li
       )
@@ -106,7 +135,7 @@ export default function NewPurchaseRequestPage() {
     setCatalogOpen(false);
   };
 
-  const updateItem = (localId: string, field: keyof LineItem, value: string) => {
+  const updateItem = (localId: string, field: keyof LineItem, value: string | boolean) => {
     setItems((prev) =>
       prev.map((li) => (li.id === localId ? { ...li, [field]: value } : li))
     );
@@ -130,6 +159,7 @@ export default function NewPurchaseRequestPage() {
   const buildPayload = (submit: boolean) => ({
     department,
     location_id: locationId || null,
+    expenditure_type: expenditureType,
     notes: notes.trim() || undefined,
     submit,
     items: items.map((li) => ({
@@ -142,14 +172,47 @@ export default function NewPurchaseRequestPage() {
     })),
   });
 
+  const isPriceOverCeiling = (li: LineItem): boolean => {
+    if (li.isCustom) return false; // no ceiling for custom items
+    if (li.catalog_standard_price == null || !li.estimated_price) return false;
+    return parseFloat(li.estimated_price) > li.catalog_standard_price;
+  };
+
   const validate = (): string | null => {
     for (const li of items) {
-      if (!li.item_id) return "All items must be selected from the catalog";
+      if (!li.isCustom && !li.item_id) return "Please select all catalog items from the catalog, or use the Custom Item option for unlisted items";
+      if (li.isCustom && !li.item_name.trim()) return "Custom items must have a name";
       if (!li.item_name.trim()) return "All items must have a name";
       if (!li.quantity || isNaN(parseFloat(li.quantity)) || parseFloat(li.quantity) <= 0)
         return "All items must have a valid quantity";
+      if (isPriceOverCeiling(li))
+        return `Price for "${li.item_name}" cannot exceed the catalog price of ${formatCurrency(li.catalog_standard_price!)}`;
     }
     return null;
+  };
+
+  // Submit catalog suggestions fire-and-forget after PR is created
+  const submitCatalogSuggestions = (submittedItems: LineItem[]) => {
+    const suggestions = submittedItems.filter((li) => li.isCustom && li.suggestCatalog && li.item_name.trim());
+    if (suggestions.length === 0) return;
+    Promise.allSettled(
+      suggestions.map((li) =>
+        fetch("/api/procurement/items", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: li.item_name.trim(),
+            department,
+            unit: li.unit,
+            standard_price: li.estimated_price ? parseFloat(li.estimated_price) : undefined,
+            is_active: false,
+            is_suggested: true,
+          }),
+        })
+      )
+    ).then(() => {
+      toast.info(`${suggestions.length} item${suggestions.length > 1 ? "s" : ""} suggested for the catalog — admin will review`);
+    });
   };
 
   const handleSaveDraft = async () => {
@@ -165,6 +228,7 @@ export default function NewPurchaseRequestPage() {
       const json = await res.json();
       if (!res.ok) { toast.error(json.error || "Failed to save draft"); return; }
       toast.success(`Draft saved — ${json.data.pr_number}`);
+      submitCatalogSuggestions(items);
       router.push(`/procurement/requests/${json.data.id}`);
     } finally {
       setSavingDraft(false);
@@ -184,6 +248,7 @@ export default function NewPurchaseRequestPage() {
       const json = await res.json();
       if (!res.ok) { toast.error(json.error || "Failed to submit request"); return; }
       toast.success(`Request submitted — ${json.data.pr_number}`);
+      submitCatalogSuggestions(items);
       router.push(`/procurement/requests/${json.data.id}`);
     } finally {
       setSubmitting(false);
@@ -213,7 +278,7 @@ export default function NewPurchaseRequestPage() {
             <Label htmlFor="department">Department <span className="text-red-500">*</span></Label>
             <Select
               value={department}
-              onValueChange={(v) => setDepartment(v as ProcurementDepartment)}
+              onValueChange={(v) => handleDepartmentChange(v as ProcurementDepartment)}
             >
               <SelectTrigger id="department">
                 <SelectValue />
@@ -241,6 +306,28 @@ export default function NewPurchaseRequestPage() {
             </Select>
           </div>
 
+          {department === "maintenance" && (
+            <div className="space-y-1.5">
+              <Label htmlFor="expenditure-type">Expenditure Type <span className="text-red-500">*</span></Label>
+              <Select
+                value={expenditureType}
+                onValueChange={(v) => setExpenditureType(v as "operational" | "amc")}
+              >
+                <SelectTrigger id="expenditure-type">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {EXPENDITURE_TYPES.map((t) => (
+                    <SelectItem key={t} value={t}>
+                      {EXPENDITURE_TYPE_LABELS[t]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <p className="text-[11px] text-muted-foreground">{EXPENDITURE_TYPE_DESCRIPTIONS[expenditureType]}</p>
+            </div>
+          )}
+
           <div className="space-y-1.5 sm:col-span-2">
             <Label htmlFor="notes">Notes <span className="text-xs text-muted-foreground font-normal">(will carry forward to Purchase Order)</span></Label>
             <Textarea
@@ -258,17 +345,26 @@ export default function NewPurchaseRequestPage() {
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-3">
           <CardTitle className="text-base">Items <span className="text-red-500">*</span></CardTitle>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              const newItem = emptyItem();
-              setItems((prev) => [...prev, newItem]);
-              setTimeout(() => openCatalogForItem(newItem.id), 0);
-            }}
-          >
-            <Plus className="h-4 w-4 mr-1" /> Add Item
-          </Button>
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                const newItem = emptyItem();
+                setItems((prev) => [...prev, newItem]);
+                setTimeout(() => openCatalogForItem(newItem.id), 0);
+              }}
+            >
+              <Plus className="h-4 w-4 mr-1" /> Add Item
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setItems((prev) => [...prev, { ...emptyItem(), isCustom: true }])}
+            >
+              <PenLine className="h-4 w-4 mr-1" /> Custom Item
+            </Button>
+          </div>
         </CardHeader>
         <CardContent className="space-y-4">
           {items.map((li, idx) => (
@@ -276,14 +372,27 @@ export default function NewPurchaseRequestPage() {
               <div className="flex items-center justify-between">
                 <span className="text-sm font-medium text-muted-foreground">Item {idx + 1}</span>
                 <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => openCatalogForItem(li.id)}
-                  >
-                    <Package className="h-3.5 w-3.5 mr-1" />
-                    {li.item_id ? "Change Item" : "Select from Catalog"}
-                  </Button>
+                  {!li.isCustom && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => openCatalogForItem(li.id)}
+                    >
+                      <Package className="h-3.5 w-3.5 mr-1" />
+                      {li.item_id ? "Change Item" : "Select from Catalog"}
+                    </Button>
+                  )}
+                  {li.isCustom && !li.item_id && (
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="text-muted-foreground text-xs h-8"
+                      onClick={() => openCatalogForItem(li.id)}
+                    >
+                      <Package className="h-3.5 w-3.5 mr-1" />
+                      Pick from catalog instead
+                    </Button>
+                  )}
                   {items.length > 1 && (
                     <Button
                       variant="ghost"
@@ -297,7 +406,8 @@ export default function NewPurchaseRequestPage() {
                 </div>
               </div>
 
-              {li.item_id && (
+              {/* Status badge */}
+              {li.item_id && !li.isCustom && (
                 <div className="flex items-center gap-2">
                   <Badge variant="secondary" className="bg-blue-50 text-blue-700 text-xs">
                     From catalog
@@ -306,7 +416,13 @@ export default function NewPurchaseRequestPage() {
                 </div>
               )}
 
-              {!li.item_id && (
+              {li.isCustom && (
+                <Badge variant="outline" className="border-orange-300 text-orange-700 text-xs">
+                  Custom item
+                </Badge>
+              )}
+
+              {!li.item_id && !li.isCustom && (
                 <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1.5">
                   Please select an item from the catalog using the button above.
                 </p>
@@ -315,12 +431,20 @@ export default function NewPurchaseRequestPage() {
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div className="space-y-1">
                   <Label className="text-xs">Item Name <span className="text-red-500">*</span></Label>
-                  <Input
-                    placeholder="Select from catalog to set item name"
-                    value={li.item_name}
-                    readOnly={true}
-                    className="bg-muted/50"
-                  />
+                  {li.isCustom ? (
+                    <Input
+                      placeholder="Describe the item (e.g. 5-drawer filing cabinet)"
+                      value={li.item_name}
+                      onChange={(e) => updateItem(li.id, "item_name", e.target.value)}
+                    />
+                  ) : (
+                    <Input
+                      placeholder="Select from catalog to set item name"
+                      value={li.item_name}
+                      readOnly={true}
+                      className="bg-muted/50"
+                    />
+                  )}
                 </div>
 
                 <div className="grid grid-cols-2 gap-2">
@@ -340,7 +464,7 @@ export default function NewPurchaseRequestPage() {
                     <Select
                       value={li.unit}
                       onValueChange={(v) => updateItem(li.id, "unit", v)}
-                      disabled={!!li.item_id}
+                      disabled={!!li.item_id && !li.isCustom}
                     >
                       <SelectTrigger className="h-9">
                         <SelectValue />
@@ -354,19 +478,36 @@ export default function NewPurchaseRequestPage() {
                   </div>
                 </div>
 
-                <div className="space-y-1">
-                  <Label className="text-xs">Est. Price per Unit (₹)</Label>
-                  <Input
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    placeholder="0.00"
-                    value={li.estimated_price}
-                    onChange={(e) => updateItem(li.id, "estimated_price", e.target.value)}
-                  />
-                </div>
+                {/* Price field: visible to admin/manager for catalog items; visible to ALL for custom items */}
+                {(canSeePrices || li.isCustom) && (
+                  <div className="space-y-1">
+                    <Label className="text-xs">
+                      Est. Price per Unit (₹)
+                      {!li.isCustom && li.catalog_standard_price != null && (
+                        <span className="ml-1 text-muted-foreground font-normal">
+                          — max {formatCurrency(li.catalog_standard_price)}
+                        </span>
+                      )}
+                    </Label>
+                    <Input
+                      type="number"
+                      min="0"
+                      max={!li.isCustom && li.catalog_standard_price != null ? li.catalog_standard_price : undefined}
+                      step="0.01"
+                      placeholder="0.00"
+                      value={li.estimated_price}
+                      className={isPriceOverCeiling(li) ? "border-red-400 focus-visible:ring-red-400" : ""}
+                      onChange={(e) => updateItem(li.id, "estimated_price", e.target.value)}
+                    />
+                    {isPriceOverCeiling(li) && (
+                      <p className="text-xs text-red-600 font-medium">
+                        ↑ Exceeds catalog price ({formatCurrency(li.catalog_standard_price!)}). Price can only be reduced here — update the catalog to increase it.
+                      </p>
+                    )}
+                  </div>
+                )}
 
-                {li.estimated_price && li.quantity && (
+                {(canSeePrices || li.isCustom) && li.estimated_price && li.quantity && (
                   <div className="flex items-end pb-0.5">
                     <p className="text-sm text-muted-foreground">
                       Line total:{" "}
@@ -385,34 +526,64 @@ export default function NewPurchaseRequestPage() {
                     onChange={(e) => updateItem(li.id, "notes", e.target.value)}
                   />
                 </div>
+
+                {/* Suggest to catalog checkbox — custom items only */}
+                {li.isCustom && (
+                  <div className="flex items-center gap-2.5 sm:col-span-2 rounded-md border bg-orange-50/50 border-orange-200 px-3 py-2.5">
+                    <Checkbox
+                      id={`suggest-${li.id}`}
+                      checked={li.suggestCatalog}
+                      onCheckedChange={(v) => updateItem(li.id, "suggestCatalog", !!v)}
+                    />
+                    <label htmlFor={`suggest-${li.id}`} className="text-xs text-muted-foreground cursor-pointer select-none leading-relaxed">
+                      Suggest adding this item to the catalog
+                      <span className="block text-orange-700/80">Admin will review the suggestion before publishing it</span>
+                    </label>
+                  </div>
+                )}
               </div>
             </div>
           ))}
 
-          {/* Add Item — bottom button so users don't need to scroll up */}
-          <Button
-            variant="outline"
-            className="w-full border-dashed"
-            onClick={() => {
-              const newItem = emptyItem();
-              setItems((prev) => [...prev, newItem]);
-              setTimeout(() => openCatalogForItem(newItem.id), 0);
-            }}
-          >
-            <Plus className="h-4 w-4 mr-1" /> Add Another Item
-          </Button>
+          {/* Add Item — bottom buttons so users don't need to scroll up */}
+          <div className="flex gap-2">
+            <Button
+              variant="outline"
+              className="flex-1 border-dashed"
+              onClick={() => {
+                const newItem = emptyItem();
+                setItems((prev) => [...prev, newItem]);
+                setTimeout(() => openCatalogForItem(newItem.id), 0);
+              }}
+            >
+              <Plus className="h-4 w-4 mr-1" /> Add Another Item
+            </Button>
+            <Button
+              variant="outline"
+              className="flex-1 border-dashed"
+              onClick={() => setItems((prev) => [...prev, { ...emptyItem(), isCustom: true }])}
+            >
+              <PenLine className="h-4 w-4 mr-1" /> Add Custom Item
+            </Button>
+          </div>
         </CardContent>
       </Card>
 
       {/* Summary & Actions */}
       <Card>
         <CardContent className="pt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <div>
-            <p className="text-sm text-muted-foreground">Total Estimated</p>
-            <p className="text-xl font-bold">
-              {totalEstimated > 0 ? formatCurrency(totalEstimated) : "—"}
-            </p>
-          </div>
+          {(canSeePrices || items.some((li) => li.isCustom && li.estimated_price)) ? (
+            <div>
+              <p className="text-sm text-muted-foreground">Total Estimated</p>
+              <p className="text-xl font-bold">
+                {totalEstimated > 0 ? formatCurrency(totalEstimated) : "—"}
+              </p>
+            </div>
+          ) : (
+            <div>
+              <p className="text-sm text-muted-foreground">{items.length} item{items.length !== 1 ? "s" : ""} added</p>
+            </div>
+          )}
           <div className="flex gap-2">
             <Button
               variant="outline"
@@ -438,7 +609,7 @@ export default function NewPurchaseRequestPage() {
           if (!open) {
             setItems((prev) => {
               const target = prev.find((li) => li.id === targetItemId);
-              if (target && !target.item_id && !target.item_name.trim() && prev.length > 1) {
+              if (target && !target.item_id && !target.item_name.trim() && !target.isCustom && prev.length > 1) {
                 return prev.filter((li) => li.id !== targetItemId);
               }
               return prev;

@@ -70,8 +70,8 @@ export async function GET(
 
   if (error || !data) return NextResponse.json({ error: "Request not found" }, { status: 404 });
 
-  // Non-manager/admin/fms can only view their own PRs
-  if (!["admin", "manager", "fms"].includes(dbUser.role) && data.requested_by !== dbUser.id) {
+  // Only procurement roles can access
+  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -138,7 +138,7 @@ export async function PATCH(
       if (!["draft", "submitted"].includes(pr.status)) {
         return NextResponse.json({ error: "Only draft or submitted PRs can be cancelled" }, { status: 422 });
       }
-      if (pr.requested_by !== dbUser.id && !["admin", "manager", "fms"].includes(dbUser.role)) {
+      if (pr.requested_by !== dbUser.id && !["admin", "manager", "office_admin"].includes(dbUser.role)) {
         return NextResponse.json({ error: "Access denied" }, { status: 403 });
       }
       updatePayload = { status: "cancelled" };
@@ -158,6 +158,60 @@ export async function PATCH(
       if (!["admin", "manager"].includes(dbUser.role)) {
         return NextResponse.json({ error: "Only managers and admins can approve PRs" }, { status: 403 });
       }
+      // ── Budget enforcement ───────────────────────────────────────────
+      // AMC / Annual Contract MRs are excluded from monthly budget checks.
+      // If a monthly budget is set for this department and approver is a manager,
+      // check whether this MR would push operational spend over the budget.
+      // If so: only admin can approve.
+      if (dbUser.role === "manager" && pr.expenditure_type !== "amc") {
+        const now = new Date();
+        const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
+        const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
+
+        const { data: budget } = await supabase
+          .from("department_budgets")
+          .select("monthly_budget, is_active")
+          .eq("department", pr.department)
+          .is("location_id", null)
+          .maybeSingle();
+
+        if (budget?.is_active && budget.monthly_budget) {
+          const monthlyBudget = Number(budget.monthly_budget);
+
+          const { data: existingMrs } = await supabase
+            .from("purchase_requests")
+            .select("total_estimated_amount")
+            .eq("department", pr.department)
+            .eq("expenditure_type", "operational")
+            .gte("created_at", monthStart)
+            .lte("created_at", monthEnd)
+            .not("status", "in", '("cancelled","rejected")')
+            .neq("id", id);
+
+          const spentSoFar = (existingMrs ?? []).reduce(
+            (sum, mr) => sum + Number(mr.total_estimated_amount ?? 0), 0
+          );
+          const projectedTotal = spentSoFar + Number(pr.total_estimated_amount ?? 0);
+
+          if (projectedTotal > monthlyBudget) {
+            const overBy = projectedTotal - monthlyBudget;
+            return NextResponse.json({
+              error: `Department budget exceeded — manager approval not permitted. ` +
+                `Monthly budget for ${pr.department}: ₹${monthlyBudget.toLocaleString("en-IN")}. ` +
+                `Already spent: ₹${spentSoFar.toLocaleString("en-IN")}. ` +
+                `This MR: ₹${Number(pr.total_estimated_amount).toLocaleString("en-IN")}. ` +
+                `Would exceed budget by ₹${overBy.toLocaleString("en-IN")}. ` +
+                `Only admin can approve over-budget requests.`,
+              budget_exceeded: true,
+              monthly_budget: monthlyBudget,
+              spent_so_far: spentSoFar,
+              this_mr: Number(pr.total_estimated_amount ?? 0),
+              over_by: overBy,
+            }, { status: 403 });
+          }
+        }
+      }
+      // ── End budget enforcement ────────────────────────────────────────
       const approvalCode = await generateApprovalCode(supabase, id);
       updatePayload = {
         status: "approved",

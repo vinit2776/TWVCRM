@@ -230,7 +230,7 @@ export async function PATCH(
       if (transfer.status !== "approved") {
         return NextResponse.json({ error: "Only approved transfers can be dispatched" }, { status: 422 });
       }
-      if (!["admin", "manager", "floor_manager"].includes(dbUser.role)) {
+      if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
         return NextResponse.json({ error: "Insufficient permissions to dispatch" }, { status: 403 });
       }
 

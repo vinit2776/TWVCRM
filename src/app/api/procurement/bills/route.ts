@@ -14,7 +14,6 @@ const createBillSchema = z.object({
   notes: z.string().nullish(),
   invoice_file_url: z.string().url().nullish(),
   service_report_id: z.string().uuid().nullish(),
-  replaces_bill_id: z.string().uuid().nullish(),
 });
 
 function generateBillNumber(count: number): string {
@@ -106,8 +105,8 @@ export async function POST(request: NextRequest) {
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  if (!["admin", "manager", "accounts", "fms", "office_admin"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Insufficient permissions to create vendor invoices" }, { status: 403 });
+  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
   const body = await request.json();
@@ -247,7 +246,6 @@ export async function POST(request: NextRequest) {
       amount_paid: poAdvanceCredit,
       payment_status: initialPaymentStatus,
       approval_status: "pending",
-      replaces_bill_id: parsed.data.replaces_bill_id ?? null,
       created_by: dbUser.id,
     })
     .select("id, bill_number")

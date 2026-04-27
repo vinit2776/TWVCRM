@@ -96,7 +96,7 @@ export async function POST(
 
   if (hasDeposit && !depositLinkUrl) {
     try {
-      const adminSupabase = await createAdminClient();
+      const adminSupabase = createAdminClient();
       const { data: rzpSettings } = await adminSupabase
         .from("app_settings").select("key, value")
         .in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret"]);
@@ -161,7 +161,7 @@ export async function POST(
   let pdfPublicUrl: string | null = null;
   if (pdfBuffer) {
     try {
-      const adminSupabase = await createAdminClient();
+      const adminSupabase = createAdminClient();
       const storagePath = `proposals/${id}/booking-confirmation-${Date.now()}.pdf`;
       await adminSupabase.storage
         .from("crm-documents")

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { createInvoiceSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 
@@ -80,6 +80,111 @@ export async function POST(request: NextRequest) {
       performedBy: dbUser.id,
       changes: { record: { old: null, new: data } },
     });
+  }
+
+  // ── Auto-create Razorpay payment link at creation time ────────────────────
+  // This makes the link available immediately in the PDF download and avoids
+  // recreating it on every email send.
+  if (data && totalAmount > 0 && result.data.lead_id) {
+    try {
+      const adminSupabase = createAdminClient();
+      const { data: rzpSettings } = await adminSupabase
+        .from("app_settings")
+        .select("key, value")
+        .in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret"]);
+
+      const rzpMap: Record<string, string> = {};
+      (rzpSettings || []).forEach((s: { key: string; value: string }) => { rzpMap[s.key] = s.value; });
+
+      if (rzpMap.razorpay_enabled === "true" && rzpMap.razorpay_key_id && rzpMap.razorpay_key_secret) {
+        // Fetch lead contact details for Razorpay customer prefill
+        const { data: lead } = await supabase
+          .from("leads")
+          .select("first_name, last_name, email, phone, mobile")
+          .eq("id", result.data.lead_id)
+          .single();
+
+        const customerName = lead
+          ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim()
+          : "";
+        const customerEmail = (lead as { email?: string } | null)?.email || "";
+        const customerPhone = ((lead as { phone?: string; mobile?: string } | null)?.phone ||
+          (lead as { phone?: string; mobile?: string } | null)?.mobile || "");
+
+        const auth = Buffer.from(
+          `${rzpMap.razorpay_key_id}:${rzpMap.razorpay_key_secret}`
+        ).toString("base64");
+        const appUrl = (
+          process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app"
+        ).trim();
+
+        // Expire at due date (if set) or 30 days from now
+        const defaultExpiry = Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60;
+        const expireBy = result.data.due_date
+          ? Math.max(
+              Math.floor(new Date(result.data.due_date).getTime() / 1000),
+              defaultExpiry
+            )
+          : defaultExpiry;
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const payload: Record<string, any> = {
+          amount: Math.round(totalAmount * 100),
+          currency: "INR",
+          description: `${invoiceNumber} — ${result.data.title} — The WorkVilla`,
+          reference_id: `${invoiceNumber}-${Date.now()}`,
+          expire_by: expireBy,
+          notify: { sms: !!customerPhone, email: !!customerEmail },
+          reminder_enable: true,
+          notes: {
+            invoice_id: data.id,
+            invoice_number: invoiceNumber,
+            type: "adhoc_invoice",
+          },
+          callback_url: `${appUrl}/invoices`,
+          callback_method: "get",
+        };
+
+        if (customerName || customerEmail || customerPhone) {
+          payload.customer = {};
+          if (customerName) payload.customer.name = customerName;
+          if (customerEmail) payload.customer.email = customerEmail;
+          if (customerPhone)
+            payload.customer.contact = customerPhone.replace(/\s/g, "");
+        }
+
+        const rzpRes = await fetch("https://api.razorpay.com/v1/payment_links", {
+          method: "POST",
+          headers: {
+            Authorization: `Basic ${auth}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify(payload),
+        });
+
+        if (rzpRes.ok) {
+          const linkData = await rzpRes.json();
+          await supabase
+            .from("proforma_invoices")
+            .update({
+              razorpay_link_id: linkData.id,
+              razorpay_link_url: linkData.short_url,
+            })
+            .eq("id", data.id);
+          // Return the enriched record so the UI can show the link immediately
+          data.razorpay_link_id = linkData.id;
+          data.razorpay_link_url = linkData.short_url;
+        } else {
+          console.warn(
+            "[invoice create] Razorpay link creation failed:",
+            await rzpRes.json().catch(() => null)
+          );
+        }
+      }
+    } catch (e) {
+      // Non-fatal — invoice was already saved; link can be created on first email send
+      console.warn("[invoice create] Razorpay error (non-fatal):", e);
+    }
   }
 
   return NextResponse.json({ data }, { status: 201 });

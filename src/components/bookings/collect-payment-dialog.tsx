@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useRef, useEffect, useCallback } from "react";
-import Script from "next/script";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -13,10 +12,11 @@ import { Separator } from "@/components/ui/separator";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Loader2, Upload, CheckCircle, XCircle, Eye,
-  Banknote, Smartphone, CreditCard, Globe, ImageIcon, Maximize2, X,
+  Banknote, Smartphone, CreditCard, ImageIcon, Maximize2, X,
   Link2, Copy, ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
+import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { createClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
@@ -31,29 +31,20 @@ interface CollectPaymentDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   bookingId: string;
+  bookingReference?: string;
   totalAmount: number;
   onSuccess: () => void;
-  razorpayEnabled?: boolean;
-  razorpayKeyId?: string;
   upiId?: string;
   upiQrCodePath?: string;
-}
-
-declare global {
-  interface Window {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    Razorpay: any;
-  }
 }
 
 export function CollectPaymentDialog({
   open,
   onOpenChange,
   bookingId,
+  bookingReference = "",
   totalAmount,
   onSuccess,
-  razorpayEnabled = false,
-  razorpayKeyId = "",
   upiId = "",
   upiQrCodePath = "",
 }: CollectPaymentDialogProps) {
@@ -162,12 +153,6 @@ export function CollectPaymentDialog({
       return;
     }
 
-    // Razorpay flow
-    if (paymentMode === "razorpay") {
-      await handleRazorpayPayment(amt);
-      return;
-    }
-
     setSaving(true);
     try {
       // Create payment record
@@ -191,14 +176,25 @@ export function CollectPaymentDialog({
 
       const paymentId = json.data?.id;
 
-      // Upload screenshot if UPI
+      // Upload screenshot if UPI — normalize client-side before send.
       if (paymentMode === "upi" && screenshotFile && paymentId) {
-        const formData = new FormData();
-        formData.append("file", screenshotFile);
-        await fetch(`/api/booking-payments/${paymentId}/screenshot`, {
-          method: "POST",
-          body: formData,
-        });
+        try {
+          const processed = await prepareUpload(screenshotFile);
+          if (processed) {
+            const formData = new FormData();
+            formData.append("file", processed);
+            await fetch(`/api/booking-payments/${paymentId}/screenshot`, {
+              method: "POST",
+              body: formData,
+            });
+          }
+        } catch (e) {
+          if (e instanceof UploadTooLargeError) {
+            toast.error(e.message);
+          } else {
+            toast.error(e instanceof Error ? e.message : "Screenshot upload failed");
+          }
+        }
       }
 
       const modeLabel = BOOKING_PAYMENT_MODE_LABELS[paymentMode] || paymentMode;
@@ -224,77 +220,6 @@ export function CollectPaymentDialog({
       }
     } catch {
       toast.error("Failed to record payment");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleRazorpayPayment = async (amt: number) => {
-    if (!window.Razorpay) {
-      toast.error("Razorpay is loading, please try again");
-      return;
-    }
-
-    setSaving(true);
-    try {
-      // Create order
-      const orderRes = await fetch("/api/payments/create-order", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ booking_id: bookingId, amount: amt }),
-      });
-
-      const orderJson = await orderRes.json();
-      if (!orderRes.ok) {
-        toast.error(orderJson.error || "Failed to create order");
-        setSaving(false);
-        return;
-      }
-
-      const { order_id, payment_record_id, razorpay_key_id: keyId, amount: amountInPaise } = orderJson.data;
-
-      // Open Razorpay checkout
-      const options = {
-        key: keyId,
-        amount: amountInPaise,
-        currency: "INR",
-        name: "The WorkVilla",
-        description: "Booking Payment",
-        order_id,
-        handler: async (response: { razorpay_payment_id: string; razorpay_order_id: string; razorpay_signature: string }) => {
-          // Verify payment
-          const verifyRes = await fetch("/api/payments/verify", {
-            method: "POST",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({
-              ...response,
-              payment_record_id,
-            }),
-          });
-
-          if (verifyRes.ok) {
-            toast.success("Online payment successful");
-            await fetchPayments();
-            onSuccess();
-            onOpenChange(false);
-          } else {
-            toast.error("Payment verification failed");
-            await fetchPayments();
-          }
-        },
-        modal: {
-          ondismiss: () => {
-            toast.info("Payment cancelled");
-            fetchPayments();
-          },
-        },
-        theme: { color: "#1a1a2e" },
-      };
-
-      const rzp = new window.Razorpay(options);
-      rzp.open();
-    } catch {
-      toast.error("Failed to initiate payment");
     } finally {
       setSaving(false);
     }
@@ -376,14 +301,11 @@ export function CollectPaymentDialog({
   };
 
   const upiPayLink = upiId && amount
-    ? `upi://pay?pa=${encodeURIComponent(upiId)}&am=${amount}&cu=INR&tn=Booking+Payment`
+    ? `upi://pay?pa=${encodeURIComponent(upiId)}&am=${amount}&cu=INR&tn=${encodeURIComponent(bookingReference ? `TWV-${bookingReference}` : "Booking Payment")}`
     : "";
 
   return (
     <>
-      {razorpayEnabled && (
-        <Script src="https://checkout.razorpay.com/v1/checkout.js" strategy="lazyOnload" />
-      )}
 
       <Dialog open={open} onOpenChange={onOpenChange}>
         <DialogContent className="sm:max-w-[560px] max-h-[90vh] overflow-y-auto">
@@ -481,8 +403,7 @@ export function CollectPaymentDialog({
                 <div className="space-y-2">
                   <Label>Payment Method</Label>
                   <Tabs value={paymentMode} onValueChange={setPaymentMode}>
-                    {/* "Send Link" is always shown — server handles "Razorpay not configured" error */}
-                    <TabsList className={`grid w-full ${razorpayEnabled ? "grid-cols-5" : "grid-cols-4"}`}>
+                    <TabsList className="grid w-full grid-cols-4">
                       <TabsTrigger value="cash" className="text-xs gap-1">
                         <Banknote className="h-3.5 w-3.5" />Cash
                       </TabsTrigger>
@@ -492,11 +413,6 @@ export function CollectPaymentDialog({
                       <TabsTrigger value="card" className="text-xs gap-1">
                         <CreditCard className="h-3.5 w-3.5" />Card
                       </TabsTrigger>
-                      {razorpayEnabled && (
-                        <TabsTrigger value="razorpay" className="text-xs gap-1">
-                          <Globe className="h-3.5 w-3.5" />Online
-                        </TabsTrigger>
-                      )}
                       <TabsTrigger value="send_link" className="text-xs gap-1">
                         <Link2 className="h-3.5 w-3.5" />Send Link
                       </TabsTrigger>
@@ -541,6 +457,13 @@ export function CollectPaymentDialog({
                             )}
                           </div>
                           <p className="text-xs text-muted-foreground mt-2">Scan to pay {formatCurrency(parseFloat(amount) || 0)}</p>
+                          {bookingReference && (
+                            <div className="mt-2 rounded-md bg-amber-50 border border-amber-200 px-3 py-1.5 text-center">
+                              <p className="text-[10px] uppercase tracking-wider text-amber-600 font-medium">Payment Reference</p>
+                              <p className="text-sm font-bold text-amber-800 font-mono">TWV-{bookingReference}</p>
+                              <p className="text-[10px] text-amber-600 mt-0.5">Add this as a remark when paying</p>
+                            </div>
+                          )}
                         </div>
                       )}
 
@@ -641,18 +564,7 @@ export function CollectPaymentDialog({
                       </div>
                     </TabsContent>
 
-                    {/* Razorpay */}
-                    {razorpayEnabled && (
-                      <TabsContent value="razorpay" className="mt-3">
-                        <div className="rounded-md bg-blue-50 border border-blue-200 p-3 text-sm text-blue-800">
-                          <Globe className="inline-block h-4 w-4 mr-1.5" />
-                          Online payment of <strong>{formatCurrency(parseFloat(amount) || 0)}</strong> via Razorpay.
-                          A checkout window will open.
-                        </div>
-                      </TabsContent>
-                    )}
-
-                    {/* Send Link — always shown; server validates Razorpay credentials */}
+                    {/* Send Link */}
                     <TabsContent value="send_link" className="mt-3 space-y-3">
                       {!linkUrl ? (
                         <div className="rounded-md bg-blue-50 border border-blue-200 p-3 text-sm text-blue-800">
@@ -724,8 +636,6 @@ export function CollectPaymentDialog({
                   >
                     {saving ? (
                       <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Processing...</>
-                    ) : paymentMode === "razorpay" ? (
-                      `Pay ${formatCurrency(parseFloat(amount) || 0)} Online`
                     ) : paymentMode === "cash" ? (
                       `Record Cash Payment — ${formatCurrency(parseFloat(amount) || 0)}`
                     ) : paymentMode === "upi" ? (
@@ -778,6 +688,9 @@ export function CollectPaymentDialog({
             />
           </div>
           <p className="text-white/70 text-sm mt-4">Scan to pay {formatCurrency(parseFloat(amount) || 0)}</p>
+          {bookingReference && (
+            <p className="text-amber-300 text-sm font-mono font-bold mt-1">Ref: TWV-{bookingReference}</p>
+          )}
           <p className="text-white/40 text-xs mt-1">Tap anywhere to close</p>
         </div>
       )}

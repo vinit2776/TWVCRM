@@ -6,6 +6,7 @@ import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Upload, Download, Mail, Loader2, Check, Save } from "lucide-react";
 import { toast } from "sonner";
+import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { GstInvoiceEmailDialog } from "./gst-invoice-email-dialog";
 
@@ -15,6 +16,7 @@ interface GstEntry {
   company: string;
   lead_email?: string;
   lead_secondary_email?: string;
+  lead_phone?: string;
   total_billable: number;
   total_paid: number;
   payment_id: string | null;
@@ -37,13 +39,17 @@ export function GstInvoiceEntry({ entries, onRefresh }: GstInvoiceEntryProps) {
   const [savingInvoiceNo, setSavingInvoiceNo] = useState<string | null>(null);
   const [emailDialogEntry, setEmailDialogEntry] = useState<GstEntry | null>(null);
 
-  const handleUpload = async (entry: GstEntry, file: File) => {
+  const handleUpload = async (entry: GstEntry, raw: File) => {
     if (!entry.payment_id) {
       toast.error("No payment found for this contract. Record a payment first.");
       return;
     }
     setUploading(entry.contract_id);
     try {
+      // Normalize before sending: PDFs → stripped, images → JPEG 2048px.
+      const file = await prepareUpload(raw);
+      if (!file) return;
+
       const formData = new FormData();
       formData.append("file", file);
 
@@ -60,8 +66,12 @@ export function GstInvoiceEntry({ entries, onRefresh }: GstInvoiceEntryProps) {
 
       toast.success("GST invoice uploaded");
       onRefresh();
-    } catch {
-      toast.error("Network error");
+    } catch (e) {
+      if (e instanceof UploadTooLargeError) {
+        toast.error(e.message);
+      } else {
+        toast.error(e instanceof Error ? e.message : "Network error");
+      }
     } finally {
       setUploading(null);
     }
@@ -282,6 +292,7 @@ export function GstInvoiceEntry({ entries, onRefresh }: GstInvoiceEntryProps) {
           company={emailDialogEntry.company}
           leadEmail={emailDialogEntry.lead_email}
           leadSecondaryEmail={emailDialogEntry.lead_secondary_email}
+          leadPhone={emailDialogEntry.lead_phone}
           onSuccess={onRefresh}
         />
       )}

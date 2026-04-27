@@ -1,8 +1,8 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { useRouter } from "next/navigation";
-import { ChevronLeft, Info, ChevronDown, ChevronUp } from "lucide-react";
+import { useState, useEffect, useCallback, Suspense } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ChevronLeft, Info, ChevronDown, ChevronUp, Wrench, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -33,8 +33,9 @@ function getCycleEndDate(start: string, cycle: string): string {
   return d.toISOString().split("T")[0];
 }
 
-export default function NewServicePOPage() {
+function NewServicePOForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [saving, setSaving] = useState(false);
 
   const [vendors, setVendors] = useState<ProcurementVendor[]>([]);
@@ -61,6 +62,18 @@ export default function NewServicePOPage() {
   const [advanceMode, setAdvanceMode] = useState("");
   const [advanceReference, setAdvanceReference] = useState("");
   const [advanceNotes, setAdvanceNotes] = useState("");
+
+  // AMC fields — pre-expand if URL param ?amc=1
+  const isAmcFromUrl = searchParams.get("amc") === "1";
+  const [isAmc, setIsAmc] = useState(isAmcFromUrl);
+  const [amcExpanded, setAmcExpanded] = useState(isAmcFromUrl);
+  const [amcStartDate, setAmcStartDate] = useState("");
+  const [amcEndDate, setAmcEndDate] = useState("");
+  const [amcUnlimited, setAmcUnlimited] = useState(false);
+  const [amcVisitsCovered, setAmcVisitsCovered] = useState("");
+  const [amcContactName, setAmcContactName] = useState("");
+  const [amcHelpline, setAmcHelpline] = useState("");
+  const [amcContactEmail, setAmcContactEmail] = useState("");
 
   const fetchVendors = useCallback(async () => {
     const res = await fetch("/api/procurement/vendors?limit=100");
@@ -115,6 +128,22 @@ export default function NewServicePOPage() {
         toast.error("Advance amount must be a positive number"); return;
       }
       if (!advanceMode) { toast.error("Please select a payment mode for the advance"); return; }
+      if (totalWithGst > 0 && parseFloat(advanceAmount) > totalWithGst) {
+        toast.error(`Advance amount (${formatCurrency(parseFloat(advanceAmount))}) cannot exceed the PO total (${formatCurrency(totalWithGst)})`);
+        return;
+      }
+    }
+
+    // AMC warning (non-blocking)
+    if (isAmc && (!amcStartDate || (!amcContactName && !amcHelpline))) {
+      // Show warning but allow user to still submit after confirmation
+      const proceed = window.confirm(
+        "⚠ AMC details are incomplete.\n\n" +
+        (!amcStartDate ? "• Contract start date is not set\n" : "") +
+        (!amcContactName && !amcHelpline ? "• No AMC contact details provided\n" : "") +
+        "\nProceed anyway? (You can add these details later from the PO page.)"
+      );
+      if (!proceed) return;
     }
 
     setSaving(true);
@@ -140,6 +169,15 @@ export default function NewServicePOPage() {
           advance_payment_mode: advanceRequired && advanceMode ? advanceMode : undefined,
           advance_payment_reference: advanceRequired && advanceReference.trim() ? advanceReference.trim() : undefined,
           advance_notes: advanceRequired && advanceNotes.trim() ? advanceNotes.trim() : undefined,
+          // AMC fields
+          ...(isAmc ? {
+            amc_start_date: amcStartDate || undefined,
+            amc_end_date: amcEndDate || undefined,
+            amc_visits_covered: !amcUnlimited && amcVisitsCovered ? parseInt(amcVisitsCovered) : undefined,
+            amc_contact_name: amcContactName || undefined,
+            amc_helpline_number: amcHelpline || undefined,
+            amc_contact_email: amcContactEmail || undefined,
+          } : {}),
         }),
       });
       const json = await res.json();
@@ -366,6 +404,134 @@ export default function NewServicePOPage() {
           </CardContent>
         </Card>
 
+        {/* AMC Contract Details */}
+        <Card className={isAmc ? "border-blue-200" : ""}>
+          <CardHeader
+            className="flex flex-row items-center justify-between pb-3 cursor-pointer select-none"
+            onClick={() => setAmcExpanded((v) => !v)}
+          >
+            <div className="flex items-center gap-2">
+              <Wrench className={`h-4 w-4 ${isAmc ? "text-blue-600" : "text-muted-foreground"}`} />
+              <CardTitle className="text-base">AMC Contract</CardTitle>
+              {isAmc && <span className="text-xs text-blue-600 font-medium bg-blue-50 px-2 py-0.5 rounded-full">Enabled</span>}
+              {!isAmc && <span className="text-xs text-muted-foreground">(optional — for AMC / maintenance contracts)</span>}
+            </div>
+            {amcExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+          </CardHeader>
+          {amcExpanded && (
+            <CardContent className="space-y-4">
+              {/* Toggle */}
+              <div className="flex items-center gap-2">
+                <input
+                  id="is_amc"
+                  type="checkbox"
+                  checked={isAmc}
+                  onChange={(e) => setIsAmc(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300"
+                />
+                <label htmlFor="is_amc" className="text-sm cursor-pointer font-medium">
+                  This is an AMC / Annual Maintenance Contract
+                </label>
+              </div>
+
+              {isAmc && (
+                <div className="space-y-4 pt-2 border-t">
+                  {/* Warning if incomplete */}
+                  {(!amcStartDate || (!amcContactName && !amcHelpline)) && (
+                    <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+                      <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-amber-600" />
+                      <span>
+                        Complete AMC details before issuing the PO.
+                        {!amcStartDate && " Start date is missing."}
+                        {!amcContactName && !amcHelpline && " Contact details are missing."}
+                        {" "}You can still save now and update later.
+                      </span>
+                    </div>
+                  )}
+
+                  {/* Contract period */}
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label>Contract Start Date</Label>
+                      <Input
+                        type="date"
+                        value={amcStartDate}
+                        onChange={(e) => setAmcStartDate(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Contract End Date</Label>
+                      <Input
+                        type="date"
+                        value={amcEndDate}
+                        onChange={(e) => setAmcEndDate(e.target.value)}
+                      />
+                    </div>
+                  </div>
+
+                  {/* Visits covered */}
+                  <div className="space-y-1.5">
+                    <Label>Visits / Calls Covered</Label>
+                    <div className="flex items-center gap-3">
+                      <Input
+                        type="number"
+                        min={1}
+                        placeholder="e.g. 12"
+                        value={amcUnlimited ? "" : amcVisitsCovered}
+                        onChange={(e) => setAmcVisitsCovered(e.target.value)}
+                        disabled={amcUnlimited}
+                        className="w-32"
+                      />
+                      <label className="flex items-center gap-1.5 text-sm cursor-pointer select-none">
+                        <input
+                          type="checkbox"
+                          checked={amcUnlimited}
+                          onChange={(e) => {
+                            setAmcUnlimited(e.target.checked);
+                            if (e.target.checked) setAmcVisitsCovered("");
+                          }}
+                          className="rounded"
+                        />
+                        Unlimited
+                      </label>
+                    </div>
+                    <p className="text-xs text-muted-foreground">How many visits / support calls does this AMC cover in total?</p>
+                  </div>
+
+                  {/* Contact details */}
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div className="space-y-1.5">
+                      <Label>AMC Contact Name</Label>
+                      <Input
+                        placeholder="e.g. Rajesh Kumar"
+                        value={amcContactName}
+                        onChange={(e) => setAmcContactName(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5">
+                      <Label>Helpline / Support Number</Label>
+                      <Input
+                        placeholder="+91 98400 12345"
+                        value={amcHelpline}
+                        onChange={(e) => setAmcHelpline(e.target.value)}
+                      />
+                    </div>
+                    <div className="space-y-1.5 sm:col-span-2">
+                      <Label>AMC Contact Email</Label>
+                      <Input
+                        type="email"
+                        placeholder="amc@vendor.com"
+                        value={amcContactEmail}
+                        onChange={(e) => setAmcContactEmail(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                </div>
+              )}
+            </CardContent>
+          )}
+        </Card>
+
         {/* Advance Payment */}
         <Card>
           <CardHeader
@@ -411,7 +577,13 @@ export default function NewServicePOPage() {
                       placeholder="e.g. 5000"
                       value={advanceAmount}
                       onChange={(e) => setAdvanceAmount(e.target.value)}
+                      className={totalWithGst > 0 && parseFloat(advanceAmount) > totalWithGst ? "border-red-400 focus-visible:ring-red-400" : ""}
                     />
+                    {totalWithGst > 0 && parseFloat(advanceAmount) > 0 && parseFloat(advanceAmount) > totalWithGst && (
+                      <p className="text-xs text-red-600 mt-0.5">
+                        Exceeds PO total ({formatCurrency(totalWithGst)})
+                      </p>
+                    )}
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="advance_mode">Payment Mode <span className="text-red-500">*</span></Label>
@@ -461,5 +633,17 @@ export default function NewServicePOPage() {
         </div>
       </form>
     </div>
+  );
+}
+
+export default function NewServicePOPage() {
+  return (
+    <Suspense fallback={
+      <div className="flex items-center justify-center h-64">
+        <div className="h-8 w-8 animate-spin rounded-full border-4 border-primary border-t-transparent" />
+      </div>
+    }>
+      <NewServicePOForm />
+    </Suspense>
   );
 }

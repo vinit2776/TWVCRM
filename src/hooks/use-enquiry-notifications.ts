@@ -8,6 +8,7 @@ import { useRouter } from "next/navigation";
 
 const FORM_TAGS = ["google-ads-form", "meta-ads-form", "walkin-form"];
 const LS_KEY = "twv_last_seen_reenquiry";
+const LS_KEY_WA = "twv_last_seen_wa_inbound";
 const SOURCE_LABEL: Record<string, string> = {
   "google-ads-form":  "Google Ads",
   "meta-ads-form":    "Meta Ads",
@@ -20,6 +21,14 @@ export interface EnquiryNotificationItem {
   name: string;
   source: string;
   time: string; // ISO timestamp
+}
+
+export interface WhatsAppInboundItem {
+  id: string;
+  fromNumber: string;
+  messagePreview: string;
+  time: string;
+  leadId?: string;
 }
 
 export interface EnquiryAlert {
@@ -76,15 +85,17 @@ function playChime() {
  */
 export function useEnquiryNotificationsCore() {
   const router = useRouter();
-  const [newLeadCount, setNewLeadCount]     = useState(0);
-  const [reEnquiryCount, setReEnquiryCount] = useState(0);
-  const [recentItems, setRecentItems]       = useState<EnquiryNotificationItem[]>([]);
-  const [alertQueue, setAlertQueue]         = useState<EnquiryAlert[]>([]);
+  const [newLeadCount, setNewLeadCount]         = useState(0);
+  const [reEnquiryCount, setReEnquiryCount]     = useState(0);
+  const [recentItems, setRecentItems]           = useState<EnquiryNotificationItem[]>([]);
+  const [alertQueue, setAlertQueue]             = useState<EnquiryAlert[]>([]);
+  const [waInboundCount, setWaInboundCount]     = useState(0);
+  const [waInboundItems, setWaInboundItems]     = useState<WhatsAppInboundItem[]>([]);
 
   // Tracks lead IDs with pending re-enquiries (used in real-time handlers to avoid stale closures)
   const reEnquiryLeadIdsRef = useRef<Set<string>>(new Set());
 
-  const totalCount = newLeadCount + reEnquiryCount;
+  const totalCount = newLeadCount + reEnquiryCount + waInboundCount;
 
   const getLastSeen = () => {
     try {
@@ -116,15 +127,22 @@ export function useEnquiryNotificationsCore() {
     setReEnquiryCount((c) => Math.max(0, c - 1));
   }, []);
 
+  const markWhatsAppSeen = useCallback(() => {
+    try { localStorage.setItem(LS_KEY_WA, new Date().toISOString()); } catch { /* ignore */ }
+    setWaInboundCount(0);
+  }, []);
+
   useEffect(() => {
     const supabase = createClient();
 
     async function loadInitialData() {
       const lastSeen = getLastSeen();
+      const lastSeenWa = (() => { try { return localStorage.getItem(LS_KEY_WA) || new Date(Date.now() - 24 * 3600 * 1000).toISOString(); } catch { return new Date(Date.now() - 24 * 3600 * 1000).toISOString(); } })();
       const [
         { count: leadCount },
         { data: recentLeads },
         { data: allReEnquiryActivities },
+        { data: inboundMessages, count: inboundCount },
       ] = await Promise.all([
         // 1. Count unactioned new leads from public forms
         supabase
@@ -149,6 +167,15 @@ export function useEnquiryNotificationsCore() {
           .gt("created_at", lastSeen)
           .order("created_at", { ascending: false })
           .limit(100),
+        // 4. Unread inbound WhatsApp messages since last seen
+        supabase
+          .from("whatsapp_messages")
+          .select("id, from_number, message_body, created_at, entity_id, entity_type", { count: "exact" })
+          .eq("direction", "inbound")
+          .eq("channel", "whatsapp")
+          .gt("created_at", lastSeenWa)
+          .order("created_at", { ascending: false })
+          .limit(10),
       ]);
 
       // Only show re-enquiries for leads still at "new" status
@@ -167,6 +194,16 @@ export function useEnquiryNotificationsCore() {
 
       setNewLeadCount(leadCount ?? 0);
       setReEnquiryCount(activeReEnquiries.length);
+      setWaInboundCount(inboundCount ?? 0);
+      setWaInboundItems(
+        (inboundMessages ?? []).map((m) => ({
+          id: m.id,
+          fromNumber: m.from_number ?? "Unknown",
+          messagePreview: (m.message_body ?? "").substring(0, 80),
+          time: m.created_at,
+          leadId: m.entity_type === "lead" && m.entity_id ? m.entity_id : undefined,
+        }))
+      );
 
       const leadItems: EnquiryNotificationItem[] = (recentLeads ?? []).map((l) => {
         const matchingTag = (l.tags as string[]).find((t) => FORM_TAGS.includes(t)) ?? "";
@@ -215,7 +252,7 @@ export function useEnquiryNotificationsCore() {
     }
     document.addEventListener("visibilitychange", handleVisibilityChange);
 
-    // 5. Real-time subscription for new enquiries
+    // 5. Real-time subscription for new enquiries + WhatsApp inbound
     const channel = supabase
       .channel("enquiry-alerts")
       .on(
@@ -332,6 +369,39 @@ export function useEnquiryNotificationsCore() {
           });
         }
       )
+      .on(
+        "postgres_changes",
+        { event: "INSERT", schema: "public", table: "whatsapp_messages", filter: "direction=eq.inbound" },
+        (payload) => {
+          const msg = payload.new as {
+            id: string; from_number: string; message_body: string;
+            created_at: string; entity_type: string | null; entity_id: string | null;
+          };
+
+          const item: WhatsAppInboundItem = {
+            id: msg.id,
+            fromNumber: msg.from_number ?? "Unknown",
+            messagePreview: (msg.message_body ?? "").substring(0, 80),
+            time: msg.created_at,
+            leadId: msg.entity_type === "lead" && msg.entity_id ? msg.entity_id : undefined,
+          };
+
+          unstable_batchedUpdates(() => {
+            setWaInboundCount((c) => c + 1);
+            setWaInboundItems((prev) => [item, ...prev].slice(0, 10));
+          });
+
+          playChime();
+
+          toast(`WhatsApp reply from ${msg.from_number}`, {
+            description: (msg.message_body ?? "").substring(0, 60) || undefined,
+            duration: 8000,
+            action: item.leadId
+              ? { label: "View Lead", onClick: () => router.push(`/leads/${item.leadId}`) }
+              : undefined,
+          });
+        }
+      )
       .subscribe();
 
     return () => {
@@ -350,5 +420,8 @@ export function useEnquiryNotificationsCore() {
     dismissAlert,
     dismissAllAlerts,
     dismissReEnquiryItem,
+    waInboundCount,
+    waInboundItems,
+    markWhatsAppSeen,
   };
 }

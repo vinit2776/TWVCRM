@@ -1,6 +1,14 @@
 // ==========================================
 // Location Types
 // ==========================================
+
+export interface LocationCapacityConfig {
+  open_desk?: number;       // Open floor / hot desk seats
+  private_cabin?: number;   // Private cabins / offices
+  meeting_room?: number;    // Small meeting room seats
+  conference_room?: number; // Large conference room seats
+}
+
 export interface Location {
   id: string;
   name: string;
@@ -9,6 +17,10 @@ export interface Location {
   city?: string;
   state?: string;
   is_active: boolean;
+  capacity_config?: LocationCapacityConfig;
+  requires_headcount: boolean;
+  latitude?: number | null;
+  longitude?: number | null;
   created_at: string;
   updated_at: string;
 }
@@ -273,6 +285,7 @@ export interface Proposal {
   accepted_at?: string;
   rejected_at?: string;
   rejection_reason?: string;
+  pdf_storage_path?: string;
   created_by?: string;
   created_at: string;
   updated_at: string;
@@ -293,6 +306,11 @@ export interface Proposal {
   deposit_payment_received_at?: string;
   deposit_payment_amount?: number;
   deposit_payment_reference?: string;
+  deposit_payment_screenshot_url?: string;
+  // Accounting
+  deposit_accounted?: boolean;
+  deposit_accounted_at?: string;
+  deposit_accounted_by?: string;
 }
 
 // ==========================================
@@ -322,6 +340,17 @@ export interface ProformaInvoice {
   created_by?: string;
   created_at: string;
   updated_at: string;
+  // Razorpay payment link (auto-created when emailing)
+  razorpay_link_id?: string;
+  razorpay_link_url?: string;
+  // GST invoice (sent automatically once payment is confirmed)
+  gst_invoice_number?: string;
+  gst_invoice_sent_at?: string;
+  gst_invoice_sent_to?: string;
+  // Accounting
+  accounted?: boolean;
+  accounted_at?: string;
+  accounted_by?: string;
 }
 
 // ==========================================
@@ -761,7 +790,8 @@ export interface Booking {
   created_at: string;
   updated_at: string;
   facilities?: BookingFacility[];
-  feedback?: BookingFeedback | BookingFeedback[] | null;
+  feedback?: BookingFeedback | null;          // staff rating (backward compat)
+  customer_feedback?: BookingFeedback | null; // customer-submitted via link
 }
 
 export interface BookingFacility {
@@ -780,6 +810,7 @@ export interface BookingFeedback {
   id: string;
   booking_id: string;
   lead_id: string;
+  source: "staff" | "customer";
   space_etiquette: number | null;
   payment_discipline: number | null;
   community_behavior: number | null;
@@ -1200,7 +1231,7 @@ export type CaseStatus =
   | "client_approved" | "signing_in_progress" | "executed"
   | "invoiced" | "active" | "renewal_due" | "renewed" | "lapsed";
 
-export type CaseDocStatus = "pending" | "uploaded" | "approved" | "rejected";
+export type CaseDocStatus = "pending" | "uploaded" | "approved" | "rejected" | "deferred";
 
 export type ComplianceCheckStatus = "pending" | "passed" | "failed" | "waived";
 
@@ -1306,12 +1337,18 @@ export interface ContractDocument {
   document_type: string;
   label: string;
   is_required: boolean;
-  status: CaseDocStatus; // reuse same enum: pending, uploaded, approved, rejected
+  status: CaseDocStatus; // pending | uploaded | approved | rejected | deferred
   reviewed_by?: string;
   reviewer?: User;
   reviewed_at?: string;
   rejection_reason?: string;
   notes?: string;
+  // deferral fields
+  deferred_by?: string;
+  deferrer?: { id: string; full_name: string };
+  deferred_at?: string;
+  deferred_reason?: string;
+  deferred_until?: string;
   created_at: string;
   updated_at: string;
 }
@@ -1443,6 +1480,20 @@ export type PoStatus = "pending" | "ordered" | "partially_received" | "received"
 export type BillPaymentStatus = "unpaid" | "partially_paid" | "paid";
 export type BillApprovalStatus = "pending" | "approved" | "rejected";
 export type RejectionOutcome = "return" | "replacement" | "void";
+export type PaymentBatchType = "immediate" | "15th" | "25th";
+
+export interface VendorBillBatchChange {
+  id: string;
+  vendor_bill_id: string;
+  changed_by?: string;
+  changed_at: string;
+  old_batch_type?: PaymentBatchType | null;
+  new_batch_type?: PaymentBatchType | null;
+  old_batch_date?: string | null;
+  new_batch_date?: string | null;
+  reason?: string | null;
+  changer?: { id: string; full_name?: string } | null;
+}
 
 export interface ProcurementVendor {
   id: string;
@@ -1492,6 +1543,7 @@ export interface ProcurementItem {
   gst_rate?: number;
   description?: string;
   is_active: boolean;
+  is_suggested: boolean;
   created_by?: string;
   created_at: string;
   updated_at: string;
@@ -1539,6 +1591,7 @@ export interface PurchaseRequest {
   approval_code?: string;
   rejection_reason?: string;
   notes?: string;
+  expenditure_type: "operational" | "amc";
   total_estimated_amount: number;
   created_at: string;
   updated_at: string;
@@ -1603,6 +1656,25 @@ export interface PoBillSummary {
 
 export type PoAdvanceStatus = "not_required" | "pending" | "processed";
 
+export type AmcStatus = "inactive" | "active" | "expiring" | "exhausted" | "expired";
+export type AmcEventType = "breakdown" | "preventive" | "remote_support" | "annual_service";
+
+export interface AmcServiceEvent {
+  id: string;
+  po_id: string;
+  event_number: number;
+  event_type: AmcEventType;
+  event_date: string;
+  technician_name?: string | null;
+  issue_description: string;
+  resolution_notes?: string | null;
+  next_scheduled_date?: string | null;
+  report_file_url?: string | null;
+  logged_by?: string | null;
+  created_at: string;
+  logger?: { id: string; full_name?: string } | null;
+}
+
 export interface PurchaseOrder {
   id: string;
   po_number: string;
@@ -1634,18 +1706,28 @@ export interface PurchaseOrder {
   advance_processed_by?: string | null;
   advance_processed_at?: string | null;
   advance_payment_date?: string | null;
+  // AMC fields
+  amc_start_date?: string | null;
+  amc_end_date?: string | null;
+  amc_visits_covered?: number | null;  // null = unlimited
+  amc_visits_used?: number;
+  amc_contact_name?: string | null;
+  amc_helpline_number?: string | null;
+  amc_contact_email?: string | null;
+  amc_status?: AmcStatus;
   created_at: string;
   updated_at: string;
   // Joined fields
   procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
   locations?: { id: string; name: string } | null;
   orderer?: { id: string; full_name?: string; email?: string } | null;
-  purchase_requests?: (Pick<PurchaseRequest, "id" | "pr_number" | "department" | "approval_code" | "approved_at"> & {
+  purchase_requests?: (Pick<PurchaseRequest, "id" | "pr_number" | "department" | "approval_code" | "approved_at" | "expenditure_type"> & {
     approver?: { id: string; full_name?: string; email?: string } | null;
   }) | null;
   purchase_order_items?: PurchaseOrderItem[];
   po_delivery_receipts?: PoDeliveryReceipt[];
   po_service_reports?: PoServiceReport[];
+  amc_service_events?: AmcServiceEvent[];
   vendor_bills?: PoBillSummary[];
 }
 
@@ -1669,9 +1751,16 @@ export interface VendorBill {
   approval_status: BillApprovalStatus;
   approved_by?: string;
   approved_at?: string;
+  approved_amount?: number | null;
+  approved_amount_note?: string | null;
   rejection_reason?: string;
   rejection_outcome?: RejectionOutcome;
   replaces_bill_id?: string | null;
+  // Payment batch scheduling
+  payment_batch_type?: PaymentBatchType | null;
+  payment_batch_date?: string | null;
+  payment_batch_assigned_by?: string | null;
+  payment_batch_assigned_at?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
@@ -1679,6 +1768,13 @@ export interface VendorBill {
   procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
   purchase_orders?: Pick<PurchaseOrder, "id" | "po_number" | "po_type"> | null;
   approver?: { id: string; full_name?: string } | null;
+  vendor_bill_batch_changes?: VendorBillBatchChange[];
+  vendor_bill_payments?: Array<{
+    id: string; amount: number; payment_mode: string;
+    payment_reference: string | null; payment_date: string;
+    notes: string | null;
+    recorder: { id: string; full_name: string } | null;
+  }>;
 }
 
 export interface ItemHistoryEntry {
@@ -2087,4 +2183,23 @@ export interface SpaceAnalytics {
   occupancy: SpaceTypeOccupancy[];
   revenue: SpaceRevenueRow[];
   idle_units: SpaceUnit[];
+}
+
+// ==========================================
+// Headcount Types
+// ==========================================
+export interface SpaceHeadcount {
+  id: string;
+  location_id: string;
+  location?: { id: string; name: string; code: string; capacity_config?: LocationCapacityConfig } | null;
+  recorded_at: string;
+  recorded_by?: string | null;
+  recorder?: { id: string; full_name: string } | null;
+  open_desk?: number | null;
+  private_cabin?: number | null;
+  meeting_room?: number | null;
+  conference_room?: number | null;
+  total_count: number;
+  notes?: string | null;
+  created_at: string;
 }

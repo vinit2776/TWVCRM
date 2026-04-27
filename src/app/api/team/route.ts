@@ -21,9 +21,9 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const { email, full_name, password, role, phone } = body;
 
-  if (!email || !full_name || !password) {
+  if (!email || !full_name || !password || !phone?.trim()) {
     return NextResponse.json(
-      { error: "Email, full name, and password are required" },
+      { error: "Email, full name, password, and mobile number are required" },
       { status: 400 }
     );
   }
@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  const validRoles = ["admin", "manager", "sales_rep", "floor_manager"];
+  const validRoles = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin"];
   const userRole = validRoles.includes(role) ? role : "sales_rep";
 
   // Use admin client to create auth user

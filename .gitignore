@@ -46,3 +46,4 @@ supabase/.temp/
 scripts/backup/.backup.env
 scripts/backup/rclone.conf
 scripts/backup/logs/
+.env*.local

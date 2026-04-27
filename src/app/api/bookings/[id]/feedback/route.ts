@@ -54,15 +54,16 @@ export async function POST(
   }
   // lead_id is optional — walk-in / guest bookings may not have one
 
-  // Check if feedback already exists
+  // Check if staff feedback already exists for this booking
   const { data: existing } = await supabase
     .from("booking_feedbacks")
     .select("id")
     .eq("booking_id", id)
+    .eq("source", "staff")
     .maybeSingle();
 
   if (existing) {
-    return NextResponse.json({ error: "Feedback already submitted for this booking" }, { status: 409 });
+    return NextResponse.json({ error: "Staff feedback already submitted for this booking" }, { status: 409 });
   }
 
   const body = await request.json();
@@ -96,6 +97,7 @@ export async function POST(
 
   const row: Record<string, unknown> = {
     booking_id: id,
+    source: "staff",
     ...ratings,
     overall_rating: overallRating,
     notes: body.notes?.trim() || null,

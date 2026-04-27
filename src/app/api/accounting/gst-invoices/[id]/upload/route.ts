@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { normalizeUploadServer, UploadValidationError } from "@/lib/uploads/normalize-upload-server";
 
 // POST — Upload GST invoice PDF, auto-extract invoice number from filename
 export async function POST(
@@ -38,9 +39,15 @@ export async function POST(
     return NextResponse.json({ error: "Only PDF and image files are allowed" }, { status: 400 });
   }
 
-  // Validate file size (10MB max)
-  if (file.size > 10 * 1024 * 1024) {
-    return NextResponse.json({ error: "File size must be under 10MB" }, { status: 400 });
+  // Normalize upload (images → JPEG Q82 @ 2048px, PDF pass-through, hard cap 50MB).
+  let normalized;
+  try {
+    normalized = await normalizeUploadServer(file);
+  } catch (err) {
+    if (err instanceof UploadValidationError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
   }
 
   // Try to extract invoice number from filename
@@ -67,14 +74,14 @@ export async function POST(
     }
   }
 
-  // Upload to Supabase storage
-  const ext = file.name.split(".").pop() || "pdf";
+  // Upload to Supabase storage (normalized buffer, not raw file)
   const timestamp = Date.now();
-  const filePath = `gst-invoices/${payment.contract_id}/${timestamp}-${file.name}`;
+  const baseName = file.name.replace(/\.[^.]+$/, "");
+  const filePath = `gst-invoices/${payment.contract_id}/${timestamp}-${baseName}.${normalized.ext}`;
 
   const { error: uploadError } = await supabase.storage
     .from("crm-documents")
-    .upload(filePath, file, { contentType: file.type });
+    .upload(filePath, normalized.buffer, { contentType: normalized.mimeType });
 
   if (uploadError) {
     return NextResponse.json({ error: `Upload failed: ${uploadError.message}` }, { status: 500 });

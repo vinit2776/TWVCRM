@@ -48,6 +48,13 @@ const createServicePoSchema = z.object({
   notes: z.string().nullish(),
   payment_terms: z.string().nullish(),
   terms_and_conditions: z.string().nullish(),
+  // AMC fields (optional — for AMC contracts)
+  amc_start_date: z.string().nullish(),
+  amc_end_date: z.string().nullish(),
+  amc_visits_covered: z.number().int().positive().nullish(),
+  amc_contact_name: z.string().nullish(),
+  amc_helpline_number: z.string().nullish(),
+  amc_contact_email: z.string().email().nullish().or(z.literal("").transform(() => null)),
 }).merge(advancePaymentSchema);
 
 function generatePoNumber(count: number): string {
@@ -72,6 +79,7 @@ export async function GET(request: NextRequest) {
   const locationId = searchParams.get("location_id");
   const prId = searchParams.get("pr_id");
   const advanceStatus = searchParams.get("advance_status");
+  const search = searchParams.get("search")?.trim() ?? "";
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
   const offset = (page - 1) * limit;
@@ -90,6 +98,21 @@ export async function GET(request: NextRequest) {
   if (locationId) query = query.eq("location_id", locationId);
   if (prId) query = query.eq("pr_id", prId);
   if (advanceStatus) query = query.eq("advance_status", advanceStatus);
+
+  // Search: require ≥3 chars to prevent full-table scans on short terms
+  if (search.length >= 3) {
+    // Search by PO number OR vendor name (vendor lookup is acceptable at ≥3 chars)
+    const { data: matchingVendors } = await supabase
+      .from("procurement_vendors")
+      .select("id")
+      .ilike("name", `%${search}%`);
+    const vendorIds = (matchingVendors ?? []).map((v: { id: string }) => v.id);
+    if (vendorIds.length > 0) {
+      query = query.or(`po_number.ilike.%${search}%,vendor_id.in.(${vendorIds.join(",")})`);
+    } else {
+      query = query.ilike("po_number", `%${search}%`);
+    }
+  }
 
   const { data, error, count } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -112,6 +135,9 @@ export async function POST(request: NextRequest) {
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
+  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
 
   const body = await request.json();
 
@@ -133,8 +159,36 @@ export async function POST(request: NextRequest) {
     const totalAmount = parsed.data.unit_cost_per_cycle * parsed.data.cycle_count;
     const svcGstRate = parsed.data.gst_rate ?? 0;
     const svcGstAmount = Math.round(totalAmount * svcGstRate) / 100;
+    const totalWithGst = totalAmount + svcGstAmount;
+
+    // Advance cannot exceed PO total (including GST)
+    if (parsed.data.advance_amount && parsed.data.advance_amount > totalWithGst) {
+      return NextResponse.json({
+        error: `Advance amount (₹${parsed.data.advance_amount.toLocaleString("en-IN")}) cannot exceed PO total (₹${totalWithGst.toLocaleString("en-IN")})`
+      }, { status: 422 });
+    }
 
     const hasAdvance = !!parsed.data.advance_amount;
+    // Compute initial amc_status if AMC dates were provided
+    const amcStart = parsed.data.amc_start_date ?? null;
+    const amcEnd = parsed.data.amc_end_date ?? null;
+    const amcVisitsCovered = parsed.data.amc_visits_covered ?? null;
+    let amcStatus = "inactive";
+    if (amcStart) {
+      const today = new Date();
+      const start = new Date(amcStart);
+      if (today >= start) {
+        if (amcEnd && today > new Date(amcEnd)) {
+          amcStatus = "expired";
+        } else if (amcEnd) {
+          const daysLeft = Math.floor((new Date(amcEnd).getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+          amcStatus = daysLeft <= 60 ? "expiring" : "active";
+        } else {
+          amcStatus = "active";
+        }
+      }
+    }
+
     const { data: po, error: poError } = await supabase
       .from("purchase_orders")
       .insert({
@@ -158,6 +212,15 @@ export async function POST(request: NextRequest) {
         advance_payment_mode: parsed.data.advance_payment_mode ?? null,
         advance_payment_reference: parsed.data.advance_payment_reference ?? null,
         advance_notes: parsed.data.advance_notes ?? null,
+        // AMC fields
+        amc_start_date: amcStart,
+        amc_end_date: amcEnd,
+        amc_visits_covered: amcVisitsCovered,
+        amc_visits_used: 0,
+        amc_contact_name: parsed.data.amc_contact_name ?? null,
+        amc_helpline_number: parsed.data.amc_helpline_number ?? null,
+        amc_contact_email: parsed.data.amc_contact_email ?? null,
+        amc_status: amcStatus,
         advance_status: hasAdvance ? "pending" : "not_required",
       })
       .select("id, po_number")
@@ -274,7 +337,15 @@ export async function POST(request: NextRequest) {
 
   const poNumber = generatePoNumber(existingCount ?? 0);
 
-  // ── 4. Insert purchase order ──
+  // ── 4. Validate advance amount ≤ PO total ──
+  const goodsTotalWithGst = totalOrderedAmount + totalGstAmount;
+  if (parsed.data.advance_amount && parsed.data.advance_amount > goodsTotalWithGst) {
+    return NextResponse.json({
+      error: `Advance amount (₹${parsed.data.advance_amount.toLocaleString("en-IN")}) cannot exceed PO total (₹${goodsTotalWithGst.toLocaleString("en-IN")})`
+    }, { status: 422 });
+  }
+
+  // ── 5. Insert purchase order ──
   const hasAdvance = !!parsed.data.advance_amount;
   const { data: po, error: poError } = await supabase
     .from("purchase_orders")

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { normalizeUploadServer, UploadValidationError } from "@/lib/uploads/normalize-upload-server";
 
 // POST — upload UPI payment screenshot
 export async function POST(
@@ -32,18 +33,22 @@ export async function POST(
     return NextResponse.json({ error: "Only image files are allowed" }, { status: 400 });
   }
 
-  // Validate file size (10MB max)
-  if (file.size > 10 * 1024 * 1024) {
-    return NextResponse.json({ error: "File size must be under 10MB" }, { status: 400 });
+  // Normalize (image → JPEG Q82 @ 2048px, 50MB hard cap).
+  let normalized;
+  try {
+    normalized = await normalizeUploadServer(file);
+  } catch (err) {
+    if (err instanceof UploadValidationError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
   }
 
-  // Upload to Supabase storage
-  const ext = file.name.split(".").pop() || "png";
-  const filePath = `payment-screenshots/${id}-${Date.now()}.${ext}`;
+  const filePath = `payment-screenshots/${id}-${Date.now()}.${normalized.ext}`;
 
   const { error: uploadError } = await supabase.storage
     .from("crm-documents")
-    .upload(filePath, file, { contentType: file.type });
+    .upload(filePath, normalized.buffer, { contentType: normalized.mimeType });
 
   if (uploadError) {
     return NextResponse.json({ error: `Upload failed: ${uploadError.message}` }, { status: 500 });

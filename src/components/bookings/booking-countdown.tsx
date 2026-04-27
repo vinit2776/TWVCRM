@@ -33,7 +33,10 @@ export function BookingCountdown({ bookingDate, startTime }: { bookingDate: stri
     };
 
     update();
-    const interval = setInterval(update, 1000);
+    // Tick every 10s instead of 1s. With potentially dozens of countdowns on a
+    // bookings list, 1s updates triggered 50+ renders/sec. The display format
+    // is minute-granular except in the final minute, so 10s is plenty accurate.
+    const interval = setInterval(update, 10000);
     return () => clearInterval(interval);
   }, [bookingDate, startTime]);
 

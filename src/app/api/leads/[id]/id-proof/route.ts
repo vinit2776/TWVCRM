@@ -1,9 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
-import { createAdminClient } from "@/lib/supabase/server";
-
-// Max dimensions for image compression (server-side via sharp if available, else raw upload)
-const MAX_SIZE_BYTES = 2 * 1024 * 1024; // 2 MB limit per file
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import {
+  normalizeUploadServer,
+  UploadValidationError,
+  IMAGE_MIME_TYPES,
+  PDF_MIME_TYPE,
+} from "@/lib/uploads/normalize-upload-server";
 
 export async function POST(
   request: NextRequest,
@@ -19,24 +21,30 @@ export async function POST(
   const formData = await request.formData();
   const file = formData.get("file") as File | null;
   if (!file) return NextResponse.json({ error: "No file provided" }, { status: 400 });
-  if (file.size > MAX_SIZE_BYTES) {
-    return NextResponse.json({ error: "File too large. Maximum 2MB allowed." }, { status: 400 });
+
+  if (!IMAGE_MIME_TYPES.has(file.type) && file.type !== PDF_MIME_TYPE) {
+    return NextResponse.json(
+      { error: "Only JPG, PNG, WebP, HEIC, or PDF files are accepted." },
+      { status: 400 }
+    );
   }
 
-  const ext = file.name.split(".").pop()?.toLowerCase() || "bin";
-  const allowed = ["jpg", "jpeg", "png", "webp", "pdf"];
-  if (!allowed.includes(ext)) {
-    return NextResponse.json({ error: "Only JPG, PNG, WebP, or PDF files are accepted." }, { status: 400 });
+  let normalized;
+  try {
+    normalized = await normalizeUploadServer(file);
+  } catch (err) {
+    if (err instanceof UploadValidationError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
   }
 
-  const filePath = `leads/${id}/id_proof_${Date.now()}.${ext}`;
-  const arrayBuffer = await file.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
+  const filePath = `leads/${id}/id_proof_${Date.now()}.${normalized.ext}`;
 
   const { error: uploadError } = await adminSupabase.storage
     .from("crm-documents")
-    .upload(filePath, buffer, {
-      contentType: file.type || "application/octet-stream",
+    .upload(filePath, normalized.buffer, {
+      contentType: normalized.mimeType,
       upsert: true,
     });
 

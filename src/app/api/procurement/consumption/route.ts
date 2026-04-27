@@ -78,7 +78,9 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
-  // Validate stock availability for each item
+  // Check stock levels — log warnings if below tracked stock, but don't block
+  // (physical stock may differ from system records if deliveries weren't location-linked)
+  const stockWarnings: string[] = [];
   for (const item of parsed.data.items) {
     if (!item.item_id) continue;
 
@@ -87,13 +89,11 @@ export async function POST(request: NextRequest) {
       .select("quantity_on_hand")
       .eq("location_id", parsed.data.location_id)
       .eq("item_id", item.item_id)
-      .single();
+      .maybeSingle();
 
     const onHand = stock?.quantity_on_hand ?? 0;
     if (item.quantity_consumed > Number(onHand)) {
-      return NextResponse.json({
-        error: `${item.item_name}: quantity (${item.quantity_consumed}) exceeds available stock (${onHand})`,
-      }, { status: 422 });
+      stockWarnings.push(`${item.item_name}: consumed ${item.quantity_consumed} but system shows ${onHand} in stock`);
     }
   }
 
@@ -164,5 +164,9 @@ export async function POST(request: NextRequest) {
     },
   });
 
-  return NextResponse.json({ data: log, reorder_alerts: alertItems }, { status: 201 });
+  return NextResponse.json({
+    data: log,
+    reorder_alerts: alertItems,
+    stock_warnings: stockWarnings,
+  }, { status: 201 });
 }

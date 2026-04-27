@@ -422,8 +422,13 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
 
-  // Store lead.created_at in a ref to avoid dependency on the entire lead object
-  const leadCreatedAt = lead.created_at;
+  // Stable refs — avoid re-creating fetchAll (and re-fetching) on every parent render.
+  // The lead object changes reference on every parent render; keeping it in useCallback
+  // deps would re-trigger all 5 fetches on every keystroke/state update in the parent.
+  const leadRef = useRef(lead);
+  leadRef.current = lead;
+  const leadCreatedAtRef = useRef(lead.created_at);
+  leadCreatedAtRef.current = lead.created_at;
 
   const fetchAll = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
@@ -477,7 +482,7 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
       merged.sort(
         (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
       );
-      merged.push({ kind: "created", date: leadCreatedAt, lead });
+      merged.push({ kind: "created", date: leadCreatedAtRef.current, lead: leadRef.current });
 
       setItems(merged);
     } catch (err) {
@@ -485,7 +490,7 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
     } finally {
       setLoading(false);
     }
-  }, [leadId, leadCreatedAt, lead, refreshKey]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [leadId, refreshKey]); // leadRef/leadCreatedAtRef are stable refs — no need in deps
 
   useEffect(() => {
     const controller = new AbortController();

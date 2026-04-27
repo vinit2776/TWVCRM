@@ -19,6 +19,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { Loader2, Upload, X, Image as ImageIcon } from "lucide-react";
 import {
   TICKET_TYPES,
@@ -124,17 +125,24 @@ export function ReportIssueDialog({
 
       const { data: ticket } = await res.json();
 
-      // Step 2: Upload screenshot if present
+      // Step 2: Upload screenshot if present — normalize client-side first.
       if (screenshot && ticket.id) {
+        let processed: File | null = null;
+        try {
+          processed = await prepareUpload(screenshot);
+        } catch (e) {
+          if (e instanceof UploadTooLargeError) toast.error(e.message);
+          else toast.error(e instanceof Error ? e.message : "Screenshot too large");
+        }
+
         const formData = new FormData();
-        formData.append("file", screenshot);
+        formData.append("file", processed ?? screenshot);
 
-        const uploadRes = await fetch(
-          `/api/support-tickets/${ticket.id}/screenshot`,
-          { method: "POST", body: formData }
-        );
+        const uploadRes = processed
+          ? await fetch(`/api/support-tickets/${ticket.id}/screenshot`, { method: "POST", body: formData })
+          : null;
 
-        if (!uploadRes.ok) {
+        if (!uploadRes || !uploadRes.ok) {
           // Ticket was created but screenshot failed — still show success
           toast.warning(
             `Ticket ${ticket.ticket_number} created but screenshot upload failed`

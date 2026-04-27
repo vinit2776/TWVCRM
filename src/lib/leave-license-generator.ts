@@ -1,7 +1,8 @@
 /**
  * Leave & License Agreement PDF Generator
  *
- * Generates a full legal Leave & License Agreement based on the TWV template.
+ * Generates a full legal Leave & License Agreement matching the authoritative
+ * DOCX template ("New VO Agreement Format-1.DOCX").
  * Uses jsPDF with shared branding from pdf-utils.ts.
  */
 import jsPDF from "jspdf";
@@ -11,8 +12,6 @@ import {
   BRAND_TEAL,
   BRAND_DARK,
   COMPANY_NAME,
-  BRAND_NAME,
-  COMPANY_ADDRESS,
   LL_PROPERTY_ADDRESS,
   LESSOR_DIRECTOR,
   formatCurrency,
@@ -62,8 +61,10 @@ export interface LeaveLicenseVariables {
   nature_of_business: string;
   witness_1_name?: string;
   witness_1_aadhaar_last4?: string;
+  witness_1_mobile?: string;
   witness_2_name?: string;
   witness_2_aadhaar_last4?: string;
+  witness_2_mobile?: string;
   estamp_value?: number;
   estamp_value_formatted?: string;
   service_retainer_deposit: number;
@@ -97,8 +98,10 @@ export function mergeLeaveLicenseVariables(params: {
   lesseeSignatoryDesignation?: string;
   witness1Name?: string;
   witness1AadhaarLast4?: string;
+  witness1Mobile?: string;
   witness2Name?: string;
   witness2AadhaarLast4?: string;
+  witness2Mobile?: string;
   estampValue?: number;
 }): LeaveLicenseVariables {
   const startDate = new Date(params.startDate);
@@ -139,8 +142,10 @@ export function mergeLeaveLicenseVariables(params: {
     nature_of_business: params.natureOfBusiness || "To be provided",
     witness_1_name: params.witness1Name,
     witness_1_aadhaar_last4: params.witness1AadhaarLast4,
+    witness_1_mobile: params.witness1Mobile,
     witness_2_name: params.witness2Name,
     witness_2_aadhaar_last4: params.witness2AadhaarLast4,
+    witness_2_mobile: params.witness2Mobile,
     estamp_value: params.estampValue,
     estamp_value_formatted: params.estampValue ? formatCurrency(params.estampValue) : undefined,
     service_retainer_deposit: serviceRetainer,
@@ -152,56 +157,80 @@ export function mergeLeaveLicenseVariables(params: {
 // Purpose-specific clauses
 // ================================================================
 
-function getPurposeClause(purpose: VoPurpose): string {
-  const clauses: Record<VoPurpose, string> = {
+/** Returns the purpose description for the WHEREAS clause. */
+function getPurposeDescription(purpose: VoPurpose): string {
+  const descriptions: Record<VoPurpose, string> = {
     gst_registration:
-      "The Lessee shall use the Licensed Premises solely for the purpose of GST Registration under the Goods and Services Tax Act, 2017 and related statutory compliance.",
+      "solely as the principal address for GST Registration and business correspondence",
     mca_registration:
-      "The Lessee shall use the Licensed Premises solely for the purpose of Company/LLP Registration with the Ministry of Corporate Affairs (MCA) under the Companies Act, 2013 / LLP Act, 2008.",
+      "solely as the principal address for Company/LLP Registration with the Ministry of Corporate Affairs (MCA) and business correspondence",
     branch_office:
-      "The Lessee shall use the Licensed Premises as a branch office address for business operations, GST registration, and related compliance.",
+      "as a branch office address for business operations, GST registration, and business correspondence",
     mail_handling:
-      "The Lessee shall use the Licensed Premises for receiving business correspondence, mail handling, and as a professional business address.",
+      "for receiving business correspondence and mail handling",
     business_address:
-      "The Lessee shall use the Licensed Premises as a virtual office and professional business address for their operations.",
+      "as a virtual office and professional business address for business operations",
   };
-  return clauses[purpose];
+  return descriptions[purpose];
+}
+
+/** Returns the purpose-specific text for Terms of Usage clause 2. */
+function getTermsOfUsagePurpose(purpose: VoPurpose): string {
+  const purposes: Record<VoPurpose, string> = {
+    gst_registration:
+      "as their principal address for GST Registration",
+    mca_registration:
+      "as their principal address for Company/LLP Registration with the MCA",
+    branch_office:
+      "as a branch office address for business operations and GST Registration",
+    mail_handling:
+      "as their business correspondence address",
+    business_address:
+      "as their principal business address",
+  };
+  return purposes[purpose];
 }
 
 function getRequiredDocuments(entityType: EntityType): string[][] {
   const docs: Record<string, string[][]> = {
     individual: [
-      ["1", "Aadhaar Card (Self-attested copy)"],
-      ["2", "PAN Card (Self-attested copy)"],
-      ["3", "Passport-size Photograph"],
-      ["4", "Cancelled Cheque / Bank Statement"],
+      ["1", "Aadhar Card"],
+      ["2", "PAN Card"],
+      ["3", "Cancelled cheque"],
+      ["4", "GST Certificate"],
     ],
     company: [
-      ["1", "Certificate of Incorporation"],
-      ["2", "PAN Card of Company"],
-      ["3", "GST Registration Certificate (if available)"],
-      ["4", "Board Resolution authorizing signatory"],
-      ["5", "MOA & AOA"],
-      ["6", "Aadhaar & PAN of authorized signatory"],
+      ["1", "PAN Card for Company"],
+      ["2", "Certificate of Incorporation"],
+      ["3", "Board Resolution in favour of the authorized Signatory executing the membership agreement"],
+      ["4", "MOA & AOA"],
+      ["5", "KYC (Pan Card & Aadhar card) of all the Directors"],
+      ["6", "Cancelled cheque"],
+      ["7", "GST Certificate"],
     ],
     partnership: [
-      ["1", "Partnership Deed"],
-      ["2", "PAN Card of Firm"],
-      ["3", "GST Registration Certificate (if available)"],
-      ["4", "Aadhaar & PAN of all partners"],
-      ["5", "Authorization letter from all partners"],
+      ["1", "Partnership Agreement / registration certificate if Partnership is registered"],
+      ["2", "Authority letter in favour of the person executing the membership agreement"],
+      ["3", "KYC (Pan Card & Aadhar card) of all the partners"],
+      ["4", "Cancelled cheque"],
+      ["5", "GST Certificate"],
     ],
     llp: [
-      ["1", "LLP Agreement"],
-      ["2", "Certificate of Incorporation (LLP)"],
-      ["3", "PAN Card of LLP"],
-      ["4", "GST Registration Certificate (if available)"],
-      ["5", "Aadhaar & PAN of designated partners"],
-      ["6", "Board Resolution authorizing signatory"],
+      ["1", "LLP Agreement / registration certificate if LLP is registered"],
+      ["2", "LLP PAN Card"],
+      ["3", "KYC (Pan Card & Aadhar card) of all the partners"],
+      ["4", "Cancelled cheque"],
+      ["5", "GST Certificate"],
     ],
   };
   return docs[entityType] || docs.individual;
 }
+
+// ================================================================
+// Lessor registered office address for L&L text (exact DOCX format)
+// ================================================================
+const LL_LESSOR_REG_OFFICE =
+  "'Prakash Presidium' 110, Mahatma Gandhi Road, Nungambakkam, Chennai 600034";
 
 // ================================================================
 // PDF Generation
@@ -209,6 +238,7 @@ function getRequiredDocuments(entityType: EntityType): string[][] {
 
 /**
  * Generate the full Leave & License Agreement PDF.
+ * Content matches the authoritative DOCX template exactly.
  */
 export function generateLeaveLicensePdf(
   variables: LeaveLicenseVariables
@@ -216,6 +246,26 @@ export function generateLeaveLicensePdf(
   const doc = new jsPDF();
   const startY = addBrandHeader(doc);
   const ctx = createPdfContext(doc, startY);
+
+  // Helper to add a numbered/titled clause heading
+  const addClauseHeading = (text: string) => {
+    ctx.checkPageBreak(12);
+    ctx.addWrappedText(text, ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
+    ctx.y += 2;
+  };
+
+  // Helper to add body paragraph text
+  const addBodyText = (text: string, indent = 0) => {
+    ctx.addWrappedText(
+      text,
+      ctx.marginLeft + indent,
+      ctx.contentWidth - indent,
+      9,
+      "normal",
+      [50, 50, 50],
+      4.5
+    );
+  };
 
   // ── Title ──
   const titleText = "LEAVE AND LICENSE AGREEMENT";
@@ -228,7 +278,12 @@ export function generateLeaveLicensePdf(
   const titleWidth = doc.getTextWidth(titleText);
   doc.setDrawColor(...BRAND_TEAL);
   doc.setLineWidth(0.5);
-  doc.line((ctx.pageWidth - titleWidth) / 2, ctx.y, (ctx.pageWidth + titleWidth) / 2, ctx.y);
+  doc.line(
+    (ctx.pageWidth - titleWidth) / 2,
+    ctx.y,
+    (ctx.pageWidth + titleWidth) / 2,
+    ctx.y
+  );
   ctx.y += 8;
 
   // ── Reference & Date ──
@@ -236,61 +291,126 @@ export function generateLeaveLicensePdf(
   doc.setFont("helvetica", "normal");
   doc.setTextColor(100, 100, 100);
   doc.text(`Ref: ${variables.agreement_number}`, ctx.marginLeft, ctx.y);
-  doc.text(`Date: ${variables.agreement_date}`, ctx.pageWidth - ctx.marginRight, ctx.y, { align: "right" });
+  doc.text(
+    `Date: ${variables.agreement_date}`,
+    ctx.pageWidth - ctx.marginRight,
+    ctx.y,
+    { align: "right" }
+  );
   ctx.y += 10;
 
   // ── PARTIES ──
-  ctx.addWrappedText("PARTIES", ctx.marginLeft, ctx.contentWidth, 11, "bold", BRAND_TEAL, 6);
+  ctx.addWrappedText(
+    "PARTIES",
+    ctx.marginLeft,
+    ctx.contentWidth,
+    11,
+    "bold",
+    BRAND_TEAL,
+    6
+  );
   ctx.y += 2;
 
   // Lessor
-  ctx.addWrappedText("LESSOR:", ctx.marginLeft, ctx.contentWidth, 9, "bold", BRAND_DARK, 5);
   ctx.addWrappedText(
-    `${COMPANY_NAME}, a company incorporated under the Companies Act, having its registered office at ${COMPANY_ADDRESS.join(" ")}, operating under the brand name "${BRAND_NAME}", represented by its Director, ${variables.lessor_signatory_name} (hereinafter referred to as the "Lessor").`,
-    ctx.marginLeft, ctx.contentWidth, 9, "normal", [50, 50, 50], 4.5
+    "LESSOR / SERVICE PROVIDER:",
+    ctx.marginLeft,
+    ctx.contentWidth,
+    9,
+    "bold",
+    BRAND_DARK,
+    5
+  );
+  ctx.addWrappedText(
+    `${COMPANY_NAME}, having registered office address at ${LL_LESSOR_REG_OFFICE}, through its Authorized Signatory, ${variables.lessor_signatory_name}, hereinafter referred to as "Lessor / Service Provider".`,
+    ctx.marginLeft,
+    ctx.contentWidth,
+    9,
+    "normal",
+    [50, 50, 50],
+    4.5
   );
   ctx.y += 4;
 
   // Lessee
-  ctx.addWrappedText("LESSEE:", ctx.marginLeft, ctx.contentWidth, 9, "bold", BRAND_DARK, 5);
-  const lesseeDesc = variables.client_company_name
-    ? `${variables.client_company_name}, a ${variables.entity_type_label}, having its registered office at ${variables.client_address}, represented by ${variables.lessee_signatory_name}, ${variables.lessee_signatory_designation} (hereinafter referred to as the "Lessee").`
-    : `${variables.client_name}, ${variables.entity_type_label}, residing at ${variables.client_address} (hereinafter referred to as the "Lessee").`;
-  ctx.addWrappedText(lesseeDesc, ctx.marginLeft, ctx.contentWidth, 9, "normal", [50, 50, 50], 4.5);
+  ctx.addWrappedText(
+    "LESSEE / CLIENT:",
+    ctx.marginLeft,
+    ctx.contentWidth,
+    9,
+    "bold",
+    BRAND_DARK,
+    5
+  );
+
+  let lesseeDesc: string;
+  if (variables.client_company_name) {
+    const panText = variables.client_pan_number
+      ? `, with PAN Number ${variables.client_pan_number}`
+      : "";
+    lesseeDesc = `${variables.client_company_name}, through its ${variables.lessee_signatory_designation || "Director"} ${variables.lessee_signatory_name}, having registered office at ${variables.client_address}${panText}, hereinafter referred to as "Lessee/Client". (KYC is attached).`;
+  } else {
+    const panText = variables.client_pan_number
+      ? `, with PAN Number ${variables.client_pan_number}`
+      : "";
+    lesseeDesc = `${variables.client_name}, residing at ${variables.client_address}${panText}, hereinafter referred to as "Lessee/Client". (KYC is attached).`;
+  }
+  addBodyText(lesseeDesc);
   ctx.y += 6;
 
-  // ── RECITALS ──
-  ctx.addWrappedText("RECITALS", ctx.marginLeft, ctx.contentWidth, 11, "bold", BRAND_TEAL, 6);
-  ctx.y += 2;
+  // ── WHEREAS ──
   ctx.addWrappedText(
-    `WHEREAS the Lessor is the owner/occupier of the premises situated at ${variables.property_address}, operating as "${BRAND_NAME}" (hereinafter referred to as the "Licensed Premises").`,
-    ctx.marginLeft, ctx.contentWidth, 9, "normal", [50, 50, 50], 4.5
+    "WHEREAS",
+    ctx.marginLeft,
+    ctx.contentWidth,
+    11,
+    "bold",
+    BRAND_TEAL,
+    6
   );
   ctx.y += 2;
-  ctx.addWrappedText(
-    getPurposeClause(variables.purpose),
-    ctx.marginLeft, ctx.contentWidth, 9, "normal", [50, 50, 50], 4.5
+
+  // Whereas paragraph 1 — Lessor's rights
+  addBodyText(
+    `The Lessor is the sub leased property owner of the property bearing address: ${variables.location_name}, ${variables.property_address}. The Lessor has full and unfettered rights to lease/let out the said Premises (or a portion thereof) on such terms and conditions as it may think fit at its sole discretion.`
   );
-  ctx.y += 2;
-  ctx.addWrappedText(
-    "NOW THEREFORE, in consideration of the mutual covenants contained herein, the parties agree as follows:",
-    ctx.marginLeft, ctx.contentWidth, 9, "normal", [50, 50, 50], 4.5
+  ctx.y += 3;
+
+  // Whereas paragraph 2 — Lessee's purpose (dynamic)
+  addBodyText(
+    `The Lessee desires to take a property on lease so as to use the said property ${getPurposeDescription(variables.purpose)} for a period of ${variables.tenure_months} months.`
+  );
+  ctx.y += 3;
+
+  // Whereas paragraph 3 — Mutual agreement
+  addBodyText(
+    `Pursuant thereto, the Lessor has agreed to permit the Lessee to use the Licensed Premises on a Leave and License basis, and the Lessee has agreed to take the Licensed Premises on license subject to the terms, covenants, conditions and agreements hereinafter contained.`
   );
   ctx.y += 6;
 
-  // ── SCHEDULE ──
-  ctx.addWrappedText("SCHEDULE", ctx.marginLeft, ctx.contentWidth, 11, "bold", BRAND_TEAL, 6);
+  // ── EFFECTIVE DATE / TERM / RENEWAL ──
+  ctx.checkPageBreak(50);
+  ctx.addWrappedText(
+    "SCHEDULE",
+    ctx.marginLeft,
+    ctx.contentWidth,
+    11,
+    "bold",
+    BRAND_TEAL,
+    6
+  );
   ctx.y += 2;
-  ctx.checkPageBreak(40);
 
   const scheduleData = [
     ["Effective Date", variables.start_date_formatted],
-    ["Term", `${variables.tenure_months} months (until ${variables.end_date_formatted})`],
+    [
+      "Term",
+      `${variables.tenure_months} Months (until ${variables.end_date_formatted})`,
+    ],
     ["Licensed Premises", `${variables.location_name}, ${variables.property_address}`],
     ["Purpose", variables.purpose_label],
     ["Monthly License Fee", `${variables.rate_formatted} + applicable GST`],
     ["Security Deposit", variables.security_deposit_formatted],
-    ["Service Retainer Deposit", `${variables.service_retainer_deposit_formatted} + GST`],
   ];
 
   autoTable(doc, {
@@ -305,159 +425,199 @@ export function generateLeaveLicensePdf(
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ctx.y = (doc as any).lastAutoTable.finalY + 8;
+  ctx.y = (doc as any).lastAutoTable.finalY + 6;
 
-  // ── TERMS OF USAGE ──
-  ctx.addWrappedText("1. TERMS OF USAGE", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
-  ctx.y += 2;
+  // Renewal clause
+  ctx.addWrappedText(
+    "Renewal:",
+    ctx.marginLeft,
+    ctx.contentWidth,
+    9,
+    "bold",
+    BRAND_DARK,
+    5
+  );
+  addBodyText(
+    "Following the expiration of the Term mentioned hereinabove, this Agreement may be renewed for a further period as mutually agreed by the parties, on terms and conditions as mutually agreed by the parties. Each renewal term shall be subject to a minimum 5% escalation in License Fees."
+  );
+  ctx.y += 6;
+
+  // ── USE OF AND ACCESS TO THE LICENSED PREMISES ──
+  ctx.checkPageBreak(30);
+  addClauseHeading("USE OF AND ACCESS TO THE LICENSED PREMISES");
+
+  addBodyText(
+    `The Lessee/Client is interested in using the virtual office space (hereinafter referred to as the "Services") from the Lessor at its premise located at ${variables.location_name}, ${variables.property_address} (hereinafter referred to as the "Premise"). The whole of the Premise remains the property of the Service Provider and remains in the Lessor's possession and control. The allowed usage for Lessor is mentioned in the clause 'Terms of Usage'. This Agreement is personal to the Lessee/Client and cannot be transferred to anyone else. Lessor may transfer the benefit of this Agreement and its obligations under it at any time.`
+  );
+  ctx.y += 6;
+
+  // ── ACKNOWLEDGMENT AND ACCEPTANCE OF TERMS OF USE ──
+  ctx.checkPageBreak(30);
+  addClauseHeading("ACKNOWLEDGMENT AND ACCEPTANCE OF TERMS OF USE");
+
+  addBodyText(
+    `The Services are offered to Lessee/Clients conditioned on acceptance without modification, of the terms and conditions, contained in this Agreement. Lessee/Client's use of the Service constitutes its agreement and consent to the terms and conditions stated in this Agreement. Each person that uses the Premise, or enters into a contract, in writing or online, on behalf of its employer or other third party, represents that such person is authorized to accept these terms on its employer's or on third party's behalf. Unless explicitly stated otherwise, the Terms of Service will govern the use of any new features that augment or enhance the current Services, including the release of new resources and services. In the case of any violation of these terms, Service Provider reserves the right to cancel Services to Lessee/Client immediately and seek all remedies available by law and in equity for such violations.`
+  );
+  ctx.y += 6;
+
+  // ── 1. TERMS OF USAGE ──
+  addClauseHeading("1. TERMS OF USAGE");
 
   const termsOfUsage = [
-    "The Lessee shall use the Licensed Premises solely for the stated purpose and shall not engage in any unauthorized or illegal activities.",
-    "The Lessee shall not assign, transfer, or sublicense this agreement or any part of the Licensed Premises to any third party.",
-    "The Lessee shall maintain confidentiality regarding the terms and conditions of this agreement.",
-    "The Lessor shall provide a virtual office address and related facilities as specified in the Schedule.",
-    "The Lessee shall comply with all applicable laws, regulations, and statutory requirements.",
-    "The Lessee shall indemnify the Lessor against any claims, damages, or liabilities arising from the Lessee's use of the Licensed Premises.",
+    "The Lessee/Client may use the address for its business correspondence.",
+    `The Lessee/Client is only permitted to use the Office Address prescribed herein ${getTermsOfUsagePurpose(variables.purpose)}, provided that the Lessee/Client bears the responsibility for compliance with all the necessary provisions of the law including the Companies Act, GST Laws, etc.`,
+    "The Lessee/Client hereby agrees to maintain the books of accounts at the space allotted to it in the Premises. Non-compliance with respect to non-maintenance of books of accounts shall be on the Lessee/Client.",
+    "The Lessee/Client is not allowed to use the Office Address or the address of the Premises as the primary bodies. The Lessee/Client shall seek prior written permission from the Service Provider/Lessor if it wishes to utilise the office address for any statutory / Government purpose including but not limited to address in MCA records.",
+    "The Lessee/Client is not allowed to avail any credit facility, whether relating to any loans or any other forms of credit line, on this address.",
+    "The Lessee agrees that no trade or occupation shall be conducted using the address of the Premises which will be unlawful, improper, or contrary to any law, ordinance, by-law, code, rule, regulation or order applicable or which will tarnish or cause harm or injury to the reputation of the Lessor and/or the Premises.",
+    "The Lessee/Client understands that this Leave and License Agreement is contingent upon the Lessee/Client's strict adherence to the Terms of Usage prescribed herein and any contravention of the Terms of Usage prescribed hereinabove by the Lessee/Client would constitute a material breach of this Agreement and thereby liable to immediate termination of the Agreement. The Service Provider/Lessor shall also be entitled to all the remedies available to it in law in addition to such termination of this Agreement.",
   ];
 
   termsOfUsage.forEach((term, i) => {
-    ctx.addWrappedText(`${i + 1}.${i + 1} ${term}`, ctx.marginLeft + 4, ctx.contentWidth - 4, 9, "normal", [50, 50, 50], 4.5);
+    ctx.checkPageBreak(15);
+    ctx.addWrappedText(
+      `1.${i + 1} ${term}`,
+      ctx.marginLeft + 4,
+      ctx.contentWidth - 4,
+      9,
+      "normal",
+      [50, 50, 50],
+      4.5
+    );
     ctx.y += 2;
   });
   ctx.y += 4;
 
-  // ── LICENSE FEES ──
-  ctx.addWrappedText("2. LICENSE FEES", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
-  ctx.y += 2;
-  ctx.addWrappedText(
-    `The Lessee shall pay a monthly license fee of ${variables.rate_formatted} plus applicable GST, payable on or before the 5th of each month. Any delay in payment shall attract a late payment charge of 2% per month on the outstanding amount.`,
-    ctx.marginLeft + 4, ctx.contentWidth - 4, 9, "normal", [50, 50, 50], 4.5
+  // ── 2. LICENSE FEES ──
+  addClauseHeading("2. LICENSE FEES");
+  addBodyText(
+    `License fees of ${variables.rate_formatted} + applicable GST is payable in advance by the Client/Lessee to the Service Provider/Lessor. Any dues/delays in the License fees in case of renewals will cause the termination of the Services/Agreement on the expiration date set forth at the time of signup or payment. For late payments of renewals, the client has to pay an additional 5% penalty per day, in addition to the renewal license fees, for delay in payment.`
   );
   ctx.y += 6;
 
-  // ── SERVICE RETAINER / DEPOSIT ──
-  ctx.addWrappedText("3. SERVICE RETAINER / DEPOSIT", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
-  ctx.y += 2;
-  ctx.addWrappedText(
-    `The Lessee shall pay a one-time service retainer deposit of ${variables.service_retainer_deposit_formatted} plus applicable GST. Additionally, a security deposit of ${variables.security_deposit_formatted} shall be maintained during the tenure of this agreement. The deposits shall be refundable upon termination, subject to adjustment of any outstanding dues.`,
-    ctx.marginLeft + 4, ctx.contentWidth - 4, 9, "normal", [50, 50, 50], 4.5
+  // ── 3. SERVICE RETAINER / DEPOSIT AMOUNT ──
+  addClauseHeading("3. SERVICE RETAINER / DEPOSIT AMOUNT");
+  addBodyText(
+    `At any time during the subsistence of this Agreement, the Client can opt to use the "Courier Forwarding" facility from the Service Provider, for which the Client will be required to pay a Service Retainer / Deposit Amount of ${variables.service_retainer_deposit_formatted} + GST. This amount will be kept separately from License fees. Client has to replenish the deposit when it reaches Rs. 250. When the Client terminates the Service, the balance of the Service Retainer / Deposit Amount, if any, will be refunded to the Client.`
+  );
+  if (variables.security_deposit > 0) {
+    ctx.y += 2;
+    addBodyText(
+      `Additionally, a Security Deposit of ${variables.security_deposit_formatted} is payable and shall be maintained during the tenure of this Agreement.`
+    );
+  }
+  ctx.y += 6;
+
+  // ── 4. MAIL HANDLING ──
+  addClauseHeading("4. MAIL HANDLING");
+  addBodyText(
+    "Client can receive registered and certified mail at the Premise. Service Provider will receive up to 10 letters or packages per month free of charge for the Client. For additional letters or packages, Service Provider will charge a handling fee of Rs. 10 per letter / Rs. 100 per package. Service Provider will not accept packages more than 5 Kg of weight or 1 cubic feet size. Client can pick up the mails from the Premises free of cost. Service Provider shall not be liable for any mail/package not collected by the Client within 30 days from the date of receipt of the mail/package by the Service Provider at the Premise."
   );
   ctx.y += 6;
 
-  // ── MAIL HANDLING ──
-  ctx.addWrappedText("4. MAIL HANDLING", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
+  // ── 5. TERMINATION OF SERVICE ──
+  addClauseHeading("5. TERMINATION OF SERVICE");
+  addBodyText(
+    "Service will be automatically terminated on the expiry of the Term unless the license is renewed. Upon termination of this Agreement, the Client must cease the use of address of the Premise absolutely, including for any government registrations, and further, any Phone Numbers issued by the Service Provider to the Client shall also be ceased to be used immediately by the Client."
+  );
   ctx.y += 2;
-  ctx.addWrappedText(
-    "The Lessor shall provide mail handling services at the Licensed Premises. Up to 10 letters per month shall be received at no additional charge. Additional letters shall be charged at Rs. 10 per letter and additional packages at Rs. 100 per package. The Lessee shall collect mail during centre operating hours or request forwarding at applicable courier charges.",
-    ctx.marginLeft + 4, ctx.contentWidth - 4, 9, "normal", [50, 50, 50], 4.5
+  addBodyText(
+    "The Client shall remove the said address and phone numbers from all places including but not limited to GST records, MCA records (if applicable), business cards, websites, stationery, advertising material, licenses, certificates etc."
+  );
+  ctx.y += 2;
+  addBodyText(
+    "Notwithstanding any other provision under this Agreement, if the Client has used the address of the premise for registration with the registrar of companies, GST Authority, Banks, or other governmental authorities etc., it has to change the address submitted with such authorities within 15 (Fifteen) days from the date of termination or expiry of this Agreement, unless otherwise agreed in writing by Service Provider."
+  );
+  ctx.y += 2;
+  addBodyText(
+    "The Lessor reserves the right to take legal action against the Lessee if the Lessee is found in breach of this clause. Service Provider reserves the right to terminate the Service and this Agreement without notice if the Client's activity might adversely affect the Service Provider's reputation or Service Provider's normal operation."
+  );
+  ctx.y += 2;
+  addBodyText(
+    "Service Provider will terminate the Service anytime in case Client violates any clause or provision of this Agreement, or Client's activities are reported to be fraudulent, illegal or offensive in nature, attracting criminal consequences. In such eventuality, the Service Provider shall be entitled to withhold the entire Service Retainer / Deposit Amount in hand in addition to being entitled to receive liquidated damages of Rs. 5,00,000/- from the Client for the damage caused to the reputation and goodwill of the Service Provider."
   );
   ctx.y += 6;
 
-  // ── TERMINATION ──
-  ctx.addWrappedText("5. TERMINATION", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
-  ctx.y += 2;
-  ctx.addWrappedText(
-    "Either party may terminate this agreement by providing 30 days written notice to the other party. In the event of breach of any terms, the non-breaching party may terminate immediately upon written notice. Upon termination, the Lessee shall cease using the Licensed Premises address and shall update all statutory registrations accordingly within 30 days.",
-    ctx.marginLeft + 4, ctx.contentWidth - 4, 9, "normal", [50, 50, 50], 4.5
+  // ── 6. REFUND POLICY ──
+  addClauseHeading("6. REFUND POLICY");
+  addBodyText(
+    "Any License fee paid fully or partially is non-refundable, unless the Lessor terminates the Agreement without cause."
   );
   ctx.y += 6;
 
-  // ── REFUND POLICY ──
-  ctx.addWrappedText("6. REFUND POLICY", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
+  // ── 7. NATURE OF BUSINESS ──
+  addClauseHeading("7. NATURE OF BUSINESS");
+  addBodyText(
+    `The Lessee/Client has to explain its nature of business in writing on this Agreement in Annexure 1 hereto. The Lessee/Client agrees with the Service Provider not to carry on any business, which could be construed illegal, defamatory, immoral or obscene and agrees not to use the address of the premises, whether directly or indirectly for any such purpose or purposes.`
+  );
   ctx.y += 2;
-  ctx.addWrappedText(
-    "Upon termination, the security deposit and service retainer shall be refunded within 30 working days, subject to deduction of any outstanding dues, damages, or pending bills. No refund shall be made for unused portions of the license fee paid in advance.",
-    ctx.marginLeft + 4, ctx.contentWidth - 4, 9, "normal", [50, 50, 50], 4.5
+  addBodyText(
+    `If the Lessee/Client carries any business contrary to this understanding, the Service Provider is at liberty to terminate the Agreement and shall not be responsible for any legal issues which may arise because of such illegal business. Further the Service Provider shall be entitled to damages as mentioned supra in the clause pertaining to "Termination of Service".`
+  );
+  ctx.y += 2;
+  addBodyText(
+    "If the Lessee/Client changes the nature of business, it must notify the Service Provider in writing beforehand."
+  );
+  ctx.y += 2;
+  addBodyText(
+    `Nature of Business declared: ${variables.nature_of_business}`
   );
   ctx.y += 6;
 
-  // ── NATURE OF BUSINESS ──
-  ctx.addWrappedText("7. NATURE OF BUSINESS", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
+  // ── 8. LIABILITY ──
+  addClauseHeading("8. LIABILITY");
+  addBodyText(
+    "Service Provider will not be liable for any loss sustained as a result of Service Provider's failure to provide the services as a result of any Software Glitches, Mechanical breakdown, Strike, Loss of electric power, or termination of Service Provider interest in the building containing the office. The Service Provider does not accept liability for actions, services of/by third parties in any way whatsoever, including delays & non-receipt of messages or communication due to delays or failures in the email, SMS or fax systems, Phone, courier or postal service."
+  );
   ctx.y += 2;
-  ctx.addWrappedText(
-    `The Lessee declares that the nature of their business is: ${variables.nature_of_business}. The Lessee shall notify the Lessor in writing of any changes in the nature of business.`,
-    ctx.marginLeft + 4, ctx.contentWidth - 4, 9, "normal", [50, 50, 50], 4.5
+  addBodyText(
+    "Further, Service Provider shall not be responsible or liable to Lessee/Client for any loss or damage resulting to Lessee/Client by reason including but not limited to flood, fire, hurricane, riots, explosion, acts of God, war, terror, governmental action, or any other cause which is beyond the reasonable control of the Service Provider."
+  );
+  ctx.y += 2;
+  addBodyText(
+    "The Client shall indemnify and keep and hold Service Provider fully indemnified and harmless from and against all claims, proceedings, damages, losses, actions, costs and expenses arising as a consequence of or out of this Agreement or arising from its breach of any rules and regulations of any applicable law."
+  );
+  ctx.y += 2;
+  addBodyText(
+    "In case the Client is unable to fulfill the obligations mentioned herein, this Agreement shall be deemed to be terminated therefrom."
+  );
+  ctx.y += 2;
+  addBodyText(
+    "In the event of termination of this Agreement, the Client shall forthwith cease the use of address of the Premises for any purposes. In the event of a violation, the Client is liable to compensate the Service Provider a sum equivalent to three times the agreed License fee as damages until the cessation and rectification of such violation."
   );
   ctx.y += 6;
 
-  // ── LIABILITY ──
-  ctx.addWrappedText("8. LIABILITY", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
+  // ── 9. CONFIDENTIALITY ──
+  addClauseHeading("9. CONFIDENTIALITY");
+  addBodyText(
+    `Client recognizes that it may, in the course of obtaining or using the Services, come into possession of or learn certain confidential information ("Confidential Information") about Service Provider. Client agrees that during the Term of this Agreement and thereafter: (a) Client shall provide, at a minimum, the care to avoid disclosure of and/or unauthorized use of Confidential Information as it would provide to its own confidential information, but in no event less than a reasonable standard of care; (b) Client will use Confidential Information solely for the purposes of this Agreement; and (c) Client will not disclose Confidential Information to any third party without the express prior written consent of Service Provider, unless required to do so under applicable law.`
+  );
   ctx.y += 2;
-  ctx.addWrappedText(
-    "The Lessor shall not be liable for any losses, damages, or claims arising from the Lessee's business activities. The Lessee shall indemnify and hold harmless the Lessor from all claims, damages, liabilities, and expenses arising out of the Lessee's use of the Licensed Premises.",
-    ctx.marginLeft + 4, ctx.contentWidth - 4, 9, "normal", [50, 50, 50], 4.5
+  addBodyText(
+    "Similarly, the Service Provider recognizes that it may, in the course of obtaining or using the Services, come into possession of or learn confidential and proprietary business information (\"Confidential Information\") about the Lessee/Client. Service Provider agrees that during the Term of this Agreement and thereafter Service Provider shall provide, at a minimum, the care to avoid disclosure of and/or unauthorized use of Confidential Information of Lessee/Client."
+  );
+  ctx.y += 2;
+  addBodyText(
+    "If the Service Provider transfers its business or any business segment that provides services to the Lessee/Client, Service Provider is authorized to transfer all user information to Service Provider's successor."
   );
   ctx.y += 6;
 
-  // ── CONFIDENTIALITY ──
-  ctx.addWrappedText("9. CONFIDENTIALITY", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
+  // ── 10. OWNERSHIP ──
+  addClauseHeading("10. OWNERSHIP");
+  addBodyText(
+    "All programs, services, processes, designs, software, technologies, trademarks, trade names, inventions and materials comprising the services are wholly owned by the Service Provider and/or its Lessors and service providers except where expressly stated otherwise. This Agreement only provides a license to the Lessee/Client to use the address of the Premise and will not provide any leasehold rights to the Lessee/Client."
+  );
   ctx.y += 2;
-  ctx.addWrappedText(
-    "Both parties agree to maintain confidentiality of all information shared during the term of this agreement. Neither party shall disclose the terms, conditions, or any proprietary information to any third party without prior written consent of the other party.",
-    ctx.marginLeft + 4, ctx.contentWidth - 4, 9, "normal", [50, 50, 50], 4.5
+  addBodyText(
+    "Lessee/Client agrees that the Lessee/Client is not the owner of any phone number assigned to them by the Service Provider. Upon termination of the Agreement for any reason, such number may be reassigned to another Lessee/Client."
   );
   ctx.y += 6;
-
-  // ── OWNERSHIP ──
-  ctx.addWrappedText("10. OWNERSHIP", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
-  ctx.y += 2;
-  ctx.addWrappedText(
-    "This agreement does not confer any ownership or leasehold rights upon the Lessee. The Licensed Premises remain the sole property of the Lessor. The Lessee's right is limited to using the address for the purposes stated herein.",
-    ctx.marginLeft + 4, ctx.contentWidth - 4, 9, "normal", [50, 50, 50], 4.5
-  );
-  ctx.y += 6;
-
-  // ── DISPUTE RESOLUTION ──
-  ctx.addWrappedText("11. DISPUTE RESOLUTION", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
-  ctx.y += 2;
-  ctx.addWrappedText(
-    "Any disputes arising under this agreement shall first be resolved through mutual discussion and negotiation. If unresolved within 30 days, the dispute shall be referred to arbitration under the Arbitration and Conciliation Act, 1996. The arbitration shall be conducted in Chennai, Tamil Nadu, and the language of arbitration shall be English.",
-    ctx.marginLeft + 4, ctx.contentWidth - 4, 9, "normal", [50, 50, 50], 4.5
-  );
-  ctx.y += 6;
-
-  // ── EXECUTION ──
-  ctx.addWrappedText("12. EXECUTION", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
-  ctx.y += 2;
-  ctx.addWrappedText(
-    "This agreement is executed on the date mentioned above and shall come into effect from the Effective Date mentioned in the Schedule. This agreement is made on e-stamp paper and executed via digital signatures through an authorized e-signing platform.",
-    ctx.marginLeft + 4, ctx.contentWidth - 4, 9, "normal", [50, 50, 50], 4.5
-  );
-  ctx.y += 10;
-
-  // ── ANNEXURE 1: NATURE OF BUSINESS ──
-  ctx.checkPageBreak(60);
-  ctx.addWrappedText("ANNEXURE 1", ctx.marginLeft, ctx.contentWidth, 11, "bold", BRAND_TEAL, 6);
-  ctx.y += 2;
-
-  const annexureData = [
-    ["Nature of Business", variables.nature_of_business],
-    ["Virtual Office Address", `${variables.location_name}, ${variables.property_address}`],
-    ["Lessee Name", variables.client_company_name || variables.client_name],
-    ["Contact Person", variables.lessee_signatory_name],
-    ["Email", variables.client_email || "—"],
-    ["Phone", variables.client_phone || "—"],
-  ];
-
-  autoTable(doc, {
-    startY: ctx.y,
-    body: annexureData,
-    theme: "grid",
-    bodyStyles: { fontSize: 8.5, cellPadding: 3 },
-    columnStyles: { 0: { fontStyle: "bold", cellWidth: 55 } },
-    margin: { left: ctx.marginLeft, right: ctx.marginRight },
-  });
-
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  ctx.y = (doc as any).lastAutoTable.finalY + 8;
 
   // ── REQUIRED DOCUMENTS ──
   ctx.checkPageBreak(40);
-  ctx.addWrappedText("REQUIRED DOCUMENTS", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
-  ctx.y += 2;
-  ctx.addWrappedText(
-    `Documents required from ${variables.entity_type_label}:`,
-    ctx.marginLeft, ctx.contentWidth, 9, "normal", [80, 80, 80], 4.5
+  addClauseHeading("REQUIRED DOCUMENTS");
+  addBodyText(
+    `Documents required from ${variables.entity_type_label}:`
   );
   ctx.y += 2;
 
@@ -475,30 +635,106 @@ export function generateLeaveLicensePdf(
   });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  ctx.y = (doc as any).lastAutoTable.finalY + 8;
+
+  // ── DISPUTE RESOLUTION ──
+  ctx.checkPageBreak(30);
+  addClauseHeading("DISPUTE RESOLUTION");
+  addBodyText(
+    "Any dispute, controversy or difference which may arise between the parties out of or in relation to or in connection with the Agreement, shall be referred to a Sole Arbitrator to be appointed mutually by the Parties. The arbitral proceedings shall be conducted in English language and the Venue of arbitration shall be at Chennai."
+  );
+  ctx.y += 2;
+  addBodyText(
+    "The arbitral tribunal shall follow the Fastrack procedure as laid down under section 29B (2) of the Arbitration and Conciliation Act, 1996, while conducting the arbitration proceedings. The award of the arbitrator shall be made within a period of 6 months from the date arbitral tribunal enters upon the reference. The fee payable to the arbitrator shall be in accordance with the Schedule IV of the Arbitration and Conciliation Act, 1996."
+  );
+  ctx.y += 6;
+
+  // ── EXECUTION BY PARTIES ──
+  ctx.checkPageBreak(20);
+  addClauseHeading("EXECUTION BY PARTIES");
+  addBodyText(
+    "The parties acknowledge that electronic signatures and electronically transmitted signatures shall be legally binding with the same effect as if such signatures were originals."
+  );
+  ctx.y += 10;
+
+  // ── ANNEXURE 1 ──
+  ctx.checkPageBreak(60);
+  ctx.addWrappedText(
+    "ANNEXURE 1",
+    ctx.marginLeft,
+    ctx.contentWidth,
+    11,
+    "bold",
+    BRAND_TEAL,
+    6
+  );
+  ctx.y += 2;
+
+  const annexureData = [
+    [
+      "Brief about Company Operations",
+      variables.nature_of_business,
+    ],
+    [
+      "Client's Address (\"Office Address\")",
+      `${variables.location_name}, ${variables.property_address}`,
+    ],
+    [
+      "Lessee/Client Name",
+      variables.client_company_name || variables.client_name,
+    ],
+    ["Contact Person", variables.lessee_signatory_name],
+    ["Email", variables.client_email || "—"],
+    ["Phone", variables.client_phone || "—"],
+  ];
+
+  autoTable(doc, {
+    startY: ctx.y,
+    body: annexureData,
+    theme: "grid",
+    bodyStyles: { fontSize: 8.5, cellPadding: 3 },
+    columnStyles: { 0: { fontStyle: "bold", cellWidth: 60 } },
+    margin: { left: ctx.marginLeft, right: ctx.marginRight },
+  });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   ctx.y = (doc as any).lastAutoTable.finalY + 10;
 
   // ── SIGNATURE BLOCK ──
   ctx.checkPageBreak(80);
-  ctx.addWrappedText("IN WITNESS WHEREOF, the parties have executed this Leave and License Agreement on the date first written above.", ctx.marginLeft, ctx.contentWidth, 9, "bold", BRAND_DARK, 5);
+  ctx.addWrappedText(
+    "IN WITNESS WHEREOF, the parties hereto have executed this instrument under seal as of the date set forth above.",
+    ctx.marginLeft,
+    ctx.contentWidth,
+    9,
+    "bold",
+    BRAND_DARK,
+    5
+  );
   ctx.y += 10;
 
-  const colWidth = (ctx.contentWidth - 20) / 2;
-  const col1X = ctx.marginLeft;
-  const col2X = ctx.marginLeft + colWidth + 20;
-
-  // Signature table
   ctx.checkPageBreak(45);
 
   autoTable(doc, {
     startY: ctx.y,
-    head: [["For the Lessor", "For the Lessee"]],
+    head: [["For Lessor", "For Lessee"]],
     body: [
       [
-        `Name: ${variables.lessor_signatory_name}\nDesignation: Director\nCompany: ${COMPANY_NAME}`,
-        `Name: ${variables.lessee_signatory_name}\nDesignation: ${variables.lessee_signatory_designation || "Authorized Signatory"}\n${variables.client_company_name ? `Company: ${variables.client_company_name}` : ""}`,
+        "Signature: ____________________",
+        "Signature: ____________________",
       ],
-      ["Signature: ____________________", "Signature: ____________________"],
-      [`Date: ${variables.agreement_date}`, `Date: ${variables.agreement_date}`],
+      [
+        `Name: ${variables.lessor_signatory_name.toUpperCase()}`,
+        `Name: ${variables.lessee_signatory_name}`,
+      ],
+      [
+        "Designation/Title: Director",
+        `Designation/Title: ${variables.lessee_signatory_designation || "Director"}`,
+      ],
+      [
+        `Date: ${variables.agreement_date}`,
+        `Date: ${variables.agreement_date}`,
+      ],
     ],
     theme: "grid",
     headStyles: { fillColor: BRAND_TEAL, fontSize: 9, fontStyle: "bold" },
@@ -511,24 +747,52 @@ export function generateLeaveLicensePdf(
 
   // ── WITNESSES ──
   ctx.checkPageBreak(50);
-  ctx.addWrappedText("WITNESSES", ctx.marginLeft, ctx.contentWidth, 10, "bold", BRAND_TEAL, 5.5);
+  ctx.addWrappedText(
+    "WITNESSES",
+    ctx.marginLeft,
+    ctx.contentWidth,
+    10,
+    "bold",
+    BRAND_TEAL,
+    5.5
+  );
   ctx.y += 4;
 
   const witness1 = variables.witness_1_name || "____________________";
   const witness2 = variables.witness_2_name || "____________________";
-  const w1Aadhaar = variables.witness_1_aadhaar_last4 ? `(Aadhaar: XXXX-XXXX-${variables.witness_1_aadhaar_last4})` : "";
-  const w2Aadhaar = variables.witness_2_aadhaar_last4 ? `(Aadhaar: XXXX-XXXX-${variables.witness_2_aadhaar_last4})` : "";
+  const w1Aadhaar = variables.witness_1_aadhaar_last4
+    ? `XXXX-XXXX-${variables.witness_1_aadhaar_last4}`
+    : "____________________";
+  const w2Aadhaar = variables.witness_2_aadhaar_last4
+    ? `XXXX-XXXX-${variables.witness_2_aadhaar_last4}`
+    : "____________________";
+  const w1Mobile = variables.witness_1_mobile || "____________________";
+  const w2Mobile = variables.witness_2_mobile || "____________________";
 
   autoTable(doc, {
     startY: ctx.y,
-    head: [["Witness 1", "Witness 2"]],
+    head: [["WITNESS 1", "WITNESS 2"]],
     body: [
       [`Name: ${witness1}`, `Name: ${witness2}`],
-      [w1Aadhaar ? `Aadhaar: ${w1Aadhaar}` : "Aadhaar: ____________________", w2Aadhaar ? `Aadhaar: ${w2Aadhaar}` : "Aadhaar: ____________________"],
-      ["Signature: ____________________", "Signature: ____________________"],
+      [
+        `Aadhar Number: ${w1Aadhaar}`,
+        `Aadhar Number: ${w2Aadhaar}`,
+      ],
+      [
+        `Aadhar Linked Mobile No: ${w1Mobile}`,
+        `Aadhar Linked Mobile No: ${w2Mobile}`,
+      ],
+      [
+        "Signature: ____________________",
+        "Signature: ____________________",
+      ],
     ],
     theme: "grid",
-    headStyles: { fillColor: [100, 100, 100], fontSize: 9, fontStyle: "bold" },
+    headStyles: {
+      fillColor: [100, 100, 100],
+      fontSize: 9,
+      fontStyle: "bold",
+    },
     bodyStyles: { fontSize: 8.5, cellPadding: 4 },
     margin: { left: ctx.marginLeft, right: ctx.marginRight },
   });

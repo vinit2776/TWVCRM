@@ -20,7 +20,7 @@ export async function GET(
   const { id } = await params;
 
   // Admin client — public route, no session available
-  const supabase = await createAdminClient();
+  const supabase = createAdminClient();
 
   const { data: proposal } = await supabase
     .from("proposals")

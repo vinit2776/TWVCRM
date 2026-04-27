@@ -11,13 +11,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClient } from "@/lib/supabase/client"; // still needed for handleSave
 import { getInitials } from "@/lib/utils";
 import { toast } from "sonner";
-import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart, LayoutDashboard, Banknote, AlertTriangle } from "lucide-react";
+import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart, LayoutDashboard, Banknote, AlertTriangle, PieChart } from "lucide-react";
 import { PaymentGatewaySettings } from "@/components/settings/payment-gateway-settings";
 import { ProcurementSettings } from "@/components/settings/procurement-settings";
 import { DashboardSettings } from "@/components/settings/dashboard-settings";
 import { PettyCashSettings } from "@/components/settings/petty-cash-settings";
 import { ServicesSettings } from "@/components/settings/services-settings";
 import { ReorderSettings } from "@/components/settings/reorder-settings";
+import { ProcurementBudgetSettings } from "@/components/settings/procurement-budget-settings";
 import Link from "next/link";
 
 export default function SettingsPage() {
@@ -90,7 +91,7 @@ export default function SettingsPage() {
       : profile.role === "manager"
         ? "Manager"
         : profile.role === "floor_manager"
-          ? "Floor Manager"
+          ? "Floor Incharge"
           : "Sales Rep";
 
   return (
@@ -100,54 +101,60 @@ export default function SettingsPage() {
         <p className="text-muted-foreground">Manage your account and preferences</p>
       </div>
 
-      <Tabs defaultValue="profile" className="max-w-3xl">
-        <TabsList>
-          <TabsTrigger value="profile" className="flex items-center gap-1.5">
-            <User className="h-3.5 w-3.5" />Profile
+      <Tabs defaultValue="profile" orientation="vertical" className="flex flex-col md:flex-row gap-4 md:gap-6 w-full">
+        <TabsList className="flex flex-col h-auto w-full md:w-52 shrink-0 items-stretch bg-muted/50 p-1 rounded-lg">
+          <TabsTrigger value="profile" className="justify-start gap-2 px-3 py-2 text-sm">
+            <User className="h-4 w-4 shrink-0" />Profile
           </TabsTrigger>
           {profile.role === "admin" && (
-            <TabsTrigger value="payment-gateway" className="flex items-center gap-1.5">
-              <CreditCard className="h-3.5 w-3.5" />Payment Gateway
+            <TabsTrigger value="payment-gateway" className="justify-start gap-2 px-3 py-2 text-sm">
+              <CreditCard className="h-4 w-4 shrink-0" />Payment Gateway
             </TabsTrigger>
           )}
           {profile.role === "admin" && (
-            <TabsTrigger value="spaces" className="flex items-center gap-1.5">
-              <DoorOpen className="h-3.5 w-3.5" />Spaces
+            <TabsTrigger value="spaces" className="justify-start gap-2 px-3 py-2 text-sm">
+              <DoorOpen className="h-4 w-4 shrink-0" />Spaces
             </TabsTrigger>
           )}
           {profile.role === "admin" && (
-            <TabsTrigger value="documents" className="flex items-center gap-1.5">
-              <FolderOpen className="h-3.5 w-3.5" />Documents
+            <TabsTrigger value="documents" className="justify-start gap-2 px-3 py-2 text-sm">
+              <FolderOpen className="h-4 w-4 shrink-0" />Documents
             </TabsTrigger>
           )}
           {["admin", "manager"].includes(profile.role) && (
-            <TabsTrigger value="services" className="flex items-center gap-1.5">
-              <DoorOpen className="h-3.5 w-3.5" />Services
+            <TabsTrigger value="services" className="justify-start gap-2 px-3 py-2 text-sm">
+              <DoorOpen className="h-4 w-4 shrink-0" />Services
             </TabsTrigger>
           )}
           {profile.role === "admin" && (
-            <TabsTrigger value="procurement" className="flex items-center gap-1.5">
-              <ShoppingCart className="h-3.5 w-3.5" />Procurement
+            <TabsTrigger value="procurement" className="justify-start gap-2 px-3 py-2 text-sm">
+              <ShoppingCart className="h-4 w-4 shrink-0" />Procurement
             </TabsTrigger>
           )}
           {profile.role === "admin" && (
-            <TabsTrigger value="dashboard-config" className="flex items-center gap-1.5">
-              <LayoutDashboard className="h-3.5 w-3.5" />Dashboard
+            <TabsTrigger value="dashboard-config" className="justify-start gap-2 px-3 py-2 text-sm">
+              <LayoutDashboard className="h-4 w-4 shrink-0" />Dashboard
             </TabsTrigger>
           )}
           {profile.role === "admin" && (
-            <TabsTrigger value="petty-cash" className="flex items-center gap-1.5">
-              <Banknote className="h-3.5 w-3.5" />Petty Cash
+            <TabsTrigger value="petty-cash" className="justify-start gap-2 px-3 py-2 text-sm">
+              <Banknote className="h-4 w-4 shrink-0" />Petty Cash
             </TabsTrigger>
           )}
           {["admin", "manager"].includes(profile.role) && (
-            <TabsTrigger value="reorder-levels" className="flex items-center gap-1.5">
-              <AlertTriangle className="h-3.5 w-3.5" />Reorder Levels
+            <TabsTrigger value="reorder-levels" className="justify-start gap-2 px-3 py-2 text-sm">
+              <AlertTriangle className="h-4 w-4 shrink-0" />Reorder Levels
+            </TabsTrigger>
+          )}
+          {["admin", "manager"].includes(profile.role) && (
+            <TabsTrigger value="dept-budgets" className="justify-start gap-2 px-3 py-2 text-sm">
+              <PieChart className="h-4 w-4 shrink-0" />Budgets
             </TabsTrigger>
           )}
         </TabsList>
 
-        <TabsContent value="profile" className="mt-6">
+        <div className="flex-1 min-w-0">
+        <TabsContent value="profile" className="mt-0">
           <Card>
             <CardHeader>
               <CardTitle className="text-base flex items-center gap-2">
@@ -244,13 +251,13 @@ export default function SettingsPage() {
         </TabsContent>
 
         {profile.role === "admin" && (
-          <TabsContent value="payment-gateway" className="mt-6">
+          <TabsContent value="payment-gateway" className="mt-0">
             <PaymentGatewaySettings />
           </TabsContent>
         )}
 
         {profile.role === "admin" && (
-          <TabsContent value="spaces" className="mt-6">
+          <TabsContent value="spaces" className="mt-0">
             <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
@@ -275,7 +282,7 @@ export default function SettingsPage() {
         )}
 
         {profile.role === "admin" && (
-          <TabsContent value="documents" className="mt-6">
+          <TabsContent value="documents" className="mt-0">
             <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
@@ -300,34 +307,40 @@ export default function SettingsPage() {
         )}
 
         {["admin", "manager"].includes(profile.role) && (
-          <TabsContent value="services" className="mt-6">
+          <TabsContent value="services" className="mt-0">
             <ServicesSettings />
           </TabsContent>
         )}
 
         {profile.role === "admin" && (
-          <TabsContent value="procurement" className="mt-6">
+          <TabsContent value="procurement" className="mt-0">
             <ProcurementSettings />
           </TabsContent>
         )}
 
         {profile.role === "admin" && (
-          <TabsContent value="dashboard-config" className="mt-6">
+          <TabsContent value="dashboard-config" className="mt-0">
             <DashboardSettings />
           </TabsContent>
         )}
 
         {profile.role === "admin" && (
-          <TabsContent value="petty-cash" className="mt-6">
+          <TabsContent value="petty-cash" className="mt-0">
             <PettyCashSettings />
           </TabsContent>
         )}
 
         {["admin", "manager"].includes(profile.role) && (
-          <TabsContent value="reorder-levels" className="mt-6">
+          <TabsContent value="reorder-levels" className="mt-0">
             <ReorderSettings />
           </TabsContent>
         )}
+        {["admin", "manager"].includes(profile.role) && (
+          <TabsContent value="dept-budgets" className="mt-0">
+            <ProcurementBudgetSettings userRole={profile.role} />
+          </TabsContent>
+        )}
+        </div>
       </Tabs>
     </div>
   );

@@ -17,6 +17,7 @@ const createPrSchema = z.object({
   department: z.enum(["pantry", "maintenance", "administration", "asset"]),
   location_id: z.string().uuid().optional().nullable(),
   notes: z.string().optional(),
+  expenditure_type: z.enum(["operational", "amc"]).default("operational"),
   items: z.array(createPrItemSchema).min(1, "At least one item is required"),
   submit: z.boolean().optional(), // If true, create in "submitted" state
 });
@@ -41,6 +42,7 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get("status");
   const department = searchParams.get("department");
   const locationId = searchParams.get("location_id");
+  const search = searchParams.get("search")?.trim() ?? "";
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
   const offset = (page - 1) * limit;
@@ -54,14 +56,24 @@ export async function GET(request: NextRequest) {
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
-  // Non-managers/non-FMS can only see their own PRs
-  if (!["admin", "manager", "fms"].includes(dbUser.role)) {
-    query = query.eq("requested_by", dbUser.id);
+  // Only procurement roles can see all; others are blocked at the route level
+  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
+
+  const fromDate = searchParams.get("from_date");
+  const toDate = searchParams.get("to_date");
 
   if (status) query = query.eq("status", status);
   if (department) query = query.eq("department", department);
   if (locationId) query = query.eq("location_id", locationId);
+  if (fromDate) query = query.gte("created_at", fromDate);
+  if (toDate) query = query.lte("created_at", toDate);
+
+  // Search: require ≥3 chars to prevent full-table scans on short terms
+  if (search.length >= 3) {
+    query = query.ilike("pr_number", `%${search}%`);
+  }
 
   const { data, error, count } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -84,6 +96,9 @@ export async function POST(request: NextRequest) {
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
+  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  }
 
   const body = await request.json();
   const parsed = createPrSchema.safeParse(body);

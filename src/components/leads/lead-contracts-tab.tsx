@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, ScrollText, MoreHorizontal, Eye, CheckCircle2, XCircle, Send, Mail } from "lucide-react";
+import { Plus, ScrollText, MoreHorizontal, Eye, CheckCircle2, XCircle, Send, Mail, Clock, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -35,10 +35,13 @@ import { formatDate, formatCurrency } from "@/lib/utils";
 import { toast } from "sonner";
 import { Loader2 } from "lucide-react";
 import type { Contract } from "@/types";
+import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
 
 interface LeadContractsTabProps {
   leadId: string;
 }
+
+type KycSummary = Record<string, { deferred: number; pending: number; uploaded: number; approved: number; rejected: number; total: number }>;
 
 export function LeadContractsTab({ leadId }: LeadContractsTabProps) {
   const router = useRouter();
@@ -50,13 +53,24 @@ export function LeadContractsTab({ leadId }: LeadContractsTabProps) {
   const [terminationReason, setTerminationReason] = useState("");
   const [terminating, setTerminating] = useState(false);
   const [updatingId, setUpdatingId] = useState<string | null>(null);
+  const [kycSummary, setKycSummary] = useState<KycSummary>({});
 
   const fetchData = useCallback(async () => {
     setLoading(true);
     const res = await fetch(`/api/contracts?lead_id=${leadId}`);
     if (res.ok) {
       const json = await res.json();
-      setContracts(json.data || []);
+      const loaded: Contract[] = json.data || [];
+      setContracts(loaded);
+
+      // Fetch KYC summary for all contracts in a single request
+      if (loaded.length > 0) {
+        const ids = loaded.map(c => c.id).join(",");
+        fetch(`/api/contracts/kyc-summary?ids=${ids}`)
+          .then(r => r.json())
+          .then(j => setKycSummary(j.data || {}))
+          .catch(() => {});
+      }
     }
     setLoading(false);
   }, [leadId]);
@@ -151,6 +165,7 @@ export function LeadContractsTab({ leadId }: LeadContractsTabProps) {
                   <tr className="border-b bg-muted/50">
                     <th className="px-4 py-3 text-left font-medium">Contract #</th>
                     <th className="px-4 py-3 text-left font-medium">Status</th>
+                    <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">KYC</th>
                     <th className="px-4 py-3 text-right font-medium">Amount</th>
                     <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Billing</th>
                     <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Start - End</th>
@@ -158,13 +173,41 @@ export function LeadContractsTab({ leadId }: LeadContractsTabProps) {
                   </tr>
                 </thead>
                 <tbody>
-                  {contracts.map((c) => (
+                  {contracts.map((c) => {
+                    const kyc = kycSummary[c.id];
+                    const kycDeferred = kyc?.deferred ?? 0;
+                    const kycPending = kyc ? (kyc.pending + kyc.uploaded + kyc.rejected) : 0;
+                    const kycApproved = kyc?.approved ?? 0;
+                    const kycTotal = kyc?.total ?? 0;
+                    const kycFullyApproved = kycTotal > 0 && kycApproved >= kycTotal;
+                    return (
                     <tr key={c.id} className="border-b hover:bg-muted/30 transition-colors cursor-pointer" onClick={() => router.push(`/contracts/${c.id}`)}>
                       <td className="px-4 py-3 font-mono text-xs">{c.contract_number}</td>
                       <td className="px-4 py-3">
                         <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[c.status]}>
                           {CONTRACT_STATUS_LABELS[c.status]}
                         </Badge>
+                      </td>
+                      <td className="px-4 py-3 hidden sm:table-cell">
+                        {kycTotal === 0 ? (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        ) : kycFullyApproved ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-green-700 font-medium">
+                            <CheckCircle2 className="h-3 w-3" /> Complete
+                          </span>
+                        ) : kycDeferred > 0 && kycPending === 0 ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-amber-700 font-medium">
+                            <Clock className="h-3 w-3" /> {kycDeferred} deferred
+                          </span>
+                        ) : kycDeferred > 0 ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-amber-700 font-medium">
+                            <AlertTriangle className="h-3 w-3" /> {kycDeferred} deferred · {kycPending} missing
+                          </span>
+                        ) : (
+                          <span className="inline-flex items-center gap-1 text-xs text-amber-600 font-medium">
+                            <AlertTriangle className="h-3 w-3" /> {kycApproved}/{kycTotal}
+                          </span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right font-medium">
                         {formatCurrency(c.total_amount)}
@@ -253,13 +296,39 @@ export function LeadContractsTab({ leadId }: LeadContractsTabProps) {
                         </DropdownMenu>
                       </td>
                     </tr>
-                  ))}
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
           )}
         </CardContent>
       </Card>
+
+      {/* Contract Lifecycle cards — one per contract */}
+      {contracts.length > 0 && (
+        <div className="space-y-4">
+          {contracts.map((c) => (
+            <Card key={`lifecycle-${c.id}`}>
+              <CardHeader
+                className="flex flex-row items-center justify-between pb-2 cursor-pointer"
+                onClick={() => router.push(`/contracts/${c.id}`)}
+              >
+                <div>
+                  <CardTitle className="text-sm font-mono">{c.contract_number}</CardTitle>
+                  <p className="text-xs text-muted-foreground mt-0.5">{c.title}</p>
+                </div>
+                <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[c.status]}>
+                  {CONTRACT_STATUS_LABELS[c.status]}
+                </Badge>
+              </CardHeader>
+              <CardContent>
+                <ContractLifecycle contract={c} />
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      )}
 
       {/* Create Contract Dialog */}
       <CreateContractDialog

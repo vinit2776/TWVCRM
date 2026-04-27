@@ -40,7 +40,7 @@ export async function POST(
   const customerEmail = lead?.email;
   const customerPhone = lead?.phone || lead?.mobile;
 
-  const adminSupabase = await createAdminClient();
+  const adminSupabase = createAdminClient();
   const { data: rzpSettings } = await adminSupabase
     .from("app_settings")
     .select("key, value")

@@ -1,6 +1,7 @@
 "use client";
 
-import { use, useState, useEffect, useCallback } from "react";
+import { use, useState, useEffect, useCallback, useRef } from "react";
+import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -49,9 +50,10 @@ import {
   ENTITY_TYPE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import { generateMembershipAgreementPDF } from "@/lib/pdf-generator";
+import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
 import { toast } from "sonner";
 import { LayoutGrid, Trash2 } from "lucide-react";
+import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import type { Contract, ContractSpaceAllocation } from "@/types";
 
 export default function ContractDetailPage({
@@ -73,6 +75,7 @@ export default function ContractDetailPage({
   const [checkingSigningStatus, setCheckingSigningStatus] = useState(false);
   const [copiedLessor, setCopiedLessor] = useState(false);
   const [copiedLessee, setCopiedLessee] = useState(false);
+  const signedDocInputRef = useRef<HTMLInputElement>(null);
 
   const copyToClipboard = (text: string, who: "lessor" | "lessee") => {
     navigator.clipboard.writeText(text);
@@ -84,8 +87,9 @@ export default function ContractDetailPage({
   const [linkedProposal, setLinkedProposal] = useState<any>(null);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
-  const [kycStatus, setKycStatus] = useState<{ allApproved: boolean; total: number; approved: number }>({ allApproved: true, total: 0, approved: 0 });
+  const [kycStatus, setKycStatus] = useState<{ allSatisfied: boolean; total: number; approved: number; deferred: number }>({ allSatisfied: true, total: 0, approved: 0, deferred: 0 });
   const [showOverride, setShowOverride] = useState(false);
+  const [deferredActivateOpen, setDeferredActivateOpen] = useState(false);
 
   // Assigned spaces
   const [spaceAllocations, setSpaceAllocations] = useState<ContractSpaceAllocation[]>([]);
@@ -118,8 +122,12 @@ export default function ContractDetailPage({
     setUnlinkingId(null);
   };
 
-  const fetchContract = useCallback(async () => {
-    setLoading(true);
+  const handleKycStatusChange = useCallback((allSatisfied: boolean, total: number, approved: number, deferred: number) => {
+    setKycStatus({ allSatisfied, total, approved, deferred });
+  }, []);
+
+  const fetchContract = useCallback(async (showSpinner = true) => {
+    if (showSpinner) setLoading(true);
     const res = await fetch(`/api/contracts/${id}`);
     if (res.ok) {
       const json = await res.json();
@@ -134,11 +142,11 @@ export default function ContractDetailPage({
           .catch(() => setLinkedProposal(null));
       }
     }
-    setLoading(false);
+    if (showSpinner) setLoading(false);
   }, [id]);
 
   useEffect(() => {
-    fetchContract();
+    fetchContract(true);
     fetchSpaceAllocations();
     fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {});
   }, [fetchContract, fetchSpaceAllocations]);
@@ -156,7 +164,7 @@ export default function ContractDetailPage({
     if (res.ok) {
       const statusLabel = CONTRACT_STATUS_LABELS[newStatus] || newStatus;
       toast.success(`Contract marked as ${statusLabel}`);
-      fetchContract();
+      fetchContract(false);
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || `Failed to update contract status`);
@@ -182,7 +190,7 @@ export default function ContractDetailPage({
       toast.success("Contract terminated");
       setTerminateOpen(false);
       setTerminationReason("");
-      fetchContract();
+      fetchContract(false);
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || "Failed to terminate contract");
@@ -190,8 +198,9 @@ export default function ContractDetailPage({
     setTerminating(false);
   };
 
-  const handleDownloadPDF = () => {
+  const handleDownloadPDF = async () => {
     if (!contract) return;
+    const { generateMembershipAgreementPDF } = await import("@/lib/pdf-generator");
     const doc = generateMembershipAgreementPDF(
       contract,
       contract.lead || undefined,
@@ -200,8 +209,9 @@ export default function ContractDetailPage({
     doc.save(`${contract.contract_number}.pdf`);
   };
 
-  const handleGeneratePDFBase64 = (): string => {
+  const handleGeneratePDFBase64 = async (): Promise<string> => {
     if (!contract) return "";
+    const { generateMembershipAgreementPDF } = await import("@/lib/pdf-generator");
     const doc = generateMembershipAgreementPDF(
       contract,
       contract.lead || undefined,
@@ -216,45 +226,81 @@ export default function ContractDetailPage({
     return btoa(binary);
   };
 
-  const handleSignedDocUpload = async (file: File) => {
+  const handleSignedDocUpload = async (raw: File) => {
     if (!contract) return;
     setUploadingSignedDoc(true);
 
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("title", `Signed Contract - ${contract.contract_number}`);
-    formData.append("category", "signed_contract");
-    formData.append("lead_id", contract.lead_id);
+    try {
+      // Normalize before upload: PDFs → stripped, images → JPEG 2048px.
+      const file = await prepareUpload(raw);
+      if (!file) return;
 
-    const uploadRes = await fetch("/api/documents", {
-      method: "POST",
-      body: formData,
-    });
+      // Step 1: get signed upload URL — file goes directly to Supabase, bypassing Vercel's 4.5MB limit
+      const urlRes = await fetch("/api/documents/upload-url", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          fileName: file.name,
+          mimeType: file.type,
+          path: "signed-contracts",
+        }),
+      });
+      if (!urlRes.ok) {
+        const urlErr = await urlRes.json().catch(() => null);
+        throw new Error(urlErr?.error || "Failed to get upload URL");
+      }
+      const { token, path: filePath } = await urlRes.json();
 
-    if (!uploadRes.ok) {
-      const err = await uploadRes.json().catch(() => null);
-      toast.error(err?.error || "Failed to upload document");
+      // Step 2: upload directly to Supabase Storage via the browser client
+      const supabase = createBrowserClient();
+      const { error: storageError } = await supabase.storage
+        .from("crm-documents")
+        .uploadToSignedUrl(filePath, token, file, { contentType: file.type || "application/octet-stream" });
+      if (storageError) throw new Error(storageError.message);
+
+      // Step 3: create document DB record
+      const regRes = await fetch("/api/documents/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          title: `Signed Contract - ${contract.contract_number}`,
+          fileName: file.name,
+          filePath,
+          mimeType: file.type,
+          sizeBytes: file.size,
+          category: "signed_contract",
+          leadId: contract.lead_id,
+        }),
+      });
+      if (!regRes.ok) {
+        const regErr = await regRes.json().catch(() => null);
+        throw new Error(regErr?.error || "Failed to register document");
+      }
+      const { data: doc } = await regRes.json();
+
+      // Step 4: link to contract
+      const patchRes = await fetch(`/api/contracts/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ signed_document_id: doc.id }),
+      });
+
+      if (patchRes.ok) {
+        toast.success("Signed contract uploaded successfully");
+        fetchContract(false);
+      } else {
+        const err = await patchRes.json().catch(() => null);
+        toast.error(err?.error || "Failed to link document to contract");
+      }
+    } catch (e) {
+      if (e instanceof UploadTooLargeError) {
+        toast.error(e.message);
+      } else {
+        toast.error(e instanceof Error ? e.message : "Failed to upload document");
+      }
+    } finally {
       setUploadingSignedDoc(false);
-      return;
     }
-
-    const { data: doc } = await uploadRes.json();
-
-    const patchRes = await fetch(`/api/contracts/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ signed_document_id: doc.id }),
-    });
-
-    if (patchRes.ok) {
-      toast.success("Signed contract uploaded successfully");
-      fetchContract();
-    } else {
-      const err = await patchRes.json().catch(() => null);
-      toast.error(err?.error || "Failed to link document to contract");
-    }
-
-    setUploadingSignedDoc(false);
   };
 
   const handleViewSignedDoc = async () => {
@@ -277,7 +323,7 @@ export default function ContractDetailPage({
     setInitiatingSigning(true);
 
     // Generate PDF client-side (jsPDF is browser-only)
-    const pdfBase64 = handleGeneratePDFBase64();
+    const pdfBase64 = await handleGeneratePDFBase64();
     if (!pdfBase64) {
       toast.error("Failed to generate PDF");
       setInitiatingSigning(false);
@@ -292,7 +338,7 @@ export default function ContractDetailPage({
 
     if (res.ok) {
       toast.success("Agreement sent for e-stamping and signing");
-      fetchContract();
+      fetchContract(false);
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || "Failed to initiate signing");
@@ -318,7 +364,7 @@ export default function ContractDetailPage({
       } else {
         toast.info(`Signing status: ${status}`);
       }
-      fetchContract();
+      fetchContract(false);
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || "Failed to check signing status");
@@ -428,13 +474,19 @@ export default function ContractDetailPage({
           {contract.status === "accepted" && (() => {
             const proposalPaid = !linkedProposal || linkedProposal.payment_status === "paid";
             const depositPaid = !linkedProposal || linkedProposal.deposit_payment_status !== "pending";
-            const kycComplete = kycStatus.total === 0 || kycStatus.allApproved;
+            const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
             const canActivate = proposalPaid && depositPaid && kycComplete;
+            const hasDeferred = kycStatus.deferred > 0;
 
             return canActivate ? (
-              <Button variant="outline" onClick={() => handleStatusUpdate("active")} disabled={statusUpdating}>
+              <Button
+                variant="outline"
+                onClick={() => hasDeferred ? setDeferredActivateOpen(true) : handleStatusUpdate("active")}
+                disabled={statusUpdating}
+                className={hasDeferred ? "border-amber-400 text-amber-800 hover:bg-amber-50" : ""}
+              >
                 {statusUpdating ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle2 className="mr-2 h-4 w-4" />}
-                Activate
+                Activate{hasDeferred ? " (KYC Pending)" : ""}
               </Button>
             ) : (
               <div className="space-y-2">
@@ -447,7 +499,9 @@ export default function ContractDetailPage({
                     <p className="font-semibold mb-1">Cannot activate until:</p>
                     {!proposalPaid && <p>• Proposal payment collected</p>}
                     {!depositPaid && <p>• Security deposit collected</p>}
-                    {!kycComplete && <p>• KYC documents approved ({kycStatus.approved}/{kycStatus.total})</p>}
+                    {!kycComplete && (
+                      <p>• KYC documents — {kycStatus.approved} approved, {kycStatus.deferred} deferred, {kycStatus.total - kycStatus.approved - kycStatus.deferred} still missing ({kycStatus.approved + kycStatus.deferred}/{kycStatus.total} satisfied)</p>
+                    )}
                   </div>
                 </div>
                 {userRole === "admin" && (
@@ -657,10 +711,8 @@ export default function ContractDetailPage({
           {/* KYC Documents — Upload & Approval */}
           <ContractDocumentsTab
             contractId={id}
-            onKycStatusChange={(allApproved, total, approved) => {
-              // Store KYC status for activation gate
-              setKycStatus({ allApproved, total, approved });
-            }}
+            userRole={userRole}
+            onKycStatusChange={handleKycStatusChange}
           />
 
           {/* Line Items Table */}
@@ -783,6 +835,16 @@ export default function ContractDetailPage({
             </CardContent>
           </Card>
 
+          {/* Contract Lifecycle */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Agreement Journey</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <ContractLifecycle contract={contract} />
+            </CardContent>
+          </Card>
+
           {/* Signed Contract */}
           <Card>
             <CardHeader>
@@ -815,16 +877,7 @@ export default function ContractDetailPage({
                     <Button
                       size="sm"
                       variant="ghost"
-                      onClick={() => {
-                        const input = document.createElement("input");
-                        input.type = "file";
-                        input.accept = ".pdf,.jpg,.jpeg,.png";
-                        input.onchange = (e) => {
-                          const file = (e.target as HTMLInputElement).files?.[0];
-                          if (file) handleSignedDocUpload(file);
-                        };
-                        input.click();
-                      }}
+                      onClick={() => signedDocInputRef.current?.click()}
                       disabled={uploadingSignedDoc}
                     >
                       <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
@@ -836,15 +889,7 @@ export default function ContractDetailPage({
                 <div
                   className="border-2 border-dashed rounded-lg p-4 text-center cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-colors"
                   onClick={() => {
-                    if (uploadingSignedDoc) return;
-                    const input = document.createElement("input");
-                    input.type = "file";
-                    input.accept = ".pdf,.jpg,.jpeg,.png";
-                    input.onchange = (e) => {
-                      const file = (e.target as HTMLInputElement).files?.[0];
-                      if (file) handleSignedDocUpload(file);
-                    };
-                    input.click();
+                    if (!uploadingSignedDoc) signedDocInputRef.current?.click();
                   }}
                 >
                   {uploadingSignedDoc ? (
@@ -1183,6 +1228,56 @@ export default function ContractDetailPage({
           </Card>
         </div>
       </div>
+
+      {/* Hidden persistent file input for signed contract upload/replace — avoids detached-input accumulation bug */}
+      <input
+        ref={signedDocInputRef}
+        type="file"
+        accept=".pdf,.jpg,.jpeg,.png"
+        className="hidden"
+        onChange={(e) => {
+          const file = e.target.files?.[0];
+          if (file) handleSignedDocUpload(file);
+          e.target.value = "";
+        }}
+      />
+
+      {/* Deferred-KYC Activation Confirmation */}
+      <Dialog open={deferredActivateOpen} onOpenChange={setDeferredActivateOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              Activate with Deferred KYC Documents
+            </DialogTitle>
+            <DialogDescription>
+              {kycStatus.deferred} KYC document{kycStatus.deferred > 1 ? "s are" : " is"} deferred.
+              The account will not be fully KYC-compliant until{" "}
+              {kycStatus.deferred > 1 ? "they are" : "it is"} collected.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+            <p className="font-semibold mb-1">Deferred documents must still be collected.</p>
+            <p className="text-xs">
+              Activating this contract does not waive the deferred requirements. They will remain
+              visible across all lead interactions until fulfilled.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeferredActivateOpen(false)}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+              disabled={statusUpdating}
+              onClick={() => { setDeferredActivateOpen(false); handleStatusUpdate("active"); }}
+            >
+              {statusUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Activate Anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Terminate Dialog */}
       <Dialog open={terminateOpen} onOpenChange={setTerminateOpen}>

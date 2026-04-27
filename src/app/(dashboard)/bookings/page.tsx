@@ -32,9 +32,19 @@ import type { Booking } from "@/types";
 import { CalendarView } from "@/components/bookings/calendar-view";
 import { BookingCountdown } from "@/components/bookings/booking-countdown";
 import { BulkActionsBar } from "@/components/bookings/bulk-actions-bar";
-import { UtilizationDashboard } from "@/components/bookings/utilization-dashboard";
-import { RevenueReport } from "@/components/bookings/revenue-report";
+import dynamic from "next/dynamic";
 import { CustomerSegments } from "@/components/bookings/customer-segments";
+
+// Recharts is ~200 KB gzipped. Lazy-load the two chart-heavy components so the
+// Analytics tab only pulls them in when the user actually opens it.
+const UtilizationDashboard = dynamic(
+  () => import("@/components/bookings/utilization-dashboard").then((m) => m.UtilizationDashboard),
+  { ssr: false, loading: () => <div className="h-64 rounded-md bg-muted animate-pulse" /> }
+);
+const RevenueReport = dynamic(
+  () => import("@/components/bookings/revenue-report").then((m) => m.RevenueReport),
+  { ssr: false, loading: () => <div className="h-64 rounded-md bg-muted animate-pulse" /> }
+);
 
 function formatTime12(timeStr: string): string {
   const [h, m] = timeStr.slice(0, 5).split(":").map(Number);

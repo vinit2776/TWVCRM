@@ -198,6 +198,9 @@ function NewPurchaseOrderFormWithPr({
   const [paymentTerms, setPaymentTerms] = useState("");
   const [termsAndConditions, setTermsAndConditions] = useState("");
 
+  // Vendor price memory: item_id → { price, gst_rate }
+  const [vendorPriceMap, setVendorPriceMap] = useState<Map<string, { price: number; gst_rate: number }>>(new Map());
+
   // Advance payment
   const [advanceRequired, setAdvanceRequired] = useState(false);
   const [advanceExpanded, setAdvanceExpanded] = useState(false);
@@ -206,16 +209,50 @@ function NewPurchaseOrderFormWithPr({
   const [advanceReference, setAdvanceReference] = useState("");
   const [advanceNotes, setAdvanceNotes] = useState("");
 
-  const handleVendorChange = (newVendorId: string) => {
+  const handleVendorChange = async (newVendorId: string) => {
     const actualId = newVendorId === "__none__" ? "" : newVendorId;
     setVendorId(actualId);
+
     if (actualId) {
       const vendor = vendors.find((v) => v.id === actualId);
       if (vendor) {
         setPaymentTerms(vendor.payment_terms ?? "");
         setTermsAndConditions(vendor.terms_and_conditions ?? "");
       }
+
+      // Fetch this vendor's known prices and auto-fill unit_price fields
+      try {
+        const res = await fetch(`/api/procurement/vendor-prices?vendor_id=${actualId}`);
+        if (res.ok) {
+          const { data } = await res.json();
+          const map = new Map<string, { price: number; gst_rate: number }>(
+            (data ?? [])
+              .filter((r: { item_id?: string }) => r.item_id)
+              .map((r: { item_id: string; price: number; gst_rate: number }) => [
+                r.item_id,
+                { price: r.price, gst_rate: r.gst_rate },
+              ])
+          );
+          setVendorPriceMap(map);
+
+          // Apply to current line items that have a catalog item_id
+          setItems(
+            items.map((li: LineItem) => {
+              if (!li.item_id || !map.has(li.item_id)) return li;
+              const known = map.get(li.item_id)!;
+              return {
+                ...li,
+                unit_price: String(known.price),
+                gst_rate:   String(known.gst_rate),
+              };
+            })
+          );
+        }
+      } catch {
+        // Non-critical — user can still enter prices manually
+      }
     } else {
+      setVendorPriceMap(new Map());
       setPaymentTerms("");
       setTermsAndConditions("");
     }
@@ -258,6 +295,10 @@ function NewPurchaseOrderFormWithPr({
       if (!advanceAmount || isNaN(parseFloat(advanceAmount)) || parseFloat(advanceAmount) <= 0)
         return "Advance amount must be a positive number";
       if (!advanceMode) return "Please select a payment mode for the advance";
+      const poTotal = totalOrdered + totalGst;
+      if (poTotal > 0 && parseFloat(advanceAmount) > poTotal) {
+        return `Advance amount (₹${parseFloat(advanceAmount).toLocaleString("en-IN")}) cannot exceed PO total (₹${poTotal.toLocaleString("en-IN")})`;
+      }
     }
     const orderable = activeItems.filter(li => parseFloat(li.quantity_ordered) > 0);
     if (orderable.length === 0) return "At least one item must have a quantity greater than 0";
@@ -664,6 +705,11 @@ function NewPurchaseOrderFormWithPr({
                     {li.estimated_price !== undefined && (
                       <p className={`text-xs ${li.unit_price && parseFloat(li.unit_price) > li.estimated_price ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
                         Max approved: ₹{li.estimated_price}
+                      </p>
+                    )}
+                    {li.item_id && vendorPriceMap.has(li.item_id) && (
+                      <p className="text-xs text-blue-600">
+                        ↑ From last PO with this vendor
                       </p>
                     )}
                   </div>

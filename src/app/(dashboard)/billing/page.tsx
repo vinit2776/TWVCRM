@@ -14,6 +14,7 @@ import {
   Upload,
   X,
   IndianRupee,
+  ScrollText,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
@@ -42,36 +43,44 @@ import { GenerateStatementDialog } from "@/components/billing/generate-statement
 import { ViewStatementDialog } from "@/components/billing/view-statement-dialog";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { toast } from "sonner";
+import { MonthPicker } from "@/components/accounting/month-picker";
+import { PeriodStatusBar } from "@/components/accounting/period-status-bar";
+import { AgingBuckets } from "@/components/accounting/aging-buckets";
+import { ContractAccountingRow } from "@/components/accounting/contract-accounting-row";
+import { WalkinCollectionsTable } from "@/components/accounting/walkin-collections-table";
+import { CashHandoverTable } from "@/components/accounting/cash-handover-table";
+import { GstInvoiceEntry } from "@/components/accounting/gst-invoice-entry";
+import { ExportSummaryDialog } from "@/components/accounting/export-summary-dialog";
+import { ActionRequiredBanner } from "@/components/accounting/action-required-banner";
+import { ProposalPaymentsTab } from "@/components/accounting/proposal-payments-tab";
+import { createClient } from "@/lib/supabase/client";
 
-// --- Status constants ---
+// ── Status maps ──────────────────────────────────────────────────────────────
 
 const USAGE_STATUS_COLORS: Record<string, string> = {
   pending: "bg-yellow-100 text-yellow-800",
-  billed: "bg-green-100 text-green-800",
-  waived: "bg-gray-100 text-gray-800",
+  billed:  "bg-green-100 text-green-800",
+  waived:  "bg-gray-100 text-gray-800",
 };
-
 const USAGE_STATUS_LABELS: Record<string, string> = {
   pending: "Pending",
-  billed: "Billed",
-  waived: "Waived",
+  billed:  "Billed",
+  waived:  "Waived",
 };
-
 const STATEMENT_STATUS_COLORS: Record<string, string> = {
-  draft: "bg-gray-100 text-gray-800",
+  draft:     "bg-gray-100 text-gray-800",
   finalized: "bg-blue-100 text-blue-800",
-  exported: "bg-green-100 text-green-800",
+  exported:  "bg-green-100 text-green-800",
 };
-
 const STATEMENT_STATUS_LABELS: Record<string, string> = {
-  draft: "Draft",
+  draft:     "Draft",
   finalized: "Finalized",
-  exported: "Exported",
+  exported:  "Exported",
 };
 
-// --- Types ---
+// ── Types — billing ──────────────────────────────────────────────────────────
 
-interface Contract {
+interface ContractFilter {
   id: string;
   contract_number: string;
   lead?: { first_name: string; last_name: string; company?: string };
@@ -117,52 +126,302 @@ interface Pagination {
   totalPages: number;
 }
 
-// --- Component ---
+// ── Types — monthly summary ──────────────────────────────────────────────────
+
+interface AgingBucket {
+  count: number;
+  total: number;
+  contracts: string[];
+}
+
+interface ContractSummary {
+  contract: {
+    id: string;
+    contract_number: string;
+    title: string;
+    monthly_membership_fee: number;
+    lead?: {
+      id: string;
+      first_name: string;
+      last_name: string;
+      company?: string;
+      email?: string;
+      secondary_email?: string;
+    };
+  };
+  recurring_amount: number;
+  facility_usage_total: number;
+  facility_usages: unknown[];
+  ad_hoc_total: number;
+  ad_hoc_charges: unknown[];
+  booking_total: number;
+  posted_bookings: unknown[];
+  current_month_charges: number;
+  carried_forward: number;
+  total_owed: number;
+  payments: unknown[];
+  total_paid_this_month: number;
+  outstanding: number;
+  gst_invoice: unknown;
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+interface WalkinPayment {
+  id: string;
+  amount: number;
+  payment_mode: string;
+  status: string;
+  created_at: string;
+  booking?: {
+    id: string;
+    booking_date: string;
+    guest_name?: string;
+    guest_company?: string;
+    customer_type?: string;
+    space?: { name: string };
+    lead?: { first_name: string; last_name: string; company?: string };
+  };
+}
+
+interface CashHandoverItem {
+  id: string;
+  amount: number;
+  payment_date?: string;
+  cash_handover_status: string;
+  collected_at?: string;
+  handed_over_at?: string;
+  handover_notes?: string;
+  source: "contract" | "booking";
+  display_name: string;
+  reference: string;
+  payment_number?: string;
+  collector?: { full_name: string } | null;
+  handover_receiver?: { full_name: string } | null;
+}
+
+interface GstEntry {
+  contract_id: string;
+  contract_number: string;
+  company: string;
+  lead_email?: string;
+  lead_secondary_email?: string;
+  total_billable: number;
+  total_paid: number;
+  payment_id: string | null;
+  gst_invoice_number: string | null;
+  gst_invoice_path: string | null;
+  gst_invoice_status: string | null;
+  gst_invoice_sent_at: string | null;
+  gst_invoice_sent_to: string | null;
+}
+
+interface MonthlySummary {
+  period: {
+    id: string;
+    status: string;
+    locked_at?: string;
+    locker?: { full_name: string } | null;
+  } | null;
+  year: number;
+  month: number;
+  period_start: string;
+  period_end: string;
+  contracts: ContractSummary[];
+  walkin_payments: WalkinPayment[];
+  totals: {
+    total_billable: number;
+    total_collected: number;
+    total_outstanding: number;
+    total_carried_forward: number;
+    cash_pending_handover: number;
+    cash_handed_over: number;
+  };
+  aging_buckets: {
+    current: AgingBucket;
+    overdue_30: AgingBucket;
+    overdue_60: AgingBucket;
+    overdue_90: AgingBucket;
+  };
+}
+
+// ── Component ────────────────────────────────────────────────────────────────
 
 export default function BillingPage() {
-  // Tab state
-  const [activeTab, setActiveTab] = useState("usage-charges");
+  const now = new Date();
 
-  // Usage Charges state
-  const [charges, setCharges] = useState<UsageCharge[]>([]);
-  const [chargesPagination, setChargesPagination] = useState<Pagination>({
-    page: 1,
-    limit: 25,
-    total: 0,
-    totalPages: 0,
+  // ── Month ─────────────────────────────────────────────────────────────────
+  const [year, setYear]   = useState(now.getFullYear());
+  const [month, setMonth] = useState(now.getMonth() + 1);
+
+  // ── Monthly summary state ─────────────────────────────────────────────────
+  const [summary, setSummary]             = useState<MonthlySummary | null>(null);
+  const [cashHandovers, setCashHandovers] = useState<CashHandoverItem[]>([]);
+  const [gstEntries, setGstEntries]       = useState<GstEntry[]>([]);
+  const [summaryLoading, setSummaryLoading] = useState(true);
+  const [userRole, setUserRole]           = useState<string | null>(null);
+  const [isLocking, setIsLocking]         = useState(false);
+  const [showExport, setShowExport]       = useState(false);
+
+  // ── Tab ───────────────────────────────────────────────────────────────────
+  const [activeTab, setActiveTab] = useState(() => {
+    if (typeof window !== "undefined") {
+      return new URLSearchParams(window.location.search).get("tab") ?? "contracts";
+    }
+    return "contracts";
   });
-  const [chargesLoading, setChargesLoading] = useState(true);
-  const [chargesPage, setChargesPage] = useState(1);
+
+  // ── Usage Charges ─────────────────────────────────────────────────────────
+  const [charges, setCharges]                         = useState<UsageCharge[]>([]);
+  const [chargesPagination, setChargesPagination]     = useState<Pagination>({ page: 1, limit: 25, total: 0, totalPages: 0 });
+  const [chargesLoading, setChargesLoading]           = useState(true);
+  const [chargesPage, setChargesPage]                 = useState(1);
   const [chargesContractFilter, setChargesContractFilter] = useState("");
   const [chargesStatusFilter, setChargesStatusFilter] = useState("");
-  const [chargesDateFrom, setChargesDateFrom] = useState("");
-  const [chargesDateTo, setChargesDateTo] = useState("");
-  const [addChargeOpen, setAddChargeOpen] = useState(false);
+  const [chargesDateFrom, setChargesDateFrom]         = useState("");
+  const [chargesDateTo, setChargesDateTo]             = useState("");
+  const [addChargeOpen, setAddChargeOpen]             = useState(false);
 
-  // Billing Statements state
-  const [statements, setStatements] = useState<BillingStatement[]>([]);
-  const [statementsPagination, setStatementsPagination] = useState<Pagination>({
-    page: 1,
-    limit: 25,
-    total: 0,
-    totalPages: 0,
-  });
-  const [statementsLoading, setStatementsLoading] = useState(true);
-  const [statementsPage, setStatementsPage] = useState(1);
+  // ── Billing Statements ────────────────────────────────────────────────────
+  const [statements, setStatements]                       = useState<BillingStatement[]>([]);
+  const [statementsPagination, setStatementsPagination]   = useState<Pagination>({ page: 1, limit: 25, total: 0, totalPages: 0 });
+  const [statementsLoading, setStatementsLoading]         = useState(true);
+  const [statementsPage, setStatementsPage]               = useState(1);
   const [statementsContractFilter, setStatementsContractFilter] = useState("");
-  const [statementsStatusFilter, setStatementsStatusFilter] = useState("");
+  const [statementsStatusFilter, setStatementsStatusFilter]     = useState("");
   const [generateStatementOpen, setGenerateStatementOpen] = useState(false);
-  const [viewStatementId, setViewStatementId] = useState<string | null>(null);
+  const [viewStatementId, setViewStatementId]             = useState<string | null>(null);
 
-  // Record Payment dialog state
-  const [recordPaymentDialogOpen, setRecordPaymentDialogOpen] = useState(false);
+  // ── Record Payment dialog ─────────────────────────────────────────────────
+  const [recordPaymentDialogOpen, setRecordPaymentDialogOpen]   = useState(false);
   const [recordPaymentStatementId, setRecordPaymentStatementId] = useState<string | null>(null);
-  const [rpAmount, setRpAmount] = useState("");
-  const [rpDate, setRpDate] = useState(new Date().toISOString().slice(0, 10));
-  const [rpMode, setRpMode] = useState("neft");
+  const [rpAmount, setRpAmount]       = useState("");
+  const [rpDate, setRpDate]           = useState(now.toISOString().slice(0, 10));
+  const [rpMode, setRpMode]           = useState("neft");
   const [rpReference, setRpReference] = useState("");
-  const [rpNotes, setRpNotes] = useState("");
+  const [rpNotes, setRpNotes]         = useState("");
   const [rpSubmitting, setRpSubmitting] = useState(false);
+
+  // ── Contract list for filter dropdowns ───────────────────────────────────
+  const [contractFilters, setContractFilters] = useState<ContractFilter[]>([]);
+
+  // ── Get user role ────────────────────────────────────────────────────────
+  useEffect(() => {
+    const supabase = createClient();
+    supabase.auth.getUser().then(async ({ data: { user } }) => {
+      if (user) {
+        const { data } = await supabase
+          .from("users").select("role").eq("auth_id", user.id).single();
+        setUserRole(data?.role || "sales_rep");
+      }
+    });
+  }, []);
+
+  // ── Fetch monthly summary ────────────────────────────────────────────────
+  const fetchData = useCallback(async () => {
+    setSummaryLoading(true);
+    try {
+      const [summaryRes, cashRes, gstRes] = await Promise.all([
+        fetch(`/api/accounting/monthly-summary?year=${year}&month=${month}`),
+        fetch(`/api/accounting/cash-handovers?year=${year}&month=${month}`),
+        fetch(`/api/accounting/gst-invoices?year=${year}&month=${month}`),
+      ]);
+      if (summaryRes.ok) setSummary((await summaryRes.json()).data);
+      if (cashRes.ok)    setCashHandovers((await cashRes.json()).data || []);
+      if (gstRes.ok)     setGstEntries((await gstRes.json()).data || []);
+    } catch {
+      toast.error("Failed to load billing data");
+    } finally {
+      setSummaryLoading(false);
+    }
+  }, [year, month]);
+
+  useEffect(() => { fetchData(); }, [fetchData]);
+
+  // ── Fetch contracts for filter dropdowns ─────────────────────────────────
+  useEffect(() => {
+    fetch("/api/contracts?limit=100")
+      .then((r) => r.json())
+      .then((j) => setContractFilters(j.data || []))
+      .catch(() => {});
+  }, []);
+
+  // ── Fetch usage charges ───────────────────────────────────────────────────
+  const fetchCharges = useCallback(async () => {
+    setChargesLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(chargesPage), limit: "25" });
+      if (chargesContractFilter) params.set("contract_id", chargesContractFilter);
+      if (chargesStatusFilter)   params.set("status", chargesStatusFilter);
+      if (chargesDateFrom)       params.set("date_from", chargesDateFrom);
+      if (chargesDateTo)         params.set("date_to", chargesDateTo);
+      const res = await fetch(`/api/usage-charges?${params}`);
+      if (res.ok) {
+        const json = await res.json();
+        setCharges(json.data || []);
+        setChargesPagination(json.pagination || { page: 1, limit: 25, total: 0, totalPages: 0 });
+      }
+    } catch {
+      toast.error("Failed to load usage charges");
+    } finally {
+      setChargesLoading(false);
+    }
+  }, [chargesPage, chargesContractFilter, chargesStatusFilter, chargesDateFrom, chargesDateTo]);
+
+  useEffect(() => { fetchCharges(); }, [fetchCharges]);
+
+  // ── Fetch billing statements ──────────────────────────────────────────────
+  const fetchStatements = useCallback(async () => {
+    setStatementsLoading(true);
+    try {
+      const params = new URLSearchParams({ page: String(statementsPage), limit: "25" });
+      if (statementsContractFilter) params.set("contract_id", statementsContractFilter);
+      if (statementsStatusFilter)   params.set("status", statementsStatusFilter);
+      const res = await fetch(`/api/billing-statements?${params}`);
+      if (res.ok) {
+        const json = await res.json();
+        setStatements(json.data || []);
+        setStatementsPagination(json.pagination || { page: 1, limit: 25, total: 0, totalPages: 0 });
+      }
+    } catch {
+      toast.error("Failed to load billing statements");
+    } finally {
+      setStatementsLoading(false);
+    }
+  }, [statementsPage, statementsContractFilter, statementsStatusFilter]);
+
+  useEffect(() => { fetchStatements(); }, [fetchStatements]);
+
+  // ── Handlers ─────────────────────────────────────────────────────────────
+
+  const handleMonthChange = (newYear: number, newMonth: number) => {
+    setYear(newYear);
+    setMonth(newMonth);
+  };
+
+  const handleLockToggle = async () => {
+    if (!summary?.period?.id) return;
+    const locked = summary.period.status === "locked";
+    const action = locked ? "unlock" : "lock";
+    setIsLocking(true);
+    try {
+      const res = await fetch(`/api/accounting/periods/${summary.period.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        toast.error(err.error || `Failed to ${action} period`);
+        return;
+      }
+      toast.success(`Period ${action}ed`);
+      fetchData();
+    } catch {
+      toast.error("Network error");
+    } finally {
+      setIsLocking(false);
+    }
+  };
 
   const handleRecordPayment = async () => {
     if (!recordPaymentStatementId || !rpAmount || Number(rpAmount) <= 0) {
@@ -184,7 +443,11 @@ export default function BillingPage() {
     setRpSubmitting(false);
     if (res.ok) {
       const json = await res.json();
-      toast.success(`Payment recorded. ${json.payment_status === "paid" ? "Invoice fully paid!" : `Balance due: ₹${json.balance_due.toLocaleString("en-IN")}`}`);
+      toast.success(
+        `Payment recorded. ${json.payment_status === "paid"
+          ? "Invoice fully paid!"
+          : `Balance due: ₹${json.balance_due.toLocaleString("en-IN")}`}`
+      );
       setRecordPaymentDialogOpen(false);
       setRpAmount(""); setRpReference(""); setRpNotes("");
       fetchStatements();
@@ -194,113 +457,6 @@ export default function BillingPage() {
     }
   };
 
-  // Shared: contract list for filter dropdowns
-  const [contracts, setContracts] = useState<Contract[]>([]);
-
-  // Fetch contracts for filter dropdowns
-  useEffect(() => {
-    fetch("/api/contracts?limit=100")
-      .then((res) => res.json())
-      .then((json) => setContracts(json.data || []))
-      .catch(() => setContracts([]));
-  }, []);
-
-  // --- Fetch Usage Charges ---
-  const fetchCharges = useCallback(async () => {
-    setChargesLoading(true);
-    try {
-      const params = new URLSearchParams({
-        page: String(chargesPage),
-        limit: "25",
-      });
-      if (chargesContractFilter)
-        params.set("contract_id", chargesContractFilter);
-      if (chargesStatusFilter) params.set("status", chargesStatusFilter);
-      if (chargesDateFrom) params.set("date_from", chargesDateFrom);
-      if (chargesDateTo) params.set("date_to", chargesDateTo);
-
-      const res = await fetch(`/api/usage-charges?${params}`);
-      if (res.ok) {
-        const json = await res.json();
-        setCharges(json.data || []);
-        setChargesPagination(
-          json.pagination || { page: 1, limit: 25, total: 0, totalPages: 0 }
-        );
-      }
-    } catch {
-      toast.error("Failed to load usage charges");
-    } finally {
-      setChargesLoading(false);
-    }
-  }, [
-    chargesPage,
-    chargesContractFilter,
-    chargesStatusFilter,
-    chargesDateFrom,
-    chargesDateTo,
-  ]);
-
-  useEffect(() => {
-    fetchCharges();
-  }, [fetchCharges]);
-
-  // --- Fetch Billing Statements ---
-  const fetchStatements = useCallback(async () => {
-    setStatementsLoading(true);
-    try {
-      const params = new URLSearchParams({
-        page: String(statementsPage),
-        limit: "25",
-      });
-      if (statementsContractFilter)
-        params.set("contract_id", statementsContractFilter);
-      if (statementsStatusFilter)
-        params.set("status", statementsStatusFilter);
-
-      const res = await fetch(`/api/billing-statements?${params}`);
-      if (res.ok) {
-        const json = await res.json();
-        setStatements(json.data || []);
-        setStatementsPagination(
-          json.pagination || { page: 1, limit: 25, total: 0, totalPages: 0 }
-        );
-      }
-    } catch {
-      toast.error("Failed to load billing statements");
-    } finally {
-      setStatementsLoading(false);
-    }
-  }, [statementsPage, statementsContractFilter, statementsStatusFilter]);
-
-  useEffect(() => {
-    fetchStatements();
-  }, [fetchStatements]);
-
-  // --- Clear filters ---
-  const clearChargesFilters = () => {
-    setChargesContractFilter("");
-    setChargesStatusFilter("");
-    setChargesDateFrom("");
-    setChargesDateTo("");
-    setChargesPage(1);
-  };
-
-  const clearStatementsFilters = () => {
-    setStatementsContractFilter("");
-    setStatementsStatusFilter("");
-    setStatementsPage(1);
-  };
-
-  const hasChargesFilters =
-    chargesContractFilter ||
-    chargesStatusFilter ||
-    chargesDateFrom ||
-    chargesDateTo;
-
-  const hasStatementsFilters =
-    statementsContractFilter || statementsStatusFilter;
-
-  // --- Statement actions ---
   const handleFinalizeStatement = async (id: string) => {
     try {
       const res = await fetch(`/api/billing-statements/${id}`, {
@@ -308,16 +464,9 @@ export default function BillingPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "finalized" }),
       });
-      if (res.ok) {
-        toast.success("Statement finalized");
-        fetchStatements();
-      } else {
-        const err = await res.json().catch(() => null);
-        toast.error(err?.error || "Failed to finalize statement");
-      }
-    } catch {
-      toast.error("Failed to finalize statement");
-    }
+      if (res.ok) { toast.success("Statement finalized"); fetchStatements(); }
+      else { const err = await res.json().catch(() => null); toast.error(err?.error || "Failed to finalize"); }
+    } catch { toast.error("Failed to finalize statement"); }
   };
 
   const handleExportStatement = async (id: string) => {
@@ -327,175 +476,233 @@ export default function BillingPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "exported" }),
       });
-      if (res.ok) {
-        toast.success("Statement exported");
-        fetchStatements();
-      } else {
-        const err = await res.json().catch(() => null);
-        toast.error(err?.error || "Failed to export statement");
-      }
-    } catch {
-      toast.error("Failed to export statement");
-    }
+      if (res.ok) { toast.success("Statement exported"); fetchStatements(); }
+      else { const err = await res.json().catch(() => null); toast.error(err?.error || "Failed to export"); }
+    } catch { toast.error("Failed to export statement"); }
   };
 
+  const clearChargesFilters = () => {
+    setChargesContractFilter(""); setChargesStatusFilter("");
+    setChargesDateFrom(""); setChargesDateTo(""); setChargesPage(1);
+  };
+  const clearStatementsFilters = () => {
+    setStatementsContractFilter(""); setStatementsStatusFilter(""); setStatementsPage(1);
+  };
+
+  const hasChargesFilters   = chargesContractFilter || chargesStatusFilter || chargesDateFrom || chargesDateTo;
+  const hasStatementsFilters = statementsContractFilter || statementsStatusFilter;
+  const isLocked      = summary?.period?.status === "locked";
+  const selectedMonth = `${year}-${String(month).padStart(2, "0")}`;
+  const pendingHandover = cashHandovers.filter((c) => c.cash_handover_status === "pending_handover");
+
+  // ── Render ────────────────────────────────────────────────────────────────
+
   return (
-    <div className="space-y-4">
-      {/* Page Header */}
-      <div>
-        <h1 className="text-2xl font-bold">Billing</h1>
-        <p className="text-sm text-muted-foreground">
-          Manage usage charges and billing statements
-        </p>
+    <div className="space-y-6">
+
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-3">
+          <IndianRupee className="h-6 w-6 text-primary" />
+          <h1 className="text-2xl font-bold">Billing — Acc Receivables</h1>
+        </div>
+        <MonthPicker year={year} month={month} onChange={handleMonthChange} />
       </div>
 
-      <Tabs value={activeTab} onValueChange={setActiveTab}>
-        <TabsList>
-          <TabsTrigger value="usage-charges" className="gap-1.5">
-            <Receipt className="h-4 w-4" />
-            Usage Charges
-          </TabsTrigger>
-          <TabsTrigger value="billing-statements" className="gap-1.5">
-            <FileText className="h-4 w-4" />
-            Billing Statements
-          </TabsTrigger>
-        </TabsList>
+      {/* Period status + aging + action banner (when summary loaded) */}
+      {!summaryLoading && summary && (
+        <>
+          <PeriodStatusBar
+            period={summary.period}
+            totals={summary.totals}
+            userRole={userRole}
+            onLockToggle={handleLockToggle}
+            onExport={() => setShowExport(true)}
+            isLocking={isLocking}
+          />
+          <AgingBuckets buckets={summary.aging_buckets} />
+          <ActionRequiredBanner
+            contracts={summary.contracts as { contract: { id: string; contract_number: string; title: string; lead?: { first_name: string; last_name: string; company?: string } }; outstanding: number }[]}
+            cashHandovers={pendingHandover}
+            gstEntries={gstEntries as { contract_id: string; contract_number: string; company: string; total_billable: number; gst_invoice_number: string | null; gst_invoice_sent_at: string | null }[]}
+            onSwitchTab={setActiveTab}
+          />
+        </>
+      )}
 
-        {/* ========== USAGE CHARGES TAB ========== */}
-        <TabsContent value="usage-charges" className="space-y-4">
-          {/* Filters Bar */}
+      {/* Tabs */}
+      <Tabs value={activeTab} onValueChange={setActiveTab}>
+        <div className="overflow-x-auto pb-1">
+          <TabsList className="w-max">
+            <TabsTrigger value="contracts">
+              Contracts{!summaryLoading && summary ? ` (${summary.contracts.length})` : ""}
+            </TabsTrigger>
+            <TabsTrigger value="proposals">Proposals</TabsTrigger>
+            <TabsTrigger value="walkin">
+              Walk-in{!summaryLoading && summary ? ` (${summary.walkin_payments.length})` : ""}
+            </TabsTrigger>
+            <TabsTrigger value="cash">
+              Cash{!summaryLoading ? ` (${pendingHandover.length} pending)` : ""}
+            </TabsTrigger>
+            <TabsTrigger value="gst">GST Invoices</TabsTrigger>
+            <TabsTrigger value="usage-charges">Usage Charges</TabsTrigger>
+            <TabsTrigger value="statements">Statements</TabsTrigger>
+          </TabsList>
+        </div>
+
+        {/* ── Contracts ─────────────────────────────────────────────────── */}
+        <TabsContent value="contracts" className="space-y-3 mt-4">
+          {summaryLoading ? (
+            <TableSkeleton />
+          ) : !summary ? (
+            <EmptyState icon={ScrollText} title="No data" description="Could not load billing data for this period" />
+          ) : summary.contracts.length === 0 ? (
+            <EmptyState icon={ScrollText} title="No active contracts" description="No contracts are active for this period" />
+          ) : (
+            summary.contracts.map((cs) => (
+              <ContractAccountingRow
+                key={cs.contract.id}
+                // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                summary={cs as any}
+                accountingPeriodId={summary.period?.id || ""}
+                isLocked={isLocked || false}
+                onRefresh={fetchData}
+              />
+            ))
+          )}
+        </TabsContent>
+
+        {/* ── Proposals ─────────────────────────────────────────────────── */}
+        <TabsContent value="proposals" className="mt-4">
+          <ProposalPaymentsTab month={selectedMonth} />
+        </TabsContent>
+
+        {/* ── Walk-in ───────────────────────────────────────────────────── */}
+        <TabsContent value="walkin" className="mt-4">
+          {summaryLoading ? (
+            <TableSkeleton />
+          ) : summary ? (
+            <WalkinCollectionsTable payments={summary.walkin_payments} />
+          ) : null}
+        </TabsContent>
+
+        {/* ── Cash Handovers ────────────────────────────────────────────── */}
+        <TabsContent value="cash" className="space-y-6 mt-4">
+          {summaryLoading ? (
+            <TableSkeleton />
+          ) : (
+            <>
+              <div>
+                <h3 className="text-sm font-semibold text-muted-foreground uppercase mb-3">Pending Handover</h3>
+                <CashHandoverTable
+                  items={pendingHandover}
+                  status="pending_handover"
+                  onRefresh={fetchData}
+                />
+              </div>
+              <div>
+                <h3 className="text-sm font-semibold text-muted-foreground uppercase mb-3">Handed Over</h3>
+                <CashHandoverTable
+                  items={cashHandovers.filter((c) => c.cash_handover_status === "handed_over")}
+                  status="handed_over"
+                  onRefresh={fetchData}
+                />
+              </div>
+            </>
+          )}
+        </TabsContent>
+
+        {/* ── GST Invoices ──────────────────────────────────────────────── */}
+        <TabsContent value="gst" className="mt-4">
+          {summaryLoading ? (
+            <TableSkeleton />
+          ) : (
+            <GstInvoiceEntry entries={gstEntries} onRefresh={fetchData} />
+          )}
+        </TabsContent>
+
+        {/* ── Usage Charges ─────────────────────────────────────────────── */}
+        <TabsContent value="usage-charges" className="space-y-4 mt-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-2">
               <Select
                 value={chargesContractFilter}
-                onValueChange={(val) => {
-                  setChargesContractFilter(val === "all" ? "" : val);
-                  setChargesPage(1);
-                }}
+                onValueChange={(val) => { setChargesContractFilter(val === "all" ? "" : val); setChargesPage(1); }}
               >
-                <SelectTrigger className="w-[200px]">
-                  <SelectValue placeholder="All Contracts" />
-                </SelectTrigger>
+                <SelectTrigger className="w-[200px]"><SelectValue placeholder="All Contracts" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Contracts</SelectItem>
-                  {contracts.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.contract_number}
-                    </SelectItem>
+                  {contractFilters.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.contract_number}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <Select
                 value={chargesStatusFilter}
-                onValueChange={(val) => {
-                  setChargesStatusFilter(val === "all" ? "" : val);
-                  setChargesPage(1);
-                }}
+                onValueChange={(val) => { setChargesStatusFilter(val === "all" ? "" : val); setChargesPage(1); }}
               >
-                <SelectTrigger className="w-[140px]">
-                  <SelectValue placeholder="All Statuses" />
-                </SelectTrigger>
+                <SelectTrigger className="w-[140px]"><SelectValue placeholder="All Statuses" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Statuses</SelectItem>
                   {Object.entries(USAGE_STATUS_LABELS).map(([key, label]) => (
-                    <SelectItem key={key} value={key}>
-                      {label}
-                    </SelectItem>
+                    <SelectItem key={key} value={key}>{label}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <Input
                 type="date"
                 value={chargesDateFrom}
-                onChange={(e) => {
-                  setChargesDateFrom(e.target.value);
-                  setChargesPage(1);
-                }}
+                onChange={(e) => { setChargesDateFrom(e.target.value); setChargesPage(1); }}
                 className="w-[150px]"
                 placeholder="From"
               />
               <Input
                 type="date"
                 value={chargesDateTo}
-                onChange={(e) => {
-                  setChargesDateTo(e.target.value);
-                  setChargesPage(1);
-                }}
+                onChange={(e) => { setChargesDateTo(e.target.value); setChargesPage(1); }}
                 className="w-[150px]"
                 placeholder="To"
               />
               {hasChargesFilters && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={clearChargesFilters}
-                >
-                  <X className="mr-1 h-4 w-4" />
-                  Clear
+                <Button variant="ghost" size="sm" onClick={clearChargesFilters}>
+                  <X className="mr-1 h-4 w-4" />Clear
                 </Button>
               )}
             </div>
             <Button onClick={() => setAddChargeOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              Add Charge
+              <Plus className="mr-2 h-4 w-4" />Add Charge
             </Button>
           </div>
 
-          {/* Usage Charges Table */}
           {chargesLoading ? (
             <TableSkeleton rows={6} />
           ) : charges.length === 0 ? (
             <EmptyState
               icon={Receipt}
               title="No usage charges found"
-              description={
-                hasChargesFilters
-                  ? "Try adjusting your filters."
-                  : "Add your first usage charge to get started."
-              }
+              description={hasChargesFilters ? "Try adjusting your filters." : "Add your first usage charge to get started."}
               actionLabel={!hasChargesFilters ? "Add Charge" : undefined}
-              onAction={
-                !hasChargesFilters
-                  ? () => setAddChargeOpen(true)
-                  : undefined
-              }
+              onAction={!hasChargesFilters ? () => setAddChargeOpen(true) : undefined}
             />
           ) : (
             <div className="rounded-md border overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
-                    <th className="px-4 py-3 text-left font-medium">
-                      Description
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">
-                      Reference
-                    </th>
-                    <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">
-                      Quantity
-                    </th>
-                    <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">
-                      Unit Price
-                    </th>
+                    <th className="px-4 py-3 text-left font-medium">Description</th>
+                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Reference</th>
+                    <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Qty</th>
+                    <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Unit Price</th>
                     <th className="px-4 py-3 text-right font-medium">Total</th>
-                    <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">
-                      Charge Date
-                    </th>
+                    <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Charge Date</th>
                     <th className="px-4 py-3 text-left font-medium">Status</th>
-                    <th className="px-4 py-3 text-right font-medium">
-                      Actions
-                    </th>
+                    <th className="px-4 py-3 text-right font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {charges.map((charge) => (
-                    <tr
-                      key={charge.id}
-                      className="border-b hover:bg-muted/30 transition-colors"
-                    >
-                      <td className="px-4 py-3 font-medium max-w-[200px] truncate">
-                        {charge.description}
-                      </td>
+                    <tr key={charge.id} className="border-b hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-3 font-medium max-w-[200px] truncate">{charge.description}</td>
                       <td className="px-4 py-3 font-mono text-xs hidden md:table-cell">
                         {charge.contract?.contract_number ? (
                           <span title="Contract">{charge.contract.contract_number}</span>
@@ -503,44 +710,24 @@ export default function BillingPage() {
                           <span className="text-blue-600" title={`Booking — ${formatDate(charge.booking.booking_date)}`}>
                             {charge.booking.booking_number}
                           </span>
-                        ) : (
-                          "-"
-                        )}
+                        ) : "—"}
                       </td>
-                      <td className="px-4 py-3 text-right hidden sm:table-cell">
-                        {charge.quantity}
-                      </td>
-                      <td className="px-4 py-3 text-right hidden sm:table-cell">
-                        {formatCurrency(charge.unit_price)}
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium">
-                        {formatCurrency(charge.total)}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
-                        {formatDate(charge.charge_date)}
-                      </td>
+                      <td className="px-4 py-3 text-right hidden sm:table-cell">{charge.quantity}</td>
+                      <td className="px-4 py-3 text-right hidden sm:table-cell">{formatCurrency(charge.unit_price)}</td>
+                      <td className="px-4 py-3 text-right font-medium">{formatCurrency(charge.total)}</td>
+                      <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{formatDate(charge.charge_date)}</td>
                       <td className="px-4 py-3">
-                        <Badge
-                          variant="secondary"
-                          className={
-                            USAGE_STATUS_COLORS[charge.status] || ""
-                          }
-                        >
+                        <Badge variant="secondary" className={USAGE_STATUS_COLORS[charge.status] || ""}>
                           {USAGE_STATUS_LABELS[charge.status] || charge.status}
                         </Badge>
                       </td>
                       <td className="px-4 py-3 text-right">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm">
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
+                            <Button variant="ghost" size="sm"><MoreHorizontal className="h-4 w-4" /></Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
-                            <DropdownMenuItem>
-                              <Eye className="mr-2 h-4 w-4" />
-                              View Details
-                            </DropdownMenuItem>
+                            <DropdownMenuItem><Eye className="mr-2 h-4 w-4" />View Details</DropdownMenuItem>
                           </DropdownMenuContent>
                         </DropdownMenu>
                       </td>
@@ -551,28 +738,16 @@ export default function BillingPage() {
             </div>
           )}
 
-          {/* Usage Charges Pagination */}
           {chargesPagination.totalPages > 1 && (
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
-                Page {chargesPagination.page} of {chargesPagination.totalPages} (
-                {chargesPagination.total} total)
+                Page {chargesPagination.page} of {chargesPagination.totalPages} ({chargesPagination.total} total)
               </p>
               <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={chargesPage <= 1}
-                  onClick={() => setChargesPage(chargesPage - 1)}
-                >
+                <Button variant="outline" size="sm" disabled={chargesPage <= 1} onClick={() => setChargesPage(chargesPage - 1)}>
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={chargesPage >= chargesPagination.totalPages}
-                  onClick={() => setChargesPage(chargesPage + 1)}
-                >
+                <Button variant="outline" size="sm" disabled={chargesPage >= chargesPagination.totalPages} onClick={() => setChargesPage(chargesPage + 1)}>
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
@@ -580,199 +755,115 @@ export default function BillingPage() {
           )}
         </TabsContent>
 
-        {/* ========== BILLING STATEMENTS TAB ========== */}
-        <TabsContent value="billing-statements" className="space-y-4">
-          {/* Filters Bar */}
+        {/* ── Billing Statements ────────────────────────────────────────── */}
+        <TabsContent value="statements" className="space-y-4 mt-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-2">
               <Select
                 value={statementsContractFilter}
-                onValueChange={(val) => {
-                  setStatementsContractFilter(val === "all" ? "" : val);
-                  setStatementsPage(1);
-                }}
+                onValueChange={(val) => { setStatementsContractFilter(val === "all" ? "" : val); setStatementsPage(1); }}
               >
-                <SelectTrigger className="w-[200px]">
-                  <SelectValue placeholder="All Contracts" />
-                </SelectTrigger>
+                <SelectTrigger className="w-[200px]"><SelectValue placeholder="All Contracts" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Contracts</SelectItem>
-                  {contracts.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>
-                      {c.contract_number}
-                    </SelectItem>
+                  {contractFilters.map((c) => (
+                    <SelectItem key={c.id} value={c.id}>{c.contract_number}</SelectItem>
                   ))}
                 </SelectContent>
               </Select>
               <Select
                 value={statementsStatusFilter}
-                onValueChange={(val) => {
-                  setStatementsStatusFilter(val === "all" ? "" : val);
-                  setStatementsPage(1);
-                }}
+                onValueChange={(val) => { setStatementsStatusFilter(val === "all" ? "" : val); setStatementsPage(1); }}
               >
-                <SelectTrigger className="w-[140px]">
-                  <SelectValue placeholder="All Statuses" />
-                </SelectTrigger>
+                <SelectTrigger className="w-[140px]"><SelectValue placeholder="All Statuses" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="all">All Statuses</SelectItem>
-                  {Object.entries(STATEMENT_STATUS_LABELS).map(
-                    ([key, label]) => (
-                      <SelectItem key={key} value={key}>
-                        {label}
-                      </SelectItem>
-                    )
-                  )}
+                  {Object.entries(STATEMENT_STATUS_LABELS).map(([key, label]) => (
+                    <SelectItem key={key} value={key}>{label}</SelectItem>
+                  ))}
                 </SelectContent>
               </Select>
               {hasStatementsFilters && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={clearStatementsFilters}
-                >
-                  <X className="mr-1 h-4 w-4" />
-                  Clear
+                <Button variant="ghost" size="sm" onClick={clearStatementsFilters}>
+                  <X className="mr-1 h-4 w-4" />Clear
                 </Button>
               )}
             </div>
             <Button onClick={() => setGenerateStatementOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />
-              Generate Statement
+              <Plus className="mr-2 h-4 w-4" />Generate Statement
             </Button>
           </div>
 
-          {/* Billing Statements Table */}
           {statementsLoading ? (
             <TableSkeleton rows={6} />
           ) : statements.length === 0 ? (
             <EmptyState
               icon={FileText}
               title="No billing statements found"
-              description={
-                hasStatementsFilters
-                  ? "Try adjusting your filters."
-                  : "Generate your first billing statement to get started."
-              }
-              actionLabel={
-                !hasStatementsFilters ? "Generate Statement" : undefined
-              }
-              onAction={
-                !hasStatementsFilters
-                  ? () => setGenerateStatementOpen(true)
-                  : undefined
-              }
+              description={hasStatementsFilters ? "Try adjusting your filters." : "Generate your first billing statement to get started."}
+              actionLabel={!hasStatementsFilters ? "Generate Statement" : undefined}
+              onAction={!hasStatementsFilters ? () => setGenerateStatementOpen(true) : undefined}
             />
           ) : (
             <div className="rounded-md border overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
-                    <th className="px-4 py-3 text-left font-medium">
-                      Statement #
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">
-                      Reference
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">
-                      Lead
-                    </th>
-                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">
-                      Period
-                    </th>
-                    <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">
-                      Fixed
-                    </th>
-                    <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">
-                      Usage
-                    </th>
+                    <th className="px-4 py-3 text-left font-medium">Statement #</th>
+                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Reference</th>
+                    <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Lead</th>
+                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Period</th>
+                    <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Fixed</th>
+                    <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Usage</th>
                     <th className="px-4 py-3 text-right font-medium">Total</th>
                     <th className="px-4 py-3 text-left font-medium">Status</th>
-                    <th className="px-4 py-3 text-right font-medium">
-                      Actions
-                    </th>
+                    <th className="px-4 py-3 text-right font-medium">Actions</th>
                   </tr>
                 </thead>
                 <tbody>
                   {statements.map((stmt) => (
-                    <tr
-                      key={stmt.id}
-                      className="border-b hover:bg-muted/30 transition-colors"
-                    >
-                      <td className="px-4 py-3 font-mono text-xs">
-                        {stmt.statement_number}
-                      </td>
+                    <tr key={stmt.id} className="border-b hover:bg-muted/30 transition-colors">
+                      <td className="px-4 py-3 font-mono text-xs">{stmt.statement_number}</td>
                       <td className="px-4 py-3 font-mono text-xs hidden md:table-cell">
-                        {stmt.contract?.contract_number
-                          ? stmt.contract.contract_number
-                          : stmt.booking?.booking_number
-                          ? stmt.booking.booking_number
-                          : "-"}
+                        {stmt.contract?.contract_number || stmt.booking?.booking_number || "—"}
                       </td>
                       <td className="px-4 py-3 hidden lg:table-cell">
                         {stmt.lead
-                          ? stmt.lead.company ||
-                            `${stmt.lead.first_name} ${stmt.lead.last_name}`
-                          : stmt.booking?.guest_name || "-"}
+                          ? stmt.lead.company || `${stmt.lead.first_name} ${stmt.lead.last_name}`
+                          : stmt.booking?.guest_name || "—"}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
-                        {formatDate(stmt.period_start)} -{" "}
-                        {formatDate(stmt.period_end)}
+                        {formatDate(stmt.period_start)} – {formatDate(stmt.period_end)}
                       </td>
-                      <td className="px-4 py-3 text-right hidden sm:table-cell">
-                        {formatCurrency(stmt.fixed_amount)}
-                      </td>
-                      <td className="px-4 py-3 text-right hidden sm:table-cell">
-                        {formatCurrency(stmt.usage_amount)}
-                      </td>
-                      <td className="px-4 py-3 text-right font-medium">
-                        {formatCurrency(stmt.total_amount)}
-                      </td>
+                      <td className="px-4 py-3 text-right hidden sm:table-cell">{formatCurrency(stmt.fixed_amount)}</td>
+                      <td className="px-4 py-3 text-right hidden sm:table-cell">{formatCurrency(stmt.usage_amount)}</td>
+                      <td className="px-4 py-3 text-right font-medium">{formatCurrency(stmt.total_amount)}</td>
                       <td className="px-4 py-3">
-                        <Badge
-                          variant="secondary"
-                          className={
-                            STATEMENT_STATUS_COLORS[stmt.status] || ""
-                          }
-                        >
+                        <Badge variant="secondary" className={STATEMENT_STATUS_COLORS[stmt.status] || ""}>
                           {STATEMENT_STATUS_LABELS[stmt.status] || stmt.status}
                         </Badge>
                       </td>
                       <td className="px-4 py-3 text-right">
                         <DropdownMenu>
                           <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm">
-                              <MoreHorizontal className="h-4 w-4" />
-                            </Button>
+                            <Button variant="ghost" size="sm"><MoreHorizontal className="h-4 w-4" /></Button>
                           </DropdownMenuTrigger>
                           <DropdownMenuContent align="end">
                             <DropdownMenuItem onClick={() => setViewStatementId(stmt.id)}>
-                              <Eye className="mr-2 h-4 w-4" />
-                              View Detail
+                              <Eye className="mr-2 h-4 w-4" />View Detail
                             </DropdownMenuItem>
                             <DropdownMenuItem disabled>
-                              <Download className="mr-2 h-4 w-4" />
-                              Download PDF
+                              <Download className="mr-2 h-4 w-4" />Download PDF
                             </DropdownMenuItem>
                             {stmt.status === "draft" && (
-                              <DropdownMenuItem
-                                onClick={() =>
-                                  handleFinalizeStatement(stmt.id)
-                                }
-                              >
-                                <CheckCircle className="mr-2 h-4 w-4" />
-                                Finalize
+                              <DropdownMenuItem onClick={() => handleFinalizeStatement(stmt.id)}>
+                                <CheckCircle className="mr-2 h-4 w-4" />Finalize
                               </DropdownMenuItem>
                             )}
                             {stmt.status === "finalized" && (
                               <>
-                                <DropdownMenuItem
-                                  onClick={() =>
-                                    handleExportStatement(stmt.id)
-                                  }
-                                >
-                                  <Upload className="mr-2 h-4 w-4" />
-                                  Export
+                                <DropdownMenuItem onClick={() => handleExportStatement(stmt.id)}>
+                                  <Upload className="mr-2 h-4 w-4" />Export
                                 </DropdownMenuItem>
                                 <DropdownMenuItem
                                   onClick={() => {
@@ -780,8 +871,7 @@ export default function BillingPage() {
                                     setRecordPaymentDialogOpen(true);
                                   }}
                                 >
-                                  <IndianRupee className="mr-2 h-4 w-4" />
-                                  Record Payment
+                                  <IndianRupee className="mr-2 h-4 w-4" />Record Payment
                                 </DropdownMenuItem>
                               </>
                             )}
@@ -795,29 +885,16 @@ export default function BillingPage() {
             </div>
           )}
 
-          {/* Billing Statements Pagination */}
           {statementsPagination.totalPages > 1 && (
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">
-                Page {statementsPagination.page} of{" "}
-                {statementsPagination.totalPages} (
-                {statementsPagination.total} total)
+                Page {statementsPagination.page} of {statementsPagination.totalPages} ({statementsPagination.total} total)
               </p>
               <div className="flex gap-2">
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={statementsPage <= 1}
-                  onClick={() => setStatementsPage(statementsPage - 1)}
-                >
+                <Button variant="outline" size="sm" disabled={statementsPage <= 1} onClick={() => setStatementsPage(statementsPage - 1)}>
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
-                <Button
-                  variant="outline"
-                  size="sm"
-                  disabled={statementsPage >= statementsPagination.totalPages}
-                  onClick={() => setStatementsPage(statementsPage + 1)}
-                >
+                <Button variant="outline" size="sm" disabled={statementsPage >= statementsPagination.totalPages} onClick={() => setStatementsPage(statementsPage + 1)}>
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>
@@ -826,17 +903,10 @@ export default function BillingPage() {
         </TabsContent>
       </Tabs>
 
-      {/* Dialogs */}
-      <AddUsageChargeDialog
-        open={addChargeOpen}
-        onOpenChange={setAddChargeOpen}
-        onSuccess={fetchCharges}
-      />
-      <GenerateStatementDialog
-        open={generateStatementOpen}
-        onOpenChange={setGenerateStatementOpen}
-        onSuccess={fetchStatements}
-      />
+      {/* ── Dialogs ─────────────────────────────────────────────────────── */}
+      <ExportSummaryDialog open={showExport} onOpenChange={setShowExport} year={year} month={month} />
+      <AddUsageChargeDialog open={addChargeOpen} onOpenChange={setAddChargeOpen} onSuccess={fetchCharges} />
+      <GenerateStatementDialog open={generateStatementOpen} onOpenChange={setGenerateStatementOpen} onSuccess={fetchStatements} />
       <ViewStatementDialog
         statementId={viewStatementId}
         open={!!viewStatementId}
@@ -844,30 +914,18 @@ export default function BillingPage() {
         onStatusChange={fetchStatements}
       />
 
-      {/* Record Payment Dialog */}
       <Dialog open={recordPaymentDialogOpen} onOpenChange={setRecordPaymentDialogOpen}>
         <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Record Payment</DialogTitle>
-          </DialogHeader>
+          <DialogHeader><DialogTitle>Record Payment</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label>Amount (₹)</Label>
-                <Input
-                  type="number"
-                  value={rpAmount}
-                  onChange={(e) => setRpAmount(e.target.value)}
-                  placeholder="e.g. 15000"
-                />
+                <Input type="number" value={rpAmount} onChange={(e) => setRpAmount(e.target.value)} placeholder="e.g. 15000" />
               </div>
               <div className="space-y-2">
                 <Label>Payment Date</Label>
-                <Input
-                  type="date"
-                  value={rpDate}
-                  onChange={(e) => setRpDate(e.target.value)}
-                />
+                <Input type="date" value={rpDate} onChange={(e) => setRpDate(e.target.value)} />
               </div>
             </div>
             <div className="grid grid-cols-2 gap-4">
@@ -887,24 +945,15 @@ export default function BillingPage() {
               </div>
               <div className="space-y-2">
                 <Label>Reference / UTR No.</Label>
-                <Input
-                  value={rpReference}
-                  onChange={(e) => setRpReference(e.target.value)}
-                  placeholder="UTR or cheque number"
-                />
+                <Input value={rpReference} onChange={(e) => setRpReference(e.target.value)} placeholder="UTR or cheque number" />
               </div>
             </div>
             <div className="space-y-2">
               <Label>Notes (optional)</Label>
-              <Textarea
-                value={rpNotes}
-                onChange={(e) => setRpNotes(e.target.value)}
-                placeholder="Additional notes..."
-                rows={2}
-              />
+              <Textarea value={rpNotes} onChange={(e) => setRpNotes(e.target.value)} placeholder="Additional notes…" rows={2} />
             </div>
             <Button onClick={handleRecordPayment} disabled={rpSubmitting} className="w-full">
-              {rpSubmitting ? "Recording..." : "Record Payment"}
+              {rpSubmitting ? "Recording…" : "Record Payment"}
             </Button>
           </div>
         </DialogContent>

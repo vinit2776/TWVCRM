@@ -63,7 +63,151 @@ interface PDFOptions {
   qrCodeBase64?: string; // Base64 image data (PNG/JPEG) for UPI QR code
   upiId?: string; // UPI ID text to show alongside QR
   razorpayPaymentLink?: string; // Razorpay payment link URL
+  preparedBy?: { name: string; email?: string; phone?: string }; // Sales rep info
+  showServicesIncluded?: boolean; // Show the "What's Included" icon strip (proposals only)
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+// "What's Included" service icon strip — drawn with jsPDF primitives so no
+// external icon font or image assets are required.
+// All icon functions accept (cx, cy) as the visual centre of the icon and
+// s as the icon half-size (radius) in mm.
+// ─────────────────────────────────────────────────────────────────────────────
+
+/** Draw a series of line segments approximating an arc of a circle. */
+function arcSegments(
+  doc: jsPDF,
+  cx: number, cy: number, r: number,
+  startDeg: number, endDeg: number,
+  steps = 16
+): void {
+  for (let i = 0; i < steps; i++) {
+    const a1 = ((startDeg + (endDeg - startDeg) * i / steps) * Math.PI) / 180;
+    const a2 = ((startDeg + (endDeg - startDeg) * (i + 1) / steps) * Math.PI) / 180;
+    doc.line(
+      cx + r * Math.cos(a1), cy + r * Math.sin(a1),
+      cx + r * Math.cos(a2), cy + r * Math.sin(a2)
+    );
+  }
+}
+
+/** Wi-Fi arcs (3 concentric arcs opening upward + centre dot). */
+function iconWifi(doc: jsPDF, cx: number, cy: number, s: number): void {
+  doc.setDrawColor(...BRAND_TEAL);
+  doc.setFillColor(...BRAND_TEAL);
+  doc.setLineWidth(0.55);
+  // Centre dot sits at the bottom of the symbol
+  doc.circle(cx, cy + s * 0.18, s * 0.1, "F");
+  // Three arcs — 210° → 330° puts them opening upward in jsPDF's Y-down coords
+  [0.36, 0.63, 0.90].forEach((rf) =>
+    arcSegments(doc, cx, cy + s * 0.18, s * rf, 210, 330)
+  );
+}
+
+/** Pantry / coffee cup (body, handle, saucer, three steam dots). */
+function iconCoffee(doc: jsPDF, cx: number, cy: number, s: number): void {
+  doc.setDrawColor(...BRAND_TEAL);
+  doc.setFillColor(...BRAND_TEAL);
+  doc.setLineWidth(0.55);
+  const bw = s * 0.9, bh = s * 0.9;
+  // Cup body
+  doc.rect(cx - bw / 2, cy - bh * 0.28, bw, bh, "S");
+  // Handle — C-curve on the right side (-75° → 75°)
+  arcSegments(doc, cx + bw / 2, cy + bh * 0.22, s * 0.28, -75, 75, 14);
+  // Saucer line
+  doc.setLineWidth(0.7);
+  doc.line(cx - bw * 0.65, cy + bh * 0.72, cx + bw * 0.65, cy + bh * 0.72);
+  // Steam dots (three small filled circles above cup)
+  doc.setLineWidth(0.55);
+  [-0.28, 0, 0.28].forEach((dx) =>
+    doc.circle(cx + dx * s, cy - bh * 0.48, s * 0.07, "F")
+  );
+}
+
+/** Printer (input tray, filled body with green LED, output paper). */
+function iconPrinter(doc: jsPDF, cx: number, cy: number, s: number): void {
+  const bw = s * 1.2, bh = s * 0.62, pw = s * 0.72;
+  doc.setFillColor(...BRAND_TEAL);
+  doc.setDrawColor(...BRAND_TEAL);
+  doc.setLineWidth(0.55);
+  // Input paper tray (top, stroked only)
+  doc.rect(cx - pw / 2, cy - bh / 2 - s * 0.28, pw, s * 0.28, "S");
+  // Printer body (filled)
+  doc.rect(cx - bw / 2, cy - bh / 2, bw, bh, "F");
+  // Paper-slot highlight (white slot on front of body)
+  doc.setFillColor(255, 255, 255);
+  doc.rect(cx - pw / 2 + s * 0.07, cy + bh / 2 - s * 0.1, pw - s * 0.14, s * 0.1, "F");
+  doc.setFillColor(...BRAND_TEAL);
+  // Output paper hanging below (stroked)
+  doc.rect(cx - pw / 2 + s * 0.07, cy + bh / 2, pw - s * 0.14, s * 0.3, "S");
+  // Green status LED on top-right of body
+  doc.setFillColor(...BRAND_GREEN);
+  doc.circle(cx + bw / 2 - s * 0.23, cy - s * 0.04, s * 0.09, "F");
+  doc.setFillColor(...BRAND_TEAL);
+}
+
+/** Conference room (filled table + 6 seat circles). */
+function iconMeeting(doc: jsPDF, cx: number, cy: number, s: number): void {
+  doc.setFillColor(...BRAND_TEAL);
+  doc.setDrawColor(...BRAND_TEAL);
+  // Table (filled rounded rect)
+  doc.roundedRect(cx - s * 0.5, cy - s * 0.22, s * 1.0, s * 0.44, s * 0.08, s * 0.08, "F");
+  // Six seat circles around the table
+  const r = s * 0.12;
+  [
+    [cx - s * 0.28, cy - s * 0.58],
+    [cx + s * 0.28, cy - s * 0.58],
+    [cx - s * 0.28, cy + s * 0.58],
+    [cx + s * 0.28, cy + s * 0.58],
+    [cx - s * 0.70, cy],
+    [cx + s * 0.70, cy],
+  ].forEach(([px, py]) => doc.circle(px, py, r, "F"));
+}
+
+/**
+ * Renders the "What's Included" icon strip.
+ * Returns the new Y cursor after the section.
+ */
+function addServicesIncludedSection(doc: jsPDF, startY: number): number {
+  const pageWidth = doc.internal.pageSize.getWidth();
+  const sectionH = 28;
+
+  // Light teal background band
+  doc.setFillColor(240, 250, 245);
+  doc.rect(14, startY, pageWidth - 28, sectionH, "F");
+
+  // Section label
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text("FEATURED AMENITIES", 16, startY + 5);
+
+  const cellW = (pageWidth - 28) / 4;
+  const s = 4.5;           // icon half-size in mm
+  const iconY = startY + 15; // icon vertical centre
+  const textY = startY + 23.5;
+
+  const SERVICES: Array<{ label: string; fn: (cx: number, cy: number) => void }> = [
+    { label: "High-speed Wi-Fi & LAN",      fn: (cx, cy) => iconWifi(doc, cx, cy, s) },
+    { label: "Pantry Services",              fn: (cx, cy) => iconCoffee(doc, cx, cy, s) },
+    { label: "Printing Facilities",          fn: (cx, cy) => iconPrinter(doc, cx, cy, s) },
+    { label: "Conference & Meeting Rooms",   fn: (cx, cy) => iconMeeting(doc, cx, cy, s) },
+  ];
+
+  SERVICES.forEach((svc, i) => {
+    const cx = 14 + cellW * i + cellW / 2;
+    svc.fn(cx, iconY);
+
+    doc.setFontSize(7.5);
+    doc.setFont("helvetica", "normal");
+    doc.setTextColor(...BRAND_TEAL);
+    doc.text(svc.label, cx, textY, { align: "center" });
+  });
+
+  return startY + sectionH + 4;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
 
 function addLogoToDoc(doc: jsPDF): number {
   const pageWidth = doc.internal.pageSize.getWidth();
@@ -152,47 +296,96 @@ function generatePDF(options: PDFOptions): jsPDF {
 
   y += 8;
 
-  // ── Prepared For (Lead Info) ──
-  if (options.lead) {
-    // Section header with teal accent
-    doc.setFillColor(240, 250, 245); // light green-gray bg
+  // ── Prepared For / Point of Contact ──
+  if (options.lead || options.preparedBy) {
+    const hasBoth = !!(options.lead && options.preparedBy);
+    const col1X = 16;
+    const col2X = hasBoth ? (pageWidth / 2 + 4) : 16;
+
+    // Section header band
+    doc.setFillColor(240, 250, 245);
     doc.rect(14, y - 4, pageWidth - 28, 6, "F");
-    doc.setFontSize(10);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(...BRAND_TEAL);
-    doc.text("PREPARED FOR", 16, y);
+
+    if (options.lead) {
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(...BRAND_TEAL);
+      doc.text("PREPARED FOR", col1X, y);
+    }
+    if (options.preparedBy) {
+      doc.setFontSize(10);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(...BRAND_TEAL);
+      doc.text("YOUR POINT OF CONTACT", col2X, y);
+    }
     y += 6;
 
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(...BRAND_DARK);
-    const leadName = `${options.lead.first_name || ""} ${options.lead.last_name || ""}`.trim();
-    if (leadName) {
+    let leftY = y;
+    let rightY = y;
+
+    // Left column: Lead info
+    if (options.lead) {
+      const leadName = `${options.lead.first_name || ""} ${options.lead.last_name || ""}`.trim();
+      if (leadName) {
+        doc.setFont("helvetica", "bold");
+        doc.setFontSize(10);
+        doc.setTextColor(...BRAND_DARK);
+        doc.text(leadName, col1X, leftY);
+        doc.setFont("helvetica", "normal");
+        leftY += 5;
+      }
+      doc.setFontSize(9);
+      if (options.lead.company) {
+        doc.setTextColor(...BRAND_DARK);
+        doc.text(options.lead.company, col1X, leftY);
+        leftY += 5;
+      }
+      if (options.lead.email) {
+        doc.setTextColor(100, 100, 100);
+        doc.text(options.lead.email, col1X, leftY);
+        leftY += 5;
+      }
+      if (options.lead.phone || options.lead.mobile) {
+        doc.setTextColor(100, 100, 100);
+        doc.text(options.lead.phone || options.lead.mobile || "", col1X, leftY);
+        leftY += 5;
+      }
+      if (options.location?.name) {
+        doc.setTextColor(...BRAND_TEAL);
+        doc.setFont("helvetica", "bold");
+        doc.text(`Location: ${options.location.name}`, col1X, leftY);
+        doc.setFont("helvetica", "normal");
+        leftY += 5;
+      }
+    }
+
+    // Right column: Rep / point of contact info
+    if (options.preparedBy) {
       doc.setFont("helvetica", "bold");
-      doc.text(leadName, 16, y);
+      doc.setFontSize(10);
+      doc.setTextColor(...BRAND_DARK);
+      doc.text(options.preparedBy.name, col2X, rightY);
       doc.setFont("helvetica", "normal");
-      y += 5;
+      rightY += 5;
+      doc.setFontSize(9);
+      if (options.preparedBy.email) {
+        doc.setTextColor(100, 100, 100);
+        doc.text(options.preparedBy.email, col2X, rightY);
+        rightY += 5;
+      }
+      if (options.preparedBy.phone) {
+        doc.setTextColor(100, 100, 100);
+        doc.text(options.preparedBy.phone, col2X, rightY);
+        rightY += 5;
+      }
     }
-    if (options.lead.company) {
-      doc.text(options.lead.company, 16, y);
-      y += 5;
-    }
-    if (options.lead.email) {
-      doc.setTextColor(100, 100, 100);
-      doc.text(options.lead.email, 16, y);
-      y += 5;
-    }
-    if (options.lead.phone || options.lead.mobile) {
-      doc.text(options.lead.phone || options.lead.mobile || "", 16, y);
-      y += 5;
-    }
-    if (options.location?.name) {
-      doc.setTextColor(...BRAND_TEAL);
-      doc.setFont("helvetica", "bold");
-      doc.text(`Location: ${options.location.name}`, 16, y);
-      doc.setFont("helvetica", "normal");
-      y += 5;
-    }
-    y += 4;
+
+    y = Math.max(leftY, rightY) + 4;
+  }
+
+  // ── Services Included Strip (proposals only) ──
+  if (options.showServicesIncluded) {
+    y = addServicesIncludedSection(doc, y);
   }
 
   // ── Line Items Table ──
@@ -340,17 +533,47 @@ function generatePDF(options: PDFOptions): jsPDF {
     y += 4.5;
   });
 
-  // ── Razorpay Payment Link (below bank details, above QR) ──
+  // ── Razorpay Payment Link — button + raw URL ──────────────────────────────
   if (options.razorpayPaymentLink) {
-    y += 2;
-    doc.setFontSize(9);
+    y += 5;
+
+    // Section label in small grey caps
+    doc.setFontSize(8);
     doc.setFont("helvetica", "bold");
-    doc.setTextColor(...BRAND_TEAL);
-    doc.text("Pay Online:", 14, y);
+    doc.setTextColor(100, 100, 100);
+    doc.text("ONLINE PAYMENT", 14, y);
+    y += 5;
+
+    // Filled teal button — shows amount so customer knows exactly what they're paying
+    const btnX = 14;
+    const btnW = 92;
+    const btnH = 10;
+    doc.setFillColor(...BRAND_TEAL);
+    doc.roundedRect(btnX, y, btnW, btnH, 2, 2, "F");
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(255, 255, 255);
+    doc.text(
+      `Pay ${formatCurrencyPDF(options.totalAmount)} Online`,
+      btnX + btnW / 2,
+      y + 7,        // baseline ~70% down the 10mm button
+      { align: "center" }
+    );
+    // Make the entire button rectangle a clickable hyperlink
+    doc.link(btnX, y, btnW, btnH, { url: options.razorpayPaymentLink });
+    y += btnH + 3;
+
+    // Raw URL below button — visible for copy-paste or print
+    doc.setFontSize(7.5);
     doc.setFont("helvetica", "normal");
-    doc.setTextColor(0, 0, 200);
-    doc.textWithLink(options.razorpayPaymentLink, 42, y, { url: options.razorpayPaymentLink });
-    y += 6;
+    doc.setTextColor(30, 80, 200);
+    doc.textWithLink(
+      options.razorpayPaymentLink,
+      14,
+      y,
+      { url: options.razorpayPaymentLink }
+    );
+    y += 7;
   }
 
   // ── UPI QR Code (right side, next to bank details) ──
@@ -469,7 +692,8 @@ function generatePDF(options: PDFOptions): jsPDF {
 export function generateProposalPDF(
   proposal: Proposal & { location?: Partial<Location> },
   lead?: Partial<Lead>,
-  paymentOptions?: { qrCodeBase64?: string; upiId?: string; razorpayPaymentLink?: string }
+  paymentOptions?: { qrCodeBase64?: string; upiId?: string; razorpayPaymentLink?: string },
+  preparedBy?: { name: string; email?: string; phone?: string }
 ): jsPDF {
   return generatePDF({
     title: "PRO-FORMA INVOICE / PROPOSAL",
@@ -495,6 +719,8 @@ export function generateProposalPDF(
     qrCodeBase64: paymentOptions?.qrCodeBase64,
     upiId: paymentOptions?.upiId,
     razorpayPaymentLink: paymentOptions?.razorpayPaymentLink,
+    preparedBy,
+    showServicesIncluded: true,
   });
 }
 
@@ -516,6 +742,8 @@ export function generateInvoicePDF(
     createdAt: invoice.created_at,
     dueDate: invoice.due_date,
     notes: invoice.notes,
+    // Include payment link when available so the downloaded PDF is self-contained
+    razorpayPaymentLink: invoice.razorpay_link_url || undefined,
   });
 }
 

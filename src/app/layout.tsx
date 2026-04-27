@@ -1,6 +1,8 @@
 import type { Metadata, Viewport } from "next";
 import "./globals.css";
 import { ToastProvider } from "@/components/shared/toast-provider";
+import { Analytics } from "@vercel/analytics/next";
+import { SpeedInsights } from "@vercel/speed-insights/next";
 
 export const metadata: Metadata = {
   title: "The WorkVilla CRM",
@@ -35,6 +37,8 @@ export default function RootLayout({
       <body className="antialiased">
         {children}
         <ToastProvider />
+        <Analytics />
+        <SpeedInsights />
       </body>
     </html>
   );

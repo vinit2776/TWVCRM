@@ -73,7 +73,7 @@ export async function PATCH(
   // Handle profile and role updates
   const allowedFields: Record<string, unknown> = {};
 
-  if (body.role && ["admin", "manager", "sales_rep", "floor_manager"].includes(body.role)) {
+  if (body.role && ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin"].includes(body.role)) {
     allowedFields.role = body.role;
   }
   if (typeof body.is_active === "boolean") {
@@ -92,7 +92,9 @@ export async function PATCH(
 
   const { data: oldUser } = await supabase.from("users").select("*").eq("id", id).single();
 
-  const { data, error } = await supabase
+  // Use admin client for the update to bypass RLS and guarantee writes succeed
+  const adminSupabase = await createAdminClient();
+  const { data, error } = await adminSupabase
     .from("users")
     .update(allowedFields)
     .eq("id", id)

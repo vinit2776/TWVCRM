@@ -1,5 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { normalizeUploadServer, UploadValidationError } from "@/lib/uploads/normalize-upload-server";
+
+const TICKET_EXTRA_MIME = new Set([
+  "application/msword",
+  "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  "application/vnd.ms-excel",
+]);
 
 // POST — upload screenshot for a ticket (any authenticated user)
 export async function POST(
@@ -33,39 +41,27 @@ export async function POST(
     return NextResponse.json({ error: "No file provided" }, { status: 400 });
   }
 
-  // Validate file type (images and common document types)
-  const allowedTypes = ["image/", "application/pdf", "application/msword", "application/vnd.openxmlformats"];
-  if (!allowedTypes.some((t) => file.type.startsWith(t))) {
-    return NextResponse.json(
-      { error: "Only images, PDFs, and documents are allowed" },
-      { status: 400 }
-    );
-  }
-
-  // Validate file size (10MB max)
-  if (file.size > 10 * 1024 * 1024) {
-    return NextResponse.json(
-      { error: "File size must be under 10MB" },
-      { status: 400 }
-    );
-  }
-
   // Check ticket is not closed
   if (ticket.status === "closed") {
     return NextResponse.json({ error: "Cannot add attachments to a closed ticket" }, { status: 400 });
   }
 
-  // Upload to Supabase storage
-  const ext = file.name.split(".").pop() || "png";
-  const filePath = `support-screenshots/${id}-${Date.now()}.${ext}`;
+  // Normalize: images → JPEG 2048px, PDF pass-through, office docs pass-through, 50MB hard cap.
+  let normalized;
+  try {
+    normalized = await normalizeUploadServer(file, { extraMimeTypes: TICKET_EXTRA_MIME });
+  } catch (err) {
+    if (err instanceof UploadValidationError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
+  }
 
-  // Convert File to Buffer for reliable server-side upload
-  const arrayBuffer = await file.arrayBuffer();
-  const buffer = Buffer.from(arrayBuffer);
+  const filePath = `support-screenshots/${id}-${Date.now()}.${normalized.ext}`;
 
   const { error: uploadError } = await adminSupabase.storage
     .from("crm-documents")
-    .upload(filePath, buffer, { contentType: file.type, upsert: true });
+    .upload(filePath, normalized.buffer, { contentType: normalized.mimeType, upsert: true });
 
   if (uploadError) {
     return NextResponse.json(

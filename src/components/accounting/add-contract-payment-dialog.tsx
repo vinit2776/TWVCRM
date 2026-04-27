@@ -21,6 +21,7 @@ import {
 } from "@/components/ui/select";
 import { Loader2, Upload } from "lucide-react";
 import { toast } from "sonner";
+import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { CONTRACT_PAYMENT_MODE_LABELS } from "@/lib/constants";
 
 interface AddContractPaymentDialogProps {
@@ -81,14 +82,25 @@ export function AddContractPaymentDialog({
 
       const { data: payment } = await res.json();
 
-      // Upload screenshot if provided
+      // Upload screenshot if provided — normalize client-side before send.
       if (screenshotFile && payment?.id) {
-        const formData = new FormData();
-        formData.append("file", screenshotFile);
-        await fetch(`/api/accounting/contract-payments/${payment.id}/screenshot`, {
-          method: "POST",
-          body: formData,
-        });
+        try {
+          const processed = await prepareUpload(screenshotFile);
+          if (processed) {
+            const formData = new FormData();
+            formData.append("file", processed);
+            await fetch(`/api/accounting/contract-payments/${payment.id}/screenshot`, {
+              method: "POST",
+              body: formData,
+            });
+          }
+        } catch (e) {
+          if (e instanceof UploadTooLargeError) {
+            toast.error(e.message);
+          } else {
+            toast.error(e instanceof Error ? e.message : "Screenshot upload failed");
+          }
+        }
       }
 
       toast.success("Payment recorded");

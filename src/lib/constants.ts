@@ -174,15 +174,16 @@ export const INVOICE_STATUS_LABELS: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-export const USER_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms"] as const;
+export const USER_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin"] as const;
 
 export const USER_ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
   manager: "Manager",
   sales_rep: "Sales Rep",
-  floor_manager: "Floor Manager",
+  floor_manager: "Floor Incharge",
   accounts: "Accounts",
   fms: "Facility Manager",
+  office_admin: "Office Administrator",
 };
 
 export const RATINGS = ["none", "hot", "warm", "cold"] as const;
@@ -706,10 +707,10 @@ export const ENTITY_TYPE_LABELS: Record<string, string> = {
 // ==========================================
 export const KYC_DOCUMENTS: Record<string, string[]> = {
   individual: [
-    "PAN Card",
     "Aadhaar Card",
-    "Passport-size Photograph",
-    "Address Proof (utility bill / bank statement)",
+    "PAN Card",
+    "Cancelled Cheque",
+    "GST Certificate",
   ],
   proprietorship: [
     "PAN Card of Proprietor",
@@ -720,43 +721,36 @@ export const KYC_DOCUMENTS: Record<string, string[]> = {
     "Passport-size Photograph of Proprietor",
   ],
   partnership: [
-    "Partnership Deed",
-    "PAN Card of Firm",
-    "PAN & Aadhaar of all Partners",
-    "GST Registration Certificate",
-    "Authority Letter / Board Resolution",
-    "Address Proof of Firm",
-    "Passport-size Photograph of Authorised Partner",
+    "Partnership Agreement / Registration Certificate",
+    "Authority Letter",
+    "Cancelled Cheque",
+    "KYC (PAN Card & Aadhaar Card of all Partners)",
+    "GST Certificate",
   ],
   llp: [
-    "LLP Agreement",
-    "Certificate of Incorporation (MCA)",
-    "PAN Card of LLP",
-    "PAN & Aadhaar of Designated Partners",
-    "GST Registration Certificate",
-    "Board Resolution / Authority Letter",
-    "Address Proof of LLP",
-    "Passport-size Photograph of Authorised Partner",
+    "LLP Agreement / Registration Certificate",
+    "LLP PAN Card",
+    "Cancelled Cheque",
+    "KYC (PAN Card & Aadhaar Card of all Partners)",
+    "GST Certificate",
   ],
   pvt_ltd: [
-    "Certificate of Incorporation (MCA)",
-    "MOA & AOA",
     "PAN Card of Company",
-    "GST Registration Certificate",
-    "Board Resolution authorising signatory",
-    "PAN & Aadhaar of Authorised Director(s)",
-    "Address Proof of Company",
-    "Passport-size Photograph of Authorised Director",
+    "Certificate of Incorporation",
+    "Board Resolution (in favour of authorised signatory executing membership agreement)",
+    "MOA & AOA",
+    "KYC (PAN Card & Aadhaar Card of all Directors)",
+    "Cancelled Cheque",
+    "GST Certificate",
   ],
   public_ltd: [
-    "Certificate of Incorporation (MCA)",
-    "MOA & AOA",
     "PAN Card of Company",
-    "GST Registration Certificate",
-    "Board Resolution authorising signatory",
-    "PAN & Aadhaar of Authorised Director(s)",
-    "Address Proof of Company",
-    "Passport-size Photograph of Authorised Director",
+    "Certificate of Incorporation",
+    "Board Resolution (in favour of authorised signatory executing membership agreement)",
+    "MOA & AOA",
+    "KYC (PAN Card & Aadhaar Card of all Directors)",
+    "Cancelled Cheque",
+    "GST Certificate",
   ],
   trust: [
     "Trust Deed",
@@ -1257,7 +1251,7 @@ export type PrStatus = (typeof PR_STATUSES)[number];
 
 export const PR_STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
-  submitted: "Submitted",
+  submitted: "Pending Approval",
   approved: "Approved",
   rejected: "Rejected",
   partially_ordered: "Partially Ordered",
@@ -1347,6 +1341,21 @@ export const REJECTION_OUTCOME_LABELS: Record<string, string> = {
   return: "Return Goods & Cancel PO",
   replacement: "Request Replacement (New PR)",
   void: "Void (Service Invoice)",
+};
+
+// Payment Batch Scheduling
+export const PAYMENT_BATCH_TYPES = ["immediate", "15th", "25th"] as const;
+
+export const PAYMENT_BATCH_TYPE_LABELS: Record<string, string> = {
+  immediate: "Immediate",
+  "15th": "15th of Month",
+  "25th": "25th of Month",
+};
+
+export const PAYMENT_BATCH_TYPE_COLORS: Record<string, string> = {
+  immediate: "bg-blue-100 text-blue-800",
+  "15th": "bg-violet-100 text-violet-800",
+  "25th": "bg-indigo-100 text-indigo-800",
 };
 
 export const ITEM_TYPES = ["goods", "service"] as const;
@@ -1523,4 +1532,23 @@ export const CORRECTION_TYPE_LABELS: Record<string, string> = {
   void: "Void Entry",
   adjust: "Adjust Quantity",
   relog: "Re-log (Void & Replace)",
+};
+
+// ── Expenditure Types ─────────────────────────────────────────────────────────
+export const EXPENDITURE_TYPES = ["operational", "amc"] as const;
+export type ExpenditureType = (typeof EXPENDITURE_TYPES)[number];
+
+export const EXPENDITURE_TYPE_LABELS: Record<string, string> = {
+  operational: "Operational",
+  amc: "AMC / Annual Contract",
+};
+
+export const EXPENDITURE_TYPE_DESCRIPTIONS: Record<string, string> = {
+  operational: "Counts against monthly department budget",
+  amc: "Annual maintenance contract — excluded from monthly budget",
+};
+
+export const EXPENDITURE_TYPE_COLORS: Record<string, string> = {
+  operational: "bg-blue-100 text-blue-800",
+  amc: "bg-purple-100 text-purple-800",
 };

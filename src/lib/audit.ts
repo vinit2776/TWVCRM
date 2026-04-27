@@ -53,7 +53,8 @@ export async function logEmailActivity(
 }
 
 /**
- * Log a WhatsApp-send event as a lead activity.
+ * Log a WhatsApp-send event as a lead activity (stored as a note so it appears
+ * in the lead timeline without requiring a schema change).
  * Fires and forgets — does not throw on failure so it never blocks the main operation.
  */
 export async function logWhatsAppActivity(
@@ -69,8 +70,8 @@ export async function logWhatsAppActivity(
 
   await supabase.from("activities").insert({
     lead_id: leadId,
-    type: "whatsapp",
-    subject,
+    type: "note",
+    subject: `📱 WhatsApp: ${subject}`,
     description,
     created_by: createdBy,
   }).then(({ error }) => {

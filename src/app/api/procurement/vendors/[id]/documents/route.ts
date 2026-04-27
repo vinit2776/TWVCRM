@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import sharp from "sharp";
+import {
+  normalizeUploadServer,
+  UploadValidationError,
+  IMAGE_MIME_TYPES,
+  PDF_MIME_TYPE,
+} from "@/lib/uploads/normalize-upload-server";
 
 const ALLOWED_FIELDS = [
   "pan_doc_path",
@@ -11,36 +16,6 @@ const ALLOWED_FIELDS = [
 ] as const;
 
 type DocField = (typeof ALLOWED_FIELDS)[number];
-
-const IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/jpg", "image/png", "image/webp"]);
-const MAX_DIMENSION = 2048; // px — longest side
-const JPEG_QUALITY = 82;   // good balance of quality vs file size
-const MAX_FILE_BYTES = 10 * 1024 * 1024; // 10 MB raw input limit
-
-/**
- * Normalise uploaded file:
- * - Images (JPEG / PNG / WEBP) → converted to JPEG, resized to max 2048px on longest side,
- *   compressed to Q82. Typical result: 150–400 KB regardless of input size.
- * - PDFs → passed through unchanged.
- * Returns { buffer, mimeType, ext }.
- */
-async function normaliseFile(
-  file: File
-): Promise<{ buffer: Buffer; mimeType: string; ext: string }> {
-  const raw = Buffer.from(await file.arrayBuffer());
-
-  if (IMAGE_MIME_TYPES.has(file.type)) {
-    const processed = await sharp(raw)
-      .rotate()                            // auto-orient from EXIF
-      .resize({ width: MAX_DIMENSION, height: MAX_DIMENSION, fit: "inside", withoutEnlargement: true })
-      .jpeg({ quality: JPEG_QUALITY, mozjpeg: true })
-      .toBuffer();
-    return { buffer: processed, mimeType: "image/jpeg", ext: "jpg" };
-  }
-
-  // PDF — pass through
-  return { buffer: raw, mimeType: "application/pdf", ext: "pdf" };
-}
 
 // POST /api/procurement/vendors/[id]/documents
 // Upload a compliance document, normalise it, and store the path on the vendor record.
@@ -59,7 +34,7 @@ export async function POST(
     .eq("auth_id", user.id)
     .single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
-  if (!["admin", "manager", "fms", "floor_manager", "office_admin"].includes(dbUser.role)) {
+  if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
   }
 
@@ -71,13 +46,14 @@ export async function POST(
   if (!field || !ALLOWED_FIELDS.includes(field as DocField)) {
     return NextResponse.json({ error: "Invalid document field" }, { status: 400 });
   }
-  if (file.size > MAX_FILE_BYTES) {
-    return NextResponse.json({ error: "File too large (max 10MB)" }, { status: 400 });
-  }
 
-  // Reject unsupported types early
-  if (!IMAGE_MIME_TYPES.has(file.type) && file.type !== "application/pdf") {
-    return NextResponse.json({ error: "Only JPEG, PNG, WEBP, and PDF files are accepted" }, { status: 400 });
+  // Reject unsupported types up front with a friendly message (the normalizer
+  // would throw too, but this message is clearer for this specific route).
+  if (!IMAGE_MIME_TYPES.has(file.type) && file.type !== PDF_MIME_TYPE) {
+    return NextResponse.json(
+      { error: "Only JPEG, PNG, WEBP, HEIC, and PDF files are accepted" },
+      { status: 400 }
+    );
   }
 
   const adminSupabase = await createAdminClient();
@@ -91,12 +67,21 @@ export async function POST(
     return NextResponse.json({ error: "Vendor not found" }, { status: 404 });
   }
 
-  const { buffer, mimeType, ext } = await normaliseFile(file);
-  const filePath = `vendors/${id}/${field}-${Date.now()}.${ext}`;
+  let normalized;
+  try {
+    normalized = await normalizeUploadServer(file);
+  } catch (err) {
+    if (err instanceof UploadValidationError) {
+      return NextResponse.json({ error: err.message }, { status: err.status });
+    }
+    throw err;
+  }
+
+  const filePath = `vendors/${id}/${field}-${Date.now()}.${normalized.ext}`;
 
   const { error: uploadError } = await adminSupabase.storage
     .from("crm-documents")
-    .upload(filePath, buffer, { contentType: mimeType, upsert: true });
+    .upload(filePath, normalized.buffer, { contentType: normalized.mimeType, upsert: true });
 
   if (uploadError) {
     return NextResponse.json({ error: uploadError.message }, { status: 500 });
@@ -111,15 +96,12 @@ export async function POST(
     return NextResponse.json({ error: updateError.message }, { status: 500 });
   }
 
-  const originalKB = Math.round(file.size / 1024);
-  const finalKB = Math.round(buffer.length / 1024);
-
   return NextResponse.json({
     data: {
       path: filePath,
-      original_size_kb: originalKB,
-      final_size_kb: finalKB,
-      compressed: originalKB !== finalKB,
+      original_size_kb: Math.round(normalized.originalBytes / 1024),
+      final_size_kb: Math.round(normalized.finalBytes / 1024),
+      compressed: normalized.originalBytes !== normalized.finalBytes,
     },
   });
 }

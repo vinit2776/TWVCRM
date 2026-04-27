@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye } from "lucide-react";
+import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye, CreditCard, Copy } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -24,7 +24,6 @@ import {
   INVOICE_STATUS_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
-import { generateProposalPDF, generateInvoicePDF } from "@/lib/pdf-generator";
 import { toast } from "sonner";
 import type { Proposal, ProformaInvoice, Lead } from "@/types";
 
@@ -56,7 +55,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
     id: string;
     number: string;
     leadEmail?: string;
-    generatePDF: () => string;
+    generatePDF: () => Promise<string>;
   } | null>(null);
 
   // Lead info for PDF generation
@@ -94,13 +93,15 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
   };
 
   // ── Download Proposal PDF ──
-  const handleDownloadProposalPDF = (p: Proposal) => {
+  const handleDownloadProposalPDF = async (p: Proposal) => {
+    const { generateProposalPDF } = await import("@/lib/pdf-generator");
     const doc = generateProposalPDF(p, lead || undefined);
     doc.save(`${p.proposal_number}.pdf`);
   };
 
   // ── Download Invoice PDF ──
-  const handleDownloadInvoicePDF = (inv: ProformaInvoice) => {
+  const handleDownloadInvoicePDF = async (inv: ProformaInvoice) => {
+    const { generateInvoicePDF } = await import("@/lib/pdf-generator");
     const doc = generateInvoicePDF(inv, lead || undefined);
     doc.save(`${inv.invoice_number}.pdf`);
   };
@@ -112,11 +113,11 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       id: p.id,
       number: p.proposal_number,
       leadEmail: lead?.email || undefined,
-      generatePDF: () => {
+      generatePDF: async () => {
+        const { generateProposalPDF } = await import("@/lib/pdf-generator");
         const doc = generateProposalPDF(p, lead || undefined);
         // Get base64 without data URI prefix
-        const base64 = doc.output("datauristring").split(",")[1];
-        return base64;
+        return doc.output("datauristring").split(",")[1];
       },
     });
     setEmailDialogOpen(true);
@@ -129,10 +130,10 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       id: inv.id,
       number: inv.invoice_number,
       leadEmail: lead?.email || undefined,
-      generatePDF: () => {
+      generatePDF: async () => {
+        const { generateInvoicePDF } = await import("@/lib/pdf-generator");
         const doc = generateInvoicePDF(inv, lead || undefined);
-        const base64 = doc.output("datauristring").split(",")[1];
-        return base64;
+        return doc.output("datauristring").split(",")[1];
       },
     });
     setEmailDialogOpen(true);
@@ -197,6 +198,37 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
     }
   };
 
+  // ── Mark Invoice Paid + Send GST Invoice ──
+  const handleMarkInvoicePaid = async (inv: ProformaInvoice) => {
+    const ref = window.prompt(
+      `Enter payment reference / UTR for ${inv.invoice_number} (optional):`
+    );
+    if (ref === null) return; // cancelled
+
+    const amount = window.prompt(
+      `Confirm amount received (₹):`,
+      String(Number(inv.total_amount))
+    );
+    if (!amount) return;
+
+    const res = await fetch(`/api/invoices/${inv.id}/payment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ amount: parseFloat(amount), reference: ref.trim() || undefined }),
+    });
+    const json = await res.json();
+    if (res.ok) {
+      toast.success(
+        json.customer_email
+          ? `Invoice paid. GST invoice sent to ${json.customer_email}.`
+          : "Invoice marked as paid."
+      );
+      fetchData();
+    } else {
+      toast.error(json.error || "Failed to record payment");
+    }
+  };
+
   if (loading) {
     return <TableSkeleton rows={4} />;
   }
@@ -229,6 +261,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                     <th className="px-4 py-3 text-left font-medium">Proposal #</th>
                     <th className="px-4 py-3 text-left font-medium">Title</th>
                     <th className="px-4 py-3 text-left font-medium">Status</th>
+                    <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Opened</th>
                     <th className="px-4 py-3 text-right font-medium">Amount</th>
                     <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Created</th>
                     <th className="px-4 py-3 text-left font-medium w-16">Actions</th>
@@ -243,6 +276,18 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                         <Badge variant="secondary" className={PROPOSAL_STATUS_COLORS[p.status]}>
                           {PROPOSAL_STATUS_LABELS[p.status]}
                         </Badge>
+                      </td>
+                      <td className="px-4 py-3 hidden sm:table-cell">
+                        {p.viewed_at ? (
+                          <span className="inline-flex items-center gap-1 text-xs text-green-700 font-medium">
+                            <CheckCircle2 className="h-3 w-3" />
+                            {formatDate(p.viewed_at)}
+                          </span>
+                        ) : p.status === "sent" ? (
+                          <span className="text-xs text-muted-foreground">Not yet opened</span>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-right font-medium">
                         {formatCurrency(p.total_amount)}
@@ -279,10 +324,10 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                                 Mark as Sent
                               </DropdownMenuItem>
                             )}
-                            {(p.status === "sent") && (
-                              <DropdownMenuItem onClick={() => handleUpdateProposalStatus(p.id, "viewed", "Viewed")}>
-                                <Eye className="mr-2 h-4 w-4" />
-                                Mark as Viewed
+                            {p.status === "sent" && (
+                              <DropdownMenuItem disabled className="text-xs text-muted-foreground opacity-60 cursor-default select-none">
+                                <Eye className="mr-2 h-3.5 w-3.5" />
+                                {p.viewed_at ? `Opened ${formatDate(p.viewed_at)}` : "Opens when customer clicks email link"}
                               </DropdownMenuItem>
                             )}
                             {(p.status === "sent" || p.status === "viewed") && (
@@ -326,7 +371,12 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       {/* Invoices Section */}
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
-          <CardTitle className="text-base">Proforma Invoices</CardTitle>
+          <div>
+            <CardTitle className="text-base">Proforma Invoices</CardTitle>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              For adhoc or additional charges only — not for security deposit or monthly rentals
+            </p>
+          </div>
           <Button size="sm" onClick={() => setInvoiceFormOpen(true)}>
             <Plus className="mr-2 h-4 w-4" />
             New Invoice
@@ -350,7 +400,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                     <th className="px-4 py-3 text-left font-medium">Title</th>
                     <th className="px-4 py-3 text-left font-medium">Status</th>
                     <th className="px-4 py-3 text-right font-medium">Amount</th>
-                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Due Date</th>
+                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Pay Link / Reference</th>
                     <th className="px-4 py-3 text-left font-medium w-16">Actions</th>
                   </tr>
                 </thead>
@@ -367,8 +417,32 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                       <td className="px-4 py-3 text-right font-medium">
                         {formatCurrency(inv.total_amount)}
                       </td>
-                      <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
-                        {inv.due_date ? formatDate(inv.due_date) : "-"}
+                      {/* Pay Link / Reference column */}
+                      <td className="px-4 py-3 hidden md:table-cell">
+                        {inv.status === "paid" ? (
+                          <div className="space-y-0.5">
+                            {inv.payment_reference && (
+                              <p className="text-xs font-mono text-green-700">{inv.payment_reference}</p>
+                            )}
+                            {inv.gst_invoice_number && (
+                              <p className="text-xs text-muted-foreground">GST: {inv.gst_invoice_number}</p>
+                            )}
+                          </div>
+                        ) : inv.razorpay_link_url ? (
+                          <button
+                            type="button"
+                            className="flex items-center gap-1 text-xs text-primary hover:underline"
+                            onClick={() => {
+                              navigator.clipboard.writeText(inv.razorpay_link_url!);
+                              toast.success("Payment link copied");
+                            }}
+                          >
+                            <Copy className="h-3 w-3" />
+                            Copy link
+                          </button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
                       </td>
                       <td className="px-4 py-3">
                         <DropdownMenu>
@@ -386,6 +460,12 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                               <Mail className="mr-2 h-4 w-4" />
                               Email to Lead
                             </DropdownMenuItem>
+                            {inv.razorpay_link_url && inv.status !== "paid" && (
+                              <DropdownMenuItem onClick={() => { navigator.clipboard.writeText(inv.razorpay_link_url!); toast.success("Payment link copied"); }}>
+                                <CreditCard className="mr-2 h-4 w-4" />
+                                Copy Payment Link
+                              </DropdownMenuItem>
+                            )}
                             <DropdownMenuSeparator />
                             {inv.status === "draft" && (
                               <DropdownMenuItem onClick={() => handleUpdateInvoiceStatus(inv.id, "sent", "Sent")}>
@@ -395,11 +475,11 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                             )}
                             {(inv.status === "sent" || inv.status === "overdue") && (
                               <DropdownMenuItem
-                                onClick={() => handleUpdateInvoiceStatus(inv.id, "paid", "Paid")}
+                                onClick={() => handleMarkInvoicePaid(inv)}
                                 className="text-green-600"
                               >
                                 <CheckCircle2 className="mr-2 h-4 w-4" />
-                                Mark as Paid
+                                Mark Paid + Send GST Invoice
                               </DropdownMenuItem>
                             )}
                             {inv.status === "sent" && (

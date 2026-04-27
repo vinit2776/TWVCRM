@@ -31,6 +31,12 @@ interface CreateContractDialogProps {
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
   leadId: string;
+  /**
+   * When provided (e.g. opened from a proposal detail page), the dialog
+   * automatically switches to "From Proposal" mode and pre-selects this
+   * proposal ID so the user doesn't have to hunt for it.
+   */
+  defaultProposalId?: string;
 }
 
 export function CreateContractDialog({
@@ -38,6 +44,7 @@ export function CreateContractDialog({
   onOpenChange,
   onSuccess,
   leadId,
+  defaultProposalId,
 }: CreateContractDialogProps) {
   const [lead, setLead] = useState<Lead | null>(null);
   const [proposals, setProposals] = useState<Proposal[]>([]);
@@ -70,6 +77,7 @@ export function CreateContractDialog({
   const [startDate, setStartDate] = useState("");
   const [tenureMonths, setTenureMonths] = useState<number>(12);
   const [lockInMonths, setLockInMonths] = useState<number>(10);
+  const [noticePeriodMonths, setNoticePeriodMonths] = useState<number>(2);
   const [securityDepositMonths, setSecurityDepositMonths] = useState<number>(3.0);
   const [escalationPercentage, setEscalationPercentage] = useState<number>(10.0);
 
@@ -113,12 +121,22 @@ export function CreateContractDialog({
             if (l.seat_capacity) setSeats(l.seat_capacity);
             if (l.location_id) setLocationId(l.location_id);
           }
-          setProposals(proposalsJson.data || []);
+          const loaded: Proposal[] = proposalsJson.data || [];
+          setProposals(loaded);
+
+          // Auto-select proposal if opened from a proposal detail page
+          if (defaultProposalId) {
+            const match = loaded.find((p) => p.id === defaultProposalId);
+            if (match) {
+              setSource("proposal");
+              setSelectedProposalId(defaultProposalId);
+            }
+          }
         })
         .catch(() => {})
         .finally(() => setLoadingData(false));
     }
-  }, [open, leadId]);
+  }, [open, leadId, defaultProposalId]);
 
   const selectedProposal = useMemo(
     () => proposals.find((p) => p.id === selectedProposalId) || null,
@@ -171,12 +189,22 @@ export function CreateContractDialog({
   }, [startDate, tenureMonths]);
 
   const ifrsdAmount = monthlyFee * securityDepositMonths;
-  const noticePeriodMonths = Math.max(0, tenureMonths - lockInMonths);
+  const maxNoticePeriod = Math.max(0, tenureMonths - lockInMonths);
 
   const handleTenureChange = (val: string) => {
     const t = parseInt(val);
+    const newLockIn = Math.min(lockInMonths, t);
     setTenureMonths(t);
-    if (lockInMonths > t) setLockInMonths(t);
+    setLockInMonths(newLockIn);
+    const newMax = Math.max(0, t - newLockIn);
+    if (noticePeriodMonths > newMax) setNoticePeriodMonths(newMax);
+  };
+
+  const handleLockInChange = (val: string) => {
+    const l = parseInt(val);
+    setLockInMonths(l);
+    const newMax = Math.max(0, tenureMonths - l);
+    if (noticePeriodMonths > newMax) setNoticePeriodMonths(newMax);
   };
 
   const missingCompany = !company.trim();
@@ -203,6 +231,7 @@ export function CreateContractDialog({
     setStartDate("");
     setTenureMonths(12);
     setLockInMonths(10);
+    setNoticePeriodMonths(2);
     setSecurityDepositMonths(3.0);
     setEscalationPercentage(10.0);
     setSignatoryName("");
@@ -617,7 +646,7 @@ export function CreateContractDialog({
                 <Label>
                   Lock-in Period <span className="text-destructive">*</span>
                 </Label>
-                <Select value={String(lockInMonths)} onValueChange={(v) => setLockInMonths(parseInt(v))}>
+                <Select value={String(lockInMonths)} onValueChange={handleLockInChange}>
                   <SelectTrigger>
                     <SelectValue />
                   </SelectTrigger>
@@ -629,6 +658,26 @@ export function CreateContractDialog({
                     ))}
                   </SelectContent>
                 </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>
+                  Notice Period <span className="text-destructive">*</span>
+                </Label>
+                <Select value={String(noticePeriodMonths)} onValueChange={(v) => setNoticePeriodMonths(parseInt(v))}>
+                  <SelectTrigger>
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: maxNoticePeriod + 1 }, (_, i) => i).map((m) => (
+                      <SelectItem key={m} value={String(m)}>
+                        {m === 0 ? "None (0 months)" : `${m} month${m !== 1 ? "s" : ""}`}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {maxNoticePeriod === 0 && (
+                  <p className="text-xs text-muted-foreground">Lock-in equals tenure — no notice period available.</p>
+                )}
               </div>
               <div className="space-y-2">
                 <Label>Security Deposit (x Monthly Fee)</Label>
