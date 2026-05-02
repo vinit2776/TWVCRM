@@ -67,24 +67,21 @@ export async function PATCH(
     return NextResponse.json({ error: "Contract not found" }, { status: 404 });
   }
 
-  // Department ID uniqueness check (per location). The DB has a partial unique
-  // index, so we'd get a 23505 anyway — but a friendly pre-check produces a
-  // better error message that names the conflicting contract.
+  // Department ID uniqueness check — global, not per location. The DB has a
+  // partial unique index on department_id alone, so we'd get a 23505 anyway,
+  // but a friendly pre-check returns a message naming the conflicting contract.
   if (allowedFields.department_id != null && allowedFields.department_id !== oldContract.department_id) {
-    const locId = (allowedFields.location_id as string | null) ?? oldContract.location_id;
-    if (locId) {
-      const { data: clash } = await supabase
-        .from("contracts")
-        .select("contract_number")
-        .eq("location_id", locId)
-        .eq("department_id", allowedFields.department_id)
-        .neq("id", id)
-        .maybeSingle();
-      if (clash) {
-        return NextResponse.json({
-          error: `Department ID "${allowedFields.department_id}" is already used by ${clash.contract_number} at this location`,
-        }, { status: 409 });
-      }
+    const { data: clash } = await supabase
+      .from("contracts")
+      .select("contract_number, location:locations!contracts_location_id_fkey(name)")
+      .eq("department_id", allowedFields.department_id)
+      .neq("id", id)
+      .maybeSingle();
+    if (clash) {
+      const loc = (clash.location as { name?: string } | null)?.name;
+      return NextResponse.json({
+        error: `Department ID "${allowedFields.department_id}" is already used by ${clash.contract_number}${loc ? ` (${loc})` : ""}`,
+      }, { status: 409 });
     }
   }
   // Handle special status transitions

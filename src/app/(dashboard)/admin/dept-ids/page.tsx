@@ -70,14 +70,15 @@ export default function BulkDeptIdsPage() {
     })();
   }, []);
 
-  // Per-location dup detection
+  // Global dup detection — Department IDs are unique across the network.
+  // Two contracts (anywhere) with the same ID will collide on save, so we
+  // surface it inline before the API rejects the duplicate.
   const dupKeys = useMemo(() => {
     const counts = new Map<string, number>();
     for (const r of rows) {
       const v = r.draft.trim();
-      if (!v || !r.location_id) continue;
-      const key = `${r.location_id}::${v}`;
-      counts.set(key, (counts.get(key) || 0) + 1);
+      if (!v) continue;
+      counts.set(v, (counts.get(v) || 0) + 1);
     }
     return new Set(Array.from(counts.entries()).filter(([, n]) => n > 1).map(([k]) => k));
   }, [rows]);
@@ -106,13 +107,10 @@ export default function BulkDeptIdsPage() {
     const newVal = r.draft.trim() || null;
     if (newVal === (r.department_id || null)) return;     // no change
 
-    if (newVal && r.location_id) {
-      const key = `${r.location_id}::${newVal}`;
-      if (dupKeys.has(key)) {
-        updateField(idx, { error: "Duplicate at this location", saving: false });
-        toast.error(`Department ID "${newVal}" used by another contract at this location`);
-        return;
-      }
+    if (newVal && dupKeys.has(newVal)) {
+      updateField(idx, { error: "Duplicate — same ID elsewhere", saving: false });
+      toast.error(`Department ID "${newVal}" is already used by another contract`);
+      return;
     }
 
     updateField(idx, { saving: true, error: null });
@@ -159,8 +157,9 @@ export default function BulkDeptIdsPage() {
       <div>
         <h1 className="text-xl md:text-2xl font-semibold">Bulk Department ID Assignment</h1>
         <p className="text-xs md:text-sm text-muted-foreground">
-          Map each active contract to its printer-server Department ID. Without this mapping,
-          monthly print reports can't bill the right customer.
+          Map each active contract to its printer-server Department ID. IDs are unique
+          across the network — the same ID can never be reused at another location.
+          Without this mapping, monthly print reports can&apos;t bill the right customer.
         </p>
       </div>
 
@@ -213,7 +212,7 @@ export default function BulkDeptIdsPage() {
                       const idx = rows.findIndex((x) => x.id === r.id);
                       const customer = r.lead?.company ||
                         [r.lead?.first_name, r.lead?.last_name].filter(Boolean).join(" ") || "—";
-                      const isDup = !!r.draft.trim() && r.location_id ? dupKeys.has(`${r.location_id}::${r.draft.trim()}`) : false;
+                      const isDup = !!r.draft.trim() && dupKeys.has(r.draft.trim());
                       return (
                         <tr key={r.id} className="border-t hover:bg-muted/20">
                           <td className="px-3 py-2">
@@ -238,7 +237,7 @@ export default function BulkDeptIdsPage() {
                             />
                             {(isDup || r.error) && (
                               <p className="text-[10px] text-red-600 mt-0.5">
-                                {isDup ? "Duplicate at this location" : r.error}
+                                {isDup ? "Duplicate — same ID assigned elsewhere" : r.error}
                               </p>
                             )}
                           </td>
