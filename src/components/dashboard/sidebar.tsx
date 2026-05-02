@@ -148,8 +148,8 @@ const navSections: NavSection[] = [
     icon: Wrench,
     items: [
       { href: "/facility",            label: "Dashboard",  icon: BarChart3Icon, roles: ["admin", "it_manager"] },
-      { href: "/facility/issues",     label: "Issues",     icon: ClipboardList, roles: ["admin", "manager", "it_manager", "it_technician", "fms", "office_admin", "floor_manager"] },
-      { href: "/facility/my-issues",  label: "My Issues",  icon: Ticket,        roles: ["admin", "it_manager", "it_technician"] },
+      { href: "/facility/issues",     label: "Issues",     icon: ClipboardList, roles: null },
+      { href: "/facility/my-issues",  label: "My Issues",  icon: Ticket,        roles: null },
       { href: "/facility/assets",     label: "Assets",     icon: Server,        roles: ["admin", "manager", "it_manager", "it_technician"] },
       { href: "/facility/team-kpi",   label: "Team KPI",   icon: TrendingUp,    roles: ["admin", "it_manager"] },
     ],
@@ -266,8 +266,8 @@ export function Sidebar() {
   useEffect(() => {
     fetch("/api/me")
       .then((r) => r.json())
-      .then((json) => setUserRole(json.role || "sales_rep"))
-      .catch(() => setUserRole("sales_rep"));
+      .then((json) => setUserRole(json.role ?? null))
+      .catch(() => setUserRole(null));
   }, []);
 
   // Auto-expand the section containing the active route

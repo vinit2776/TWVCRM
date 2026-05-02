@@ -18,7 +18,7 @@ export async function GET() {
     } = await supabase.auth.getUser();
 
     if (authError || !user) {
-      return NextResponse.json({ role: "sales_rep" });
+      return NextResponse.json({ role: null });
     }
 
     const { data } = await supabase
@@ -28,12 +28,12 @@ export async function GET() {
       .single();
 
     return NextResponse.json({
-      role: data?.role ?? "sales_rep",
+      role: data?.role ?? null,
       full_name: data?.full_name ?? "",
       email: data?.email ?? "",
       phone: data?.phone ?? "",
     });
   } catch {
-    return NextResponse.json({ role: "sales_rep" });
+    return NextResponse.json({ role: null });
   }
 }
