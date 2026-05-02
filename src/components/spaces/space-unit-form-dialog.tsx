@@ -23,7 +23,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { ChevronRight, Minus, Plus, Check, MapPin, Loader2 } from "lucide-react";
+import { ChevronRight, Minus, Plus, Check, Loader2 } from "lucide-react";
 import type { SpaceUnit, SpaceUnitType, LocationFloor } from "@/types";
 
 // ── Constants ──────────────────────────────────────────────────────────────
@@ -135,23 +135,6 @@ function suggestName(type: SpaceUnitType, existingUnits: SpaceUnit[]): string {
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
-export interface PendingSpaceUnit {
-  floor_id: string | null;
-  type: SpaceUnitType;
-  name: string;
-  code: string;
-  capacity: number;
-  area_sqft: number | null;
-  monthly_rate: number | null;
-  daily_rate: number | null;
-  hourly_rate: number | null;
-  amenities: string[];
-  notes: string;
-  color: string;
-  grid_col_span: number;
-  grid_row_span: number;
-}
-
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -161,57 +144,10 @@ interface Props {
   existingUnits: SpaceUnit[];
   /** Edit mode — present when editing an existing unit */
   unit?: SpaceUnit | null;
-  /** ADD mode: called after wizard completes; canvas then handles placement */
-  onReadyToPlace?: (data: PendingSpaceUnit) => void;
-  /** EDIT mode: called after PUT API succeeds */
+  /** Called after unit is saved (add or edit) */
   onSuccess?: (unit: SpaceUnit) => void;
-  /** EDIT mode: called when user deletes from the dialog */
+  /** Called when user deletes a unit from the edit dialog */
   onDelete?: (unit: SpaceUnit) => void;
-}
-
-// ── Mini floor grid preview ─────────────────────────────────────────────────
-
-function MiniFloorPreview({
-  floor, type, colSpan, rowSpan,
-}: { floor: LocationFloor; type: SpaceUnitType; colSpan: number; rowSpan: number }) {
-  const MINI = Math.min(8, Math.floor(240 / floor.grid_cols)); // px per cell, max 8
-  const w = floor.grid_cols * MINI;
-  const h = floor.grid_rows * MINI;
-  const pct = Math.round((colSpan * rowSpan * 100) / (floor.grid_cols * floor.grid_rows));
-
-  return (
-    <div className="space-y-1.5">
-      <div
-        style={{
-          width: w, height: h,
-          display: "grid",
-          gridTemplateColumns: `repeat(${floor.grid_cols}, ${MINI}px)`,
-          gridTemplateRows: `repeat(${floor.grid_rows}, ${MINI}px)`,
-          backgroundImage:
-            `linear-gradient(${MINI}px, #e5e7eb ${MINI}px, transparent ${MINI}px),
-             linear-gradient(90deg, ${MINI}px, #e5e7eb ${MINI}px, transparent ${MINI}px)`,
-          backgroundSize: `${MINI}px ${MINI}px`,
-          border: "1px solid #e5e7eb",
-          borderRadius: 4,
-          backgroundColor: "#f9fafb",
-          overflow: "hidden",
-        }}
-      >
-        <div
-          style={{
-            gridColumn: `1 / span ${Math.min(colSpan, floor.grid_cols)}`,
-            gridRow: `1 / span ${Math.min(rowSpan, floor.grid_rows)}`,
-            backgroundColor: COLOR_MAP[type],
-            border: `1px solid ${BORDER_MAP[type]}`,
-            borderRadius: 2,
-          }}
-        />
-      </div>
-      <p className="text-xs text-muted-foreground">
-        {colSpan} × {rowSpan} block &nbsp;·&nbsp; ~{pct}% of {floor.name} floor
-      </p>
-    </div>
-  );
 }
 
 // ── Stepper ─────────────────────────────────────────────────────────────────
@@ -243,7 +179,7 @@ function Stepper({ value, onChange, min = 1, max = 100 }: {
 // ── Main component ──────────────────────────────────────────────────────────
 
 export function SpaceUnitFormDialog({
-  open, onOpenChange, locationId, floor, existingUnits, unit, onReadyToPlace, onSuccess, onDelete,
+  open, onOpenChange, locationId, floor, existingUnits, unit, onSuccess, onDelete,
 }: Props) {
   const isEdit = !!unit;
 
@@ -320,30 +256,44 @@ export function SpaceUnitFormDialog({
     setStep("details");
   };
 
-  // ── Add mode: "Place on Canvas" ──────────────────────────────────────────
-  const handleReadyToPlace = () => {
+  // ── Add mode: save directly ──────────────────────────────────────────────
+  const handleAddSubmit = async () => {
     if (!name.trim()) { toast.error("Name is required"); return; }
     if (!code.trim()) { toast.error("Code is required"); return; }
     const rateVal = parseFloat(rate);
     if (isNaN(rateVal) || rateVal < 0) { toast.error(`${isHourly ? "Hourly" : "Monthly"} rate is required`); return; }
+    if (!floor) { toast.error("No floor selected"); return; }
 
-    onReadyToPlace?.({
-      floor_id: floor?.id ?? null,
-      type,
-      name: name.trim(),
-      code: code.trim().toUpperCase(),
-      capacity,
-      area_sqft: areaSqft ? Number(areaSqft) : null,
-      monthly_rate: isHourly ? null : rateVal,
-      daily_rate: dailyRate ? Number(dailyRate) : null,
-      hourly_rate: isHourly ? rateVal : (dailyRate ? null : null),
-      amenities,
-      notes: notes.trim(),
-      color: COLOR_MAP[type],
-      grid_col_span: colSpan,
-      grid_row_span: rowSpan,
-    });
-    onOpenChange(false);
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/locations/${locationId}/space-units`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          floor_id: floor.id,
+          type,
+          name: name.trim(),
+          code: code.trim().toUpperCase(),
+          capacity,
+          area_sqft: areaSqft ? Number(areaSqft) : null,
+          monthly_rate: isHourly ? null : rateVal,
+          daily_rate: dailyRate ? Number(dailyRate) : null,
+          hourly_rate: isHourly ? rateVal : null,
+          amenities,
+          notes: notes.trim(),
+          color: COLOR_MAP[type],
+          grid_col_span: colSpan,
+          grid_row_span: rowSpan,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Failed to add unit"); return; }
+      toast.success(`${name.trim()} added`);
+      onSuccess?.(json.data);
+      onOpenChange(false);
+    } finally {
+      setSaving(false);
+    }
   };
 
   // ── Edit mode: submit ─────────────────────────────────────────────────────
@@ -505,47 +455,6 @@ export function SpaceUnitFormDialog({
         </div>
       </div>
 
-      {/* Block size + mini-preview */}
-      {floor && (
-        <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">Canvas Block Size</p>
-              <p className="text-xs text-muted-foreground">
-                Auto-sized from seat count · adjust if needed
-              </p>
-            </div>
-            <div className="flex items-center gap-4">
-              <div className="text-center">
-                <p className="text-[10px] text-muted-foreground mb-1">Width</p>
-                <Stepper
-                  value={colSpan}
-                  onChange={setColSpan}
-                  min={1}
-                  max={floor.grid_cols}
-                />
-              </div>
-              <span className="text-muted-foreground text-sm mt-3">×</span>
-              <div className="text-center">
-                <p className="text-[10px] text-muted-foreground mb-1">Height</p>
-                <Stepper
-                  value={rowSpan}
-                  onChange={setRowSpan}
-                  min={1}
-                  max={floor.grid_rows}
-                />
-              </div>
-            </div>
-          </div>
-          <MiniFloorPreview
-            floor={floor}
-            type={type}
-            colSpan={colSpan}
-            rowSpan={rowSpan}
-          />
-        </div>
-      )}
-
       {/* Notes */}
       <div className="space-y-1.5">
         <Label htmlFor="su-notes">Notes <span className="text-xs text-muted-foreground">(optional)</span></Label>
@@ -592,12 +501,13 @@ export function SpaceUnitFormDialog({
           </Button>
           <Button
             type="button"
-            onClick={handleReadyToPlace}
+            onClick={handleAddSubmit}
+            disabled={saving}
             className="gap-1.5"
             style={{ backgroundColor: "#015E65", color: "white" }}
           >
-            <MapPin className="h-4 w-4" />
-            Place on Canvas
+            {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Check className="h-4 w-4" />}
+            Add Unit
           </Button>
         </div>
       </div>
@@ -639,25 +549,6 @@ export function SpaceUnitFormDialog({
           <Input type="number" value={dailyRate} onChange={(e) => setDailyRate(e.target.value)} />
         </div>
       </div>
-
-      {/* Block size for edit */}
-      {floor && (
-        <div className="rounded-lg border bg-muted/20 p-3 space-y-3">
-          <p className="text-sm font-medium">Canvas Block Size</p>
-          <div className="flex items-center gap-4">
-            <div className="text-center">
-              <p className="text-[10px] text-muted-foreground mb-1">Width</p>
-              <Stepper value={colSpan} onChange={setColSpan} min={1} max={floor.grid_cols} />
-            </div>
-            <span className="text-muted-foreground text-sm mt-3">×</span>
-            <div className="text-center">
-              <p className="text-[10px] text-muted-foreground mb-1">Height</p>
-              <Stepper value={rowSpan} onChange={setRowSpan} min={1} max={floor.grid_rows} />
-            </div>
-          </div>
-          <MiniFloorPreview floor={floor} type={type} colSpan={colSpan} rowSpan={rowSpan} />
-        </div>
-      )}
 
       <div className="space-y-1.5">
         <Label>Notes</Label>

@@ -11,7 +11,6 @@ import {
   BarChart3,
   Info,
   MapPin,
-  Eye,
   Layers,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -19,13 +18,11 @@ import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
-import { FloorCanvas, CanvasLegend } from "@/components/spaces/floor-canvas";
 import { FloorFormDialog } from "@/components/spaces/floor-form-dialog";
 import { SpaceUnitFormDialog } from "@/components/spaces/space-unit-form-dialog";
 import { SpaceAnalyticsPanel } from "@/components/spaces/space-analytics";
 import { LocationFormDialog } from "@/components/locations/location-form-dialog";
 import type { Location, LocationFloor, SpaceUnit, SpaceAnalytics } from "@/types";
-import type { PendingSpaceUnit } from "@/components/spaces/space-unit-form-dialog";
 
 type Tab = "overview" | "spaces" | "analytics";
 
@@ -47,17 +44,12 @@ export default function LocationDetailPage({
   const [units, setUnits] = useState<SpaceUnit[]>([]);
   const [unitsLoading, setUnitsLoading] = useState(false);
 
-  // Edit mode for canvas
-  const [editMode, setEditMode] = useState(false);
-
   // Dialogs
   const [editLocationOpen, setEditLocationOpen] = useState(false);
   const [floorDialogOpen, setFloorDialogOpen] = useState(false);
   const [editFloor, setEditFloor] = useState<LocationFloor | null>(null);
   const [unitDialogOpen, setUnitDialogOpen] = useState(false);
   const [editUnit, setEditUnit] = useState<SpaceUnit | null>(null);
-  /** Pending unit waiting to be placed on canvas (add wizard completed, awaiting click-to-place) */
-  const [pendingUnit, setPendingUnit] = useState<PendingSpaceUnit | null>(null);
 
   // Analytics
   const [analytics, setAnalytics] = useState<SpaceAnalytics | null>(null);
@@ -153,54 +145,8 @@ export default function LocationDetailPage({
   };
 
   const handleUnitClick = (unit: SpaceUnit) => {
-    if (pendingUnit) return; // ignore clicks on existing units during placement
     setEditUnit(unit);
     setUnitDialogOpen(true);
-  };
-
-  /** Wizard completed → enter placement mode */
-  const handleReadyToPlace = (data: PendingSpaceUnit) => {
-    setPendingUnit(data);
-    setUnitDialogOpen(false);
-  };
-
-  /** Canvas click-to-place → POST API with final position */
-  const handlePlaceUnit = async (col: number, row: number) => {
-    if (!pendingUnit || !selectedFloor) return;
-    const payload = {
-      ...pendingUnit,
-      floor_id: selectedFloor.id,
-      grid_col: col,
-      grid_row: row,
-    };
-    const res = await fetch(`/api/locations/${id}/space-units`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
-    });
-    if (res.ok) {
-      const json = await res.json();
-      setUnits((prev) => [...prev, json.data]);
-      setPendingUnit(null);
-      toast.success(`${pendingUnit.name} placed on canvas`);
-    } else {
-      const json = await res.json().catch(() => null);
-      toast.error(json?.error || "Failed to place unit");
-    }
-  };
-
-  const handleUnitMove = async (unit: SpaceUnit, newCol: number, newRow: number) => {
-    const res = await fetch(`/api/locations/${id}/space-units/${unit.id}`, {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ grid_col: newCol, grid_row: newRow }),
-    });
-    if (res.ok) {
-      const json = await res.json();
-      setUnits((prev) => prev.map((u) => u.id === unit.id ? json.data : u));
-    } else {
-      toast.error("Failed to move unit");
-    }
   };
 
   const handleUnitDelete = async (unit: SpaceUnit) => {
@@ -435,7 +381,7 @@ export default function LocationDetailPage({
             </Card>
           )}
 
-          {/* Canvas area */}
+          {/* Floor units area */}
           {selectedFloor && (
             <div className="space-y-3">
               {/* Toolbar */}
@@ -449,12 +395,10 @@ export default function LocationDetailPage({
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  {/* Add Unit always available when a floor is selected */}
                   <Button
                     variant="outline"
                     size="sm"
                     onClick={() => { setEditUnit(null); setUnitDialogOpen(true); }}
-                    disabled={!!pendingUnit}
                   >
                     <Plus className="mr-1.5 h-3.5 w-3.5" />
                     Add Unit
@@ -475,50 +419,14 @@ export default function LocationDetailPage({
                   >
                     <Trash2 className="h-3.5 w-3.5" />
                   </Button>
-                  <button
-                    onClick={() => setEditMode((m) => !m)}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-sm font-medium border transition-colors ${
-                      editMode
-                        ? "bg-[#015E65] text-white border-[#015E65]"
-                        : "bg-background border-border text-muted-foreground hover:text-foreground"
-                    }`}
-                  >
-                    {editMode ? <Pencil className="h-3.5 w-3.5" /> : <Eye className="h-3.5 w-3.5" />}
-                    {editMode ? "Editing" : "View"}
-                  </button>
                 </div>
               </div>
 
-              {/* Hint for edit mode */}
-              {editMode && !pendingUnit && (
-                <p className="text-xs text-muted-foreground">
-                  Drag an existing unit to reposition it · Use <strong>Add Unit</strong> to place a new one
-                </p>
-              )}
-
-              {/* Canvas — horizontally scrollable on small screens */}
-              <div className="overflow-auto rounded-lg">
-                {unitsLoading ? (
-                  <div className="h-64 bg-muted animate-pulse rounded-lg" />
-                ) : (
-                  <FloorCanvas
-                    floor={selectedFloor}
-                    units={units}
-                    mode={editMode ? "edit" : "view"}
-                    pendingUnit={pendingUnit}
-                    onPlaceUnit={handlePlaceUnit}
-                    onCancelPlacement={() => setPendingUnit(null)}
-                    onUnitClick={handleUnitClick}
-                    onUnitMove={handleUnitMove}
-                  />
-                )}
-              </div>
-
-              <CanvasLegend />
-
-              {/* Unit list table */}
-              {units.length > 0 && (
-                <div className="border rounded-lg overflow-hidden mt-4">
+              {/* Unit list */}
+              {unitsLoading ? (
+                <div className="h-32 bg-muted animate-pulse rounded-lg" />
+              ) : units.length > 0 ? (
+                <div className="border rounded-lg overflow-hidden">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="bg-muted/50 border-b">
@@ -586,26 +494,18 @@ export default function LocationDetailPage({
                     </tbody>
                   </table>
                 </div>
-              )}
-
-              {!unitsLoading && units.length === 0 && (
+              ) : (
                 <div className="text-center py-8 border rounded-lg border-dashed">
-                  <p className="text-muted-foreground text-sm">
-                    {editMode
-                      ? "Drag across the canvas to add your first space unit."
-                      : "No units on this floor yet. Switch to Edit mode to add units."}
-                  </p>
-                  {!editMode && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      className="mt-3"
-                      onClick={() => setEditMode(true)}
-                    >
-                      <Pencil className="mr-2 h-3.5 w-3.5" />
-                      Switch to Edit Mode
-                    </Button>
-                  )}
+                  <p className="text-muted-foreground text-sm">No units on this floor yet.</p>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    className="mt-3"
+                    onClick={() => { setEditUnit(null); setUnitDialogOpen(true); }}
+                  >
+                    <Plus className="mr-2 h-3.5 w-3.5" />
+                    Add First Unit
+                  </Button>
                 </div>
               )}
             </div>
@@ -668,7 +568,6 @@ export default function LocationDetailPage({
         floor={selectedFloor ?? null}
         existingUnits={units}
         unit={editUnit}
-        onReadyToPlace={handleReadyToPlace}
         onSuccess={handleUnitSaved}
         onDelete={handleUnitDelete}
       />
