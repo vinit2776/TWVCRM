@@ -3,8 +3,9 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { MapPin, Plus, Pencil, Eye } from "lucide-react";
+import { MapPin, Plus, Pencil } from "lucide-react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { useLocations } from "@/hooks/use-locations";
 import { LocationFormDialog } from "@/components/locations/location-form-dialog";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -15,8 +16,10 @@ export default function LocationsPage() {
   const { locations, loading, refetch } = useLocations(false);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editLocation, setEditLocation] = useState<Location | null>(null);
+  const router = useRouter();
 
-  const handleEdit = (loc: Location) => {
+  const handleEdit = (e: React.MouseEvent, loc: Location) => {
+    e.stopPropagation();
     setEditLocation(loc);
     setDialogOpen(true);
   };
@@ -57,13 +60,25 @@ export default function LocationsPage() {
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">City</th>
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Address</th>
                 <th className="px-4 py-3 text-left font-medium">Status</th>
-                <th className="px-4 py-3 text-left font-medium w-[120px]">Actions</th>
+                <th className="px-4 py-3 text-left font-medium w-[60px]">Actions</th>
               </tr>
             </thead>
             <tbody>
               {locations.map((loc) => (
-                <tr key={loc.id} className="border-b hover:bg-muted/30 transition-colors">
-                  <td className="px-4 py-3 font-medium">{loc.name}</td>
+                <tr
+                  key={loc.id}
+                  className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
+                  onClick={() => router.push(`/locations/${loc.id}`)}
+                >
+                  <td className="px-4 py-3 font-medium">
+                    <Link
+                      href={`/locations/${loc.id}`}
+                      className="hover:underline"
+                      onClick={(e) => e.stopPropagation()}
+                    >
+                      {loc.name}
+                    </Link>
+                  </td>
                   <td className="px-4 py-3">
                     <code className="text-xs bg-muted px-1.5 py-0.5 rounded">{loc.code}</code>
                   </td>
@@ -77,21 +92,14 @@ export default function LocationsPage() {
                     </Badge>
                   </td>
                   <td className="px-4 py-3">
-                    <div className="flex items-center gap-1">
-                      <Link href={`/locations/${loc.id}`}>
-                        <Button variant="ghost" size="icon" title="View location">
-                          <Eye className="h-4 w-4" />
-                        </Button>
-                      </Link>
-                      <Button
-                        variant="ghost"
-                        size="icon"
-                        onClick={() => handleEdit(loc)}
-                        title="Edit location"
-                      >
-                        <Pencil className="h-4 w-4" />
-                      </Button>
-                    </div>
+                    <Button
+                      variant="ghost"
+                      size="icon"
+                      onClick={(e) => handleEdit(e, loc)}
+                      title="Edit location"
+                    >
+                      <Pencil className="h-4 w-4" />
+                    </Button>
                   </td>
                 </tr>
               ))}
