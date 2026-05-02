@@ -725,7 +725,7 @@ function DepartmentIdCard({ contractId, departmentId, onUpdate }: { contractId: 
     const res = await fetch(`/api/contracts/${contractId}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ printer_department_id: value.trim() || null }),
+      body: JSON.stringify({ department_id: value.trim() || null }),
     });
     setSaving(false);
     if (res.ok) {

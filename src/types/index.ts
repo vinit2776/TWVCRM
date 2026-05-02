@@ -428,6 +428,10 @@ export interface Contract {
   end_date: string;
   next_billing_date?: string;
   seats: number;
+  // Printer-side ID assigned to this customer at the location.
+  // Used to map the customer to rows in the monthly print-server report.
+  // Unique per location (NULL allowed; multiple NULLs OK).
+  department_id?: string | null;
   terms_and_conditions?: string;
   notes?: string;
   // Membership agreement fields
@@ -666,7 +670,13 @@ export type AuditEntityType =
   | "facility_issue"
   | "facility_issue_attachment"
   | "booking_addon"
-  | "addon_catalog";
+  | "addon_catalog"
+  | "service_catalog"
+  | "contract_service_quota"
+  | "proposal_service_quota"
+  | "service_usage_record"
+  | "service_usage_import"
+  | "location_print_template";
 
 export interface AuditLog {
   id: string;
@@ -2503,6 +2513,167 @@ export interface AddonCatalogItem {
   is_active: boolean;
   sort_order: number;
   created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ==========================================
+// Service Quotas (printing, future: meeting hours, coffee, etc.)
+// ==========================================
+export type ServicePricingModel = "per_unit";
+export type ServiceUsageSource = "printer_report" | "manual" | "meeting_booking" | "other";
+export type ServiceImportStatus = "preview" | "confirmed" | "voided";
+export type ServiceImportSource = "printer_report";
+export type PrintTemplateQuotaFormat = "used_slash_quota" | "used_only";
+
+export interface ServiceCatalogItem {
+  id: string;
+  slug: string;
+  name: string;
+  description?: string | null;
+  unit_label: string;
+  pricing_model: ServicePricingModel;
+  default_overage_rate: number;
+  gst_rate: number;
+  // Used by the printer importer to know whether this catalog row maps to
+  // the B&W or Colour column ("bw" | "colour" | null).
+  printer_column?: "bw" | "colour" | null;
+  is_active: boolean;
+  sort_order: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ContractServiceQuota {
+  id: string;
+  contract_id: string;
+  service_id: string;
+  service?: ServiceCatalogItem | null;
+  monthly_quota: number;
+  overage_rate: number;
+  notes?: string | null;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ProposalServiceQuota {
+  id: string;
+  proposal_id: string;
+  service_id: string;
+  service?: ServiceCatalogItem | null;
+  monthly_quota: number;
+  overage_rate: number;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ServiceUsageRecord {
+  id: string;
+  contract_id?: string | null;        // NULL = unmapped / internal use
+  contract?: { id: string; contract_number: string } | null;
+  service_id: string;
+  service?: ServiceCatalogItem | null;
+  location_id: string;
+  period_year: number;
+  period_month: number;
+
+  quantity_used: number;
+  quota_snapshot: number;
+  overage_rate_snapshot: number;
+  overage_quantity: number;
+  amount: number;
+  gst_rate: number;
+  gst_amount: number;
+  total_with_gst: number;
+
+  source: ServiceUsageSource;
+  source_ref?: string | null;
+  detail?: Record<string, unknown> | null;
+
+  billing_statement_id?: string | null;
+  is_billed: boolean;
+
+  notes?: string | null;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ServiceImportPreviewRow {
+  dept_id: string;
+  contract_id?: string | null;
+  contract_number?: string | null;
+  customer_name?: string | null;
+  bw_used: number;
+  bw_quota_report?: number | null;     // quota as printed in the report (for sanity check)
+  bw_quota_contract: number;           // CRM-side quota — source of truth
+  bw_overage_qty: number;
+  bw_overage_amount: number;
+  colour_used: number;
+  colour_quota_report?: number | null;
+  colour_quota_contract: number;
+  colour_overage_qty: number;
+  colour_overage_amount: number;
+  total_amount: number;                // ex-GST sum across services
+  is_unmapped: boolean;
+  is_excluded?: boolean;               // admin chose to skip this row
+  flags?: string[];                    // e.g. ['quota_mismatch', 'no_contract_quota']
+  raw?: Record<string, unknown>;
+}
+
+export interface ServiceUsageImport {
+  id: string;
+  location_id: string;
+  location?: { id: string; name: string; code: string } | null;
+  source: ServiceImportSource;
+  period_year: number;
+  period_month: number;
+  filename?: string | null;
+  file_path?: string | null;
+  file_size_bytes?: number | null;
+  total_rows: number;
+  mapped_rows: number;
+  unmapped_rows: number;
+  total_overage_amount: number;
+  total_with_gst: number;
+  status: ServiceImportStatus;
+  imported_by?: string | null;
+  imported_at: string;
+  confirmed_by?: string | null;
+  confirmed_at?: string | null;
+  voided_by?: string | null;
+  voided_at?: string | null;
+  voided_reason?: string | null;
+  preview_rows: ServiceImportPreviewRow[];
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LocationPrintTemplate {
+  id: string;
+  location_id: string;
+  header_rows: number;
+  data_start_row: number;
+  // Excel column letters
+  dept_id_col: string;
+  bw_total_col?: string | null;
+  colour_total_col?: string | null;
+  bw_copy_col?: string | null;
+  bw_print_col?: string | null;
+  bw_scan_col?: string | null;
+  colour_copy_col?: string | null;
+  colour_print_col?: string | null;
+  colour_scan_col?: string | null;
+  quota_format: PrintTemplateQuotaFormat;
+  ignore_dept_ids?: string[] | null;
+  sample_file_path?: string | null;
+  sample_file_name?: string | null;
+  notes?: string | null;
+  created_by?: string | null;
+  updated_by?: string | null;
   created_at: string;
   updated_at: string;
 }

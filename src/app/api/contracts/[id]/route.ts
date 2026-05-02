@@ -47,15 +47,46 @@ export async function PATCH(
   if (body.tenure_months) allowedFields.tenure_months = body.tenure_months;
   if (body.renewed_at) allowedFields.renewed_at = body.renewed_at;
   if (body.signed_document_id !== undefined) allowedFields.signed_document_id = body.signed_document_id;
-  if (body.printer_department_id !== undefined) allowedFields.printer_department_id = body.printer_department_id;
+
+  // Department ID — printer-side identifier mapped to this contract.
+  // Empty string is normalised to NULL so unique-per-location stays clean.
+  // Accepts both `department_id` (current) and the legacy `printer_department_id`
+  // alias for backwards-compat with any older callers.
+  const rawDept = body.department_id ?? body.printer_department_id;
+  if (rawDept !== undefined) {
+    const trimmed = (typeof rawDept === "string" ? rawDept.trim() : rawDept) || null;
+    allowedFields.department_id = trimmed;
+  }
 
   if (Object.keys(allowedFields).length === 0) {
     return NextResponse.json({ error: "No valid fields" }, { status: 400 });
   }
 
   const { data: oldContract } = await supabase.from("contracts").select("*").eq("id", id).single();
-  if (!oldContract) return NextResponse.json({ error: "Contract not found" }, { status: 404 });
+  if (!oldContract) {
+    return NextResponse.json({ error: "Contract not found" }, { status: 404 });
+  }
 
+  // Department ID uniqueness check (per location). The DB has a partial unique
+  // index, so we'd get a 23505 anyway — but a friendly pre-check produces a
+  // better error message that names the conflicting contract.
+  if (allowedFields.department_id != null && allowedFields.department_id !== oldContract.department_id) {
+    const locId = (allowedFields.location_id as string | null) ?? oldContract.location_id;
+    if (locId) {
+      const { data: clash } = await supabase
+        .from("contracts")
+        .select("contract_number")
+        .eq("location_id", locId)
+        .eq("department_id", allowedFields.department_id)
+        .neq("id", id)
+        .maybeSingle();
+      if (clash) {
+        return NextResponse.json({
+          error: `Department ID "${allowedFields.department_id}" is already used by ${clash.contract_number} at this location`,
+        }, { status: 409 });
+      }
+    }
+  }
   // Handle special status transitions
   if (body.status && body.status !== oldContract.status) {
     const now = new Date().toISOString();

@@ -31,6 +31,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
+import { ContractQuotasSection } from "@/components/contracts/contract-quotas-section";
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
@@ -770,9 +771,16 @@ export default function ContractDetailPage({
             signedDocumentId={contract.signed_document_id}
             leadEmail={contract.lead?.email}
             locationId={contract.location_id}
-            printerDepartmentId={contract.printer_department_id}
+            printerDepartmentId={contract.department_id ?? undefined}
             onDepartmentIdUpdate={fetchContract}
           />
+
+          {/* Service Quotas — printer (B&W / Colour) and any future quota services.
+              Available for any non-terminated contract; values flow into monthly
+              billing once usage reports (e.g. printer reports) are uploaded. */}
+          {contract.status !== "terminated" && contract.status !== "expired" && (
+            <ContractQuotasSection contractId={id} readOnly={contract.status === "rejected"} />
+          )}
 
           {/* Billing Section */}
           {["active", "completed"].includes(contract.status) && (
