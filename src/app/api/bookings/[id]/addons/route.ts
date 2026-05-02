@@ -58,7 +58,12 @@ export async function POST(
   if (bErr || !booking) return NextResponse.json({ error: "Booking not found" }, { status: 404 });
 
   const body = await request.json();
-  let { addon_type, description, quantity, unit_price, unit_label, gst_rate, notes } = body;
+  const { quantity, notes } = body;
+  let addon_type = body.addon_type;
+  let description = body.description;
+  let unit_price = body.unit_price;
+  let unit_label = body.unit_label;
+  let gst_rate = body.gst_rate;
   const addonCatalogId = body.addon_catalog_id as string | undefined;
 
   if (addonCatalogId) {

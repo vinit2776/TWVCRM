@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
   // AMC POs can be:
   //  a) Service POs whose linked PR has expenditure_type = 'amc'
   //  b) Any PO that has amc_start_date set (manually activated)
-  let query = supabase
+  const query = supabase
     .from("purchase_orders")
     .select(`
       id, po_number, po_type, status, amc_status,

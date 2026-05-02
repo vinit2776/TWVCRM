@@ -728,7 +728,7 @@ export default function PayablesPage() {
               </div>
 
               <p className="text-xs text-muted-foreground bg-muted/50 rounded p-2">
-                This change will be logged in the bill's audit history.
+                This change will be logged in the bill&apos;s audit history.
               </p>
             </div>
           )}
