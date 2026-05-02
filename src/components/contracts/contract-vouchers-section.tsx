@@ -357,8 +357,9 @@ export function ContractVouchersSection({
         </div>
       </CardHeader>
       <CardContent>
-        {/* Printer Department ID */}
-        {isContractActive && (
+        {/* Printer Department ID — only when contract has a location.
+            Without one there's no printer to map to, so we hide the field. */}
+        {isContractActive && locationId && (
           <DepartmentIdCard
             contractId={contractId}
             departmentId={printerDepartmentId}

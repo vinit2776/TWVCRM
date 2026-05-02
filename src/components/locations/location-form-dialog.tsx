@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import {
   Dialog,
   DialogContent,
@@ -11,9 +11,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, MapPin, LocateFixed } from "lucide-react";
+import { Loader2, MapPin, LocateFixed, FileSpreadsheet, Trash2, Check } from "lucide-react";
 import { toast } from "sonner";
-import type { Location, LocationCapacityConfig } from "@/types";
+import type { Location, LocationCapacityConfig, LocationPrintTemplate } from "@/types";
 
 interface LocationFormDialogProps {
   open: boolean;
@@ -48,6 +48,14 @@ export function LocationFormDialog({
   const [detectingGeo, setDetectingGeo] = useState(false);
   const [saving, setSaving]   = useState(false);
 
+  // Print-server template — optional. The admin can upload it now or later
+  // (passively from the location's edit dialog). Just stores the sample file;
+  // the column-mapping editor lives in a future Batch.
+  const [printTemplate, setPrintTemplate] = useState<LocationPrintTemplate | null>(null);
+  const [pendingTemplateFile, setPendingTemplateFile] = useState<File | null>(null);
+  const [uploadingTemplate, setUploadingTemplate] = useState(false);
+  const templateInputRef = useRef<HTMLInputElement>(null);
+
   const isEdit = !!location;
 
   useEffect(() => {
@@ -68,7 +76,14 @@ export function LocationFormDialog({
       );
       setLatitude(location.latitude != null ? String(location.latitude) : "");
       setLongitude(location.longitude != null ? String(location.longitude) : "");
+      // Load any existing template so the dialog shows the current sample
+      fetch(`/api/locations/${location.id}/print-template`)
+        .then((r) => r.json())
+        .then((j) => setPrintTemplate(j.data || null))
+        .catch(() => setPrintTemplate(null));
     } else {
+      setPrintTemplate(null);
+      setPendingTemplateFile(null);
       setName(""); setCode(""); setAddress(""); setCity(""); setState("");
       setIsActive(true);
       setRequiresHeadcount(false);
@@ -141,6 +156,32 @@ export function LocationFormDialog({
 
       const json = await res.json();
       if (res.ok) {
+        // If admin attached a print-server template, upload it now that the
+        // location row exists. Failure here is non-fatal — they can retry from
+        // the edit dialog later. Doing it after the main save keeps creation
+        // semantics simple (file upload doesn't block location creation).
+        const savedLocId = (json.data?.id || location?.id) as string | undefined;
+        if (pendingTemplateFile && savedLocId) {
+          try {
+            setUploadingTemplate(true);
+            const fd = new FormData();
+            fd.append("file", pendingTemplateFile);
+            const upRes = await fetch(`/api/locations/${savedLocId}/print-template`, {
+              method: "POST",
+              body: fd,
+            });
+            if (!upRes.ok) {
+              const e = await upRes.json().catch(() => null);
+              toast.warning(`Location saved, but template upload failed: ${e?.error || "unknown error"}. Try again from Edit Location.`);
+            } else {
+              toast.success("Print-server template attached");
+            }
+          } catch {
+            toast.warning("Location saved, but template upload failed. Try again from Edit Location.");
+          } finally {
+            setUploadingTemplate(false);
+          }
+        }
         toast.success(isEdit ? "Location updated" : "Location created");
         onSuccess();
         onOpenChange(false);
@@ -151,6 +192,18 @@ export function LocationFormDialog({
       toast.error("Failed to save location");
     } finally {
       setSaving(false);
+    }
+  };
+
+  const handleRemoveTemplate = async () => {
+    if (!location?.id || !confirm("Remove the saved print-server template?")) return;
+    const res = await fetch(`/api/locations/${location.id}/print-template`, { method: "DELETE" });
+    if (res.ok) {
+      setPrintTemplate(null);
+      setPendingTemplateFile(null);
+      toast.success("Template removed");
+    } else {
+      toast.error("Failed to remove template");
     }
   };
 
@@ -309,6 +362,73 @@ export function LocationFormDialog({
                 <MapPin className="h-3 w-3" />
                 Verify on Google Maps
               </a>
+            )}
+          </div>
+
+          {/* Print-server template — optional, can be uploaded later */}
+          <div className="rounded-md border p-3 space-y-2">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <Label className="flex items-center gap-1.5">
+                  <FileSpreadsheet className="h-3.5 w-3.5" />
+                  Print-server template
+                  <span className="text-[10px] text-muted-foreground font-normal">(optional)</span>
+                </Label>
+                <p className="text-[11px] text-muted-foreground mt-0.5">
+                  Sample monthly export from this location&apos;s print server. Used to bill print overage.
+                  Skip now and upload later from Edit Location.
+                </p>
+              </div>
+            </div>
+
+            <input
+              ref={templateInputRef}
+              type="file"
+              accept=".xlsx,.xls,.csv"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0] ?? null;
+                setPendingTemplateFile(f);
+              }}
+            />
+
+            {printTemplate?.sample_file_name && !pendingTemplateFile ? (
+              <div className="flex items-center justify-between rounded-md bg-muted/40 px-3 py-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Check className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
+                  <span className="text-xs truncate">{printTemplate.sample_file_name}</span>
+                </div>
+                <div className="flex items-center gap-1">
+                  <Button
+                    type="button" variant="ghost" size="sm" className="h-7 text-xs"
+                    onClick={() => templateInputRef.current?.click()}
+                  >Replace</Button>
+                  <Button
+                    type="button" variant="ghost" size="sm" className="h-7 text-xs text-red-600 hover:text-red-700"
+                    onClick={handleRemoveTemplate}
+                  >
+                    <Trash2 className="h-3 w-3" />
+                  </Button>
+                </div>
+              </div>
+            ) : pendingTemplateFile ? (
+              <div className="flex items-center justify-between rounded-md bg-muted/40 px-3 py-2">
+                <span className="text-xs truncate">
+                  {uploadingTemplate ? "Uploading… " : "Will upload on save: "}
+                  <span className="font-medium">{pendingTemplateFile.name}</span>
+                </span>
+                <Button type="button" variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setPendingTemplateFile(null)}>
+                  Clear
+                </Button>
+              </div>
+            ) : (
+              <Button
+                type="button" variant="outline" size="sm" className="h-8 text-xs"
+                onClick={() => templateInputRef.current?.click()}
+              >
+                <FileSpreadsheet className="h-3.5 w-3.5 mr-1.5" />
+                Choose .xlsx file
+              </Button>
             )}
           </div>
 

@@ -67,20 +67,30 @@ export async function PATCH(
     return NextResponse.json({ error: "Contract not found" }, { status: 404 });
   }
 
-  // Department ID uniqueness check — global, not per location. The DB has a
-  // partial unique index on department_id alone, so we'd get a 23505 anyway,
-  // but a friendly pre-check returns a message naming the conflicting contract.
+  // Department ID rules:
+  //   - A contract must have a location to receive a department ID (printers
+  //     are physical, tied to a building). Setting an ID on a location-less
+  //     contract is rejected with 400.
+  //   - The ID is unique per location; the same ID can exist at different
+  //     locations (each location has its own print server / printer cards).
   if (allowedFields.department_id != null && allowedFields.department_id !== oldContract.department_id) {
+    const locId = (allowedFields.location_id as string | null) ?? oldContract.location_id;
+    if (!locId) {
+      return NextResponse.json({
+        error: "Assign a location to the contract before mapping a Department ID",
+      }, { status: 400 });
+    }
+
     const { data: clash } = await supabase
       .from("contracts")
-      .select("contract_number, location:locations!contracts_location_id_fkey(name)")
+      .select("contract_number")
+      .eq("location_id", locId)
       .eq("department_id", allowedFields.department_id)
       .neq("id", id)
       .maybeSingle();
     if (clash) {
-      const loc = (clash.location as { name?: string } | null)?.name;
       return NextResponse.json({
-        error: `Department ID "${allowedFields.department_id}" is already used by ${clash.contract_number}${loc ? ` (${loc})` : ""}`,
+        error: `Department ID "${allowedFields.department_id}" is already used by ${clash.contract_number} at this location`,
       }, { status: 409 });
     }
   }

@@ -160,7 +160,6 @@ const navSections: NavSection[] = [
     icon: Settings,
     items: [
       { href: "/locations",      label: "Locations",      icon: MapPin,        roles: ["admin", "manager", "fms", "floor_manager"] },
-      { href: "/admin/dept-ids", label: "Department IDs", icon: ScrollText,    roles: ["admin", "manager", "accounts"] },
       { href: "/audit-logs",     label: "Audit Logs",     icon: ClipboardList, roles: ["admin", "manager"] },
       { href: "/infrastructure", label: "Infrastructure", icon: Server,        roles: ["admin"] },
       { href: "/support",        label: "Support",        icon: LifeBuoy,      roles: ["admin"] },

@@ -47,11 +47,19 @@ export default function BulkDeptIdsPage() {
   const [search, setSearch] = useState("");
   const [hideAssigned, setHideAssigned] = useState(true);
 
+  // Active contracts WITHOUT a location are hidden — they're not allocated
+  // to a physical space yet, so there's no printer to map. Track the count
+  // for an inline banner.
+  const [skippedNoLocation, setSkippedNoLocation] = useState(0);
+
   useEffect(() => {
     (async () => {
       const res = await fetch("/api/contracts?status=active&limit=500");
       const json = await res.json();
-      const items = (json.data || []).map((c: ContractRow) => ({
+      const all = (json.data || []) as ContractRow[];
+      const withLocation = all.filter((c) => !!c.location_id);
+      setSkippedNoLocation(all.length - withLocation.length);
+      const items = withLocation.map((c) => ({
         ...c,
         draft: c.department_id || "",
         saving: false,
@@ -70,15 +78,17 @@ export default function BulkDeptIdsPage() {
     })();
   }, []);
 
-  // Global dup detection — Department IDs are unique across the network.
-  // Two contracts (anywhere) with the same ID will collide on save, so we
-  // surface it inline before the API rejects the duplicate.
+  // Per-location dup detection — Department IDs are unique within a
+  // location (each location has its own print server, so the same numeric
+  // ID across locations is fine). Surface conflicts inline before the API
+  // rejects them.
   const dupKeys = useMemo(() => {
     const counts = new Map<string, number>();
     for (const r of rows) {
       const v = r.draft.trim();
-      if (!v) continue;
-      counts.set(v, (counts.get(v) || 0) + 1);
+      if (!v || !r.location_id) continue;
+      const key = `${r.location_id}::${v}`;
+      counts.set(key, (counts.get(key) || 0) + 1);
     }
     return new Set(Array.from(counts.entries()).filter(([, n]) => n > 1).map(([k]) => k));
   }, [rows]);
@@ -107,10 +117,13 @@ export default function BulkDeptIdsPage() {
     const newVal = r.draft.trim() || null;
     if (newVal === (r.department_id || null)) return;     // no change
 
-    if (newVal && dupKeys.has(newVal)) {
-      updateField(idx, { error: "Duplicate — same ID elsewhere", saving: false });
-      toast.error(`Department ID "${newVal}" is already used by another contract`);
-      return;
+    if (newVal && r.location_id) {
+      const key = `${r.location_id}::${newVal}`;
+      if (dupKeys.has(key)) {
+        updateField(idx, { error: "Duplicate at this location", saving: false });
+        toast.error(`Department ID "${newVal}" used by another contract at this location`);
+        return;
+      }
     }
 
     updateField(idx, { saving: true, error: null });
@@ -157,10 +170,18 @@ export default function BulkDeptIdsPage() {
       <div>
         <h1 className="text-xl md:text-2xl font-semibold">Bulk Department ID Assignment</h1>
         <p className="text-xs md:text-sm text-muted-foreground">
-          Map each active contract to its printer-server Department ID. IDs are unique
-          across the network — the same ID can never be reused at another location.
-          Without this mapping, monthly print reports can&apos;t bill the right customer.
+          Map each active contract to its printer-server Department ID.
+          IDs are unique <span className="font-medium">within a location</span> —
+          the same number can be reused across locations because each has its own
+          print server. Without this mapping, monthly print reports can&apos;t bill
+          the right customer.
         </p>
+        {skippedNoLocation > 0 && (
+          <div className="mt-2 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-900">
+            {skippedNoLocation} active contract{skippedNoLocation > 1 ? "s are" : " is"} hidden because no location has been assigned.
+            Assign a location on those contracts first — there&apos;s no printer to map until then.
+          </div>
+        )}
       </div>
 
       <div className="flex items-center gap-2">
@@ -212,7 +233,7 @@ export default function BulkDeptIdsPage() {
                       const idx = rows.findIndex((x) => x.id === r.id);
                       const customer = r.lead?.company ||
                         [r.lead?.first_name, r.lead?.last_name].filter(Boolean).join(" ") || "—";
-                      const isDup = !!r.draft.trim() && dupKeys.has(r.draft.trim());
+                      const isDup = !!r.draft.trim() && r.location_id ? dupKeys.has(`${r.location_id}::${r.draft.trim()}`) : false;
                       return (
                         <tr key={r.id} className="border-t hover:bg-muted/20">
                           <td className="px-3 py-2">
@@ -237,7 +258,7 @@ export default function BulkDeptIdsPage() {
                             />
                             {(isDup || r.error) && (
                               <p className="text-[10px] text-red-600 mt-0.5">
-                                {isDup ? "Duplicate — same ID assigned elsewhere" : r.error}
+                                {isDup ? "Duplicate at this location" : r.error}
                               </p>
                             )}
                           </td>
