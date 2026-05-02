@@ -1,8 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
+import { generateMonthlyStatements } from "@/lib/billing";
 
 export async function GET(
   _request: NextRequest,
@@ -122,6 +123,19 @@ export async function PATCH(
   // Auto-advance lead status when contract becomes active
   if (body.status === "active" && oldContract.status !== "active") {
     await autoUpdateLeadStatus(supabase, oldContract.lead_id, "contract");
+
+    // Generate the current month's billing statement immediately. The monthly
+    // cron only runs on the 1st of each month — without this hook, contracts
+    // activated mid-month would have no bill until the next cron firing.
+    // Idempotent: skips if a statement for this month already exists.
+    try {
+      const admin = createAdminClient();
+      await generateMonthlyStatements(admin, { contractId: id });
+    } catch (err) {
+      console.error("[contract-activate] auto-generate statement failed:", err);
+      // Non-fatal: activation still succeeds. Operator can use the
+      // "Generate Missing Bills" button in /billing to retry.
+    }
   }
 
   // On termination: revoke active vouchers and notify IT

@@ -135,6 +135,21 @@ function suggestName(type: SpaceUnitType, existingUnits: SpaceUnit[]): string {
 
 // ── Types ───────────────────────────────────────────────────────────────────
 
+/**
+ * Shape of a unit-in-progress before it's placed on the canvas. Used by
+ * floor-canvas.tsx to render the ghost block during click-to-place. Kept
+ * here so both files have a single source of truth for what makes up a
+ * pending unit (code/name + canvas footprint + colour hint).
+ */
+export interface PendingSpaceUnit {
+  type: SpaceUnitType;
+  code: string;
+  name: string;
+  grid_col_span: number;
+  grid_row_span: number;
+  color?: string | null;
+}
+
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;

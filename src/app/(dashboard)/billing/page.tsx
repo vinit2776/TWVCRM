@@ -15,6 +15,7 @@ import {
   X,
   IndianRupee,
   ScrollText,
+  RefreshCcw,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
@@ -289,6 +290,43 @@ export default function BillingPage() {
   const [statementsContractFilter, setStatementsContractFilter] = useState("");
   const [statementsStatusFilter, setStatementsStatusFilter]     = useState("");
   const [generateStatementOpen, setGenerateStatementOpen] = useState(false);
+  const [generatingMissing, setGeneratingMissing] = useState(false);
+
+  // "Generate Missing Bills" — re-runs the auto-generate logic for the current
+  // month so any contracts activated mid-month (after the cron ran on the 1st)
+  // get their billing statement created right away. Idempotent: contracts that
+  // already have a statement for the period are skipped.
+  const handleGenerateMissingBills = async () => {
+    setGeneratingMissing(true);
+    try {
+      const res = await fetch("/api/billing/auto-generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to generate bills");
+      } else if (json.generated === 0 && json.skipped === 0) {
+        toast.info("No active contracts need bills for this month");
+      } else if (json.generated === 0) {
+        toast.info(`All ${json.skipped} active contract${json.skipped > 1 ? "s" : ""} already have bills for this month`);
+      } else {
+        toast.success(
+          `Generated ${json.generated} draft bill${json.generated > 1 ? "s" : ""}` +
+          (json.skipped > 0 ? ` (${json.skipped} already existed)` : "")
+        );
+        await fetchStatements();
+      }
+      if (json.errors?.length) {
+        for (const e of json.errors) toast.error(e);
+      }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to generate bills");
+    } finally {
+      setGeneratingMissing(false);
+    }
+  };
   const [viewStatementId, setViewStatementId]             = useState<string | null>(null);
 
   // ── Record Payment dialog ─────────────────────────────────────────────────
@@ -789,9 +827,18 @@ export default function BillingPage() {
                 </Button>
               )}
             </div>
-            <Button onClick={() => setGenerateStatementOpen(true)}>
-              <Plus className="mr-2 h-4 w-4" />Generate Statement
-            </Button>
+            <div className="flex items-center gap-2">
+              <Button variant="outline" onClick={handleGenerateMissingBills} disabled={generatingMissing}>
+                {generatingMissing ? (
+                  <><span className="mr-2 h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin inline-block" />Generating…</>
+                ) : (
+                  <><RefreshCcw className="mr-2 h-4 w-4" />Generate Missing Bills</>
+                )}
+              </Button>
+              <Button onClick={() => setGenerateStatementOpen(true)}>
+                <Plus className="mr-2 h-4 w-4" />Generate Statement
+              </Button>
+            </div>
           </div>
 
           {statementsLoading ? (
