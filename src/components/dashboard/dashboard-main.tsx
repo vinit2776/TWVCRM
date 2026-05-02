@@ -6,6 +6,7 @@ import { PushNotificationPrompt } from "@/components/dashboard/push-notification
 import { InstallPrompt } from "@/components/dashboard/install-prompt";
 import { EnquiryNotificationsProvider } from "@/providers/enquiry-notifications-provider";
 import { useServiceWorker } from "@/hooks/use-service-worker";
+import { FlowGuideHint } from "@/components/shared/flow-guide-hint";
 
 /**
  * Client wrapper for the dashboard layout's main content area.
@@ -34,6 +35,8 @@ export function DashboardMain({ children }: { children: React.ReactNode }) {
           {children}
         </main>
       </div>
+      {/* Contextual idle-triggered flow guide — zero infra, sessionStorage only */}
+      <FlowGuideHint />
     </EnquiryNotificationsProvider>
   );
 }
