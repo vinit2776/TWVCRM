@@ -152,7 +152,19 @@ export default function SpacesPage() {
                 <td className="px-4 py-3 font-medium">{space.name}</td>
                 <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">{space.location?.name || "—"}</td>
                 <td className="px-4 py-3 text-right">{space.capacity}</td>
-                <td className="px-4 py-3 text-right font-medium">{formatCurrency(space.hourly_rate)}</td>
+                <td className="px-4 py-3 text-right font-medium">
+                  {space.pricing_model === "daily" ? (
+                    <>
+                      {formatCurrency(Number(space.daily_rate ?? 0))}
+                      <span className="text-[10px] text-muted-foreground ml-1">/day</span>
+                    </>
+                  ) : (
+                    <>
+                      {formatCurrency(space.hourly_rate)}
+                      <span className="text-[10px] text-muted-foreground ml-1">/hr</span>
+                    </>
+                  )}
+                </td>
                 <td className="px-4 py-3 hidden lg:table-cell">
                   {space.facilities && space.facilities.length > 0 ? (
                     <span className="text-muted-foreground text-xs">

@@ -15,7 +15,7 @@ import { Loader2, Plus, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 import { useLocations } from "@/hooks/use-locations";
 import { DEFAULT_FACILITIES } from "@/lib/constants";
-import type { Space, SpaceOperatingHours } from "@/types";
+import type { Space, SpaceOperatingHours, SpacePricingModel } from "@/types";
 
 interface SpaceFormDialogProps {
   open: boolean;
@@ -54,7 +54,9 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
   const [locationId, setLocationId] = useState("");
   const [workspaceType, setWorkspaceType] = useState("__none");
   const [capacity, setCapacity] = useState(10);
+  const [pricingModel, setPricingModel] = useState<SpacePricingModel>("hourly");
   const [hourlyRate, setHourlyRate] = useState(500);
+  const [dailyRate, setDailyRate] = useState(500);
   const [description, setDescription] = useState("");
   const [operatingHours, setOperatingHours] = useState<SpaceOperatingHours>(DEFAULT_OPERATING_HOURS);
   const [maxAdvanceDays, setMaxAdvanceDays] = useState(30);
@@ -70,7 +72,9 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
       setLocationId(space.location_id);
       setWorkspaceType(space.workspace_type || "__none");
       setCapacity(space.capacity);
+      setPricingModel(space.pricing_model || "hourly");
       setHourlyRate(space.hourly_rate);
+      setDailyRate(Number(space.daily_rate ?? space.hourly_rate ?? 0));
       setDescription(space.description || "");
       setOperatingHours(space.operating_hours || DEFAULT_OPERATING_HOURS);
       setMaxAdvanceDays(space.max_advance_booking_days);
@@ -88,7 +92,9 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
       setLocationId("");
       setWorkspaceType("__none");
       setCapacity(10);
+      setPricingModel("hourly");
       setHourlyRate(500);
+      setDailyRate(500);
       setDescription("");
       setOperatingHours(DEFAULT_OPERATING_HOURS);
       setMaxAdvanceDays(30);
@@ -126,8 +132,16 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
       toast.error("Name and location are required");
       return;
     }
-    if (capacity < 1 || hourlyRate <= 0) {
-      toast.error("Capacity and hourly rate must be positive");
+    if (capacity < 1) {
+      toast.error("Capacity must be positive");
+      return;
+    }
+    if (pricingModel === "hourly" && hourlyRate <= 0) {
+      toast.error("Hourly rate must be positive");
+      return;
+    }
+    if (pricingModel === "daily" && dailyRate <= 0) {
+      toast.error("Daily rate must be positive");
       return;
     }
 
@@ -138,7 +152,11 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
         location_id: locationId,
         workspace_type: (workspaceType && workspaceType !== "__none") ? workspaceType : undefined,
         capacity,
-        hourly_rate: hourlyRate,
+        pricing_model: pricingModel,
+        // Rate the API stores as the unit rate. For daily-priced spaces we send 0
+        // for hourly and the day rate in daily_rate; the migration accepts both.
+        hourly_rate: pricingModel === "daily" ? 0 : hourlyRate,
+        daily_rate: pricingModel === "daily" ? dailyRate : null,
         description: description.trim() || undefined,
         operating_hours: operatingHours,
         max_advance_booking_days: maxAdvanceDays,
@@ -220,7 +238,20 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
                 />
               </div>
               <div className="space-y-2">
-                <Label htmlFor="space-rate">Hourly Rate (INR)</Label>
+                <Label htmlFor="space-pricing-model">Pricing Model</Label>
+                <Select value={pricingModel} onValueChange={(v) => setPricingModel(v as SpacePricingModel)}>
+                  <SelectTrigger id="space-pricing-model"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="hourly">Hourly (rate × hours booked)</SelectItem>
+                    <SelectItem value="daily">Daily / Day Pass (flat day rate)</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+
+            {pricingModel === "hourly" ? (
+              <div className="space-y-2">
+                <Label htmlFor="space-rate">Hourly Rate (INR, ex-GST)</Label>
                 <Input
                   id="space-rate"
                   type="number"
@@ -230,7 +261,23 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
                   onChange={(e) => setHourlyRate(Number(e.target.value))}
                 />
               </div>
-            </div>
+            ) : (
+              <div className="space-y-2">
+                <Label htmlFor="space-day-rate">Day Rate (INR, ex-GST)</Label>
+                <Input
+                  id="space-day-rate"
+                  type="number"
+                  min={0}
+                  step={50}
+                  value={dailyRate}
+                  onChange={(e) => setDailyRate(Number(e.target.value))}
+                />
+                <p className="text-xs text-muted-foreground">
+                  Charged once per booking. Times auto-set to centre operating hours.
+                  Extras (extended time, F&amp;B, services) are added at check-out.
+                </p>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="space-workspace-type">Space Type</Label>

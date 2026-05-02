@@ -278,10 +278,32 @@ function NewBookingForm() {
     }
   }, [spaceId, spaces, preselectedSpaceId]);
 
+  // Day-pass spaces use a flat daily rate (₹X/day) instead of hours × rate.
+  // The rate that flows through the booking is the daily_rate; times are
+  // auto-set to the centre's operating hours for that day.
+  const isDayPass = selectedSpace?.pricing_model === "daily";
+
   // Sync customRate when selected space changes
   useEffect(() => {
-    setCustomRate(selectedSpace ? selectedSpace.hourly_rate.toFixed(2) : "");
-  }, [selectedSpace]);
+    if (!selectedSpace) { setCustomRate(""); return; }
+    const rate = isDayPass
+      ? Number(selectedSpace.daily_rate ?? 0)
+      : Number(selectedSpace.hourly_rate ?? 0);
+    setCustomRate(rate.toFixed(2));
+  }, [selectedSpace, isDayPass]);
+
+  // For day passes: auto-set start/end to the centre's operating hours for the
+  // chosen booking date. The user never picks times.
+  useEffect(() => {
+    if (!isDayPass || !selectedSpace || !bookingDate) return;
+    const days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+    const dayKey = days[new Date(bookingDate + "T00:00:00").getDay()];
+    const hours = selectedSpace.operating_hours?.[dayKey];
+    if (hours?.is_open) {
+      setStartTime(hours.open);
+      setEndTime(hours.close);
+    }
+  }, [isDayPass, selectedSpace, bookingDate]);
 
   // Fetch availability
   const fetchAvailability = useCallback(async () => {
@@ -407,10 +429,16 @@ function NewBookingForm() {
   };
 
   const parsedCustomRate = parseFloat(customRate);
-  const effectiveRate = selectedSpace
-    ? (!isNaN(parsedCustomRate) && parsedCustomRate >= 0 ? parsedCustomRate : selectedSpace.hourly_rate)
+  const fallbackRate = selectedSpace
+    ? (isDayPass ? Number(selectedSpace.daily_rate ?? 0) : Number(selectedSpace.hourly_rate ?? 0))
     : 0;
-  const roomCost = selectedSpace ? durationHours * effectiveRate : 0;
+  const effectiveRate = selectedSpace
+    ? (!isNaN(parsedCustomRate) && parsedCustomRate >= 0 ? parsedCustomRate : fallbackRate)
+    : 0;
+  // For day passes: charge is one flat day rate, not hours × rate.
+  const roomCost = selectedSpace
+    ? (isDayPass ? effectiveRate : durationHours * effectiveRate)
+    : 0;
   const facilityCost = selectedSpace?.facilities
     ? selectedSpace.facilities
         .filter(f => selectedFacilities.includes(f.id) && !f.is_complimentary)
@@ -450,11 +478,15 @@ function NewBookingForm() {
       toast.error("Mobile number is mandatory");
       return;
     }
-    if (!spaceId || !bookingDate || !startTime || !endTime) {
-      toast.error("Please select room, date, and time");
+    if (!spaceId || !bookingDate) {
+      toast.error("Please select room and date");
       return;
     }
-    if (durationHours < (selectedSpace?.min_booking_minutes || 60) / 60) {
+    if (!isDayPass && (!startTime || !endTime)) {
+      toast.error("Please select start and end times");
+      return;
+    }
+    if (!isDayPass && durationHours < (selectedSpace?.min_booking_minutes || 60) / 60) {
       toast.error(`Minimum booking is ${selectedSpace?.min_booking_minutes || 60} minutes`);
       return;
     }
@@ -670,7 +702,11 @@ function NewBookingForm() {
                 <SelectContent>
                   {spaces.map(s => (
                     <SelectItem key={s.id} value={s.id}>
-                      {s.name} ({s.capacity} seats, {formatCurrency(s.hourly_rate)}/hr)
+                      {s.name} ({s.capacity} seats, {
+                        s.pricing_model === "daily"
+                          ? `${formatCurrency(Number(s.daily_rate ?? 0))}/day`
+                          : `${formatCurrency(s.hourly_rate)}/hr`
+                      })
                     </SelectItem>
                   ))}
                 </SelectContent>
@@ -732,35 +768,60 @@ function NewBookingForm() {
 
       {/* Time Selection */}
       <Card>
-        <CardHeader><CardTitle className="text-base">2. Select Time</CardTitle></CardHeader>
+        <CardHeader>
+          <CardTitle className="text-base">
+            2. {isDayPass ? "Day Pass Coverage" : "Select Time"}
+          </CardTitle>
+        </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
-            <div className="space-y-2">
-              <Label>Start Time *</Label>
-              <Select value={startTime} onValueChange={(val) => { setStartTime(val); if (endTime && val >= endTime) setEndTime(""); }}>
-                <SelectTrigger><SelectValue placeholder="Start time" /></SelectTrigger>
-                <SelectContent>
-                  {timeOptions.map(t => <SelectItem key={t} value={t}>{formatTime12(t)}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>End Time *</Label>
-              <Select value={endTime} onValueChange={setEndTime} disabled={!startTime}>
-                <SelectTrigger><SelectValue placeholder="End time" /></SelectTrigger>
-                <SelectContent>
-                  {endTimeOptions.map(t => <SelectItem key={t} value={t}>{formatTime12(t)}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-2">
-              <Label>Duration</Label>
-              <div className="flex items-center gap-2 h-10 px-3 rounded-md border bg-muted/30">
-                <Clock className="h-4 w-4 text-muted-foreground" />
-                <span className="text-sm font-medium">{formatDuration(durationHours)}</span>
+          {isDayPass ? (
+            // Day-pass: times are fixed to the centre's operating hours.
+            // We still display them so the staff knows the working window,
+            // but they can't be edited and they don't affect the price.
+            <div className="rounded-lg border bg-muted/20 p-3 flex items-start gap-3">
+              <Clock className="h-4 w-4 text-muted-foreground mt-0.5 shrink-0" />
+              <div className="text-sm space-y-0.5">
+                <div>
+                  Day pass covers the centre&apos;s operating hours
+                  {startTime && endTime
+                    ? <> — <span className="font-medium">{formatTime12(startTime)} to {formatTime12(endTime)}</span></>
+                    : null}
+                  .
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  The customer is charged a flat day rate. Extras (extended time, printer, F&amp;B) can be added at check-out.
+                </p>
               </div>
             </div>
-          </div>
+          ) : (
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="space-y-2">
+                <Label>Start Time *</Label>
+                <Select value={startTime} onValueChange={(val) => { setStartTime(val); if (endTime && val >= endTime) setEndTime(""); }}>
+                  <SelectTrigger><SelectValue placeholder="Start time" /></SelectTrigger>
+                  <SelectContent>
+                    {timeOptions.map(t => <SelectItem key={t} value={t}>{formatTime12(t)}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>End Time *</Label>
+                <Select value={endTime} onValueChange={setEndTime} disabled={!startTime}>
+                  <SelectTrigger><SelectValue placeholder="End time" /></SelectTrigger>
+                  <SelectContent>
+                    {endTimeOptions.map(t => <SelectItem key={t} value={t}>{formatTime12(t)}</SelectItem>)}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <Label>Duration</Label>
+                <div className="flex items-center gap-2 h-10 px-3 rounded-md border bg-muted/30">
+                  <Clock className="h-4 w-4 text-muted-foreground" />
+                  <span className="text-sm font-medium">{formatDuration(durationHours)}</span>
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Slot conflict — Waitlist prompt */}
           {slotConflict && (
@@ -1380,14 +1441,14 @@ function NewBookingForm() {
               </p>
             </div>
             <div>
-              <p className="text-xs text-muted-foreground">Duration</p>
-              <p className="font-medium text-sm">{formatDuration(durationHours)}</p>
+              <p className="text-xs text-muted-foreground">{isDayPass ? "Coverage" : "Duration"}</p>
+              <p className="font-medium text-sm">{isDayPass ? "1 Day" : formatDuration(durationHours)}</p>
             </div>
           </div>
           <div className="border-t pt-3 space-y-1">
             {selectedSpace && (
               <div className="flex justify-between text-sm items-center">
-                <span className="text-muted-foreground">Hourly Rate</span>
+                <span className="text-muted-foreground">{isDayPass ? "Day Rate" : "Hourly Rate"}</span>
                 <div className="flex items-center gap-1">
                   <span className="text-muted-foreground text-xs">₹</span>
                   <Input
@@ -1396,12 +1457,12 @@ function NewBookingForm() {
                     onChange={(e) => setCustomRate(e.target.value)}
                     className="h-6 w-20 text-right text-xs px-1"
                   />
-                  <span className="text-muted-foreground text-xs">/hr</span>
+                  <span className="text-muted-foreground text-xs">{isDayPass ? "/day" : "/hr"}</span>
                 </div>
               </div>
             )}
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">Room ({formatDuration(durationHours)})</span>
+              <span className="text-muted-foreground">{isDayPass ? "Day Pass (1 day)" : `Room (${formatDuration(durationHours)})`}</span>
               <span>{formatCurrency(roomCost)}</span>
             </div>
             {facilityCost > 0 && (

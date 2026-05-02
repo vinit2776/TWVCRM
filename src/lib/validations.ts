@@ -306,7 +306,10 @@ export const createSpaceSchema = z.object({
   name: z.string().min(1, "Name is required"),
   location_id: z.string().uuid("Invalid location ID"),
   capacity: z.number().int().positive("Capacity must be positive"),
-  hourly_rate: z.number().positive("Hourly rate must be positive"),
+  pricing_model: z.enum(["hourly", "daily"]).default("hourly"),
+  // Hourly rate: required for hourly-priced spaces, can be 0 for daily-priced.
+  hourly_rate: z.number().min(0),
+  daily_rate: z.number().min(0).nullable().optional(),
   description: z.string().optional(),
   operating_hours: z.record(z.string(), operatingDaySchema).optional(),
   max_advance_booking_days: z.number().int().positive().default(30),
@@ -329,8 +332,10 @@ export type CreateSpaceInput = z.input<typeof createSpaceSchema>;
 export const createBookingSchema = z.object({
   space_id: z.string().uuid("Invalid space ID"),
   booking_date: z.string().min(1, "Booking date is required"),
-  start_time: z.string().regex(/^\d{2}:\d{2}$/, "Start time required (HH:MM)"),
-  end_time: z.string().regex(/^\d{2}:\d{2}$/, "End time required (HH:MM)"),
+  // Times are optional for day-pass bookings — server fills them from
+  // the centre's operating hours when the space is daily-priced.
+  start_time: z.string().regex(/^\d{2}:\d{2}$/, "Start time required (HH:MM)").optional(),
+  end_time: z.string().regex(/^\d{2}:\d{2}$/, "End time required (HH:MM)").optional(),
   customer_type: z.enum(["contract_holder", "walk_in", "guest"]),
   contract_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   lead_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),

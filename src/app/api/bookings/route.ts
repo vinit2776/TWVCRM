@@ -193,26 +193,38 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `Space is closed on ${dayOfWeek}` }, { status: 400 });
   }
 
-  const startMin = timeToMinutes(input.start_time);
-  const endMin = timeToMinutes(input.end_time);
-  const openMin = timeToMinutes(dayHours.open);
+  // Day-pass spaces (pricing_model = 'daily') always cover the full operating
+  // window for that day. Times are auto-set from the centre's operating hours;
+  // any input times are ignored to keep behaviour predictable.
+  const isDaily = space.pricing_model === "daily";
+  const effectiveStart = isDaily ? dayHours.open : input.start_time;
+  const effectiveEnd   = isDaily ? dayHours.close : input.end_time;
+
+  if (!effectiveStart || !effectiveEnd) {
+    return NextResponse.json({ error: "Start and end times are required for hourly spaces" }, { status: 400 });
+  }
+
+  const startMin = timeToMinutes(effectiveStart);
+  const endMin   = timeToMinutes(effectiveEnd);
+  const openMin  = timeToMinutes(dayHours.open);
   const closeMin = timeToMinutes(dayHours.close);
 
-  if (startMin < openMin || endMin > closeMin) {
-    return NextResponse.json({
-      error: `Booking must be within operating hours (${dayHours.open} - ${dayHours.close})`,
-    }, { status: 400 });
-  }
+  if (!isDaily) {
+    if (startMin < openMin || endMin > closeMin) {
+      return NextResponse.json({
+        error: `Booking must be within operating hours (${dayHours.open} - ${dayHours.close})`,
+      }, { status: 400 });
+    }
 
-  const durationMinutes = endMin - startMin;
-  if (durationMinutes < space.min_booking_minutes) {
-    return NextResponse.json({
-      error: `Minimum booking duration is ${space.min_booking_minutes} minutes`,
-    }, { status: 400 });
-  }
-
-  if (durationMinutes % 15 !== 0) {
-    return NextResponse.json({ error: "Duration must be in multiples of 15 minutes" }, { status: 400 });
+    const durationMinutes = endMin - startMin;
+    if (durationMinutes < space.min_booking_minutes) {
+      return NextResponse.json({
+        error: `Minimum booking duration is ${space.min_booking_minutes} minutes`,
+      }, { status: 400 });
+    }
+    if (durationMinutes % 15 !== 0) {
+      return NextResponse.json({ error: "Duration must be in multiples of 15 minutes" }, { status: 400 });
+    }
   }
 
   // Check advance booking days
@@ -226,28 +238,57 @@ export async function POST(request: NextRequest) {
     }, { status: 400 });
   }
 
-  // Check overlap
-  const { data: conflicts } = await supabase
+  // Overlap check: hourly = strict time overlap; daily = any other booking on that date
+  const overlapQuery = supabase
     .from("bookings")
     .select("id, booking_number")
     .eq("space_id", input.space_id)
     .eq("booking_date", input.booking_date)
-    .in("status", ["confirmed", "checked_in"])
-    .lt("start_time", input.end_time + ":00")
-    .gt("end_time", input.start_time + ":00");
+    .in("status", ["confirmed", "checked_in"]);
+  const { data: conflicts } = isDaily
+    ? await overlapQuery
+    : await overlapQuery
+        .lt("start_time", effectiveEnd + ":00")
+        .gt("end_time", effectiveStart + ":00");
 
+  // Day-pass: still respect the space's capacity. Conflict only if existing
+  // bookings on this date already fill capacity (capacity 1 = single seat).
   if (conflicts && conflicts.length > 0) {
-    return NextResponse.json({
-      error: "Time slot conflicts with an existing booking",
-    }, { status: 409 });
+    if (!isDaily || conflicts.length >= (space.capacity ?? 1)) {
+      return NextResponse.json({
+        error: isDaily
+          ? "All day-pass seats are booked for this date"
+          : "Time slot conflicts with an existing booking",
+      }, { status: 409 });
+    }
   }
 
-  // 3. Calculate pricing
+  // 3. Calculate pricing — branch on pricing_model
+  const durationMinutes = endMin - startMin;
   const durationHours = durationMinutes / 60;
-  const effectiveRate = (input.hourly_rate !== undefined && input.hourly_rate >= 0)
-    ? input.hourly_rate
-    : space.hourly_rate;
-  let totalAmount = durationHours * effectiveRate;
+
+  let unitRate: number;
+  let quantity: number;
+  if (isDaily) {
+    if (input.hourly_rate !== undefined && input.hourly_rate >= 0) {
+      // The booking form may pass an override (e.g., voucher / promo). Treat as day rate.
+      unitRate = input.hourly_rate;
+    } else {
+      const dr = Number(space.daily_rate ?? 0);
+      if (!dr) {
+        return NextResponse.json({ error: "Day pass rate not configured for this space" }, { status: 400 });
+      }
+      unitRate = dr;
+    }
+    quantity = 1;
+  } else {
+    unitRate = (input.hourly_rate !== undefined && input.hourly_rate >= 0)
+      ? input.hourly_rate
+      : space.hourly_rate;
+    quantity = durationHours;
+  }
+  const effectiveRate = unitRate;
+  let totalAmount = parseFloat((unitRate * quantity).toFixed(2));
 
   // Add facility charges
   const requestedFacilities: { facility_name: string; is_complimentary: boolean; charge: number }[] = [];
@@ -411,9 +452,12 @@ export async function POST(request: NextRequest) {
       space_id: input.space_id,
       location_id: space.location_id,
       booking_date: input.booking_date,
-      start_time: input.start_time + ":00",
-      end_time: input.end_time + ":00",
-      duration_hours: durationHours,
+      start_time: effectiveStart + ":00",
+      end_time: effectiveEnd + ":00",
+      duration_hours: isDaily ? 1 : durationHours,
+      pricing_model: space.pricing_model,
+      unit_rate: unitRate,
+      quantity,
       customer_type: input.customer_type,
       contract_id: contractId,
       lead_id: leadId,
@@ -422,7 +466,7 @@ export async function POST(request: NextRequest) {
       guest_email: input.guest_email || null,
       guest_phone: input.guest_phone,
       guest_company: input.guest_company,
-      hourly_rate: effectiveRate,
+      hourly_rate: effectiveRate,    // legacy column — for daily, this equals the day rate
       total_amount: totalAmount,
       gst_rate: gstRate,
       gst_amount: gstAmount,

@@ -664,7 +664,9 @@ export type AuditEntityType =
   | "facility_asset_category"
   | "facility_asset"
   | "facility_issue"
-  | "facility_issue_attachment";
+  | "facility_issue_attachment"
+  | "booking_addon"
+  | "addon_catalog";
 
 export interface AuditLog {
   id: string;
@@ -688,13 +690,20 @@ export interface SpaceOperatingDay {
 
 export type SpaceOperatingHours = Record<string, SpaceOperatingDay>;
 
+export type SpacePricingModel = "hourly" | "daily";
+
 export interface Space {
   id: string;
   name: string;
   location_id: string;
   location?: Location;
   capacity: number;
-  hourly_rate: number;
+  // Pricing model determines which rate applies:
+  //  - hourly: hourly_rate × duration_hours
+  //  - daily:  daily_rate × 1 (booking covers the centre's operating hours for that day)
+  pricing_model: SpacePricingModel;
+  hourly_rate: number;          // 0 for daily-priced spaces
+  daily_rate?: number | null;   // set when pricing_model = 'daily'
   description?: string;
   workspace_type?: WorkspaceType;
   operating_hours: SpaceOperatingHours;
@@ -739,6 +748,10 @@ export interface Booking {
   start_time: string;
   end_time: string;
   duration_hours: number;
+  // Pricing snapshot at booking time
+  pricing_model?: SpacePricingModel;
+  unit_rate?: number | null;        // per-unit rate (per-hour or per-day)
+  quantity?: number | null;         // hours for hourly, days (always 1) for daily
   customer_type: BookingCustomerType;
   contract_id?: string;
   contract?: Contract;
@@ -2451,3 +2464,46 @@ export interface FacilityTechnicianKpi {
   avg_satisfaction: number | null;
   satisfaction_responses: number;
 }
+
+// ==========================================
+// Booking add-ons (extras: extended time, F&B, services)
+// ==========================================
+export type BookingAddonType = "extended_time" | "service" | "food_beverage" | "other";
+
+export interface BookingAddon {
+  id: string;
+  booking_id: string;
+  addon_catalog_id?: string | null;
+  addon_type: BookingAddonType;
+  description: string;
+  unit_label?: string | null;
+  quantity: number;
+  unit_price: number;       // ex-GST
+  amount: number;           // = quantity × unit_price
+  gst_rate: number;
+  gst_amount: number;
+  total_with_gst: number;
+  notes?: string | null;
+  added_by?: string | null;
+  added_by_user?: { id: string; full_name: string } | null;
+  added_at: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AddonCatalogItem {
+  id: string;
+  location_id?: string | null;       // null = global
+  addon_type: BookingAddonType;
+  name: string;
+  description?: string | null;
+  unit_price: number;                // ex-GST
+  unit_label?: string | null;
+  gst_rate: number;
+  is_active: boolean;
+  sort_order: number;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+

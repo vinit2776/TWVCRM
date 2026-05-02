@@ -221,8 +221,27 @@ export async function PATCH(
         if (booking.status !== "confirmed") {
           return NextResponse.json({ error: "Can only check in confirmed bookings" }, { status: 400 });
         }
-        if (!canManage) {
-          return NextResponse.json({ error: "Only managers/floor managers can check in" }, { status: 403 });
+
+        // Day-pass spaces: enforce that check-in happens during the centre's
+        // operating hours for that day. Outside that window, the staff should
+        // either reschedule or extend the booking explicitly.
+        if (booking.pricing_model === "daily" && booking.space?.operating_hours) {
+          const days = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
+          const now = new Date();
+          const dayKey = days[now.getDay()];
+          const todayHours = booking.space.operating_hours[dayKey];
+          if (todayHours?.is_open) {
+            const [oH, oM] = todayHours.open.split(":").map(Number);
+            const [cH, cM] = todayHours.close.split(":").map(Number);
+            const nowMin = now.getHours() * 60 + now.getMinutes();
+            const openMin = oH * 60 + oM;
+            const closeMin = cH * 60 + cM;
+            if (nowMin < openMin || nowMin > closeMin) {
+              return NextResponse.json({
+                error: `Day-pass check-in must be during centre hours (${todayHours.open} – ${todayHours.close})`,
+              }, { status: 400 });
+            }
+          }
         }
 
         // PAYMENT GATE: Walk-in bookings require full payment before check-in
@@ -258,9 +277,6 @@ export async function PATCH(
         if (booking.status !== "checked_in") {
           return NextResponse.json({ error: "Can only check out checked-in bookings" }, { status: 400 });
         }
-        if (!canManage) {
-          return NextResponse.json({ error: "Only managers/floor managers can check out" }, { status: 403 });
-        }
         const now = new Date();
         updates.status = "checked_out";
         updates.check_out_at = now.toISOString();
@@ -277,17 +293,54 @@ export async function PATCH(
         const overtimeMinutes = actualCheckoutMin - bookingEndMin;
         if (overtimeMinutes > 15 && !body.skip_overtime) {
           const overtimeHours = Math.ceil(overtimeMinutes / 60);
-          const hourlyRate = Number(booking.hourly_rate || booking.space?.hourly_rate || 0);
-          const overtimeCharge = overtimeHours * hourlyRate;
 
-          // Return overtime info for the frontend to collect payment
-          // eslint-disable-next-line @typescript-eslint/no-explicit-any
-          (updates as any)._overtime = {
-            minutes: overtimeMinutes,
-            hours: overtimeHours,
-            hourly_rate: hourlyRate,
-            charge: overtimeCharge,
-          };
+          if (booking.pricing_model === "daily") {
+            // Day-pass: never multiply day rate by hours. Surface a suggestion to
+            // add the catalogued "Extended hour" add-on (₹100/hr by default,
+            // editable in the addon catalog).
+            const { data: extendedItem } = await supabase
+              .from("addon_catalog")
+              .select("id, name, unit_price, gst_rate")
+              .eq("addon_type", "extended_time")
+              .eq("is_active", true)
+              .or(`location_id.eq.${booking.location_id},location_id.is.null`)
+              .order("location_id", { ascending: false, nullsFirst: false })
+              .limit(1)
+              .maybeSingle();
+
+            const unitPrice = Number(extendedItem?.unit_price ?? 100);
+            const gstRate = Number(extendedItem?.gst_rate ?? 18);
+            const overtimeCharge = parseFloat((overtimeHours * unitPrice).toFixed(2));
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (updates as any)._overtime = {
+              minutes: overtimeMinutes,
+              hours: overtimeHours,
+              unit_price: unitPrice,
+              gst_rate: gstRate,
+              charge: overtimeCharge,
+              addon_catalog_id: extendedItem?.id ?? null,
+              suggested_addon: {
+                addon_type: "extended_time",
+                description: extendedItem?.name ?? "Extended hour",
+                unit_label: "per hour",
+                quantity: overtimeHours,
+                unit_price: unitPrice,
+                gst_rate: gstRate,
+              },
+              is_day_pass: true,
+            };
+          } else {
+            const hourlyRate = Number(booking.hourly_rate || booking.space?.hourly_rate || 0);
+            const overtimeCharge = overtimeHours * hourlyRate;
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            (updates as any)._overtime = {
+              minutes: overtimeMinutes,
+              hours: overtimeHours,
+              hourly_rate: hourlyRate,
+              charge: overtimeCharge,
+              is_day_pass: false,
+            };
+          }
         }
         break;
       }

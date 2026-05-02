@@ -22,6 +22,7 @@ import { NoShowRefundDialog } from "@/components/bookings/no-show-refund-dialog"
 import { CheckoutFeedbackDialog } from "@/components/bookings/checkout-feedback-dialog";
 import { RescheduleDialog } from "@/components/bookings/reschedule-dialog";
 import { ExtendBookingDialog } from "@/components/bookings/extend-booking-dialog";
+import { BookingAddonsSection } from "@/components/bookings/booking-addons-section";
 import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
@@ -72,6 +73,11 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [logChargeOpen, setLogChargeOpen] = useState(false);
   const [waiverOpen, setWaiverOpen] = useState(false);
   const [pendingOvertimeCharge, setPendingOvertimeCharge] = useState<{ minutes: number; hours: number; hourly_rate: number; charge: number } | null>(null);
+  // For day-pass overtime, we open the addons dialog with the suggested
+  // "Extended time" line pre-filled. The number is just a tick to retrigger.
+  const [addonOpenSignal, setAddonOpenSignal] = useState<number>(0);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [addonPrefill, setAddonPrefill] = useState<any>(null);
   const [outstandingCharges, setOutstandingCharges] = useState<Array<{
     id: string;
     description: string;
@@ -281,16 +287,39 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         // Show overtime alert if applicable
         if (resJson.overtime) {
           const ot = resJson.overtime;
-          setPendingOvertimeCharge(ot);
-          toast.warning(
-            `Overtime: ${ot.minutes} min past booking end`,
-            {
-              description: `Differential charge: ₹${ot.charge.toLocaleString("en-IN")} (${ot.hours}h × ₹${ot.hourly_rate.toLocaleString("en-IN")}/hr). Collect payment or request manager waiver.`,
-              duration: 15000,
-            }
-          );
-          // Open payment dialog so they can collect the overtime charge
-          setPaymentDialogOpen(true);
+          if (ot.is_day_pass && ot.suggested_addon) {
+            // Day-pass: open the addons dialog with extended-time pre-filled.
+            // Day rate is NEVER multiplied by extra hours; this is a separate
+            // catalog item (default ₹100/hr).
+            setAddonPrefill({
+              addon_catalog_id: ot.addon_catalog_id,
+              addon_type: ot.suggested_addon.addon_type,
+              description: ot.suggested_addon.description,
+              quantity: ot.suggested_addon.quantity,
+              unit_price: ot.suggested_addon.unit_price,
+              unit_label: ot.suggested_addon.unit_label,
+              gst_rate: ot.suggested_addon.gst_rate,
+            });
+            setAddonOpenSignal(Date.now());
+            toast.warning(
+              `Customer stayed ${ot.minutes} min past closing`,
+              {
+                description: `Suggest adding "Extended time": ${ot.hours}h × ₹${Number(ot.unit_price).toLocaleString("en-IN")}/hr = ₹${Number(ot.charge).toLocaleString("en-IN")} (+ GST). Adjust quantity or skip if waiving.`,
+                duration: 15000,
+              }
+            );
+          } else {
+            setPendingOvertimeCharge(ot);
+            toast.warning(
+              `Overtime: ${ot.minutes} min past booking end`,
+              {
+                description: `Differential charge: ₹${ot.charge.toLocaleString("en-IN")} (${ot.hours}h × ₹${Number(ot.hourly_rate).toLocaleString("en-IN")}/hr). Collect payment or request manager waiver.`,
+                duration: 15000,
+              }
+            );
+            // Open payment dialog so they can collect the overtime charge
+            setPaymentDialogOpen(true);
+          }
         }
 
         setFeedbackDialogOpen(true);
@@ -1011,9 +1040,15 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         <Card>
           <CardHeader><CardTitle className="text-sm">Financials</CardTitle></CardHeader>
           <CardContent className="space-y-2 text-sm">
-            {/* Hourly Rate — inline editable */}
+            {/* Pricing-model indicator (label only — value editor below stays unchanged) */}
+            {booking.pricing_model === "daily" && (
+              <div className="text-[10px] uppercase tracking-wide text-muted-foreground bg-muted/30 rounded px-2 py-1">
+                Day pass · 1 × day rate (×{Number(booking.quantity ?? 1)})
+              </div>
+            )}
+            {/* Rate — inline editable */}
             <div className="flex justify-between items-center">
-              <span className="text-muted-foreground">Hourly Rate</span>
+              <span className="text-muted-foreground">{booking.pricing_model === "daily" ? "Day Rate" : "Hourly Rate"}</span>
               {editingPricing ? (
                 <Input
                   type="number"
@@ -1368,6 +1403,18 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           <StaffFeedbackCard feedback={booking.feedback} />
         )}
       </div>
+
+      {/* Add-ons / extras (extended time, F&B, services) */}
+      {booking.location_id && (
+        <BookingAddonsSection
+          bookingId={booking.id}
+          locationId={booking.location_id}
+          canEdit={booking.status !== "cancelled"}
+          onChange={fetchBooking}
+          prefill={addonPrefill}
+          openSignal={addonOpenSignal}
+        />
+      )}
 
       {/* Customer History */}
       {(booking.booker_phone || booking.lead?.phone || booking.guest_phone) && (
