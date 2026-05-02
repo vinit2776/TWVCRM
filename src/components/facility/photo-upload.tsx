@@ -16,7 +16,7 @@ import { Camera, ImagePlus, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { createClient } from "@/lib/supabase/client";
-import { compressImageClient } from "@/lib/uploads/compress-image-client";
+import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 
 export type UploadedPhoto = {
   file_url: string;
@@ -67,8 +67,26 @@ export function FacilityPhotoUpload({
           toast.error(`${raw.name} is over 10MB — skipped`);
           continue;
         }
-        const file = await compressImageClient(raw);
-        const ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+        // prepareUpload handles both image compression (canvas → JPEG @ 2048px / Q82)
+        // and PDF normalization (metadata strip + object streams). Returns null if the
+        // user cancels the soft-warn for files still > 15MB after processing.
+        let file: File | null;
+        try {
+          file = await prepareUpload(raw);
+        } catch (e) {
+          if (e instanceof UploadTooLargeError) {
+            toast.error(e.message);
+          } else {
+            toast.error(e instanceof Error ? e.message : "Upload prep failed");
+          }
+          continue;
+        }
+        if (!file) continue;
+        // Normalize image extensions to ".jpg" since compressImageClient always
+        // re-encodes to JPEG. Keeps storage extensions consistent.
+        let ext = file.name.split(".").pop()?.toLowerCase() || "jpg";
+        if (file.type === "image/jpeg") ext = "jpg";
+        else if (file.type === "application/pdf") ext = "pdf";
         const path = `${pathPrefix}/${Date.now()}-${Math.random().toString(36).slice(2, 8)}.${ext}`;
 
         const { error } = await supabase.storage

@@ -43,6 +43,14 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const { booking_id, amount, payment_mode, payment_reference } = body;
 
+  // verify_on_create: when staff records a UPI/manual-QR payment WITH proof
+  // attached at the counter, the upload itself is the operator's attestation.
+  // We trust staff roles and skip the separate verification step so check-in
+  // can proceed immediately. Restricted to roles that can run the floor.
+  const verifyOnCreate = body.verify_on_create === true && [
+    "admin", "manager", "floor_manager", "fms", "office_admin",
+  ].includes(dbUser.role);
+
   if (!booking_id || !amount || !payment_mode) {
     return NextResponse.json({ error: "booking_id, amount, and payment_mode are required" }, { status: 400 });
   }
@@ -81,8 +89,15 @@ export async function POST(request: NextRequest) {
     }, { status: 400 });
   }
 
-  // Determine initial status based on payment mode
-  const status = (payment_mode === "cash" || payment_mode === "card") ? "verified" : "pending";
+  // Determine initial status:
+  //   • cash / card  → verified (cash physically collected; card already cleared)
+  //   • upi          → pending UNLESS verify_on_create is set (staff attesting via uploaded proof)
+  //   • razorpay     → pending (webhook flips to verified asynchronously)
+  const status = (payment_mode === "cash" || payment_mode === "card")
+    ? "verified"
+    : (payment_mode === "upi" && verifyOnCreate)
+      ? "verified"
+      : "pending";
 
   // Build payment record with cash handover tracking
   const paymentRecord: Record<string, unknown> = {
@@ -99,6 +114,14 @@ export async function POST(request: NextRequest) {
     paymentRecord.cash_handover_status = "pending_handover";
     paymentRecord.collected_by = dbUser.id;
     paymentRecord.collected_at = new Date().toISOString();
+  }
+
+  // Audit trail for the verify-on-create attestation. We use the existing
+  // screenshot_verified + verification_notes columns rather than adding new
+  // ones; the audit_log row also captures who attested when.
+  if (payment_mode === "upi" && verifyOnCreate) {
+    paymentRecord.screenshot_verified = true;
+    paymentRecord.verification_notes = `Verified at counter by ${dbUser.id} against uploaded payment confirmation`;
   }
 
   const { data: payment, error } = await supabase

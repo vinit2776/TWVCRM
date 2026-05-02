@@ -305,9 +305,23 @@ function NewBookingForm() {
     }
   }, [isDayPass, selectedSpace, bookingDate]);
 
-  // Fetch availability
+  // Day-pass capacity tracking — replaces the slot-availability concept.
+  // For day-pass spaces, we don't care about hourly slot conflicts; we only
+  // care whether the per-day capacity has been exhausted at the location.
+  const [dayPassUsed, setDayPassUsed] = useState(0);
+
+  // Fetch availability — only for hourly spaces. Day-pass uses dayPassUsed below.
   const fetchAvailability = useCallback(async () => {
     if (!spaceId || !bookingDate) return;
+    if (isDayPass) {
+      // Don't run the slot-availability machinery for day-pass spaces.
+      // It would otherwise show "no slots available" because day passes
+      // already cover the full operating window (which the conference-room
+      // overlap algorithm interprets as a conflict).
+      setAvailableSlots([]);
+      setSlotConflict(false);
+      return;
+    }
     setAvailLoading(true);
     setSlotConflict(false);
     try {
@@ -318,9 +332,26 @@ function NewBookingForm() {
       }
     } catch { /* ignore */ }
     setAvailLoading(false);
-  }, [spaceId, bookingDate]);
+  }, [spaceId, bookingDate, isDayPass]);
 
   useEffect(() => { fetchAvailability(); }, [fetchAvailability]);
+
+  // Day-pass capacity counter — fetch how many day passes are already booked
+  // for this date at this space, so we can show "3 of 13 day passes booked".
+  useEffect(() => {
+    if (!isDayPass || !spaceId || !bookingDate) { setDayPassUsed(0); return; }
+    let cancelled = false;
+    fetch(`/api/bookings?space_id=${spaceId}&date_from=${bookingDate}&date_to=${bookingDate}&limit=200`)
+      .then((r) => r.json())
+      .then((j) => {
+        if (cancelled) return;
+        const rows = (j.data || []) as Array<{ status: string }>;
+        const live = rows.filter((b) => ["confirmed", "checked_in", "checked_out"].includes(b.status));
+        setDayPassUsed(live.length);
+      })
+      .catch(() => { if (!cancelled) setDayPassUsed(0); });
+    return () => { cancelled = true; };
+  }, [isDayPass, spaceId, bookingDate]);
 
   // Merge adjacent 30-min slots into continuous availability windows
   const availabilityWindows = (() => {
@@ -718,8 +749,31 @@ function NewBookingForm() {
             </div>
           </div>
 
-          {/* Availability */}
-          {spaceId && bookingDate && (
+          {/* Availability — day-pass uses a capacity counter, hourly uses slot windows */}
+          {spaceId && bookingDate && isDayPass && selectedSpace && (
+            <div className="pt-2 rounded-lg border bg-muted/20 p-3 text-sm">
+              {(() => {
+                const cap = selectedSpace.capacity || 1;
+                const remaining = Math.max(0, cap - dayPassUsed);
+                const exhausted = remaining === 0;
+                return (
+                  <div className="flex items-start gap-2">
+                    <div className={`mt-0.5 h-2 w-2 rounded-full ${exhausted ? "bg-red-500" : "bg-emerald-500"}`} />
+                    <div>
+                      <div className="font-medium">
+                        {exhausted ? "All day passes booked" : `${remaining} of ${cap} day passes available`} for this date
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">
+                        Day passes don&apos;t use the slot grid — any seat at this location works.
+                        Hourly meeting/conference rooms are unaffected.
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
+          )}
+          {spaceId && bookingDate && !isDayPass && (
             <div className="pt-2">
               <div className="flex items-center gap-2 mb-2">
                 <Label className="text-sm text-muted-foreground">Available Slots</Label>

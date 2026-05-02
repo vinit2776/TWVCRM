@@ -153,9 +153,21 @@ export function CollectPaymentDialog({
       return;
     }
 
+    // For UPI ("manual QR collected at the counter"), the staff MUST attach
+    // the customer's payment confirmation. The upload itself is the
+    // attestation — we then create the payment with verify_on_create so it
+    // lands in the verified state and the booking can move to checked-in
+    // without a separate verification step.
+    if (paymentMode === "upi" && !screenshotFile) {
+      toast.error("Please upload the customer's payment confirmation screenshot");
+      return;
+    }
+
     setSaving(true);
     try {
-      // Create payment record
+      // Create payment record. For UPI with screenshot, send verify_on_create
+      // so the API marks it verified (and the booking moves to fully paid if
+      // the amount covers the balance).
       const res = await fetch("/api/booking-payments", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -164,6 +176,7 @@ export function CollectPaymentDialog({
           amount: amt,
           payment_mode: paymentMode,
           payment_reference: paymentReference.trim() || undefined,
+          verify_on_create: paymentMode === "upi" && !!screenshotFile,
         }),
       });
 
@@ -198,7 +211,7 @@ export function CollectPaymentDialog({
       }
 
       const modeLabel = BOOKING_PAYMENT_MODE_LABELS[paymentMode] || paymentMode;
-      if (paymentMode === "cash" || paymentMode === "card") {
+      if (paymentMode === "cash" || paymentMode === "card" || paymentMode === "upi") {
         toast.success(`${modeLabel} payment of ${formatCurrency(amt)} recorded`);
       } else {
         toast.success(`${modeLabel} payment submitted — pending verification`);
@@ -212,8 +225,11 @@ export function CollectPaymentDialog({
       // Refresh
       await fetchPayments();
 
-      // Check if now fully paid
-      const newVerified = verifiedTotal + ((paymentMode === "cash" || paymentMode === "card") ? amt : 0);
+      // Check if now fully paid — UPI with screenshot is auto-verified now,
+      // so include it in the optimistic total.
+      const wasVerified = paymentMode === "cash" || paymentMode === "card" ||
+        (paymentMode === "upi" && !!screenshotFile);
+      const newVerified = verifiedTotal + (wasVerified ? amt : 0);
       if (newVerified >= totalAmount) {
         onSuccess();
         onOpenChange(false);
@@ -497,9 +513,17 @@ export function CollectPaymentDialog({
                         />
                       </div>
 
-                      {/* Screenshot upload */}
+                      {/* Screenshot upload — REQUIRED for manual-QR. Upload itself
+                          attests that staff saw the customer's payment confirmation,
+                          and the booking moves to fully paid immediately. */}
                       <div className="space-y-1.5">
-                        <Label className="text-xs">Payment Screenshot</Label>
+                        <Label className="text-xs flex items-center gap-1">
+                          Payment confirmation screenshot
+                          <span className="text-red-500">*</span>
+                        </Label>
+                        <p className="text-[11px] text-muted-foreground -mt-1">
+                          Required. Upload the customer&apos;s UPI confirmation. Marks the payment verified so check-in can proceed.
+                        </p>
                         {screenshotPreview ? (
                           <div className="relative border rounded-md p-2">
                             {/* eslint-disable-next-line @next/next/no-img-element */}
@@ -632,14 +656,16 @@ export function CollectPaymentDialog({
                   <Button
                     className="w-full"
                     onClick={handleSubmitPayment}
-                    disabled={saving || !amount || parseFloat(amount) <= 0}
+                    disabled={saving || !amount || parseFloat(amount) <= 0 || (paymentMode === "upi" && !screenshotFile)}
                   >
                     {saving ? (
                       <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Processing...</>
                     ) : paymentMode === "cash" ? (
                       `Record Cash Payment — ${formatCurrency(parseFloat(amount) || 0)}`
                     ) : paymentMode === "upi" ? (
-                      `Submit UPI Payment — ${formatCurrency(parseFloat(amount) || 0)}`
+                      screenshotFile
+                        ? `Confirm UPI Payment — ${formatCurrency(parseFloat(amount) || 0)}`
+                        : "Upload screenshot to confirm"
                     ) : (
                       `Record Card Payment — ${formatCurrency(parseFloat(amount) || 0)}`
                     )}
