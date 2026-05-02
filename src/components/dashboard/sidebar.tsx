@@ -143,6 +143,18 @@ const navSections: NavSection[] = [
     ],
   },
   {
+    key: "facility",
+    label: "Facility",
+    icon: Wrench,
+    items: [
+      { href: "/facility",            label: "Dashboard",  icon: BarChart3Icon, roles: ["admin", "it_manager"] },
+      { href: "/facility/issues",     label: "Issues",     icon: ClipboardList, roles: ["admin", "manager", "it_manager", "it_technician", "fms", "office_admin", "floor_manager"] },
+      { href: "/facility/my-issues",  label: "My Issues",  icon: Ticket,        roles: ["admin", "it_manager", "it_technician"] },
+      { href: "/facility/assets",     label: "Assets",     icon: Server,        roles: ["admin", "manager", "it_manager", "it_technician"] },
+      { href: "/facility/team-kpi",   label: "Team KPI",   icon: TrendingUp,    roles: ["admin", "it_manager"] },
+    ],
+  },
+  {
     key: "admin",
     label: "Admin",
     icon: Settings,

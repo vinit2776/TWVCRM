@@ -28,7 +28,7 @@ export interface Location {
 // ==========================================
 // User Types
 // ==========================================
-export type UserRole = "admin" | "manager" | "sales_rep" | "floor_manager" | "accounts" | "fms" | "office_admin";
+export type UserRole = "admin" | "manager" | "sales_rep" | "floor_manager" | "accounts" | "fms" | "office_admin" | "it_manager" | "it_technician";
 
 export interface User {
   id: string;
@@ -660,7 +660,11 @@ export type AuditEntityType =
   | "location_floor"
   | "space_unit"
   | "contract_space_allocation"
-  | "space_seat_occupant";
+  | "space_seat_occupant"
+  | "facility_asset_category"
+  | "facility_asset"
+  | "facility_issue"
+  | "facility_issue_attachment";
 
 export interface AuditLog {
   id: string;
@@ -1756,7 +1760,6 @@ export interface VendorBill {
   approved_amount_note?: string | null;
   rejection_reason?: string;
   rejection_outcome?: RejectionOutcome;
-  replaces_bill_id?: string | null;
   // Payment batch scheduling
   payment_batch_type?: PaymentBatchType | null;
   payment_batch_date?: string | null;
@@ -2230,4 +2233,221 @@ export interface SpaceHeadcount {
   total_count: number;
   notes?: string | null;
   created_at: string;
+}
+
+// ==========================================
+// Facility Issues Module
+// ==========================================
+export type FacilityScope = "it" | "hvac" | "plumbing" | "electrical" | "housekeeping" | "security" | "other";
+export type FacilityIssuePriority = "low" | "medium" | "high" | "critical";
+export type FacilityIssueStatus = "new" | "acknowledged" | "in_progress" | "resolved" | "closed" | "reopened";
+export type FacilityRootCause =
+  | "hardware_failure"
+  | "config_issue"
+  | "isp_outage"
+  | "power_issue"
+  | "user_error"
+  | "scheduled_maintenance"
+  | "wear_and_tear"
+  | "environmental"
+  | "unknown"
+  | "other";
+export type FacilityReportedVia = "walk_in" | "phone" | "whatsapp" | "email" | "self_service" | "proactive" | "feedback";
+export type FacilityAssetStatus = "active" | "maintenance" | "retired";
+export type FacilityAttachmentPhase = "report" | "progress" | "resolution";
+
+export interface FacilityAssetCategory {
+  id: string;
+  scope: FacilityScope;
+  name: string;
+  slug: string;
+  icon?: string | null;
+  description?: string | null;
+  default_sla_critical_hrs: number;
+  default_sla_high_hrs: number;
+  default_sla_medium_hrs: number;
+  default_sla_low_hrs: number;
+  sort_order: number;
+  is_active: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FacilityAsset {
+  id: string;
+  location_id: string;
+  location?: { id: string; name: string; code: string } | null;
+  floor_id?: string | null;
+  floor?: { id: string; name: string } | null;
+  space_unit_id?: string | null;
+  space_unit?: { id: string; name: string; code: string } | null;
+  category_id: string;
+  category?: FacilityAssetCategory | null;
+  name: string;
+  asset_code: string;
+  make?: string | null;
+  model?: string | null;
+  serial_number?: string | null;
+  mac_address?: string | null;
+  ip_address?: string | null;
+  purchase_date?: string | null;
+  warranty_expiry?: string | null;
+  vendor?: string | null;
+  status: FacilityAssetStatus;
+  location_notes?: string | null;
+  notes?: string | null;
+  sort_order: number;
+  created_by?: string | null;
+  creator?: { id: string; full_name: string } | null;
+  created_at: string;
+  updated_at: string;
+  // Aggregates (when requested)
+  open_issue_count?: number;
+  total_issue_count?: number;
+  last_issue_at?: string | null;
+}
+
+export interface FacilityIssueAttachment {
+  id: string;
+  issue_id: string;
+  file_url: string;
+  file_path: string;
+  file_type: "image" | "document";
+  caption?: string | null;
+  phase: FacilityAttachmentPhase;
+  uploaded_by?: string | null;
+  uploader?: { id: string; full_name: string } | null;
+  uploaded_at: string;
+}
+
+export interface FacilityIssueEvent {
+  id: string;
+  issue_id: string;
+  event_type:
+    | "created"
+    | "status_changed"
+    | "assigned"
+    | "comment"
+    | "photo_added"
+    | "resolved"
+    | "reopened"
+    | "sla_breached"
+    | "satisfaction"
+    | "priority_changed"
+    | string;
+  actor_id?: string | null;
+  actor?: { id: string; full_name: string } | null;
+  actor_label?: string | null;
+  message?: string | null;
+  payload?: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface FacilityIssue {
+  id: string;
+  issue_number: string;
+  scope: FacilityScope;
+  category_id: string;
+  category?: FacilityAssetCategory | null;
+  location_id: string;
+  location?: { id: string; name: string; code: string } | null;
+  floor_id?: string | null;
+  floor?: { id: string; name: string } | null;
+  space_unit_id?: string | null;
+  space_unit?: { id: string; name: string; code: string } | null;
+  asset_id?: string | null;
+  asset?: { id: string; name: string; asset_code: string } | null;
+  title: string;
+  description?: string | null;
+  priority: FacilityIssuePriority;
+  status: FacilityIssueStatus;
+  reported_by?: string | null;
+  reporter?: { id: string; full_name: string } | null;
+  reporter_name?: string | null;
+  reporter_email?: string | null;
+  reporter_phone?: string | null;
+  reported_via: FacilityReportedVia;
+  linked_feedback_id?: string | null;
+  assigned_to?: string | null;
+  assignee?: { id: string; full_name: string } | null;
+  assigned_at?: string | null;
+  assigned_by?: string | null;
+  reported_at: string;
+  acknowledged_at?: string | null;
+  started_at?: string | null;
+  resolved_at?: string | null;
+  closed_at?: string | null;
+  sla_target_at?: string | null;
+  sla_breached: boolean;
+  resolution_root_cause?: FacilityRootCause | null;
+  resolution_notes?: string | null;
+  resolution_time_minutes?: number | null;
+  parts_cost: number;
+  parts_notes?: string | null;
+  satisfaction_rating?: number | null;
+  satisfaction_comment?: string | null;
+  satisfaction_token?: string | null;
+  satisfaction_requested_at?: string | null;
+  satisfaction_received_at?: string | null;
+  reopen_count: number;
+  created_at: string;
+  updated_at: string;
+  attachments?: FacilityIssueAttachment[];
+  events?: FacilityIssueEvent[];
+}
+
+// Analytics shapes
+export interface FacilityDashboardSummary {
+  open_count: number;
+  open_by_priority: Record<FacilityIssuePriority, number>;
+  resolved_period: number;
+  resolved_period_prev: number;
+  avg_resolution_minutes: number;
+  sla_compliance_pct: number;
+  sla_compliance_pct_prev: number;
+  sla_breached_open: number;
+}
+
+export interface FacilityHotSpot {
+  location_id: string;
+  location_name: string;
+  total_issues: number;
+  by_priority: Record<FacilityIssuePriority, number>;
+}
+
+export interface FacilityCategoryBreakdownRow {
+  location_id: string;
+  location_name: string;
+  by_category: Array<{ category_id: string; category_name: string; count: number }>;
+}
+
+export interface FacilityTrendPoint {
+  bucket: string;        // ISO date or week label
+  total: number;
+  by_location?: Record<string, number>;
+}
+
+export interface FacilityRecurringIssue {
+  asset_id?: string | null;
+  asset_name?: string | null;
+  asset_code?: string | null;
+  location_id: string;
+  location_name: string;
+  category_id: string;
+  category_name: string;
+  count: number;
+  last_at: string;
+}
+
+export interface FacilityTechnicianKpi {
+  technician_id: string;
+  technician_name: string;
+  assigned: number;
+  resolved: number;
+  avg_ack_minutes: number;
+  avg_resolution_minutes: number;
+  sla_compliance_pct: number;
+  reopen_rate_pct: number;
+  avg_satisfaction: number | null;
+  satisfaction_responses: number;
 }

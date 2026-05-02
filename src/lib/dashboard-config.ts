@@ -104,4 +104,10 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "procurement_summary",
     "booking_summary",
   ],
+
+  // IT Manager — minimal default; the dedicated /facility dashboard is their main view
+  it_manager: [],
+
+  // IT Technician — same; /facility/my-issues is their home
+  it_technician: [],
 };
