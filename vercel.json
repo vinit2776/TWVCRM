@@ -31,6 +31,10 @@
     {
       "path": "/api/cron/headcount-reminder",
       "schedule": "30 12 * * 1-6"
+    },
+    {
+      "path": "/api/cron/kyc-reminder",
+      "schedule": "0 4 * * 6"
     }
   ],
   "headers": [
