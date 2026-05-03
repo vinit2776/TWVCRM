@@ -30,7 +30,62 @@ export async function GET(
     .eq("billing_statement_id", id)
     .order("charge_date", { ascending: true });
 
-  return NextResponse.json({ data: { ...statement, usage_charges: usageCharges || [] } });
+  // Fetch facility usage records for this statement's accounting period.
+  // These are service overages (e.g. conference room hours beyond free quota)
+  // stored in facility_usage_records and rolled into the statement's usage_amount
+  // at billing time. We surface them here as named line items so the statement
+  // view can render them individually rather than as an opaque lump sum.
+  let facilityCharges: Array<{
+    id: string;
+    name: string;
+    unit: string;
+    quantity_used: number;
+    free_quota_applied: number;
+    billable_quantity: number;
+    unit_price: number;
+    total_charge: number;
+  }> = [];
+
+  if (statement.accounting_period_id && statement.contract_id) {
+    const { data: facRecords } = await supabase
+      .from("facility_usage_records")
+      .select(`
+        id,
+        quantity_used,
+        free_quota_applied,
+        billable_quantity,
+        unit_price,
+        total_charge,
+        contract_facility:contract_facilities!facility_usage_records_contract_facility_id_fkey(name, unit)
+      `)
+      .eq("accounting_period_id", statement.accounting_period_id)
+      .eq("contract_id", statement.contract_id)
+      .gt("total_charge", 0)
+      .order("created_at", { ascending: true });
+
+    facilityCharges = (facRecords || []).map((r) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const fac = r.contract_facility as any;
+      return {
+        id: r.id as string,
+        name: fac?.name || "Facility usage",
+        unit: fac?.unit || "unit",
+        quantity_used: Number(r.quantity_used || 0),
+        free_quota_applied: Number(r.free_quota_applied || 0),
+        billable_quantity: Number(r.billable_quantity || 0),
+        unit_price: Number(r.unit_price || 0),
+        total_charge: Number(r.total_charge || 0),
+      };
+    });
+  }
+
+  return NextResponse.json({
+    data: {
+      ...statement,
+      usage_charges: usageCharges || [],
+      facility_charges: facilityCharges,
+    },
+  });
 }
 
 export async function PATCH(

@@ -25,6 +25,17 @@ interface UsageCharge {
   status: string;
 }
 
+interface FacilityCharge {
+  id: string;
+  name: string;
+  unit: string;
+  quantity_used: number;
+  free_quota_applied: number;
+  billable_quantity: number;
+  unit_price: number;
+  total_charge: number;
+}
+
 interface Statement {
   id: string;
   statement_number: string;
@@ -42,6 +53,7 @@ interface Statement {
   booking?: { id: string; booking_number: string; booking_date: string; guest_name?: string } | null;
   lead?: { first_name: string; last_name: string; company?: string } | null;
   usage_charges?: UsageCharge[];
+  facility_charges?: FacilityCharge[];
 }
 
 const STATUS_COLORS: Record<string, string> = {
@@ -168,54 +180,83 @@ export function ViewStatementDialog({
             </div>
 
             {/* Amounts summary */}
-            <div className="rounded-md border bg-muted/30 p-4 space-y-2 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Fixed Amount</span>
-                <span>{formatCurrency(statement.fixed_amount)}</span>
-              </div>
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">
-                  Usage Charges ({statement.usage_charges?.length ?? 0} item{statement.usage_charges?.length !== 1 ? "s" : ""})
-                </span>
-                <span>{formatCurrency(statement.usage_amount)}</span>
-              </div>
-              {statement.tax_percentage > 0 && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Tax ({statement.tax_percentage}%)</span>
-                  <span>{formatCurrency(statement.tax_amount)}</span>
+            {(() => {
+              const usageCount = statement.usage_charges?.length ?? 0;
+              const facilityCount = statement.facility_charges?.length ?? 0;
+              const totalLineItems = usageCount + facilityCount;
+              return (
+                <div className="rounded-md border bg-muted/30 p-4 space-y-2 text-sm">
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">
+                      {statement.contract ? "Monthly Membership Fee" : "Booking Amount"}
+                    </span>
+                    <span>{formatCurrency(statement.fixed_amount)}</span>
+                  </div>
+                  {totalLineItems > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">
+                        Additional Charges ({totalLineItems} item{totalLineItems !== 1 ? "s" : ""})
+                      </span>
+                      <span>{formatCurrency(statement.usage_amount)}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between border-t pt-2">
+                    <span className="text-muted-foreground">Subtotal</span>
+                    <span>{formatCurrency(statement.subtotal)}</span>
+                  </div>
+                  {statement.tax_percentage > 0 && (
+                    <div className="flex justify-between">
+                      <span className="text-muted-foreground">GST ({statement.tax_percentage}%)</span>
+                      <span>{formatCurrency(statement.tax_amount)}</span>
+                    </div>
+                  )}
+                  <div className="border-t pt-2 flex justify-between font-semibold">
+                    <span>Total</span>
+                    <span>{formatCurrency(statement.total_amount)}</span>
+                  </div>
                 </div>
-              )}
-              <div className="border-t pt-2 flex justify-between font-semibold">
-                <span>Total</span>
-                <span>{formatCurrency(statement.total_amount)}</span>
-              </div>
-            </div>
+              );
+            })()}
 
             {/* Usage charges table */}
-            {statement.usage_charges && statement.usage_charges.length > 0 && (
+            {((statement.usage_charges?.length ?? 0) > 0 || (statement.facility_charges?.length ?? 0) > 0) && (
               <div>
-                <h4 className="text-sm font-semibold mb-2">Usage Charges</h4>
+                <h4 className="text-sm font-semibold mb-2">Charge Breakdown</h4>
                 <div className="rounded-md border overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b bg-muted/50">
                         <th className="px-3 py-2 text-left font-medium">Description</th>
                         <th className="px-3 py-2 text-right font-medium">Qty</th>
-                        <th className="px-3 py-2 text-right font-medium">Unit Price</th>
+                        <th className="px-3 py-2 text-right font-medium">Rate</th>
                         <th className="px-3 py-2 text-right font-medium">Total</th>
-                        <th className="px-3 py-2 text-left font-medium hidden sm:table-cell">Date</th>
                       </tr>
                     </thead>
                     <tbody>
-                      {statement.usage_charges.map((charge) => (
+                      {/* Usage charges (manual or ad-hoc) */}
+                      {(statement.usage_charges ?? []).map((charge) => (
                         <tr key={charge.id} className="border-b last:border-0">
-                          <td className="px-3 py-2 max-w-[180px] truncate">{charge.description}</td>
+                          <td className="px-3 py-2">
+                            <div className="font-medium">{charge.description}</div>
+                            <div className="text-xs text-muted-foreground">{formatDate(charge.charge_date)}</div>
+                          </td>
                           <td className="px-3 py-2 text-right">{charge.quantity}</td>
                           <td className="px-3 py-2 text-right">{formatCurrency(charge.unit_price)}</td>
                           <td className="px-3 py-2 text-right font-medium">{formatCurrency(charge.total)}</td>
-                          <td className="px-3 py-2 text-muted-foreground hidden sm:table-cell">
-                            {formatDate(charge.charge_date)}
+                        </tr>
+                      ))}
+                      {/* Facility usage overages (conference rooms, printing, etc.) */}
+                      {(statement.facility_charges ?? []).map((fc) => (
+                        <tr key={fc.id} className="border-b last:border-0 bg-blue-50/30">
+                          <td className="px-3 py-2">
+                            <div className="font-medium">{fc.name} — Overage</div>
+                            <div className="text-xs text-muted-foreground">
+                              {fc.quantity_used} {fc.unit} used · {fc.free_quota_applied} free · {fc.billable_quantity} chargeable
+                            </div>
                           </td>
+                          <td className="px-3 py-2 text-right">{fc.billable_quantity}</td>
+                          <td className="px-3 py-2 text-right">{formatCurrency(fc.unit_price)}</td>
+                          <td className="px-3 py-2 text-right font-medium">{formatCurrency(fc.total_charge)}</td>
                         </tr>
                       ))}
                     </tbody>

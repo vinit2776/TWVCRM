@@ -153,5 +153,50 @@ export async function POST(request: NextRequest) {
     });
   }
 
+  // ── Auto-seed contract_facilities from proposal complimentary_items ────────
+  // When a contract is created from an accepted proposal, the structured
+  // complimentary_items (service name, free monthly quota, overage rate) are
+  // directly transferred into contract_facilities so billing can track usage
+  // against the negotiated entitlements without any manual re-entry.
+  if (data && d.proposal_id) {
+    try {
+      const { data: proposalData } = await supabase
+        .from("proposals")
+        .select("complimentary_items")
+        .eq("id", d.proposal_id)
+        .single();
+
+      type ComplimentaryItem = {
+        name: string;
+        unit: string;
+        quantity: number;
+        price_per_unit: number;
+        service_id?: string;
+      };
+
+      const items = proposalData?.complimentary_items as ComplimentaryItem[] | null;
+
+      if (items && items.length > 0) {
+        const facilitiesToInsert = items
+          .filter((item) => item.name?.trim() && item.unit?.trim())
+          .map((item) => ({
+            contract_id: data.id,
+            name: item.name.trim(),
+            unit: item.unit.trim(),
+            free_quota: Number(item.quantity) || 0,
+            cost_per_unit: Number(item.price_per_unit) || 0,
+            created_by: dbUser?.id ?? null,
+          }));
+
+        if (facilitiesToInsert.length > 0) {
+          await supabase.from("contract_facilities").insert(facilitiesToInsert);
+        }
+      }
+    } catch (err) {
+      // Non-fatal — log but don't fail the contract creation
+      console.error("[contracts] Failed to seed contract_facilities from proposal:", err);
+    }
+  }
+
   return NextResponse.json({ data }, { status: 201 });
 }

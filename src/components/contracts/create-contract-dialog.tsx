@@ -143,6 +143,16 @@ export function CreateContractDialog({
     [proposals, selectedProposalId]
   );
 
+  // Derived: structured complimentary items from selected proposal (for preview)
+  const proposalComplimentaryItems = useMemo(() => {
+    if (!selectedProposal) return [];
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const items = (selectedProposal as any).complimentary_items as Array<{
+      name: string; unit: string; quantity: number; price_per_unit: number;
+    }> | null;
+    return (items || []).filter((i) => i.name?.trim() && i.unit?.trim());
+  }, [selectedProposal]);
+
   // Auto-populate from selected proposal
   useEffect(() => {
     if (selectedProposal) {
@@ -431,7 +441,7 @@ export function CreateContractDialog({
             </div>
 
             {source === "proposal" && (
-              <div className="space-y-2">
+              <div className="space-y-3">
                 <Select value={selectedProposalId} onValueChange={setSelectedProposalId}>
                   <SelectTrigger>
                     <SelectValue placeholder="Select an accepted proposal" />
@@ -444,6 +454,37 @@ export function CreateContractDialog({
                     ))}
                   </SelectContent>
                 </Select>
+
+                {/* Complimentary services auto-seed preview */}
+                {selectedProposalId && proposalComplimentaryItems.length > 0 && (
+                  <div className="rounded-md border border-[#015E65]/20 bg-[#015E65]/5 p-3 space-y-2">
+                    <p className="text-xs font-semibold text-[#015E65] flex items-center gap-1.5">
+                      <span>✓</span> {proposalComplimentaryItems.length} complimentary service{proposalComplimentaryItems.length !== 1 ? "s" : ""} will be auto-configured on this contract
+                    </p>
+                    <div className="space-y-1">
+                      {proposalComplimentaryItems.map((item, idx) => (
+                        <div key={idx} className="flex items-center justify-between text-xs">
+                          <span className="font-medium text-foreground">{item.name}</span>
+                          <span className="text-muted-foreground tabular-nums">
+                            {item.quantity} {item.unit}/mo free
+                            {item.price_per_unit > 0
+                              ? ` · ₹${Number(item.price_per_unit).toLocaleString("en-IN")}/${item.unit} beyond`
+                              : " · no overage charge"}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[10px] text-muted-foreground">
+                      These will appear on the contract's Facilities tab and be tracked automatically in monthly billing.
+                    </p>
+                  </div>
+                )}
+
+                {selectedProposalId && proposalComplimentaryItems.length === 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    This proposal has no complimentary services configured. You can add them manually on the contract's Facilities tab after creation.
+                  </p>
+                )}
               </div>
             )}
           </div>
@@ -634,7 +675,7 @@ export function CreateContractDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {[6, 11, 12, 18, 24, 36].map((m) => (
+                    {[3, 6, 11, 12, 18, 24, 36].map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m} months
                       </SelectItem>
