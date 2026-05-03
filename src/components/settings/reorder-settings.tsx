@@ -55,12 +55,27 @@ export function ReorderSettings() {
     setLoading(true);
     try {
       const res = await fetch(`/api/procurement/reorder-config?location_id=${selectedLocation}`);
-      const data = await res.json();
-      const configItems = data.items || data || [];
+      const json = await res.json();
+      // API returns { data: [{ item_id, quantity_on_hand, reorder_level, procurement_items: { name, department, unit } }] }
+      const rawItems: Array<{
+        item_id: string;
+        quantity_on_hand: number;
+        reorder_level: number;
+        procurement_items?: { name?: string; department?: string; unit?: string } | null;
+      }> = Array.isArray(json.data) ? json.data : [];
+
+      const configItems: ReorderConfigItem[] = rawItems.map((item) => ({
+        item_id: item.item_id,
+        item_name: item.procurement_items?.name ?? "Unknown",
+        department: item.procurement_items?.department ?? "",
+        unit: item.procurement_items?.unit ?? "",
+        quantity_on_hand: Number(item.quantity_on_hand ?? 0),
+        reorder_level: Number(item.reorder_level ?? 0),
+      }));
+
       setItems(configItems);
-      // Initialize edited levels with current values
       const levels: Record<string, string> = {};
-      configItems.forEach((item: ReorderConfigItem) => {
+      configItems.forEach((item) => {
         levels[item.item_id] = String(item.reorder_level);
       });
       setEditedLevels(levels);
@@ -90,7 +105,7 @@ export function ReorderSettings() {
       const res = await fetch("/api/procurement/reorder-config", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ location_id: selectedLocation, configs }),
+        body: JSON.stringify({ location_id: selectedLocation, items: configs }),
       });
 
       if (!res.ok) {

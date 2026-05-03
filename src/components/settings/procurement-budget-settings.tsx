@@ -532,9 +532,10 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
     const res = await fetch(`/api/procurement/budget?year=${year}&month=${month}`);
     if (res.ok) {
       const { data } = await res.json();
-      setRows(data);
+      const safeRows: BudgetRow[] = Array.isArray(data) ? data : [];
+      setRows(safeRows);
       const initial: Record<string, { monthly_budget: string; is_active: boolean; notes: string }> = {};
-      for (const row of data as BudgetRow[]) {
+      for (const row of safeRows) {
         initial[row.department] = {
           monthly_budget: row.monthly_budget != null ? String(row.monthly_budget) : "",
           is_active: row.is_active,
