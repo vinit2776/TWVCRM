@@ -272,12 +272,16 @@ export function SpaceUnitFormDialog({
   };
 
   // ── Add mode: save directly ──────────────────────────────────────────────
+  // Rates are intentionally NOT collected here — the price a customer pays
+  // is set on the contract, not on the floor-plan unit. We store null and
+  // let admin fill it in later from Edit Unit if they want it for reports.
   const handleAddSubmit = async () => {
     if (!name.trim()) { toast.error("Name is required"); return; }
     if (!code.trim()) { toast.error("Code is required"); return; }
-    const rateVal = parseFloat(rate);
-    if (isNaN(rateVal) || rateVal < 0) { toast.error(`${isHourly ? "Hourly" : "Monthly"} rate is required`); return; }
     if (!floor) { toast.error("No floor selected"); return; }
+
+    const rateVal = rate.trim() === "" ? null : parseFloat(rate);
+    const dailyRateVal = dailyRate.trim() === "" ? null : parseFloat(dailyRate);
 
     setSaving(true);
     try {
@@ -292,7 +296,7 @@ export function SpaceUnitFormDialog({
           capacity,
           area_sqft: areaSqft ? Number(areaSqft) : null,
           monthly_rate: isHourly ? null : rateVal,
-          daily_rate: dailyRate ? Number(dailyRate) : null,
+          daily_rate: dailyRateVal,
           hourly_rate: isHourly ? rateVal : null,
           amenities,
           notes: notes.trim(),
@@ -316,8 +320,10 @@ export function SpaceUnitFormDialog({
     e.preventDefault();
     if (!unit) return;
     if (!name.trim()) { toast.error("Name is required"); return; }
-    const rateVal = parseFloat(rate);
-    if (isNaN(rateVal) || rateVal < 0) { toast.error("Rate is required"); return; }
+
+    // Rate optional in edit too — admin can clear it if it was set in error.
+    const rateVal = rate.trim() === "" ? null : parseFloat(rate);
+    const dailyRateVal = dailyRate.trim() === "" ? null : parseFloat(dailyRate);
 
     setSaving(true);
     try {
@@ -331,7 +337,7 @@ export function SpaceUnitFormDialog({
           capacity,
           area_sqft: areaSqft ? Number(areaSqft) : null,
           monthly_rate: isHourly ? null : rateVal,
-          daily_rate: dailyRate ? Number(dailyRate) : null,
+          daily_rate: dailyRateVal,
           hourly_rate: isHourly ? rateVal : null,
           amenities,
           notes: notes.trim(),
@@ -441,33 +447,19 @@ export function SpaceUnitFormDialog({
         </div>
       </div>
 
-      {/* Rate */}
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label htmlFor="su-rate">
-            {isHourly ? "Hourly Rate (₹)" : "Monthly Rate (₹)"}
-            <span className="text-destructive"> *</span>
-          </Label>
-          <Input
-            id="su-rate"
-            type="number"
-            value={rate}
-            onChange={(e) => setRate(e.target.value)}
-            placeholder={isHourly ? "350" : "18000"}
-            min={0}
-          />
-        </div>
-        <div className="space-y-1.5">
-          <Label htmlFor="su-area">Area (sqft)</Label>
-          <Input
-            id="su-area"
-            type="number"
-            value={areaSqft}
-            onChange={(e) => setAreaSqft(e.target.value)}
-            placeholder="e.g. 180"
-            min={0}
-          />
-        </div>
+      {/* Area (sqft) — rate intentionally NOT collected here. Pricing is set
+          on the contract drawn against this unit, so capturing it twice causes
+          drift. Admin can still set rates from Edit Unit if needed for reports. */}
+      <div className="space-y-1.5">
+        <Label htmlFor="su-area">Area (sqft) <span className="text-xs text-muted-foreground">(optional)</span></Label>
+        <Input
+          id="su-area"
+          type="number"
+          value={areaSqft}
+          onChange={(e) => setAreaSqft(e.target.value)}
+          placeholder="e.g. 180"
+          min={0}
+        />
       </div>
 
       {/* Notes */}
@@ -549,21 +541,28 @@ export function SpaceUnitFormDialog({
           <Stepper value={capacity} onChange={setCapacity} min={1} max={100} />
         </div>
         <div className="space-y-1.5">
-          <Label>{isHourly ? "Hourly Rate (₹) *" : "Monthly Rate (₹) *"}</Label>
-          <Input type="number" value={rate} onChange={(e) => setRate(e.target.value)} min={0} />
+          <Label>Area (sqft) <span className="text-xs text-muted-foreground">(optional)</span></Label>
+          <Input type="number" value={areaSqft} onChange={(e) => setAreaSqft(e.target.value)} />
         </div>
       </div>
 
-      <div className="grid grid-cols-2 gap-3">
-        <div className="space-y-1.5">
-          <Label>Area (sqft)</Label>
-          <Input type="number" value={areaSqft} onChange={(e) => setAreaSqft(e.target.value)} />
+      {/* Rates are optional — the contract sets the price the customer actually
+          pays. Filled in here only if useful for inventory / reporting. */}
+      <details className="group rounded-md border bg-muted/20 p-2">
+        <summary className="cursor-pointer text-xs text-muted-foreground select-none">
+          Rates <span className="opacity-60">(optional)</span>
+        </summary>
+        <div className="grid grid-cols-2 gap-3 mt-2">
+          <div className="space-y-1.5">
+            <Label>{isHourly ? "Hourly Rate (₹)" : "Monthly Rate (₹)"}</Label>
+            <Input type="number" value={rate} onChange={(e) => setRate(e.target.value)} min={0} />
+          </div>
+          <div className="space-y-1.5">
+            <Label>Daily Rate (₹)</Label>
+            <Input type="number" value={dailyRate} onChange={(e) => setDailyRate(e.target.value)} />
+          </div>
         </div>
-        <div className="space-y-1.5">
-          <Label>Daily Rate (₹)</Label>
-          <Input type="number" value={dailyRate} onChange={(e) => setDailyRate(e.target.value)} />
-        </div>
-      </div>
+      </details>
 
       <div className="space-y-1.5">
         <Label>Notes</Label>

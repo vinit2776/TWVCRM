@@ -77,16 +77,11 @@ export async function POST(
   if (!type || !VALID_TYPES.includes(type)) {
     return NextResponse.json({ error: `Type must be one of: ${VALID_TYPES.join(", ")}` }, { status: 400 });
   }
+  // Rates are optional at floor-plan / space-unit creation. The actual price
+  // a customer pays is set when a contract is drawn against this unit, so
+  // capturing rate up-front is unnecessary friction. Stored as NULL when not
+  // provided; admin can fill it in later via Edit Unit if useful for reports.
   const isHourly = HOURLY_TYPES.has(type);
-  if (isHourly) {
-    if (!hourly_rate && hourly_rate !== 0) {
-      return NextResponse.json({ error: "hourly_rate is required for business_centre" }, { status: 400 });
-    }
-  } else {
-    if (!monthly_rate && monthly_rate !== 0) {
-      return NextResponse.json({ error: "monthly_rate is required" }, { status: 400 });
-    }
-  }
 
   // Validate grid bounds against floor
   if (floor_id) {
