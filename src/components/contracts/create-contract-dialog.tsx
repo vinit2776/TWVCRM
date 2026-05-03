@@ -475,14 +475,14 @@ export function CreateContractDialog({
                       ))}
                     </div>
                     <p className="text-[10px] text-muted-foreground">
-                      These will appear on the contract's Facilities tab and be tracked automatically in monthly billing.
+                      These will appear on the contract&apos;s Facilities tab and be tracked automatically in monthly billing.
                     </p>
                   </div>
                 )}
 
                 {selectedProposalId && proposalComplimentaryItems.length === 0 && (
                   <p className="text-xs text-muted-foreground">
-                    This proposal has no complimentary services configured. You can add them manually on the contract's Facilities tab after creation.
+                    This proposal has no complimentary services configured. You can add them manually on the contract&apos;s Facilities tab after creation.
                   </p>
                 )}
               </div>
