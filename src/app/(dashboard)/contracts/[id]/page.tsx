@@ -841,6 +841,25 @@ export default function ContractDetailPage({
                 <span className="text-muted-foreground">Seats</span>
                 <span>{contract.seats}</span>
               </div>
+              {/* Department ID surfaced in the sidebar so staff don't have to
+                  scroll to the Vouchers section to see whether the contract
+                  is mapped for printer billing. Only shown for contracts that
+                  have a location (no location → no printer to map). */}
+              {contract.location_id && (
+                <>
+                  <Separator />
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground">Department ID</span>
+                    <span className="font-mono">
+                      {contract.department_id ? (
+                        <Badge variant="secondary" className="font-mono">{contract.department_id}</Badge>
+                      ) : (
+                        <span className="text-xs text-muted-foreground italic">Not mapped</span>
+                      )}
+                    </span>
+                  </div>
+                </>
+              )}
             </CardContent>
           </Card>
 

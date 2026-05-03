@@ -115,7 +115,54 @@ export async function generateMonthlyStatements(
     (existingStatements || []).map((s: { contract_id: string }) => s.contract_id)
   );
 
-  // 4. Generate drafts
+  // 3a. Pre-fetch usage charges + facility usage for ALL contracts in one go.
+  //
+  // Old code ran two queries per contract inside the for-loop (4N round-trips
+  // total). With 200 active contracts at ~150ms RTT each, that's ~120 seconds
+  // — past Vercel's 60s function limit. This single-shot fetch with IN(...)
+  // brings it to a constant 2 round-trips regardless of contract count.
+  const billable = (contracts as Array<{ id: string }>)
+    .filter((c) => !alreadyBilled.has(c.id))
+    .map((c) => c.id);
+
+  const [usageRes, facilityRes] = billable.length === 0
+    ? [{ data: [] }, { data: [] }]
+    : await Promise.all([
+        supabase
+          .from("usage_charges")
+          .select("id, contract_id, total")
+          .in("contract_id", billable)
+          .eq("status", "pending")
+          .gte("charge_date", firstOfMonth)
+          .lte("charge_date", lastOfMonth),
+        periodId
+          ? supabase
+              .from("facility_usage_records")
+              .select("contract_id, total_charge")
+              .in("contract_id", billable)
+              .eq("accounting_period_id", periodId)
+          : Promise.resolve({ data: [] }),
+      ]);
+
+  type UsageRow = { id: string; contract_id: string; total: number };
+  type FacilityRow = { contract_id: string; total_charge: number };
+
+  // Index by contract_id for O(1) lookup inside the per-contract loop
+  const usageByContract = new Map<string, UsageRow[]>();
+  for (const u of (usageRes.data ?? []) as UsageRow[]) {
+    const list = usageByContract.get(u.contract_id) ?? [];
+    list.push(u);
+    usageByContract.set(u.contract_id, list);
+  }
+  const facilitySumByContract = new Map<string, number>();
+  for (const f of (facilityRes.data ?? []) as FacilityRow[]) {
+    facilitySumByContract.set(
+      f.contract_id,
+      (facilitySumByContract.get(f.contract_id) ?? 0) + Number(f.total_charge || 0),
+    );
+  }
+
+  // 4. Generate drafts (one INSERT per contract, but reads are now O(1) per loop)
   for (const contract of contracts as Array<Record<string, unknown>>) {
     if (alreadyBilled.has(contract.id as string)) {
       result.skipped++;
@@ -141,31 +188,9 @@ export async function generateMonthlyStatements(
         fixedAmount = Math.round((baseAmount / daysInMonth) * billableDays * 100) / 100;
       }
 
-      // Pending usage charges in this period
-      const { data: usageCharges } = await supabase
-        .from("usage_charges")
-        .select("id, total")
-        .eq("contract_id", contract.id)
-        .eq("status", "pending")
-        .gte("charge_date", firstOfMonth)
-        .lte("charge_date", lastOfMonth);
-
-      const usageAmount = (usageCharges || []).reduce(
-        (s: number, c: { total: number }) => s + Number(c.total || 0), 0
-      );
-
-      // Facility usage records for this period
-      let facilityAmount = 0;
-      if (periodId) {
-        const { data: facilityRecords } = await supabase
-          .from("facility_usage_records")
-          .select("total_charge")
-          .eq("contract_id", contract.id)
-          .eq("accounting_period_id", periodId);
-        facilityAmount = (facilityRecords || []).reduce(
-          (s: number, r: { total_charge: number }) => s + Number(r.total_charge || 0), 0
-        );
-      }
+      const usageCharges = usageByContract.get(contract.id as string) ?? [];
+      const usageAmount = usageCharges.reduce((s, c) => s + Number(c.total || 0), 0);
+      const facilityAmount = facilitySumByContract.get(contract.id as string) ?? 0;
 
       const subtotal = fixedAmount + usageAmount + facilityAmount;
       const taxPercentage = Number(contract.tax_percentage || 18);
@@ -216,9 +241,12 @@ export async function generateMonthlyStatements(
         continue;
       }
 
-      // Link usage charges to this statement and mark them billed
-      if (usageCharges && usageCharges.length > 0 && statement) {
-        const chargeIds = usageCharges.map((c: { id: string }) => c.id);
+      // Link this contract's usage charges to the new statement and mark billed.
+      // Single UPDATE per contract — could be batched further by collecting all
+      // (charge_id → statement_id) pairs, but Supabase's IN-update can't carry
+      // per-row values, so per-contract UPDATE is the cleanest option.
+      if (usageCharges.length > 0 && statement) {
+        const chargeIds = usageCharges.map((c) => c.id);
         await supabase
           .from("usage_charges")
           .update({ billing_statement_id: statement.id, status: "billed" })

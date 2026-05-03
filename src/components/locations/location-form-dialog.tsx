@@ -401,7 +401,14 @@ export function LocationFormDialog({
                 <div className="flex items-center gap-1">
                   <Button
                     type="button" variant="ghost" size="sm" className="h-7 text-xs"
-                    onClick={() => templateInputRef.current?.click()}
+                    onClick={() => {
+                      // Confirm before overwriting an existing saved sample —
+                      // accidental Replace clicks would lose the reference file
+                      // the parser maps against.
+                      if (confirm("Replace the saved sample? The current file will be overwritten on save.")) {
+                        templateInputRef.current?.click();
+                      }
+                    }}
                   >Replace</Button>
                   <Button
                     type="button" variant="ghost" size="sm" className="h-7 text-xs text-red-600 hover:text-red-700"

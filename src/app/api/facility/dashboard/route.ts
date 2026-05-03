@@ -60,14 +60,33 @@ export async function GET(request: NextRequest) {
   if (scope) prevQ = prevQ.eq("scope", scope);
   if (locationId) prevQ = prevQ.eq("location_id", locationId);
 
-  const [curRes, prevRes, openRes, locRes, catRes] = await Promise.all([
+  // The dashboard only renders the top 20 SLA-breached open issues plus
+  // counts. Cap the open-issues fetch at 500 to avoid pulling MBs of joined
+  // data for orgs with thousands of open tickets. Headline counts are read
+  // from a separate cheap exact-count query.
+  const OPEN_STATUSES = ["new", "acknowledged", "in_progress", "reopened"];
+
+  const [curRes, prevRes, openRes, openCountRes, openBreachedCountRes, locRes, catRes] = await Promise.all([
     curQ,
     prevQ,
     supabase.from("facility_issues").select(`
-      *, location:locations(id, name, code),
+      id, issue_number, title, status, priority, sla_breached, created_at,
+      location:locations(id, name, code),
       category:facility_asset_categories(id, name, slug, scope, icon),
       assignee:users!facility_issues_assigned_to_fkey(id, full_name)
-    `).in("status", ["new", "acknowledged", "in_progress", "reopened"]),
+    `)
+      .in("status", OPEN_STATUSES)
+      .order("created_at", { ascending: true })
+      .limit(500),
+    // Cheap exact count: drives the headline "Open issues" KPI even if the
+    // capped fetch above truncated.
+    supabase.from("facility_issues")
+      .select("priority", { count: "exact", head: false })
+      .in("status", OPEN_STATUSES),
+    supabase.from("facility_issues")
+      .select("id", { count: "exact", head: true })
+      .in("status", OPEN_STATUSES)
+      .eq("sla_breached", true),
     supabase.from("locations").select("id, name").eq("is_active", true),
     supabase.from("facility_asset_categories").select("id, name, scope"),
   ]);
@@ -92,14 +111,18 @@ export async function GET(request: NextRequest) {
   const catName = new Map(categories.map((c) => [c.id, c.name]));
 
   // ---- summary -------------------------------------------------------------
+  // Derive priority breakdown from the cheap server-side count query so the
+  // numbers are correct even if the capped open-issues list (limit 500) didn't
+  // include every row. In Postgres the 'priority' column comes back per-row
+  // when count={exact, head:false} — bucket them client-side.
   const openByPriority: Record<FacilityIssuePriority, number> = {
     critical: 0, high: 0, medium: 0, low: 0,
   };
-  let slaBreachedOpen = 0;
-  for (const o of open) {
-    openByPriority[o.priority] = (openByPriority[o.priority] ?? 0) + 1;
-    if (o.sla_breached) slaBreachedOpen += 1;
+  for (const row of (openCountRes.data ?? []) as Array<{ priority: FacilityIssuePriority }>) {
+    openByPriority[row.priority] = (openByPriority[row.priority] ?? 0) + 1;
   }
+  const totalOpenCount = openCountRes.count ?? open.length;
+  const slaBreachedOpen = openBreachedCountRes.count ?? open.filter((o) => o.sla_breached).length;
 
   const resolvedCur = cur.filter((i) => i.status === "resolved" || i.status === "closed");
   const resolvedPrev = prev.filter((i) => i.status === "resolved" || i.status === "closed");
@@ -117,7 +140,7 @@ export async function GET(request: NextRequest) {
   const slaCompliancePctPrev = slaScored(prev);
 
   const summary: FacilityDashboardSummary = {
-    open_count: open.length,
+    open_count: totalOpenCount,
     open_by_priority: openByPriority,
     resolved_period: resolvedCur.length,
     resolved_period_prev: resolvedPrev.length,
