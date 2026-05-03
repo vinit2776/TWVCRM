@@ -378,19 +378,114 @@ export async function POST(request: NextRequest) {
     contractId = contract.id;
     leadId = contract.lead_id;
 
-    // Create usage charge
+    // ── Quota-aware usage charge ───────────────────────────────────────────
+    // For hourly bookings: look up contract_facilities with an hour-based unit.
+    // If a matching facility exists we check how many hours have already been
+    // consumed this calendar month and only charge the overage beyond the
+    // negotiated free quota.  Daily-space bookings bypass quota logic entirely
+    // (they're day-pass hot-desks, not conference hours).
+    const HOUR_UNITS = ["hr", "hrs", "hour", "hours", "h"];
+    let contractFacilityForQuota: {
+      id: string; name: string; unit: string;
+      free_quota: number; cost_per_unit: number;
+    } | null = null;
+
+    if (!isDaily) {
+      const { data: contractFacilities } = await supabase
+        .from("contract_facilities")
+        .select("id, name, unit, free_quota, cost_per_unit")
+        .eq("contract_id", contract.id)
+        .in("unit", HOUR_UNITS);
+
+      if (contractFacilities && contractFacilities.length > 0) {
+        if (contractFacilities.length === 1) {
+          contractFacilityForQuota = contractFacilities[0];
+        } else {
+          // Multiple hour-based facilities — name-match against the space being booked
+          const spaceLower = space.name.toLowerCase();
+          contractFacilityForQuota =
+            contractFacilities.find(
+              (f: { name: string }) =>
+                spaceLower.includes(f.name.toLowerCase()) ||
+                f.name.toLowerCase().includes(spaceLower)
+            ) || contractFacilities[0]; // fallback to first
+        }
+      }
+    }
+
+    let chargeDescription: string;
+    let chargeQty: number;
+    let chargeUnitPrice: number;
+    let chargeTotal: number;
+    let chargeStatus: string;
+
+    if (contractFacilityForQuota) {
+      // Sum hours already used this calendar month for this contract
+      // (confirmed / checked_in / checked_out — not cancelled or no_show)
+      const bDate = new Date(input.booking_date + "T00:00:00");
+      const yr = bDate.getFullYear();
+      const mo = bDate.getMonth(); // 0-based
+      const monthStart = new Date(yr, mo, 1).toISOString().split("T")[0];
+      const monthEnd   = new Date(yr, mo + 1, 0).toISOString().split("T")[0];
+
+      const { data: existingBookings } = await supabase
+        .from("bookings")
+        .select("duration_hours")
+        .eq("contract_id", contract.id)
+        .gte("booking_date", monthStart)
+        .lte("booking_date", monthEnd)
+        .in("status", ["confirmed", "checked_in", "checked_out"]);
+
+      const hoursUsedSoFar = (existingBookings || []).reduce(
+        (sum: number, b: { duration_hours: number | null }) =>
+          sum + Number(b.duration_hours || 0),
+        0
+      );
+
+      const freeQuota    = Number(contractFacilityForQuota.free_quota);
+      const freeRemaining = Math.max(0, freeQuota - hoursUsedSoFar);
+      const overageHours  = Math.max(0, durationHours - freeRemaining);
+      const overageRate   = Number(contractFacilityForQuota.cost_per_unit);
+      const facilityName  = contractFacilityForQuota.name;
+
+      if (overageHours > 0) {
+        chargeQty       = overageHours;
+        chargeUnitPrice = overageRate;
+        chargeTotal     = parseFloat((overageHours * overageRate).toFixed(2));
+        chargeStatus    = "pending";
+        chargeDescription =
+          `${facilityName} Overage: ${space.name} — ${overageHours}hr charged ` +
+          `(prior usage: ${hoursUsedSoFar}hr, quota: ${freeQuota}hr/mo)`;
+      } else {
+        chargeQty       = durationHours;
+        chargeUnitPrice = 0;
+        chargeTotal     = 0;
+        chargeStatus    = "waived";
+        chargeDescription =
+          `${facilityName}: ${space.name} — ${durationHours}hr ` +
+          `(within ${freeQuota}hr/mo quota, used ${hoursUsedSoFar + durationHours}hr total)`;
+      }
+    } else {
+      // No hour-based contract facility configured — charge the full booking rate
+      chargeDescription = `Conference Room: ${space.name} (${input.start_time}–${input.end_time}, ${input.booking_date})`;
+      chargeQty         = isDaily ? quantity : durationHours;
+      chargeUnitPrice   = effectiveRate;
+      chargeTotal       = totalAmount;
+      chargeStatus      = "pending";
+    }
+
     const { data: charge, error: chargeErr } = await supabase
       .from("usage_charges")
       .insert({
         contract_id: contract.id,
-        lead_id: contract.lead_id,
-        description: `Conference Room: ${space.name} (${input.start_time}-${input.end_time}, ${input.booking_date})`,
-        quantity: durationHours,
-        unit_price: effectiveRate,
-        total: totalAmount,
+        lead_id:     contract.lead_id,
+        description: chargeDescription,
+        quantity:    chargeQty,
+        unit_price:  chargeUnitPrice,
+        total:       chargeTotal,
         charge_date: input.booking_date,
-        status: "pending",
-        created_by: dbUser.id,
+        status:      chargeStatus,
+        created_by:  dbUser.id,
       })
       .select("id")
       .single();
