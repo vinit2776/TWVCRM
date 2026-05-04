@@ -17,6 +17,18 @@ import { TeamPerformanceWidget } from "@/components/dashboard/widgets/team-perfo
 import { BookingSummaryWidget } from "@/components/dashboard/widgets/booking-summary-widget";
 import { FinancialSummaryWidget } from "@/components/dashboard/widgets/financial-summary-widget";
 import { RecentLeadsWidget } from "@/components/dashboard/widgets/recent-leads-widget";
+import { RenewalPipelineWidget } from "@/components/dashboard/widgets/renewal-pipeline-widget";
+import { CashAgingWidget } from "@/components/dashboard/widgets/cash-aging-widget";
+import { RevenuePulseWidget } from "@/components/dashboard/widgets/revenue-pulse-widget";
+import { OccupancyWidget } from "@/components/dashboard/widgets/occupancy-widget";
+import { SlaRiskWidget } from "@/components/dashboard/widgets/sla-risk-widget";
+import { MemberHealthWidget } from "@/components/dashboard/widgets/member-health-widget";
+import { LeadFunnelWidget } from "@/components/dashboard/widgets/lead-funnel-widget";
+import { ScheduleWidget } from "@/components/dashboard/widgets/schedule-widget";
+import { SourceRoiWidget } from "@/components/dashboard/widgets/source-roi-widget";
+import { AggregatorPerformanceWidget } from "@/components/dashboard/widgets/aggregator-performance-widget";
+import { ProcurementSpendWidget } from "@/components/dashboard/widgets/procurement-spend-widget";
+import { QuotaOveruseWidget } from "@/components/dashboard/widgets/quota-overuse-widget";
 
 import Link from "next/link";
 import { Bell, RefreshCw, Zap } from "lucide-react";
@@ -265,6 +277,30 @@ export default function DashboardPage() {
         return <BookingSummaryWidget key="booking_summary" locationFilter={locationFilter} />;
       case "financial_summary":
         return <FinancialSummaryWidget key="financial_summary" />;
+      case "renewal_pipeline":
+        return <RenewalPipelineWidget key="renewal_pipeline" locationFilter={locationFilter} />;
+      case "cash_aging":
+        return <CashAgingWidget key="cash_aging" />;
+      case "revenue_pulse":
+        return <RevenuePulseWidget key="revenue_pulse" locationFilter={locationFilter} />;
+      case "occupancy":
+        return <OccupancyWidget key="occupancy" locationFilter={locationFilter} />;
+      case "sla_risk":
+        return <SlaRiskWidget key="sla_risk" locationFilter={locationFilter} />;
+      case "member_health":
+        return <MemberHealthWidget key="member_health" />;
+      case "lead_funnel":
+        return <LeadFunnelWidget key="lead_funnel" locationFilter={locationFilter} />;
+      case "schedule":
+        return <ScheduleWidget key="schedule" locationFilter={locationFilter} />;
+      case "source_roi":
+        return <SourceRoiWidget key="source_roi" locationFilter={locationFilter} />;
+      case "aggregator_performance":
+        return <AggregatorPerformanceWidget key="aggregator_performance" />;
+      case "procurement_spend":
+        return <ProcurementSpendWidget key="procurement_spend" locationFilter={locationFilter} />;
+      case "quota_overuse":
+        return <QuotaOveruseWidget key="quota_overuse" />;
       default:
         return null;
     }

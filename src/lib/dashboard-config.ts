@@ -3,6 +3,7 @@ import type { UserRole } from "@/types";
 // ─── Widget identifiers ────────────────────────────────────────────────────
 
 export type WidgetId =
+  // Existing
   | "live_enquiries"
   | "kpi_stats"
   | "followups"
@@ -13,7 +14,22 @@ export type WidgetId =
   | "support_summary"
   | "team_performance"
   | "booking_summary"
-  | "financial_summary";
+  | "financial_summary"
+  // New (Tier 1: money & churn)
+  | "renewal_pipeline"
+  | "cash_aging"
+  | "revenue_pulse"
+  | "occupancy"
+  // New (Tier 2: operational signal)
+  | "sla_risk"
+  | "member_health"
+  | "lead_funnel"
+  | "schedule"
+  // New (Tier 3: strategic)
+  | "source_roi"
+  | "aggregator_performance"
+  | "procurement_spend"
+  | "quota_overuse";
 
 // ─── Widget metadata registry ──────────────────────────────────────────────
 
@@ -23,91 +39,122 @@ export interface WidgetMeta {
 }
 
 export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
-  live_enquiries:      { id: "live_enquiries",      title: "Live Enquiries" },
-  kpi_stats:           { id: "kpi_stats",           title: "Key Metrics" },
-  followups:           { id: "followups",           title: "Follow-ups" },
-  recent_activities:   { id: "recent_activities",   title: "Recent Activities" },
-  recent_leads:        { id: "recent_leads",        title: "Recent Leads" },
-  notes:               { id: "notes",               title: "Unread Notes" },
-  procurement_summary: { id: "procurement_summary", title: "Procurement Overview" },
-  support_summary:     { id: "support_summary",     title: "Support Tickets" },
-  team_performance:    { id: "team_performance",    title: "Team Activity This Week" },
-  booking_summary:     { id: "booking_summary",     title: "Today's Bookings" },
-  financial_summary:   { id: "financial_summary",   title: "Financial Overview" },
+  live_enquiries:         { id: "live_enquiries",         title: "Live Enquiries" },
+  kpi_stats:              { id: "kpi_stats",              title: "Key Metrics" },
+  followups:              { id: "followups",              title: "Follow-ups" },
+  recent_activities:      { id: "recent_activities",      title: "Recent Activities" },
+  recent_leads:           { id: "recent_leads",           title: "Recent Leads" },
+  notes:                  { id: "notes",                  title: "Unread Notes" },
+  procurement_summary:    { id: "procurement_summary",    title: "Procurement Overview" },
+  support_summary:        { id: "support_summary",        title: "Support Tickets" },
+  team_performance:       { id: "team_performance",       title: "Team Activity This Week" },
+  booking_summary:        { id: "booking_summary",        title: "Today's Bookings" },
+  financial_summary:      { id: "financial_summary",      title: "Financial Overview" },
+  renewal_pipeline:       { id: "renewal_pipeline",       title: "Renewal Pipeline" },
+  cash_aging:             { id: "cash_aging",             title: "Cash Aging" },
+  revenue_pulse:          { id: "revenue_pulse",          title: "Revenue Pulse" },
+  occupancy:              { id: "occupancy",              title: "Occupancy" },
+  sla_risk:               { id: "sla_risk",               title: "SLA Risk Board" },
+  member_health:          { id: "member_health",          title: "Member Health" },
+  lead_funnel:            { id: "lead_funnel",            title: "Lead Funnel" },
+  schedule:               { id: "schedule",               title: "Today's Schedule" },
+  source_roi:             { id: "source_roi",             title: "Source ROI" },
+  aggregator_performance: { id: "aggregator_performance", title: "Aggregator Performance" },
+  procurement_spend:      { id: "procurement_spend",      title: "Procurement Spend" },
+  quota_overuse:          { id: "quota_overuse",          title: "Quota Overuse" },
 };
 
 // ─── Role → widget order ───────────────────────────────────────────────────
 //
-// This is the single source of truth for dashboard layout per role.
-// To add a widget to a role: insert its WidgetId into the array below.
-// To remove a widget: delete its entry. No component changes needed.
-//
-// Future: move this config into app_settings table for live admin-UI editing.
+// Single source of truth for dashboard layout per role. To add a widget,
+// insert its WidgetId into the role's array.
 
 export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   admin: [
     "live_enquiries",
     "kpi_stats",
-    "procurement_summary",
-    "support_summary",
-    "followups",
-    "recent_leads",
-    "recent_activities",
-    "notes",
+    "revenue_pulse",
+    "renewal_pipeline",
+    "cash_aging",
+    "occupancy",
+    "sla_risk",
+    "lead_funnel",
+    "source_roi",
+    "schedule",
+    "member_health",
+    "aggregator_performance",
+    "quota_overuse",
+    "procurement_spend",
     "team_performance",
-    "booking_summary",
+    "followups",
   ],
 
   manager: [
     "live_enquiries",
     "kpi_stats",
-    "procurement_summary",
-    "booking_summary",
-    "followups",
-    "recent_leads",
-    "recent_activities",
-    "notes",
+    "schedule",
+    "renewal_pipeline",
+    "occupancy",
+    "lead_funnel",
+    "revenue_pulse",
+    "sla_risk",
+    "source_roi",
+    "member_health",
     "team_performance",
+    "followups",
   ],
 
   sales_rep: [
     "live_enquiries",
+    "schedule",
+    "lead_funnel",
     "kpi_stats",
     "followups",
     "recent_leads",
-    "recent_activities",
-    "notes",
   ],
 
   floor_manager: [
     "live_enquiries",
+    "schedule",
     "booking_summary",
     "kpi_stats",
     "followups",
-    "recent_leads",
-    "recent_activities",
-    "notes",
   ],
 
-  // Accounts: finance/accounts team — focused on financial operations only
+  // Accounts: finance/accounts team
   accounts: [
+    "cash_aging",
+    "revenue_pulse",
+    "renewal_pipeline",
+    "quota_overuse",
+    "aggregator_performance",
+    "procurement_spend",
     "financial_summary",
   ],
 
-  // FMS: Facility Manager — full procurement operational view
+  // FMS: Facility Manager
   fms: [
+    "sla_risk",
+    "procurement_spend",
     "procurement_summary",
   ],
 
-  // Office Administrator — procurement + operations focus
+  // Office Administrator
   office_admin: [
+    "schedule",
+    "procurement_spend",
+    "sla_risk",
     "procurement_summary",
     "booking_summary",
   ],
 
-  // IT Manager — minimal default; the dedicated /facility dashboard is their main view
-  it_manager: [],
+  // IT Manager
+  it_manager: [
+    "sla_risk",
+  ],
 
-  // IT Technician — same; /facility/my-issues is their home
-  it_technician: [],
+  // IT Technician
+  it_technician: [
+    "sla_risk",
+  ],
 };

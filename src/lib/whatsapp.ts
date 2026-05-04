@@ -36,14 +36,19 @@ import { createAdminClient } from "@/lib/supabase/server";
 const AUTH_KEY      = process.env.MSG91_AUTH_KEY;
 const WA_SENDER     = process.env.MSG91_WHATSAPP_SENDER;
 
+// SMS is disabled until DLT sender ID is approved on TRAI portal.
+// Set MSG91_SMS_ENABLED=true in Vercel env vars to re-enable.
+const SMS_ENABLED   = process.env.MSG91_SMS_ENABLED === "true";
+
 const WA_API_URL    = "https://control.msg91.com/api/v5/whatsapp/whatsapp-outbound-message/bulk/";
 const SMS_API_URL   = "https://control.msg91.com/api/v5/flow/";
 
 // SMS flow IDs — must match MSG91_SMS_DLT_FLOW_* env vars set in Vercel
+// Only used when SMS_ENABLED is true.
 const SMS_FLOWS = {
-  booking:  process.env.MSG91_SMS_DLT_FLOW_BOOKING          as string | undefined,
-  billing:  undefined                                        as string | undefined, // no billing-specific DLT SMS flow
-  reminder: process.env.MSG91_SMS_DLT_FLOW_PAYMENT_REMINDER as string | undefined,
+  booking:  SMS_ENABLED ? process.env.MSG91_SMS_DLT_FLOW_BOOKING          : undefined,
+  billing:  undefined as string | undefined, // no billing-specific DLT SMS flow
+  reminder: SMS_ENABLED ? process.env.MSG91_SMS_DLT_FLOW_PAYMENT_REMINDER : undefined,
 };
 
 // ---------------------------------------------------------------------------
@@ -337,6 +342,10 @@ export async function sendSms(
   vars: Record<string, string>,
   opts?: { entityType?: string; entityId?: string; templateName?: string }
 ): Promise<SendResult> {
+  if (!SMS_ENABLED) {
+    console.info("[messaging] SMS disabled (MSG91_SMS_ENABLED not set) — skipping SMS send.");
+    return { success: false, error: "SMS disabled", channel: "sms" };
+  }
   if (!AUTH_KEY) {
     console.warn("[messaging] MSG91_AUTH_KEY not set — SMS disabled.");
     return { success: false, error: "SMS not configured", channel: "sms" };
@@ -405,6 +414,10 @@ export async function sendDltSms(
   variables: string[],
   opts?: { flowId?: string; entityType?: string; entityId?: string }
 ): Promise<SendResult> {
+  if (!SMS_ENABLED) {
+    console.info("[messaging] SMS disabled (MSG91_SMS_ENABLED not set) — skipping DLT SMS send.");
+    return { success: false, error: "SMS disabled", channel: "sms" };
+  }
   if (!AUTH_KEY) {
     console.warn("[messaging] MSG91_AUTH_KEY not set — DLT SMS disabled.");
     return { success: false, error: "SMS not configured", channel: "sms" };

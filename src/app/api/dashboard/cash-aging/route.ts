@@ -1,0 +1,111 @@
+import { NextResponse } from "next/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+
+/**
+ * GET /api/dashboard/cash-aging
+ * Returns receivables (billing_statements unpaid) and payables (vendor_bills unpaid)
+ * bucketed by age: current / 0-30 / 31-60 / 60+
+ *
+ * Access: admin, accounts.
+ */
+export async function GET() {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const adminSupabase = await createAdminClient();
+  const { data: dbUser } = await adminSupabase
+    .from("users")
+    .select("id, role")
+    .eq("auth_id", user.id)
+    .single();
+
+  if (!dbUser || !["admin", "accounts"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  const now = new Date();
+  const today = now.toISOString().split("T")[0];
+
+  type Bucket = { count: number; total: number };
+  const empty = (): Bucket => ({ count: 0, total: 0 });
+
+  function ageBuckets(rows: { ref_date: string; amount: number }[]) {
+    const buckets = {
+      current: empty(),
+      d_0_30: empty(),
+      d_31_60: empty(),
+      d_60_plus: empty(),
+    };
+    for (const r of rows) {
+      const age = Math.floor(
+        (now.getTime() - new Date(r.ref_date).getTime()) / 86_400_000
+      );
+      let key: keyof typeof buckets;
+      if (age < 0) key = "current";
+      else if (age <= 30) key = "d_0_30";
+      else if (age <= 60) key = "d_31_60";
+      else key = "d_60_plus";
+      buckets[key].count += 1;
+      buckets[key].total += r.amount;
+    }
+    return buckets;
+  }
+
+  const [
+    { data: statements },
+    { data: bills },
+  ] = await Promise.all([
+    // Receivables: finalized billing statements not fully paid.
+    // Use period_end as reference for aging.
+    adminSupabase
+      .from("billing_statements")
+      .select("id, total_amount, period_end, payment_status, status")
+      .eq("status", "finalized")
+      .neq("payment_status", "paid"),
+
+    // Payables: vendor bills unpaid / partial. Use due_date if present, fall
+    // back to invoice_date.
+    adminSupabase
+      .from("vendor_bills")
+      .select("id, total_amount, amount_paid, due_date, invoice_date, payment_status")
+      .in("payment_status", ["unpaid", "partially_paid"]),
+  ]);
+
+  const recvRows = (statements ?? []).map((s) => ({
+    ref_date: s.period_end,
+    amount: Number(s.total_amount ?? 0),
+  }));
+  const payRows = (bills ?? []).map((b) => ({
+    ref_date: b.due_date ?? b.invoice_date ?? today,
+    amount: Math.max(0, Number(b.total_amount ?? 0) - Number(b.amount_paid ?? 0)),
+  }));
+
+  const round = (n: number) => Math.round(n * 100) / 100;
+  const r = ageBuckets(recvRows);
+  const p = ageBuckets(payRows);
+
+  const receivablesTotal = recvRows.reduce((s, x) => s + x.amount, 0);
+  const payablesTotal = payRows.reduce((s, x) => s + x.amount, 0);
+
+  return NextResponse.json({
+    data: {
+      receivables: {
+        total: round(receivablesTotal),
+        count: recvRows.length,
+        current: { count: r.current.count, total: round(r.current.total) },
+        d_0_30: { count: r.d_0_30.count, total: round(r.d_0_30.total) },
+        d_31_60: { count: r.d_31_60.count, total: round(r.d_31_60.total) },
+        d_60_plus: { count: r.d_60_plus.count, total: round(r.d_60_plus.total) },
+      },
+      payables: {
+        total: round(payablesTotal),
+        count: payRows.length,
+        current: { count: p.current.count, total: round(p.current.total) },
+        d_0_30: { count: p.d_0_30.count, total: round(p.d_0_30.total) },
+        d_31_60: { count: p.d_31_60.count, total: round(p.d_31_60.total) },
+        d_60_plus: { count: p.d_60_plus.count, total: round(p.d_60_plus.total) },
+      },
+    },
+  });
+}
