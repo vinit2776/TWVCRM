@@ -58,46 +58,87 @@ export async function POST(
   if (bErr || !booking) return NextResponse.json({ error: "Booking not found" }, { status: 404 });
 
   const body = await request.json();
-  const { quantity, notes } = body;
-  let addon_type = body.addon_type;
-  let description = body.description;
-  let unit_price = body.unit_price;
-  let unit_label = body.unit_label;
-  let gst_rate = body.gst_rate;
-  const addonCatalogId = body.addon_catalog_id as string | undefined;
 
-  if (addonCatalogId) {
-    const { data: catItem, error: cErr } = await supabase
-      .from("addon_catalog").select("*").eq("id", addonCatalogId).single();
-    if (cErr || !catItem) return NextResponse.json({ error: "Catalog item not found" }, { status: 404 });
-    addon_type    = addon_type    ?? catItem.addon_type;
-    description   = description   ?? catItem.name;
-    unit_price    = unit_price    ?? catItem.unit_price;
-    unit_label    = unit_label    ?? catItem.unit_label;
-    gst_rate      = gst_rate      ?? catItem.gst_rate;
+  // Accept either a single item (legacy callers) or `{ items: [...] }` (new
+  // mobile-friendly cart UX that lets staff add several extras in one shot).
+  // We normalise both into a `rawItems` array so the rest of the handler is
+  // shape-agnostic.
+  type RawItem = {
+    addon_catalog_id?: string;
+    addon_type?: string;
+    description?: string;
+    unit_price?: number | string;
+    unit_label?: string | null;
+    gst_rate?: number | string;
+    quantity?: number | string;
+    notes?: string | null;
+  };
+  const rawItems: RawItem[] = Array.isArray(body.items) && body.items.length > 0
+    ? (body.items as RawItem[])
+    : [body as RawItem];
+
+  if (rawItems.length === 0) {
+    return NextResponse.json({ error: "At least one item is required" }, { status: 400 });
   }
 
-  if (!addon_type || !VALID_TYPES.includes(addon_type)) {
-    return NextResponse.json({ error: "Invalid addon_type" }, { status: 400 });
+  // Pre-fetch all referenced catalog rows in one query (avoids N round-trips
+  // when 5 items in the cart all reference catalog ids).
+  const catalogIds = Array.from(new Set(
+    rawItems.map((it) => it.addon_catalog_id).filter(Boolean) as string[]
+  ));
+  let catalogMap = new Map<string, { addon_type: string; name: string; unit_price: number; unit_label: string | null; gst_rate: number }>();
+  if (catalogIds.length > 0) {
+    const { data: catRows, error: cErr } = await supabase
+      .from("addon_catalog").select("id, addon_type, name, unit_price, unit_label, gst_rate")
+      .in("id", catalogIds);
+    if (cErr) return NextResponse.json({ error: cErr.message }, { status: 500 });
+    catalogMap = new Map((catRows ?? []).map((r) => [r.id, r]));
   }
-  if (!description || typeof description !== "string" || !description.trim()) {
-    return NextResponse.json({ error: "description is required" }, { status: 400 });
-  }
-  const qty = Number(quantity ?? 1);
-  const price = Number(unit_price ?? 0);
-  const gst = Number(gst_rate ?? 18);
-  if (!isFinite(qty) || qty <= 0) return NextResponse.json({ error: "quantity must be > 0" }, { status: 400 });
-  if (!isFinite(price) || price < 0) return NextResponse.json({ error: "unit_price must be >= 0" }, { status: 400 });
 
-  const amount = parseFloat((qty * price).toFixed(2));
-  const gstAmount = parseFloat((amount * gst / 100).toFixed(2));
-  const totalWithGst = parseFloat((amount + gstAmount).toFixed(2));
+  // Resolve + validate each row.
+  const toInsert: Array<Record<string, unknown>> = [];
+  for (let i = 0; i < rawItems.length; i++) {
+    const it = rawItems[i];
+    let addon_type = it.addon_type;
+    let description = it.description;
+    let unit_price: number | string | undefined = it.unit_price;
+    let unit_label = it.unit_label;
+    let gst_rate: number | string | undefined = it.gst_rate;
 
-  const { data: addon, error: insErr } = await supabase
-    .from("booking_addons")
-    .insert({
+    if (it.addon_catalog_id) {
+      const cat = catalogMap.get(it.addon_catalog_id);
+      if (!cat) {
+        return NextResponse.json(
+          { error: `Catalog item not found for entry ${i + 1}` },
+          { status: 404 },
+        );
+      }
+      addon_type  = addon_type  ?? cat.addon_type;
+      description = description ?? cat.name;
+      unit_price  = unit_price  ?? cat.unit_price;
+      unit_label  = unit_label  ?? cat.unit_label;
+      gst_rate    = gst_rate    ?? cat.gst_rate;
+    }
+
+    if (!addon_type || !(VALID_TYPES as readonly string[]).includes(addon_type)) {
+      return NextResponse.json({ error: `Invalid addon_type at entry ${i + 1}` }, { status: 400 });
+    }
+    if (!description || typeof description !== "string" || !description.trim()) {
+      return NextResponse.json({ error: `Description required at entry ${i + 1}` }, { status: 400 });
+    }
+    const qty = Number(it.quantity ?? 1);
+    const price = Number(unit_price ?? 0);
+    const gst = Number(gst_rate ?? 18);
+    if (!isFinite(qty) || qty <= 0) return NextResponse.json({ error: `Quantity must be > 0 at entry ${i + 1}` }, { status: 400 });
+    if (!isFinite(price) || price < 0) return NextResponse.json({ error: `Unit price must be >= 0 at entry ${i + 1}` }, { status: 400 });
+
+    const amount = parseFloat((qty * price).toFixed(2));
+    const gstAmount = parseFloat((amount * gst / 100).toFixed(2));
+    const totalWithGst = parseFloat((amount + gstAmount).toFixed(2));
+
+    toInsert.push({
       booking_id: id,
-      addon_catalog_id: addonCatalogId || null,
+      addon_catalog_id: it.addon_catalog_id || null,
       addon_type,
       description: String(description).trim(),
       quantity: qty,
@@ -107,24 +148,39 @@ export async function POST(
       gst_rate: gst,
       gst_amount: gstAmount,
       total_with_gst: totalWithGst,
-      notes: notes || null,
+      notes: it.notes || null,
       added_by: dbUser.id,
-    })
-    .select()
-    .single();
+    });
+  }
+
+  // One bulk insert + one recompute, regardless of cart size.
+  const { data: addons, error: insErr } = await supabase
+    .from("booking_addons")
+    .insert(toInsert)
+    .select();
   if (insErr) return NextResponse.json({ error: insErr.message }, { status: 500 });
 
   await recomputeBookingTotal(supabase, id, booking);
 
-  logAudit(supabase, {
-    entityType: "booking_addon",
-    entityId: addon.id,
-    action: "create",
-    performedBy: dbUser.id,
-    changes: { record: { old: null, new: addon } },
-  });
+  // Audit one row per inserted addon — keeps the existing per-addon timeline
+  // contract intact (callers consuming audit_trail don't need to learn a new
+  // batch shape).
+  for (const addon of addons ?? []) {
+    logAudit(supabase, {
+      entityType: "booking_addon",
+      entityId: addon.id,
+      action: "create",
+      performedBy: dbUser.id,
+      changes: { record: { old: null, new: addon } },
+    });
+  }
 
-  return NextResponse.json({ data: addon }, { status: 201 });
+  // Single-item legacy callers expect `{ data: <addon> }`. Multi-item callers
+  // use `data` as the array. Always include `count` for clarity.
+  return NextResponse.json({
+    data: (addons?.length ?? 0) === 1 ? addons![0] : (addons ?? []),
+    count: addons?.length ?? 0,
+  }, { status: 201 });
 }
 
 /**
