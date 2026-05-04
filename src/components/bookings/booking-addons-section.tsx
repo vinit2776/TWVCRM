@@ -41,7 +41,12 @@ const TYPE_ICON: Record<BookingAddonType, React.ComponentType<{ className?: stri
 
 interface Props {
   bookingId: string;
-  locationId: string;
+  /** Used to scope the add-charge dialog to this space's catalogue.
+   *  Catalogue items live per-space (Tea / Print / Coffee rates can differ
+   *  between rooms even at the same location). */
+  spaceId: string;
+  /** Kept for backwards-compat with older parents — no longer used. */
+  locationId?: string;
   /** Allow add/remove. Set false on locked / cancelled bookings. */
   canEdit: boolean;
   /** Called after a successful add or remove so the parent can refetch totals. */
@@ -62,7 +67,7 @@ interface Props {
 }
 
 export function BookingAddonsSection({
-  bookingId, locationId, canEdit, onChange, prefill, openSignal,
+  bookingId, spaceId, canEdit, onChange, prefill, openSignal,
 }: Props) {
   const [addons, setAddons] = useState<BookingAddon[]>([]);
   const [loading, setLoading] = useState(true);
@@ -181,7 +186,7 @@ export function BookingAddonsSection({
         open={dialogOpen}
         onOpenChange={setDialogOpen}
         bookingId={bookingId}
-        locationId={locationId}
+        spaceId={spaceId}
         prefill={prefill}
         onAdded={async () => { await fetchAddons(); onChange?.(); }}
       />
@@ -193,12 +198,12 @@ export function BookingAddonsSection({
 // Add-charge dialog: pick from catalog OR enter a free-text line
 // ───────────────────────────────────────────────────────────────────────────
 function AddChargeDialog({
-  open, onOpenChange, bookingId, locationId, prefill, onAdded,
+  open, onOpenChange, bookingId, spaceId, prefill, onAdded,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   bookingId: string;
-  locationId: string;
+  spaceId: string;
   prefill?: Props["prefill"];
   onAdded: () => void | Promise<void>;
 }) {
@@ -218,7 +223,9 @@ function AddChargeDialog({
 
   useEffect(() => {
     if (!open) return;
-    fetch(`/api/addon-catalog?location_id=${locationId}`)
+    // Catalogue is now scoped per-space; bookings of the same room get a
+    // consistent list of extras while different rooms can charge differently.
+    fetch(`/api/addon-catalog?space_id=${spaceId}`)
       .then((r) => r.json())
       .then((j) => setCatalog(j.data || []));
 
@@ -242,7 +249,7 @@ function AddChargeDialog({
       setGstRate("18");
       setNotes("");
     }
-  }, [open, locationId, prefill]);
+  }, [open, spaceId, prefill]);
 
   // When prefill targets a specific catalog item, auto-pick it once catalog loads
   useEffect(() => {

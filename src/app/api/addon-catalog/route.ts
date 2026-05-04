@@ -17,9 +17,11 @@ export async function GET(request: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { searchParams } = new URL(request.url);
+  const spaceId = searchParams.get("space_id");
   const locationId = searchParams.get("location_id");
   const type = searchParams.get("type");
   const includeInactive = searchParams.get("include_inactive") === "true";
+  const templates = searchParams.get("templates") === "true";
 
   let query = supabase
     .from("addon_catalog")
@@ -30,8 +32,17 @@ export async function GET(request: NextRequest) {
 
   if (!includeInactive) query = query.eq("is_active", true);
   if (type) query = query.eq("addon_type", type);
-  if (locationId) {
-    // Items either scoped to this location OR global (NULL)
+
+  // Scope rules (in priority order):
+  //   ?space_id=X  → only this space's catalogue
+  //   ?templates=true → only the template rows (space_id IS NULL)
+  //   ?location_id=X (legacy) → location rows + global templates
+  //   else → all rows
+  if (spaceId) {
+    query = query.eq("space_id", spaceId);
+  } else if (templates) {
+    query = query.is("space_id", null);
+  } else if (locationId) {
     query = query.or(`location_id.eq.${locationId},location_id.is.null`);
   }
 
@@ -56,7 +67,7 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json();
-  const { location_id, addon_type, name, description, unit_price, unit_label, gst_rate = 18, sort_order = 0 } = body;
+  const { space_id, location_id, addon_type, name, description, unit_price, unit_label, gst_rate = 18, sort_order = 0 } = body;
 
   if (!addon_type || !VALID_TYPES.includes(addon_type)) {
     return NextResponse.json({ error: `addon_type must be one of: ${VALID_TYPES.join(", ")}` }, { status: 400 });
@@ -71,6 +82,7 @@ export async function POST(request: NextRequest) {
   const { data, error } = await supabase
     .from("addon_catalog")
     .insert({
+      space_id: space_id || null,
       location_id: location_id || null,
       addon_type,
       name: name.trim(),

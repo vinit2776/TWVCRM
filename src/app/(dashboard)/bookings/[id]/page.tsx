@@ -1404,11 +1404,11 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         )}
       </div>
 
-      {/* Add-ons / extras (extended time, F&B, services) */}
-      {booking.location_id && (
+      {/* Add-ons / extras — catalogue is per-space, so we need space_id */}
+      {booking.space_id && (
         <BookingAddonsSection
           bookingId={booking.id}
-          locationId={booking.location_id}
+          spaceId={booking.space_id}
           canEdit={booking.status !== "cancelled"}
           onChange={fetchBooking}
           prefill={addonPrefill}

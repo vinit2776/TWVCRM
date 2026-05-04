@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { SpaceFormDialog } from "@/components/spaces/space-form-dialog";
+import { SpaceChargesTab } from "@/components/spaces/space-charges-tab";
 import { formatCurrency } from "@/lib/utils";
 import { BOOKING_STATUS_COLORS, BOOKING_STATUS_LABELS, BOOKING_CUSTOMER_TYPE_LABELS } from "@/lib/constants";
 import { toast } from "sonner";
@@ -184,6 +185,7 @@ export default function SpaceDetailPage({ params }: { params: Promise<{ id: stri
           </TabsTrigger>
           <TabsTrigger value="details">Details</TabsTrigger>
           <TabsTrigger value="facilities">Facilities</TabsTrigger>
+          <TabsTrigger value="charges">Charges</TabsTrigger>
         </TabsList>
 
         {/* Schedule Tab */}
@@ -331,6 +333,11 @@ export default function SpaceDetailPage({ params }: { params: Promise<{ id: stri
               </table>
             </div>
           )}
+        </TabsContent>
+
+        {/* Charges tab — per-space add-on catalogue (Tea, Coffee, Print, etc.) */}
+        <TabsContent value="charges" className="space-y-4">
+          <SpaceChargesTab spaceId={id} />
         </TabsContent>
       </Tabs>
 
