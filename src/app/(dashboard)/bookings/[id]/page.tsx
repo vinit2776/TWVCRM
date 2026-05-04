@@ -17,16 +17,20 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Skeleton } from "@/components/shared/loading-skeleton";
-import { CollectPaymentDialog } from "@/components/bookings/collect-payment-dialog";
-import { NoShowRefundDialog } from "@/components/bookings/no-show-refund-dialog";
-import { CheckoutFeedbackDialog } from "@/components/bookings/checkout-feedback-dialog";
-import { RescheduleDialog } from "@/components/bookings/reschedule-dialog";
-import { ExtendBookingDialog } from "@/components/bookings/extend-booking-dialog";
+// Dialogs are dynamic-imported. They only render when their open prop flips
+// to true, so the JS doesn't need to ship in the initial bundle. SSR off
+// because each dialog is fully client-state-driven (forms, file uploads).
+import dynamic from "next/dynamic";
+const CollectPaymentDialog   = dynamic(() => import("@/components/bookings/collect-payment-dialog").then(m => m.CollectPaymentDialog),      { ssr: false });
+const NoShowRefundDialog     = dynamic(() => import("@/components/bookings/no-show-refund-dialog").then(m => m.NoShowRefundDialog),         { ssr: false });
+const CheckoutFeedbackDialog = dynamic(() => import("@/components/bookings/checkout-feedback-dialog").then(m => m.CheckoutFeedbackDialog), { ssr: false });
+const RescheduleDialog       = dynamic(() => import("@/components/bookings/reschedule-dialog").then(m => m.RescheduleDialog),               { ssr: false });
+const ExtendBookingDialog    = dynamic(() => import("@/components/bookings/extend-booking-dialog").then(m => m.ExtendBookingDialog),       { ssr: false });
+const AddUsageChargeDialog   = dynamic(() => import("@/components/billing/add-usage-charge-dialog").then(m => m.AddUsageChargeDialog),     { ssr: false });
+const WaiverRequestDialog    = dynamic(() => import("@/components/bookings/waiver-request-dialog").then(m => m.WaiverRequestDialog),       { ssr: false });
 import { BookingAddonsSection } from "@/components/bookings/booking-addons-section";
 import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
-import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
-import { WaiverRequestDialog } from "@/components/bookings/waiver-request-dialog";
 import { BookingLifecycleTimeline } from "@/components/bookings/booking-lifecycle-timeline";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import {

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import dynamic from "next/dynamic";
 import {
   ChevronLeft,
   ChevronRight,
@@ -48,12 +49,24 @@ import { MonthPicker } from "@/components/accounting/month-picker";
 import { PeriodStatusBar } from "@/components/accounting/period-status-bar";
 import { AgingBuckets } from "@/components/accounting/aging-buckets";
 import { ContractAccountingRow } from "@/components/accounting/contract-accounting-row";
-import { WalkinCollectionsTable } from "@/components/accounting/walkin-collections-table";
-import { CashHandoverTable } from "@/components/accounting/cash-handover-table";
-import { GstInvoiceEntry } from "@/components/accounting/gst-invoice-entry";
-import { ExportSummaryDialog } from "@/components/accounting/export-summary-dialog";
 import { ActionRequiredBanner } from "@/components/accounting/action-required-banner";
-import { ProposalPaymentsTab } from "@/components/accounting/proposal-payments-tab";
+// Per-tab components are dynamic-imported so the JS for tabs the user
+// never opens isn't downloaded. Each loader shows a small skeleton block.
+// SSR off because all four are client-state-driven (filters, dialogs).
+const WalkinCollectionsTable = dynamic(() => import("@/components/accounting/walkin-collections-table").then(m => m.WalkinCollectionsTable), { ssr: false, loading: () => <TabLoading label="Walk-in" /> });
+const CashHandoverTable      = dynamic(() => import("@/components/accounting/cash-handover-table").then(m => m.CashHandoverTable),           { ssr: false, loading: () => <TabLoading label="Cash" /> });
+const GstInvoiceEntry        = dynamic(() => import("@/components/accounting/gst-invoice-entry").then(m => m.GstInvoiceEntry),               { ssr: false, loading: () => <TabLoading label="GST" /> });
+const ProposalPaymentsTab    = dynamic(() => import("@/components/accounting/proposal-payments-tab").then(m => m.ProposalPaymentsTab),       { ssr: false, loading: () => <TabLoading label="Proposals" /> });
+const ExportSummaryDialog    = dynamic(() => import("@/components/accounting/export-summary-dialog").then(m => m.ExportSummaryDialog),       { ssr: false });
+
+function TabLoading({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-2 text-sm text-muted-foreground py-12 justify-center">
+      <span className="h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin" />
+      Loading {label}…
+    </div>
+  );
+}
 import { createClient } from "@/lib/supabase/client";
 
 // ── Status maps ──────────────────────────────────────────────────────────────
@@ -405,7 +418,11 @@ export default function BillingPage() {
     }
   }, [chargesPage, chargesContractFilter, chargesStatusFilter, chargesDateFrom, chargesDateTo]);
 
-  useEffect(() => { fetchCharges(); }, [fetchCharges]);
+  // Only fire on the Usage Charges tab — saves a round-trip on first load
+  // for users who never open it.
+  useEffect(() => {
+    if (activeTab === "usage-charges") fetchCharges();
+  }, [activeTab, fetchCharges]);
 
   // ── Fetch billing statements ──────────────────────────────────────────────
   const fetchStatements = useCallback(async () => {
@@ -427,7 +444,11 @@ export default function BillingPage() {
     }
   }, [statementsPage, statementsContractFilter, statementsStatusFilter]);
 
-  useEffect(() => { fetchStatements(); }, [fetchStatements]);
+  // Only fire on the Statements tab — saves a round-trip on first load
+  // for users who land on contracts/cash/gst tabs.
+  useEffect(() => {
+    if (activeTab === "statements") fetchStatements();
+  }, [activeTab, fetchStatements]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────
 

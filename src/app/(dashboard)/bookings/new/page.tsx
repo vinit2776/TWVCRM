@@ -13,6 +13,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { useLocations } from "@/hooks/use-locations";
+import { useDebounced } from "@/hooks/use-debounced";
 import { formatCurrency } from "@/lib/utils";
 import { BOOKING_CUSTOMER_TYPE_LABELS, PAYMENT_MODES, PAYMENT_MODE_LABELS, BOOKING_PAYMENT_MODES, BOOKING_PAYMENT_MODE_LABELS, RECURRENCE_FREQUENCIES } from "@/lib/constants";
 import { toast } from "sonner";
@@ -132,6 +133,18 @@ function NewBookingForm() {
   // Waitlist
   const [waitlistDialogOpen, setWaitlistDialogOpen] = useState(false);
   const [slotConflict, setSlotConflict] = useState(false);
+
+  // Debounced selectors — used by the heavy effect chains so that rapid
+  // changes (e.g. user clicking through customer suggestions, picking a
+  // different date, switching customer type) only fire one fetch at the end
+  // instead of one per intermediate value. 250ms is below human perception
+  // for most users and big enough to coalesce typical click cascades.
+  const debouncedLeadId        = useDebounced(leadId, 250);
+  const debouncedSpaceId       = useDebounced(spaceId, 250);
+  const debouncedBookingDate   = useDebounced(bookingDate, 250);
+  const debouncedLocationId    = useDebounced(locationId, 250);
+  const debouncedGuestCompany  = useDebounced(guestCompany, 350);
+  const debouncedCustomerType  = useDebounced(customerType, 250);
 
   // --- Customer Search ---
   const searchCustomers = useCallback(async (q: string) => {
@@ -311,8 +324,10 @@ function NewBookingForm() {
   const [dayPassUsed, setDayPassUsed] = useState(0);
 
   // Fetch availability — only for hourly spaces. Day-pass uses dayPassUsed below.
+  // Reads debounced selectors so rapid date-picker / space-dropdown changes
+  // don't fire one network request per intermediate value.
   const fetchAvailability = useCallback(async () => {
-    if (!spaceId || !bookingDate) return;
+    if (!debouncedSpaceId || !debouncedBookingDate) return;
     if (isDayPass) {
       // Don't run the slot-availability machinery for day-pass spaces.
       // It would otherwise show "no slots available" because day passes
@@ -325,23 +340,23 @@ function NewBookingForm() {
     setAvailLoading(true);
     setSlotConflict(false);
     try {
-      const res = await fetch(`/api/spaces/${spaceId}/availability?date=${bookingDate}`);
+      const res = await fetch(`/api/spaces/${debouncedSpaceId}/availability?date=${debouncedBookingDate}`);
       if (res.ok) {
         const json = await res.json();
         setAvailableSlots(json.data?.available_slots || []);
       }
     } catch { /* ignore */ }
     setAvailLoading(false);
-  }, [spaceId, bookingDate, isDayPass]);
+  }, [debouncedSpaceId, debouncedBookingDate, isDayPass]);
 
   useEffect(() => { fetchAvailability(); }, [fetchAvailability]);
 
   // Day-pass capacity counter — fetch how many day passes are already booked
   // for this date at this space, so we can show "3 of 13 day passes booked".
   useEffect(() => {
-    if (!isDayPass || !spaceId || !bookingDate) { setDayPassUsed(0); return; }
+    if (!isDayPass || !debouncedSpaceId || !debouncedBookingDate) { setDayPassUsed(0); return; }
     let cancelled = false;
-    fetch(`/api/bookings?space_id=${spaceId}&date_from=${bookingDate}&date_to=${bookingDate}&limit=200`)
+    fetch(`/api/bookings?space_id=${debouncedSpaceId}&date_from=${debouncedBookingDate}&date_to=${debouncedBookingDate}&limit=200`)
       .then((r) => r.json())
       .then((j) => {
         if (cancelled) return;
@@ -351,7 +366,7 @@ function NewBookingForm() {
       })
       .catch(() => { if (!cancelled) setDayPassUsed(0); });
     return () => { cancelled = true; };
-  }, [isDayPass, spaceId, bookingDate]);
+  }, [isDayPass, debouncedSpaceId, debouncedBookingDate]);
 
   // Merge adjacent 30-min slots into continuous availability windows
   const availabilityWindows = (() => {
@@ -386,11 +401,11 @@ function NewBookingForm() {
     setSlotConflict(!isAvailable && availableSlots.length > 0);
   }, [startTime, endTime, availabilityWindows, availableSlots, spaceId, bookingDate]);
 
-  // Fetch outstanding charges when customer is selected
+  // Fetch outstanding charges when customer is selected (debounced lead_id)
   useEffect(() => {
-    if (!leadId) { setOutstandingCharges([]); return; }
+    if (!debouncedLeadId) { setOutstandingCharges([]); return; }
     let cancelled = false;
-    fetch(`/api/usage-charges?lead_id=${leadId}&status=pending&limit=50`)
+    fetch(`/api/usage-charges?lead_id=${debouncedLeadId}&status=pending&limit=50`)
       .then(r => r.json())
       .then(json => {
         if (!cancelled) {
@@ -402,20 +417,21 @@ function NewBookingForm() {
       })
       .catch(() => { if (!cancelled) setOutstandingCharges([]); });
     return () => { cancelled = true; };
-  }, [leadId]);
+  }, [debouncedLeadId]);
 
   // Auto-detect prepaid purchase when customer + space are both selected
+  // (debounced — coalesces rapid lead/space switches into a single fetch)
   useEffect(() => {
-    const hasPrepaidTarget = (leadId || guestCompany) && spaceId;
+    const hasPrepaidTarget = (debouncedLeadId || debouncedGuestCompany) && debouncedSpaceId;
     if (!hasPrepaidTarget) {
       setActivePurchase(null);
       return;
     }
     let cancelled = false;
     setPrepaidChecking(true);
-    const params = new URLSearchParams({ space_id: spaceId });
-    if (leadId) params.set("lead_id", leadId);
-    if (guestCompany) params.set("company_name", guestCompany);
+    const params = new URLSearchParams({ space_id: debouncedSpaceId });
+    if (debouncedLeadId) params.set("lead_id", debouncedLeadId);
+    if (debouncedGuestCompany) params.set("company_name", debouncedGuestCompany);
     fetch(`/api/prepaid-purchases/check?${params}`)
       .then(r => r.json())
       .then(json => {
@@ -427,19 +443,19 @@ function NewBookingForm() {
       .catch(() => { if (!cancelled) setActivePurchase(null); })
       .finally(() => { if (!cancelled) setPrepaidChecking(false); });
     return () => { cancelled = true; };
-  }, [leadId, guestCompany, spaceId]);
+  }, [debouncedLeadId, debouncedGuestCompany, debouncedSpaceId]);
 
-  // Fetch contracts for dropdown
+  // Fetch contracts for dropdown (debounced customer-type + location)
   useEffect(() => {
-    if (customerType === "contract_holder" || customerType === "guest") {
+    if (debouncedCustomerType === "contract_holder" || debouncedCustomerType === "guest") {
       const params = new URLSearchParams({ status: "active", limit: "100" });
-      if (locationId) params.set("location_id", locationId);
+      if (debouncedLocationId) params.set("location_id", debouncedLocationId);
       fetch(`/api/contracts?${params}`)
         .then(r => r.json())
         .then(json => setContracts(json.data || []))
         .catch(() => setContracts([]));
     }
-  }, [customerType, locationId]);
+  }, [debouncedCustomerType, debouncedLocationId]);
 
   // Calculate pricing
   const durationHours = (() => {
