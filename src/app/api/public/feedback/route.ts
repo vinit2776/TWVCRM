@@ -1,14 +1,19 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient } from "@/lib/supabase/server";
 
-// GET — Fetch booking details by feedback token (no auth)
-// POST — Submit feedback by token (no auth)
+// GET — Fetch booking details by feedback token (no auth required)
+// POST — Submit feedback by token (no auth required)
+//
+// These routes are accessed by unauthenticated customers. We use the admin
+// (service-role) client so that RLS is bypassed for the token lookup.
+// The token itself acts as the auth proof — it's a UUID only the booking
+// confirmation email recipient would have.
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const token = searchParams.get("token");
   if (!token) return NextResponse.json({ error: "Token required" }, { status: 400 });
 
-  const supabase = await createClient();
+  const supabase = createAdminClient();
 
   const { data: booking, error } = await supabase
     .from("bookings")
@@ -53,7 +58,7 @@ export async function POST(request: NextRequest) {
 
   if (!token) return NextResponse.json({ error: "Token required" }, { status: 400 });
 
-  const supabase = await createClient();
+  const supabase = createAdminClient();
 
   const { data: booking, error } = await supabase
     .from("bookings")
