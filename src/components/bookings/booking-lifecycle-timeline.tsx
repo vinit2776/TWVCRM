@@ -1,0 +1,377 @@
+"use client";
+
+/**
+ * BookingLifecycleTimeline
+ *
+ * Renders a vertical step-by-step timeline for a single booking, showing every
+ * stage from creation through physical check-in / check-out.
+ *
+ * Lifecycle steps:
+ *   1. Booked         — booking_date + start_time determined; confirmed in CRM
+ *   2. Session Start  — scheduled start of the slot (booking_date + start_time)
+ *   3. ── Physical leg begins ──
+ *   4. Checked In     — actual arrival (check_in_at)
+ *   5. Checked Out    — actual departure (check_out_at)
+ *   or Cancelled / No-Show terminal steps
+ *
+ * Answers to the user's 5 clarifications:
+ *   1. both  — shows for walk-in AND contract customers
+ *   2. yes   — timestamps shown for every completed step
+ *   3. physical leg — check-in → check-out highlighted as the "physical leg"
+ *   4. yes   — includes elapsed time / early-late deltas
+ *   5. booking detail page — rendered in the bookings/[id] page
+ */
+
+import {
+  CalendarCheck, LogIn, LogOut, XCircle, AlertTriangle, Clock,
+  CheckCircle2, Circle,
+} from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import type { Booking } from "@/types";
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function formatTs(iso: string): string {
+  return new Date(iso).toLocaleString("en-IN", {
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+function formatTime12(timeStr: string): string {
+  const [h, m] = timeStr.slice(0, 5).split(":").map(Number);
+  const ampm = h >= 12 ? "PM" : "AM";
+  const h12 = h === 0 ? 12 : h > 12 ? h - 12 : h;
+  return `${h12}:${String(m).padStart(2, "0")} ${ampm}`;
+}
+
+function minutesDiff(a: string, b: string): number {
+  return Math.round((new Date(b).getTime() - new Date(a).getTime()) / 60000);
+}
+
+function durationLabel(minutes: number): string {
+  const abs = Math.abs(minutes);
+  const h = Math.floor(abs / 60);
+  const m = abs % 60;
+  const parts: string[] = [];
+  if (h > 0) parts.push(`${h}h`);
+  if (m > 0 || h === 0) parts.push(`${m}m`);
+  return parts.join(" ");
+}
+
+/** Combine booking_date (YYYY-MM-DD) and HH:MM[:SS] into an ISO string */
+function slotDateTime(date: string, time: string): string {
+  return `${date}T${time.slice(0, 5)}:00`;
+}
+
+// ---------------------------------------------------------------------------
+// Sub-components
+// ---------------------------------------------------------------------------
+
+type StepState = "done" | "active" | "pending" | "cancelled" | "no_show";
+
+function StepDot({ state }: { state: StepState }) {
+  const base = "flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full border-2 z-10";
+  if (state === "done")
+    return (
+      <div className={`${base} bg-teal-600 border-teal-600 text-white`}>
+        <CheckCircle2 className="h-4 w-4" />
+      </div>
+    );
+  if (state === "active")
+    return (
+      <div className={`${base} bg-blue-50 border-blue-500 text-blue-600 animate-pulse`}>
+        <Circle className="h-3 w-3 fill-blue-500" />
+      </div>
+    );
+  if (state === "cancelled")
+    return (
+      <div className={`${base} bg-red-50 border-red-400 text-red-500`}>
+        <XCircle className="h-4 w-4" />
+      </div>
+    );
+  if (state === "no_show")
+    return (
+      <div className={`${base} bg-amber-50 border-amber-400 text-amber-600`}>
+        <AlertTriangle className="h-4 w-4" />
+      </div>
+    );
+  // pending
+  return (
+    <div className={`${base} bg-background border-muted-foreground/30 text-muted-foreground/40`}>
+      <Circle className="h-3 w-3" />
+    </div>
+  );
+}
+
+function ConnectorLine({ done, highlight }: { done: boolean; highlight?: boolean }) {
+  return (
+    <div className="flex flex-col items-center w-8 flex-shrink-0 my-[-2px]">
+      <div
+        className={[
+          "w-0.5 h-6",
+          done
+            ? highlight
+              ? "bg-blue-400"
+              : "bg-teal-400"
+            : "border-l-2 border-dashed border-muted-foreground/20",
+        ].join(" ")}
+      />
+    </div>
+  );
+}
+
+interface StepProps {
+  state: StepState;
+  icon: React.ReactNode;
+  label: string;
+  timestamp?: string;
+  sublabel?: string;
+  badge?: React.ReactNode;
+  isLast?: boolean;
+  highlight?: boolean; // physical leg styling
+}
+
+function Step({ state, icon, label, timestamp, sublabel, badge, isLast, highlight }: StepProps) {
+  const isPending = state === "pending";
+  return (
+    <div className="flex items-start gap-0">
+      <div className="flex flex-col items-center">
+        <StepDot state={state} />
+        {!isLast && <ConnectorLine done={state === "done" || state === "active"} highlight={highlight} />}
+      </div>
+      <div
+        className={[
+          "ml-3 pb-5 flex-1 min-w-0",
+          isPending ? "opacity-40" : "",
+          isLast ? "pb-0" : "",
+        ].join(" ")}
+      >
+        <div className="flex items-center gap-2 flex-wrap">
+          <span
+            className={[
+              "text-sm font-semibold flex items-center gap-1.5",
+              highlight ? "text-blue-700" : "text-foreground",
+            ].join(" ")}
+          >
+            <span className={highlight ? "text-blue-500" : "text-muted-foreground"}>
+              {icon}
+            </span>
+            {label}
+          </span>
+          {badge}
+        </div>
+        {timestamp && (
+          <p className={`text-xs mt-0.5 ${highlight ? "text-blue-600" : "text-muted-foreground"}`}>
+            {timestamp}
+          </p>
+        )}
+        {sublabel && (
+          <p className="text-xs text-muted-foreground mt-0.5">{sublabel}</p>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Main component
+// ---------------------------------------------------------------------------
+
+interface BookingLifecycleTimelineProps {
+  booking: Booking;
+}
+
+export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelineProps) {
+  const status = booking.status;
+  const scheduledStart = slotDateTime(booking.booking_date, booking.start_time);
+  const scheduledEnd   = slotDateTime(booking.booking_date, booking.end_time);
+
+  // ── Step states ───────────────────────────────────────────────────────────
+  // Step 1: Booked — always done once we're looking at a booking
+  const step1State: StepState = "done";
+
+  // Step 2: Session Start — done if we've passed it
+  const now = new Date();
+  const slotStarted = now >= new Date(scheduledStart);
+  const step2State: StepState =
+    status === "cancelled" || status === "no_show"
+      ? "done"
+      : slotStarted || status === "checked_in" || status === "checked_out"
+      ? "done"
+      : "pending";
+
+  // Step 3: Check-in
+  const step3State: StepState =
+    status === "cancelled"
+      ? "cancelled"
+      : status === "no_show"
+      ? "no_show"
+      : status === "checked_in"
+      ? "active"
+      : booking.check_in_at
+      ? "done"
+      : "pending";
+
+  // Step 4: Check-out (only if we have check-in)
+  const step4State: StepState =
+    status === "cancelled" || status === "no_show"
+      ? "pending"
+      : status === "checked_out" && booking.check_out_at
+      ? "done"
+      : status === "checked_in"
+      ? "pending"
+      : "pending";
+
+  // ── Physical leg timing ───────────────────────────────────────────────────
+  let checkInDeltaLabel: React.ReactNode = null;
+  if (booking.check_in_at) {
+    const delta = minutesDiff(scheduledStart, booking.check_in_at);
+    if (delta > 2) {
+      checkInDeltaLabel = (
+        <Badge variant="secondary" className="bg-amber-100 text-amber-700 text-[10px] font-normal">
+          {durationLabel(delta)} late
+        </Badge>
+      );
+    } else if (delta < -2) {
+      checkInDeltaLabel = (
+        <Badge variant="secondary" className="bg-green-100 text-green-700 text-[10px] font-normal">
+          {durationLabel(delta)} early
+        </Badge>
+      );
+    }
+  }
+
+  let checkOutDeltaLabel: React.ReactNode = null;
+  let actualDurationLabel: string | null = null;
+  if (booking.check_out_at) {
+    const delta = minutesDiff(scheduledEnd, booking.check_out_at);
+    if (delta > 5) {
+      checkOutDeltaLabel = (
+        <Badge variant="secondary" className="bg-red-100 text-red-700 text-[10px] font-normal">
+          {durationLabel(delta)} over
+        </Badge>
+      );
+    } else if (delta < -5) {
+      checkOutDeltaLabel = (
+        <Badge variant="secondary" className="bg-blue-100 text-blue-700 text-[10px] font-normal">
+          {durationLabel(delta)} early
+        </Badge>
+      );
+    }
+
+    if (booking.check_in_at) {
+      const actualMins = minutesDiff(booking.check_in_at, booking.check_out_at);
+      actualDurationLabel = `Physical session: ${durationLabel(actualMins)}`;
+    }
+  }
+
+  // Physical leg is highlighted when checked_in or checked_out
+  const physicalLegActive =
+    status === "checked_in" || status === "checked_out";
+
+  return (
+    <div className="py-1">
+      {/* Step 1: Booked */}
+      <Step
+        state={step1State}
+        icon={<CalendarCheck className="h-3.5 w-3.5" />}
+        label="Booked"
+        timestamp={formatTs(booking.created_at)}
+        sublabel={`${formatTime12(booking.start_time)} – ${formatTime12(booking.end_time)} · ${Number(booking.duration_hours)}h slot`}
+      />
+
+      {/* Step 2: Session Scheduled */}
+      <Step
+        state={step2State}
+        icon={<Clock className="h-3.5 w-3.5" />}
+        label="Session Start"
+        timestamp={
+          step2State === "pending"
+            ? `Scheduled ${formatTs(scheduledStart)}`
+            : formatTs(scheduledStart)
+        }
+        sublabel={
+          step2State !== "pending" && !booking.check_in_at
+            ? "Waiting for physical arrival"
+            : undefined
+        }
+      />
+
+      {/* Step 3: Checked In — physical leg */}
+      {status !== "cancelled" && (
+        <Step
+          state={step3State}
+          icon={<LogIn className="h-3.5 w-3.5" />}
+          label={
+            step3State === "no_show"
+              ? "No-Show"
+              : step3State === "active"
+              ? "Checked In — Session in progress"
+              : "Checked In"
+          }
+          timestamp={
+            booking.no_show_detected_at && step3State === "no_show"
+              ? formatTs(booking.no_show_detected_at)
+              : booking.check_in_at
+              ? formatTs(booking.check_in_at)
+              : "Awaiting arrival"
+          }
+          sublabel={
+            step3State === "no_show"
+              ? "Customer did not arrive — no-show policy applied"
+              : step3State === "active"
+              ? `Physical leg in progress · scheduled end ${formatTime12(booking.end_time)}`
+              : undefined
+          }
+          badge={checkInDeltaLabel}
+          highlight={physicalLegActive && step3State !== "no_show"}
+        />
+      )}
+
+      {/* Cancelled terminal step */}
+      {status === "cancelled" && (
+        <Step
+          state="cancelled"
+          icon={<XCircle className="h-3.5 w-3.5" />}
+          label="Cancelled"
+          timestamp={formatTs(booking.updated_at)}
+          isLast
+        />
+      )}
+
+      {/* Step 4: Checked Out — physical leg end */}
+      {status !== "cancelled" && status !== "no_show" && (
+        <Step
+          state={step4State}
+          icon={<LogOut className="h-3.5 w-3.5" />}
+          label="Checked Out"
+          timestamp={
+            booking.check_out_at
+              ? formatTs(booking.check_out_at)
+              : step3State === "active"
+              ? `Scheduled ${formatTime12(booking.end_time)}`
+              : "Awaiting checkout"
+          }
+          sublabel={actualDurationLabel || undefined}
+          badge={checkOutDeltaLabel}
+          highlight={physicalLegActive}
+          isLast
+        />
+      )}
+
+      {/* No-show is terminal after step 3 */}
+      {status === "no_show" && (
+        <div className="ml-[44px] text-xs text-muted-foreground mt-[-12px] mb-2">
+          No further action required unless a refund exception was raised.
+        </div>
+      )}
+    </div>
+  );
+}

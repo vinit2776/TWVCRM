@@ -27,6 +27,7 @@ import { CustomerHistoryCard } from "@/components/bookings/customer-history-card
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
 import { WaiverRequestDialog } from "@/components/bookings/waiver-request-dialog";
+import { BookingLifecycleTimeline } from "@/components/bookings/booking-lifecycle-timeline";
 import { formatDate, formatDateTime, formatCurrency } from "@/lib/utils";
 import {
   BOOKING_STATUS_LABELS, BOOKING_STATUS_COLORS,
@@ -878,6 +879,16 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         )}
       </div>
 
+      {/* Booking Lifecycle Timeline */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Booking Lifecycle</CardTitle>
+        </CardHeader>
+        <CardContent className="pt-0">
+          <BookingLifecycleTimeline booking={booking} />
+        </CardContent>
+      </Card>
+
       {/* Details Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
         {/* Room */}
@@ -1258,32 +1269,6 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           </CardContent>
         </Card>
 
-        {/* Session */}
-        {(booking.check_in_at || booking.check_out_at) && (
-          <Card>
-            <CardHeader><CardTitle className="text-sm">Session</CardTitle></CardHeader>
-            <CardContent className="space-y-2 text-sm">
-              {booking.check_in_at && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Checked In</span>
-                  <span>{formatDateTime(booking.check_in_at)}</span>
-                </div>
-              )}
-              {booking.check_out_at && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">Checked Out</span>
-                  <span>{formatDateTime(booking.check_out_at)}</span>
-                </div>
-              )}
-              {booking.no_show_detected_at && (
-                <div className="flex justify-between">
-                  <span className="text-muted-foreground">No-Show Detected</span>
-                  <span>{formatDateTime(booking.no_show_detected_at)}</span>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
 
         {/* Refund Info (No-Show Exception) */}
         {booking.status === "no_show" && booking.refund_status && (
