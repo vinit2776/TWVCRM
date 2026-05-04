@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateICS } from "@/lib/ics-generator";
-import { BOOKING_CUSTOMER_TYPE_LABELS } from "@/lib/constants";
+import { BOOKING_CUSTOMER_TYPE_LABELS, BOOKING_PAYMENT_MODE_LABELS } from "@/lib/constants";
 import { logEmailActivity } from "@/lib/audit";
 
 function formatCurrency(amount: number): string {
@@ -313,6 +313,111 @@ export async function POST(
 
   const icsBase64 = Buffer.from(icsContent).toString("base64");
 
+  // ── Payment block ──────────────────────────────────────────────────────────
+  // Surface the current payment state so the customer can see at-a-glance what
+  // they've already paid (and via which method / reference). Walk-in and guest
+  // bookings collect payment up-front; contract holders are usually post-paid.
+  // If a UPI confirmation screenshot was uploaded, attach it inline so the
+  // customer has the original proof in their inbox forever.
+  const { data: payments } = await supabase
+    .from("booking_payments")
+    .select("id, amount, payment_mode, payment_reference, status, screenshot_path, created_at")
+    .eq("booking_id", id)
+    .order("created_at", { ascending: true });
+
+  const verifiedPayments = (payments ?? []).filter((p) => p.status === "verified");
+  const pendingPayments  = (payments ?? []).filter((p) => p.status === "pending");
+  const totalPaid = verifiedPayments.reduce((s, p) => s + Number(p.amount), 0);
+  const totalDue  = Number(booking.total_amount_with_gst ?? booking.total_amount ?? 0);
+  const balanceDue = Math.max(0, totalDue - totalPaid);
+  const isFullyPaid = totalPaid >= totalDue && totalDue > 0;
+
+  // Pull screenshot attachments for any verified UPI payment so the customer's
+  // proof of payment travels with the email itself.
+  const paymentAttachments: { filename: string; content: string; contentType: string }[] = [];
+  for (const p of verifiedPayments) {
+    if (!p.screenshot_path) continue;
+    try {
+      const { data: file } = await supabase.storage
+        .from("crm-documents")
+        .download(p.screenshot_path);
+      if (!file) continue;
+      const buf = Buffer.from(await file.arrayBuffer());
+      // Derive extension/mime from the stored path; default to jpg.
+      const ext = (p.screenshot_path.split(".").pop() || "jpg").toLowerCase();
+      const mime =
+        ext === "png"  ? "image/png"  :
+        ext === "pdf"  ? "application/pdf" :
+        ext === "webp" ? "image/webp" :
+                         "image/jpeg";
+      paymentAttachments.push({
+        filename: `payment-proof-${booking.booking_number}.${ext}`,
+        content: buf.toString("base64"),
+        contentType: mime,
+      });
+    } catch {
+      // Non-fatal: missing file shouldn't block the confirmation email.
+    }
+  }
+
+  function paymentRowHtml(p: { amount: number; payment_mode: string; payment_reference: string | null; status: string; screenshot_path: string | null }): string {
+    const modeLabel = BOOKING_PAYMENT_MODE_LABELS[p.payment_mode] || p.payment_mode;
+    const statusPill = p.status === "verified"
+      ? `<span style="display:inline-block;background:#dcfce7;color:#166534;font-size:10px;font-weight:600;padding:2px 8px;border-radius:4px;text-transform:uppercase;letter-spacing:0.4px;">Received</span>`
+      : `<span style="display:inline-block;background:#fef3c7;color:#92400e;font-size:10px;font-weight:600;padding:2px 8px;border-radius:4px;text-transform:uppercase;letter-spacing:0.4px;">Pending</span>`;
+    return `<tr>
+      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;">${modeLabel}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-family:monospace;color:#666;">${p.payment_reference || "—"}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:center;">${statusPill}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;text-align:right;font-weight:600;">${formatCurrency(Number(p.amount))}</td>
+    </tr>`;
+  }
+
+  const paymentSection = (() => {
+    if (!payments || payments.length === 0) {
+      // No payment recorded yet — most likely a contract holder being post-billed.
+      // Still useful to show a payment status row.
+      const isPostPaid = booking.customer_type === "contract_holder";
+      const bg     = isPostPaid ? "#eff6ff" : "#fef3c7";
+      const border = isPostPaid ? "#3b82f6" : "#f59e0b";
+      const color  = isPostPaid ? "#1e40af" : "#92400e";
+      const label  = isPostPaid
+        ? "This booking will be added to your monthly invoice."
+        : "Payment is pending. We'll update you once received.";
+      return `<div style="background:${bg};border:1px solid ${border};border-radius:8px;padding:14px 16px;margin:16px 0;">
+        <p style="margin:0;color:${color};font-size:13px;font-weight:600;">Payment Status</p>
+        <p style="margin:4px 0 0;color:${color};font-size:12px;">${label}</p>
+      </div>`;
+    }
+
+    const headerColor    = isFullyPaid ? "#15803d" : "#b45309";
+    const headerBg       = isFullyPaid ? "#f0fdf4" : "#fffbeb";
+    const headerBorder   = isFullyPaid ? "#22c55e" : "#f59e0b";
+    const headerLabel    = isFullyPaid ? "Payment Received in Full" : "Payment In Progress";
+
+    return `<div style="background:${headerBg};border:1px solid ${headerBorder};border-radius:8px;padding:16px;margin:16px 0;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <span style="color:${headerColor};font-size:14px;font-weight:700;">${headerLabel}</span>
+        <span style="color:${headerColor};font-size:13px;font-weight:600;">${formatCurrency(totalPaid)} of ${formatCurrency(totalDue)}</span>
+      </div>
+      ${balanceDue > 0 ? `<p style="margin:0 0 10px;color:#b45309;font-size:12px;">Balance due: <strong>${formatCurrency(balanceDue)}</strong></p>` : ""}
+      <table style="width:100%;border-collapse:collapse;background:#fff;border-radius:6px;overflow:hidden;margin-top:8px;">
+        <thead>
+          <tr style="background:#f9fafb;">
+            <th style="padding:8px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #e5e7eb;">Method</th>
+            <th style="padding:8px 12px;text-align:left;font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #e5e7eb;">Reference</th>
+            <th style="padding:8px 12px;text-align:center;font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #e5e7eb;">Status</th>
+            <th style="padding:8px 12px;text-align:right;font-size:10px;color:#6b7280;text-transform:uppercase;letter-spacing:0.4px;border-bottom:1px solid #e5e7eb;">Amount</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${[...verifiedPayments, ...pendingPayments].map(paymentRowHtml).join("")}
+        </tbody>
+      </table>
+      ${paymentAttachments.length > 0 ? `<p style="margin:10px 0 0;font-size:11px;color:${headerColor};">📎 Payment confirmation${paymentAttachments.length > 1 ? "s" : ""} attached for your records.</p>` : ""}
+    </div>`;
+  })();
+
   // Voucher section for walk-in/guest
   const voucherSection = voucherCode
     ? `<div style="background:#f0fdf4;border:1px solid #00AE6C;border-radius:8px;padding:16px;margin:16px 0;text-align:center;">
@@ -343,6 +448,7 @@ export async function POST(
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Amount</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;">${formatCurrency(booking.total_amount)}</td></tr>
           <tr><td style="padding:10px 16px;color:#666;">Customer Type</td><td style="padding:10px 16px;color:#333;">${BOOKING_CUSTOMER_TYPE_LABELS[booking.customer_type] || booking.customer_type}</td></tr>
         </table>
+        ${paymentSection}
         ${voucherSection}
         <p style="color:#333;font-size:14px;">Please arrive 5 minutes before your scheduled time. A calendar invite (.ics) is attached for your convenience.</p>
         <p style="color:#333;font-size:14px;">We look forward to hosting you!</p>
@@ -369,6 +475,9 @@ export async function POST(
           content: icsBase64,
           contentType: "text/calendar",
         },
+        // Payment confirmation screenshots (one per verified UPI payment),
+        // base64-encoded by the loop above. Empty array if none uploaded.
+        ...paymentAttachments,
       ],
     });
   } catch (e: unknown) {
