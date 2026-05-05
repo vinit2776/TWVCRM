@@ -10,29 +10,43 @@ interface KpiStatsWidgetProps {
 }
 
 export function KpiStatsWidget({ stats }: KpiStatsWidgetProps) {
+  // Total Leads now derives from the unfiltered pipeline so the "all leads in
+  // your pipeline" label stays truthful. Conversion below uses the cutoff-
+  // filtered numbers (see /api/dashboard CONVERSION_CUTOFF) so the ratio
+  // doesn't carry the legacy bulk-imported skew.
+  const pipelineTotal = (stats.pipeline ?? []).reduce(
+    (sum: number, p: { count: number }) => sum + (p.count ?? 0),
+    0,
+  );
+  const pipelineWon  = (stats.pipeline ?? []).find((p: { status: string }) => p.status === "won")?.count ?? 0;
+  const pipelineLost = (stats.pipeline ?? []).find((p: { status: string }) => p.status === "lost")?.count ?? 0;
+
   return (
     <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-sm font-medium flex items-center gap-1">Total Leads <InfoTooltip text="All leads in your pipeline across all statuses" /></CardTitle>
+          <CardTitle className="text-sm font-medium flex items-center gap-1">Total Leads <InfoTooltip text="All leads in your pipeline across all statuses (entire history)" /></CardTitle>
           <Users className="h-4 w-4 text-muted-foreground" />
         </CardHeader>
         <CardContent>
-          <div className="text-2xl font-bold">{stats.conversion.total_leads}</div>
+          <div className="text-2xl font-bold">{pipelineTotal}</div>
           <p className="text-xs text-muted-foreground">
-            {stats.conversion.won} won, {stats.conversion.lost} lost
+            {pipelineWon} won, {pipelineLost} lost
           </p>
         </CardContent>
       </Card>
 
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-2">
-          <CardTitle className="text-sm font-medium flex items-center gap-1">Conversion Rate <InfoTooltip text="Percentage of leads won out of total leads" /></CardTitle>
+          <CardTitle className="text-sm font-medium flex items-center gap-1">
+            Conversion Rate
+            <InfoTooltip text="Leads won ÷ leads created since 1 April 2026. Older imported leads are excluded so the ratio reflects post-launch performance." />
+          </CardTitle>
           <TrendingUp className="h-4 w-4 text-muted-foreground" />
         </CardHeader>
         <CardContent>
           <div className="text-2xl font-bold">{stats.conversion.rate}%</div>
-          <p className="text-xs text-muted-foreground">leads won vs total</p>
+          <p className="text-xs text-muted-foreground">{stats.conversion.won}/{stats.conversion.total_leads} since Apr 2026</p>
         </CardContent>
       </Card>
 

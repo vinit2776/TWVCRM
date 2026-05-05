@@ -17,12 +17,20 @@ export async function GET(request: NextRequest) {
   const today = new Date().toISOString().split("T")[0];
   const NULL_ID = "00000000-0000-0000-0000-000000000000";
 
+  // Conversion-rate cutoff. Pre-April-2026 leads were imported in bulk from
+  // legacy systems and skew the won/total ratio against the team's actual
+  // post-launch performance. Counting only leads created on/after this date
+  // gives a fair "since launch" conversion rate. Bump the cutoff if the
+  // team wants a tighter window later — kept as a single constant so the
+  // three branches below stay consistent.
+  const CONVERSION_CUTOFF = "2026-04-01";
+
   // ── Self-scoped path: sales_rep and floor_manager see only their own data ──
   // Filter all lead/task/activity queries to records assigned to this user.
   if (dbUser?.role === "sales_rep" || dbUser?.role === "floor_manager") {
     const { data: myLeads } = await supabase
       .from("leads")
-      .select("id, status")
+      .select("id, status, created_at")
       .eq("assigned_to", dbUser.id);
 
     const myLeadIds = (myLeads ?? []).map((l) => l.id);
@@ -35,9 +43,12 @@ export async function GET(request: NextRequest) {
     }
     const pipeline = Object.entries(pipelineMap).map(([status, count]) => ({ status, count }));
 
-    const total = myLeadIds.length;
-    const won = pipelineMap["won"] ?? 0;
-    const lost = pipelineMap["lost"] ?? 0;
+    // Conversion rate restricted to post-launch leads (see CONVERSION_CUTOFF
+    // comment at top). Old imported data is excluded from the denominator.
+    const cutoffLeads = (myLeads ?? []).filter((l) => l.created_at >= CONVERSION_CUTOFF);
+    const total = cutoffLeads.length;
+    const won = cutoffLeads.filter((l) => l.status === "won").length;
+    const lost = cutoffLeads.filter((l) => l.status === "lost").length;
     const rate = total > 0 ? Math.round((won / total) * 100) : 0;
 
     let tasksDueTodayQ = supabase.from("tasks").select("*", { count: "exact", head: true }).eq("due_date", today).neq("status", "done");
@@ -95,9 +106,13 @@ export async function GET(request: NextRequest) {
       { data: locationLeads },
     ] = await Promise.all([
       supabase.rpc("get_pipeline_counts", { p_location_id: locationId }),
-      supabase.from("leads").select("*", { count: "exact", head: true }).eq("location_id", locationId),
-      supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "won").eq("location_id", locationId),
-      supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "lost").eq("location_id", locationId),
+      // Conversion totals restricted to post-CONVERSION_CUTOFF leads to keep the
+      // KPI honest after the legacy bulk import. Pipeline still reflects the
+      // entire pool — that's a "where does my pipeline sit right now" view,
+      // not a performance metric.
+      supabase.from("leads").select("*", { count: "exact", head: true }).eq("location_id", locationId).gte("created_at", CONVERSION_CUTOFF),
+      supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "won").eq("location_id", locationId).gte("created_at", CONVERSION_CUTOFF),
+      supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "lost").eq("location_id", locationId).gte("created_at", CONVERSION_CUTOFF),
       supabase.from("leads").select("id").eq("location_id", locationId),
     ]);
 
@@ -175,9 +190,12 @@ export async function GET(request: NextRequest) {
     { count: pendingFollowUps },
   ] = await Promise.all([
     supabase.rpc("get_pipeline_counts", { p_location_id: null }),
-    supabase.from("leads").select("*", { count: "exact", head: true }),
-    supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "won"),
-    supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "lost"),
+    // Conversion totals restricted to post-CONVERSION_CUTOFF leads to ignore
+    // the legacy bulk-imported pre-April-2026 records that were skewing the
+    // ratio. Pipeline view above still reflects the full pool.
+    supabase.from("leads").select("*", { count: "exact", head: true }).gte("created_at", CONVERSION_CUTOFF),
+    supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "won").gte("created_at", CONVERSION_CUTOFF),
+    supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "lost").gte("created_at", CONVERSION_CUTOFF),
     supabase.from("tasks").select("*", { count: "exact", head: true }).eq("due_date", today).neq("status", "done"),
     supabase.from("tasks").select("*", { count: "exact", head: true }).lt("due_date", today).neq("status", "done"),
     supabase.from("activities")
