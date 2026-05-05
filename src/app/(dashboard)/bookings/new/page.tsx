@@ -94,6 +94,9 @@ function NewBookingForm() {
   const [gstError, setGstError] = useState<string | null>(null);
   const [selectedCustomer, setSelectedCustomer] = useState<CustomerSuggestion | null>(null);
 
+  // Attendee count — drives multi-voucher issuance (1 voucher per 2 attendees)
+  const [numAttendees, setNumAttendees] = useState<string>("");
+
   // ID proof
   const [idProofFile, setIdProofFile] = useState<File | null>(null);
   const [leadHasIdProof, setLeadHasIdProof] = useState(false);
@@ -584,6 +587,7 @@ function NewBookingForm() {
         guest_company: guestCompany.trim() || undefined,
         booker_gst_number: bookerGstNumber.trim().toUpperCase() || undefined,
         aggregator_booking_id: aggregatorBookingId.trim() || undefined,
+        num_attendees: numAttendees ? parseInt(numAttendees, 10) : undefined,
         facility_ids: selectedFacilities,
         payment_mode: paymentMode || undefined,
         payment_reference: paymentReference.trim() || undefined,
@@ -762,6 +766,26 @@ function NewBookingForm() {
             <div className="space-y-2">
               <Label>Date *</Label>
               <Input type="date" value={bookingDate} onChange={(e) => setBookingDate(e.target.value)} />
+            </div>
+            <div className="space-y-2">
+              <Label>No. of Attendees</Label>
+              <Input
+                type="number"
+                min="1"
+                placeholder={selectedSpace ? `Up to ${selectedSpace.capacity}` : "e.g. 4"}
+                value={numAttendees}
+                onChange={(e) => setNumAttendees(e.target.value)}
+              />
+              {numAttendees && selectedSpace && parseInt(numAttendees, 10) > selectedSpace.capacity && (
+                <p className="text-xs text-amber-600 flex items-center gap-1">
+                  ⚠ Exceeds room capacity of {selectedSpace.capacity} — you can still book, but seating may be tight.
+                </p>
+              )}
+              {numAttendees && parseInt(numAttendees, 10) >= 1 && (
+                <p className="text-xs text-muted-foreground">
+                  {Math.ceil(parseInt(numAttendees, 10) / 2)} WiFi voucher{Math.ceil(parseInt(numAttendees, 10) / 2) !== 1 ? "s" : ""} will be issued (1 per 2 devices)
+                </p>
+              )}
             </div>
           </div>
 

@@ -814,6 +814,9 @@ export interface Booking {
   prepaid_topup_amount?: number;
   notes?: string;
   aggregator_booking_id?: string;
+  // Number of attendees collected at booking time — used to determine how
+  // many WiFi vouchers to issue (1 voucher supports 2 device logins).
+  num_attendees?: number | null;
   created_by?: string;
   created_at: string;
   updated_at: string;

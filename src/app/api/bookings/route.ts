@@ -598,6 +598,7 @@ export async function POST(request: NextRequest) {
       prepaid_topup_amount: prepaidTopupAmount || null,
       notes: input.notes,
       aggregator_booking_id: input.aggregator_booking_id || null,
+      num_attendees: input.num_attendees ? Number(input.num_attendees) : null,
       created_by: dbUser.id,
     })
     .select("*")
@@ -646,55 +647,62 @@ export async function POST(request: NextRequest) {
     });
   }
 
-  // 7. Issue voucher for walk-in or guest
-  // Smart matching: bookings ≤ 3 hrs → prefer a 3-hour WiFi voucher (validity_days = 0.125);
-  // bookings > 3 hrs → prefer a 1-day voucher. Falls back to the other type if preferred not available.
+  // 7. Issue WiFi vouchers for walk-in or guest bookings.
+  //
+  // Quantity logic: each voucher supports 2 device logins, so we need
+  // ceil(num_attendees / 2) vouchers. If num_attendees was not provided we
+  // default to 1 voucher (legacy behaviour).
+  //
+  // Validity matching: bookings ≤ 3 hrs → prefer 3-hour voucher (validity_days = 0.125);
+  // bookings > 3 hrs → prefer 1-day voucher. Falls back if preferred stock is empty.
+  //
+  // Partial stock: if fewer vouchers are available than needed, issue as many
+  // as possible and continue — the booking is never blocked by voucher stock.
   if ((input.customer_type === "walk_in" || input.customer_type === "guest") && booking) {
+    const numAttendeesInt = input.num_attendees ? Math.max(1, Number(input.num_attendees)) : 1;
+    const vouchersNeeded = Math.ceil(numAttendeesInt / 2);
+
     const isShortBooking = durationHours <= 3;
-    const preferredValidity = isShortBooking ? 0.125 : 1; // 0.125d = 3 hrs
-    const fallbackValidity = isShortBooking ? 1 : null;   // 1-day fallback for short bookings only
+    const preferredValidity = isShortBooking ? 0.125 : 1;
+    const fallbackValidity  = isShortBooking ? 1      : null;
 
-    // Try preferred validity first
-    let { data: voucher } = await supabase
-      .from("voucher_repository")
-      .select("id, voucher_code, validity_days")
-      .eq("status", "available")
-      .eq("validity_days", preferredValidity)
-      .eq("location_id", space.location_id)
-      .limit(1)
-      .maybeSingle();
-
-    // Fallback: if no 3-hour voucher available for a short booking, try 1-day
-    if (!voucher && fallbackValidity) {
-      const { data: fallback } = await supabase
+    // Helper: fetch up to `limit` available vouchers of a given validity
+    async function fetchAvailableVouchers(validity: number, limit: number) {
+      const { data } = await supabase
         .from("voucher_repository")
         .select("id, voucher_code, validity_days")
         .eq("status", "available")
-        .eq("validity_days", fallbackValidity)
+        .eq("validity_days", validity)
         .eq("location_id", space.location_id)
-        .limit(1)
-        .maybeSingle();
-      if (fallback) voucher = fallback;
+        .limit(limit);
+      return data || [];
     }
 
-    if (voucher) {
-      // expires_at: for sub-day vouchers convert fractional days → ms; otherwise 24 hours
+    // Try preferred validity; top up from fallback if short
+    let vouchers = await fetchAvailableVouchers(preferredValidity, vouchersNeeded);
+    if (vouchers.length < vouchersNeeded && fallbackValidity) {
+      const stillNeeded = vouchersNeeded - vouchers.length;
+      const extras = await fetchAvailableVouchers(fallbackValidity, stillNeeded);
+      vouchers = [...vouchers, ...extras];
+    }
+
+    const now = new Date();
+    for (let i = 0; i < vouchers.length; i++) {
+      const voucher = vouchers[i];
       const validityDays: number = voucher.validity_days ?? 1;
       const expiryMs = validityDays < 1
-        ? Math.round(validityDays * 24 * 60 * 60 * 1000) // e.g. 0.125 * 86400000 = 3 hrs
-        : 24 * 60 * 60 * 1000;                           // 1 day = 86400000 ms
+        ? Math.round(validityDays * 24 * 60 * 60 * 1000)
+        : 24 * 60 * 60 * 1000;
 
-      // Mark voucher as issued
       await supabase
         .from("voucher_repository")
         .update({
           status: "issued",
-          issued_at: new Date().toISOString(),
-          expires_at: new Date(Date.now() + expiryMs).toISOString(),
+          issued_at: now.toISOString(),
+          expires_at: new Date(now.getTime() + expiryMs).toISOString(),
         })
         .eq("id", voucher.id);
 
-      // Create issuance record
       await supabase
         .from("voucher_issuances")
         .insert({
@@ -702,17 +710,17 @@ export async function POST(request: NextRequest) {
           voucher_id: voucher.id,
           lead_id: leadId || null,
           booking_id: booking.id,
-          seat_number: 1,
+          seat_number: i + 1,
           issued_by: dbUser.id,
-          issued_at: new Date().toISOString(),
+          issued_at: now.toISOString(),
           valid_from: input.booking_date,
           valid_until: input.booking_date,
           is_active: true,
-          seat_occupant_email: input.guest_email || null,
+          seat_occupant_email: i === 0 ? (input.guest_email || null) : null,
         });
     }
-    // Note: If no suitable voucher is available, we still create the booking.
-    // The voucher can be issued later from the booking detail page.
+    // If fewer vouchers were issued than needed, the booking detail page shows
+    // the shortfall and staff can top up from the voucher management screen.
   }
 
   // 7b. Handle advance payment (creates a booking_payments record)

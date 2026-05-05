@@ -352,6 +352,8 @@ export const createBookingSchema = z.object({
   hourly_rate: z.number().min(0).optional(),
   settle_charge_ids: z.array(z.string().uuid()).optional(),
   aggregator_booking_id: z.string().optional(),
+  // Number of people attending — drives multi-voucher issuance (1 per 2 attendees)
+  num_attendees: z.number().int().positive().optional(),
 }).refine(data => {
   if (data.customer_type === "contract_holder" && !data.contract_id) return false;
   return true;

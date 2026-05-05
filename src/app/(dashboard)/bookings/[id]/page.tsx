@@ -9,7 +9,7 @@ import {
   Phone, AlertTriangle, ShieldCheck, Star,
   Banknote, CheckCircle, Calendar, Timer, Copy,
   Link2, Download, MessageCircle, Repeat, RotateCcw,
-  StickyNote, Receipt, Pencil, Check, X,
+  StickyNote, Receipt, Pencil, Check, X, Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -583,7 +583,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     : booking.guest_name || "Guest";
   const customerEmail = booking.lead?.email || booking.guest_email;
   const customerPhone = booking.lead?.phone || booking.guest_phone;
-  const activeVoucher = booking.voucher_issuances?.find(v => v.is_active);
+  // activeVoucher replaced by WifiVoucherCard which handles multi-voucher display
   const outstandingTotal = outstandingCharges.reduce((s, c) => s + c.total, 0);
   const canEditPricing = booking.status !== "cancelled";
 
@@ -1329,18 +1329,12 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           </Card>
         )}
 
-        {/* Voucher */}
-        {activeVoucher && (
-          <Card>
-            <CardHeader><CardTitle className="text-sm flex items-center gap-2"><Wifi className="h-4 w-4" />WiFi Voucher</CardTitle></CardHeader>
-            <CardContent className="text-sm">
-              <p className="font-mono text-lg font-bold tracking-wider text-center py-2">
-                {activeVoucher.voucher?.voucher_code || "—"}
-              </p>
-              <p className="text-xs text-muted-foreground text-center">Valid for 24 hours</p>
-            </CardContent>
-          </Card>
-        )}
+        {/* WiFi Vouchers — multi-voucher display */}
+        <WifiVoucherCard
+          booking={booking}
+          existingIssuances={booking.voucher_issuances || []}
+          onIssued={fetchBooking}
+        />
 
         {/* Facilities */}
         {booking.facilities && booking.facilities.length > 0 && (
@@ -1540,6 +1534,127 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         />
       )}
     </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// WiFi Voucher card — handles both multi-voucher display (walk-in/guest)
+// and on-demand issuance button (contract holders with invited guests).
+// ---------------------------------------------------------------------------
+
+interface VoucherIssuance {
+  id?: string;
+  is_active: boolean;
+  voucher?: { voucher_code: string } | null;
+}
+
+function WifiVoucherCard({
+  booking,
+  existingIssuances,
+  onIssued,
+}: {
+  booking: Booking;
+  existingIssuances: VoucherIssuance[];
+  onIssued: () => void;
+}) {
+  const [requesting, setRequesting] = useState(false);
+  const activeIssuances = existingIssuances.filter((v) => v.is_active && v.voucher?.voucher_code);
+
+  const numAttendees = booking.num_attendees ?? null;
+  const vouchersNeeded = numAttendees ? Math.ceil(numAttendees / 2) : 1;
+  const shortfall = Math.max(0, vouchersNeeded - activeIssuances.length);
+
+  const handleRequestVouchers = async () => {
+    setRequesting(true);
+    const res = await fetch(`/api/bookings/${booking.id}/vouchers`, { method: "POST" });
+    const json = await res.json();
+    if (res.ok) {
+      toast.success(`${json.issued} WiFi voucher${json.issued !== 1 ? "s" : ""} issued`);
+      if (json.shortfall > 0) {
+        toast.warning(`${json.shortfall} voucher${json.shortfall !== 1 ? "s" : ""} could not be issued — stock is low. Top up inventory.`);
+      }
+      onIssued();
+    } else {
+      toast.error(json.error || "Failed to issue vouchers");
+    }
+    setRequesting(false);
+  };
+
+  // Contract holder — no auto-issued vouchers
+  if (booking.customer_type === "contract_holder") {
+    if (activeIssuances.length === 0) {
+      // Only offer the button for active bookings
+      if (!["confirmed", "checked_in"].includes(booking.status)) return null;
+      return (
+        <Card className="border-dashed">
+          <CardContent className="py-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <Wifi className="h-4 w-4" />
+              <span>No WiFi vouchers issued — guests attending?</span>
+            </div>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleRequestVouchers}
+              disabled={requesting}
+            >
+              {requesting ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />Issuing…</> : <><Wifi className="h-3.5 w-3.5 mr-1" />Issue Vouchers</>}
+            </Button>
+          </CardContent>
+        </Card>
+      );
+    }
+  }
+
+  // No vouchers at all — nothing to show for walk-in/guest (shouldn't normally happen)
+  if (activeIssuances.length === 0) return null;
+
+  return (
+    <Card>
+      <CardHeader className="pb-2">
+        <CardTitle className="text-sm flex items-center gap-2">
+          <Wifi className="h-4 w-4" />
+          WiFi Vouchers
+          <span className="ml-auto text-xs font-normal text-muted-foreground tabular-nums">
+            {activeIssuances.length}{numAttendees ? ` / ${vouchersNeeded} needed` : ""} issued
+          </span>
+        </CardTitle>
+      </CardHeader>
+      <CardContent className="space-y-2">
+        {activeIssuances.length === 1 ? (
+          // Single voucher — keep the original prominent display
+          <div>
+            <p className="font-mono text-lg font-bold tracking-wider text-center py-1">
+              {activeIssuances[0].voucher!.voucher_code}
+            </p>
+            <p className="text-xs text-muted-foreground text-center">2 device logins · valid for 24 hours</p>
+          </div>
+        ) : (
+          // Multiple vouchers — numbered list
+          <div className="space-y-1.5">
+            {activeIssuances.map((v, idx) => (
+              <div key={v.id} className="flex items-center justify-between rounded-md bg-muted/30 px-3 py-2">
+                <span className="text-xs text-muted-foreground">Voucher {idx + 1}</span>
+                <span className="font-mono text-sm font-semibold tracking-wider">
+                  {v.voucher!.voucher_code}
+                </span>
+              </div>
+            ))}
+            <p className="text-xs text-muted-foreground pt-1 text-center">
+              Each code supports 2 device logins · valid for 24 hours
+            </p>
+          </div>
+        )}
+
+        {/* Low-stock warning when fewer vouchers issued than attendees need */}
+        {shortfall > 0 && (
+          <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700 flex items-center gap-2">
+            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+            {shortfall} voucher{shortfall !== 1 ? "s" : ""} short — only {activeIssuances.length} available in stock for {numAttendees} attendees. Top up inventory.
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
