@@ -803,7 +803,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             <div className="flex-1 min-w-0">
               <p className="font-semibold text-green-800">Payment Collected Successfully</p>
               <p className="text-sm text-green-600">
-                {formatCurrency(booking.total_amount)} paid via {(booking.payment_mode && PAYMENT_MODE_LABELS[booking.payment_mode]) || booking.payment_mode || "online payment"}
+                {formatCurrency(Number(booking.total_amount_with_gst) || booking.total_amount)} paid via {(booking.payment_mode && PAYMENT_MODE_LABELS[booking.payment_mode]) || booking.payment_mode || "online payment"}
                 {booking.status === "confirmed" && " — Ready for check-in"}
               </p>
               {razorpayPayment && (
