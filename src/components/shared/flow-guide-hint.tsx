@@ -39,8 +39,10 @@ export function FlowGuideHint() {
       role="status"
       aria-live="polite"
       className={[
-        // Position — above mobile nav on small screens, bottom-right on desktop
-        "fixed bottom-20 right-4 lg:bottom-6 lg:right-6 z-40",
+        // Position — sit to the left of the floating support button (right-6,
+        // 48px wide) so the card never overlaps it. right-20 = 80px, which
+        // clears the button's 72px left edge with an 8px gap.
+        "fixed bottom-20 right-20 lg:bottom-6 lg:right-20 z-40",
         // Size
         "w-72",
         // Appearance
