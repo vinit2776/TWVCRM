@@ -25,6 +25,14 @@ export async function GET(request: NextRequest) {
   // three branches below stay consistent.
   const CONVERSION_CUTOFF = "2026-04-01";
 
+  // Start-of-current-month cutoff for the secondary cohort metric:
+  // "of the leads created this month, how many have converted (won) so far?"
+  // Gives a real-time pulse alongside the cumulative since-launch number.
+  // Computed in the server's clock — for an India-hosted ops team running on
+  // IST this is fine; the date drift only matters around midnight on the 1st.
+  const now = new Date();
+  const MONTH_CUTOFF = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}-01`;
+
   // ── Self-scoped path: sales_rep and floor_manager see only their own data ──
   // Filter all lead/task/activity queries to records assigned to this user.
   if (dbUser?.role === "sales_rep" || dbUser?.role === "floor_manager") {
@@ -50,6 +58,13 @@ export async function GET(request: NextRequest) {
     const won = cutoffLeads.filter((l) => l.status === "won").length;
     const lost = cutoffLeads.filter((l) => l.status === "lost").length;
     const rate = total > 0 ? Math.round((won / total) * 100) : 0;
+
+    // This-month cohort: of leads created this month, how many converted
+    // (regardless of when the conversion happened — usually within days).
+    const monthLeads = (myLeads ?? []).filter((l) => l.created_at >= MONTH_CUTOFF);
+    const monthTotal = monthLeads.length;
+    const monthWon = monthLeads.filter((l) => l.status === "won").length;
+    const monthRate = monthTotal > 0 ? Math.round((monthWon / monthTotal) * 100) : 0;
 
     let tasksDueTodayQ = supabase.from("tasks").select("*", { count: "exact", head: true }).eq("due_date", today).neq("status", "done");
     let tasksOverdueQ = supabase.from("tasks").select("*", { count: "exact", head: true }).lt("due_date", today).neq("status", "done");
@@ -86,7 +101,10 @@ export async function GET(request: NextRequest) {
         tasks_overdue: tasksOverdue ?? 0,
         recent_activities: recentActivities ?? [],
         recent_notes: recentNotes ?? [],
-        conversion: { total_leads: total, won, lost, rate },
+        conversion: {
+          total_leads: total, won, lost, rate,
+          this_month: { total: monthTotal, won: monthWon, rate: monthRate },
+        },
         pending_follow_ups: pendingFollowUps ?? 0,
       },
     });
@@ -104,6 +122,8 @@ export async function GET(request: NextRequest) {
       { count: wonCount },
       { count: lostCount },
       { data: locationLeads },
+      { count: monthTotalCount },
+      { count: monthWonCount },
     ] = await Promise.all([
       supabase.rpc("get_pipeline_counts", { p_location_id: locationId }),
       // Conversion totals restricted to post-CONVERSION_CUTOFF leads to keep the
@@ -114,6 +134,9 @@ export async function GET(request: NextRequest) {
       supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "won").eq("location_id", locationId).gte("created_at", CONVERSION_CUTOFF),
       supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "lost").eq("location_id", locationId).gte("created_at", CONVERSION_CUTOFF),
       supabase.from("leads").select("id").eq("location_id", locationId),
+      // This-month cohort: leads created this month + how many of those won
+      supabase.from("leads").select("*", { count: "exact", head: true }).eq("location_id", locationId).gte("created_at", MONTH_CUTOFF),
+      supabase.from("leads").select("*", { count: "exact", head: true }).eq("location_id", locationId).eq("status", "won").gte("created_at", MONTH_CUTOFF),
     ]);
 
     const locationLeadIds = (locationLeads || []).map((l) => l.id);
@@ -162,6 +185,9 @@ export async function GET(request: NextRequest) {
     const won = wonCount || 0;
     const lost = lostCount || 0;
     const rate = total > 0 ? Math.round((won / total) * 100) : 0;
+    const monthTotal = monthTotalCount || 0;
+    const monthWon = monthWonCount || 0;
+    const monthRate = monthTotal > 0 ? Math.round((monthWon / monthTotal) * 100) : 0;
 
     return NextResponse.json({
       data: {
@@ -170,7 +196,10 @@ export async function GET(request: NextRequest) {
         tasks_overdue: tasksOverdue || 0,
         recent_activities: recentActivities || [],
         recent_notes: recentNotes || [],
-        conversion: { total_leads: total, won, lost, rate },
+        conversion: {
+          total_leads: total, won, lost, rate,
+          this_month: { total: monthTotal, won: monthWon, rate: monthRate },
+        },
         pending_follow_ups: pendingFollowUps || 0,
       },
     });
@@ -188,6 +217,8 @@ export async function GET(request: NextRequest) {
     { data: recentActivities },
     { data: recentNotes },
     { count: pendingFollowUps },
+    { count: monthTotalCount },
+    { count: monthWonCount },
   ] = await Promise.all([
     supabase.rpc("get_pipeline_counts", { p_location_id: null }),
     // Conversion totals restricted to post-CONVERSION_CUTOFF leads to ignore
@@ -211,6 +242,11 @@ export async function GET(request: NextRequest) {
       .select("*", { count: "exact", head: true })
       .eq("is_follow_up_done", false)
       .not("follow_up_date", "is", null),
+    // This-month cohort: leads created since the 1st of this month + how
+    // many of those have won so far. Real-time pulse alongside the
+    // since-launch cumulative number.
+    supabase.from("leads").select("*", { count: "exact", head: true }).gte("created_at", MONTH_CUTOFF),
+    supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "won").gte("created_at", MONTH_CUTOFF),
   ]);
 
   // RPC already returns [{status, count}] — no JS aggregation needed
@@ -220,6 +256,9 @@ export async function GET(request: NextRequest) {
   const won = wonCount || 0;
   const lost = lostCount || 0;
   const rate = total > 0 ? Math.round((won / total) * 100) : 0;
+  const monthTotal = monthTotalCount || 0;
+  const monthWon = monthWonCount || 0;
+  const monthRate = monthTotal > 0 ? Math.round((monthWon / monthTotal) * 100) : 0;
 
   return NextResponse.json({
     data: {
@@ -228,7 +267,10 @@ export async function GET(request: NextRequest) {
       tasks_overdue: tasksOverdue || 0,
       recent_activities: recentActivities || [],
       recent_notes: recentNotes || [],
-      conversion: { total_leads: total, won, lost, rate },
+      conversion: {
+        total_leads: total, won, lost, rate,
+        this_month: { total: monthTotal, won: monthWon, rate: monthRate },
+      },
       pending_follow_ups: pendingFollowUps || 0,
     },
   });

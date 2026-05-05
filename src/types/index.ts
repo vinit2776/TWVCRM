@@ -937,7 +937,16 @@ export interface DashboardStats {
   tasks_overdue: number;
   recent_activities: Activity[];
   recent_notes: DashboardNote[];
-  conversion: { total_leads: number; won: number; lost: number; rate: number };
+  conversion: {
+    total_leads: number;
+    won: number;
+    lost: number;
+    rate: number;
+    /** This-month cohort: of leads created since the 1st of this month, how
+     *  many have already converted. Real-time pulse alongside the since-launch
+     *  cumulative number. */
+    this_month?: { total: number; won: number; rate: number };
+  };
   pending_follow_ups: number;
 }
 
