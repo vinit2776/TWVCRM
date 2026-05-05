@@ -509,6 +509,12 @@ export type VoucherStockLevel = "green" | "amber" | "red";
 export interface VoucherInventoryGroup {
   validity_days: number | null;
   label: string;
+  /** Location the pool belongs to. Each location runs its own voucher
+   *  inventory, so a single (validity_days) summary across locations is
+   *  misleading — cards key on (location_id, validity_days). */
+  location_id?: string | null;
+  location_name?: string | null;
+  location_code?: string | null;
   available: number;
   issued: number;
   total: number;

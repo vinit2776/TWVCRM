@@ -3,7 +3,7 @@
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Upload, Shuffle } from "lucide-react";
+import { Upload, Shuffle, MapPin } from "lucide-react";
 import type { VoucherInventoryGroup } from "@/types";
 
 const STOCK_DOT_COLORS: Record<string, string> = {
@@ -38,6 +38,21 @@ export function VoucherInventoryCard({
   return (
     <Card className={`${STOCK_BG_COLORS[group.stock_level]} transition-colors`}>
       <CardContent className="pt-6">
+        {/* Location strap — each location runs its own pool, so the card
+            now belongs to a specific location. Falls back to "All locations"
+            for legacy rows where location_id was never set. */}
+        {group.location_name ? (
+          <div className="flex items-center gap-1 mb-2 text-[11px] uppercase tracking-wide text-muted-foreground">
+            <MapPin className="h-3 w-3" />
+            <span className="font-medium text-foreground/80">{group.location_name}</span>
+            {group.location_code && <span className="text-muted-foreground">({group.location_code})</span>}
+          </div>
+        ) : group.location_id === null ? (
+          <div className="flex items-center gap-1 mb-2 text-[11px] uppercase tracking-wide text-amber-700">
+            <MapPin className="h-3 w-3" />
+            <span className="font-medium">No location assigned</span>
+          </div>
+        ) : null}
         <div className="flex items-start justify-between mb-4">
           <div className="flex items-center gap-2">
             <div

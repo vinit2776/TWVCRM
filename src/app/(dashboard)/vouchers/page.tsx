@@ -15,6 +15,7 @@ import { UploadVouchersDialog } from "@/components/vouchers/upload-vouchers-dial
 import { VoucherInventoryCard } from "@/components/vouchers/voucher-inventory-card";
 import { LowStockAlert } from "@/components/vouchers/low-stock-alert";
 import { ReclassifyVouchersDialog } from "@/components/vouchers/reclassify-vouchers-dialog";
+import { VoucherIssuanceDialog } from "@/components/vouchers/voucher-issuance-dialog";
 import { LocationSelector } from "@/components/shared/location-selector";
 import {
   VOUCHER_STATUSES,
@@ -56,6 +57,10 @@ export default function VouchersPage() {
   const [statusFilter, setStatusFilter] = useState("");
   const [validityFilter, setValidityFilter] = useState("");
   const [search, setSearch] = useState("");
+
+  // Issuance side-panel: opens when admin clicks an "Issued" voucher row.
+  // Available rows are intentionally NOT clickable — there's nothing to show.
+  const [issuanceVoucherId, setIssuanceVoucherId] = useState<string | null>(null);
 
   // Location filter (shared across tabs)
   const [locationFilter, setLocationFilter] = useState<string | null>(null);
@@ -279,30 +284,44 @@ export default function VouchersPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {vouchers.map((v) => (
-                    <tr key={v.id} className="border-b hover:bg-muted/30 transition-colors">
-                      <td className="px-4 py-3 font-mono text-xs">{v.voucher_code}</td>
-                      <td className="px-4 py-3">
-                        <Badge variant="secondary" className={VOUCHER_STATUS_COLORS[v.status]}>
-                          {VOUCHER_STATUS_LABELS[v.status] || v.status}
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-3">
-                        <Badge variant="outline" className="text-xs">
-                          {getValidityLabel(v.validity_days)}
-                        </Badge>
-                      </td>
-                      <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
-                        {v.location?.name || "—"}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
-                        {formatDate(v.uploaded_at || v.created_at)}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
-                        {v.issued_at ? formatDate(v.issued_at) : "-"}
-                      </td>
-                    </tr>
-                  ))}
+                  {vouchers.map((v) => {
+                    // Only "Issued" / "Revoked" rows have something to show
+                    // in the side panel. Available vouchers stay un-clickable.
+                    const clickable = v.status !== "available";
+                    return (
+                      <tr
+                        key={v.id}
+                        className={`border-b transition-colors ${
+                          clickable
+                            ? "cursor-pointer hover:bg-muted/40"
+                            : "hover:bg-muted/30"
+                        }`}
+                        onClick={clickable ? () => setIssuanceVoucherId(v.id) : undefined}
+                        title={clickable ? "View issuance details" : undefined}
+                      >
+                        <td className="px-4 py-3 font-mono text-xs">{v.voucher_code}</td>
+                        <td className="px-4 py-3">
+                          <Badge variant="secondary" className={VOUCHER_STATUS_COLORS[v.status]}>
+                            {VOUCHER_STATUS_LABELS[v.status] || v.status}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-3">
+                          <Badge variant="outline" className="text-xs">
+                            {getValidityLabel(v.validity_days)}
+                          </Badge>
+                        </td>
+                        <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
+                          {v.location?.name || "—"}
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
+                          {formatDate(v.uploaded_at || v.created_at)}
+                        </td>
+                        <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
+                          {v.issued_at ? formatDate(v.issued_at) : "-"}
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -324,6 +343,13 @@ export default function VouchersPage() {
           )}
         </div>
       )}
+
+      {/* Voucher Issuance side panel — opens when an Issued / Revoked row is clicked */}
+      <VoucherIssuanceDialog
+        open={!!issuanceVoucherId}
+        onOpenChange={(v) => { if (!v) setIssuanceVoucherId(null); }}
+        voucherId={issuanceVoucherId}
+      />
 
       {/* Upload Dialog */}
       <UploadVouchersDialog
