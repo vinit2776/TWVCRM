@@ -150,7 +150,7 @@ export interface SendDocumentOptions {
    *
    * Templates needed (create in MSG91 → WhatsApp → Templates):
    *   proposal_send_doc        — Header: Document | Body: "Hi {{1}}, please find the proposal {{2}} from The Work Villa."
-   *   booking_confirmation_doc — Header: Document | Body: "Hi {{1}}, your proposal {{2}} is accepted. Pay security deposit of Rs.{{3}} here: {{4}}"
+   *   booking_confirmation_doc — Header: Document | Body: "Hi {{1}}, your proposal {{2}} has been accepted. Please pay the security deposit of Rs.{{3}} here: {{4}} to confirm your booking."
    *   gst_invoice_doc          — Header: Document | Body: "Hi {{1}}, invoice {{2}} of Rs.{{3}} from The Work Villa is attached. Click to pay: {{4}}. Thank you!"
    */
   template: string;
@@ -715,7 +715,7 @@ export const messaging = {
   /**
    * Booking confirmation PDF → lead phone after acceptance.
    * Template: booking_confirmation_doc
-   * Header: Document  |  Body: "Hi {{1}}, your proposal {{2}} is accepted. Pay security deposit of Rs.{{3}} here: {{4}}"
+   * Header: Document  |  Body: "Hi {{1}}, your proposal {{2}} has been accepted. Please pay the security deposit of Rs.{{3}} here: {{4}} to confirm your booking."
    */
   bookingConfirmationDocument(
     to: string,
