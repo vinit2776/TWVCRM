@@ -83,9 +83,12 @@ export function BookingAddonsSection({
 
   useEffect(() => { fetchAddons(); /* eslint-disable-next-line */ }, [bookingId]);
 
-  // External "open the dialog with prefill" signal
+  // External "open the dialog with prefill" signal.
+  // Guard with truthiness — openSignal starts at 0 in the parent, which is
+  // falsy, so this won't fire on initial render. Only Date.now() values (> 0)
+  // from the overtime checkout handler will trigger the dialog.
   useEffect(() => {
-    if (openSignal != null) setDialogOpen(true);
+    if (openSignal) setDialogOpen(true);
   }, [openSignal]);
 
   const remove = async (addonId: string) => {

@@ -81,6 +81,10 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   // For day-pass overtime, we open the addons dialog with the suggested
   // "Extended time" line pre-filled. The number is just a tick to retrigger.
   const [addonOpenSignal, setAddonOpenSignal] = useState<number>(0);
+  // Addons section is lazy — only mounted after the user clicks "Add charge"
+  // (or when a checkout overtime prompt needs it). Prevents an extra API call
+  // on every booking page load.
+  const [showAddonsSection, setShowAddonsSection] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [addonPrefill, setAddonPrefill] = useState<any>(null);
   const [outstandingCharges, setOutstandingCharges] = useState<Array<{
@@ -305,6 +309,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               unit_label: ot.suggested_addon.unit_label,
               gst_rate: ot.suggested_addon.gst_rate,
             });
+            setShowAddonsSection(true); // ensure section is mounted before signal fires
             setAddonOpenSignal(Date.now());
             toast.warning(
               `Customer stayed ${ot.minutes} min past closing`,
@@ -1393,16 +1398,40 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         )}
       </div>
 
-      {/* Add-ons / extras — catalogue is per-space, so we need space_id */}
+      {/* Add-ons / extras — lazy-mounted so the catalog fetch and dialog don't
+          run on every page load. The section mounts the first time the user
+          clicks "Add charge" (or automatically on checkout overtime). */}
       {booking.space_id && (
-        <BookingAddonsSection
-          bookingId={booking.id}
-          spaceId={booking.space_id}
-          canEdit={booking.status !== "cancelled"}
-          onChange={fetchBooking}
-          prefill={addonPrefill}
-          openSignal={addonOpenSignal}
-        />
+        showAddonsSection ? (
+          <BookingAddonsSection
+            bookingId={booking.id}
+            spaceId={booking.space_id}
+            canEdit={booking.status !== "cancelled"}
+            onChange={fetchBooking}
+            prefill={addonPrefill}
+            openSignal={addonOpenSignal}
+          />
+        ) : (
+          <div className="rounded-lg border bg-card p-4 flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-semibold">Extras &amp; charges</h3>
+              <p className="text-xs text-muted-foreground">Add-ons and additional charges</p>
+            </div>
+            {booking.status !== "cancelled" && (
+              <Button
+                size="sm"
+                onClick={() => {
+                  setShowAddonsSection(true);
+                  // Use Date.now() so the openSignal effect in the section
+                  // (which guards on truthiness) fires after mount.
+                  setAddonOpenSignal(Date.now());
+                }}
+              >
+                <Plus className="h-4 w-4 mr-1" />Add charge
+              </Button>
+            )}
+          </div>
+        )
       )}
 
       {/* Customer History */}
