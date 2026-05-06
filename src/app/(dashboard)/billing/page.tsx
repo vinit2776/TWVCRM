@@ -285,6 +285,41 @@ export default function BillingPage() {
     return "contracts";
   });
 
+  // ── Section grouping (Phase 3 finance consolidation) ─────────────────────
+  // The 7 underlying tabs roll up into 3 finance-friendly buckets so the page
+  // doesn't feel like a scavenger hunt. Each section renders its own
+  // sub-tabs; the existing TabsContent components stay untouched.
+  const SECTION_TABS = {
+    receivables: ["contracts", "proposals", "usage-charges"],
+    collections: ["walkin", "cash"],
+    invoicing:   ["gst", "statements"],
+  } as const;
+  type Section = keyof typeof SECTION_TABS;
+  const sectionForTab = (tab: string): Section => {
+    for (const s of Object.keys(SECTION_TABS) as Section[]) {
+      if ((SECTION_TABS[s] as readonly string[]).includes(tab)) return s;
+    }
+    return "receivables";
+  };
+  const [section, setSection] = useState<Section>(() => sectionForTab(activeTab));
+
+  // Keep section in sync when activeTab changes via deep links (e.g. the
+  // ActionRequiredBanner buttons that flip directly to "cash" or "gst").
+  useEffect(() => {
+    const next = sectionForTab(activeTab);
+    if (next !== section) setSection(next);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [activeTab]);
+
+  const handleSectionChange = (next: Section) => {
+    setSection(next);
+    // If the current tab isn't part of the new section, jump to the section's
+    // first tab so the user sees real content instead of an empty area.
+    if (!(SECTION_TABS[next] as readonly string[]).includes(activeTab)) {
+      setActiveTab(SECTION_TABS[next][0]);
+    }
+  };
+
   // ── Usage Charges ─────────────────────────────────────────────────────────
   const [charges, setCharges]                         = useState<UsageCharge[]>([]);
   const [chargesPagination, setChargesPagination]     = useState<Pagination>({ page: 1, limit: 25, total: 0, totalPages: 0 });
@@ -590,23 +625,70 @@ export default function BillingPage() {
         </>
       )}
 
-      {/* Tabs */}
+      {/* ── Section selector (Phase 3) ─────────────────────────────────────
+          Three finance-centric buckets above the tab list so the screen
+          tells finance "what owes me / what came in / what goes out"
+          before forcing them to pick a sub-view.
+            • Receivables — Contracts, Proposals, Usage Charges
+            • Collections — Walk-in, Cash Handovers
+            • Invoicing  — GST Invoices, Statements
+      */}
+      <div className="flex flex-wrap gap-2 border-b pb-2">
+        {([
+          { key: "receivables", label: "Receivables", hint: "What customers owe" },
+          { key: "collections", label: "Collections", hint: "Cash that came in" },
+          { key: "invoicing",   label: "Invoicing",   hint: "Documents going out" },
+        ] as const).map((s) => {
+          const isActive = section === s.key;
+          return (
+            <button
+              key={s.key}
+              type="button"
+              onClick={() => handleSectionChange(s.key)}
+              className={`rounded-md px-4 py-2 text-sm font-semibold transition-colors text-left ${
+                isActive
+                  ? "bg-primary text-primary-foreground shadow-sm"
+                  : "bg-muted/40 text-muted-foreground hover:bg-muted hover:text-foreground"
+              }`}
+            >
+              <div>{s.label}</div>
+              <div className={`text-[11px] font-normal mt-0.5 ${isActive ? "text-primary-foreground/80" : "text-muted-foreground/80"}`}>
+                {s.hint}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Sub-tabs — only the ones inside the active section render. */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <div className="overflow-x-auto pb-1">
           <TabsList className="w-max">
-            <TabsTrigger value="contracts">
-              Contracts{!summaryLoading && summary ? ` (${summary.contracts.length})` : ""}
-            </TabsTrigger>
-            <TabsTrigger value="proposals">Proposals</TabsTrigger>
-            <TabsTrigger value="walkin">
-              Walk-in{!summaryLoading && summary ? ` (${summary.walkin_payments.length})` : ""}
-            </TabsTrigger>
-            <TabsTrigger value="cash">
-              Cash{!summaryLoading ? ` (${pendingHandover.length} pending)` : ""}
-            </TabsTrigger>
-            <TabsTrigger value="gst">GST Invoices</TabsTrigger>
-            <TabsTrigger value="usage-charges">Usage Charges</TabsTrigger>
-            <TabsTrigger value="statements">Statements</TabsTrigger>
+            {section === "receivables" && (
+              <>
+                <TabsTrigger value="contracts">
+                  Contracts{!summaryLoading && summary ? ` (${summary.contracts.length})` : ""}
+                </TabsTrigger>
+                <TabsTrigger value="proposals">Proposals</TabsTrigger>
+                <TabsTrigger value="usage-charges">Usage Charges</TabsTrigger>
+              </>
+            )}
+            {section === "collections" && (
+              <>
+                <TabsTrigger value="walkin">
+                  Walk-in{!summaryLoading && summary ? ` (${summary.walkin_payments.length})` : ""}
+                </TabsTrigger>
+                <TabsTrigger value="cash">
+                  Cash{!summaryLoading ? ` (${pendingHandover.length} pending)` : ""}
+                </TabsTrigger>
+              </>
+            )}
+            {section === "invoicing" && (
+              <>
+                <TabsTrigger value="gst">GST Invoices</TabsTrigger>
+                <TabsTrigger value="statements">Statements</TabsTrigger>
+              </>
+            )}
           </TabsList>
         </div>
 
