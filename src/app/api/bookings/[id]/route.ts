@@ -244,7 +244,10 @@ export async function PATCH(
           }
         }
 
-        // PAYMENT GATE: Walk-in bookings require full payment before check-in
+        // PAYMENT GATE: Walk-in bookings require full payment before check-in.
+        // We compare against the GST-inclusive grand total, the same figure
+        // the customer is told to pay — using ex-GST here would have let
+        // walk-ins check in after paying only the pre-tax amount.
         if (booking.customer_type === "walk_in") {
           const { data: verifiedPayments } = await supabase
             .from("booking_payments")
@@ -255,14 +258,15 @@ export async function PATCH(
           const totalPaid = (verifiedPayments || []).reduce(
             (sum: number, p: { amount: number }) => sum + Number(p.amount), 0
           );
+          const grandTotal = Number(booking.total_amount_with_gst || booking.total_amount);
 
-          if (totalPaid < Number(booking.total_amount)) {
+          if (totalPaid < grandTotal) {
             return NextResponse.json({
               error: "Payment required before check-in",
               payment_required: true,
-              total_amount: Number(booking.total_amount),
+              total_amount: grandTotal,
               amount_paid: totalPaid,
-              balance_due: Number(booking.total_amount) - totalPaid,
+              balance_due: grandTotal - totalPaid,
             }, { status: 402 });
           }
         }
@@ -282,12 +286,25 @@ export async function PATCH(
         updates.check_out_at = now.toISOString();
         updates.checked_out_by = dbUser.id;
 
-        // Calculate overtime if checkout is past booking end_time
+        // Calculate overtime if checkout is past booking end_time.
+        // booking.end_time is stored as IST clock time ("HH:MM"), so the
+        // actual checkout has to be expressed in IST too. now.getHours()
+        // returns the runtime's local hours — UTC on Vercel — which made
+        // overtime detection silently wrong (off by 5h30). Use Intl with
+        // an explicit Asia/Kolkata timezone instead.
         const bookingEndMin = (() => {
           const [h, m] = (booking.end_time || "00:00").split(":").map(Number);
           return h * 60 + m;
         })();
-        const actualCheckoutMin = now.getHours() * 60 + now.getMinutes();
+        const istParts = new Intl.DateTimeFormat("en-GB", {
+          timeZone: "Asia/Kolkata",
+          hour: "2-digit",
+          minute: "2-digit",
+          hour12: false,
+        }).formatToParts(now);
+        const istHour = Number(istParts.find((p) => p.type === "hour")?.value ?? 0);
+        const istMinute = Number(istParts.find((p) => p.type === "minute")?.value ?? 0);
+        const actualCheckoutMin = istHour * 60 + istMinute;
 
         // Only flag overtime if checkout is past the booked end_time by > 15 minutes
         const overtimeMinutes = actualCheckoutMin - bookingEndMin;

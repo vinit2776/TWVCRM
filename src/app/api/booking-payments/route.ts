@@ -63,10 +63,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid payment mode" }, { status: 400 });
   }
 
-  // Fetch the booking
+  // Fetch the booking. We compare against the GST-inclusive total because
+  // that's the figure shown in the CollectPaymentDialog and on every
+  // customer-facing receipt — using ex-GST total here meant a customer
+  // handing over ₹354 (the displayed total) was rejected with
+  // "Balance: ₹300" because the server only saw the ex-GST amount.
   const { data: booking } = await supabase
     .from("bookings")
-    .select("id, total_amount, payment_status, customer_type")
+    .select("id, total_amount, total_amount_with_gst, payment_status, customer_type")
     .eq("id", booking_id)
     .single();
 
@@ -80,7 +84,8 @@ export async function POST(request: NextRequest) {
     .eq("status", "verified");
 
   const paidSoFar = (existingPayments || []).reduce((sum, p) => sum + Number(p.amount), 0);
-  const balanceDue = Number(booking.total_amount) - paidSoFar;
+  const grandTotal = Number(booking.total_amount_with_gst || booking.total_amount);
+  const balanceDue = grandTotal - paidSoFar;
 
   if (amount > balanceDue + 0.01) { // small epsilon for floating point
     return NextResponse.json({
@@ -133,9 +138,10 @@ export async function POST(request: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   // If this payment was auto-verified, check if booking is fully paid
+  // (compared against the same GST-inclusive total used above).
   if (status === "verified") {
     const newTotal = paidSoFar + amount;
-    if (newTotal >= Number(booking.total_amount)) {
+    if (newTotal >= grandTotal) {
       await supabase
         .from("bookings")
         .update({ payment_status: "paid", payment_mode })
