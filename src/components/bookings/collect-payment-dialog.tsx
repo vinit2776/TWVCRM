@@ -13,7 +13,6 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import {
   Loader2, Upload, CheckCircle, XCircle, Eye,
   Banknote, Smartphone, CreditCard, ImageIcon, Maximize2, X,
-  Link2, Copy, ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
@@ -58,11 +57,6 @@ export function CollectPaymentDialog({
   const [screenshotPreview, setScreenshotPreview] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Send Link tab state
-  const [linkUrl, setLinkUrl] = useState<string | null>(null);
-  const [linkSending, setLinkSending] = useState(false);
-  const [linkNotifiedVia, setLinkNotifiedVia] = useState<string | null>(null);
-
   // QR code signed URL & lightbox
   const [qrCodeUrl, setQrCodeUrl] = useState<string | null>(null);
   const [qrZoomed, setQrZoomed] = useState(false);
@@ -88,9 +82,6 @@ export function CollectPaymentDialog({
   useEffect(() => {
     if (open) {
       fetchPayments();
-      setLinkUrl(null);
-      setLinkSending(false);
-      setLinkNotifiedVia(null);
     }
   }, [open, fetchPayments]);
 
@@ -280,41 +271,6 @@ export function CollectPaymentDialog({
     }
   };
 
-  const handleSendLink = async () => {
-    setLinkSending(true);
-    try {
-      const res = await fetch("/api/payments/create-payment-link", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ booking_id: bookingId }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        toast.error(json.error || "Failed to create payment link");
-        return;
-      }
-      setLinkUrl(json.data?.payment_link_url);
-
-      // Build toast based on what notifications were actually sent
-      const { notified_via_sms, notified_via_email } = json.data ?? {};
-      let notifiedVia: string | null = null;
-      if (notified_via_sms && notified_via_email) {
-        notifiedVia = "SMS & email";
-        toast.success("Payment link sent to customer via SMS & email");
-      } else if (notified_via_sms) {
-        notifiedVia = "SMS";
-        toast.success("Payment link sent to customer via SMS");
-      } else if (notified_via_email) {
-        notifiedVia = "email";
-        toast.success("Payment link sent to customer via email");
-      } else {
-        toast.success("Payment link created — share the link below with the customer");
-      }
-      setLinkNotifiedVia(notifiedVia);
-    } finally {
-      setLinkSending(false);
-    }
-  };
 
   const upiPayLink = upiId && amount
     ? `upi://pay?pa=${encodeURIComponent(upiId)}&am=${amount}&cu=INR&tn=${encodeURIComponent(bookingReference ? `TWV-${bookingReference}` : "Booking Payment")}`
@@ -401,36 +357,37 @@ export function CollectPaymentDialog({
               <Separator />
 
               <div className="space-y-4">
-                {paymentMode !== "send_link" && (
-                  <div className="space-y-2">
-                    <Label>Amount</Label>
-                    <Input
-                      type="number"
-                      step="0.01"
-                      min="1"
-                      max={balanceDue}
-                      value={amount}
-                      onChange={(e) => setAmount(e.target.value)}
-                      placeholder={`Max ${formatCurrency(balanceDue)}`}
-                    />
-                  </div>
-                )}
+                <div className="space-y-2">
+                  <Label>Amount</Label>
+                  <Input
+                    type="number"
+                    step="0.01"
+                    min="1"
+                    max={balanceDue}
+                    value={amount}
+                    onChange={(e) => setAmount(e.target.value)}
+                    placeholder={`Max ${formatCurrency(balanceDue)}`}
+                  />
+                </div>
 
                 <div className="space-y-2">
                   <Label>Payment Method</Label>
                   <Tabs value={paymentMode} onValueChange={setPaymentMode}>
-                    <TabsList className="grid w-full grid-cols-4">
+                    {/* "Send Link" (Razorpay) is intentionally removed — the
+                        gateway has disabled UPI on our account, so the link
+                        flow no longer reliably collects. UPI is now a fully
+                        manual flow: the customer scans the static QR, and
+                        the staff uploads the customer's confirmation
+                        screenshot as proof for finance + GST invoicing. */}
+                    <TabsList className="grid w-full grid-cols-3">
                       <TabsTrigger value="cash" className="text-xs gap-1">
                         <Banknote className="h-3.5 w-3.5" />Cash
                       </TabsTrigger>
                       <TabsTrigger value="upi" className="text-xs gap-1">
-                        <Smartphone className="h-3.5 w-3.5" />UPI
+                        <Smartphone className="h-3.5 w-3.5" />UPI (Manual)
                       </TabsTrigger>
                       <TabsTrigger value="card" className="text-xs gap-1">
                         <CreditCard className="h-3.5 w-3.5" />Card
-                      </TabsTrigger>
-                      <TabsTrigger value="send_link" className="text-xs gap-1">
-                        <Link2 className="h-3.5 w-3.5" />Send Link
                       </TabsTrigger>
                     </TabsList>
 
@@ -513,16 +470,19 @@ export function CollectPaymentDialog({
                         />
                       </div>
 
-                      {/* Screenshot upload — REQUIRED for manual-QR. Upload itself
-                          attests that staff saw the customer's payment confirmation,
-                          and the booking moves to fully paid immediately. */}
+                      {/* Screenshot upload — REQUIRED for manual UPI.
+                          The upload IS the proof of payment for finance:
+                          it doubles as the source document for GST
+                          invoicing and bank-reconciliation against the
+                          merchant UPI account. Once uploaded, the booking
+                          is auto-marked paid so check-in can proceed. */}
                       <div className="space-y-1.5">
                         <Label className="text-xs flex items-center gap-1">
                           Payment confirmation screenshot
                           <span className="text-red-500">*</span>
                         </Label>
                         <p className="text-[11px] text-muted-foreground -mt-1">
-                          Required. Upload the customer&apos;s UPI confirmation. Marks the payment verified so check-in can proceed.
+                          Required. Upload the customer&apos;s UPI success screen — finance uses this as the GST-invoice reference and to reconcile against the bank statement.
                         </p>
                         {screenshotPreview ? (
                           <div className="relative border rounded-md p-2">
@@ -571,7 +531,7 @@ export function CollectPaymentDialog({
                           }}
                         />
                         <p className="text-[11px] text-muted-foreground">
-                          Upload screenshot for verification. Payment will be pending until verified by a manager.
+                          The screenshot is attested at the counter and stored on the booking — operations & finance can pull it later for audit.
                         </p>
                       </div>
                     </TabsContent>
@@ -588,89 +548,30 @@ export function CollectPaymentDialog({
                       </div>
                     </TabsContent>
 
-                    {/* Send Link */}
-                    <TabsContent value="send_link" className="mt-3 space-y-3">
-                      {!linkUrl ? (
-                        <div className="rounded-md bg-blue-50 border border-blue-200 p-3 text-sm text-blue-800">
-                          <Link2 className="inline-block h-4 w-4 mr-1.5" />
-                          A Razorpay payment link for the full balance due ({formatCurrency(balanceDue)}) will be
-                          created and sent to the customer via SMS and email.
-                        </div>
-                      ) : (
-                        <div className="space-y-2">
-                          <div className="flex items-center gap-2 rounded-md bg-green-50 border border-green-200 px-3 py-2">
-                            <CheckCircle className="h-4 w-4 text-green-600 shrink-0" />
-                            <p className="text-sm text-green-800 flex-1">
-                              {linkNotifiedVia
-                                ? `Link sent to customer via ${linkNotifiedVia}`
-                                : "Link created — share it with the customer"}
-                            </p>
-                          </div>
-                          <div className="flex items-center gap-2 rounded-md bg-muted/50 border px-3 py-2">
-                            <span className="flex-1 truncate text-xs font-mono">{linkUrl}</span>
-                            <button
-                              onClick={() => { navigator.clipboard.writeText(linkUrl); toast.success("Link copied"); }}
-                              title="Copy link"
-                              className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                            >
-                              <Copy className="h-3.5 w-3.5" />
-                            </button>
-                            <a
-                              href={linkUrl}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              title="Open link"
-                              className="shrink-0 text-muted-foreground hover:text-foreground transition-colors"
-                            >
-                              <ExternalLink className="h-3.5 w-3.5" />
-                            </a>
-                          </div>
-                        </div>
-                      )}
-                    </TabsContent>
+                    {/* "Send Link" tab removed — gateway disabled UPI on
+                        our account, so the Razorpay link flow is unreliable.
+                        Card-terminal payments are recorded under the Card
+                        tab; UPI is collected manually via QR + screenshot. */}
                   </Tabs>
                 </div>
 
-                {paymentMode === "send_link" ? (
-                  linkUrl ? (
-                    <Button
-                      className="w-full"
-                      onClick={() => { onSuccess(); onOpenChange(false); }}
-                    >
-                      Done
-                    </Button>
+                <Button
+                  className="w-full"
+                  onClick={handleSubmitPayment}
+                  disabled={saving || !amount || parseFloat(amount) <= 0 || (paymentMode === "upi" && !screenshotFile)}
+                >
+                  {saving ? (
+                    <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Processing...</>
+                  ) : paymentMode === "cash" ? (
+                    `Record Cash Payment — ${formatCurrency(parseFloat(amount) || 0)}`
+                  ) : paymentMode === "upi" ? (
+                    screenshotFile
+                      ? `Confirm UPI Payment — ${formatCurrency(parseFloat(amount) || 0)}`
+                      : "Upload screenshot to confirm"
                   ) : (
-                    <Button
-                      className="w-full"
-                      onClick={handleSendLink}
-                      disabled={linkSending}
-                    >
-                      {linkSending ? (
-                        <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Sending...</>
-                      ) : (
-                        "Generate & Send Link"
-                      )}
-                    </Button>
-                  )
-                ) : (
-                  <Button
-                    className="w-full"
-                    onClick={handleSubmitPayment}
-                    disabled={saving || !amount || parseFloat(amount) <= 0 || (paymentMode === "upi" && !screenshotFile)}
-                  >
-                    {saving ? (
-                      <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Processing...</>
-                    ) : paymentMode === "cash" ? (
-                      `Record Cash Payment — ${formatCurrency(parseFloat(amount) || 0)}`
-                    ) : paymentMode === "upi" ? (
-                      screenshotFile
-                        ? `Confirm UPI Payment — ${formatCurrency(parseFloat(amount) || 0)}`
-                        : "Upload screenshot to confirm"
-                    ) : (
-                      `Record Card Payment — ${formatCurrency(parseFloat(amount) || 0)}`
-                    )}
-                  </Button>
-                )}
+                    `Record Card Payment — ${formatCurrency(parseFloat(amount) || 0)}`
+                  )}
+                </Button>
               </div>
             </>
           )}
