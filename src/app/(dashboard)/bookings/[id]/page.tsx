@@ -78,6 +78,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [extendDialogOpen, setExtendDialogOpen] = useState(false);
   const [logChargeOpen, setLogChargeOpen] = useState(false);
   const [waiverOpen, setWaiverOpen] = useState(false);
+  const [convertingFromBill, setConvertingFromBill] = useState(false);
   const [pendingOvertimeCharge, setPendingOvertimeCharge] = useState<{ minutes: number; hours: number; hourly_rate: number; charge: number } | null>(null);
   // For day-pass overtime, we open the addons dialog with the suggested
   // "Extended time" line pre-filled. The number is just a tick to retrigger.
@@ -544,6 +545,37 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     }
   };
 
+  // "Collect now anyway" — for contract-holder bookings whose default flow
+  // posts the charge to next month's invoice. Some members prefer to settle
+  // on the spot (cash, UPI, card). This flips the booking out of
+  // posted_to_bill and waives the linked usage_charge from the monthly
+  // statement, then opens the existing CollectPaymentDialog so the rest of
+  // the workflow is unchanged.
+  const handleConvertFromBill = async () => {
+    if (!booking) return;
+    const ok = window.confirm(
+      "Convert this booking from monthly invoice to direct collection?\n\n" +
+      "The charge will be removed from the next monthly statement and " +
+      "you'll be prompted to collect payment now."
+    );
+    if (!ok) return;
+    setConvertingFromBill(true);
+    try {
+      const res = await fetch(`/api/bookings/${id}/convert-from-bill`, { method: "POST" });
+      if (!res.ok) {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to convert booking");
+        return;
+      }
+      toast.success("Charge removed from monthly invoice — collect payment now");
+      await fetchBooking();
+      // Open the collect-payment dialog so finance can take payment immediately.
+      setPaymentDialogOpen(true);
+    } finally {
+      setConvertingFromBill(false);
+    }
+  };
+
   const handleNotesUpdate = async (newNotes: string) => {
     const res = await fetch(`/api/bookings/${id}`, {
       method: "PATCH",
@@ -656,6 +688,26 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           {booking.customer_type === "walk_in" && booking.payment_status !== "paid" && (
             <Button variant="outline" size="sm" onClick={() => setPaymentDialogOpen(true)}>
               <IndianRupee className="mr-1 h-4 w-4" />Collect Payment
+            </Button>
+          )}
+          {/* Contract members can opt out of monthly invoicing for this
+              one booking and pay on the spot. The button is intentionally
+              limited to posted_to_bill state — once it's collected/paid,
+              there's nothing to convert. */}
+          {booking.customer_type === "contract_holder" &&
+           booking.payment_status === "posted_to_bill" && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={handleConvertFromBill}
+              disabled={convertingFromBill}
+              className="border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+              title="Take payment now instead of posting to monthly invoice"
+            >
+              {convertingFromBill
+                ? <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+                : <Banknote className="mr-1 h-4 w-4" />}
+              Collect Now Anyway
             </Button>
           )}
           {booking.status === "no_show" && !booking.refund_status && (
