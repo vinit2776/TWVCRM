@@ -70,23 +70,33 @@ export interface IrpClient {
   ): Promise<IrpResult<NicGenerateIrnSuccess>>;
 }
 
+import type { SupabaseClient } from "@supabase/supabase-js";
+import { NicProtocolIrpClient } from "./adapters/nic-protocol";
+
 /**
  * Factory — selects the right adapter based on config.
  *
- * Throws if the configured provider has no adapter yet. We use this at
- * the API-route level to fail fast with a clear message during rollout.
+ * IRIS, NIC1, and NIC2 all use the same wire protocol (RSA + AES-SEK),
+ * so a single adapter handles all three; only host + public key differ.
  */
-export function createIrpClient(_config: IrpClientConfig): IrpClient {
-  // Adapter implementations are added as separate files; keep this stub
-  // returning a clear error until at least one is wired up. Once IRIS
-  // adapter ships, we'll import + branch here:
-  //
-  //   if (config.provider === "einvoice6") return new IrisIrpClient(config);
-  //   if (config.provider === "nic1")      return new NicDirectClient(config);
-  //
-  throw new Error(
-    "IRP adapter not implemented yet. " +
-    "This is created in Phase 2 (final) once IRIS sandbox credentials are received. " +
-    "All upstream code (validator, schema-mapper, types) is ready and tested."
-  );
+export function createIrpClient(
+  config: IrpClientConfig,
+  supabase: SupabaseClient,
+): IrpClient {
+  switch (config.provider) {
+    case "einvoice6":   // IRIS IRP6
+    case "nic1":
+    case "nic2":
+      return new NicProtocolIrpClient(config, supabase);
+    case "iris":        // alias for einvoice6
+      return new NicProtocolIrpClient({ ...config, provider: "einvoice6" }, supabase);
+    case "cygnet":
+    case "cleartax":
+      throw new Error(
+        `Provider "${config.provider}" adapter not yet implemented. ` +
+        `Add an adapter in src/lib/e-invoice/adapters/ that implements IrpClient.`
+      );
+    default:
+      throw new Error(`Unknown IRP provider "${config.provider}"`);
+  }
 }
