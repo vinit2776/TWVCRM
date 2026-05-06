@@ -441,12 +441,18 @@ export const BOOKING_PAYMENT_STATUSES = [
   "prepaid",
 ] as const;
 
+/**
+ * Customer-facing labels for booking.payment_status. Finance feedback was
+ * that "Posted to Bill" felt like jargon — it's the clearest one-word
+ * summary, but the booking detail UI now augments these with context
+ * (which contract, which month, free-quota math, etc).
+ */
 export const BOOKING_PAYMENT_STATUS_LABELS: Record<string, string> = {
-  pending: "Pending",
+  pending: "Pending Collection",
   paid: "Paid",
   waived: "Waived",
-  posted_to_bill: "Posted to Bill",
-  prepaid: "Prepaid",
+  posted_to_bill: "Post-paid (Monthly Invoice)",
+  prepaid: "Prepaid Pack",
 };
 
 export const BOOKING_PAYMENT_STATUS_COLORS: Record<string, string> = {

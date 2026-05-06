@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import dynamic from "next/dynamic";
+import Link from "next/link";
 import {
   ChevronLeft,
   ChevronRight,
@@ -763,13 +764,30 @@ export default function BillingPage() {
                     <tr key={charge.id} className="border-b hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-3 font-medium max-w-[200px] truncate">{charge.description}</td>
                       <td className="px-4 py-3 font-mono text-xs hidden md:table-cell">
-                        {charge.contract?.contract_number ? (
-                          <span title="Contract">{charge.contract.contract_number}</span>
-                        ) : charge.booking?.booking_number ? (
-                          <span className="text-blue-600" title={`Booking — ${formatDate(charge.booking.booking_date)}`}>
-                            {charge.booking.booking_number}
-                          </span>
-                        ) : "—"}
+                        {/* Show both contract + booking when present (a posted-
+                            to-bill booking has both). Each is clickable —
+                            opens detail in a new tab so finance keeps context. */}
+                        <div className="flex flex-col gap-0.5">
+                          {charge.contract?.contract_number && (
+                            <Link
+                              href={`/contracts/${charge.contract_id}`}
+                              target="_blank"
+                              rel="noopener"
+                              className="text-primary hover:underline"
+                              title="Open contract"
+                            >{charge.contract.contract_number}</Link>
+                          )}
+                          {charge.booking?.booking_number && (
+                            <Link
+                              href={`/bookings/${charge.booking_id}`}
+                              target="_blank"
+                              rel="noopener"
+                              className="text-blue-600 hover:underline"
+                              title={`Open booking — ${formatDate(charge.booking.booking_date)}`}
+                            >{charge.booking.booking_number}</Link>
+                          )}
+                          {!charge.contract?.contract_number && !charge.booking?.booking_number && "—"}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-right hidden sm:table-cell">{charge.quantity}</td>
                       <td className="px-4 py-3 text-right hidden sm:table-cell">{formatCurrency(charge.unit_price)}</td>

@@ -29,6 +29,7 @@ const ExtendBookingDialog    = dynamic(() => import("@/components/bookings/exten
 const AddUsageChargeDialog   = dynamic(() => import("@/components/billing/add-usage-charge-dialog").then(m => m.AddUsageChargeDialog),     { ssr: false });
 const WaiverRequestDialog    = dynamic(() => import("@/components/bookings/waiver-request-dialog").then(m => m.WaiverRequestDialog),       { ssr: false });
 import { BookingAddonsSection } from "@/components/bookings/booking-addons-section";
+import { BookingPaymentSummary } from "@/components/bookings/booking-payment-summary";
 import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
 import { BookingLifecycleTimeline } from "@/components/bookings/booking-lifecycle-timeline";
@@ -692,6 +693,12 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           {actionLoading && <Loader2 className="h-4 w-4 animate-spin self-center" />}
         </div>
       </div>
+
+      {/* Payment status summary — replaces the bare "posted_to_bill" pill
+          with a finance-friendly banner that names the contract, the
+          target invoice month, the method (when paid), free-quota math
+          (when applicable), or the prepaid pack source. */}
+      <BookingPaymentSummary booking={booking} variant="full" />
 
       {/* Outstanding charges from previous bookings */}
       {outstandingCharges.length > 0 && (

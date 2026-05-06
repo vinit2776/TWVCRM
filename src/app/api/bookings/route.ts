@@ -497,6 +497,11 @@ export async function POST(request: NextRequest) {
       chargeStatus      = "pending";
     }
 
+    // Note: booking_id is set AFTER the booking row is inserted further below
+    // (we only have the contract here). We'll patch booking_id onto this
+    // charge row once the booking has been created. Without that link,
+    // /billing can't trace from a booking back to its posted charge — which
+    // was confusing finance.
     const { data: charge, error: chargeErr } = await supabase
       .from("usage_charges")
       .insert({
@@ -613,6 +618,17 @@ export async function POST(request: NextRequest) {
     await supabase.from("booking_facilities").insert(
       requestedFacilities.map((f) => ({ booking_id: booking.id, ...f }))
     );
+  }
+
+  // 6a. Patch the usage_charge with the now-known booking_id so finance can
+  // trace each posted charge back to its source booking. Without this link
+  // the /billing UI could only show "Conference Room: <name> (date+time)"
+  // text and finance had no clickable trail back to the booking.
+  if (usageChargeId && booking) {
+    await supabase
+      .from("usage_charges")
+      .update({ booking_id: booking.id })
+      .eq("id", usageChargeId);
   }
 
   // 6b. Handle prepaid redemption — deduct credits & log
