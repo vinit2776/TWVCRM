@@ -101,6 +101,7 @@ export async function POST(
         <div style="padding:20px;">
           <p>A customer has just checked in:</p>
           <table style="width:100%;border-collapse:collapse;margin:16px 0;">
+            <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Location</td><td style="padding:8px;border:1px solid #ddd;">${locationName || "—"}</td></tr>
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Room</td><td style="padding:8px;border:1px solid #ddd;">${spaceName}</td></tr>
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Customer</td><td style="padding:8px;border:1px solid #ddd;">${customerName}</td></tr>
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Check-in Time</td><td style="padding:8px;border:1px solid #ddd;">${new Date().toLocaleString("en-IN")}</td></tr>
@@ -114,7 +115,9 @@ export async function POST(
         resend.emails.send({
           from: EMAIL_FROM,
           to: mgr.email,
-          subject: `Check-In: ${customerName} at ${spaceName} - The WorkVilla`,
+          // Subject leads with the location so a manager covering multiple
+          // centres can triage their inbox at a glance.
+          subject: `Check-In${locationName ? ` [${locationName}]` : ""}: ${customerName} at ${spaceName} - The WorkVilla`,
           html: alertHtml,
         }).catch((e) => console.error(`Failed to send check-in alert to ${mgr.email}:`, e))
       )
@@ -146,7 +149,7 @@ export async function POST(
             <div style="text-align:center;margin:24px 0;">
               <a href="${feedbackUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;">Share Your Feedback</a>
             </div>
-            <p style="color:#666;font-size:13px;">Booking: ${booking.booking_number} | Room: ${spaceName}</p>
+            <p style="color:#666;font-size:13px;">Booking: ${booking.booking_number} | Room: ${spaceName}${locationName ? ` | Location: ${locationName}` : ""}</p>
             <p style="color:#333;font-size:14px;margin-top:20px;">Warm regards,<br/><strong>${senderName}</strong><br/>The WorkVilla</p>
             <p style="color:#666;font-size:12px;margin-top:16px;">For any queries, write to us at <a href="mailto:contact@theworkvilla.com" style="color:#015E65;">contact@theworkvilla.com</a> or call <strong>+91 97910 97900</strong>.</p>
           </div>
@@ -195,7 +198,7 @@ export async function POST(
       from: EMAIL_FROM,
       replyTo: EMAIL_REPLY_TO,
       to: customerEmail,
-      subject: `Payment Link - ${booking.booking_number} - ₹${displayAmount.toLocaleString("en-IN")} - The WorkVilla`,
+      subject: `Payment Link${locationName ? ` [${locationName}]` : ""} - ${booking.booking_number} - ₹${displayAmount.toLocaleString("en-IN")} - The WorkVilla`,
       html: `
         <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
           <div style="background:#015E65;padding:20px 32px;">
@@ -208,6 +211,7 @@ export async function POST(
             <table style="width:100%;border-collapse:collapse;margin:16px 0;background:#f0faf5;border-radius:6px;">
               <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Booking</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${booking.booking_number}</td></tr>
               <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Room</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${spaceName}</td></tr>
+              ${locationName ? `<tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Location</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${locationName}</td></tr>` : ""}
               <tr><td style="padding:10px 16px;color:#666;">Amount Due</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;">₹${displayAmount.toLocaleString("en-IN")}</td></tr>
             </table>
             <div style="text-align:center;margin:24px 0;">
@@ -512,6 +516,7 @@ export async function POST(
           <p>A new meeting room booking has been created:</p>
           <table style="width:100%;border-collapse:collapse;margin:16px 0;">
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Booking #</td><td style="padding:8px;border:1px solid #ddd;">${booking.booking_number}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Location</td><td style="padding:8px;border:1px solid #ddd;">${locationName || "—"}</td></tr>
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Room</td><td style="padding:8px;border:1px solid #ddd;">${spaceName}</td></tr>
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Date & Time</td><td style="padding:8px;border:1px solid #ddd;">${formatDate(booking.booking_date)} ${startTime} - ${endTime}</td></tr>
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Customer</td><td style="padding:8px;border:1px solid #ddd;">${customerName} (${BOOKING_CUSTOMER_TYPE_LABELS[booking.customer_type]})</td></tr>
@@ -529,7 +534,9 @@ export async function POST(
         resend.emails.send({
           from: EMAIL_FROM,
           to: mgr.email,
-          subject: `New Booking: ${spaceName} - ${formatDate(booking.booking_date)} ${startTime} - ${booking.booking_number}`,
+          // Subject leads with location so a manager can sort their inbox
+          // by centre at a glance.
+          subject: `New Booking${locationName ? ` [${locationName}]` : ""}: ${spaceName} - ${formatDate(booking.booking_date)} ${startTime} - ${booking.booking_number}`,
           html: managerHtml,
         }).catch((e) => console.error(`Failed to send manager notification to ${mgr.email}:`, e))
       )
