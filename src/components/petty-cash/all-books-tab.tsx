@@ -247,7 +247,7 @@ function BookDetailView({
                     <tbody>
                       {entries.map((e) => (
                         <tr key={e.id} className="border-b last:border-0 hover:bg-muted/30">
-                          <td className="py-2">{new Date(e.date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}</td>
+                          <td className="py-2">{new Date(e.date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" })}</td>
                           <td className="py-2">₹{Number(e.amount).toLocaleString("en-IN")}</td>
                           <td className="py-2 hidden md:table-cell text-muted-foreground">
                             {(e.category as { name: string } | null)?.name || "—"}

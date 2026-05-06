@@ -60,8 +60,8 @@ export async function POST(
   const isFullyPaid = outstanding <= 0;
 
   const formattedDate = bill.payment_date
-    ? new Date(bill.payment_date).toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" })
-    : new Date().toLocaleDateString("en-IN", { day: "numeric", month: "long", year: "numeric" });
+    ? new Date(bill.payment_date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "long", year: "numeric" })
+    : new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "long", year: "numeric" });
 
   const html = `
     <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">

@@ -43,6 +43,7 @@ function formatCurrencyPDF(amount: number): string {
 function formatDatePDF(dateStr: string | null | undefined): string {
   if (!dateStr) return "—";
   return new Date(dateStr).toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
     year: "numeric",
     month: "long",
     day: "numeric",

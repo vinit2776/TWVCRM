@@ -76,10 +76,10 @@ export async function POST(
 
     const voucherCode = issuance.voucher?.voucher_code || "—";
     const validFrom = issuance.valid_from
-      ? new Date(issuance.valid_from).toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" })
+      ? new Date(issuance.valid_from).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" })
       : "—";
     const validUntil = issuance.valid_until
-      ? new Date(issuance.valid_until).toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" })
+      ? new Date(issuance.valid_until).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" })
       : "—";
 
     try {
@@ -164,10 +164,10 @@ export async function POST(
         const email = issuance.seat_occupant_email!;
         const voucherCode = issuance.voucher?.voucher_code || "—";
         const validFrom = issuance.valid_from
-          ? new Date(issuance.valid_from).toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" })
+          ? new Date(issuance.valid_from).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" })
           : "—";
         const validUntil = issuance.valid_until
-          ? new Date(issuance.valid_until).toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" })
+          ? new Date(issuance.valid_until).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" })
           : "—";
 
         await resend.emails.send({
@@ -252,8 +252,8 @@ export async function POST(
         <tr>
           <td style="padding: 10px 16px; color: #333; border-bottom: 1px solid #e5e7eb; text-align: center;">${issuance.seat_number}</td>
           <td style="padding: 10px 16px; color: #015E65; font-weight: bold; border-bottom: 1px solid #e5e7eb; font-family: monospace;">${issuance.voucher?.voucher_code || "—"}</td>
-          <td style="padding: 10px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">${issuance.valid_from ? new Date(issuance.valid_from).toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" }) : "—"}</td>
-          <td style="padding: 10px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">${issuance.valid_until ? new Date(issuance.valid_until).toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" }) : "—"}</td>
+          <td style="padding: 10px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">${issuance.valid_from ? new Date(issuance.valid_from).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" }) : "—"}</td>
+          <td style="padding: 10px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">${issuance.valid_until ? new Date(issuance.valid_until).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" }) : "—"}</td>
         </tr>`
     )
     .join("");

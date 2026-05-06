@@ -190,7 +190,7 @@ export async function POST(
           <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Proposal</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">${proposal.proposal_number}</td></tr>
           <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Monthly Rental</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">₹${Number(proposal.total_amount).toLocaleString("en-IN")}/month + GST</td></tr>
           ${hasDeposit ? `<tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Security Deposit</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">₹${depositAmount.toLocaleString("en-IN")} (${depositMonths} month${depositMonths > 1 ? "s" : ""}, refundable)</td></tr>` : ""}
-          ${proposal.valid_until ? `<tr><td style="padding: 10px 16px; color: #666;">Valid Until</td><td style="padding: 10px 16px; color: #333;">${new Date(proposal.valid_until).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}</td></tr>` : ""}
+          ${proposal.valid_until ? `<tr><td style="padding: 10px 16px; color: #666;">Valid Until</td><td style="padding: 10px 16px; color: #333;">${new Date(proposal.valid_until).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "long", day: "numeric" })}</td></tr>` : ""}
         </table>
 
         <!-- Tracking CTA — clicking this marks the proposal as "viewed" server-side -->

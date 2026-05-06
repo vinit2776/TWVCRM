@@ -73,6 +73,7 @@ export async function POST(
 
   if (customerEmail) {
     const paidDate = new Date(paidAt).toLocaleDateString("en-IN", {
+      timeZone: "Asia/Kolkata",
       year: "numeric", month: "long", day: "numeric",
     });
     const totalFormatted = `₹${Number(invoice.total_amount).toLocaleString("en-IN")}`;

@@ -487,7 +487,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const loc = b.location as any;
       const locationStr = loc ? `${loc.name}${loc.address ? ", " + loc.address : ""}${loc.city ? ", " + loc.city : ""}` : "";
-      const dateStr = new Date(b.booking_date).toLocaleDateString("en-IN", { year: "numeric", month: "short", day: "numeric" });
+      const dateStr = new Date(b.booking_date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" });
       const startStr = b.start_time?.slice(0, 5);
       const endStr = b.end_time?.slice(0, 5);
       const totalPaid = (rd.payments || []).reduce((s: number, p: { amount: number }) => s + p.amount, 0);

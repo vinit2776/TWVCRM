@@ -122,6 +122,7 @@ export default function SupportPage() {
 
   function formatDate(date: string) {
     return new Date(date).toLocaleDateString("en-IN", {
+      timeZone: "Asia/Kolkata",
       day: "numeric",
       month: "short",
       year: "numeric",

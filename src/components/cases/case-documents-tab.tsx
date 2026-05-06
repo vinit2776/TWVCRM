@@ -175,9 +175,9 @@ export function CaseDocumentsTab({ caseId }: CaseDocumentsTabProps) {
                           {doc.status === "approved" ? "Approved" : "Rejected"}
                           {doc.reviewer?.full_name && <> by <span className="font-medium">{doc.reviewer.full_name}</span></>}
                           {" on "}
-                          {new Date(doc.reviewed_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                          {new Date(doc.reviewed_at).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })}
                           {" at "}
-                          {new Date(doc.reviewed_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" })}
+                          {new Date(doc.reviewed_at).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit" })}
                         </p>
                       )}
                     </div>

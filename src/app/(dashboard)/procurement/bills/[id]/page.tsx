@@ -149,7 +149,7 @@ function AuditEntry({
             <span className="text-xs text-muted-foreground ml-2 bg-muted px-1.5 py-0.5 rounded">{entityLabel}</span>
           </div>
           <span className="text-xs text-muted-foreground shrink-0 mt-0.5">
-            {new Date(row.created_at).toLocaleString("en-IN", { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+            {new Date(row.created_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
           </span>
         </div>
         <p className="text-xs text-muted-foreground mt-0.5">

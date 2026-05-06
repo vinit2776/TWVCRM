@@ -68,6 +68,7 @@ export function ScheduleWidget({ locationFilter }: ScheduleWidgetProps) {
   }, [fetchData]);
 
   const today = new Date().toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
     weekday: "short",
     day: "numeric",
     month: "short",

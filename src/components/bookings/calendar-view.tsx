@@ -103,7 +103,7 @@ export function CalendarView({
           <Button variant="outline" size="sm" onClick={today}>Today</Button>
           <Button variant="outline" size="icon" onClick={nextDay}><ChevronRight className="w-4 h-4" /></Button>
           <span className="font-semibold text-lg ml-2">
-            {currentDate.toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+            {currentDate.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "long", year: "numeric", month: "long", day: "numeric" })}
           </span>
         </div>
         <Select value={locationId} onValueChange={setLocationId}>

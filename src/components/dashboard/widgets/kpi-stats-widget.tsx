@@ -62,7 +62,7 @@ export function KpiStatsWidget({ stats }: KpiStatsWidgetProps) {
               </div>
               <p className="text-[10px] text-muted-foreground">
                 {stats.conversion.this_month.total > 0
-                  ? `${stats.conversion.this_month.won}/${stats.conversion.this_month.total} created in ${new Date().toLocaleDateString("en-IN", { month: "short" })}, won so far`
+                  ? `${stats.conversion.this_month.won}/${stats.conversion.this_month.total} created in ${new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short" })}, won so far`
                   : "No leads created this month yet"}
               </p>
             </div>

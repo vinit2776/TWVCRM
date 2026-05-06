@@ -92,7 +92,7 @@ export async function GET(request: Request) {
   const html = `
     <div style="font-family:Arial,sans-serif;max-width:700px;margin:0 auto">
       <h2 style="color:#1a1a1a;border-bottom:2px solid #f59e0b;padding-bottom:8px">
-        Petty Cash Day Book — ${new Date(targetDate).toLocaleDateString("en-IN", { weekday: "long", year: "numeric", month: "long", day: "numeric" })}
+        Petty Cash Day Book — ${new Date(targetDate).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "long", year: "numeric", month: "long", day: "numeric" })}
       </h2>
 
       <div style="display:flex;gap:20px;margin:16px 0">

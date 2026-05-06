@@ -774,7 +774,7 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
                   {/* Meta */}
                   {row.updated_at && (
                     <p className="text-[10px] text-muted-foreground mt-2">
-                      Last updated {new Date(row.updated_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                      Last updated {new Date(row.updated_at).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })}
                       {row.updater ? ` by ${row.updater.full_name}` : ""}
                     </p>
                   )}

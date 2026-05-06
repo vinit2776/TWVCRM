@@ -887,7 +887,7 @@ export default function ProposalDetailPage({
                   {invoiceSent && proposal.payment_status !== "paid" && (
                     <>
                       <div className="flex justify-between text-xs">
-                        <span className="text-blue-700">Occupation from: {new Date(proposal.occupation_start_date + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
+                        <span className="text-blue-700">Occupation from: {new Date(proposal.occupation_start_date + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })}</span>
                         <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-700">Invoice Sent</Badge>
                       </div>
                       {proposal.razorpay_payment_link_url && (
@@ -1035,7 +1035,7 @@ export default function ProposalDetailPage({
                   return (
                     <div className="mt-2 space-y-2">
                       <div className="flex justify-between text-xs">
-                        <span className="text-amber-700">Created: {linkCreated.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</span>
+                        <span className="text-amber-700">Created: {linkCreated.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })}</span>
                         {isExpired ? (
                           <span className="text-red-600 font-semibold">Expired</span>
                         ) : (
@@ -1230,7 +1230,7 @@ export default function ProposalDetailPage({
               {proposal.proposal_number} — Monthly charge ₹{Number(proposal.total_amount).toLocaleString("en-IN")}
               {gstIsRevise && proposal.occupation_start_date && (
                 <span className="ml-2 text-xs text-blue-600">
-                  (currently set to {new Date(proposal.occupation_start_date + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })})
+                  (currently set to {new Date(proposal.occupation_start_date + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })})
                 </span>
               )}
             </p>

@@ -76,6 +76,7 @@ export async function POST(request: NextRequest) {
 
     const customerName = lead?.first_name || "Client";
     const renewalDate = new Date(contract.end_date as string).toLocaleDateString("en-IN", {
+      timeZone: "Asia/Kolkata",
       day: "2-digit",
       month: "2-digit",
       year: "numeric",

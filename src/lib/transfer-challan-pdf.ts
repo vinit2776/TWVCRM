@@ -29,6 +29,7 @@ const COMPANY_GST = "GST: 33AAACU4245J1ZF";
 function formatDatePDF(dateStr: string | null | undefined): string {
   if (!dateStr) return "—";
   return new Date(dateStr).toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
     year: "numeric",
     month: "long",
     day: "numeric",

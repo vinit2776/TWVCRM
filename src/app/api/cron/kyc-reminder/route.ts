@@ -198,6 +198,7 @@ export async function GET(request: NextRequest) {
 
 function fmtDate(iso: string): string {
   return new Date(iso).toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
     day: "numeric", month: "short", year: "numeric",
   });
 }

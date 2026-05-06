@@ -549,7 +549,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                       <p className="text-sm font-medium text-green-700">KYC Verified</p>
                       {vendor.kyc_verified_at && (
                         <p className="text-xs text-muted-foreground">
-                          Verified on {new Date(vendor.kyc_verified_at).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}
+                          Verified on {new Date(vendor.kyc_verified_at).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })}
                         </p>
                       )}
                     </div>

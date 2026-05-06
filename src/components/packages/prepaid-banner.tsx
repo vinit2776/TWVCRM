@@ -38,6 +38,7 @@ export function PrepaidBanner({
   const isFullyCovered = creditType === "days" || creditType === "bookings" || (creditType === "hours" && topupAmount === 0);
 
   const expiryDate = new Date(purchase.expires_at + "T00:00:00").toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
     day: "numeric",
     month: "short",
   });

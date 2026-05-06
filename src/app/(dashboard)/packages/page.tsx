@@ -620,6 +620,7 @@ export default function PackagesPage() {
                         <td className="px-4 py-3 whitespace-nowrap">{formatCurrency(p.price_paid)}</td>
                         <td className="px-4 py-3 whitespace-nowrap">
                           {new Date(p.expires_at + "T00:00:00").toLocaleDateString("en-IN", {
+                            timeZone: "Asia/Kolkata",
                             day: "numeric", month: "short", year: "numeric",
                           })}
                         </td>

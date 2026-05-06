@@ -116,7 +116,7 @@ export async function GET(request: NextRequest) {
       <div style="font-family:sans-serif;max-width:540px;margin:0 auto">
         <div style="background:#015E65;padding:20px 24px;border-radius:8px 8px 0 0">
           <p style="color:white;font-size:18px;font-weight:700;margin:0">Headcount Not Logged</p>
-          <p style="color:#00AE6C;font-size:13px;margin:4px 0 0">${slotLabel} · ${now.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "long", year: "numeric" })}</p>
+          <p style="color:#00AE6C;font-size:13px;margin:4px 0 0">${slotLabel} · ${now.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "long", day: "numeric", month: "long", year: "numeric" })}</p>
         </div>
         <div style="background:#fff;border:1px solid #e5e7eb;border-top:none;padding:24px;border-radius:0 0 8px 8px">
           <p style="color:#374151;font-size:14px">The following location(s) have <strong>not logged their headcount</strong> for the <strong>${slotLabel}</strong> slot:</p>

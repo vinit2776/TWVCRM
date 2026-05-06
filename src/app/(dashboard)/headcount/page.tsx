@@ -34,11 +34,11 @@ const ROLES_CAN_ENTER = ["admin", "manager", "floor_manager", "office_admin"];
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 function formatTime(iso: string) {
-  return new Date(iso).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", hour12: true });
+  return new Date(iso).toLocaleTimeString("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: true });
 }
 
 function formatDateShort(iso: string) {
-  return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  return new Date(iso).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });
 }
 
 function toLocalDatetimeInput(iso?: string) {
@@ -359,7 +359,7 @@ export default function HeadcountPage() {
             <div className="px-5 py-4 border-b flex items-center justify-between">
               <h2 className="font-semibold">New Headcount Reading</h2>
               <span className="text-xs text-muted-foreground bg-muted px-2 py-1 rounded-md border">
-                {new Date().toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}
+                {new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "numeric", month: "short" })}
               </span>
             </div>
 
@@ -557,7 +557,7 @@ export default function HeadcountPage() {
                 <h3 className="text-sm font-semibold">Today&apos;s Readings</h3>
                 {selectedLocation && (
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    {selectedLocation.name} · {new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                    {selectedLocation.name} · {new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" })}
                   </p>
                 )}
               </div>

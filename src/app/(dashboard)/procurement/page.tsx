@@ -330,7 +330,7 @@ export default function ProcurementDashboard() {
   }, []);
 
   const canSeePrices = ["admin", "manager"].includes(userRole);
-  const currentMonth = new Date().toLocaleString("en-IN", { month: "long", year: "numeric" });
+  const currentMonth = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", month: "long", year: "numeric" });
 
   return (
     <div className="space-y-6">

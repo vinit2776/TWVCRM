@@ -138,7 +138,7 @@ export function AnalyticsTab() {
                         .slice(0, 15)
                         .map(([date, count]) => (
                           <tr key={date} className="border-b last:border-0">
-                            <td className="py-2">{new Date(date).toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" })}</td>
+                            <td className="py-2">{new Date(date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "short", day: "numeric", month: "short" })}</td>
                             <td className="py-2 text-right font-medium">{count}</td>
                           </tr>
                         ))}

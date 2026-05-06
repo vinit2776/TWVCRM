@@ -29,7 +29,7 @@ export function computeBatchDate(type: PaymentBatchType, referenceDate?: Date): 
 /** Format a date as "15 May 2026" */
 export function formatBatchDate(date: Date | string): string {
   const d = typeof date === "string" ? new Date(date + "T00:00:00") : date;
-  return d.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  return d.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });
 }
 
 /** Returns true if the ISO date string is today */

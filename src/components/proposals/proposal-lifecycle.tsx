@@ -30,6 +30,7 @@ const AWAITING_LABEL: Record<string, string> = {
 function fmt(dateStr?: string | null) {
   if (!dateStr) return null;
   return new Date(dateStr).toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
     day: "numeric", month: "short", year: "numeric",
   });
 }

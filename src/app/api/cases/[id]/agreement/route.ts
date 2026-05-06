@@ -564,8 +564,8 @@ export async function PATCH(
       const startDate = vars.start_date_formatted
         ? String(vars.start_date_formatted)
         : vars.start_date
-          ? new Date(String(vars.start_date)).toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" })
-          : new Date().toLocaleDateString("en-IN", { day: "2-digit", month: "2-digit", year: "numeric" });
+          ? new Date(String(vars.start_date)).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric" })
+          : new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "2-digit", month: "2-digit", year: "numeric" });
 
       if (clientPhone && body.send_sms !== false) {
         dltSms.contractWelcome(clientPhone, clientName, startDate, caseId).catch(console.error);

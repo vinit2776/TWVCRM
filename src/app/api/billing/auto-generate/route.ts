@@ -93,7 +93,7 @@ async function notifyDraftBills(
   if (emails.length === 0) return;
 
   const monthLabel = new Date(result.year, result.month - 1)
-    .toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+    .toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "long", year: "numeric" });
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
 
   for (const email of emails) {

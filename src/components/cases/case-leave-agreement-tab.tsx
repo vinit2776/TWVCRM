@@ -155,7 +155,7 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
         new Intl.NumberFormat("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(amt);
 
       const fmtDate = (d: string | Date) =>
-        new Date(d).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" });
+        new Date(d).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "long", day: "numeric" });
 
       const estampValue = Number(editVars.estamp_value) || 0;
 

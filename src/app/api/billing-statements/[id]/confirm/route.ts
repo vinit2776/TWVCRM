@@ -269,7 +269,7 @@ export async function POST(
   // 9. Email to customer + CC accounts/managers
   const customerEmail = lead?.email;
   const customerName = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Customer";
-  const periodLabel = `${new Date(statement.period_start + "T00:00:00").toLocaleDateString("en-IN", { month: "short", year: "numeric" })}`;
+  const periodLabel = `${new Date(statement.period_start + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" })}`;
 
   // Get CC recipients
   const { data: ccUsers } = await adminSupabase

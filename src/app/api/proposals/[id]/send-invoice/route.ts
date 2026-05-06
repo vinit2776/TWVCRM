@@ -171,9 +171,9 @@ export async function POST(
     };
   });
 
-  const periodLabel = startDate.toLocaleDateString("en-IN", { month: "long", year: "numeric" });
-  const startLabel = startDate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
-  const endLabel = new Date(periodEnd + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  const periodLabel = startDate.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "long", year: "numeric" });
+  const startLabel = startDate.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });
+  const endLabel = new Date(periodEnd + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });
 
   const payBlock = razorpayUrl
     ? `<div style="text-align:center;margin:24px 0;">

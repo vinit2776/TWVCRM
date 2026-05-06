@@ -95,7 +95,7 @@ export function PaymentReceipt({ open, onOpenChange, paymentId }: PaymentReceipt
             <div className="flex justify-between text-sm">
               <div>
                 <p><span className="text-muted-foreground">Receipt #:</span> <strong>{receipt.receipt_number}</strong></p>
-                <p><span className="text-muted-foreground">Date:</span> {new Date(receipt.date).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}</p>
+                <p><span className="text-muted-foreground">Date:</span> {new Date(receipt.date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "long", day: "numeric" })}</p>
               </div>
               <div className="text-right">
                 <p><span className="text-muted-foreground">Contract:</span> {receipt.contract_number}</p>

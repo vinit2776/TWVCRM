@@ -794,6 +794,7 @@ export async function POST(request: NextRequest) {
 
     if (phones.length > 0) {
       const bookingDate = new Date(booking.booking_date as string).toLocaleDateString("en-IN", {
+        timeZone: "Asia/Kolkata",
         day: "numeric", month: "short", year: "numeric",
       });
       const guestName = (booking.guest_name as string) ?? "Guest";

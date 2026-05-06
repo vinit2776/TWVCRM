@@ -25,7 +25,7 @@ export async function GET(
     const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
     const start = d.toISOString();
     const end = new Date(d.getFullYear(), d.getMonth() + 1, 1).toISOString();
-    const label = d.toLocaleString("en-IN", { month: "short", year: "2-digit" });
+    const label = d.toLocaleString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "2-digit" });
     months.push({ label, start, end, year: d.getFullYear(), month: d.getMonth() + 1 });
   }
 

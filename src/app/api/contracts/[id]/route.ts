@@ -235,7 +235,7 @@ export async function PATCH(
                   <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
                     <tr><td style="padding:6px 0;color:#666;">Contract</td><td style="padding:6px 0;font-weight:600;">${oldContract.contract_number}</td></tr>
                     <tr><td style="padding:6px 0;color:#666;">Reason</td><td style="padding:6px 0;">${terminationReason}</td></tr>
-                    <tr><td style="padding:6px 0;color:#666;">Terminated</td><td style="padding:6px 0;">${new Date().toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" })}</td></tr>
+                    <tr><td style="padding:6px 0;color:#666;">Terminated</td><td style="padding:6px 0;">${new Date().toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })}</td></tr>
                   </table>
                   <h3 style="color:#dc2626;font-size:14px;margin:20px 0 8px;">Vouchers to Revoke (${issuances.length})</h3>
                   <table style="width:100%;border-collapse:collapse;font-size:13px;">

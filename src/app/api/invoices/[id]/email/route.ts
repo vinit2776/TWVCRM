@@ -170,7 +170,7 @@ export async function POST(
               <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Invoice</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;border-bottom:1px solid #e5e7eb;">${invoice.invoice_number}</td></tr>
               <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Description</td><td style="padding:10px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${invoice.title}</td></tr>
               <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Amount Due</td><td style="padding:10px 16px;font-weight:bold;color:#015E65;font-size:18px;border-bottom:1px solid #e5e7eb;">${totalFormatted}</td></tr>
-              ${invoice.due_date ? `<tr><td style="padding:10px 16px;color:#666;">Due Date</td><td style="padding:10px 16px;color:#333;">${new Date(invoice.due_date).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}</td></tr>` : ""}
+              ${invoice.due_date ? `<tr><td style="padding:10px 16px;color:#666;">Due Date</td><td style="padding:10px 16px;color:#333;">${new Date(invoice.due_date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "long", day: "numeric" })}</td></tr>` : ""}
             </table>
 
             ${payButton}

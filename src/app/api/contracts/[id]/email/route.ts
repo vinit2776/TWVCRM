@@ -75,7 +75,7 @@ export async function POST(
             <table style="border-collapse: collapse; margin: 20px 0; width: 100%; background: #f0faf5; border-radius: 6px;">
               <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Agreement:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">${contract.contract_number}</td></tr>
               <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Monthly Fee:</td><td style="padding: 10px 16px; font-weight: bold; color: #015E65; border-bottom: 1px solid #e5e7eb;">₹${Number(contract.total_amount).toLocaleString("en-IN")}</td></tr>
-              <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Start Date:</td><td style="padding: 10px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">${new Date(contract.start_date).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" })}</td></tr>
+              <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Start Date:</td><td style="padding: 10px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">${new Date(contract.start_date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "long", day: "numeric" })}</td></tr>
               <tr><td style="padding: 10px 16px; color: #666;">Tenure:</td><td style="padding: 10px 16px; color: #333;">${contract.tenure_months} months</td></tr>
             </table>
             <p style="color: #333; font-size: 14px;">Please review the attached agreement carefully. Upon your acceptance, we will proceed with activation of your workspace membership.</p>

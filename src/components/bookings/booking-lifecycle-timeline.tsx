@@ -34,7 +34,11 @@ import type { Booking } from "@/types";
 // ---------------------------------------------------------------------------
 
 function formatTs(iso: string): string {
+  // Always render in IST. Without an explicit timeZone the runtime falls
+  // back to the system tz — Vercel's Node runtime is UTC, so checkout
+  // timestamps were displaying 5h30 behind the actual IST time.
   return new Date(iso).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
     day: "numeric",
     month: "short",
     year: "numeric",

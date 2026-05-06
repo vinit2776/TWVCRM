@@ -33,7 +33,7 @@ function fmt(amount: number): string {
 }
 
 function formatDateInv(date: string): string {
-  return new Date(date + "T00:00:00").toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" });
+  return new Date(date + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });
 }
 
 // Convert number to words (Indian system)

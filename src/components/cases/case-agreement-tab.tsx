@@ -146,7 +146,7 @@ export function CaseAgreementTab({ caseId }: CaseAgreementTabProps) {
         new Intl.NumberFormat("en-IN", { minimumFractionDigits: 0, maximumFractionDigits: 2 }).format(amt);
 
       const formatDateStr = (d: string | Date) =>
-        new Date(d).toLocaleDateString("en-IN", { year: "numeric", month: "long", day: "numeric" });
+        new Date(d).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "long", day: "numeric" });
 
       const updatedVars: Record<string, unknown> = {
         client_name: editVars.client_name,

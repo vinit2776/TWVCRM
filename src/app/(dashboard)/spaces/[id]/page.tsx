@@ -198,7 +198,7 @@ export default function SpaceDetailPage({ params }: { params: Promise<{ id: stri
               className="w-[180px]"
             />
             <span className="text-sm text-muted-foreground">
-              {new Date(scheduleDate + "T00:00:00").toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short", year: "numeric" })}
+              {new Date(scheduleDate + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", weekday: "long", day: "numeric", month: "short", year: "numeric" })}
             </span>
             {scheduleLoading && <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />}
           </div>

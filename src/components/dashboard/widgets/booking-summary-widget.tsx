@@ -43,6 +43,7 @@ export function BookingSummaryWidget({ locationFilter }: BookingSummaryWidgetPro
   }, [fetchData]);
 
   const today = new Date().toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
     day: "numeric",
     month: "short",
     year: "numeric",

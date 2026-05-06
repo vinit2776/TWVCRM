@@ -100,6 +100,7 @@ export default function MyTicketsPage() {
 
   function formatDate(date: string) {
     return new Date(date).toLocaleDateString("en-IN", {
+      timeZone: "Asia/Kolkata",
       day: "numeric",
       month: "short",
       year: "numeric",

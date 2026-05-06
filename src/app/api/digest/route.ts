@@ -73,6 +73,7 @@ export async function GET(request: Request) {
 
   // Build and send email
   const dateLabel = new Date(todayIST + "T00:00:00").toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
     weekday: "long",
     day: "numeric",
     month: "long",
@@ -718,6 +719,7 @@ function stagePill(label: string, count: number, isWarn: boolean): string {
 /** Format a short date like "Mon 21 Apr" for the WTD label */
 function shortDate(iso: string): string {
   return new Date(iso + "T00:00:00").toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
     weekday: "short", day: "numeric", month: "short",
   });
 }
@@ -927,7 +929,7 @@ function buildDigestHtml(
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;">${inv.number}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-weight:600;color:${inv.isOverdue ? "#e53e3e" : "#015E65"};font-size:12px;text-align:right;">${rupees(inv.amount)}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-size:12px;color:${inv.isOverdue ? "#e53e3e" : "#333"};">
-          ${inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—"}
+          ${inv.dueDate ? new Date(inv.dueDate).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" }) : "—"}
           ${inv.isOverdue && inv.daysOverdue ? `<span style="font-size:10px;color:#e53e3e;"> (${inv.daysOverdue}d overdue)</span>` : ""}
         </td>
       </tr>`).join("")}
@@ -957,7 +959,7 @@ function buildDigestHtml(
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;text-align:right;">${rupees(b.total_amount)}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:#333;font-size:12px;text-align:right;">${rupees(b.amount_paid)}</td>
         <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;font-weight:600;color:#e53e3e;font-size:12px;text-align:right;">${rupees(b.total_amount - b.amount_paid)}</td>
-        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:${b.due_date && b.due_date <= todayIST ? "#e53e3e" : "#333"};font-size:12px;">${b.due_date ? new Date(b.due_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" }) : "—"}</td>
+        <td style="padding:8px 12px;border-bottom:1px solid #e5e7eb;color:${b.due_date && b.due_date <= todayIST ? "#e53e3e" : "#333"};font-size:12px;">${b.due_date ? new Date(b.due_date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" }) : "—"}</td>
       </tr>`).join("")}
       <tr style="background:#f7f8fa;">
         <td colspan="4" style="padding:8px 12px;font-weight:600;color:#333;font-size:12px;">Total Outstanding</td>

@@ -218,7 +218,7 @@ export default function AccountingPage() {
                                 {bill.due_date ? (
                                   <span className={isOverdue ? "text-red-600 font-semibold flex items-center gap-1" : "text-muted-foreground"}>
                                     {isOverdue && <AlertCircle className="h-3 w-3" />}
-                                    {new Date(bill.due_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                                    {new Date(bill.due_date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" })}
                                   </span>
                                 ) : <span className="text-muted-foreground">—</span>}
                               </td>
@@ -322,7 +322,7 @@ export default function AccountingPage() {
                                 </td>
                                 <td className="px-4 py-2.5 hidden sm:table-cell text-xs text-muted-foreground">
                                   {bill.invoice_date
-                                    ? new Date(bill.invoice_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "2-digit" })
+                                    ? new Date(bill.invoice_date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "2-digit" })
                                     : "—"}
                                 </td>
                                 <td className="px-4 py-2.5 text-right text-xs font-medium">
@@ -330,7 +330,7 @@ export default function AccountingPage() {
                                 </td>
                                 <td className="px-4 py-2.5 hidden sm:table-cell text-xs text-muted-foreground">
                                   {bill.payment_date
-                                    ? new Date(bill.payment_date).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "2-digit" })
+                                    ? new Date(bill.payment_date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "2-digit" })
                                     : "—"}
                                 </td>
                                 <td className="px-4 py-2.5">

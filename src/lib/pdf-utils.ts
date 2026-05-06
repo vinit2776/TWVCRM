@@ -37,6 +37,7 @@ export function formatCurrency(amount: number): string {
 
 export function formatDate(date: string | Date): string {
   return new Date(date).toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
     year: "numeric",
     month: "long",
     day: "numeric",

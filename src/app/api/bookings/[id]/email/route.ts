@@ -10,7 +10,10 @@ function formatCurrency(amount: number): string {
 }
 
 function formatDate(dateStr: string): string {
-  return new Date(dateStr + "T00:00:00").toLocaleDateString("en-IN", {
+  // Anchor the date in IST so the displayed day matches the booking_date
+  // column regardless of the server's local timezone.
+  return new Date(dateStr + "T00:00:00+05:30").toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata",
     day: "numeric",
     month: "short",
     year: "numeric",
@@ -23,6 +26,21 @@ function formatTime(timeStr: string): string {
   const ampm = hour >= 12 ? "PM" : "AM";
   const h12 = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour;
   return `${h12}:${m} ${ampm}`;
+}
+
+// IST stamp for check-in / check-out times in transactional emails. The
+// runtime tz on Vercel is UTC, so toLocaleString with no timeZone option
+// sent emails with the wrong (UTC) wall-clock time.
+function formatIstStamp(date: Date | string): string {
+  return new Date(date).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
 }
 
 export async function POST(
@@ -104,7 +122,7 @@ export async function POST(
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Location</td><td style="padding:8px;border:1px solid #ddd;">${locationName || "—"}</td></tr>
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Room</td><td style="padding:8px;border:1px solid #ddd;">${spaceName}</td></tr>
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Customer</td><td style="padding:8px;border:1px solid #ddd;">${customerName}</td></tr>
-            <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Check-in Time</td><td style="padding:8px;border:1px solid #ddd;">${new Date().toLocaleString("en-IN")}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Check-in Time</td><td style="padding:8px;border:1px solid #ddd;">${formatIstStamp(new Date())}</td></tr>
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Booking</td><td style="padding:8px;border:1px solid #ddd;">${booking.booking_number}</td></tr>
           </table>
         </div>
@@ -264,7 +282,7 @@ export async function POST(
           <table style="width:100%;border-collapse:collapse;margin:16px 0;">
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Room</td><td style="padding:8px;border:1px solid #ddd;">${spaceName}</td></tr>
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Location</td><td style="padding:8px;border:1px solid #ddd;">${locationName}</td></tr>
-            <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Check-out Time</td><td style="padding:8px;border:1px solid #ddd;">${booking.check_out_at ? new Date(booking.check_out_at).toLocaleString("en-IN") : "N/A"}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Check-out Time</td><td style="padding:8px;border:1px solid #ddd;">${booking.check_out_at ? formatIstStamp(booking.check_out_at) : "N/A"}</td></tr>
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Booking</td><td style="padding:8px;border:1px solid #ddd;">${booking.booking_number}</td></tr>
           </table>
           <p style="color:#666;">Please arrange cleaning for the room at the earliest.</p>

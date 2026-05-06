@@ -122,6 +122,7 @@ export async function POST(
 
   if (customerEmail) {
     const formattedDate = new Date(receivedAt).toLocaleDateString("en-IN", {
+      timeZone: "Asia/Kolkata",
       year: "numeric", month: "long", day: "numeric",
     });
 
