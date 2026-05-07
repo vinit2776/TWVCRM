@@ -618,7 +618,23 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const customerPhone = booking.lead?.phone || booking.guest_phone;
   // activeVoucher replaced by WifiVoucherCard which handles multi-voucher display
   const outstandingTotal = outstandingCharges.reduce((s, c) => s + c.total, 0);
-  const canEditPricing = booking.status !== "cancelled";
+
+  // Pricing is locked once any of the following is true — changing the
+  // rate after a customer has paid creates a silent mismatch between the
+  // receipt they were given and the booking record (and breaks the
+  // monthly statement reconciliation). The server enforces the same
+  // rules; this is just the UI mirror so the pencil doesn't tease.
+  const hasVerifiedPayment = existingPayments.some((p) => p.status === "verified");
+  const isTerminalStatus = ["cancelled", "checked_out", "no_show"].includes(booking.status);
+  const isPaid = booking.payment_status === "paid";
+  const canEditPricing = !isTerminalStatus && !isPaid && !hasVerifiedPayment;
+  const lockReason = isTerminalStatus
+    ? `Locked — booking is ${booking.status}`
+    : isPaid
+      ? "Locked — payment already collected"
+      : hasVerifiedPayment
+        ? "Locked — verified payment exists"
+        : "";
 
   return (
     <div className="space-y-6">
@@ -1151,7 +1167,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               ) : (
                 <div className="flex items-center gap-1">
                   <span>{formatCurrency(booking.hourly_rate)}</span>
-                  {canEditPricing && (
+                  {canEditPricing ? (
                     <button
                       onClick={() => {
                         setDraftRate(Number(booking.hourly_rate).toFixed(2));
@@ -1163,23 +1179,25 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                     >
                       <Pencil className="h-3 w-3" />
                     </button>
+                  ) : (
+                    <span
+                      className="text-[10px] text-muted-foreground/70 ml-1.5 px-1.5 py-0.5 rounded bg-muted/50"
+                      title={lockReason}
+                    >
+                      🔒
+                    </span>
                   )}
                 </div>
               )}
             </div>
 
-            {/* GST breakdown */}
-            {booking.gst_rate && booking.gst_amount ? (
-              <div className="flex justify-between text-sm text-muted-foreground">
-                <span>GST ({booking.gst_rate}%)</span>
-                <span>{formatCurrency(booking.gst_amount)}</span>
-              </div>
-            ) : null}
-
-            {/* Total Amount — auto-recalculated or direct override */}
-            <div className="flex justify-between items-center font-medium">
-              <span className="text-muted-foreground">Total (incl. GST)</span>
-              {editingPricing ? (
+            {/* Subtotal (ex-GST) — editable so staff can apply a custom
+                discount that the rate × duration formula doesn't capture
+                (e.g. goodwill credit, partial waiver). GST and grand
+                total update live from this field. */}
+            {editingPricing && (
+              <div className="flex justify-between items-center text-sm">
+                <span className="text-muted-foreground">Subtotal (ex-GST)</span>
                 <Input
                   type="number"
                   min="0"
@@ -1189,6 +1207,35 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                   className="h-7 w-28 text-right text-sm"
                   disabled={pricingSaving}
                 />
+              </div>
+            )}
+
+            {/* GST breakdown — recalculated live from draftTotal during edit
+                so the user sees the new GST and grand total before saving.
+                Static otherwise. */}
+            {booking.gst_rate ? (
+              <div className="flex justify-between text-sm text-muted-foreground">
+                <span>GST ({booking.gst_rate}%)</span>
+                <span>
+                  {editingPricing
+                    ? formatCurrency(((parseFloat(draftTotal) || 0) * Number(booking.gst_rate)) / 100)
+                    : formatCurrency(booking.gst_amount || 0)}
+                </span>
+              </div>
+            ) : null}
+
+            {/* Total Amount — during edit shows the live grand total
+                (subtotal + freshly computed GST). Server recomputes the
+                same way on save, so what you see is what gets stored. */}
+            <div className="flex justify-between items-center font-medium">
+              <span className="text-muted-foreground">Total (incl. GST)</span>
+              {editingPricing ? (
+                <span>
+                  {formatCurrency(
+                    (parseFloat(draftTotal) || 0) *
+                      (1 + Number(booking.gst_rate || 0) / 100)
+                  )}
+                </span>
               ) : (
                 <span>{formatCurrency(Number(booking.total_amount_with_gst) || booking.total_amount)}</span>
               )}

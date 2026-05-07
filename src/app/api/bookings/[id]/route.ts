@@ -72,18 +72,60 @@ export async function PATCH(
 
   // ── Update pricing ──
   if (body.action === "update_pricing") {
-    if (booking.status === "cancelled") {
-      return NextResponse.json({ error: "Cannot update pricing on a cancelled booking" }, { status: 400 });
+    // Lock pricing once the booking is in a terminal state OR money has
+    // already been collected. Editing the rate after the customer paid
+    // ₹X creates a silent mismatch between the receipt they were given
+    // and the booking record — the original reason finance flagged this.
+    if (["cancelled", "checked_out", "no_show"].includes(booking.status)) {
+      return NextResponse.json(
+        { error: `Cannot update pricing on a ${booking.status} booking` },
+        { status: 400 }
+      );
     }
+    if (booking.payment_status === "paid") {
+      return NextResponse.json(
+        { error: "Cannot change pricing — payment has already been collected. Issue a refund or new booking instead." },
+        { status: 400 }
+      );
+    }
+    // Defence in depth: even if booking.payment_status is somehow stale,
+    // verified booking_payments is the source of truth.
+    const { data: paidPayments } = await supabase
+      .from("booking_payments")
+      .select("id")
+      .eq("booking_id", id)
+      .eq("status", "verified")
+      .limit(1);
+    if (paidPayments && paidPayments.length > 0) {
+      return NextResponse.json(
+        { error: "Cannot change pricing — verified payments exist for this booking" },
+        { status: 400 }
+      );
+    }
+
     const newRate = Number(body.hourly_rate);
     const newTotal = Number(body.total_amount);
     if (isNaN(newRate) || newRate < 0)
       return NextResponse.json({ error: "hourly_rate must be 0 or greater" }, { status: 400 });
     if (isNaN(newTotal) || newTotal < 0)
       return NextResponse.json({ error: "total_amount must be 0 or greater" }, { status: 400 });
+
+    // Recompute GST against the existing gst_rate. Without this the
+    // rate change updated total_amount but left gst_amount /
+    // total_amount_with_gst pointing at the old figure — receipts and
+    // the Collect Payment dialog showed conflicting totals.
+    const gstRate = Number(booking.gst_rate ?? 0);
+    const gstAmount = parseFloat((newTotal * gstRate / 100).toFixed(2));
+    const totalWithGst = parseFloat((newTotal + gstAmount).toFixed(2));
+
     const { data: updated, error: updateErr } = await supabase
       .from("bookings")
-      .update({ hourly_rate: newRate, total_amount: newTotal })
+      .update({
+        hourly_rate: newRate,
+        total_amount: newTotal,
+        gst_amount: gstAmount,
+        total_amount_with_gst: totalWithGst,
+      })
       .eq("id", id)
       .select(BOOKING_SELECT)
       .single();
@@ -121,11 +163,20 @@ export async function PATCH(
     const newDuration = (reh * 60 + rem - rsh * 60 - rsm) / 60;
     const newTotal = Number(booking.hourly_rate) * newDuration;
 
+    // Keep GST in sync with the recalculated subtotal (same fix as the
+    // update_pricing path above — without this the receipt would show
+    // the old GST against the new ex-GST total).
+    const gstRate = Number(booking.gst_rate ?? 0);
+    const gstAmount = parseFloat((newTotal * gstRate / 100).toFixed(2));
+    const totalWithGst = parseFloat((newTotal + gstAmount).toFixed(2));
+
     updates.booking_date = new_date;
     updates.start_time = new_start_time;
     updates.end_time = new_end_time;
     updates.duration_hours = newDuration;
     updates.total_amount = newTotal;
+    updates.gst_amount = gstAmount;
+    updates.total_amount_with_gst = totalWithGst;
     updates.reschedule_count = (booking.reschedule_count || 0) + 1;
     if (!booking.original_booking_date) {
       updates.original_booking_date = booking.booking_date;
@@ -169,9 +220,18 @@ export async function PATCH(
     const extTotal = Number(booking.hourly_rate) * extDuration;
     const priceDiff = extTotal - Number(booking.total_amount);
 
+    // Same GST recompute as update_pricing / reschedule — without it the
+    // extended booking carried the original (smaller) gst_amount and
+    // total_amount_with_gst forward.
+    const extGstRate = Number(booking.gst_rate ?? 0);
+    const extGstAmount = parseFloat((extTotal * extGstRate / 100).toFixed(2));
+    const extTotalWithGst = parseFloat((extTotal + extGstAmount).toFixed(2));
+
     updates.end_time = new_end_time;
     updates.duration_hours = extDuration;
     updates.total_amount = extTotal;
+    updates.gst_amount = extGstAmount;
+    updates.total_amount_with_gst = extTotalWithGst;
 
     const { data: extUpdated, error: extError } = await supabase
       .from("bookings")
