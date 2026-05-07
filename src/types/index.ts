@@ -651,6 +651,7 @@ export type AuditEntityType =
   | "space"
   | "booking"
   | "booking_payment"
+  | "booking_credit"
   | "app_setting"
   | "contract_facility"
   | "accounting_period"
@@ -892,6 +893,35 @@ export interface BookingPayment {
   creator?: { id: string; full_name: string };
   created_at: string;
   updated_at: string;
+}
+
+// ==========================================
+// Booking Credits — partial-checkout carry-forward
+// ==========================================
+export type BookingCreditStatus = "active" | "exhausted" | "expired" | "revoked";
+
+export interface BookingCredit {
+  id: string;
+  phone: string;
+  location_id: string;
+  lead_id?: string | null;
+  hours_total: number;
+  hours_used: number;
+  hourly_rate_snapshot: number;
+  issued_from_booking_id?: string | null;
+  issued_at: string;
+  expires_at: string;
+  status: BookingCreditStatus;
+  notes?: string | null;
+  issued_by?: string | null;
+  revoked_by?: string | null;
+  revoked_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  // Optional joined fields when the API selects them
+  location?: { id: string; name: string; code: string } | null;
+  lead?: { id: string; first_name: string; last_name: string; company?: string | null } | null;
+  issued_from_booking?: { id: string; booking_number: string } | null;
 }
 
 // ==========================================

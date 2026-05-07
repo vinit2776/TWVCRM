@@ -330,7 +330,68 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // GST calculation — conference room bookings attract 18% GST
+  // 3a-bis. Booking credit redemption (partial-checkout carry-forward)
+  // The customer (or staff) chose to apply an existing credit to this
+  // booking. The credit covers `hours_to_redeem` hours at the credit's
+  // *snapshot* hourly rate — protects the customer if rates have moved
+  // between issue and redemption (locked policy: protect the customer).
+  //
+  // Discount is applied to the ex-GST subtotal so GST is collected on
+  // whatever the customer actually pays in cash. We don't pro-rate the
+  // facility charges — the customer still pays full price for any
+  // upcharged facilities (projector, etc.).
+  let creditId: string | null = null;
+  let creditDiscount = 0;
+  let creditHoursRedeemed = 0;
+  if (body.credit_id) {
+    const { data: credit, error: cErr } = await supabase
+      .from("booking_credits")
+      .select("id, location_id, hours_total, hours_used, hourly_rate_snapshot, expires_at, status")
+      .eq("id", body.credit_id)
+      .single();
+
+    if (cErr || !credit) {
+      return NextResponse.json({ error: "Credit not found" }, { status: 404 });
+    }
+    if (credit.status !== "active") {
+      return NextResponse.json({ error: `Credit is ${credit.status} — not redeemable` }, { status: 400 });
+    }
+    if (credit.location_id !== space.location_id) {
+      return NextResponse.json(
+        { error: "Credit is for a different centre — credits are not transferable across locations" },
+        { status: 400 }
+      );
+    }
+    if (new Date(credit.expires_at) <= new Date()) {
+      return NextResponse.json({ error: "Credit has expired" }, { status: 400 });
+    }
+
+    const remaining = Number(credit.hours_total) - Number(credit.hours_used);
+    const requested = Number(body.hours_to_redeem ?? remaining);
+    if (!Number.isFinite(requested) || requested < 1 || !Number.isInteger(requested)) {
+      return NextResponse.json({ error: "hours_to_redeem must be a whole number ≥ 1" }, { status: 400 });
+    }
+    // Cap redemption at both the credit's remaining hours AND the
+    // booking's actual duration — paying for "5 hrs of credit" on a
+    // 3-hour booking would silently waste 2 hrs of the customer's credit.
+    const maxRedeemable = Math.min(remaining, Math.floor(durationHours));
+    if (requested > maxRedeemable) {
+      return NextResponse.json(
+        { error: `Cannot redeem ${requested}h — only ${maxRedeemable}h applicable (booking is ${durationHours}h, credit has ${remaining}h)` },
+        { status: 400 }
+      );
+    }
+
+    creditId = credit.id;
+    creditHoursRedeemed = requested;
+    creditDiscount = parseFloat((requested * Number(credit.hourly_rate_snapshot)).toFixed(2));
+    totalAmount = parseFloat((totalAmount - creditDiscount).toFixed(2));
+    if (totalAmount < 0) totalAmount = 0; // defensive — shouldn't happen given the cap above
+  }
+
+  // GST calculation — conference room bookings attract 18% GST. Computed
+  // AFTER credit discount so customers are billed GST only on the cash
+  // portion. Keeps the receipt aligned with what's actually collected.
   const gstRate = 18;
   const gstAmount = parseFloat((totalAmount * gstRate / 100).toFixed(2));
   const totalAmountWithGst = parseFloat((totalAmount + gstAmount).toFixed(2));
@@ -601,6 +662,7 @@ export async function POST(request: NextRequest) {
       prepaid_purchase_id: prepaidPurchaseId || null,
       prepaid_credits_used: prepaidCreditsUsed || null,
       prepaid_topup_amount: prepaidTopupAmount || null,
+      credit_redeemed_id: creditId,
       notes: input.notes,
       aggregator_booking_id: input.aggregator_booking_id || null,
       num_attendees: input.num_attendees ? Number(input.num_attendees) : null,
@@ -629,6 +691,42 @@ export async function POST(request: NextRequest) {
       .from("usage_charges")
       .update({ booking_id: booking.id })
       .eq("id", usageChargeId);
+  }
+
+  // 6a-bis. If a credit was redeemed, increment hours_used and flip the
+  // credit to 'exhausted' if fully consumed. Re-fetched to avoid races
+  // with another concurrent redemption (rare but possible if two staff
+  // open the same lead at once).
+  if (creditId && creditHoursRedeemed > 0 && booking) {
+    const { data: freshCredit } = await supabase
+      .from("booking_credits")
+      .select("hours_total, hours_used")
+      .eq("id", creditId)
+      .single();
+    if (freshCredit) {
+      const newHoursUsed = parseFloat(
+        (Number(freshCredit.hours_used) + creditHoursRedeemed).toFixed(1)
+      );
+      const isExhausted = newHoursUsed >= Number(freshCredit.hours_total);
+      await supabase
+        .from("booking_credits")
+        .update({
+          hours_used: newHoursUsed,
+          ...(isExhausted ? { status: "exhausted" } : {}),
+        })
+        .eq("id", creditId);
+      logAudit(supabase, {
+        entityType: "booking_credit",
+        entityId: creditId,
+        action: "update",
+        performedBy: dbUser.id,
+        changes: {
+          hours_used: { old: freshCredit.hours_used, new: newHoursUsed },
+          redeemed_on_booking_id: { old: null, new: booking.id },
+          ...(isExhausted ? { status: { old: "active", new: "exhausted" } } : {}),
+        },
+      });
+    }
   }
 
   // 6b. Handle prepaid redemption — deduct credits & log

@@ -45,6 +45,7 @@ import { ActivityForm } from "@/components/activities/activity-form";
 import { LeadProposalsTab } from "@/components/leads/lead-proposals-tab";
 import { LeadContractsTab } from "@/components/leads/lead-contracts-tab";
 import { LeadDocumentsTab } from "@/components/leads/lead-documents-tab";
+import { LeadCreditsCard } from "@/components/leads/lead-credits-card";
 import { LeadTasksTab } from "@/components/leads/lead-tasks-tab";
 import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
 import { LeadLifecycle } from "@/components/leads/lead-lifecycle";
@@ -380,6 +381,10 @@ export default function LeadDetailPage({
                   </div>
                 </CardContent>
               </Card>
+
+              {/* Time Credits — partial-checkout carry-forward (auto-hides
+                  when the lead has no credits in any state) */}
+              <LeadCreditsCard leadId={lead.id} />
 
               {/* Tags */}
               {(lead.tags ?? []).length > 0 && (

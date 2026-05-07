@@ -7,7 +7,7 @@ import {
   ArrowLeft, LogIn, LogOut, XCircle, Mail, Loader2,
   Clock, Users as UsersIcon, IndianRupee, Wifi,
   Phone, AlertTriangle, ShieldCheck, Star,
-  Banknote, CheckCircle, Calendar, Timer, Copy,
+  Banknote, CheckCircle, Calendar, Timer, Copy, Coins,
   Download, MessageCircle, Repeat, RotateCcw,
   StickyNote, Receipt, Pencil, Check, X, Plus,
 } from "lucide-react";
@@ -26,6 +26,7 @@ const NoShowRefundDialog     = dynamic(() => import("@/components/bookings/no-sh
 const CheckoutFeedbackDialog = dynamic(() => import("@/components/bookings/checkout-feedback-dialog").then(m => m.CheckoutFeedbackDialog), { ssr: false });
 const RescheduleDialog       = dynamic(() => import("@/components/bookings/reschedule-dialog").then(m => m.RescheduleDialog),               { ssr: false });
 const ExtendBookingDialog    = dynamic(() => import("@/components/bookings/extend-booking-dialog").then(m => m.ExtendBookingDialog),       { ssr: false });
+const DeferBookingDialog     = dynamic(() => import("@/components/bookings/defer-booking-dialog").then(m => m.DeferBookingDialog),         { ssr: false });
 const AddUsageChargeDialog   = dynamic(() => import("@/components/billing/add-usage-charge-dialog").then(m => m.AddUsageChargeDialog),     { ssr: false });
 const WaiverRequestDialog    = dynamic(() => import("@/components/bookings/waiver-request-dialog").then(m => m.WaiverRequestDialog),       { ssr: false });
 import { BookingAddonsSection } from "@/components/bookings/booking-addons-section";
@@ -76,6 +77,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [feedbackDialogOpen, setFeedbackDialogOpen] = useState(false);
   const [rescheduleDialogOpen, setRescheduleDialogOpen] = useState(false);
   const [extendDialogOpen, setExtendDialogOpen] = useState(false);
+  const [deferDialogOpen, setDeferDialogOpen] = useState(false);
   const [logChargeOpen, setLogChargeOpen] = useState(false);
   const [waiverOpen, setWaiverOpen] = useState(false);
   const [convertingFromBill, setConvertingFromBill] = useState(false);
@@ -617,6 +619,19 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               </Button>
               <Button variant="outline" size="sm" onClick={() => setExtendDialogOpen(true)}>
                 <Timer className="mr-1 h-4 w-4" />Extend
+              </Button>
+              {/* Defer remaining time — partial-checkout carry-forward.
+                  Floor manager+ only (server enforces); we still show the
+                  button to all staff so juniors can flag the request,
+                  and the API gate fires on submit. */}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setDeferDialogOpen(true)}
+                className="border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                title="Customer leaving early — issue a credit for unused hours"
+              >
+                <Coins className="mr-1 h-4 w-4" />Defer
               </Button>
             </>
           )}
@@ -1529,6 +1544,19 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         currentEnd={booking.end_time}
         hourlyRate={booking.hourly_rate}
         onExtended={fetchBooking}
+      />
+
+      <DeferBookingDialog
+        open={deferDialogOpen}
+        onOpenChange={setDeferDialogOpen}
+        bookingId={booking.id}
+        bookingNumber={booking.booking_number || ""}
+        bookedHours={Number(booking.duration_hours || 0)}
+        hourlyRate={Number(booking.hourly_rate || 0)}
+        checkInAt={booking.check_in_at || null}
+        customerPhone={booking.booker_phone || booking.guest_phone || booking.lead?.phone || ""}
+        locationName={booking.location?.name || ""}
+        onSuccess={fetchBooking}
       />
 
       <AddUsageChargeDialog

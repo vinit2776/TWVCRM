@@ -516,6 +516,21 @@ export async function POST(
         ${paymentSection}
         ${voucherSection}
         <p style="color:#333;font-size:14px;">Please arrive 5 minutes before your scheduled time. A calendar invite (.ics) is attached for your convenience.</p>
+
+        <!-- Booking policy footer — added when the partial-checkout
+             carry-forward feature shipped. Tells the customer up-front
+             how unused time is handled, so the moment-of-checkout
+             conversation is consistent with what they signed up for. -->
+        <div style="background:#f9fafb;border-left:3px solid #015E65;padding:14px 18px;margin:20px 0 8px;border-radius:0 6px 6px 0;">
+          <p style="color:#015E65;font-size:12px;font-weight:600;margin:0 0 6px;">About your booking</p>
+          <ul style="color:#374151;font-size:11.5px;margin:0;padding-left:18px;line-height:1.6;">
+            <li>Your booking is ${booking.duration_hours} hour${booking.duration_hours !== 1 ? "s" : ""} at <strong>${locationName || "—"}</strong>, scheduled ${startTime}–${endTime}.</li>
+            <li>If you check in but leave before your end time, unused full hours can be carried forward as credit valid for 30 days at <strong>${locationName || "—"}</strong>. Fractional time (under 1 hour) is forfeited.</li>
+            <li>No refunds once you've checked in.</li>
+            <li>Mention your phone number when redeeming credit on a future booking.</li>
+          </ul>
+        </div>
+
         <p style="color:#333;font-size:14px;">We look forward to hosting you!</p>
         <p style="color:#333;font-size:14px;">Warm regards,<br/><strong>${confirmSenderName}</strong><br/>The WorkVilla</p>
         <p style="color:#666;font-size:12px;margin-top:16px;">For any queries, write to us at <a href="mailto:contact@theworkvilla.com" style="color:#015E65;">contact@theworkvilla.com</a> or call <strong>+91 97910 97900</strong>.</p>

@@ -20,6 +20,8 @@ import { toast } from "sonner";
 import type { Space, SpaceFacility, PrepaidPurchase } from "@/types";
 import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
 import { PrepaidBanner } from "@/components/packages/prepaid-banner";
+import { BookingCreditBanner } from "@/components/bookings/booking-credit-banner";
+import type { BookingCredit } from "@/types";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
 import { WaitlistDialog } from "@/components/bookings/waitlist-dialog";
 import { CreateRecurringDialog } from "@/components/bookings/create-recurring-dialog";
@@ -131,6 +133,21 @@ function NewBookingForm() {
   // Prepaid package detection
   const [activePurchase, setActivePurchase] = useState<PrepaidPurchase | null>(null);
   const [usePrepaid, setUsePrepaid] = useState(true);
+
+  // Partial-checkout carry-forward credit (separate from prepaid packs).
+  // Surfaces only when the customer's phone has an active credit at the
+  // selected centre. Lifted to this level so the booking submit can pick
+  // up credit_id + hours_to_redeem.
+  const [appliedCredit, setAppliedCredit] = useState<
+    | { credit: BookingCredit & { hours_remaining: number }; hours_to_redeem: number }
+    | null
+  >(null);
+
+  // Clear an applied credit if the user changes phone or centre — the
+  // applied credit's location_id / phone might no longer match.
+  useEffect(() => {
+    setAppliedCredit(null);
+  }, [bookerPhone, locationId]);
   const [prepaidChecking, setPrepaidChecking] = useState(false);
 
   // Waitlist
@@ -595,6 +612,8 @@ function NewBookingForm() {
         hourly_rate: effectiveRate,
         advance_payment: advancePayment,
         prepaid_purchase_id: (usePrepaid && activePurchase) ? activePurchase.id : undefined,
+        credit_id: appliedCredit?.credit.id,
+        hours_to_redeem: appliedCredit?.hours_to_redeem,
         settle_charge_ids: selectedChargeIds.size > 0 ? Array.from(selectedChargeIds) : undefined,
         send_sms: sendSms,
         send_whatsapp: sendWhatsapp,
@@ -1265,6 +1284,18 @@ function NewBookingForm() {
           effectiveRate={effectiveRate}
         />
       )}
+
+      {/* Partial-checkout credit banner — appears only when this customer
+          has an active credit at THIS centre. Independent of prepaid
+          packs (different mechanism, different ledger). */}
+      <BookingCreditBanner
+        bookerPhone={bookerPhone}
+        locationId={locationId}
+        durationHours={durationHours}
+        applied={appliedCredit}
+        onApply={(credit, hours) => setAppliedCredit({ credit, hours_to_redeem: hours })}
+        onClear={() => setAppliedCredit(null)}
+      />
 
       {/* Facilities */}
       {selectedSpace?.facilities && selectedSpace.facilities.length > 0 && (
