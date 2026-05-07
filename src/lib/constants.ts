@@ -415,6 +415,65 @@ export const BOOKING_STATUS_COLORS: Record<string, string> = {
   no_show: "bg-orange-100 text-orange-800",
 };
 
+// Cancellation reason picklist — locked taxonomy. The "suspected_fake_
+// booking" value triggers an auto-prefilled danger-severity caution on
+// the lead so future staff get a loud warning. "other" requires staff
+// to fill the details field.
+export const BOOKING_CANCELLATION_REASONS = [
+  "customer_requested",
+  "no_show",
+  "overbooking_error",
+  "suspected_fake_booking",
+  "centre_operational_issue",
+  "other",
+] as const;
+
+export const BOOKING_CANCELLATION_REASON_LABELS: Record<string, string> = {
+  customer_requested:        "Customer requested",
+  no_show:                   "No-show / didn't arrive",
+  overbooking_error:         "Overbooking error",
+  suspected_fake_booking:    "Suspected fake booking",
+  centre_operational_issue:  "Centre operational issue",
+  other:                     "Other (please specify)",
+};
+
+// Lead caution severity — drives the colour and the new-booking gate.
+// danger requires explicit acknowledgement before staff can proceed.
+export const LEAD_CAUTION_SEVERITY_LABELS: Record<string, string> = {
+  info:    "Info",
+  warning: "Warning",
+  danger:  "Danger",
+};
+
+export const LEAD_CAUTION_SEVERITY_COLORS: Record<string, string> = {
+  info:    "bg-slate-100 text-slate-700 border-slate-300",
+  warning: "bg-amber-50 text-amber-800 border-amber-300",
+  danger:  "bg-red-50 text-red-800 border-red-400",
+};
+
+// Refund request reason picklist — used by the cancel dialog when
+// payment was collected and the cancellation qualifies for refund.
+export const REFUND_REQUEST_REASON_LABELS: Record<string, string> = {
+  centre_at_fault:       "Centre at fault",
+  within_policy_window:  "Cancelled within policy window",
+  goodwill:              "Goodwill gesture",
+  other:                 "Other (please specify)",
+};
+
+export const REFUND_REQUEST_STATUS_LABELS: Record<string, string> = {
+  pending_approval:  "Pending approval",
+  approved:          "Approved — awaiting refund",
+  rejected:          "Rejected",
+  processed:         "Refund processed",
+};
+
+export const REFUND_REQUEST_STATUS_COLORS: Record<string, string> = {
+  pending_approval:  "bg-amber-100 text-amber-800",
+  approved:          "bg-blue-100 text-blue-800",
+  rejected:          "bg-red-100 text-red-800",
+  processed:         "bg-green-100 text-green-800",
+};
+
 export const BOOKING_CUSTOMER_TYPES = [
   "contract_holder",
   "walk_in",

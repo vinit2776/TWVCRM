@@ -46,6 +46,7 @@ import { LeadProposalsTab } from "@/components/leads/lead-proposals-tab";
 import { LeadContractsTab } from "@/components/leads/lead-contracts-tab";
 import { LeadDocumentsTab } from "@/components/leads/lead-documents-tab";
 import { LeadCreditsCard } from "@/components/leads/lead-credits-card";
+import { LeadCautionsBanner } from "@/components/leads/lead-cautions-banner";
 import { LeadTasksTab } from "@/components/leads/lead-tasks-tab";
 import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
 import { LeadLifecycle } from "@/components/leads/lead-lifecycle";
@@ -155,6 +156,12 @@ export default function LeadDetailPage({
         </TabsList>
 
         <TabsContent value="overview" className="space-y-6 mt-4">
+          {/* Cautions banner — surfaced at the very top of the overview
+              tab, before any lead details, because it affects how staff
+              interacts with this customer. Auto-hides if no active
+              cautions exist. */}
+          <LeadCautionsBanner leadId={lead.id} mode="profile" />
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Main info */}
             <div className="lg:col-span-2 space-y-6">

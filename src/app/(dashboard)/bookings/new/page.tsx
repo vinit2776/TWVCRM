@@ -21,6 +21,7 @@ import type { Space, SpaceFacility, PrepaidPurchase } from "@/types";
 import { CustomerHistoryCard } from "@/components/bookings/customer-history-card";
 import { PrepaidBanner } from "@/components/packages/prepaid-banner";
 import { BookingCreditBanner } from "@/components/bookings/booking-credit-banner";
+import { LeadCautionsBanner } from "@/components/leads/lead-cautions-banner";
 import type { BookingCredit } from "@/types";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
 import { WaitlistDialog } from "@/components/bookings/waitlist-dialog";
@@ -148,6 +149,16 @@ function NewBookingForm() {
   useEffect(() => {
     setAppliedCredit(null);
   }, [bookerPhone, locationId]);
+
+  // Lead caution acknowledgement gate — staff must explicitly tick
+  // "I've seen this" on every danger-severity caution before they can
+  // submit the booking. Lifted from LeadCautionsBanner via callback.
+  const [allDangerCautionsAcked, setAllDangerCautionsAcked] = useState(true);
+  // Reset to "all acked" whenever the lead changes — the banner will
+  // re-evaluate and lock again if the new lead has danger cautions.
+  useEffect(() => {
+    setAllDangerCautionsAcked(true);
+  }, [leadId]);
   const [prepaidChecking, setPrepaidChecking] = useState(false);
 
   // Waitlist
@@ -1285,6 +1296,18 @@ function NewBookingForm() {
         />
       )}
 
+      {/* Lead-caution banner — fires when the resolved lead has any
+          active cautions (suspected-fake-booking flags from previous
+          cancellations, repeat-no-show notes, etc.). Danger-severity
+          cautions block submission until explicitly acknowledged. */}
+      {leadId && (
+        <LeadCautionsBanner
+          leadId={leadId}
+          mode="booking-gate"
+          onAcknowledgementChange={setAllDangerCautionsAcked}
+        />
+      )}
+
       {/* Partial-checkout credit banner — appears only when this customer
           has an active credit at THIS centre. Independent of prepaid
           packs (different mechanism, different ledger). */}
@@ -1678,7 +1701,7 @@ function NewBookingForm() {
             className="w-full mt-3"
             size="lg"
             onClick={handleSubmit}
-            disabled={saving || !spaceId || !startTime || !endTime || durationHours <= 0 || !bookerPhone.trim()}
+            disabled={saving || !spaceId || !startTime || !endTime || durationHours <= 0 || !bookerPhone.trim() || !allDangerCautionsAcked}
           >
             {saving ? (
               <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Creating Booking...</>

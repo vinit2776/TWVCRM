@@ -652,6 +652,8 @@ export type AuditEntityType =
   | "booking"
   | "booking_payment"
   | "booking_credit"
+  | "lead_caution"
+  | "refund_request"
   | "app_setting"
   | "contract_facility"
   | "accounting_period"
@@ -922,6 +924,75 @@ export interface BookingCredit {
   location?: { id: string; name: string; code: string } | null;
   lead?: { id: string; first_name: string; last_name: string; company?: string | null } | null;
   issued_from_booking?: { id: string; booking_number: string } | null;
+}
+
+// ==========================================
+// Cancellation flow — reasons, lead cautions, refund requests
+// ==========================================
+
+export type BookingCancellationReason =
+  | "customer_requested"
+  | "no_show"
+  | "overbooking_error"
+  | "suspected_fake_booking"
+  | "centre_operational_issue"
+  | "other";
+
+export type LeadCautionSeverity = "info" | "warning" | "danger";
+
+export interface LeadCaution {
+  id: string;
+  lead_id: string;
+  booking_id?: string | null;
+  note: string;
+  severity: LeadCautionSeverity;
+  is_active: boolean;
+  created_by?: string | null;
+  dismissed_by?: string | null;
+  dismissed_at?: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined when fetched via API
+  creator?: { id: string; full_name: string } | null;
+  booking?: { id: string; booking_number: string } | null;
+}
+
+export type RefundRequestReason =
+  | "centre_at_fault"
+  | "within_policy_window"
+  | "goodwill"
+  | "other";
+
+export type RefundRequestStatus =
+  | "pending_approval"
+  | "approved"
+  | "rejected"
+  | "processed";
+
+export interface RefundRequest {
+  id: string;
+  booking_id: string;
+  amount_requested: number;
+  reason: string; // RefundRequestReason — text column for forward compat
+  details?: string | null;
+  status: RefundRequestStatus;
+  requested_by: string;
+  requested_at: string;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  rejected_reason?: string | null;
+  processed_by?: string | null;
+  processed_at?: string | null;
+  refund_method?: string | null;
+  refund_reference?: string | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+  // Joined fields
+  booking?: { id: string; booking_number: string; booking_date: string; total_amount: number } | null;
+  requester?: { id: string; full_name: string } | null;
+  approver?: { id: string; full_name: string } | null;
+  processor?: { id: string; full_name: string } | null;
 }
 
 // ==========================================

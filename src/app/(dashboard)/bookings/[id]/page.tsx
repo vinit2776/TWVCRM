@@ -29,6 +29,7 @@ const ExtendBookingDialog    = dynamic(() => import("@/components/bookings/exten
 const DeferBookingDialog     = dynamic(() => import("@/components/bookings/defer-booking-dialog").then(m => m.DeferBookingDialog),         { ssr: false });
 const SharePaymentLinkDialog = dynamic(() => import("@/components/bookings/share-payment-link-dialog").then(m => m.SharePaymentLinkDialog), { ssr: false });
 const PostCheckoutChecklistDialog = dynamic(() => import("@/components/bookings/post-checkout-checklist-dialog").then(m => m.PostCheckoutChecklistDialog), { ssr: false });
+const CancelBookingDialog    = dynamic(() => import("@/components/bookings/cancel-booking-dialog").then(m => m.CancelBookingDialog),         { ssr: false });
 const GetPaymentChooser      = dynamic(() => import("@/components/bookings/get-payment-chooser").then(m => m.GetPaymentChooser),             { ssr: false });
 import { NextActionBanner, NextActionTarget, computeNextActionTarget } from "@/components/bookings/next-action-banner";
 const AddUsageChargeDialog   = dynamic(() => import("@/components/billing/add-usage-charge-dialog").then(m => m.AddUsageChargeDialog),     { ssr: false });
@@ -84,6 +85,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [deferDialogOpen, setDeferDialogOpen] = useState(false);
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [getPaymentChooserOpen, setGetPaymentChooserOpen] = useState(false);
+  const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
   const [logChargeOpen, setLogChargeOpen] = useState(false);
   const [waiverOpen, setWaiverOpen] = useState(false);
   const [convertingFromBill, setConvertingFromBill] = useState(false);
@@ -690,7 +692,11 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <Button variant="outline" size="sm" onClick={() => handleStatusAction("no_show")} disabled={actionLoading}>
                 No Show
               </Button>
-              <Button variant="destructive" size="sm" onClick={() => handleStatusAction("cancel")} disabled={actionLoading}>
+              {/* Cancel — opens the rich CancelBookingDialog instead of
+                  the legacy confirm() prompt. The dialog handles the
+                  reason picklist, optional caution, and the refund-vs-
+                  retain branch in one structured ritual. */}
+              <Button variant="destructive" size="sm" onClick={() => setCancelDialogOpen(true)} disabled={actionLoading}>
                 <XCircle className="mr-1 h-4 w-4" />Cancel
               </Button>
             </>
@@ -1738,6 +1744,14 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         })()}
         onPickCounter={() => setPaymentDialogOpen(true)}
         onPickLink={() => setPaymentSendDialogOpen(true)}
+      />
+
+      <CancelBookingDialog
+        open={cancelDialogOpen}
+        onOpenChange={setCancelDialogOpen}
+        booking={booking}
+        existingPayments={existingPayments}
+        onCancelled={fetchBooking}
       />
 
       <AddUsageChargeDialog
