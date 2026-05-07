@@ -68,11 +68,17 @@ const HOST_BASE_URLS: Record<string, Record<string, string>> = {
 
 // ─── Wire types ─────────────────────────────────────────────────────────────
 
+// IRPs are inconsistent — Status can be number/string, ErrorDetails can
+// be a JSON string, base64 of JSON, an object, or an array of objects.
+// We type these loosely and let parseErrorEnvelope figure it out.
 interface IrpEnvelope {
-  Status: 0 | 1 | "0" | "1";
-  Data?: string;             // Base64 + SEK-encrypted on success
-  ErrorDetails?: string;     // Base64 + SEK-encrypted on failure (sometimes plain JSON array)
-  InfoDtls?: string | null;
+  Status?: 0 | 1 | "0" | "1" | string | number;
+  Data?: string | unknown;
+  ErrorDetails?: unknown;
+  InfoDtls?: unknown;
+  // Some IRPs return a top-level error message field
+  message?: string;
+  error?: string | unknown;
 }
 
 interface AuthSuccessInner {
@@ -150,14 +156,20 @@ export class NicProtocolIrpClient implements IrpClient {
     });
     const latency = Date.now() - start;
 
-    const body: IrpEnvelope = await res.json();
+    let body: IrpEnvelope;
+    try {
+      body = await res.json();
+    } catch {
+      const text = await res.text().catch(() => "");
+      throw new IrpAuthError("PARSE_ERROR", `Non-JSON auth response (HTTP ${res.status}): ${text.slice(0, 300)}`, latency, text, res.status);
+    }
     if (String(body.Status) !== "1" || !body.Data) {
       const err = parseErrorEnvelope(body);
-      throw new IrpAuthError(err.code, err.message, latency);
+      throw new IrpAuthError(err.code, err.message, latency, body, res.status);
     }
 
     // Auth response Data is encrypted with our AppKey (NOT SEK — there's no SEK yet!)
-    const authJson: AuthSuccessInner = decryptIrpResponseData(appKey, body.Data);
+    const authJson: AuthSuccessInner = decryptIrpResponseData(appKey, body.Data as string);
 
     // Now decrypt the SEK from inside that response — also encrypted with our AppKey
     const sek = decryptSek(appKey, authJson.Sek);
@@ -259,7 +271,7 @@ export class NicProtocolIrpClient implements IrpClient {
     }
 
     if (String(body.Status) === "1" && body.Data) {
-      const decrypted = decryptIrpResponseData<T>(session.sek, body.Data);
+      const decrypted = decryptIrpResponseData<T>(session.sek, body.Data as string);
       return { ok: true, data: decrypted, latency_ms: latency };
     }
 
@@ -302,7 +314,7 @@ export class NicProtocolIrpClient implements IrpClient {
     }
 
     if (String(body.Status) === "1" && body.Data) {
-      const decrypted = decryptIrpResponseData<T>(session.sek, body.Data);
+      const decrypted = decryptIrpResponseData<T>(session.sek, body.Data as string);
       return { ok: true, data: decrypted, latency_ms: latency };
     }
 
@@ -318,43 +330,87 @@ export class NicProtocolIrpClient implements IrpClient {
 // ─── Helpers ────────────────────────────────────────────────────────────────
 
 class IrpAuthError extends Error {
-  constructor(public code: string, message: string, public latency_ms: number) {
+  constructor(
+    public code: string,
+    message: string,
+    public latency_ms: number,
+    public raw?: unknown,
+    public httpStatus?: number,
+  ) {
     super(message);
   }
 }
 
+/**
+ * Robustly parse an error from any of the shapes IRIS / NIC return:
+ *   • ErrorDetails as JSON array of {ErrorCode, ErrorMessage}
+ *   • ErrorDetails as a single object {ErrorCode, ErrorMessage}
+ *   • ErrorDetails as a Base64-encoded JSON of either of the above
+ *   • ErrorDetails as a raw string message
+ *   • Top-level message / error fields (some auth errors)
+ *   • Nothing useful — return the whole envelope as JSON
+ */
 function parseErrorEnvelope(body: IrpEnvelope): { code: string; message: string; details?: NicErrorDetail[] } {
-  const errString = body.ErrorDetails;
-  if (!errString) return { code: "UNKNOWN", message: "IRP returned failure with no ErrorDetails" };
+  // Try ErrorDetails first (multiple shapes)
+  let errField: unknown = body.ErrorDetails;
 
-  // ErrorDetails is typically a JSON array; sometimes Base64-wrapped
-  let parsed: unknown;
-  try {
-    parsed = JSON.parse(errString);
-  } catch {
+  // If it's a string, try to interpret as JSON or Base64-of-JSON
+  if (typeof errField === "string" && errField.trim() !== "") {
+    const errStr: string = errField;
     try {
-      parsed = JSON.parse(Buffer.from(errString, "base64").toString("utf8"));
+      errField = JSON.parse(errStr);
     } catch {
-      return { code: "UNKNOWN", message: errString };
+      try {
+        errField = JSON.parse(Buffer.from(errStr, "base64").toString("utf8"));
+      } catch {
+        // Leave as string — at least we have a message
+        return { code: "UNKNOWN", message: errStr };
+      }
     }
   }
 
-  if (Array.isArray(parsed) && parsed.length > 0) {
-    const first = parsed[0] as NicErrorDetail;
-    const meta = lookupNicError(first.ErrorCode, first.ErrorMessage);
+  // Array of error objects (NIC's standard shape)
+  if (Array.isArray(errField) && errField.length > 0) {
+    const first = errField[0] as NicErrorDetail;
+    const meta = lookupNicError(first?.ErrorCode, first?.ErrorMessage);
     return {
-      code: first.ErrorCode,
-      message: meta.detail,
-      details: parsed as NicErrorDetail[],
+      code: first?.ErrorCode || "UNKNOWN",
+      message: first?.ErrorMessage || meta.detail,
+      details: errField as NicErrorDetail[],
     };
   }
 
-  return { code: "UNKNOWN", message: JSON.stringify(parsed) };
+  // Single error object
+  if (errField && typeof errField === "object" && "ErrorCode" in (errField as object)) {
+    const obj = errField as NicErrorDetail;
+    const meta = lookupNicError(obj.ErrorCode, obj.ErrorMessage);
+    return { code: obj.ErrorCode || "UNKNOWN", message: obj.ErrorMessage || meta.detail, details: [obj] };
+  }
+
+  // Top-level message / error fields (sometimes returned for HTTP-level failures)
+  if (typeof body.message === "string" && body.message) {
+    return { code: "UNKNOWN", message: body.message };
+  }
+  if (typeof body.error === "string" && body.error) {
+    return { code: "UNKNOWN", message: body.error };
+  }
+
+  // Last resort — serialise the whole body so the operator can see what came back
+  return {
+    code: "UNKNOWN",
+    message: `IRP returned non-success but error shape was unrecognised. Raw envelope: ${safeStringify(body).slice(0, 500)}`,
+  };
+}
+
+/** JSON.stringify that never throws (handles cycles by returning the type name). */
+function safeStringify(v: unknown): string {
+  try { return JSON.stringify(v); }
+  catch { return Object.prototype.toString.call(v); }
 }
 
 function errorResult<T>(e: unknown, latency_ms: number): IrpResult<T> {
   if (e instanceof IrpAuthError) {
-    return { ok: false, error: { code: e.code, message: e.message }, latency_ms };
+    return { ok: false, error: { code: e.code, message: e.message }, latency_ms, raw_response: e.raw, http_status: e.httpStatus };
   }
   if (e instanceof Error) {
     return { ok: false, error: { code: "EXCEPTION", message: e.message }, latency_ms };

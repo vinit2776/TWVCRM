@@ -42,8 +42,8 @@ export interface IrpClientConfig {
 
 /** Discriminated result type — caller never has to inspect both branches blindly */
 export type IrpResult<T> =
-  | { ok: true; data: T; latency_ms: number }
-  | { ok: false; error: { code: string; message: string; details?: NicErrorDetail[] }; latency_ms: number };
+  | { ok: true; data: T; latency_ms: number; raw_response?: unknown }
+  | { ok: false; error: { code: string; message: string; details?: NicErrorDetail[] }; latency_ms: number; raw_response?: unknown; http_status?: number };
 
 /** The interface every adapter must satisfy. */
 export interface IrpClient {

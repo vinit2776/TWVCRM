@@ -64,7 +64,8 @@ export async function POST() {
 
   const result = await client.authTest();
 
-  // Audit log (without leaking secrets)
+  // Audit log (without leaking secrets) — captures raw response body for
+  // debugging when error parsing falls through.
   await supabase.from("e_invoice_api_log").insert({
     endpoint: "POST /eivital/v1.04/auth (auth-test)",
     irp_provider: publicConfig.irp_provider,
@@ -72,7 +73,13 @@ export async function POST() {
     request_summary: { gstin: publicConfig.seller_gstin, username: credentials.username },
     response_summary: result.ok
       ? { token_expires_at: result.data.token_expires_at }
-      : { error_code: result.error.code, error_message: result.error.message },
+      : {
+          error_code: result.error.code,
+          error_message: result.error.message,
+          http_status: result.http_status,
+          // ↓ The raw IRP body — vital for diagnosing auth failures
+          raw: result.raw_response,
+        },
     irp_status_code: result.ok ? "1" : "0",
     irp_error_code: result.ok ? null : result.error.code,
     irp_error_message: result.ok ? null : result.error.message,
