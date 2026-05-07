@@ -6,6 +6,40 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 
 const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile), facilities:booking_facilities(*)";
 
+/**
+ * Recompute the booking's GST + grand-total fields from a new ex-GST
+ * subtotal. Crucially, this includes the sum of any add-on charges
+ * already attached to the booking — without that, editing the rate on a
+ * booking that had add-ons would silently drop the add-on amount from
+ * the displayed grand total (and the Collect Payment dialog).
+ */
+async function computeBookingTotalsWithAddons(
+  // Same any-client treatment as src/lib/location-incharges.ts.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  supabase: any,
+  bookingId: string,
+  newSubtotal: number,
+  gstRate: number,
+): Promise<{ total_amount: number; gst_amount: number; total_amount_with_gst: number }> {
+  const baseGstAmount = parseFloat((newSubtotal * gstRate / 100).toFixed(2));
+
+  const { data: addons } = await supabase
+    .from("booking_addons")
+    .select("total_with_gst")
+    .eq("booking_id", bookingId);
+  const addonTotal = (addons || []).reduce(
+    (s: number, a: { total_with_gst: number | string }) => s + Number(a.total_with_gst),
+    0
+  );
+
+  const totalWithGst = parseFloat((newSubtotal + baseGstAmount + addonTotal).toFixed(2));
+  return {
+    total_amount: newSubtotal,
+    gst_amount: baseGstAmount,
+    total_amount_with_gst: totalWithGst,
+  };
+}
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -110,21 +144,21 @@ export async function PATCH(
     if (isNaN(newTotal) || newTotal < 0)
       return NextResponse.json({ error: "total_amount must be 0 or greater" }, { status: 400 });
 
-    // Recompute GST against the existing gst_rate. Without this the
-    // rate change updated total_amount but left gst_amount /
-    // total_amount_with_gst pointing at the old figure — receipts and
-    // the Collect Payment dialog showed conflicting totals.
-    const gstRate = Number(booking.gst_rate ?? 0);
-    const gstAmount = parseFloat((newTotal * gstRate / 100).toFixed(2));
-    const totalWithGst = parseFloat((newTotal + gstAmount).toFixed(2));
+    // Recompute GST against the existing gst_rate AND fold in any
+    // add-on charges already attached. The previous version dropped
+    // add-ons from total_amount_with_gst on a rate edit; this preserves
+    // them so the Collect Payment dialog and receipts stay correct.
+    const totals = await computeBookingTotalsWithAddons(
+      supabase, id, newTotal, Number(booking.gst_rate ?? 0)
+    );
 
     const { data: updated, error: updateErr } = await supabase
       .from("bookings")
       .update({
         hourly_rate: newRate,
-        total_amount: newTotal,
-        gst_amount: gstAmount,
-        total_amount_with_gst: totalWithGst,
+        total_amount: totals.total_amount,
+        gst_amount: totals.gst_amount,
+        total_amount_with_gst: totals.total_amount_with_gst,
       })
       .eq("id", id)
       .select(BOOKING_SELECT)
@@ -163,20 +197,20 @@ export async function PATCH(
     const newDuration = (reh * 60 + rem - rsh * 60 - rsm) / 60;
     const newTotal = Number(booking.hourly_rate) * newDuration;
 
-    // Keep GST in sync with the recalculated subtotal (same fix as the
-    // update_pricing path above — without this the receipt would show
-    // the old GST against the new ex-GST total).
-    const gstRate = Number(booking.gst_rate ?? 0);
-    const gstAmount = parseFloat((newTotal * gstRate / 100).toFixed(2));
-    const totalWithGst = parseFloat((newTotal + gstAmount).toFixed(2));
+    // Keep GST in sync with the recalculated subtotal AND include any
+    // existing add-ons in the grand total (same addon-aware helper as
+    // update_pricing above).
+    const rsTotals = await computeBookingTotalsWithAddons(
+      supabase, id, newTotal, Number(booking.gst_rate ?? 0)
+    );
 
     updates.booking_date = new_date;
     updates.start_time = new_start_time;
     updates.end_time = new_end_time;
     updates.duration_hours = newDuration;
-    updates.total_amount = newTotal;
-    updates.gst_amount = gstAmount;
-    updates.total_amount_with_gst = totalWithGst;
+    updates.total_amount = rsTotals.total_amount;
+    updates.gst_amount = rsTotals.gst_amount;
+    updates.total_amount_with_gst = rsTotals.total_amount_with_gst;
     updates.reschedule_count = (booking.reschedule_count || 0) + 1;
     if (!booking.original_booking_date) {
       updates.original_booking_date = booking.booking_date;
@@ -220,18 +254,16 @@ export async function PATCH(
     const extTotal = Number(booking.hourly_rate) * extDuration;
     const priceDiff = extTotal - Number(booking.total_amount);
 
-    // Same GST recompute as update_pricing / reschedule — without it the
-    // extended booking carried the original (smaller) gst_amount and
-    // total_amount_with_gst forward.
-    const extGstRate = Number(booking.gst_rate ?? 0);
-    const extGstAmount = parseFloat((extTotal * extGstRate / 100).toFixed(2));
-    const extTotalWithGst = parseFloat((extTotal + extGstAmount).toFixed(2));
+    // Same addon-aware recompute as update_pricing / reschedule.
+    const extTotals = await computeBookingTotalsWithAddons(
+      supabase, id, extTotal, Number(booking.gst_rate ?? 0)
+    );
 
     updates.end_time = new_end_time;
     updates.duration_hours = extDuration;
-    updates.total_amount = extTotal;
-    updates.gst_amount = extGstAmount;
-    updates.total_amount_with_gst = extTotalWithGst;
+    updates.total_amount = extTotals.total_amount;
+    updates.gst_amount = extTotals.gst_amount;
+    updates.total_amount_with_gst = extTotals.total_amount_with_gst;
 
     const { data: extUpdated, error: extError } = await supabase
       .from("bookings")

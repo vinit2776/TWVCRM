@@ -82,13 +82,19 @@ export function AddUsageChargeDialog({
   const [description, setDescription] = useState("");
   const [quantity, setQuantity] = useState<number>(1);
   const [unitPrice, setUnitPrice] = useState<number>(0);
+  // GST defaults to the standard 18% — most ad-hoc charges (overtime, F&B,
+  // damage) attract the same rate as the booking. Editable in case a
+  // particular charge is exempt or carries a different slab (12 / 5 / 0).
+  const [gstRate, setGstRate] = useState<number>(18);
   const [chargeDate, setChargeDate] = useState(
     new Date().toISOString().split("T")[0]
   );
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
-  const total = quantity * unitPrice;
+  const subtotal = quantity * unitPrice;
+  const gstAmount = parseFloat((subtotal * gstRate / 100).toFixed(2));
+  const totalWithGst = parseFloat((subtotal + gstAmount).toFixed(2));
 
   // Fetch contracts when dialog opens in contract mode
   useEffect(() => {
@@ -186,6 +192,7 @@ export function AddUsageChargeDialog({
     setDescription("");
     setQuantity(1);
     setUnitPrice(0);
+    setGstRate(18);
     setChargeDate(new Date().toISOString().split("T")[0]);
     setNotes("");
   };
@@ -234,7 +241,8 @@ export function AddUsageChargeDialog({
           description: description.trim(),
           quantity,
           unit_price: unitPrice,
-          total,
+          total: subtotal,
+          gst_rate: gstRate,
           charge_date: chargeDate,
           notes: notes.trim() || undefined,
         }),
@@ -473,11 +481,41 @@ export function AddUsageChargeDialog({
             </div>
           </div>
 
-          {/* Total (readonly) */}
-          <div className="space-y-2">
-            <Label>Total</Label>
-            <div className="rounded-md border bg-muted/30 px-3 py-2 text-sm font-medium">
-              {formatCurrency(total)}
+          {/* GST + Total breakdown — total_with_gst is what finance bills
+              and what gets carried into Collect Payment / monthly statement.
+              GST defaults to 18% but is editable for exempt items. */}
+          <div className="grid grid-cols-3 gap-3">
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">Subtotal (ex-GST)</Label>
+              <div className="rounded-md border bg-muted/30 px-2.5 py-2 text-sm">
+                {formatCurrency(subtotal)}
+              </div>
+            </div>
+            <div className="space-y-1">
+              <Label htmlFor="charge-gst-rate" className="text-xs text-muted-foreground">GST %</Label>
+              <Input
+                id="charge-gst-rate"
+                type="number"
+                min={0}
+                max={28}
+                step="0.01"
+                value={gstRate}
+                onChange={(e) => setGstRate(parseFloat(e.target.value) || 0)}
+                className="h-9"
+              />
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs text-muted-foreground">GST amount</Label>
+              <div className="rounded-md border bg-muted/30 px-2.5 py-2 text-sm">
+                {formatCurrency(gstAmount)}
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-1">
+            <Label>Total (incl. GST)</Label>
+            <div className="rounded-md border-2 border-primary/30 bg-primary/5 px-3 py-2 text-base font-semibold">
+              {formatCurrency(totalWithGst)}
             </div>
           </div>
 

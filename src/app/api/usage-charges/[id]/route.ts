@@ -55,9 +55,20 @@ export async function PATCH(
   if (body.quantity !== undefined) allowedFields.quantity = body.quantity;
   if (body.unit_price !== undefined) allowedFields.unit_price = body.unit_price;
   if (body.total !== undefined) allowedFields.total = body.total;
+  if (body.gst_rate !== undefined) allowedFields.gst_rate = body.gst_rate;
   if (body.charge_date !== undefined) allowedFields.charge_date = body.charge_date;
   if (body.notes !== undefined) allowedFields.notes = body.notes;
   if (body.proof_path !== undefined) allowedFields.proof_path = body.proof_path;
+
+  // Recompute the GST + grand total whenever total or gst_rate moves.
+  // Server is the source of truth — clients can't drift these out of sync.
+  if (allowedFields.total !== undefined || allowedFields.gst_rate !== undefined) {
+    const newTotal = Number(allowedFields.total ?? oldCharge.total);
+    const newGstRate = Number(allowedFields.gst_rate ?? oldCharge.gst_rate ?? 0);
+    const newGstAmount = parseFloat((newTotal * newGstRate / 100).toFixed(2));
+    allowedFields.gst_amount = newGstAmount;
+    allowedFields.total_with_gst = parseFloat((newTotal + newGstAmount).toFixed(2));
+  }
 
   // Waive: only admin/manager can waive
   if (body.status === "waived") {

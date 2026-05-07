@@ -89,6 +89,15 @@ export async function POST(request: NextRequest) {
     leadId = booking.lead_id ?? null;
   }
 
+  // GST: server is the source of truth for the computed fields. The client
+  // only chooses gst_rate (defaulting to the standard 18% if omitted).
+  // Single rounded representation everywhere — see booking-addons for the
+  // same pattern.
+  const gstRate = result.data.gst_rate ?? 18;
+  const subtotal = Number(result.data.total);
+  const gstAmount = parseFloat((subtotal * gstRate / 100).toFixed(2));
+  const totalWithGst = parseFloat((subtotal + gstAmount).toFixed(2));
+
   const { data, error } = await supabase
     .from("usage_charges")
     .insert({
@@ -97,7 +106,10 @@ export async function POST(request: NextRequest) {
       description: result.data.description,
       quantity: result.data.quantity,
       unit_price: result.data.unit_price,
-      total: result.data.total,
+      total: subtotal,
+      gst_rate: gstRate,
+      gst_amount: gstAmount,
+      total_with_gst: totalWithGst,
       charge_date: result.data.charge_date,
       notes: result.data.notes,
       proof_path: body.proof_path || null,

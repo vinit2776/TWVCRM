@@ -112,6 +112,11 @@ interface UsageCharge {
   quantity: number;
   unit_price: number;
   total: number;
+  // GST + grand total — populated by the migration 00128 default of 0 for
+  // pre-migration rows, real values for new rows.
+  gst_rate?: number;
+  gst_amount?: number;
+  total_with_gst?: number;
   charge_date: string;
   status: string;
   notes?: string;
@@ -835,7 +840,9 @@ export default function BillingPage() {
                     <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Reference</th>
                     <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Qty</th>
                     <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Unit Price</th>
-                    <th className="px-4 py-3 text-right font-medium">Total</th>
+                    <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Subtotal</th>
+                    <th className="px-4 py-3 text-right font-medium hidden md:table-cell">GST</th>
+                    <th className="px-4 py-3 text-right font-medium">Total (incl. GST)</th>
                     <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Charge Date</th>
                     <th className="px-4 py-3 text-left font-medium">Status</th>
                     <th className="px-4 py-3 text-right font-medium">Actions</th>
@@ -873,7 +880,13 @@ export default function BillingPage() {
                       </td>
                       <td className="px-4 py-3 text-right hidden sm:table-cell">{charge.quantity}</td>
                       <td className="px-4 py-3 text-right hidden sm:table-cell">{formatCurrency(charge.unit_price)}</td>
-                      <td className="px-4 py-3 text-right font-medium">{formatCurrency(charge.total)}</td>
+                      <td className="px-4 py-3 text-right hidden md:table-cell text-muted-foreground">{formatCurrency(charge.total)}</td>
+                      <td className="px-4 py-3 text-right hidden md:table-cell text-xs text-muted-foreground">
+                        {charge.gst_rate ? `${formatCurrency(charge.gst_amount || 0)} (${charge.gst_rate}%)` : "—"}
+                      </td>
+                      <td className="px-4 py-3 text-right font-semibold">
+                        {formatCurrency(charge.total_with_gst ?? charge.total)}
+                      </td>
                       <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{formatDate(charge.charge_date)}</td>
                       <td className="px-4 py-3">
                         <Badge variant="secondary" className={USAGE_STATUS_COLORS[charge.status] || ""}>

@@ -8,7 +8,7 @@ import {
   Clock, Users as UsersIcon, IndianRupee, Wifi,
   Phone, AlertTriangle, ShieldCheck, Star,
   Banknote, CheckCircle, Calendar, Timer, Copy,
-  Link2, Download, MessageCircle, Repeat, RotateCcw,
+  Download, MessageCircle, Repeat, RotateCcw,
   StickyNote, Receipt, Pencil, Check, X, Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -386,91 +386,10 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     }
   };
 
-  const ensureRazorpayPaymentLink = async (): Promise<string | null> => {
-    // If we already have a Razorpay payment link URL, return it
-    if (booking?.razorpay_payment_link_url) {
-      return booking.razorpay_payment_link_url;
-    }
-
-    // Create a Razorpay Payment Link via API
-    try {
-      const res = await fetch("/api/payments/create-payment-link", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ booking_id: id }),
-      });
-      const json = await res.json();
-      if (res.ok && json.data?.payment_link_url) {
-        // Update local booking state with the new link
-        setBooking((prev) => prev ? { ...prev, razorpay_payment_link_url: json.data.payment_link_url, razorpay_payment_link_id: json.data.payment_link_id } : prev);
-        return json.data.payment_link_url;
-      } else {
-        // Razorpay not enabled or failed — fall back to internal link
-        console.warn("Razorpay payment link failed, falling back to internal link:", json.error);
-        return null;
-      }
-    } catch {
-      return null;
-    }
-  };
-
-  const [paymentLinkSending, setPaymentLinkSending] = useState(false);
-  const [paymentLinkSent, setPaymentLinkSent] = useState(false);
-
-  const handleSendPaymentLink = async () => {
-    setPaymentLinkSending(true);
-    // Try to create Razorpay payment link first
-    const razorpayUrl = await ensureRazorpayPaymentLink();
-
-    const res = await fetch(`/api/bookings/${id}/email`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        type: "payment_link",
-        razorpay_payment_link_url: razorpayUrl || undefined,
-      }),
-    });
-    setPaymentLinkSending(false);
-    if (res.ok) {
-      setPaymentLinkSent(true);
-      const customerEmail = booking?.lead?.email || booking?.guest_email || "customer";
-      toast.success(`Payment link sent to ${customerEmail}`, {
-        description: razorpayUrl
-          ? "Customer will receive a Razorpay payment link via email. Payment status will update automatically once completed."
-          : "Customer will receive an internal payment link via email.",
-        duration: 6000,
-      });
-      // Start polling for payment status updates
-      const pollInterval = setInterval(async () => {
-        const refreshRes = await fetch(`/api/bookings/${id}`);
-        if (refreshRes.ok) {
-          const refreshJson = await refreshRes.json();
-          if (refreshJson.data?.payment_status === "paid") {
-            clearInterval(pollInterval);
-            setBooking(refreshJson.data);
-            toast.success("Payment received! Customer has completed the payment.", { duration: 8000 });
-          }
-        }
-      }, 10000); // Poll every 10 seconds
-      // Stop polling after 10 minutes
-      setTimeout(() => clearInterval(pollInterval), 600000);
-    } else {
-      const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to send payment link");
-    }
-  };
-
-  const handleCopyPaymentLink = async () => {
-    if (!booking?.payment_token) { toast.error("No payment token"); return; }
-
-    // Try to get Razorpay payment link first
-    const razorpayUrl = await ensureRazorpayPaymentLink();
-    const url = razorpayUrl || `${window.location.origin}/pay/${booking.payment_token}`;
-
-    navigator.clipboard.writeText(url)
-      .then(() => toast.success(razorpayUrl ? "Razorpay payment link copied" : "Payment link copied"))
-      .catch(() => toast.error("Failed to copy"));
-  };
+  // Razorpay payment-link helpers removed — the merchant gateway has UPI
+  // disabled, so the link path no longer reliably collects. Collection
+  // happens exclusively via the in-app Collect Payment dialog (Cash,
+  // UPI Manual + screenshot, Card).
 
   const handleDownloadReceipt = async () => {
     try {
@@ -936,31 +855,11 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             </Button>
           </>
         )}
-        {booking.payment_status !== "paid" && booking.payment_token && (
-          <>
-            <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleCopyPaymentLink}>
-              <Link2 className="mr-1 h-3.5 w-3.5" />Copy Payment Link
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-xs h-7"
-              onClick={handleSendPaymentLink}
-              disabled={paymentLinkSending}
-            >
-              {paymentLinkSending ? (
-                <><Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />Sending...</>
-              ) : (
-                <><Mail className="mr-1 h-3.5 w-3.5" />Send Payment Link</>
-              )}
-            </Button>
-            {paymentLinkSent && (
-              <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-700 bg-blue-50 animate-pulse">
-                ⏳ Awaiting payment…
-              </Badge>
-            )}
-          </>
-        )}
+        {/* "Copy Payment Link" / "Send Payment Link" removed — they
+            generated a Razorpay link, but the merchant gateway has UPI
+            disabled so those links no longer reliably collect. Use the
+            "Collect Payment" button instead, which now offers Cash, UPI
+            (Manual with screenshot), and Card. */}
       </div>
 
       {/* Booking Lifecycle Timeline */}

@@ -271,6 +271,10 @@ export const createUsageChargeSchema = z.object({
   quantity: z.number().positive("Quantity must be positive"),
   unit_price: z.number().min(0, "Price must be non-negative"),
   total: z.number(),
+  // GST is optional on the input but always stored — defaults to 18% when
+  // omitted to match the rest of the booking-side flow. The server is the
+  // source of truth for gst_amount + total_with_gst (computed from these).
+  gst_rate: z.number().min(0).max(28).optional(),
   charge_date: z.string().min(1, "Charge date is required"),
   notes: z.string().optional(),
 }).refine(
