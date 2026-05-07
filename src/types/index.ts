@@ -21,6 +21,12 @@ export interface Location {
   requires_headcount: boolean;
   latitude?: number | null;
   longitude?: number | null;
+  // Up to 2 designated in-charge users — primary recipients for cleaning
+  // alerts on checkout and headcount push notifications for this location.
+  incharge_user_id_1?: string | null;
+  incharge_user_id_2?: string | null;
+  incharge_1?: Pick<User, "id" | "full_name" | "email" | "role"> | null;
+  incharge_2?: Pick<User, "id" | "full_name" | "email" | "role"> | null;
   created_at: string;
   updated_at: string;
 }

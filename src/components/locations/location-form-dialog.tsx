@@ -11,9 +11,23 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, MapPin, LocateFixed, FileSpreadsheet, Trash2, Check } from "lucide-react";
+import { Loader2, MapPin, LocateFixed, FileSpreadsheet, Trash2, Check, UserCircle2 } from "lucide-react";
 import { toast } from "sonner";
-import type { Location, LocationCapacityConfig, LocationPrintTemplate } from "@/types";
+import type { Location, LocationCapacityConfig, LocationPrintTemplate, User } from "@/types";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+
+// Roles eligible to be designated as a floor in-charge. floor_manager
+// is the natural fit, but ops / fms staff sometimes run smaller centres
+// — keep the list permissive and trust the admin choosing.
+const INCHARGE_ELIGIBLE_ROLES = new Set([
+  "floor_manager", "manager", "office_admin", "fms",
+]);
 
 interface LocationFormDialogProps {
   open: boolean;
@@ -48,6 +62,13 @@ export function LocationFormDialog({
   const [detectingGeo, setDetectingGeo] = useState(false);
   const [saving, setSaving]   = useState(false);
 
+  // Floor in-charges — up to 2 users designated as the on-the-ground
+  // owners for this location. Drives cleaning-alert recipients on
+  // checkout and headcount push targeting.
+  const [inchargeUserId1, setInchargeUserId1] = useState<string>("");
+  const [inchargeUserId2, setInchargeUserId2] = useState<string>("");
+  const [eligibleUsers, setEligibleUsers] = useState<User[]>([]);
+
   // Print-server template — optional. The admin can upload it now or later
   // (passively from the location's edit dialog). Just stores the sample file;
   // the column-mapping editor lives in a future Batch.
@@ -76,6 +97,8 @@ export function LocationFormDialog({
       );
       setLatitude(location.latitude != null ? String(location.latitude) : "");
       setLongitude(location.longitude != null ? String(location.longitude) : "");
+      setInchargeUserId1(location.incharge_user_id_1 || "");
+      setInchargeUserId2(location.incharge_user_id_2 || "");
       // Load any existing template so the dialog shows the current sample
       fetch(`/api/locations/${location.id}/print-template`)
         .then((r) => r.json())
@@ -89,8 +112,27 @@ export function LocationFormDialog({
       setRequiresHeadcount(false);
       setCapacityConfig({});
       setLatitude(""); setLongitude("");
+      setInchargeUserId1("");
+      setInchargeUserId2("");
     }
   }, [location, open]);
+
+  // Fetch the eligible-user pool once whenever the dialog opens.
+  // Filtered to active users in roles that typically run a centre —
+  // floor_manager / manager / office_admin / fms. Admins can still pick
+  // any of these regardless of which centre they themselves belong to.
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/users")
+      .then((r) => r.json())
+      .then((j) => {
+        const all: User[] = j.data || [];
+        setEligibleUsers(
+          all.filter((u) => u.is_active && INCHARGE_ELIGIBLE_ROLES.has(u.role))
+        );
+      })
+      .catch(() => setEligibleUsers([]));
+  }, [open]);
 
   const handleCapacity = (key: string, val: string) => {
     setCapacityConfig(prev => ({ ...prev, [key]: val }));
@@ -133,6 +175,14 @@ export function LocationFormDialog({
 
     setSaving(true);
     try {
+      // Same-user-twice check before the round-trip — server enforces it
+      // too via DB CHECK + 400, but we save the user a hop.
+      if (inchargeUserId1 && inchargeUserId2 && inchargeUserId1 === inchargeUserId2) {
+        toast.error("The two floor in-charges must be different users");
+        setSaving(false);
+        return;
+      }
+
       const payload = {
         name, code: code.toUpperCase(), address, city, state,
         is_active: isActive,
@@ -140,6 +190,8 @@ export function LocationFormDialog({
         capacity_config,
         latitude:  latitude  !== "" ? parseFloat(latitude)  : null,
         longitude: longitude !== "" ? parseFloat(longitude) : null,
+        incharge_user_id_1: inchargeUserId1 || null,
+        incharge_user_id_2: inchargeUserId2 || null,
       };
 
       const res = isEdit
@@ -362,6 +414,61 @@ export function LocationFormDialog({
                 <MapPin className="h-3 w-3" />
                 Verify on Google Maps
               </a>
+            )}
+          </div>
+
+          {/* Floor In-Charges — up to 2 designated owners. Drives:
+              · Cleaning alert recipients on guest checkout
+              · Headcount-due push notifications
+              · Future location-scoped nudges (announcements, escalations)
+              The slots are independent — leave the second blank if there's
+              only one in-charge today. */}
+          <div className="rounded-md border p-3 space-y-3 bg-muted/20">
+            <div className="flex items-center gap-1.5">
+              <UserCircle2 className="h-4 w-4 text-[#015E65]" />
+              <Label className="font-semibold">Floor In-Charges</Label>
+            </div>
+            <p className="text-[11px] text-muted-foreground -mt-1">
+              The people on the ground for this centre. They receive checkout cleaning alerts
+              and headcount nudges in place of the broad admin/manager broadcast.
+            </p>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {[
+                { label: "Primary in-charge", value: inchargeUserId1, set: setInchargeUserId1, exclude: inchargeUserId2 },
+                { label: "Secondary in-charge", value: inchargeUserId2, set: setInchargeUserId2, exclude: inchargeUserId1 },
+              ].map((slot) => (
+                <div key={slot.label} className="space-y-1">
+                  <Label className="text-xs">{slot.label}</Label>
+                  <Select
+                    value={slot.value || "__none__"}
+                    onValueChange={(v) => slot.set(v === "__none__" ? "" : v)}
+                  >
+                    <SelectTrigger className="h-9 text-sm">
+                      <SelectValue placeholder="Not assigned" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="__none__">— Not assigned —</SelectItem>
+                      {eligibleUsers
+                        .filter((u) => u.id !== slot.exclude)
+                        .map((u) => (
+                          <SelectItem key={u.id} value={u.id}>
+                            {u.full_name}
+                            <span className="text-[10px] text-muted-foreground ml-1.5">
+                              · {u.role}
+                            </span>
+                          </SelectItem>
+                        ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              ))}
+            </div>
+            {eligibleUsers.length === 0 && (
+              <p className="text-[11px] text-amber-700">
+                No eligible users found. Add users in the Settings → Users section first
+                (floor_manager / manager / office_admin / fms roles are eligible).
+              </p>
             )}
           </div>
 

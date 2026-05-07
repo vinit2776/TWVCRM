@@ -2,6 +2,14 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
+// In-charge user joins reused by GET (list) and POST (return).
+// Two named FKs let PostgREST disambiguate which slot each user fills.
+const LOCATION_SELECT = `
+  *,
+  incharge_1:users!locations_incharge_user_id_1_fkey(id, full_name, email, role),
+  incharge_2:users!locations_incharge_user_id_2_fkey(id, full_name, email, role)
+`;
+
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -11,7 +19,7 @@ export async function GET(request: NextRequest) {
 
   let query = supabase
     .from("locations")
-    .select("*")
+    .select(LOCATION_SELECT)
     .order("name", { ascending: true });
 
   if (isActive === "true") {
@@ -44,7 +52,10 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json();
-  const { name, code, address, city, state, capacity_config, requires_headcount, latitude, longitude } = body as {
+  const {
+    name, code, address, city, state, capacity_config, requires_headcount,
+    latitude, longitude, incharge_user_id_1, incharge_user_id_2,
+  } = body as {
     name: string;
     code: string;
     address?: string;
@@ -54,10 +65,25 @@ export async function POST(request: NextRequest) {
     requires_headcount?: boolean;
     latitude?: number | null;
     longitude?: number | null;
+    incharge_user_id_1?: string | null;
+    incharge_user_id_2?: string | null;
   };
 
   if (!name || !code) {
     return NextResponse.json({ error: "Name and code are required" }, { status: 400 });
+  }
+
+  // The DB CHECK constraint already prevents the same user in both slots,
+  // but we surface a friendlier error before the round-trip.
+  if (
+    incharge_user_id_1 &&
+    incharge_user_id_2 &&
+    incharge_user_id_1 === incharge_user_id_2
+  ) {
+    return NextResponse.json(
+      { error: "The two floor in-charges must be different users" },
+      { status: 400 }
+    );
   }
 
   const { data, error } = await supabase
@@ -72,8 +98,10 @@ export async function POST(request: NextRequest) {
       requires_headcount: requires_headcount ?? false,
       latitude: latitude ?? null,
       longitude: longitude ?? null,
+      incharge_user_id_1: incharge_user_id_1 || null,
+      incharge_user_id_2: incharge_user_id_2 || null,
     })
-    .select()
+    .select(LOCATION_SELECT)
     .single();
 
   if (error) {
@@ -83,7 +111,18 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  logAudit(supabase, { entityType: "location", entityId: data.id, action: "create", performedBy: dbUser.id, changes: { name: { old: null, new: name }, code: { old: null, new: code } } });
+  logAudit(supabase, {
+    entityType: "location",
+    entityId: data.id,
+    action: "create",
+    performedBy: dbUser.id,
+    changes: {
+      name: { old: null, new: name },
+      code: { old: null, new: code },
+      incharge_user_id_1: { old: null, new: incharge_user_id_1 ?? null },
+      incharge_user_id_2: { old: null, new: incharge_user_id_2 ?? null },
+    },
+  });
 
   return NextResponse.json({ data }, { status: 201 });
 }

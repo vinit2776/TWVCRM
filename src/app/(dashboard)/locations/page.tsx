@@ -59,6 +59,7 @@ export default function LocationsPage() {
                 <th className="px-4 py-3 text-left font-medium">Code</th>
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">City</th>
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Address</th>
+                <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Floor In-Charges</th>
                 <th className="px-4 py-3 text-left font-medium">Status</th>
                 <th className="px-4 py-3 text-left font-medium w-[60px]">Actions</th>
               </tr>
@@ -85,6 +86,18 @@ export default function LocationsPage() {
                   <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">{loc.city || "—"}</td>
                   <td className="px-4 py-3 hidden lg:table-cell text-muted-foreground max-w-[200px] truncate">
                     {loc.address || "—"}
+                  </td>
+                  <td className="px-4 py-3 hidden md:table-cell text-xs text-muted-foreground">
+                    {/* Quick visual cue that the location is wired up to
+                        receive routed alerts. Empty cell = a config gap. */}
+                    {loc.incharge_1 || loc.incharge_2 ? (
+                      <div className="flex flex-col gap-0.5">
+                        {loc.incharge_1 && <span>{loc.incharge_1.full_name}</span>}
+                        {loc.incharge_2 && <span>{loc.incharge_2.full_name}</span>}
+                      </div>
+                    ) : (
+                      <span className="text-amber-600">— Not assigned</span>
+                    )}
                   </td>
                   <td className="px-4 py-3">
                     <Badge variant={loc.is_active ? "default" : "secondary"}>

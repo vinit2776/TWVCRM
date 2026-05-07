@@ -54,3 +54,42 @@ export async function sendPushToAll(payload: PushPayload): Promise<void> {
     )
   );
 }
+
+/**
+ * Sends a Web Push notification to a specific set of users (matched by
+ * push_subscriptions.user_id). One user can have multiple subscriptions
+ * across browsers/devices — we deliver to all of them.
+ *
+ * Returns the number of subscriptions actually delivered. Empty input or a
+ * VAPID-misconfigured environment is a no-op (returns 0) so callers can
+ * treat this as fire-and-forget.
+ */
+export async function sendPushToUsers(
+  userIds: string[],
+  payload: PushPayload
+): Promise<number> {
+  ensureVapid();
+  if (!vapidConfigured || !userIds.length) return 0;
+
+  const supabase = await createAdminClient();
+  const { data: subs } = await supabase
+    .from("push_subscriptions")
+    .select("endpoint, p256dh, auth")
+    .in("user_id", userIds);
+
+  if (!subs?.length) return 0;
+
+  const payloadStr = JSON.stringify(payload);
+  const results = await Promise.allSettled(
+    subs.map((sub) =>
+      webPush.sendNotification(
+        {
+          endpoint: sub.endpoint,
+          keys: { p256dh: sub.p256dh, auth: sub.auth },
+        },
+        payloadStr
+      )
+    )
+  );
+  return results.filter((r) => r.status === "fulfilled").length;
+}

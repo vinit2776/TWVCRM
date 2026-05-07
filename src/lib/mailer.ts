@@ -64,6 +64,8 @@ function trackEmail(success: boolean) {
 export type SendEmailParams = {
   from: string;
   to: string | string[];
+  cc?: string | string[];
+  bcc?: string | string[];
   subject: string;
   html: string;
   replyTo?: string;
@@ -80,9 +82,13 @@ export type SendEmailResult = {
 };
 
 async function sendViaSMTP(params: SendEmailParams): Promise<SendEmailResult> {
+  const joinAddrs = (a?: string | string[]) =>
+    Array.isArray(a) ? a.join(", ") : a;
   const mailOptions: nodemailer.SendMailOptions = {
     from: params.from,
-    to: Array.isArray(params.to) ? params.to.join(", ") : params.to,
+    to: joinAddrs(params.to),
+    cc: joinAddrs(params.cc),
+    bcc: joinAddrs(params.bcc),
     subject: params.subject,
     html: params.html,
     replyTo: params.replyTo,
@@ -111,6 +117,8 @@ async function sendViaResend(params: SendEmailParams): Promise<SendEmailResult> 
   const result = await resendClient.emails.send({
     from: fromAddr,
     to: toArray,
+    cc: params.cc,
+    bcc: params.bcc,
     subject: params.subject,
     html: params.html,
     replyTo: params.replyTo,

@@ -38,10 +38,10 @@ export async function GET(request: NextRequest) {
   const supabase = await createAdminClient();
   const vapidOk  = setupVapid();
 
-  // ── Find locations that require headcount ──
+  // ── Find locations that require headcount, including their in-charges ──
   const { data: locations, error: locErr } = await supabase
     .from("locations")
-    .select("id, name")
+    .select("id, name, incharge_user_id_1, incharge_user_id_2")
     .eq("requires_headcount", true)
     .eq("is_active", true);
 
@@ -70,42 +70,54 @@ export async function GET(request: NextRequest) {
   const missingNames = missing.map(l => l.name).join(", ");
   console.log(`[headcount-reminder] Missing readings at: ${missingNames}`);
 
-  // ── Get floor_managers and office_admins for push notifications ──
-  const { data: floorStaff } = await supabase
-    .from("push_subscriptions")
-    .select("endpoint, p256dh, auth, user:users!push_subscriptions_user_id_fkey(role)")
-    .in("user.role", ["floor_manager", "office_admin"]);
+  // ── Resolve in-charge user IDs for the MISSING locations ──
+  // We push only to the people accountable for those specific centres
+  // instead of broadcasting to every floor_manager in the company. This
+  // is the change the user asked for: location-scoped nudges instead of
+  // role-wide blasts.
+  const inchargeUserIds = Array.from(new Set(
+    missing.flatMap(l => [l.incharge_user_id_1, l.incharge_user_id_2].filter(Boolean) as string[])
+  ));
 
-  // ── Get managers and admins for escalation email ──
+  // Manager role gets the supervisory escalation email (admin dropped).
   const { data: managers } = await supabase
     .from("users")
     .select("email, full_name")
-    .in("role", ["admin", "manager"])
+    .eq("role", "manager")
     .eq("is_active", true)
     .not("email", "is", null);
 
   const results = { pushSent: 0, emailSent: 0, missing: missing.length };
 
-  // ── Send push to floor incharge ──
+  // ── Send push to designated in-charges of the missing locations ──
   const slotLabel = getSlotLabel(now);
 
-  if (vapidOk && floorStaff?.length) {
-    const payload = JSON.stringify({
-      title: `⏰ Headcount due — ${slotLabel}`,
-      body: `Please log the headcount for: ${missingNames}`,
-      url: "/headcount",
-      tag: "headcount-reminder",
-    });
+  if (vapidOk && inchargeUserIds.length > 0) {
+    const { data: subs } = await supabase
+      .from("push_subscriptions")
+      .select("endpoint, p256dh, auth")
+      .in("user_id", inchargeUserIds);
 
-    const pushResults = await Promise.allSettled(
-      floorStaff.map(sub =>
-        webPush.sendNotification(
-          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
-          payload
+    if (subs?.length) {
+      const payload = JSON.stringify({
+        title: `⏰ Headcount due — ${slotLabel}`,
+        body: `Please log the headcount for: ${missingNames}`,
+        url: "/headcount",
+        tag: "headcount-reminder",
+      });
+
+      const pushResults = await Promise.allSettled(
+        subs.map(sub =>
+          webPush.sendNotification(
+            { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+            payload
+          )
         )
-      )
-    );
-    results.pushSent = pushResults.filter(r => r.status === "fulfilled").length;
+      );
+      results.pushSent = pushResults.filter(r => r.status === "fulfilled").length;
+    }
+  } else if (inchargeUserIds.length === 0) {
+    console.warn(`[headcount-reminder] None of the missing locations have an in-charge configured — push skipped, only the manager escalation email will go out`);
   }
 
   // ── Escalation email to managers ──

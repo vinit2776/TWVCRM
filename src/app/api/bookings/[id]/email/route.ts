@@ -4,6 +4,8 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateICS } from "@/lib/ics-generator";
 import { BOOKING_CUSTOMER_TYPE_LABELS, BOOKING_PAYMENT_MODE_LABELS } from "@/lib/constants";
 import { logEmailActivity } from "@/lib/audit";
+import { getLocationIncharges, getLocationInchargeUserIds } from "@/lib/location-incharges";
+import { sendPushToUsers } from "@/lib/push";
 
 function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 0 }).format(amount);
@@ -99,16 +101,13 @@ export async function POST(
 
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000").trim();
 
-  // ── Check-in alert to floor managers ──
+  // ── Check-in alert to floor in-charges (CC managers) ──
   if (emailType === "check_in_alert") {
-    const { data: managers } = await supabase
-      .from("users")
-      .select("email, full_name")
-      .in("role", ["admin", "manager", "floor_manager"])
-      .eq("is_active", true);
+    const { to: inchargeRecipients, cc: managerCc, fellBack } =
+      await getLocationIncharges(supabase, booking.location_id);
 
-    if (!managers || managers.length === 0) {
-      return NextResponse.json({ error: "No floor managers found" }, { status: 400 });
+    if (inchargeRecipients.length === 0 && managerCc.length === 0) {
+      return NextResponse.json({ error: "No in-charges or managers configured" }, { status: 400 });
     }
 
     const alertHtml = `
@@ -125,22 +124,36 @@ export async function POST(
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Check-in Time</td><td style="padding:8px;border:1px solid #ddd;">${formatIstStamp(new Date())}</td></tr>
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Booking</td><td style="padding:8px;border:1px solid #ddd;">${booking.booking_number}</td></tr>
           </table>
+          ${fellBack ? `<p style="color:#b45309;font-size:11px;margin-top:16px;">Note: this location has no designated floor in-charge yet. Set one in Locations → Edit.</p>` : ""}
         </div>
       </div>`;
 
-    await Promise.all(
-      managers.map((mgr) =>
-        resend.emails.send({
-          from: EMAIL_FROM,
-          to: mgr.email,
-          // Subject leads with the location so a manager covering multiple
-          // centres can triage their inbox at a glance.
-          subject: `Check-In${locationName ? ` [${locationName}]` : ""}: ${customerName} at ${spaceName} - The WorkVilla`,
-          html: alertHtml,
-        }).catch((e) => console.error(`Failed to send check-in alert to ${mgr.email}:`, e))
-      )
-    );
-    return NextResponse.json({ message: `Check-in alert sent to ${managers.length} manager(s)` });
+    const toAddresses = inchargeRecipients.map((u) => u.email);
+    const ccAddresses = managerCc.map((u) => u.email);
+
+    if (toAddresses.length > 0) {
+      await resend.emails.send({
+        from: EMAIL_FROM,
+        to: toAddresses,
+        cc: ccAddresses.length > 0 ? ccAddresses : undefined,
+        subject: `Check-In${locationName ? ` [${locationName}]` : ""}: ${customerName} at ${spaceName} - The WorkVilla`,
+        html: alertHtml,
+      }).catch((e) => console.error(`Failed to send check-in alert:`, e));
+    } else if (ccAddresses.length > 0) {
+      await resend.emails.send({
+        from: EMAIL_FROM,
+        to: ccAddresses,
+        subject: `Check-In${locationName ? ` [${locationName}]` : ""}: ${customerName} at ${spaceName} - The WorkVilla`,
+        html: alertHtml,
+      }).catch((e) => console.error(`Failed to send check-in alert:`, e));
+    }
+
+    return NextResponse.json({
+      message: "Check-in alert sent",
+      to: toAddresses,
+      cc: ccAddresses,
+      fellBack,
+    });
   }
 
   // ── Feedback link email to customer ──
@@ -261,15 +274,18 @@ export async function POST(
   }
 
   if (emailType === "cleaning") {
-    // Send cleaning alert to floor managers
-    const { data: managers } = await supabase
-      .from("users")
-      .select("email, full_name")
-      .in("role", ["admin", "manager", "floor_manager"])
-      .eq("is_active", true);
+    // Recipients are now scoped to the booking's location:
+    //   To: the location's designated floor in-charges (max 2)
+    //   CC: managers (supervisory only — they can stay informed but the
+    //       primary action sits with the in-charges)
+    //   admin role intentionally dropped — historic noise.
+    // Push notifications go to the same set so in-charges using the mobile
+    // PWA get the alert without checking email.
+    const { to: inchargeRecipients, cc: managerCc, fellBack } =
+      await getLocationIncharges(supabase, booking.location_id);
 
-    if (!managers || managers.length === 0) {
-      return NextResponse.json({ error: "No floor managers found" }, { status: 400 });
+    if (inchargeRecipients.length === 0 && managerCc.length === 0) {
+      return NextResponse.json({ error: "No in-charges or managers configured" }, { status: 400 });
     }
 
     const cleaningHtml = `
@@ -286,21 +302,48 @@ export async function POST(
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Booking</td><td style="padding:8px;border:1px solid #ddd;">${booking.booking_number}</td></tr>
           </table>
           <p style="color:#666;">Please arrange cleaning for the room at the earliest.</p>
+          ${fellBack ? `<p style="color:#b45309;font-size:11px;margin-top:16px;">Note: this location has no designated floor in-charge yet. Set one in Locations → Edit so future alerts route directly to the right person.</p>` : ""}
         </div>
       </div>`;
 
-    await Promise.all(
-      managers.map((mgr) =>
-        resend.emails.send({
-          from: EMAIL_FROM,
-          to: mgr.email,
-          subject: `Cleaning Required - ${spaceName} - The WorkVilla`,
-          html: cleaningHtml,
-        }).catch((e) => console.error(`Failed to send cleaning email to ${mgr.email}:`, e))
-      )
-    );
+    // Single Resend call with To + CC — Resend natively supports both.
+    const toAddresses = inchargeRecipients.map((u) => u.email);
+    const ccAddresses = managerCc.map((u) => u.email);
 
-    return NextResponse.json({ message: `Cleaning alert sent to ${managers.length} manager(s)` });
+    if (toAddresses.length > 0) {
+      await resend.emails.send({
+        from: EMAIL_FROM,
+        to: toAddresses,
+        cc: ccAddresses.length > 0 ? ccAddresses : undefined,
+        subject: `Cleaning Required${locationName ? ` [${locationName}]` : ""} - ${spaceName} - The WorkVilla`,
+        html: cleaningHtml,
+      }).catch((e) => console.error(`Failed to send cleaning email:`, e));
+    } else if (ccAddresses.length > 0) {
+      // No in-charges — send to managers as the primary recipients.
+      await resend.emails.send({
+        from: EMAIL_FROM,
+        to: ccAddresses,
+        subject: `Cleaning Required${locationName ? ` [${locationName}]` : ""} - ${spaceName} - The WorkVilla`,
+        html: cleaningHtml,
+      }).catch((e) => console.error(`Failed to send cleaning email:`, e));
+    }
+
+    // Fire push notifications to the same audience so the in-charges using
+    // the mobile PWA get the alert without checking email.
+    const { primary, supervisory } = await getLocationInchargeUserIds(supabase, booking.location_id);
+    sendPushToUsers([...primary, ...supervisory], {
+      title: `🧹 Cleaning Required${locationName ? ` — ${locationName}` : ""}`,
+      body: `${spaceName} just checked out (${booking.booking_number}). Arrange cleaning.`,
+      url: `/bookings/${booking.booking_number || booking.id}`,
+      tag: `cleaning-${booking.id}`,
+    }).catch((e) => console.error("[cleaning push] failed:", e));
+
+    return NextResponse.json({
+      message: `Cleaning alert sent`,
+      to: toAddresses,
+      cc: ccAddresses,
+      fellBack,
+    });
   }
 
   // Confirmation email

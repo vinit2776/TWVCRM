@@ -42,7 +42,10 @@ export async function PUT(
   }
 
   const body = await request.json();
-  const { name, code, address, city, state, is_active, capacity_config, requires_headcount, latitude, longitude } = body as {
+  const {
+    name, code, address, city, state, is_active, capacity_config, requires_headcount,
+    latitude, longitude, incharge_user_id_1, incharge_user_id_2,
+  } = body as {
     name?: string;
     code?: string;
     address?: string;
@@ -53,7 +56,22 @@ export async function PUT(
     requires_headcount?: boolean;
     latitude?: number | null;
     longitude?: number | null;
+    incharge_user_id_1?: string | null;
+    incharge_user_id_2?: string | null;
   };
+
+  // Same-user-twice guard mirrors the POST route + DB constraint so we
+  // surface a friendlier error before the round-trip.
+  if (
+    incharge_user_id_1 &&
+    incharge_user_id_2 &&
+    incharge_user_id_1 === incharge_user_id_2
+  ) {
+    return NextResponse.json(
+      { error: "The two floor in-charges must be different users" },
+      { status: 400 }
+    );
+  }
 
   const updates: Record<string, unknown> = {};
   if (name !== undefined) updates.name = name;
@@ -66,12 +84,18 @@ export async function PUT(
   if (requires_headcount !== undefined) updates.requires_headcount = requires_headcount;
   if (latitude !== undefined) updates.latitude = latitude;
   if (longitude !== undefined) updates.longitude = longitude;
+  if (incharge_user_id_1 !== undefined) updates.incharge_user_id_1 = incharge_user_id_1 || null;
+  if (incharge_user_id_2 !== undefined) updates.incharge_user_id_2 = incharge_user_id_2 || null;
 
   const { data, error } = await supabase
     .from("locations")
     .update(updates)
     .eq("id", id)
-    .select()
+    .select(`
+      *,
+      incharge_1:users!locations_incharge_user_id_1_fkey(id, full_name, email, role),
+      incharge_2:users!locations_incharge_user_id_2_fkey(id, full_name, email, role)
+    `)
     .single();
 
   if (error) {
