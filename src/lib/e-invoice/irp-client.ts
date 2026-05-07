@@ -68,6 +68,35 @@ export interface IrpClient {
     docNumber: string,
     docDateDdMmYyyy: string
   ): Promise<IrpResult<NicGenerateIrnSuccess>>;
+
+  /**
+   * GET /eivital/v1.04/Master/gstin/{gstin}
+   * Retrieve a GSTIN's details from the IRP's master (GSTN-sourced).
+   * Used for buyer-GSTIN auto-fill and seller details sync.
+   */
+  getGstinDetails(gstin: string): Promise<IrpResult<GstinMasterDetails>>;
+}
+
+export interface GstinMasterDetails {
+  Gstin?: string;
+  LglNm?: string;          // Legal name
+  TrdNm?: string;          // Trade name
+  Status?: string;         // ACT / CNL / SUSP / INA
+  BlkStatus?: string;      // Block status
+  DtReg?: string;          // Registration date
+  DtDReg?: string;         // De-registration date
+  AddrBnm?: string;        // Building name
+  AddrBno?: string;        // Building number
+  AddrFlno?: string;       // Floor number
+  AddrSt?: string;         // Street
+  AddrLoc?: string;        // Location
+  AddrCity?: string;       // City (older field)
+  Loc?: string;            // Location (newer field)
+  Adr1?: string;           // Address line 1 (composed)
+  Adr2?: string;           // Address line 2
+  Pncd?: number;           // Pincode
+  Stcd?: string;           // State code
+  TxpTyp?: string;         // Taxpayer type
 }
 
 import type { SupabaseClient } from "@supabase/supabase-js";

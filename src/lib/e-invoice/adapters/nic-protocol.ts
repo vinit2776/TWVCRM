@@ -38,6 +38,7 @@ import type {
   IrpClient,
   IrpClientConfig,
   IrpResult,
+  GstinMasterDetails,
 } from "../irp-client";
 import type {
   NicEInvoicePayload,
@@ -214,6 +215,10 @@ export class NicProtocolIrpClient implements IrpClient {
   ): Promise<IrpResult<NicGenerateIrnSuccess>> {
     const qs = new URLSearchParams({ doctype: docType, docnum: docNumber, docdate: docDateDdMmYyyy });
     return this.authedGet<NicGenerateIrnSuccess>(`/eicore/v1.03/Invoice/irnbydocdetails?${qs}`);
+  }
+
+  async getGstinDetails(gstin: string): Promise<IrpResult<GstinMasterDetails>> {
+    return this.authedGet<GstinMasterDetails>(`/eivital/v1.04/Master/gstin/${gstin}`);
   }
 
   // ─── Internal: encrypted POST with auto-retry on auth expiry ─────────────

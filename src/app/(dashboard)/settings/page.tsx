@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClient } from "@/lib/supabase/client"; // still needed for handleSave
 import { getInitials } from "@/lib/utils";
 import { toast } from "sonner";
-import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart, LayoutDashboard, Banknote, AlertTriangle, PieChart } from "lucide-react";
+import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart, LayoutDashboard, Banknote, AlertTriangle, PieChart, FileText } from "lucide-react";
 import { PaymentGatewaySettings } from "@/components/settings/payment-gateway-settings";
 import { ProcurementSettings } from "@/components/settings/procurement-settings";
 import { DashboardSettings } from "@/components/settings/dashboard-settings";
@@ -19,6 +19,7 @@ import { PettyCashSettings } from "@/components/settings/petty-cash-settings";
 import { ServicesSettings } from "@/components/settings/services-settings";
 import { ReorderSettings } from "@/components/settings/reorder-settings";
 import { ProcurementBudgetSettings } from "@/components/settings/procurement-budget-settings";
+import { EInvoiceSettings } from "@/components/settings/e-invoice-settings";
 import Link from "next/link";
 
 export default function SettingsPage() {
@@ -149,6 +150,11 @@ export default function SettingsPage() {
           {["admin", "manager"].includes(profile.role) && (
             <TabsTrigger value="dept-budgets" className="justify-start gap-2 px-3 py-2 text-sm">
               <PieChart className="h-4 w-4 shrink-0" />Budgets
+            </TabsTrigger>
+          )}
+          {profile.role === "admin" && (
+            <TabsTrigger value="e-invoicing" className="justify-start gap-2 px-3 py-2 text-sm">
+              <FileText className="h-4 w-4 shrink-0" />E-Invoicing
             </TabsTrigger>
           )}
         </TabsList>
@@ -338,6 +344,11 @@ export default function SettingsPage() {
         {["admin", "manager"].includes(profile.role) && (
           <TabsContent value="dept-budgets" className="mt-0">
             <ProcurementBudgetSettings userRole={profile.role} />
+          </TabsContent>
+        )}
+        {profile.role === "admin" && (
+          <TabsContent value="e-invoicing" className="mt-0">
+            <EInvoiceSettings />
           </TabsContent>
         )}
         </div>
