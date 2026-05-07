@@ -47,6 +47,7 @@ import {
   BarChart3 as BarChart3Icon,
   UsersRound,
   Wrench,
+  Fingerprint,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -112,7 +113,8 @@ const navSections: NavSection[] = [
       { href: "/spaces",    label: "Spaces",    icon: DoorOpen,      roles: OPERATIONS_ROLES },
       { href: "/headcount", label: "Headcount", icon: UsersRound,    roles: OPERATIONS_ROLES },
       { href: "/packages",  label: "Packages",  icon: TicketCheck,   roles: OPERATIONS_ROLES },
-      { href: "/vouchers",  label: "Vouchers",  icon: Wifi,          roles: [...OPERATIONS_ROLES, "facility_staff"] },
+      { href: "/vouchers",    label: "Vouchers",    icon: Wifi,          roles: [...OPERATIONS_ROLES, "facility_staff"] },
+      { href: "/attendance",  label: "Attendance",  icon: Fingerprint,   roles: ["admin", "manager"] },
     ],
   },
   {
