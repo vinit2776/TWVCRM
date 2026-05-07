@@ -33,6 +33,7 @@ import {
 } from "../crypto";
 import { loadSession, saveSession, clearSession } from "../token-cache";
 import { lookupNicError } from "../errors";
+import { lookupPublicKey } from "../public-keys";
 import type {
   IrpClient,
   IrpClientConfig,
@@ -46,43 +47,21 @@ import type {
   NicErrorDetail,
 } from "../types";
 
-// ─── Per-provider host & public key configuration ───────────────────────────
+// ─── Per-provider host configuration ─────────────────────────────────────────
+// Public keys are embedded in src/lib/e-invoice/public-keys.ts (they aren't
+// secrets) and resolved via lookupPublicKey().
 
-interface ProviderHostConfig {
-  baseUrl: string;        // e.g. "https://api.sandbox.core.irisirp.com"
-  publicKeyPem: string;   // RSA public key (PEM)
-}
-
-const HOST_CONFIG: Record<string, Record<string, ProviderHostConfig>> = {
+const HOST_BASE_URLS: Record<string, Record<string, string>> = {
   einvoice6: {
-    sandbox: {
-      baseUrl: "https://api.sandbox.core.irisirp.com",
-      // ⚠️ PLACEHOLDER — to be replaced with IRIS-issued public key.
-      // Operator MUST set EINVOICE_IRIS_SANDBOX_PUBLIC_KEY env var in
-      // production / .env.local in dev. Adapter throws at use-site if
-      // the public key is still unset.
-      publicKeyPem: process.env.EINVOICE_IRIS_SANDBOX_PUBLIC_KEY ?? "",
-    },
-    production: {
-      baseUrl: "https://api.einvoice6.gst.gov.in",
-      publicKeyPem: process.env.EINVOICE_IRIS_PRODUCTION_PUBLIC_KEY ?? "",
-    },
+    sandbox: "https://api.sandbox.core.irisirp.com",
+    production: "https://api.einvoice6.gst.gov.in",
   },
   nic1: {
-    sandbox: {
-      baseUrl: "https://einv-apisandbox.nic.in",
-      publicKeyPem: process.env.EINVOICE_NIC_SANDBOX_PUBLIC_KEY ?? "",
-    },
-    production: {
-      baseUrl: "https://api.einvoice1.gst.gov.in",
-      publicKeyPem: process.env.EINVOICE_NIC_PRODUCTION_PUBLIC_KEY ?? "",
-    },
+    sandbox: "https://einv-apisandbox.nic.in",
+    production: "https://api.einvoice1.gst.gov.in",
   },
   nic2: {
-    production: {
-      baseUrl: "https://api.einvoice2.gst.gov.in",
-      publicKeyPem: process.env.EINVOICE_NIC_PRODUCTION_PUBLIC_KEY ?? "",
-    },
+    production: "https://api.einvoice2.gst.gov.in",
   },
 };
 
@@ -106,29 +85,32 @@ interface AuthSuccessInner {
 // ─── Adapter implementation ─────────────────────────────────────────────────
 
 export class NicProtocolIrpClient implements IrpClient {
-  private readonly host: ProviderHostConfig;
+  private readonly baseUrl: string;
+  private readonly publicKeyPem: string;
 
   constructor(
     private readonly config: IrpClientConfig,
     private readonly supabase: SupabaseClient,
   ) {
-    const providerHosts = HOST_CONFIG[config.provider];
+    const providerHosts = HOST_BASE_URLS[config.provider];
     if (!providerHosts) {
       throw new Error(`No host config for provider "${config.provider}"`);
     }
-    const envHost = providerHosts[config.environment];
-    if (!envHost) {
+    const baseUrl = providerHosts[config.environment];
+    if (!baseUrl) {
       throw new Error(
         `Provider "${config.provider}" has no ${config.environment} environment configured`
       );
     }
-    if (!envHost.publicKeyPem) {
+    const publicKey = lookupPublicKey(config.provider, config.environment);
+    if (!publicKey) {
       throw new Error(
         `Public key not configured for ${config.provider}/${config.environment}. ` +
-        `Set the corresponding EINVOICE_*_PUBLIC_KEY env var (request from IRIS / NIC).`
+        `Add the PEM to src/lib/e-invoice/public-keys.ts (request from IRP if needed).`
       );
     }
-    this.host = envHost;
+    this.baseUrl = baseUrl;
+    this.publicKeyPem = publicKey;
   }
 
   // ─── Auth ─────────────────────────────────────────────────────────────────
@@ -149,13 +131,13 @@ export class NicProtocolIrpClient implements IrpClient {
 
     const payload = {
       UserName: this.config.credentials.username,
-      Password: rsaEncryptToBase64(this.host.publicKeyPem, this.config.credentials.password),
-      AppKey: rsaEncryptToBase64(this.host.publicKeyPem, appKeyBase64),
+      Password: rsaEncryptToBase64(this.publicKeyPem, this.config.credentials.password),
+      AppKey: rsaEncryptToBase64(this.publicKeyPem, appKeyBase64),
       ForceRefreshAccessToken: false,
     };
 
     const start = Date.now();
-    const res = await fetch(`${this.host.baseUrl}/eivital/v1.04/auth`, {
+    const res = await fetch(`${this.baseUrl}/eivital/v1.04/auth`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -246,7 +228,7 @@ export class NicProtocolIrpClient implements IrpClient {
 
     const dataB64 = encryptIrpRequestBody(session.sek, plainPayload);
 
-    const res = await fetch(`${this.host.baseUrl}${path}`, {
+    const res = await fetch(`${this.baseUrl}${path}`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -297,7 +279,7 @@ export class NicProtocolIrpClient implements IrpClient {
     const start = Date.now();
     const session = await this.getSession();
 
-    const res = await fetch(`${this.host.baseUrl}${path}`, {
+    const res = await fetch(`${this.baseUrl}${path}`, {
       method: "GET",
       headers: {
         "client_id": this.config.credentials.client_id,
