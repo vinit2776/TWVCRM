@@ -346,7 +346,7 @@ export default function AttendanceTestPage() {
         <CardContent>
           {userMaps.length === 0 ? (
             <p className="text-sm text-muted-foreground">
-              No mappings yet. When an unmapped PIN punches, click "Map a PIN" above to link it to an employee or member.
+              No mappings yet. When an unmapped PIN punches, click &quot;Map a PIN&quot; above to link it to an employee or member.
             </p>
           ) : (
             <table className="w-full text-xs">

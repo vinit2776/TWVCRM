@@ -59,6 +59,8 @@ const CashHandoverTable      = dynamic(() => import("@/components/accounting/cas
 const GstInvoiceEntry        = dynamic(() => import("@/components/accounting/gst-invoice-entry").then(m => m.GstInvoiceEntry),               { ssr: false, loading: () => <TabLoading label="GST" /> });
 const ProposalPaymentsTab    = dynamic(() => import("@/components/accounting/proposal-payments-tab").then(m => m.ProposalPaymentsTab),       { ssr: false, loading: () => <TabLoading label="Proposals" /> });
 const ExportSummaryDialog    = dynamic(() => import("@/components/accounting/export-summary-dialog").then(m => m.ExportSummaryDialog),       { ssr: false });
+const RefundsTab             = dynamic(() => import("@/components/billing/refunds-tab").then(m => m.RefundsTab),                              { ssr: false, loading: () => <TabLoading label="Refunds" /> });
+const RetainedPaymentsTab    = dynamic(() => import("@/components/billing/retained-payments-tab").then(m => m.RetainedPaymentsTab),           { ssr: false, loading: () => <TabLoading label="Retained Payments" /> });
 
 function TabLoading({ label }: { label: string }) {
   return (
@@ -296,8 +298,8 @@ export default function BillingPage() {
   // sub-tabs; the existing TabsContent components stay untouched.
   const SECTION_TABS = {
     receivables: ["contracts", "proposals", "usage-charges"],
-    collections: ["walkin", "cash"],
-    invoicing:   ["gst", "statements"],
+    collections: ["walkin", "cash", "refunds"],
+    invoicing:   ["gst", "statements", "retained-payments"],
   } as const;
   type Section = keyof typeof SECTION_TABS;
   const sectionForTab = (tab: string): Section => {
@@ -686,12 +688,14 @@ export default function BillingPage() {
                 <TabsTrigger value="cash">
                   Cash{!summaryLoading ? ` (${pendingHandover.length} pending)` : ""}
                 </TabsTrigger>
+                <TabsTrigger value="refunds">Refunds</TabsTrigger>
               </>
             )}
             {section === "invoicing" && (
               <>
                 <TabsTrigger value="gst">GST Invoices</TabsTrigger>
                 <TabsTrigger value="statements">Statements</TabsTrigger>
+                <TabsTrigger value="retained-payments">Retained Payments</TabsTrigger>
               </>
             )}
           </TabsList>
@@ -759,6 +763,11 @@ export default function BillingPage() {
           )}
         </TabsContent>
 
+        {/* ── Refunds (under Collections) ───────────────────────────────── */}
+        <TabsContent value="refunds" className="space-y-4 mt-4">
+          <RefundsTab />
+        </TabsContent>
+
         {/* ── GST Invoices ──────────────────────────────────────────────── */}
         <TabsContent value="gst" className="mt-4">
           {summaryLoading ? (
@@ -766,6 +775,11 @@ export default function BillingPage() {
           ) : (
             <GstInvoiceEntry entries={gstEntries} onRefresh={fetchData} />
           )}
+        </TabsContent>
+
+        {/* ── Retained Payments (under Invoicing) ───────────────────────── */}
+        <TabsContent value="retained-payments" className="space-y-4 mt-4">
+          <RetainedPaymentsTab />
         </TabsContent>
 
         {/* ── Usage Charges ─────────────────────────────────────────────── */}

@@ -988,8 +988,18 @@ export interface RefundRequest {
   notes?: string | null;
   created_at: string;
   updated_at: string;
-  // Joined fields
-  booking?: { id: string; booking_number: string; booking_date: string; total_amount: number } | null;
+  // Joined fields — populated on the GET endpoint
+  booking?: {
+    id: string;
+    booking_number: string;
+    booking_date: string;
+    total_amount: number;
+    total_amount_with_gst?: number;
+    customer_type?: string;
+    guest_name?: string | null;
+    location?: { id: string; name: string; code: string } | null;
+    lead?: { id: string; first_name: string; last_name: string; company?: string | null } | null;
+  } | null;
   requester?: { id: string; full_name: string } | null;
   approver?: { id: string; full_name: string } | null;
   processor?: { id: string; full_name: string } | null;

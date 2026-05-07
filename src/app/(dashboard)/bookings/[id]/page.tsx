@@ -855,12 +855,43 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             <AlertTriangle className="h-5 w-5 text-amber-600" />
           </div>
           <div className="flex-1 min-w-0">
-            <p className="font-semibold text-amber-800">
-              Outstanding charges from previous visits — {formatCurrency(outstandingTotal)}
-            </p>
-            <p className="text-sm text-amber-700 mb-2">
-              {customerName} has {outstandingCharges.length} unpaid charge{outstandingCharges.length > 1 ? "s" : ""} logged against past bookings.
-            </p>
+            <div className="flex items-start justify-between gap-3 flex-wrap">
+              <div className="min-w-0">
+                <p className="font-semibold text-amber-800">
+                  Outstanding charges from previous visits — {formatCurrency(outstandingTotal)}
+                </p>
+                <p className="text-sm text-amber-700 mb-2">
+                  {customerName} has {outstandingCharges.length} unpaid charge{outstandingCharges.length > 1 ? "s" : ""} logged against past bookings.
+                </p>
+              </div>
+              {/* Bulk import — adds every outstanding charge as addons on
+                  this booking and clears them from the queue at once.
+                  Hidden if booking is locked (paid / terminal). */}
+              {canEditPricing && outstandingCharges.length > 1 && (
+                <Button
+                  size="sm"
+                  className="h-7 text-xs bg-amber-600 hover:bg-amber-700 text-white shrink-0"
+                  onClick={async () => {
+                    if (!confirm(`Add all ${outstandingCharges.length} outstanding charges as add-ons to this booking? Customer's total will increase by ${formatCurrency(outstandingTotal)}.`)) return;
+                    const res = await fetch(`/api/bookings/${id}/import-old-dues`, {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ charge_ids: outstandingCharges.map((c) => c.id) }),
+                    });
+                    const json = await res.json();
+                    if (res.ok) {
+                      toast.success(`${json.imported} charge${json.imported > 1 ? "s" : ""} imported as add-ons`);
+                      setOutstandingCharges([]);
+                      fetchBooking();
+                    } else {
+                      toast.error(json.error || "Failed to import");
+                    }
+                  }}
+                >
+                  Add all to this bill
+                </Button>
+              )}
+            </div>
             <div className="space-y-1">
               {outstandingCharges.map((c) => (
                 <div key={c.id}>
@@ -875,27 +906,35 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                         </Link>
                       )}
                       <span className="font-semibold text-amber-800">{formatCurrency(c.total)}</span>
-                      <button
-                        type="button"
-                        className="text-xs text-green-700 hover:text-green-900 underline font-medium"
-                        title="Mark as collected in this booking"
-                        onClick={async () => {
-                          const res = await fetch(`/api/usage-charges/${c.id}`, {
-                            method: "PATCH",
-                            headers: { "Content-Type": "application/json" },
-                            body: JSON.stringify({ settled_in_booking_id: id }),
-                          });
-                          if (res.ok) {
-                            toast.success("Charge marked as collected");
-                            setOutstandingCharges(prev => prev.filter(ch => ch.id !== c.id));
-                          } else {
-                            const err = await res.json().catch(() => null);
-                            toast.error(err?.error || "Failed to settle charge");
-                          }
-                        }}
-                      >
-                        Collect
-                      </button>
+                      {/* Add to bill — imports this charge as an addon
+                          on the current booking. Replaces the legacy
+                          "Collect" path which marked the charge as
+                          billed but didn't roll into the booking total
+                          (so customers were undercharged). */}
+                      {canEditPricing && (
+                        <button
+                          type="button"
+                          className="text-xs text-green-700 hover:text-green-900 underline font-medium"
+                          title="Add this charge as an add-on to the current booking"
+                          onClick={async () => {
+                            const res = await fetch(`/api/bookings/${id}/import-old-dues`, {
+                              method: "POST",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ charge_ids: [c.id] }),
+                            });
+                            if (res.ok) {
+                              toast.success("Added as add-on — customer total updated");
+                              setOutstandingCharges((prev) => prev.filter((ch) => ch.id !== c.id));
+                              fetchBooking();
+                            } else {
+                              const err = await res.json().catch(() => null);
+                              toast.error(err?.error || "Failed to add to bill");
+                            }
+                          }}
+                        >
+                          Add to bill
+                        </button>
+                      )}
                       {(userRole === "admin" || userRole === "manager") && (
                         <button
                           type="button"
