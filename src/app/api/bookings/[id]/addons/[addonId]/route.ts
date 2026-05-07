@@ -20,8 +20,38 @@ export async function DELETE(
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
   const { data: booking } = await supabase
-    .from("bookings").select("id, total_amount, gst_amount, total_amount_with_gst").eq("id", id).single();
+    .from("bookings")
+    .select("id, total_amount, gst_amount, total_amount_with_gst, status, payment_status")
+    .eq("id", id).single();
   if (!booking) return NextResponse.json({ error: "Booking not found" }, { status: 404 });
+
+  // Same lock as the POST: removing a charge after the customer paid
+  // would lower the booking total below what was collected, leaving an
+  // unaccounted surplus.
+  if (["cancelled", "checked_out", "no_show"].includes(booking.status)) {
+    return NextResponse.json(
+      { error: `Cannot remove charges from a ${booking.status} booking` },
+      { status: 400 }
+    );
+  }
+  if (booking.payment_status === "paid") {
+    return NextResponse.json(
+      { error: "Cannot remove charges — payment has already been collected. Issue a refund or waive separately." },
+      { status: 400 }
+    );
+  }
+  const { data: paidPayments } = await supabase
+    .from("booking_payments")
+    .select("id")
+    .eq("booking_id", id)
+    .eq("status", "verified")
+    .limit(1);
+  if (paidPayments && paidPayments.length > 0) {
+    return NextResponse.json(
+      { error: "Cannot remove charges — verified payments exist for this booking" },
+      { status: 400 }
+    );
+  }
 
   const { data: addon } = await supabase
     .from("booking_addons").select("*").eq("id", addonId).eq("booking_id", id).single();

@@ -1399,13 +1399,16 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
 
       {/* Add-ons / extras — lazy-mounted so the catalog fetch and dialog don't
           run on every page load. The section mounts the first time the user
-          clicks "Add charge" (or automatically on checkout overtime). */}
+          clicks "Add charge" (or automatically on checkout overtime).
+          canEdit reuses canEditPricing so add-on add/remove is locked under
+          the same rules as the rate edit (paid / verified payment / terminal
+          status). The server enforces the same — this just hides the UI. */}
       {booking.space_id && (
         showAddonsSection ? (
           <BookingAddonsSection
             bookingId={booking.id}
             spaceId={booking.space_id}
-            canEdit={booking.status !== "cancelled"}
+            canEdit={canEditPricing}
             onChange={fetchBooking}
             prefill={addonPrefill}
             openSignal={addonOpenSignal}
@@ -1416,7 +1419,10 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <h3 className="text-sm font-semibold">Extras &amp; charges</h3>
               <p className="text-xs text-muted-foreground">Add-ons and additional charges</p>
             </div>
-            {booking.status !== "cancelled" && (
+            {/* Same lock as the in-section "Add charge" — once payment is
+                collected, charges can't be added (would create a hidden
+                balance due). */}
+            {canEditPricing ? (
               <Button
                 size="sm"
                 onClick={() => {
@@ -1428,6 +1434,13 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               >
                 <Plus className="h-4 w-4 mr-1" />Add charge
               </Button>
+            ) : (
+              <span
+                className="text-[10px] text-muted-foreground/70 px-2 py-1 rounded bg-muted/50"
+                title={lockReason}
+              >
+                🔒 {lockReason}
+              </span>
             )}
           </div>
         )

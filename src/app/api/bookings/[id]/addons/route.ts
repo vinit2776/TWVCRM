@@ -53,9 +53,39 @@ export async function POST(
   // only refresh `total_amount_with_gst` to reflect charges added/removed).
   const { data: booking, error: bErr } = await supabase
     .from("bookings")
-    .select("id, total_amount, gst_rate, gst_amount, total_amount_with_gst, status")
+    .select("id, total_amount, gst_rate, gst_amount, total_amount_with_gst, status, payment_status")
     .eq("id", id).single();
   if (bErr || !booking) return NextResponse.json({ error: "Booking not found" }, { status: 404 });
+
+  // Lock add-ons under the same rules as the rate edit. Adding charges
+  // after the customer has paid creates a balance due that the receipt
+  // doesn't reflect; same shape mismatch as silently changing the rate.
+  if (["cancelled", "checked_out", "no_show"].includes(booking.status)) {
+    return NextResponse.json(
+      { error: `Cannot add charges to a ${booking.status} booking` },
+      { status: 400 }
+    );
+  }
+  if (booking.payment_status === "paid") {
+    return NextResponse.json(
+      { error: "Cannot add charges — payment has already been collected. Use Log Charge to record a separate post-facto charge." },
+      { status: 400 }
+    );
+  }
+  // Defence in depth — payment_status can be stale; verified booking_payments
+  // is the truth.
+  const { data: paidPayments } = await supabase
+    .from("booking_payments")
+    .select("id")
+    .eq("booking_id", id)
+    .eq("status", "verified")
+    .limit(1);
+  if (paidPayments && paidPayments.length > 0) {
+    return NextResponse.json(
+      { error: "Cannot add charges — verified payments exist for this booking" },
+      { status: 400 }
+    );
+  }
 
   const body = await request.json();
 
