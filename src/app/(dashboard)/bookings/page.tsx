@@ -169,6 +169,7 @@ function BookingTable({
                 </th>
                 <th className="px-4 py-2.5 text-left font-medium text-xs">Booking #</th>
                 <th className="px-4 py-2.5 text-left font-medium text-xs hidden md:table-cell">Space</th>
+                <th className="px-4 py-2.5 text-left font-medium text-xs hidden xl:table-cell">Location</th>
                 <th className="px-4 py-2.5 text-left font-medium text-xs">Time</th>
                 <th className="px-4 py-2.5 text-left font-medium text-xs">Customer</th>
                 <th className="px-4 py-2.5 text-left font-medium text-xs hidden lg:table-cell">Phone</th>
@@ -208,6 +209,7 @@ function BookingTable({
                       </div>
                     </td>
                     <td className="px-4 py-2.5 hidden md:table-cell text-xs">{b.space?.name || "—"}</td>
+                    <td className="px-4 py-2.5 hidden xl:table-cell text-xs text-muted-foreground">{b.location?.name || "—"}</td>
                     <td className="px-4 py-2.5">
                       <div className="text-xs">{formatTime12(b.start_time)} – {formatTime12(b.end_time)}</div>
                     </td>
@@ -665,6 +667,7 @@ export default function BookingsPage() {
                       <thead><tr className="border-b bg-muted/50">
                         <th className="px-4 py-3 text-left font-medium">Booking #</th>
                         <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Space</th>
+                        <th className="px-4 py-3 text-left font-medium hidden xl:table-cell">Location</th>
                         <th className="px-4 py-3 text-left font-medium">Date & Time</th>
                         <th className="px-4 py-3 text-left font-medium">Customer</th>
                         <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Phone</th>
@@ -686,6 +689,7 @@ export default function BookingsPage() {
                           >
                             <td className="px-4 py-3 font-mono text-xs">{b.booking_number}</td>
                             <td className="px-4 py-3 hidden md:table-cell text-xs">{b.space?.name || "—"}</td>
+                            <td className="px-4 py-3 hidden xl:table-cell text-xs text-muted-foreground">{b.location?.name || "—"}</td>
                             <td className="px-4 py-3">
                               <div className="text-xs">{formatDate(b.booking_date)}</div>
                               <div className="text-xs text-muted-foreground">
