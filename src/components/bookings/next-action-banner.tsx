@@ -86,23 +86,20 @@ export function computeNextActionTarget(b: Booking, payments: BookingPayment[]):
 function computeNextHint(b: Booking, payments: BookingPayment[]): Hint | null {
   const status = b.status;
 
-  // Terminal: closed — no target highlights anywhere; the page is calm.
-  if (status === "closed") {
-    return { label: "All done — booking closed", tone: "green", target: null };
-  }
-
-  // Terminal: cancelled / no_show. Wrap Up still applies — highlight
-  // the action row so staff sees the Wrap Up button.
+  // Terminal: cancelled / no_show. Calm — booking is recorded, no
+  // further action expected from staff.
   if (status === "cancelled" || status === "no_show") {
     return {
       label: status === "cancelled" ? "Booking cancelled" : "Marked as no-show",
-      detail: "Wrap Up to close this transaction in the records",
+      detail: "Recorded — no further action needed",
       tone: "slate",
-      target: "actions",
+      target: null,
     };
   }
 
-  // checked_out → time to wrap up (or finish the payment first)
+  // checked_out → either finish the payment or send the optional
+  // post-checkout reminders (rating + feedback). Once both rating and
+  // feedback are handled (or skipped), the page goes calm.
   if (status === "checked_out") {
     const SETTLED = new Set(["paid", "waived", "posted_to_bill", "prepaid"]);
     const grandTotal = Number(b.total_amount_with_gst) || Number(b.total_amount);
@@ -119,11 +116,21 @@ function computeNextHint(b: Booking, payments: BookingPayment[]): Hint | null {
         target: "collect_payment",
       };
     }
+    // Payment is settled. If rating + feedback are still pending,
+    // suggest the reminders. Otherwise the page is calm.
+    if (!b.feedback || !b.customer_feedback) {
+      return {
+        label: "Booking complete",
+        detail: "When you have a moment — rate the customer and send a feedback link",
+        tone: "blue",
+        target: null,
+      };
+    }
     return {
-      label: "Wrap Up to close this transaction",
-      detail: "Confirm rating + customer feedback, then mark closed",
-      tone: "blue",
-      target: "actions",
+      label: "All done",
+      detail: "Rating saved and customer feedback received",
+      tone: "green",
+      target: null,
     };
   }
 

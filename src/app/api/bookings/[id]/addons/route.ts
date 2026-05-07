@@ -60,7 +60,7 @@ export async function POST(
   // Lock add-ons under the same rules as the rate edit. Adding charges
   // after the customer has paid creates a balance due that the receipt
   // doesn't reflect; same shape mismatch as silently changing the rate.
-  if (["cancelled", "checked_out", "no_show", "closed"].includes(booking.status)) {
+  if (["cancelled", "checked_out", "no_show"].includes(booking.status)) {
     return NextResponse.json(
       { error: `Cannot add charges to a ${booking.status} booking` },
       { status: 400 }

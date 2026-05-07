@@ -518,7 +518,7 @@ export async function POST(request: NextRequest) {
         .eq("contract_id", contract.id)
         .gte("booking_date", monthStart)
         .lte("booking_date", monthEnd)
-        .in("status", ["confirmed", "checked_in", "checked_out", "closed"]);
+        .in("status", ["confirmed", "checked_in", "checked_out"]);
 
       const hoursUsedSoFar = (existingBookings || []).reduce(
         (sum: number, b: { duration_hours: number | null }) =>

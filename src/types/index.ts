@@ -754,7 +754,7 @@ export interface SpaceFacility {
 // ==========================================
 // Booking Types
 // ==========================================
-export type BookingStatus = "confirmed" | "checked_in" | "checked_out" | "cancelled" | "no_show" | "closed";
+export type BookingStatus = "confirmed" | "checked_in" | "checked_out" | "cancelled" | "no_show";
 export type BookingCustomerType = "contract_holder" | "walk_in" | "guest";
 export type BookingPaymentStatus = "pending" | "paid" | "waived" | "posted_to_bill" | "prepaid";
 
@@ -818,9 +818,6 @@ export interface Booking {
   payment_token?: string;
   // No-show detection
   no_show_detected_at?: string;
-  // Wrap-up
-  closed_at?: string | null;
-  closed_by?: string | null;
   // Razorpay Payment Links
   razorpay_payment_link_id?: string;
   razorpay_payment_link_url?: string;

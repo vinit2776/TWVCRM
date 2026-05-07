@@ -405,7 +405,6 @@ export const BOOKING_STATUS_LABELS: Record<string, string> = {
   checked_out: "Checked Out",
   cancelled: "Cancelled",
   no_show: "No Show",
-  closed: "Closed",
 };
 
 export const BOOKING_STATUS_COLORS: Record<string, string> = {
@@ -414,7 +413,6 @@ export const BOOKING_STATUS_COLORS: Record<string, string> = {
   checked_out: "bg-gray-100 text-gray-800",
   cancelled: "bg-red-100 text-red-800",
   no_show: "bg-orange-100 text-orange-800",
-  closed: "bg-emerald-100 text-emerald-800",
 };
 
 export const BOOKING_CUSTOMER_TYPES = [

@@ -28,7 +28,7 @@ const RescheduleDialog       = dynamic(() => import("@/components/bookings/resch
 const ExtendBookingDialog    = dynamic(() => import("@/components/bookings/extend-booking-dialog").then(m => m.ExtendBookingDialog),       { ssr: false });
 const DeferBookingDialog     = dynamic(() => import("@/components/bookings/defer-booking-dialog").then(m => m.DeferBookingDialog),         { ssr: false });
 const SharePaymentLinkDialog = dynamic(() => import("@/components/bookings/share-payment-link-dialog").then(m => m.SharePaymentLinkDialog), { ssr: false });
-const WrapUpDialog           = dynamic(() => import("@/components/bookings/wrap-up-dialog").then(m => m.WrapUpDialog),                       { ssr: false });
+const PostCheckoutChecklistDialog = dynamic(() => import("@/components/bookings/post-checkout-checklist-dialog").then(m => m.PostCheckoutChecklistDialog), { ssr: false });
 const GetPaymentChooser      = dynamic(() => import("@/components/bookings/get-payment-chooser").then(m => m.GetPaymentChooser),             { ssr: false });
 import { NextActionBanner, NextActionTarget, computeNextActionTarget } from "@/components/bookings/next-action-banner";
 const AddUsageChargeDialog   = dynamic(() => import("@/components/billing/add-usage-charge-dialog").then(m => m.AddUsageChargeDialog),     { ssr: false });
@@ -82,7 +82,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [rescheduleDialogOpen, setRescheduleDialogOpen] = useState(false);
   const [extendDialogOpen, setExtendDialogOpen] = useState(false);
   const [deferDialogOpen, setDeferDialogOpen] = useState(false);
-  const [wrapUpDialogOpen, setWrapUpDialogOpen] = useState(false);
+  const [checklistOpen, setChecklistOpen] = useState(false);
   const [getPaymentChooserOpen, setGetPaymentChooserOpen] = useState(false);
   const [logChargeOpen, setLogChargeOpen] = useState(false);
   const [waiverOpen, setWaiverOpen] = useState(false);
@@ -774,43 +774,20 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <Star className="mr-1 h-4 w-4 text-amber-500" />Rate Customer
             </Button>
           )}
-          {/* Wrap Up — guided close-out checklist. Available on
-              checked_out / cancelled / no_show; sets status='closed'
-              after staff affirms each step (or skips it). The single
-              guided ritual that replaces the "click 5 buttons in some
-              order" flow for juniors. */}
-          {(booking.status === "checked_out" || booking.status === "cancelled" || booking.status === "no_show") && (
+          {/* Reminders — opt-in checklist of post-checkout housekeeping
+              (rate the customer, send feedback link). Doesn't change
+              booking state; just nudges juniors who haven't built the
+              habit yet. Hidden once the booking has both a rating and
+              customer feedback so it doesn't pester veterans. */}
+          {booking.status === "checked_out" && (!booking.feedback || !booking.customer_feedback) && (
             <Button
+              variant="ghost"
               size="sm"
-              onClick={() => setWrapUpDialogOpen(true)}
-              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+              className="text-xs h-7 text-emerald-700 hover:bg-emerald-50"
+              onClick={() => setChecklistOpen(true)}
             >
-              <CheckCircle className="mr-1 h-4 w-4" />Wrap Up
+              <CheckCircle className="mr-1 h-3.5 w-3.5" />Reminders
             </Button>
-          )}
-          {/* Closed badge + Reopen button (24-hr window) */}
-          {booking.status === "closed" && (
-            <>
-              <Badge variant="outline" className="text-[10px] border-emerald-300 text-emerald-700 bg-emerald-50">
-                ✓ Closed
-              </Badge>
-              {booking.closed_at && (Date.now() - new Date(booking.closed_at).getTime() < 24 * 60 * 60 * 1000) && (
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  className="text-xs h-7 text-muted-foreground hover:text-foreground"
-                  onClick={async () => {
-                    if (!confirm("Reopen this booking? You'll have until 24 hr after the original close to make changes.")) return;
-                    const res = await fetch(`/api/bookings/${id}/reopen`, { method: "POST" });
-                    const json = await res.json();
-                    if (res.ok) { toast.success("Booking reopened"); fetchBooking(); }
-                    else toast.error(json.error || "Failed to reopen");
-                  }}
-                >
-                  <RotateCcw className="mr-1 h-3.5 w-3.5" />Reopen
-                </Button>
-              )}
-            </>
           )}
           {/* Add Charge (post-facto) — for charges discovered after the
               session ended (damage, missed F&B, late checkout fees).
@@ -1737,20 +1714,18 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         onSent={startPaymentPoll}
       />
 
-      <WrapUpDialog
-        open={wrapUpDialogOpen}
-        onOpenChange={setWrapUpDialogOpen}
+      <PostCheckoutChecklistDialog
+        open={checklistOpen}
+        onOpenChange={setChecklistOpen}
         booking={booking}
         existingPayments={existingPayments}
         outstandingCount={outstandingCharges.length}
-        onOpenRateCustomer={() => { setWrapUpDialogOpen(false); setFeedbackDialogOpen(true); }}
+        onOpenRateCustomer={() => { setChecklistOpen(false); setFeedbackDialogOpen(true); }}
         onOpenSendFeedback={async () => {
-          // Reuse the existing feedback-link email flow that the prior
-          // "Send Feedback Link" button used.
-          setWrapUpDialogOpen(false);
+          // Reuse the existing feedback-link email flow.
+          setChecklistOpen(false);
           await handleSendFeedbackLink();
         }}
-        onClosed={fetchBooking}
       />
 
       <GetPaymentChooser
