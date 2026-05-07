@@ -261,7 +261,9 @@ export default function SpaceDetailPage({ params }: { params: Promise<{ id: stri
                 <div className="flex justify-between"><span className="text-muted-foreground">Capacity</span><span>{space.capacity} seats</span></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Hourly Rate</span><span>{formatCurrency(space.hourly_rate)}</span></div>
                 <div className="flex justify-between"><span className="text-muted-foreground">Max Advance Booking</span><span>{space.max_advance_booking_days} days</span></div>
-                <div className="flex justify-between"><span className="text-muted-foreground">Min Booking</span><span>{space.min_booking_minutes} min</span></div>
+                {space.pricing_model !== "daily" && (
+                  <div className="flex justify-between"><span className="text-muted-foreground">Min Booking</span><span>{space.min_booking_minutes} min</span></div>
+                )}
                 {space.description && (
                   <div className="pt-2 border-t">
                     <span className="text-muted-foreground">Description</span>

@@ -160,7 +160,9 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
         description: description.trim() || undefined,
         operating_hours: operatingHours,
         max_advance_booking_days: maxAdvanceDays,
-        min_booking_minutes: minBookingMinutes,
+        // Day-pass spaces have no minimum booking duration — they cover the full
+        // operating day by definition. Store 0 so the booking API skips the check.
+        min_booking_minutes: pricingModel === "daily" ? 0 : minBookingMinutes,
         cancellation_policy: cancellationPolicy.trim() || undefined,
         facilities,
       };
@@ -360,17 +362,19 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
                   onChange={(e) => setMaxAdvanceDays(Number(e.target.value))}
                 />
               </div>
-              <div className="space-y-2">
-                <Label htmlFor="min-booking">Min Booking (minutes)</Label>
-                <Input
-                  id="min-booking"
-                  type="number"
-                  min={30}
-                  step={30}
-                  value={minBookingMinutes}
-                  onChange={(e) => setMinBookingMinutes(Number(e.target.value))}
-                />
-              </div>
+              {pricingModel !== "daily" && (
+                <div className="space-y-2">
+                  <Label htmlFor="min-booking">Min Booking (minutes)</Label>
+                  <Input
+                    id="min-booking"
+                    type="number"
+                    min={30}
+                    step={30}
+                    value={minBookingMinutes}
+                    onChange={(e) => setMinBookingMinutes(Number(e.target.value))}
+                  />
+                </div>
+              )}
             </div>
             <div className="space-y-2">
               <Label htmlFor="cancellation">Cancellation Policy</Label>

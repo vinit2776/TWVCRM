@@ -313,7 +313,8 @@ export const createSpaceSchema = z.object({
   description: z.string().optional(),
   operating_hours: z.record(z.string(), operatingDaySchema).optional(),
   max_advance_booking_days: z.number().int().positive().default(30),
-  min_booking_minutes: z.number().int().min(30).default(60),
+  // 0 is valid for day-pass (daily) spaces — they have no minimum duration.
+  min_booking_minutes: z.number().int().min(0).default(60),
   cancellation_policy: z.string().optional(),
   facilities: z.array(z.object({
     name: z.string().min(1, "Facility name is required"),
