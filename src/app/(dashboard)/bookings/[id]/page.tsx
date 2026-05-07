@@ -8,7 +8,7 @@ import {
   Clock, Users as UsersIcon, IndianRupee, Wifi,
   Phone, AlertTriangle, ShieldCheck, Star,
   Banknote, CheckCircle, Calendar, Timer, Copy, Coins,
-  Download, MessageCircle, Repeat, RotateCcw,
+  Link2, Download, MessageCircle, Repeat, RotateCcw,
   StickyNote, Receipt, Pencil, Check, X, Plus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -27,6 +27,7 @@ const CheckoutFeedbackDialog = dynamic(() => import("@/components/bookings/check
 const RescheduleDialog       = dynamic(() => import("@/components/bookings/reschedule-dialog").then(m => m.RescheduleDialog),               { ssr: false });
 const ExtendBookingDialog    = dynamic(() => import("@/components/bookings/extend-booking-dialog").then(m => m.ExtendBookingDialog),       { ssr: false });
 const DeferBookingDialog     = dynamic(() => import("@/components/bookings/defer-booking-dialog").then(m => m.DeferBookingDialog),         { ssr: false });
+const SharePaymentLinkDialog = dynamic(() => import("@/components/bookings/share-payment-link-dialog").then(m => m.SharePaymentLinkDialog), { ssr: false });
 const AddUsageChargeDialog   = dynamic(() => import("@/components/billing/add-usage-charge-dialog").then(m => m.AddUsageChargeDialog),     { ssr: false });
 const WaiverRequestDialog    = dynamic(() => import("@/components/bookings/waiver-request-dialog").then(m => m.WaiverRequestDialog),       { ssr: false });
 import { BookingAddonsSection } from "@/components/bookings/booking-addons-section";
@@ -388,10 +389,76 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     }
   };
 
-  // Razorpay payment-link helpers removed — the merchant gateway has UPI
-  // disabled, so the link path no longer reliably collects. Collection
-  // happens exclusively via the in-app Collect Payment dialog (Cash,
-  // UPI Manual + screenshot, Card).
+  // Ensures a Razorpay Payment Link exists for this booking; creates one
+  // if not. Used by both Copy Payment Link (clipboard) and the multi-
+  // channel Send Payment Link dialog. The link is transaction-specific
+  // — Razorpay assigns a unique payment_link_id and our /api/payments
+  // /webhook flips the booking to "paid" automatically when the
+  // customer completes payment, regardless of which method they pick on
+  // the Razorpay page (card / netbanking / wallet — UPI is disabled
+  // gateway-side at the moment but the rest of the methods work fine).
+  const ensureRazorpayPaymentLink = async (): Promise<string | null> => {
+    if (booking?.razorpay_payment_link_url) {
+      return booking.razorpay_payment_link_url;
+    }
+    try {
+      const res = await fetch("/api/payments/create-payment-link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ booking_id: id }),
+      });
+      const json = await res.json();
+      if (res.ok && json.data?.payment_link_url) {
+        setBooking((prev) => prev ? {
+          ...prev,
+          razorpay_payment_link_url: json.data.payment_link_url,
+          razorpay_payment_link_id: json.data.payment_link_id,
+        } : prev);
+        return json.data.payment_link_url;
+      } else {
+        // Razorpay disabled or temporary failure — fall back to the
+        // internal /pay/[token] link so collection isn't blocked.
+        console.warn("Razorpay payment link failed, falling back to internal link:", json.error);
+        return null;
+      }
+    } catch {
+      return null;
+    }
+  };
+
+  // The "awaiting payment…" badge shows once a link has been shared
+  // through any channel. Sending state is local to the SharePaymentLinkDialog.
+  const [paymentLinkSent, setPaymentLinkSent] = useState(false);
+  const [paymentSendDialogOpen, setPaymentSendDialogOpen] = useState(false);
+
+  const handleCopyPaymentLink = async () => {
+    if (!booking?.payment_token) { toast.error("No payment token"); return; }
+    const razorpayUrl = await ensureRazorpayPaymentLink();
+    const url = razorpayUrl || `${window.location.origin}/pay/${booking.payment_token}`;
+    navigator.clipboard.writeText(url)
+      .then(() => toast.success(razorpayUrl ? "Razorpay payment link copied" : "Payment link copied"))
+      .catch(() => toast.error("Failed to copy"));
+  };
+
+  // Begin the once-every-10-seconds payment-status poll. Called after
+  // the customer has been sent the link; webhook will flip the booking
+  // to "paid" but a poll on this side gives the staff visible feedback
+  // without requiring a refresh. Stops on success or after 10 min.
+  const startPaymentPoll = () => {
+    setPaymentLinkSent(true);
+    const pollInterval = setInterval(async () => {
+      const refreshRes = await fetch(`/api/bookings/${id}`);
+      if (refreshRes.ok) {
+        const refreshJson = await refreshRes.json();
+        if (refreshJson.data?.payment_status === "paid") {
+          clearInterval(pollInterval);
+          setBooking(refreshJson.data);
+          toast.success("Payment received! Customer has completed the payment.", { duration: 8000 });
+        }
+      }
+    }, 10000);
+    setTimeout(() => clearInterval(pollInterval), 600000);
+  };
 
   const handleDownloadReceipt = async () => {
     try {
@@ -870,11 +937,31 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             </Button>
           </>
         )}
-        {/* "Copy Payment Link" / "Send Payment Link" removed — they
-            generated a Razorpay link, but the merchant gateway has UPI
-            disabled so those links no longer reliably collect. Use the
-            "Collect Payment" button instead, which now offers Cash, UPI
-            (Manual with screenshot), and Card. */}
+        {/* Online payment link — multi-channel send (email / WhatsApp /
+            SMS / clipboard). Razorpay-backed when the gateway is
+            enabled; falls back to /pay/[token] otherwise. Collection
+            via the link runs in parallel with the offline channels in
+            the Collect Payment dialog (cash / UPI manual / card). */}
+        {booking.payment_status !== "paid" && booking.payment_token && (
+          <>
+            <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleCopyPaymentLink}>
+              <Link2 className="mr-1 h-3.5 w-3.5" />Copy Payment Link
+            </Button>
+            <Button
+              variant="ghost"
+              size="sm"
+              className="text-xs h-7"
+              onClick={() => setPaymentSendDialogOpen(true)}
+            >
+              <Mail className="mr-1 h-3.5 w-3.5" />Send Payment Link
+            </Button>
+            {paymentLinkSent && (
+              <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-700 bg-blue-50 animate-pulse">
+                ⏳ Awaiting payment…
+              </Badge>
+            )}
+          </>
+        )}
       </div>
 
       {/* Booking Lifecycle Timeline */}
@@ -1557,6 +1644,20 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         customerPhone={booking.booker_phone || booking.guest_phone || booking.lead?.phone || ""}
         locationName={booking.location?.name || ""}
         onSuccess={fetchBooking}
+      />
+
+      <SharePaymentLinkDialog
+        open={paymentSendDialogOpen}
+        onOpenChange={setPaymentSendDialogOpen}
+        bookingId={booking.id}
+        bookingNumber={booking.booking_number || ""}
+        customerName={customerName}
+        customerEmail={customerEmail || null}
+        customerPhone={customerPhone || null}
+        amount={Number(booking.total_amount_with_gst) || Number(booking.total_amount)}
+        ensurePaymentLink={ensureRazorpayPaymentLink}
+        internalLinkFallback={typeof window !== "undefined" && booking.payment_token ? `${window.location.origin}/pay/${booking.payment_token}` : ""}
+        onSent={startPaymentPoll}
       />
 
       <AddUsageChargeDialog

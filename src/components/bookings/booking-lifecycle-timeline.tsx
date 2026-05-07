@@ -24,10 +24,16 @@
 
 import {
   CalendarCheck, LogIn, LogOut, XCircle, AlertTriangle, Clock,
-  CheckCircle2, Circle,
+  CheckCircle2, Circle, IndianRupee, Link2, Sparkles, ScrollText,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { Booking } from "@/types";
+
+// Currency formatting kept inline to avoid pulling utils into the
+// timeline (it's used in a sublabel for the Payment step).
+function inr(n: number): string {
+  return new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", minimumFractionDigits: 0 }).format(n);
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -201,6 +207,74 @@ export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelinePr
   // Step 1: Booked — always done once we're looking at a booking
   const step1State: StepState = "done";
 
+  // Step 1.5: Payment — derived from booking.payment_status. The states
+  // map to the user's mental model of "where is the money?":
+  //   paid / prepaid / waived / posted_to_bill → done (each with a
+  //                                                   different sublabel)
+  //   pending + razorpay_payment_link_id        → active ("link sent")
+  //   pending                                   → pending
+  //   cancelled booking                         → done (refund out of scope)
+  const paymentState: StepState = (() => {
+    if (status === "cancelled") return "done";
+    switch (booking.payment_status) {
+      case "paid":
+      case "prepaid":
+      case "waived":
+      case "posted_to_bill":
+        return "done";
+      case "pending":
+      default:
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (booking as any).razorpay_payment_link_id ? "active" : "pending";
+    }
+  })();
+  const totalDue = Number(booking.total_amount_with_gst) || Number(booking.total_amount);
+  const paymentLabel = (() => {
+    switch (booking.payment_status) {
+      case "paid":           return "Payment Received";
+      case "prepaid":        return "Paid via Prepaid Pack";
+      case "waived":         return "Free Quota — Waived";
+      case "posted_to_bill": return "Post-paid (Monthly Invoice)";
+      case "pending":
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      default:               return (booking as any).razorpay_payment_link_id
+        ? "Payment Link Sent — Awaiting Customer"
+        : "Payment Pending";
+    }
+  })();
+  const paymentSublabel = (() => {
+    switch (booking.payment_status) {
+      case "paid": {
+        const mode = booking.payment_mode;
+        const label = mode === "cash" ? "cash" : mode === "upi" ? "UPI" : mode === "card" ? "card" : mode === "razorpay" ? "Razorpay" : "online";
+        return `${inr(totalDue)} collected via ${label}`;
+      }
+      case "prepaid":        return `${inr(totalDue)} settled from prepaid pack`;
+      case "waived":         return `Within free-quota allowance — no charge`;
+      case "posted_to_bill": return `${inr(totalDue)} will appear on the next monthly invoice`;
+      case "pending":
+      default:
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (booking as any).razorpay_payment_link_id
+          ? `${inr(totalDue)} due — customer has the payment link`
+          : `${inr(totalDue)} due — collect at counter or send link`;
+    }
+  })();
+  const paymentIcon = (() => {
+    switch (booking.payment_status) {
+      case "paid":           return <IndianRupee className="h-3.5 w-3.5" />;
+      case "prepaid":        return <Sparkles className="h-3.5 w-3.5" />;
+      case "waived":         return <CheckCircle2 className="h-3.5 w-3.5" />;
+      case "posted_to_bill": return <ScrollText className="h-3.5 w-3.5" />;
+      case "pending":
+      default:
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        return (booking as any).razorpay_payment_link_id
+          ? <Link2 className="h-3.5 w-3.5" />
+          : <IndianRupee className="h-3.5 w-3.5" />;
+    }
+  })();
+
   // Step 2: Session Start — done if we've passed it
   const now = new Date();
   const slotStarted = now >= new Date(scheduledStart);
@@ -289,6 +363,27 @@ export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelinePr
         label="Booked"
         timestamp={formatTs(booking.created_at)}
         sublabel={`${formatTime12(booking.start_time)} – ${formatTime12(booking.end_time)} · ${Number(booking.duration_hours)}h slot`}
+      />
+
+      {/* Step 1.5: Payment — surfaces "where is the money" in plain
+          language. Pending/link-sent vs paid vs prepaid vs waived vs
+          posted-to-monthly-bill all read distinctly so finance/staff can
+          tell the state at a glance without leaving the lifecycle. */}
+      <Step
+        state={paymentState}
+        icon={paymentIcon}
+        label={paymentLabel}
+        timestamp={
+          booking.payment_status === "paid"
+            ? formatTs(booking.updated_at)
+            : paymentState === "active"
+              ? "Sent — waiting for customer"
+              : paymentState === "pending"
+                ? "Awaiting collection"
+                : undefined
+        }
+        sublabel={paymentSublabel}
+        highlight={paymentState === "active"}
       />
 
       {/* Step 2: Session Scheduled */}
