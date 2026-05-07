@@ -474,6 +474,25 @@ export const REFUND_REQUEST_STATUS_COLORS: Record<string, string> = {
   processed:         "bg-green-100 text-green-800",
 };
 
+// Complimentary booking reasons — locked picklist used both at booking
+// creation (when total = 0) and the post-hoc "Mark as Complimentary"
+// action. Captures intent for finance / management analytics.
+export const BOOKING_COMPLIMENTARY_REASONS = [
+  "manager_goodwill",
+  "aggregator_demo",
+  "staff_use",
+  "event_partnership",
+  "other",
+] as const;
+
+export const BOOKING_COMPLIMENTARY_REASON_LABELS: Record<string, string> = {
+  manager_goodwill:   "Manager goodwill (VIP / disgruntled customer / influencer)",
+  aggregator_demo:    "Aggregator demo / evaluation slot",
+  staff_use:          "Staff use (training / internal trial)",
+  event_partnership:  "Event partnership / sponsorship",
+  other:              "Other (please specify)",
+};
+
 export const BOOKING_CUSTOMER_TYPES = [
   "contract_holder",
   "walk_in",

@@ -7,7 +7,7 @@ import {
   ArrowLeft, LogIn, LogOut, XCircle, Mail, Loader2,
   Clock, Users as UsersIcon, IndianRupee, Wifi,
   Phone, AlertTriangle, ShieldCheck, Star,
-  Banknote, CheckCircle, Calendar, Timer, Copy, Coins,
+  Banknote, CheckCircle, Calendar, Timer, Copy, Coins, Gift,
   Link2, Download, MessageCircle, Repeat, RotateCcw,
   StickyNote, Receipt, Pencil, Check, X, Plus,
 } from "lucide-react";
@@ -30,6 +30,7 @@ const DeferBookingDialog     = dynamic(() => import("@/components/bookings/defer
 const SharePaymentLinkDialog = dynamic(() => import("@/components/bookings/share-payment-link-dialog").then(m => m.SharePaymentLinkDialog), { ssr: false });
 const PostCheckoutChecklistDialog = dynamic(() => import("@/components/bookings/post-checkout-checklist-dialog").then(m => m.PostCheckoutChecklistDialog), { ssr: false });
 const CancelBookingDialog    = dynamic(() => import("@/components/bookings/cancel-booking-dialog").then(m => m.CancelBookingDialog),         { ssr: false });
+const MarkComplimentaryDialog = dynamic(() => import("@/components/bookings/mark-complimentary-dialog").then(m => m.MarkComplimentaryDialog), { ssr: false });
 const GetPaymentChooser      = dynamic(() => import("@/components/bookings/get-payment-chooser").then(m => m.GetPaymentChooser),             { ssr: false });
 import { NextActionBanner, NextActionTarget, computeNextActionTarget } from "@/components/bookings/next-action-banner";
 const AddUsageChargeDialog   = dynamic(() => import("@/components/billing/add-usage-charge-dialog").then(m => m.AddUsageChargeDialog),     { ssr: false });
@@ -86,6 +87,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [checklistOpen, setChecklistOpen] = useState(false);
   const [getPaymentChooserOpen, setGetPaymentChooserOpen] = useState(false);
   const [cancelDialogOpen, setCancelDialogOpen] = useState(false);
+  const [markCompDialogOpen, setMarkCompDialogOpen] = useState(false);
   const [logChargeOpen, setLogChargeOpen] = useState(false);
   const [waiverOpen, setWaiverOpen] = useState(false);
   const [convertingFromBill, setConvertingFromBill] = useState(false);
@@ -699,6 +701,22 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <Button variant="destructive" size="sm" onClick={() => setCancelDialogOpen(true)} disabled={actionLoading}>
                 <XCircle className="mr-1 h-4 w-4" />Cancel
               </Button>
+              {/* Mark Complimentary — post-hoc "this should be free"
+                  action. Only useful before payment is collected; the
+                  dialog shows a clear explanation when the booking is
+                  already paid (forces refund flow first). Hidden when
+                  the booking is already waived. */}
+              {booking.payment_status !== "waived" && (
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setMarkCompDialogOpen(true)}
+                  className="border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                  title="Mark this booking as complimentary (zero out the total + capture reason)"
+                >
+                  <Gift className="mr-1 h-4 w-4" />Comp
+                </Button>
+              )}
             </>
           )}
           {booking.status === "checked_in" && (
@@ -1791,6 +1809,16 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         booking={booking}
         existingPayments={existingPayments}
         onCancelled={fetchBooking}
+      />
+
+      <MarkComplimentaryDialog
+        open={markCompDialogOpen}
+        onOpenChange={setMarkCompDialogOpen}
+        bookingId={booking.id}
+        bookingNumber={booking.booking_number || ""}
+        currentTotal={Number(booking.total_amount_with_gst) || Number(booking.total_amount) || 0}
+        hasCollectedPayment={existingPayments.some((p) => p.status === "verified")}
+        onSuccess={fetchBooking}
       />
 
       <AddUsageChargeDialog

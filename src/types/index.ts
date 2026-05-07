@@ -820,6 +820,11 @@ export interface Booking {
   payment_token?: string;
   // No-show detection
   no_show_detected_at?: string;
+  // Complimentary booking — set when payment_status='waived' AND
+  // the booking was zero-rupees (comp). Picklist value + optional
+  // staff details for analytics + audit trail.
+  complimentary_reason?: BookingComplimentaryReason | null;
+  complimentary_details?: string | null;
   // Razorpay Payment Links
   razorpay_payment_link_id?: string;
   razorpay_payment_link_url?: string;
@@ -929,6 +934,13 @@ export interface BookingCredit {
 // ==========================================
 // Cancellation flow — reasons, lead cautions, refund requests
 // ==========================================
+
+export type BookingComplimentaryReason =
+  | "manager_goodwill"
+  | "aggregator_demo"
+  | "staff_use"
+  | "event_partnership"
+  | "other";
 
 export type BookingCancellationReason =
   | "customer_requested"

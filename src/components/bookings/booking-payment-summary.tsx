@@ -33,6 +33,7 @@ interface Props {
     | "payment_status" | "payment_mode" | "payment_reference"
     | "total_amount" | "total_amount_with_gst"
     | "contract_id" | "prepaid_purchase_id" | "prepaid_credits_used"
+    | "complimentary_reason" | "complimentary_details"
   > & {
     contract?: { id: string; contract_number: string } | null;
   };
@@ -60,6 +61,31 @@ export function BookingPaymentSummary({ booking, variant = "full" }: Props) {
     }
 
     if (booking.payment_status === "waived") {
+      // A waived booking can mean two distinct things:
+      //   - Complimentary (staff comp, ₹0 booking) — has
+      //     complimentary_reason set
+      //   - Free quota (contract member's monthly allowance) — no
+      //     complimentary fields set; legacy waiver path
+      // Surface the difference so finance can see which is which.
+      if (booking.complimentary_reason) {
+        const REASON_LABELS: Record<string, string> = {
+          manager_goodwill:   "Manager goodwill",
+          aggregator_demo:    "Aggregator demo",
+          staff_use:          "Staff use",
+          event_partnership:  "Event partnership",
+          other:              "Other",
+        };
+        const label = REASON_LABELS[booking.complimentary_reason] || booking.complimentary_reason;
+        return {
+          kind: "waived" as const,
+          title: "Complimentary — No charge",
+          sub: booking.complimentary_details
+            ? `${label}: ${booking.complimentary_details}`
+            : label,
+          tone: "slate",
+          icon: CheckCircle2,
+        };
+      }
       return {
         kind: "waived" as const,
         title: "Free Quota — No charge",

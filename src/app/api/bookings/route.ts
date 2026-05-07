@@ -611,6 +611,40 @@ export async function POST(request: NextRequest) {
     paymentStatus = prepaidTopupAmount && prepaidTopupAmount > 0 ? "pending" : "prepaid";
   }
 
+  // ── Complimentary booking (₹0 grand total) ───────────────────────
+  // When the booking is genuinely free — staff overrode the rate to 0,
+  // or the only line items are complimentary facilities — there's
+  // nothing to collect. Defaulting to "pending" (the previous
+  // behaviour) read as "Payment Pending ₹0" everywhere, confusing
+  // finance. Auto-set to "waived" + capture the staff-supplied reason
+  // for the audit trail. The reason is required in the request body
+  // when total = 0 (validated below).
+  const VALID_COMP_REASONS = new Set([
+    "manager_goodwill", "aggregator_demo", "staff_use",
+    "event_partnership", "other",
+  ]);
+  let complimentaryReason: string | null = null;
+  let complimentaryDetails: string | null = null;
+  if (totalAmountWithGst <= 0) {
+    const reason = body.complimentary_reason as string | undefined;
+    const details = (body.complimentary_details as string | undefined)?.trim() || null;
+    if (!reason || !VALID_COMP_REASONS.has(reason)) {
+      return NextResponse.json(
+        { error: "complimentary_reason is required for ₹0 bookings (must be a valid picklist value)" },
+        { status: 400 }
+      );
+    }
+    if (reason === "other" && !details) {
+      return NextResponse.json(
+        { error: "complimentary_details required when reason is 'other'" },
+        { status: 400 }
+      );
+    }
+    paymentStatus = "waived";
+    complimentaryReason = reason;
+    complimentaryDetails = details;
+  }
+
   // For guest type, create/find lead for the guest person (separate from contract holder)
   if (input.customer_type === "guest") {
     const guestLeadId = await findOrCreateLeadForBooking(supabase, {
@@ -663,6 +697,8 @@ export async function POST(request: NextRequest) {
       prepaid_credits_used: prepaidCreditsUsed || null,
       prepaid_topup_amount: prepaidTopupAmount || null,
       credit_redeemed_id: creditId,
+      complimentary_reason: complimentaryReason,
+      complimentary_details: complimentaryDetails,
       notes: input.notes,
       aggregator_booking_id: input.aggregator_booking_id || null,
       num_attendees: input.num_attendees ? Number(input.num_attendees) : null,

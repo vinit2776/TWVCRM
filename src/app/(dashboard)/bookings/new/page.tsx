@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ArrowLeft, Loader2, Clock, IndianRupee, Search, Phone, User2, Building2, Banknote, CreditCard, Smartphone, Repeat, ListOrdered, Link2, TicketCheck, AlertTriangle } from "lucide-react";
+import { ArrowLeft, Loader2, Clock, IndianRupee, Search, Phone, User2, Building2, Banknote, CreditCard, Smartphone, Repeat, ListOrdered, Link2, TicketCheck, AlertTriangle, Gift } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -22,7 +22,11 @@ import { CustomerHistoryCard } from "@/components/bookings/customer-history-card
 import { PrepaidBanner } from "@/components/packages/prepaid-banner";
 import { BookingCreditBanner } from "@/components/bookings/booking-credit-banner";
 import { LeadCautionsBanner } from "@/components/leads/lead-cautions-banner";
-import type { BookingCredit } from "@/types";
+import type { BookingCredit, BookingComplimentaryReason } from "@/types";
+import {
+  BOOKING_COMPLIMENTARY_REASONS,
+  BOOKING_COMPLIMENTARY_REASON_LABELS,
+} from "@/lib/constants";
 import { BookingNotesTemplates } from "@/components/bookings/booking-notes-templates";
 import { WaitlistDialog } from "@/components/bookings/waitlist-dialog";
 import { CreateRecurringDialog } from "@/components/bookings/create-recurring-dialog";
@@ -149,6 +153,13 @@ function NewBookingForm() {
   useEffect(() => {
     setAppliedCredit(null);
   }, [bookerPhone, locationId]);
+
+  // Complimentary booking — only relevant when grand total is ≤ 0
+  // (staff overrode rate, or only complimentary facilities, etc.).
+  // The form only surfaces these when total = 0; on submit they're
+  // sent to the API which validates and stores them.
+  const [complimentaryReason, setComplimentaryReason] = useState<BookingComplimentaryReason | "">("");
+  const [complimentaryDetails, setComplimentaryDetails] = useState("");
 
   // Lead caution acknowledgement gate — staff must explicitly tick
   // "I've seen this" on every danger-severity caution before they can
@@ -568,6 +579,19 @@ function NewBookingForm() {
       toast.error(`Minimum booking is ${selectedSpace?.min_booking_minutes || 60} minutes`);
       return;
     }
+    // Complimentary booking validation — when total is 0, the user
+    // must pick a reason; the API rejects without it.
+    if (totalAmountWithGst <= 0) {
+      if (!complimentaryReason) {
+        toast.error("Pick a reason for this complimentary booking");
+        return;
+      }
+      if (complimentaryReason === "other" && !complimentaryDetails.trim()) {
+        toast.error('Add details — "Other" requires a reason');
+        return;
+      }
+    }
+
     if (customerType === "contract_holder" && !contractId) {
       toast.error("Please select a contract");
       return;
@@ -625,6 +649,8 @@ function NewBookingForm() {
         prepaid_purchase_id: (usePrepaid && activePurchase) ? activePurchase.id : undefined,
         credit_id: appliedCredit?.credit.id,
         hours_to_redeem: appliedCredit?.hours_to_redeem,
+        complimentary_reason: totalAmountWithGst <= 0 ? complimentaryReason : undefined,
+        complimentary_details: totalAmountWithGst <= 0 ? (complimentaryDetails.trim() || undefined) : undefined,
         settle_charge_ids: selectedChargeIds.size > 0 ? Array.from(selectedChargeIds) : undefined,
         send_sms: sendSms,
         send_whatsapp: sendWhatsapp,
@@ -1683,6 +1709,57 @@ function NewBookingForm() {
               </div>
             )}
           </div>
+
+          {/* Complimentary booking capture — only surfaces when the
+              grand total is ₹0 (rate manually overridden, or only
+              complimentary facilities). Locked picklist + optional
+              details so finance can report on comps by category. */}
+          {totalAmountWithGst <= 0 && spaceId && (
+            <div className="rounded-md border-2 border-emerald-300 bg-emerald-50/50 p-3 mt-3 space-y-2.5">
+              <div className="flex items-center gap-1.5 text-sm font-semibold text-emerald-900">
+                <Gift className="h-4 w-4" />
+                Complimentary booking — required reason
+              </div>
+              <p className="text-[11px] text-emerald-900">
+                Total is ₹0. Pick why this booking is being given complimentary so finance can report on it.
+                The booking will be auto-marked as waived (not pending) on creation.
+              </p>
+              <div className="space-y-1">
+                <Label className="text-xs">Reason *</Label>
+                <div className="grid grid-cols-1 gap-1">
+                  {BOOKING_COMPLIMENTARY_REASONS.map((r) => (
+                    <button
+                      key={r}
+                      type="button"
+                      onClick={() => setComplimentaryReason(r)}
+                      className={`text-left rounded-md border bg-white px-3 py-1.5 text-xs transition-colors ${
+                        complimentaryReason === r
+                          ? "border-emerald-500 bg-emerald-100 ring-1 ring-emerald-400"
+                          : "border-border hover:bg-muted/40"
+                      }`}
+                    >
+                      {BOOKING_COMPLIMENTARY_REASON_LABELS[r]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs">
+                  Details {complimentaryReason === "other" && <span className="text-destructive">*</span>}
+                </Label>
+                <Input
+                  value={complimentaryDetails}
+                  onChange={(e) => setComplimentaryDetails(e.target.value)}
+                  placeholder={
+                    complimentaryReason === "other"
+                      ? "Please describe the reason"
+                      : "Optional context (e.g., 'Mic broke last visit, comping a 2-hour session')"
+                  }
+                  className="h-8 text-sm bg-white"
+                />
+              </div>
+            </div>
+          )}
 
           {/* Notification preferences */}
           <div className="flex items-center gap-4 mt-3 pt-3 border-t">
