@@ -110,7 +110,7 @@ export async function PATCH(
     // already been collected. Editing the rate after the customer paid
     // ₹X creates a silent mismatch between the receipt they were given
     // and the booking record — the original reason finance flagged this.
-    if (["cancelled", "checked_out", "no_show"].includes(booking.status)) {
+    if (["cancelled", "checked_out", "no_show", "closed"].includes(booking.status)) {
       return NextResponse.json(
         { error: `Cannot update pricing on a ${booking.status} booking` },
         { status: 400 }

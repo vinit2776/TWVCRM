@@ -28,7 +28,7 @@ export async function DELETE(
   // Same lock as the POST: removing a charge after the customer paid
   // would lower the booking total below what was collected, leaving an
   // unaccounted surplus.
-  if (["cancelled", "checked_out", "no_show"].includes(booking.status)) {
+  if (["cancelled", "checked_out", "no_show", "closed"].includes(booking.status)) {
     return NextResponse.json(
       { error: `Cannot remove charges from a ${booking.status} booking` },
       { status: 400 }

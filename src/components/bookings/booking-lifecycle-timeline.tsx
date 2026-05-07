@@ -301,9 +301,20 @@ export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelinePr
   const step4State: StepState =
     status === "cancelled" || status === "no_show"
       ? "pending"
-      : status === "checked_out" && booking.check_out_at
+      : (status === "checked_out" || status === "closed") && booking.check_out_at
       ? "done"
       : status === "checked_in"
+      ? "pending"
+      : "pending";
+
+  // Step 5: Closed — terminal "transaction wrapped up" state. Only
+  // shown when status='closed' or when checked_out (then it's the
+  // pending next step). Hidden for cancelled/no_show because those
+  // bookings are wrapped at terminal time.
+  const step5State: StepState =
+    status === "closed"
+      ? "done"
+      : status === "checked_out"
       ? "pending"
       : "pending";
 
@@ -461,6 +472,27 @@ export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelinePr
           sublabel={actualDurationLabel || undefined}
           badge={checkOutDeltaLabel}
           highlight={physicalLegActive}
+        />
+      )}
+
+      {/* Step 5: Closed — final wrap-up state. Visible from checked_out
+          onwards so staff see the next step they need to take. */}
+      {status !== "cancelled" && status !== "no_show" && (status === "checked_out" || status === "closed") && (
+        <Step
+          state={step5State}
+          icon={<CheckCircle2 className="h-3.5 w-3.5" />}
+          label={status === "closed" ? "Closed" : "Wrap Up"}
+          timestamp={
+            booking.closed_at
+              ? formatTs(booking.closed_at)
+              : "Awaiting close-out — payment + rating + feedback"
+          }
+          sublabel={
+            status === "closed"
+              ? "Transaction fully wrapped — no further action expected"
+              : "Use the Wrap Up button to confirm and close this transaction"
+          }
+          highlight={step5State === "pending"}
           isLast
         />
       )}

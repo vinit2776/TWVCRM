@@ -39,6 +39,7 @@ interface Booking {
   total_amount: number;
   payment_status: string;
   status: string;
+  customer_type?: string;
   lead?: { first_name: string; last_name: string; company?: string } | null;
   guest_name?: string | null;
   space?: { name: string } | null;
@@ -275,11 +276,31 @@ export function AddUsageChargeDialog({
       ? b.lead.company || `${b.lead.first_name} ${b.lead.last_name}`
       : "Unknown");
 
+  // When the dialog is opened on a specific booking (Add Charge button
+  // on the booking detail page), describe where the charge will land
+  // so staff understand the difference vs the in-session "Add charge"
+  // they used during the booking. The destination depends on customer
+  // type — contract holders post to the next monthly invoice; walk-ins
+  // / guests get an outstanding charge on their lead profile that
+  // settles when they next visit.
+  const showBookingRouting = !!bookingId && !!selectedBooking;
+  const bookingRoutingText = (() => {
+    if (!selectedBooking) return null;
+    const ct = selectedBooking.customer_type;
+    if (ct === "contract_holder") {
+      return "This charge will appear on the contract's next monthly invoice — not on this booking's total.";
+    }
+    return "This will become an outstanding charge on the customer's profile. They'll settle it on their next visit.";
+  })();
+
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Add Charge</DialogTitle>
+          <DialogTitle>{bookingId ? "Add Charge — post-facto" : "Add Charge"}</DialogTitle>
+          {showBookingRouting && (
+            <p className="text-[11px] text-muted-foreground mt-1">{bookingRoutingText}</p>
+          )}
         </DialogHeader>
 
         <form onSubmit={handleSubmit} className="space-y-4">

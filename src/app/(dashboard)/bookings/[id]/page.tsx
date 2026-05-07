@@ -28,6 +28,9 @@ const RescheduleDialog       = dynamic(() => import("@/components/bookings/resch
 const ExtendBookingDialog    = dynamic(() => import("@/components/bookings/extend-booking-dialog").then(m => m.ExtendBookingDialog),       { ssr: false });
 const DeferBookingDialog     = dynamic(() => import("@/components/bookings/defer-booking-dialog").then(m => m.DeferBookingDialog),         { ssr: false });
 const SharePaymentLinkDialog = dynamic(() => import("@/components/bookings/share-payment-link-dialog").then(m => m.SharePaymentLinkDialog), { ssr: false });
+const WrapUpDialog           = dynamic(() => import("@/components/bookings/wrap-up-dialog").then(m => m.WrapUpDialog),                       { ssr: false });
+const GetPaymentChooser      = dynamic(() => import("@/components/bookings/get-payment-chooser").then(m => m.GetPaymentChooser),             { ssr: false });
+import { NextActionBanner, NextActionTarget, computeNextActionTarget } from "@/components/bookings/next-action-banner";
 const AddUsageChargeDialog   = dynamic(() => import("@/components/billing/add-usage-charge-dialog").then(m => m.AddUsageChargeDialog),     { ssr: false });
 const WaiverRequestDialog    = dynamic(() => import("@/components/bookings/waiver-request-dialog").then(m => m.WaiverRequestDialog),       { ssr: false });
 import { BookingAddonsSection } from "@/components/bookings/booking-addons-section";
@@ -79,6 +82,8 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [rescheduleDialogOpen, setRescheduleDialogOpen] = useState(false);
   const [extendDialogOpen, setExtendDialogOpen] = useState(false);
   const [deferDialogOpen, setDeferDialogOpen] = useState(false);
+  const [wrapUpDialogOpen, setWrapUpDialogOpen] = useState(false);
+  const [getPaymentChooserOpen, setGetPaymentChooserOpen] = useState(false);
   const [logChargeOpen, setLogChargeOpen] = useState(false);
   const [waiverOpen, setWaiverOpen] = useState(false);
   const [convertingFromBill, setConvertingFromBill] = useState(false);
@@ -431,6 +436,10 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [paymentLinkSent, setPaymentLinkSent] = useState(false);
   const [paymentSendDialogOpen, setPaymentSendDialogOpen] = useState(false);
 
+  // Kept available even though the standalone Copy Payment Link button
+  // is folded into the SharePaymentLinkDialog. Leaving the helper here
+  // so a future direct-copy entry point can reuse it.
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   const handleCopyPaymentLink = async () => {
     if (!booking?.payment_token) { toast.error("No payment token"); return; }
     const razorpayUrl = await ensureRazorpayPaymentLink();
@@ -607,13 +616,18 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   // activeVoucher replaced by WifiVoucherCard which handles multi-voucher display
   const outstandingTotal = outstandingCharges.reduce((s, c) => s + c.total, 0);
 
+  // Which UI region (if any) should carry the pulsing next-action halo?
+  // Computed once per render from the same logic the textual banner uses
+  // so the two stay in sync. Exactly one region lights up at a time.
+  const nextActionTarget = computeNextActionTarget(booking, existingPayments);
+
   // Pricing is locked once any of the following is true — changing the
   // rate after a customer has paid creates a silent mismatch between the
   // receipt they were given and the booking record (and breaks the
   // monthly statement reconciliation). The server enforces the same
   // rules; this is just the UI mirror so the pencil doesn't tease.
   const hasVerifiedPayment = existingPayments.some((p) => p.status === "verified");
-  const isTerminalStatus = ["cancelled", "checked_out", "no_show"].includes(booking.status);
+  const isTerminalStatus = ["cancelled", "checked_out", "no_show", "closed"].includes(booking.status);
   const isPaid = booking.payment_status === "paid";
   const canEditPricing = !isTerminalStatus && !isPaid && !hasVerifiedPayment;
   const lockReason = isTerminalStatus
@@ -658,8 +672,10 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           </div>
         </div>
 
-        {/* Actions */}
-        <div className="flex flex-wrap gap-2">
+        {/* Actions — wrapped in NextActionTarget so the row pulses
+            when the next step lives here (e.g., Check In, Wrap Up). */}
+        <NextActionTarget id="actions" currentTarget={nextActionTarget}>
+        <div className="flex flex-wrap gap-2 p-1">
           {booking.status === "confirmed" && (
             <>
               <Button size="sm" onClick={() => handleStatusAction("check_in")} disabled={actionLoading}>
@@ -702,10 +718,26 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               </Button>
             </>
           )}
-          {booking.customer_type === "walk_in" && booking.payment_status !== "paid" && (
-            <Button variant="outline" size="sm" onClick={() => setPaymentDialogOpen(true)}>
-              <IndianRupee className="mr-1 h-4 w-4" />Collect Payment
-            </Button>
+          {/* Single "Collect Payment" entry — pops a chooser asking
+              "At counter" or "Send link", then opens the relevant
+              dialog. Replaces the prior trio (walk-in counter button +
+              Send Payment Link + Copy Payment Link) with one button.
+              Visible whenever payment is due regardless of customer
+              type — contract holders can also collect at counter or
+              via link if they choose to. */}
+          {booking.payment_status !== "paid"
+            && booking.payment_status !== "waived"
+            && booking.payment_status !== "prepaid"
+            && booking.payment_status !== "posted_to_bill" && (
+            <NextActionTarget id="collect_payment" currentTarget={nextActionTarget}>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setGetPaymentChooserOpen(true)}
+              >
+                <IndianRupee className="mr-1 h-4 w-4" />Collect Payment
+              </Button>
+            </NextActionTarget>
           )}
           {/* Contract members can opt out of monthly invoicing for this
               one booking and pay on the spot. The button is intentionally
@@ -742,10 +774,56 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <Star className="mr-1 h-4 w-4 text-amber-500" />Rate Customer
             </Button>
           )}
-          {/* Log Charge — available for checked-out and no-show bookings */}
+          {/* Wrap Up — guided close-out checklist. Available on
+              checked_out / cancelled / no_show; sets status='closed'
+              after staff affirms each step (or skips it). The single
+              guided ritual that replaces the "click 5 buttons in some
+              order" flow for juniors. */}
+          {(booking.status === "checked_out" || booking.status === "cancelled" || booking.status === "no_show") && (
+            <Button
+              size="sm"
+              onClick={() => setWrapUpDialogOpen(true)}
+              className="bg-emerald-600 hover:bg-emerald-700 text-white"
+            >
+              <CheckCircle className="mr-1 h-4 w-4" />Wrap Up
+            </Button>
+          )}
+          {/* Closed badge + Reopen button (24-hr window) */}
+          {booking.status === "closed" && (
+            <>
+              <Badge variant="outline" className="text-[10px] border-emerald-300 text-emerald-700 bg-emerald-50">
+                ✓ Closed
+              </Badge>
+              {booking.closed_at && (Date.now() - new Date(booking.closed_at).getTime() < 24 * 60 * 60 * 1000) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-xs h-7 text-muted-foreground hover:text-foreground"
+                  onClick={async () => {
+                    if (!confirm("Reopen this booking? You'll have until 24 hr after the original close to make changes.")) return;
+                    const res = await fetch(`/api/bookings/${id}/reopen`, { method: "POST" });
+                    const json = await res.json();
+                    if (res.ok) { toast.success("Booking reopened"); fetchBooking(); }
+                    else toast.error(json.error || "Failed to reopen");
+                  }}
+                >
+                  <RotateCcw className="mr-1 h-3.5 w-3.5" />Reopen
+                </Button>
+              )}
+            </>
+          )}
+          {/* Add Charge (post-facto) — for charges discovered after the
+              session ended (damage, missed F&B, late checkout fees).
+              Routes to usage_charges, not this booking's total: for
+              contract holders it lands on the next monthly invoice;
+              for walk-ins / guests it becomes an outstanding charge to
+              settle on their next visit. The label intentionally
+              mirrors the in-session "Add charge" so staff see one
+              consistent verb across the whole booking lifecycle —
+              the underlying ledger differs but the intent is the same. */}
           {(booking.status === "checked_out" || booking.status === "no_show") && (
             <Button variant="outline" size="sm" onClick={() => setLogChargeOpen(true)}>
-              <Receipt className="mr-1 h-4 w-4" />Log Charge
+              <Plus className="mr-1 h-4 w-4" />Add Charge
             </Button>
           )}
           {/* Overtime waiver button — shown after checkout if overtime was detected */}
@@ -761,7 +839,25 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           )}
           {actionLoading && <Loader2 className="h-4 w-4 animate-spin self-center" />}
         </div>
+        </NextActionTarget>
       </div>
+
+      {/* Suggested next action — guided hint derived from booking state.
+          Shows a junior staff member what to do next so they don't have
+          to memorise the state machine. Veterans can ignore it; the
+          action buttons remain. */}
+      <NextActionBanner booking={booking} existingPayments={existingPayments} />
+
+      {/* Customer History — surfaced near the top so staff can calibrate
+          the conversation immediately ("regular customer · 12 visits ·
+          ₹X lifetime · clean payment record" vs "first-timer"). Used to
+          live further down the page where it was easy to miss. */}
+      {(booking.booker_phone || booking.lead?.phone || booking.guest_phone) && (
+        <CustomerHistoryCard
+          phone={booking.booker_phone || booking.lead?.phone || booking.guest_phone || ""}
+          leadId={booking.lead?.id}
+        />
+      )}
 
       {/* Payment status summary — replaces the bare "posted_to_bill" pill
           with a finance-friendly banner that names the contract, the
@@ -937,30 +1033,14 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             </Button>
           </>
         )}
-        {/* Online payment link — multi-channel send (email / WhatsApp /
-            SMS / clipboard). Razorpay-backed when the gateway is
-            enabled; falls back to /pay/[token] otherwise. Collection
-            via the link runs in parallel with the offline channels in
-            the Collect Payment dialog (cash / UPI manual / card). */}
-        {booking.payment_status !== "paid" && booking.payment_token && (
-          <>
-            <Button variant="ghost" size="sm" className="text-xs h-7" onClick={handleCopyPaymentLink}>
-              <Link2 className="mr-1 h-3.5 w-3.5" />Copy Payment Link
-            </Button>
-            <Button
-              variant="ghost"
-              size="sm"
-              className="text-xs h-7"
-              onClick={() => setPaymentSendDialogOpen(true)}
-            >
-              <Mail className="mr-1 h-3.5 w-3.5" />Send Payment Link
-            </Button>
-            {paymentLinkSent && (
-              <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-700 bg-blue-50 animate-pulse">
-                ⏳ Awaiting payment…
-              </Badge>
-            )}
-          </>
+        {/* Send/Copy Payment Link buttons removed in favor of the
+            unified "Collect Payment" chooser above. The payment-link
+            flow itself is preserved — it's just one click deeper now,
+            chosen via the chooser dialog. */}
+        {paymentLinkSent && (
+          <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-700 bg-blue-50 animate-pulse">
+            ⏳ Awaiting payment…
+          </Badge>
         )}
       </div>
 
@@ -1548,13 +1628,10 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         )
       )}
 
-      {/* Customer History */}
-      {(booking.booker_phone || booking.lead?.phone || booking.guest_phone) && (
-        <CustomerHistoryCard
-          phone={booking.booker_phone || booking.lead?.phone || booking.guest_phone || ""}
-          leadId={booking.lead?.id}
-        />
-      )}
+      {/* Customer History — moved to the top of the page (rendered just
+          after the header and next-action banner). This block is left
+          here to preserve the original layout placeholder; the actual
+          render is up there now. */}
 
       {/* Notes with Templates */}
       <Card>
@@ -1658,6 +1735,34 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         ensurePaymentLink={ensureRazorpayPaymentLink}
         internalLinkFallback={typeof window !== "undefined" && booking.payment_token ? `${window.location.origin}/pay/${booking.payment_token}` : ""}
         onSent={startPaymentPoll}
+      />
+
+      <WrapUpDialog
+        open={wrapUpDialogOpen}
+        onOpenChange={setWrapUpDialogOpen}
+        booking={booking}
+        existingPayments={existingPayments}
+        outstandingCount={outstandingCharges.length}
+        onOpenRateCustomer={() => { setWrapUpDialogOpen(false); setFeedbackDialogOpen(true); }}
+        onOpenSendFeedback={async () => {
+          // Reuse the existing feedback-link email flow that the prior
+          // "Send Feedback Link" button used.
+          setWrapUpDialogOpen(false);
+          await handleSendFeedbackLink();
+        }}
+        onClosed={fetchBooking}
+      />
+
+      <GetPaymentChooser
+        open={getPaymentChooserOpen}
+        onOpenChange={setGetPaymentChooserOpen}
+        amountDue={(() => {
+          const grandTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount);
+          const paid = existingPayments.filter((p) => p.status === "verified").reduce((s, p) => s + Number(p.amount), 0);
+          return Math.max(0, grandTotal - paid);
+        })()}
+        onPickCounter={() => setPaymentDialogOpen(true)}
+        onPickLink={() => setPaymentSendDialogOpen(true)}
       />
 
       <AddUsageChargeDialog

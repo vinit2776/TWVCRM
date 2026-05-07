@@ -87,3 +87,30 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #94a3b8;
 }
+
+/* ────────────────────────────────────────────────────────────
+   Next-action pulse — visual cue layered on top of the textual
+   NextActionBanner. Used by <NextActionTarget> to draw the
+   staff member's eye to the section that needs attention next.
+   Subtle breathing halo (~2s cycle) — never more than ONE
+   element on the page should carry .next-action-pulse at a
+   time. Stops automatically when the page state advances to
+   "closed" or "cancelled".
+   ──────────────────────────────────────────────────────────── */
+@keyframes next-action-pulse {
+  0%, 100% {
+    box-shadow:
+      0 0 0 0 rgba(251, 191, 36, 0.45),
+      0 0 0 1.5px rgba(251, 191, 36, 0.7);
+  }
+  50% {
+    box-shadow:
+      0 0 0 8px rgba(251, 191, 36, 0),
+      0 0 0 1.5px rgba(251, 191, 36, 0.55);
+  }
+}
+.next-action-pulse {
+  border-radius: 0.5rem;
+  animation: next-action-pulse 2s ease-in-out infinite;
+  transition: box-shadow 200ms ease-out;
+}
