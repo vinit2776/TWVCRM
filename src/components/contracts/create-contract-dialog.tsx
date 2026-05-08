@@ -199,21 +199,21 @@ export function CreateContractDialog({
   }, [startDate, tenureMonths]);
 
   const ifrsdAmount = monthlyFee * securityDepositMonths;
-  const maxNoticePeriod = Math.max(0, tenureMonths - lockInMonths);
+  const maxNoticePeriod = Math.max(3, tenureMonths - lockInMonths);
 
   const handleTenureChange = (val: string) => {
     const t = parseInt(val);
     const newLockIn = Math.min(lockInMonths, t);
     setTenureMonths(t);
     setLockInMonths(newLockIn);
-    const newMax = Math.max(0, t - newLockIn);
+    const newMax = Math.max(3, t - newLockIn);
     if (noticePeriodMonths > newMax) setNoticePeriodMonths(newMax);
   };
 
   const handleLockInChange = (val: string) => {
     const l = parseInt(val);
     setLockInMonths(l);
-    const newMax = Math.max(0, tenureMonths - l);
+    const newMax = Math.max(3, tenureMonths - l);
     if (noticePeriodMonths > newMax) setNoticePeriodMonths(newMax);
   };
 
@@ -675,7 +675,7 @@ export function CreateContractDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {[3, 6, 11, 12, 18, 24, 36].map((m) => (
+                    {[3, 6, 11, 12, 13, 18, 24, 36].map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m} months
                       </SelectItem>
@@ -716,9 +716,6 @@ export function CreateContractDialog({
                     ))}
                   </SelectContent>
                 </Select>
-                {maxNoticePeriod === 0 && (
-                  <p className="text-xs text-muted-foreground">Lock-in equals tenure — no notice period available.</p>
-                )}
               </div>
               <div className="space-y-2">
                 <Label>Security Deposit (x Monthly Fee)</Label>
@@ -750,6 +747,7 @@ export function CreateContractDialog({
                     <span className="text-muted-foreground">End Date:</span>{" "}
                     <span className="font-medium">
                       {new Date(calculatedEndDate).toLocaleDateString("en-IN", {
+                        timeZone: "Asia/Kolkata",
                         year: "numeric", month: "short", day: "numeric",
                       })}
                     </span>
