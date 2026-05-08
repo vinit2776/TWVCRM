@@ -66,7 +66,7 @@ function NewBookingForm() {
   const { locations } = useLocations();
   const [saving, setSaving] = useState(false);
   const [sendSms, setSendSms] = useState(true);
-  const [sendWhatsapp, setSendWhatsapp] = useState(false); // disabled until WhatsApp setup complete
+  const [sendWhatsapp, setSendWhatsapp] = useState(true);
 
   // Step 1: Room selection
   const [locationId, setLocationId] = useState("");
@@ -1803,8 +1803,8 @@ function NewBookingForm() {
               <input type="checkbox" checked={sendSms} onChange={(e) => setSendSms(e.target.checked)} className="h-3.5 w-3.5 rounded" />
               <span>SMS</span>
             </label>
-            <label className="flex items-center gap-1.5 text-xs cursor-not-allowed opacity-50" title="WhatsApp setup not yet complete">
-              <input type="checkbox" checked={sendWhatsapp} disabled className="h-3.5 w-3.5 rounded" />
+            <label className="flex items-center gap-1.5 text-xs cursor-pointer">
+              <input type="checkbox" checked={sendWhatsapp} onChange={(e) => setSendWhatsapp(e.target.checked)} className="h-3.5 w-3.5 rounded" />
               <span>WhatsApp</span>
             </label>
           </div>
