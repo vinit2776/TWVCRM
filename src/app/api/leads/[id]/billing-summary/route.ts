@@ -86,10 +86,15 @@ export async function GET(
 
   const contractPayments: { amount: number; payment_date: string }[] = [];
   if (contractIds.length > 0) {
+    // status='verified' mirrors the booking_payments filter — only
+    // successfully completed transactions count toward the snapshot.
+    // Pending and rejected rows would otherwise inflate "money this
+    // customer has paid us" with money we don't actually have.
     let query = supabase
       .from("contract_payments")
       .select("amount, payment_date")
-      .in("contract_id", contractIds);
+      .in("contract_id", contractIds)
+      .eq("status", "verified");
     if (fromIso) query = query.gte("payment_date", fromIso.slice(0, 10));
     const { data } = await query;
     if (data) contractPayments.push(...data);
