@@ -1312,6 +1312,23 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               )}
             </div>
 
+            {/* Room subtotal — always visible so staff can verify the
+                rate × time multiplication before GST is added. */}
+            {!editingPricing && (
+              <div className="flex justify-between text-sm">
+                <span className="text-muted-foreground">
+                  {booking.pricing_model === "daily"
+                    ? `Day pass × ${Number(booking.quantity ?? 1)}`
+                    : `Room (${formatDuration(Number(booking.duration_hours))})`}
+                </span>
+                <span>
+                  {booking.pricing_model === "daily"
+                    ? formatCurrency(Number(booking.hourly_rate) * Number(booking.quantity ?? 1))
+                    : formatCurrency(Number(booking.hourly_rate) * Number(booking.duration_hours))}
+                </span>
+              </div>
+            )}
+
             {/* Subtotal (ex-GST) — editable so staff can apply a custom
                 discount that the rate × duration formula doesn't capture
                 (e.g. goodwill credit, partial waiver). GST and grand
