@@ -85,27 +85,39 @@ export function LeadCautionsBanner({
 
   // ── Booking-gate compact mode ────────────────────────────────────
   if (mode === "booking-gate") {
-    // Show only the most-severe handful in the gate; full list is on
-    // the lead profile.
+    const hasDanger      = cautions.some((c) => c.severity === "danger");
+    const hasWarning     = cautions.some((c) => c.severity === "warning");
+    const hasUnackedDanger = cautions.some((c) => c.severity === "danger" && !acknowledged.has(c.id));
+
+    // Escalate banner colour: danger → red, warning-only → amber, info-only → blue
+    const bannerBorder = hasDanger ? "border-red-500"   : hasWarning ? "border-amber-400"  : "border-blue-400";
+    const bannerBg     = hasDanger ? "bg-red-50"        : hasWarning ? "bg-amber-50"        : "bg-blue-50";
+    const headingColor = hasDanger ? "text-red-900"     : hasWarning ? "text-amber-900"     : "text-blue-900";
+    const iconColor    = hasDanger ? "text-red-600"     : hasWarning ? "text-amber-600"     : "text-blue-600";
+    const moreColor    = hasDanger ? "text-red-800"     : "text-amber-800";
+
     const visible = cautions.slice(0, 3);
     return (
-      <div className="rounded-md border-l-4 border-amber-400 bg-amber-50 p-3 space-y-2">
-        <div className="flex items-center gap-1.5 text-amber-900 font-semibold text-sm">
-          <ShieldAlert className="h-4 w-4" />
-          Caution{cautions.length > 1 ? "s" : ""} on this customer ({cautions.length})
+      <div className={`rounded-md border-l-4 ${bannerBorder} ${bannerBg} p-4 space-y-3 shadow-sm`}>
+        <div className={`flex items-center gap-2 font-semibold text-sm ${headingColor}`}>
+          <ShieldAlert className={`h-5 w-5 ${iconColor}`} />
+          <span>
+            {hasDanger ? "⚠ Customer Warning" : "Customer Notice"}
+            {" "}— {cautions.length} caution{cautions.length > 1 ? "s" : ""} on record
+          </span>
         </div>
-        <div className="space-y-1.5">
+        <div className="space-y-2">
           {visible.map((c) => {
             const isDanger = c.severity === "danger";
-            const isAcked = acknowledged.has(c.id);
+            const isAcked  = acknowledged.has(c.id);
             return (
               <div
                 key={c.id}
-                className={`rounded border px-2.5 py-1.5 text-xs ${LEAD_CAUTION_SEVERITY_COLORS[c.severity]}`}
+                className={`rounded border px-3 py-2 text-xs ${LEAD_CAUTION_SEVERITY_COLORS[c.severity]}${isDanger && !isAcked ? " ring-1 ring-red-400" : ""}`}
               >
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0 flex-1">
-                    <span className="text-[10px] uppercase font-semibold mr-1.5 opacity-70">
+                    <span className="text-[10px] uppercase font-bold mr-1.5 tracking-wide">
                       {LEAD_CAUTION_SEVERITY_LABELS[c.severity]}
                     </span>
                     {c.note}
@@ -114,9 +126,9 @@ export function LeadCautionsBanner({
                     <button
                       type="button"
                       onClick={() => ack(c.id)}
-                      className="shrink-0 text-[10px] font-semibold uppercase rounded border border-current px-2 py-0.5 hover:bg-white/50"
+                      className="shrink-0 text-[10px] font-bold uppercase rounded border border-current px-2.5 py-1 hover:bg-white/60 whitespace-nowrap"
                     >
-                      I&apos;ve seen this
+                      I&apos;ve seen this ✓
                     </button>
                   )}
                   {isDanger && isAcked && (
@@ -130,8 +142,13 @@ export function LeadCautionsBanner({
           })}
         </div>
         {cautions.length > 3 && (
-          <p className="text-[11px] text-amber-800">
+          <p className={`text-[11px] ${moreColor}`}>
             + {cautions.length - 3} more — see lead profile for the full history.
+          </p>
+        )}
+        {hasUnackedDanger && (
+          <p className="text-xs font-semibold text-red-700 bg-red-100 rounded px-3 py-2">
+            You must acknowledge all danger warnings before this booking can be submitted.
           </p>
         )}
       </div>

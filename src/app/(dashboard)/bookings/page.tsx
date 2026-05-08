@@ -106,8 +106,11 @@ function BookingTable({
         const json = await res.json();
         const d = json.data;
         const params = new URLSearchParams();
-        if (d.space_id) params.set("space_id", d.space_id);
-        if (d.customer_type) params.set("customer_type", d.customer_type);
+        if (d.space_id)       params.set("space_id",      d.space_id);
+        if (d.customer_type)  params.set("customer_type", d.customer_type);
+        if (d.lead_id)        params.set("lead_id",       d.lead_id);
+        if (d.booker_phone)   params.set("booker_phone",  d.booker_phone);
+        if (d.contract_id)    params.set("contract_id",   d.contract_id);
         router.push(`/bookings/new?${params}`);
       } else {
         toast.error("Failed to load booking data");

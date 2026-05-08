@@ -57,8 +57,11 @@ interface CustomerSuggestion {
 function NewBookingForm() {
   const router = useRouter();
   const searchParams = useSearchParams();
-  const preselectedSpaceId = searchParams.get("space_id") || "";
+  const preselectedSpaceId      = searchParams.get("space_id")      || "";
   const preselectedCustomerType = searchParams.get("customer_type") || "";
+  const preselectedLeadId       = searchParams.get("lead_id")       || "";
+  const preselectedBookerPhone  = searchParams.get("booker_phone")  || "";
+  const preselectedContractId   = searchParams.get("contract_id")   || "";
 
   const { locations } = useLocations();
   const [saving, setSaving] = useState(false);
@@ -80,7 +83,7 @@ function NewBookingForm() {
   const [endTime, setEndTime] = useState("");
 
   // Step 3: Customer — phone-first search
-  const [bookerPhone, setBookerPhone] = useState("");
+  const [bookerPhone, setBookerPhone] = useState(preselectedBookerPhone);
   const [customerSearchQuery, setCustomerSearchQuery] = useState("");
   const [customerSuggestions, setCustomerSuggestions] = useState<CustomerSuggestion[]>([]);
   const [searchLoading, setSearchLoading] = useState(false);
@@ -91,8 +94,8 @@ function NewBookingForm() {
   const [customerType, setCustomerType] = useState<"contract_holder" | "walk_in" | "guest">(
     (preselectedCustomerType as "contract_holder" | "walk_in" | "guest") || "walk_in"
   );
-  const [contractId, setContractId] = useState("");
-  const [leadId, setLeadId] = useState("");
+  const [contractId, setContractId] = useState(preselectedContractId);
+  const [leadId, setLeadId] = useState(preselectedLeadId);
   const [guestName, setGuestName] = useState("");
   const [guestEmail, setGuestEmail] = useState("");
   const [guestPhone, setGuestPhone] = useState("");
