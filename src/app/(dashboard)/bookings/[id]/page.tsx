@@ -1009,19 +1009,48 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         </div>
       )}
 
-      {/* Payment Collected Success Banner */}
+      {/* Payment Collected Banner — derived from ACTUAL verified
+          payments, not the booking.payment_status flag (which can go
+          stale when a booking is edited after partial payment). Two
+          modes:
+            - Fully paid → green "Payment Collected Successfully" with
+              the actual collected total
+            - Underpaid (flag says paid but actual collected < total)
+              → amber warning showing "X of Y collected · ₹Z still due"
+              so finance sees the truth, not a misleading green tick. */}
       {booking.payment_status === "paid" && (() => {
         const razorpayPayment = existingPayments.find(p => p.payment_mode === "razorpay" && p.status === "verified");
+        const actualPaid = existingPayments
+          .filter((p) => p.status === "verified")
+          .reduce((s, p) => s + Number(p.amount), 0);
+        const grandTotal = Number(booking.total_amount_with_gst) || Number(booking.total_amount);
+        const isFullyPaid = actualPaid + 0.01 >= grandTotal;
+        const balanceDue = Math.max(0, grandTotal - actualPaid);
+        const tone = isFullyPaid
+          ? { bg: "bg-green-50", border: "border-green-200", icon: "text-green-600", iconBg: "bg-green-100", title: "text-green-800", body: "text-green-600" }
+          : { bg: "bg-amber-50",  border: "border-amber-200",  icon: "text-amber-700",  iconBg: "bg-amber-100",  title: "text-amber-800",  body: "text-amber-700" };
         return (
-          <div className="bg-green-50 border border-green-200 rounded-lg p-4 flex items-start gap-3">
-            <div className="flex-shrink-0 w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
-              <CheckCircle className="h-7 w-7 text-green-600" />
+          <div className={`${tone.bg} border ${tone.border} rounded-lg p-4 flex items-start gap-3`}>
+            <div className={`flex-shrink-0 w-12 h-12 ${tone.iconBg} rounded-full flex items-center justify-center`}>
+              {isFullyPaid
+                ? <CheckCircle className={`h-7 w-7 ${tone.icon}`} />
+                : <AlertTriangle className={`h-7 w-7 ${tone.icon}`} />}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="font-semibold text-green-800">Payment Collected Successfully</p>
-              <p className="text-sm text-green-600">
-                {formatCurrency(Number(booking.total_amount_with_gst) || booking.total_amount)} paid via {(booking.payment_mode && PAYMENT_MODE_LABELS[booking.payment_mode]) || booking.payment_mode || "online payment"}
-                {booking.status === "confirmed" && " — Ready for check-in"}
+              <p className={`font-semibold ${tone.title}`}>
+                {isFullyPaid ? "Payment Collected Successfully" : "Partial Payment — balance still due"}
+              </p>
+              <p className={`text-sm ${tone.body}`}>
+                {isFullyPaid
+                  ? <>
+                      {formatCurrency(actualPaid)} paid via {(booking.payment_mode && PAYMENT_MODE_LABELS[booking.payment_mode]) || booking.payment_mode || "online payment"}
+                      {booking.status === "confirmed" && " — Ready for check-in"}
+                    </>
+                  : <>
+                      {formatCurrency(actualPaid)} collected of {formatCurrency(grandTotal)} —
+                      <strong> {formatCurrency(balanceDue)} still due.</strong>{" "}
+                      The booking total likely changed after the original payment was taken.
+                    </>}
               </p>
               {razorpayPayment && (
                 <div className="mt-2 text-xs text-green-700 space-y-0.5">
