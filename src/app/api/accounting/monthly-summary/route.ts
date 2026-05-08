@@ -112,7 +112,7 @@ export async function GET(request: NextRequest) {
   const { data: walkinPayments } = await supabase
     .from("booking_payments")
     .select(
-      "*, booking:bookings!booking_payments_booking_id_fkey(id, booking_date, space:spaces!bookings_space_id_fkey(id, name), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company), guest_name, guest_company, customer_type)"
+      "*, booking:bookings!booking_payments_booking_id_fkey(id, booking_number, booking_date, space:spaces!bookings_space_id_fkey(id, name), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company), guest_name, guest_company, customer_type)"
     )
     .gte("created_at", `${periodStart}T00:00:00`)
     .lte("created_at", `${periodEnd}T23:59:59`);

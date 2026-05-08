@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
   let bookingQuery = supabase
     .from("booking_payments")
     .select(
-      "id, amount, payment_mode, cash_handover_status, collected_by, collected_at, handed_over_to, handed_over_at, handover_confirmed_by, handover_confirmed_at, handover_notes, created_at, booking:bookings!booking_payments_booking_id_fkey(id, booking_date, guest_name, guest_company, space:spaces!bookings_space_id_fkey(id, name), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company)), collector:users!booking_payments_collected_by_fkey(id, full_name)"
+      "id, amount, payment_mode, cash_handover_status, collected_by, collected_at, handed_over_to, handed_over_at, handover_confirmed_by, handover_confirmed_at, handover_notes, created_at, booking:bookings!booking_payments_booking_id_fkey(id, booking_number, booking_date, guest_name, guest_company, space:spaces!bookings_space_id_fkey(id, name), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company)), collector:users!booking_payments_collected_by_fkey(id, full_name)"
     )
     .eq("payment_mode", "cash")
     .not("cash_handover_status", "is", null)
@@ -60,6 +60,11 @@ export async function GET(request: NextRequest) {
     source: "contract" as const,
     display_name: item.contract?.lead?.company || `${item.contract?.lead?.first_name || ""} ${item.contract?.lead?.last_name || ""}`.trim(),
     reference: item.payment_number || item.contract?.contract_number,
+    // Expose link target — finance can click through to the contract
+    // payment context.
+    link_target_id: item.contract?.id ?? null,
+    link_target_label: item.contract?.contract_number ?? null,
+    link_target_type: "contract" as const,
   }));
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -68,6 +73,11 @@ export async function GET(request: NextRequest) {
     source: "booking" as const,
     display_name: item.booking?.guest_company || item.booking?.guest_name || item.booking?.lead?.company || `${item.booking?.lead?.first_name || ""} ${item.booking?.lead?.last_name || ""}`.trim(),
     reference: item.booking?.space?.name || "Walk-in",
+    // Expose link target — finance can click through to the booking
+    // detail (transaction) view.
+    link_target_id: item.booking?.id ?? null,
+    link_target_label: item.booking?.booking_number ?? null,
+    link_target_type: "booking" as const,
   }));
 
   const allItems = [...contractItems, ...bookingItems].sort(

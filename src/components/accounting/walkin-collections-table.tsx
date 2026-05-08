@@ -1,5 +1,6 @@
 "use client";
 
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
@@ -11,6 +12,7 @@ interface WalkinPayment {
   created_at: string;
   booking?: {
     id: string;
+    booking_number?: string;     // surfaced from monthly-summary API
     booking_date: string;
     guest_name?: string;
     guest_company?: string;
@@ -56,6 +58,12 @@ export function WalkinCollectionsTable({ payments }: WalkinCollectionsTableProps
         <table className="w-full text-sm">
           <thead className="bg-muted/50">
             <tr>
+              {/* Booking column — first so finance has the transaction
+                  reference up-front, with a click-through to the
+                  booking detail (where receipts, payments, addons all
+                  live). Opens in a new tab so finance keeps their
+                  current sweep view. */}
+              <th className="text-left px-3 py-2 font-medium">Booking</th>
               <th className="text-left px-3 py-2 font-medium">Customer</th>
               <th className="text-left px-3 py-2 font-medium">Space</th>
               <th className="text-left px-3 py-2 font-medium">Date</th>
@@ -67,6 +75,21 @@ export function WalkinCollectionsTable({ payments }: WalkinCollectionsTableProps
           <tbody className="divide-y">
             {payments.map((p) => (
               <tr key={p.id} className="hover:bg-accent/50">
+                <td className="px-3 py-2 font-mono text-xs">
+                  {p.booking?.booking_number && p.booking?.id ? (
+                    <Link
+                      href={`/bookings/${p.booking.id}`}
+                      target="_blank"
+                      rel="noopener"
+                      className="text-primary hover:underline"
+                      title="Open booking — opens in new tab"
+                    >
+                      {p.booking.booking_number}
+                    </Link>
+                  ) : (
+                    <span className="text-muted-foreground">—</span>
+                  )}
+                </td>
                 <td className="px-3 py-2">
                   {p.booking?.guest_company ||
                     p.booking?.guest_name ||

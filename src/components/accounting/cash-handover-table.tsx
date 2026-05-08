@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -21,6 +22,12 @@ interface CashHandoverItem {
   payment_number?: string;
   collector?: { full_name: string } | null;
   handover_receiver?: { full_name: string } | null;
+  // Click-through target — booking# for booking-source rows,
+  // contract# for contract-source rows. Surfaced from the API so
+  // finance can drill into the originating transaction.
+  link_target_id?: string | null;
+  link_target_label?: string | null;
+  link_target_type?: "booking" | "contract" | null;
 }
 
 interface CashHandoverTableProps {
@@ -74,7 +81,11 @@ export function CashHandoverTable({ items, status, onRefresh }: CashHandoverTabl
         <thead className="bg-muted/50">
           <tr>
             <th className="text-left px-3 py-2 font-medium">Customer</th>
-            <th className="text-left px-3 py-2 font-medium">Reference</th>
+            {/* Transaction column — the linked booking# / contract#
+                that this cash payment came from. Replaces the legacy
+                "Reference" text-only column with a click-through to
+                the source so finance can audit each row in one click. */}
+            <th className="text-left px-3 py-2 font-medium">Transaction</th>
             <th className="text-left px-3 py-2 font-medium">Source</th>
             <th className="text-right px-3 py-2 font-medium">Amount</th>
             <th className="text-left px-3 py-2 font-medium">Collected By</th>
@@ -91,7 +102,21 @@ export function CashHandoverTable({ items, status, onRefresh }: CashHandoverTabl
           {items.map((item) => (
             <tr key={`${item.source}-${item.id}`} className="hover:bg-accent/50">
               <td className="px-3 py-2">{item.display_name}</td>
-              <td className="px-3 py-2 text-muted-foreground">{item.reference}</td>
+              <td className="px-3 py-2 font-mono text-xs">
+                {item.link_target_id && item.link_target_label && item.link_target_type ? (
+                  <Link
+                    href={`/${item.link_target_type === "booking" ? "bookings" : "contracts"}/${item.link_target_id}`}
+                    target="_blank"
+                    rel="noopener"
+                    className="text-primary hover:underline"
+                    title={`Open ${item.link_target_type} — opens in new tab`}
+                  >
+                    {item.link_target_label}
+                  </Link>
+                ) : (
+                  <span className="text-muted-foreground">{item.reference || "—"}</span>
+                )}
+              </td>
               <td className="px-3 py-2">
                 <Badge variant="outline" className="text-xs">
                   {item.source === "contract" ? "Contract" : "Booking"}
