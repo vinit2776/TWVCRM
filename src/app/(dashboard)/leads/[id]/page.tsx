@@ -47,6 +47,7 @@ import { LeadContractsTab } from "@/components/leads/lead-contracts-tab";
 import { LeadDocumentsTab } from "@/components/leads/lead-documents-tab";
 import { LeadCreditsCard } from "@/components/leads/lead-credits-card";
 import { LeadCautionsBanner } from "@/components/leads/lead-cautions-banner";
+import { LeadBillingSnippet } from "@/components/leads/lead-billing-snippet";
 import { LeadTasksTab } from "@/components/leads/lead-tasks-tab";
 import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
 import { LeadLifecycle } from "@/components/leads/lead-lifecycle";
@@ -458,7 +459,15 @@ export default function LeadDetailPage({
           </div>
         </TabsContent>
 
-        <TabsContent value="activities" className="mt-4">
+        <TabsContent value="activities" className="mt-4 space-y-4">
+          {/* Billing snapshot — sits above the timeline so finance /
+              sales sees lifetime money this customer has paid before
+              digging into individual activities. Filter toggles
+              between lifetime and current Indian financial year;
+              line graph shows monthly revenue trend. Auto-hides
+              gracefully when there are no payments. */}
+          <LeadBillingSnippet leadId={id} />
+
           <Card>
             <CardHeader className="flex flex-row items-center justify-between">
               <CardTitle className="text-base">Lead Timeline</CardTitle>
