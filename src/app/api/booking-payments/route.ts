@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
-const PAYMENT_SELECT = "*, creator:users!booking_payments_created_by_fkey(id, full_name)";
+const PAYMENT_SELECT = "*, creator:users!booking_payments_created_by_fkey(id, full_name), collector:users!booking_payments_collected_by_fkey(id, full_name), handover_receiver:users!booking_payments_handed_over_to_fkey(id, full_name), handover_confirmer:users!booking_payments_handover_confirmed_by_fkey(id, full_name)";
 
 // GET — list payments for a booking
 export async function GET(request: NextRequest) {

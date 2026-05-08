@@ -1126,12 +1126,23 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <span>{formatDate(booking.booking_date)}</span>
             </div>
             <div className="flex justify-between">
-              <span className="text-muted-foreground">Time</span>
+              <span className="text-muted-foreground">
+                {booking.pricing_model === "daily" ? "Access window" : "Time"}
+              </span>
               <span>{formatTime12(booking.start_time)} – {formatTime12(booking.end_time)}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-muted-foreground">Duration</span>
-              <span>{formatDuration(Number(booking.duration_hours))}</span>
+              {/* Day-pass bookings: show "Day Pass (full day)" instead
+                  of the misleading "1 hour" — the duration_hours=1 is
+                  a legacy marker, the real meaning is "full day during
+                  the access window above". Hourly bookings render the
+                  actual hours+minutes. */}
+              <span>
+                {booking.pricing_model === "daily"
+                  ? "Day Pass (full day)"
+                  : formatDuration(Number(booking.duration_hours))}
+              </span>
             </div>
             {booking.original_booking_date && (
               <>
@@ -1509,6 +1520,42 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                       {p.payment_mode !== "razorpay" && p.payment_reference && (
                         <div className="mt-1 text-[11px] text-muted-foreground">
                           Ref: <span className="font-mono">{p.payment_reference}</span>
+                        </div>
+                      )}
+                      {/* Cash trail — who collected and where the money is
+                          right now. Only meaningful for cash payments;
+                          surfaces the audit trail finance asks for
+                          ("who has the cash in hand?"). */}
+                      {p.payment_mode === "cash" && (
+                        <div className="mt-1.5 pt-1.5 border-t border-muted/50 text-[11px] space-y-0.5">
+                          {p.collector?.full_name && (
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Collected by</span>
+                              <span className="font-medium">{p.collector.full_name}</span>
+                            </div>
+                          )}
+                          {p.cash_handover_status === "pending_handover" && (
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Handover</span>
+                              <span className="text-amber-700 font-medium">
+                                Pending — cash with {p.collector?.full_name || "collector"}
+                              </span>
+                            </div>
+                          )}
+                          {p.cash_handover_status === "handed_over" && (
+                            <>
+                              <div className="flex justify-between">
+                                <span className="text-muted-foreground">Handed over to</span>
+                                <span className="font-medium">{p.handover_receiver?.full_name || "—"}</span>
+                              </div>
+                              {p.handover_confirmer?.full_name && (
+                                <div className="flex justify-between">
+                                  <span className="text-muted-foreground">Confirmed by</span>
+                                  <span className="font-medium text-emerald-700">{p.handover_confirmer.full_name}</span>
+                                </div>
+                              )}
+                            </>
+                          )}
                         </div>
                       )}
                       <div className="mt-1 text-[10px] text-muted-foreground/70">

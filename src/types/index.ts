@@ -898,6 +898,20 @@ export interface BookingPayment {
   razorpay_signature?: string;
   created_by?: string;
   creator?: { id: string; full_name: string };
+  // Cash-handover trail — populated for cash payments. Lets the UI
+  // show "Collected by Ashok · pending handover" / "Handed over to
+  // Priya · confirmed by Rahul" without a second round-trip.
+  cash_handover_status?: "pending_handover" | "handed_over" | null;
+  collected_by?: string | null;
+  collected_at?: string | null;
+  collector?: { id: string; full_name: string } | null;
+  handed_over_to?: string | null;
+  handed_over_at?: string | null;
+  handover_receiver?: { id: string; full_name: string } | null;
+  handover_confirmed_by?: string | null;
+  handover_confirmed_at?: string | null;
+  handover_confirmer?: { id: string; full_name: string } | null;
+  handover_notes?: string | null;
   created_at: string;
   updated_at: string;
 }
