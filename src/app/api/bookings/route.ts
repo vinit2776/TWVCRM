@@ -303,7 +303,7 @@ export async function POST(request: NextRequest) {
       }
       unitRate = dr;
     }
-    quantity = 1;
+    quantity = Math.max(1, Number(input.num_seats ?? 1));
   } else {
     unitRate = (input.hourly_rate !== undefined && input.hourly_rate >= 0)
       ? input.hourly_rate

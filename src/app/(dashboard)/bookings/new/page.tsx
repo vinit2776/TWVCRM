@@ -103,6 +103,7 @@ function NewBookingForm() {
 
   // Attendee count — drives multi-voucher issuance (1 voucher per 2 attendees)
   const [numAttendees, setNumAttendees] = useState<string>("");
+  const [numSeats, setNumSeats] = useState<number>(1);
 
   // ID proof
   const [idProofFile, setIdProofFile] = useState<File | null>(null);
@@ -338,13 +339,14 @@ function NewBookingForm() {
   // auto-set to the centre's operating hours for that day.
   const isDayPass = selectedSpace?.pricing_model === "daily";
 
-  // Sync customRate when selected space changes
+  // Sync customRate and seat count when selected space changes
   useEffect(() => {
     if (!selectedSpace) { setCustomRate(""); return; }
     const rate = isDayPass
       ? Number(selectedSpace.daily_rate ?? 0)
       : Number(selectedSpace.hourly_rate ?? 0);
     setCustomRate(rate.toFixed(2));
+    setNumSeats(1); // reset to 1 seat on space change
   }, [selectedSpace, isDayPass]);
 
   // For day passes: auto-set start/end to the centre's operating hours for the
@@ -524,9 +526,9 @@ function NewBookingForm() {
   const effectiveRate = selectedSpace
     ? (!isNaN(parsedCustomRate) && parsedCustomRate >= 0 ? parsedCustomRate : fallbackRate)
     : 0;
-  // For day passes: charge is one flat day rate, not hours × rate.
+  // For day passes: charge is day rate × number of seats booked.
   const roomCost = selectedSpace
-    ? (isDayPass ? effectiveRate : durationHours * effectiveRate)
+    ? (isDayPass ? effectiveRate * numSeats : durationHours * effectiveRate)
     : 0;
   const facilityCost = selectedSpace?.facilities
     ? selectedSpace.facilities
@@ -640,6 +642,7 @@ function NewBookingForm() {
         booker_gst_number: bookerGstNumber.trim().toUpperCase() || undefined,
         aggregator_booking_id: aggregatorBookingId.trim() || undefined,
         num_attendees: numAttendees ? parseInt(numAttendees, 10) : undefined,
+        num_seats: isDayPass ? numSeats : undefined,
         facility_ids: selectedFacilities,
         payment_mode: paymentMode || undefined,
         payment_reference: paymentReference.trim() || undefined,
@@ -847,26 +850,55 @@ function NewBookingForm() {
 
           {/* Availability — day-pass uses a capacity counter, hourly uses slot windows */}
           {spaceId && bookingDate && isDayPass && selectedSpace && (
-            <div className="pt-2 rounded-lg border bg-muted/20 p-3 text-sm">
-              {(() => {
-                const cap = selectedSpace.capacity || 1;
-                const remaining = Math.max(0, cap - dayPassUsed);
-                const exhausted = remaining === 0;
-                return (
-                  <div className="flex items-start gap-2">
-                    <div className={`mt-0.5 h-2 w-2 rounded-full ${exhausted ? "bg-red-500" : "bg-emerald-500"}`} />
-                    <div>
-                      <div className="font-medium">
-                        {exhausted ? "All day passes booked" : `${remaining} of ${cap} day passes available`} for this date
+            <div className="pt-2 space-y-3">
+              <div className="rounded-lg border bg-muted/20 p-3 text-sm">
+                {(() => {
+                  const cap = selectedSpace.capacity || 1;
+                  const remaining = Math.max(0, cap - dayPassUsed);
+                  const exhausted = remaining === 0;
+                  return (
+                    <div className="flex items-start gap-2">
+                      <div className={`mt-0.5 h-2 w-2 rounded-full ${exhausted ? "bg-red-500" : "bg-emerald-500"}`} />
+                      <div>
+                        <div className="font-medium">
+                          {exhausted ? "All day passes booked" : `${remaining} of ${cap} day passes available`} for this date
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Day passes don&apos;t use the slot grid — any seat at this location works.
+                          Hourly meeting/conference rooms are unaffected.
+                        </p>
                       </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Day passes don&apos;t use the slot grid — any seat at this location works.
-                        Hourly meeting/conference rooms are unaffected.
-                      </p>
                     </div>
-                  </div>
-                );
-              })()}
+                  );
+                })()}
+              </div>
+              {/* Seat count selector */}
+              <div className="flex items-center gap-3">
+                <Label className="text-sm shrink-0">No. of Seats</Label>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-base"
+                    onClick={() => setNumSeats(s => Math.max(1, s - 1))}
+                    disabled={numSeats <= 1}
+                  >−</Button>
+                  <span className="w-8 text-center font-medium tabular-nums">{numSeats}</span>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    className="h-8 w-8 p-0 text-base"
+                    onClick={() => setNumSeats(s => Math.min(s + 1, selectedSpace?.capacity || 99))}
+                  >+</Button>
+                </div>
+                {numSeats > 1 && (
+                  <p className="text-xs text-muted-foreground">
+                    {numSeats} × {formatCurrency(effectiveRate)} = <span className="font-medium text-foreground">{formatCurrency(effectiveRate * numSeats)}</span>
+                  </p>
+                )}
+              </div>
             </div>
           )}
           {spaceId && bookingDate && !isDayPass && (
@@ -1616,7 +1648,7 @@ function NewBookingForm() {
             </div>
             <div>
               <p className="text-xs text-muted-foreground">{isDayPass ? "Coverage" : "Duration"}</p>
-              <p className="font-medium text-sm">{isDayPass ? "1 Day" : formatDuration(durationHours)}</p>
+              <p className="font-medium text-sm">{isDayPass ? `${numSeats} seat${numSeats > 1 ? "s" : ""} · 1 day` : formatDuration(durationHours)}</p>
             </div>
           </div>
           <div className="border-t pt-3 space-y-1">
@@ -1636,7 +1668,7 @@ function NewBookingForm() {
               </div>
             )}
             <div className="flex justify-between text-sm">
-              <span className="text-muted-foreground">{isDayPass ? "Day Pass (1 day)" : `Room (${formatDuration(durationHours)})`}</span>
+              <span className="text-muted-foreground">{isDayPass ? `Day Pass (${numSeats} seat${numSeats > 1 ? "s" : ""})` : `Room (${formatDuration(durationHours)})`}</span>
               <span>{formatCurrency(roomCost)}</span>
             </div>
             {facilityCost > 0 && (
