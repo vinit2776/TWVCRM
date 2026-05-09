@@ -852,6 +852,115 @@ export default function ContractDetailPage({
 
         {/* Sidebar */}
         <div className="space-y-4">
+          {/* Renewal Card — pinned to top of sidebar for active/expired/renewed contracts */}
+          {["active", "expired", "renewed"].includes(contract.status) && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <RefreshCw className="h-4 w-4" />
+                  Renewal
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                {/* Renewal chain info */}
+                {contract.is_renewal && contract.parent_contract_id && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground text-xs">Renewal of</span>
+                    <Link
+                      href={`/contracts/${contract.parent_contract_id}`}
+                      className="text-xs text-primary hover:underline font-mono"
+                    >
+                      View parent →
+                    </Link>
+                  </div>
+                )}
+                {contract.renewal_sequence && contract.renewal_sequence > 1 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground text-xs">Renewal #</span>
+                    <Badge variant="secondary" className="text-[10px]">
+                      V{contract.renewal_sequence}
+                    </Badge>
+                  </div>
+                )}
+
+                {/* Escalation waiver — admin only, on renewal drafts */}
+                {contract.is_renewal && contract.status === "draft" && (
+                  <EscalationWaiverSection
+                    contractId={contract.id}
+                    escalationWaived={contract.escalation_waived || false}
+                    waiverReason={contract.escalation_waiver_reason || null}
+                    userRole={userRole}
+                    onSuccess={() => fetchContract(false)}
+                  />
+                )}
+
+                {/* Decline info */}
+                {contract.renewal_declined && (
+                  <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 space-y-1">
+                    <p className="font-semibold">Renewal Declined</p>
+                    <p>{contract.renewal_declined_reason}</p>
+                    {contract.renewal_declined_at && (
+                      <p className="text-red-600">{formatDate(contract.renewal_declined_at)}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Deposit carry info for renewals */}
+                {contract.deposit_carried_from && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground text-xs">Deposit</span>
+                    <span className="text-xs text-green-700">Carried from parent</span>
+                  </div>
+                )}
+                {contract.deposit_shortfall != null && contract.deposit_shortfall > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground text-xs">Deposit Shortfall</span>
+                    <span className="text-xs text-amber-700 font-medium">
+                      {formatCurrency(contract.deposit_shortfall)}
+                    </span>
+                  </div>
+                )}
+
+                {/* Reminder tracking */}
+                {(contract.renewal_reminder_count || 0) > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground text-xs">Reminders Sent</span>
+                    <span className="text-xs">{contract.renewal_reminder_count}</span>
+                  </div>
+                )}
+
+                {/* Action buttons — only for active/expired, not already renewed or declined */}
+                {["active", "expired"].includes(contract.status) && !contract.renewal_declined && (
+                  <div className="flex gap-2 pt-1">
+                    <Button
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => setRenewDialogOpen(true)}
+                    >
+                      <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                      Renew
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => setDeclineDialogOpen(true)}
+                    >
+                      <XCircle className="mr-1.5 h-3.5 w-3.5" />
+                      Decline
+                    </Button>
+                  </div>
+                )}
+
+                {contract.status === "renewed" && (
+                  <p className="text-xs text-green-700 font-medium text-center">
+                    ✓ Contract has been renewed
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
+
           {/* Contract Details Card */}
           <Card>
             <CardHeader>
@@ -1313,114 +1422,6 @@ export default function ContractDetailPage({
             </CardContent>
           </Card>
 
-          {/* Renewal Card — visible for active/expired/renewed contracts */}
-          {["active", "expired", "renewed"].includes(contract.status) && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base flex items-center gap-2">
-                  <RefreshCw className="h-4 w-4" />
-                  Renewal
-                </CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 text-sm">
-                {/* Renewal chain info */}
-                {contract.is_renewal && contract.parent_contract_id && (
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground text-xs">Renewal of</span>
-                    <Link
-                      href={`/contracts/${contract.parent_contract_id}`}
-                      className="text-xs text-primary hover:underline font-mono"
-                    >
-                      View parent →
-                    </Link>
-                  </div>
-                )}
-                {contract.renewal_sequence && contract.renewal_sequence > 1 && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground text-xs">Renewal #</span>
-                    <Badge variant="secondary" className="text-[10px]">
-                      V{contract.renewal_sequence}
-                    </Badge>
-                  </div>
-                )}
-
-                {/* Escalation waiver — admin only, on renewal drafts */}
-                {contract.is_renewal && contract.status === "draft" && (
-                  <EscalationWaiverSection
-                    contractId={contract.id}
-                    escalationWaived={contract.escalation_waived || false}
-                    waiverReason={contract.escalation_waiver_reason || null}
-                    userRole={userRole}
-                    onSuccess={() => fetchContract(false)}
-                  />
-                )}
-
-                {/* Decline info */}
-                {contract.renewal_declined && (
-                  <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 space-y-1">
-                    <p className="font-semibold">Renewal Declined</p>
-                    <p>{contract.renewal_declined_reason}</p>
-                    {contract.renewal_declined_at && (
-                      <p className="text-red-600">{formatDate(contract.renewal_declined_at)}</p>
-                    )}
-                  </div>
-                )}
-
-                {/* Deposit carry info for renewals */}
-                {contract.deposit_carried_from && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground text-xs">Deposit</span>
-                    <span className="text-xs text-green-700">Carried from parent</span>
-                  </div>
-                )}
-                {contract.deposit_shortfall != null && contract.deposit_shortfall > 0 && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground text-xs">Deposit Shortfall</span>
-                    <span className="text-xs text-amber-700 font-medium">
-                      {formatCurrency(contract.deposit_shortfall)}
-                    </span>
-                  </div>
-                )}
-
-                {/* Reminder tracking */}
-                {(contract.renewal_reminder_count || 0) > 0 && (
-                  <div className="flex justify-between">
-                    <span className="text-muted-foreground text-xs">Reminders Sent</span>
-                    <span className="text-xs">{contract.renewal_reminder_count}</span>
-                  </div>
-                )}
-
-                {/* Action buttons — only for active/expired, not already renewed or declined */}
-                {["active", "expired"].includes(contract.status) && !contract.renewal_declined && (
-                  <div className="flex gap-2 pt-1">
-                    <Button
-                      size="sm"
-                      className="flex-1"
-                      onClick={() => setRenewDialogOpen(true)}
-                    >
-                      <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
-                      Renew
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="text-destructive hover:text-destructive"
-                      onClick={() => setDeclineDialogOpen(true)}
-                    >
-                      <XCircle className="mr-1.5 h-3.5 w-3.5" />
-                      Decline
-                    </Button>
-                  </div>
-                )}
-
-                {contract.status === "renewed" && (
-                  <p className="text-xs text-green-700 font-medium text-center">
-                    ✓ Contract has been renewed
-                  </p>
-                )}
-              </CardContent>
-            </Card>
-          )}
         </div>
       </div>
 
