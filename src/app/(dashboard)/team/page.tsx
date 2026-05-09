@@ -21,6 +21,8 @@ import {
   Briefcase,
   Check,
   Minus,
+  BellRing,
+  BellOff,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -622,6 +624,9 @@ export default function TeamPage() {
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">
                   Status
                 </th>
+                <th className="px-4 py-3 text-center font-medium hidden md:table-cell">
+                  Push
+                </th>
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">
                   Joined
                 </th>
@@ -675,6 +680,13 @@ export default function TeamPage() {
                       >
                         {member.is_active ? "Active" : "Suspended"}
                       </Badge>
+                    </td>
+                    <td className="px-4 py-3 hidden md:table-cell text-center">
+                      {(member as UserType & { push_enabled?: boolean }).push_enabled ? (
+                        <BellRing className="h-4 w-4 text-green-600 inline-block" />
+                      ) : (
+                        <BellOff className="h-4 w-4 text-muted-foreground/50 inline-block" />
+                      )}
                     </td>
                     <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
                       {formatDate(member.created_at)}
