@@ -100,7 +100,7 @@ export function generateAddendumPdf(data: AddendumData): jsPDF {
   const _ = autoTable; // Ensure autoTable is loaded
 
   // ── Page 1: Header ──
-  let startY = addBrandHeader(doc);
+  const startY = addBrandHeader(doc);
   const ctx = createPdfContext(doc, startY);
 
   const addendumSeq = data.renewal_sequence - 1;

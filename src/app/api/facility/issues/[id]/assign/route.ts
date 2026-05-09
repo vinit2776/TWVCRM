@@ -73,6 +73,7 @@ export async function POST(
     issueNumber: prev?.issue_number ?? "",
     title: prev?.title ?? "",
     assigneeName: assigneeName,
+    assigneeId: assigneeId,
     actorName: dbUser!.full_name,
   });
 

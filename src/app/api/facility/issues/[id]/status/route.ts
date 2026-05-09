@@ -41,7 +41,7 @@ export async function PATCH(
 
   const { data: existing, error: loadErr } = await supabase
     .from("facility_issues")
-    .select("id, issue_number, title, status, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, reopen_count, reporter_email, reporter_phone")
+    .select("id, issue_number, title, status, assigned_to, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, reopen_count, reporter_email, reporter_phone")
     .eq("id", id).single();
   if (loadErr || !existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -106,6 +106,7 @@ export async function PATCH(
     from: existing.status,
     to: next,
     actorName: dbUser!.full_name,
+    assigneeId: existing.assigned_to ?? undefined,
   });
 
   return NextResponse.json({ data });

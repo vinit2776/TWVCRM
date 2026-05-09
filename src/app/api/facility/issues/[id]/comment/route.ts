@@ -27,7 +27,7 @@ export async function POST(
 
   const { data: issue } = await supabase
     .from("facility_issues")
-    .select("issue_number, title")
+    .select("issue_number, title, assigned_to")
     .eq("id", id).single();
 
   await logIssueEvent(supabase, {
@@ -42,6 +42,7 @@ export async function POST(
     title: issue?.title ?? "",
     actorName: dbUser.full_name,
     message,
+    assigneeId: issue?.assigned_to ?? undefined,
   });
 
   return NextResponse.json({ success: true }, { status: 201 });

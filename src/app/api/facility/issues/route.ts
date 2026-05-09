@@ -198,7 +198,7 @@ export async function POST(request: NextRequest) {
     performedBy: dbUser.id, changes: { record: { old: null, new: issue } },
   });
 
-  // Fire-and-forget: notify IT team
+  // Fire-and-forget: notify IT team + assignee
   void notifyItTeam({
     type: "created",
     issueId: issue.id,
@@ -206,6 +206,7 @@ export async function POST(request: NextRequest) {
     title: title.trim(),
     priority,
     reportedBy: dbUser.full_name,
+    assigneeId: autoAssignee?.id,
   });
 
   return NextResponse.json({ data: issue }, { status: 201 });
