@@ -582,6 +582,17 @@ export default function ContractDetailPage({
             <Download className="mr-2 h-4 w-4" />
             Download PDF
           </Button>
+          {contract.is_renewal && contract.parent_contract_id && (
+            <Button
+              variant="outline"
+              onClick={() => {
+                window.open(`/api/contracts/${contract.id}/addendum`, "_blank");
+              }}
+            >
+              <FileText className="mr-2 h-4 w-4" />
+              Addendum
+            </Button>
+          )}
         </div>
       </div>
 
