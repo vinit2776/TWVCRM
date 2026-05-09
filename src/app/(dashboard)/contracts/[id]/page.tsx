@@ -85,6 +85,8 @@ export default function ContractDetailPage({
   const [copiedLessee, setCopiedLessee] = useState(false);
   const [renewDialogOpen, setRenewDialogOpen] = useState(false);
   const [declineDialogOpen, setDeclineDialogOpen] = useState(false);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [renewalDraft, setRenewalDraft] = useState<any>(null);
   const signedDocInputRef = useRef<HTMLInputElement>(null);
 
   const copyToClipboard = (text: string, who: "lessor" | "lessee") => {
@@ -150,6 +152,19 @@ export default function ContractDetailPage({
           .then(r => r.json())
           .then(pJson => setLinkedProposal(pJson.data || null))
           .catch(() => setLinkedProposal(null));
+      }
+
+      // Fetch renewal draft link (for parent contracts in renewal_in_progress or renewed)
+      if (["renewal_in_progress", "renewed"].includes(json.data?.status)) {
+        fetch(`/api/contracts?parent_contract_id=${id}&is_renewal=true&limit=1`)
+          .then(r => r.json())
+          .then(rJson => {
+            const drafts = rJson.data || [];
+            setRenewalDraft(drafts.length > 0 ? drafts[0] : null);
+          })
+          .catch(() => setRenewalDraft(null));
+      } else {
+        setRenewalDraft(null);
       }
     }
     if (showSpinner) setLoading(false);
@@ -959,13 +974,34 @@ export default function ContractDetailPage({
                 )}
 
                 {contract.status === "renewal_in_progress" && (
-                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 space-y-1">
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 space-y-2">
                     <p className="font-semibold">⏳ Renewal in Progress</p>
-                    <p>A renewal draft has been created and is awaiting finalization. The current contract remains active until the renewal is activated.</p>
+                    <p>A renewal draft has been created and is awaiting finalization. This contract remains active until the renewal is activated.</p>
+                    {renewalDraft && (
+                      <Link
+                        href={`/contracts/${renewalDraft.id}`}
+                        className="inline-flex items-center gap-1.5 text-xs font-medium text-amber-900 bg-amber-100 hover:bg-amber-200 rounded-md px-2.5 py-1.5 transition-colors"
+                      >
+                        <RefreshCw className="h-3 w-3" />
+                        Open Renewal Draft — {renewalDraft.contract_number}
+                        <span className="text-amber-600">→</span>
+                      </Link>
+                    )}
                   </div>
                 )}
 
-                {contract.status === "renewed" && (
+                {contract.status === "renewed" && renewalDraft && (
+                  <Link
+                    href={`/contracts/${renewalDraft.id}`}
+                    className="inline-flex items-center gap-1.5 text-xs font-medium text-green-800 bg-green-50 hover:bg-green-100 border border-green-200 rounded-md px-2.5 py-1.5 w-full justify-center transition-colors"
+                  >
+                    <RefreshCw className="h-3 w-3" />
+                    View Renewed Contract — {renewalDraft.contract_number}
+                    <span className="text-green-500">→</span>
+                  </Link>
+                )}
+
+                {contract.status === "renewed" && !renewalDraft && (
                   <p className="text-xs text-green-700 font-medium text-center">
                     ✓ Contract has been renewed
                   </p>

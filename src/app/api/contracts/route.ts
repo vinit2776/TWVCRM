@@ -16,6 +16,8 @@ export async function GET(request: NextRequest) {
   const leadId = searchParams.get("lead_id");
   const search = searchParams.get("search");
   const expiringSoon = searchParams.get("expiring_soon"); // "30" or "60"
+  const parentContractId = searchParams.get("parent_contract_id");
+  const isRenewal = searchParams.get("is_renewal");
 
   const offset = (page - 1) * limit;
 
@@ -25,6 +27,8 @@ export async function GET(request: NextRequest) {
 
   if (status) query = query.eq("status", status);
   if (leadId) query = query.eq("lead_id", leadId);
+  if (parentContractId) query = query.eq("parent_contract_id", parentContractId);
+  if (isRenewal === "true") query = query.eq("is_renewal", true);
   if (search) query = query.or(`contract_number.ilike.%${search}%,title.ilike.%${search}%`);
 
   // "Expiring soon" filter: active contracts ending within N days
