@@ -179,6 +179,21 @@ export async function PATCH(
       // "Generate Missing Bills" button in /billing to retry.
     }
 
+    // ── Mark parent contract as "renewed" ────────────────────────────
+    // Only transitions the parent now (not at draft creation), so deleting
+    // a renewal draft doesn't leave the parent stuck in "renewed".
+    if (oldContract.is_renewal && oldContract.parent_contract_id) {
+      try {
+        const admin = createAdminClient();
+        await admin
+          .from("contracts")
+          .update({ status: "renewed", renewed_at: new Date().toISOString() })
+          .eq("id", oldContract.parent_contract_id);
+      } catch (err) {
+        console.error("[contract-activate] failed to mark parent as renewed:", err);
+      }
+    }
+
     // ── Renewal voucher auto-issuance ──────────────────────────────────
     // When a renewal contract is activated, revoke the parent's vouchers
     // and attempt to issue fresh ones for the new tenure. Non-fatal:

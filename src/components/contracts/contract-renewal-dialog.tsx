@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useMemo } from "react";
 import {
   Dialog,
   DialogContent,
@@ -16,13 +16,22 @@ import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
   Loader2,
   RefreshCw,
   AlertTriangle,
   ArrowRight,
   ShieldAlert,
   XCircle,
+  CalendarX,
 } from "lucide-react";
+import { BILLING_CYCLE_LABELS } from "@/lib/constants";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
 import type { Contract } from "@/types";
@@ -46,19 +55,54 @@ export function ContractRenewalDialog({
 }: RenewalDialogProps) {
   const [renewing, setRenewing] = useState(false);
   const [tenureMonths, setTenureMonths] = useState(contract.tenure_months);
+  const [seats, setSeats] = useState(contract.seats || 1);
+  const [billingCycle, setBillingCycle] = useState(contract.billing_cycle || "monthly");
+  const [escalationPct, setEscalationPct] = useState(contract.escalation_percentage || 0);
   const [startDate, setStartDate] = useState(() => {
-    // Default start date: day after contract end_date
     const end = new Date(contract.end_date);
     end.setDate(end.getDate() + 1);
     return end.toISOString().slice(0, 10);
   });
 
-  const escalationPct = contract.escalation_percentage || 0;
-  const multiplier = 1 + escalationPct / 100;
+  // Round to nearest Rs 10
+  const roundToTen = (n: number) => Math.round(n / 10) * 10;
+
   const currentSubtotal = Number(contract.subtotal);
-  const newSubtotal = Math.round(currentSubtotal * multiplier * 100) / 100;
-  const currentTotal = Number(contract.total_amount);
-  const newTotal = Math.round(currentTotal * multiplier * 100) / 100;
+  const multiplier = 1 + escalationPct / 100;
+
+  // Preview: compute escalated subtotal per-item then sum (matches API logic)
+  type Item = { unit_price: number; quantity: number };
+  const previewSubtotal = useMemo(() => {
+    const items = (contract.items || []) as Item[];
+    return items.reduce((sum, item) => {
+      const newPrice = roundToTen(item.unit_price * multiplier);
+      return sum + newPrice * item.quantity;
+    }, 0);
+  }, [contract.items, multiplier]);
+
+  const taxPct = Number(contract.tax_percentage || 18);
+  const discountPct = Number(contract.discount_percentage || 0);
+  const previewDiscount = Math.round(previewSubtotal * (discountPct / 100));
+  const previewTaxable = previewSubtotal - previewDiscount;
+  const previewTax = Math.round(previewTaxable * (taxPct / 100));
+  const previewTotal = previewTaxable + previewTax;
+
+  // Calculate end date preview
+  const previewEndDate = useMemo(() => {
+    if (!startDate || !tenureMonths) return "";
+    const start = new Date(startDate);
+    start.setMonth(start.getMonth() + tenureMonths);
+    start.setDate(start.getDate() - 1);
+    return start.toISOString().split("T")[0];
+  }, [startDate, tenureMonths]);
+
+  // Gap calculation
+  const gapDays = useMemo(() => {
+    if (!startDate) return 0;
+    const parentEnd = new Date(contract.end_date).getTime();
+    const renewStart = new Date(startDate).getTime();
+    return Math.max(0, Math.round((renewStart - parentEnd) / 86_400_000) - 1);
+  }, [startDate, contract.end_date]);
 
   const handleRenew = async () => {
     setRenewing(true);
@@ -69,6 +113,9 @@ export function ContractRenewalDialog({
         body: JSON.stringify({
           tenure_months: tenureMonths,
           start_date: startDate,
+          seats,
+          billing_cycle: billingCycle,
+          escalation_percentage: escalationPct,
         }),
       });
 
@@ -97,85 +144,159 @@ export function ContractRenewalDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="max-w-lg">
+      <DialogContent className="max-w-xl">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <RefreshCw className="h-4 w-4" />
-            Renew Contract
+            Renew Contract — {contract.contract_number}
           </DialogTitle>
           <DialogDescription>
-            Create a renewal draft for {contract.contract_number} with escalated rental.
+            Negotiate renewal terms. A draft addendum will be created for customer approval.
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
-          {/* Escalation Preview */}
+        <div className="space-y-4 max-h-[65vh] overflow-y-auto pr-1">
+          {/* Rate Negotiation */}
           <div className="rounded-md border bg-muted/30 p-4 space-y-3">
-            <div className="flex items-center justify-between text-sm">
-              <span className="text-muted-foreground">Annual Escalation</span>
-              <Badge variant="secondary">{escalationPct}%</Badge>
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Rate Negotiation</p>
+            <div className="grid grid-cols-3 gap-3 items-end">
+              <div className="space-y-1">
+                <Label className="text-xs">Escalation %</Label>
+                <Input
+                  type="number"
+                  min={0}
+                  max={100}
+                  step={0.5}
+                  value={escalationPct}
+                  onChange={(e) => setEscalationPct(parseFloat(e.target.value) || 0)}
+                  className="h-9"
+                />
+              </div>
+              <div className="text-center pb-2">
+                <ArrowRight className="h-4 w-4 text-muted-foreground mx-auto" />
+              </div>
+              <div className="text-right pb-1">
+                <p className="text-xs text-muted-foreground">Renewed Rate</p>
+                <p className="font-mono font-bold text-lg text-primary">{formatCurrency(previewSubtotal)}</p>
+              </div>
             </div>
             <Separator />
-            <div className="grid grid-cols-3 gap-2 text-sm text-center">
+            <div className="grid grid-cols-3 gap-2 text-xs text-center">
               <div>
-                <p className="text-muted-foreground text-xs mb-1">Current</p>
+                <p className="text-muted-foreground">Current</p>
                 <p className="font-mono font-semibold">{formatCurrency(currentSubtotal)}</p>
               </div>
-              <div className="flex items-center justify-center">
-                <ArrowRight className="h-4 w-4 text-muted-foreground" />
+              <div>
+                <p className="text-muted-foreground">Change</p>
+                <p className={`font-mono font-semibold ${previewSubtotal > currentSubtotal ? "text-red-600" : previewSubtotal < currentSubtotal ? "text-green-600" : ""}`}>
+                  {previewSubtotal >= currentSubtotal ? "+" : ""}{formatCurrency(previewSubtotal - currentSubtotal)}
+                </p>
               </div>
               <div>
-                <p className="text-muted-foreground text-xs mb-1">Renewed</p>
-                <p className="font-mono font-semibold text-primary">{formatCurrency(newSubtotal)}</p>
+                <p className="text-muted-foreground">Total (incl. tax)</p>
+                <p className="font-mono font-semibold">{formatCurrency(previewTotal)}</p>
               </div>
             </div>
-            {escalationPct > 0 && (
-              <p className="text-xs text-muted-foreground text-center">
-                Monthly rental: {formatCurrency(currentTotal)} → {formatCurrency(newTotal)} (incl. tax)
+            <p className="text-[10px] text-muted-foreground text-center">
+              Rates rounded to nearest ₹10 for cleaner invoicing
+            </p>
+          </div>
+
+          {/* Renewal Terms */}
+          <div className="space-y-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Renewal Terms</p>
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1">
+                <Label className="text-xs" htmlFor="renewal-tenure">Tenure (months)</Label>
+                <Input
+                  id="renewal-tenure"
+                  type="number"
+                  min={1}
+                  max={120}
+                  value={tenureMonths}
+                  onChange={(e) => setTenureMonths(parseInt(e.target.value) || contract.tenure_months)}
+                  className="h-9"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs" htmlFor="renewal-seats">Seats</Label>
+                <Input
+                  id="renewal-seats"
+                  type="number"
+                  min={1}
+                  max={500}
+                  value={seats}
+                  onChange={(e) => setSeats(parseInt(e.target.value) || 1)}
+                  className="h-9"
+                />
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs" htmlFor="renewal-billing">Billing Cycle</Label>
+                <Select value={billingCycle} onValueChange={setBillingCycle}>
+                  <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Object.entries(BILLING_CYCLE_LABELS).map(([val, label]) => (
+                      <SelectItem key={val} value={val}>{label}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-1">
+                <Label className="text-xs" htmlFor="renewal-start">Start Date</Label>
+                <Input
+                  id="renewal-start"
+                  type="date"
+                  value={startDate}
+                  onChange={(e) => setStartDate(e.target.value)}
+                  className="h-9"
+                />
+              </div>
+            </div>
+            {previewEndDate && (
+              <p className="text-xs text-muted-foreground">
+                Period: {formatDate(startDate)} → {formatDate(previewEndDate)} ({tenureMonths} months)
               </p>
             )}
           </div>
 
-          {/* Renewal Parameters */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="renewal-tenure">Tenure (months)</Label>
-              <Input
-                id="renewal-tenure"
-                type="number"
-                min={1}
-                max={120}
-                value={tenureMonths}
-                onChange={(e) => setTenureMonths(parseInt(e.target.value) || contract.tenure_months)}
-              />
+          {/* Gap Warning */}
+          {gapDays > 0 && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2.5 flex items-start gap-2">
+              <CalendarX className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <div className="text-xs text-amber-800">
+                <p className="font-semibold">{gapDays}-day gap between contracts</p>
+                <p>
+                  Current contract ends {formatDate(contract.end_date)}, renewal starts {formatDate(startDate)}.
+                  The member will have no active contract during this gap.
+                </p>
+              </div>
             </div>
-            <div className="space-y-1.5">
-              <Label htmlFor="renewal-start">Start Date</Label>
-              <Input
-                id="renewal-start"
-                type="date"
-                value={startDate}
-                onChange={(e) => setStartDate(e.target.value)}
-              />
-            </div>
-          </div>
+          )}
 
-          {/* Info */}
-          <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2.5 text-xs text-blue-800 space-y-1">
-            <p className="font-semibold">What happens on renewal:</p>
-            <ul className="list-disc list-inside space-y-0.5 text-blue-700">
-              <li>A new <strong>draft</strong> contract is created with escalated rates</li>
-              <li>KYC documents and space allocations carry over automatically</li>
-              <li>Security deposit rolls forward — no re-collection</li>
-              <li>Current contract status changes to &quot;Renewed&quot;</li>
-              <li>New vouchers will be issued when the renewal is activated</li>
+          {/* Seats change warning */}
+          {seats !== (contract.seats || 1) && (
+            <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800 flex items-center gap-2">
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
+              Seats changing from {contract.seats || 1} → {seats}. Deposit shortfall may apply.
+            </div>
+          )}
+
+          {/* What happens */}
+          <div className="rounded-md border border-muted bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground space-y-1">
+            <p className="font-semibold text-foreground">What happens:</p>
+            <ul className="list-disc list-inside space-y-0.5">
+              <li>A <strong>draft</strong> renewal contract is created with the negotiated terms</li>
+              <li>KYC documents, space allocations, and facilities carry over</li>
+              <li>Security deposit rolls forward — no re-collection needed</li>
+              <li>Current contract stays <strong>active</strong> until the renewal is activated</li>
+              <li>An addendum can be generated for customer sign-off</li>
             </ul>
           </div>
 
           {userRole === "admin" && (
             <p className="text-xs text-muted-foreground flex items-center gap-1">
               <ShieldAlert className="h-3 w-3" />
-              Escalation can be waived after the renewal draft is created.
+              Escalation can also be waived entirely after the draft is created.
             </p>
           )}
         </div>

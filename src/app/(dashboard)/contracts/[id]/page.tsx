@@ -61,6 +61,7 @@ import { toast } from "sonner";
 import { LayoutGrid, Trash2 } from "lucide-react";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { SeatOccupantsPanel } from "@/components/spaces/seat-occupants-panel";
+import { ContractChainStrip } from "@/components/contracts/contract-chain-strip";
 import type { Contract, ContractSpaceAllocation } from "@/types";
 
 export default function ContractDetailPage({
@@ -568,6 +569,11 @@ export default function ContractDetailPage({
           </Button>
         </div>
       </div>
+
+      {/* Contract Chain Strip — shows history when contract is part of a renewal chain */}
+      {contract.lead_id && (
+        <ContractChainStrip contractId={contract.id} leadId={contract.lead_id} />
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main Content */}

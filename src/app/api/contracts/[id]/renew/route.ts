@@ -14,7 +14,8 @@ import { logAudit } from "@/lib/audit";
  *   allocations. Security deposit rolls over (no re-collection).
  *
  * Body (all optional overrides):
- *   { tenure_months?, seats?, start_date?, billing_cycle? }
+ *   { tenure_months?, seats?, start_date?, billing_cycle?,
+ *     escalation_percentage?, notice_period_months?, lock_in_months? }
  */
 export async function POST(
   request: NextRequest,
@@ -92,14 +93,22 @@ export async function POST(
   }
 
   // 4. Apply escalation to items
-  const escalationPct = Number(source.escalation_percentage || 10);
+  // Allow custom escalation % override — negotiation may result in a different rate
+  const escalationPct = body.escalation_percentage != null
+    ? Number(body.escalation_percentage)
+    : Number(source.escalation_percentage || 10);
   const escalationMultiplier = 1 + escalationPct / 100;
+
+  // Round to nearest Rs 10: 49,500 → 49,500 (no change); 49,350 → 49,350 stays;
+  // but we round the final subtotal, not individual items, for cleaner invoicing.
+  const roundToTen = (n: number) => Math.round(n / 10) * 10;
 
   type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string };
   const oldItems = (source.items || []) as Item[];
   const newItems: Item[] = oldItems.map((item) => {
-    const newUnitPrice = Math.round(item.unit_price * escalationMultiplier * 100) / 100;
-    const newTotal = Math.round(newUnitPrice * item.quantity * 100) / 100;
+    const rawUnitPrice = item.unit_price * escalationMultiplier;
+    const newUnitPrice = roundToTen(rawUnitPrice);
+    const newTotal = newUnitPrice * item.quantity;
     return { ...item, unit_price: newUnitPrice, total: newTotal };
   });
 
@@ -150,7 +159,9 @@ export async function POST(
       complimentary_items: source.complimentary_items,
       security_deposit_months: securityDepositMonths,
       escalation_percentage: escalationPct,
-      notice_period_months: source.notice_period_months,
+      notice_period_months: body.notice_period_months != null
+        ? Number(body.notice_period_months)
+        : source.notice_period_months,
       member_signatory_name: source.member_signatory_name,
       member_signatory_designation: source.member_signatory_designation,
       member_signatory_pan: source.member_signatory_pan,
@@ -172,11 +183,10 @@ export async function POST(
     return NextResponse.json({ error: insertErr.message }, { status: 500 });
   }
 
-  // 7. Set source contract status to "renewed"
-  await admin
-    .from("contracts")
-    .update({ status: "renewed", renewed_at: new Date().toISOString() })
-    .eq("id", id);
+  // 7. Parent stays active/expired — only transitions to "renewed" when
+  //    the renewal draft is activated (see PATCH /api/contracts/[id] hook).
+  //    This ensures that if the draft is deleted or rejected, the parent
+  //    contract isn't stuck in a "renewed" state with nothing to show for it.
 
   // 8. Copy approved KYC documents
   const { data: kycDocs } = await admin
@@ -264,11 +274,15 @@ export async function POST(
     action: "update",
     performedBy: dbUser.id,
     changes: {
-      status: { old: source.status, new: "renewed" },
+      renewal_draft_created: { old: null, new: newContract.contract_number },
       renewal_contract_id: { old: null, new: newContract.id },
-      renewal_contract_number: { old: null, new: newContract.contract_number },
     },
   });
+
+  // Calculate gap between parent end and renewal start (0 = seamless)
+  const parentEndMs = new Date(source.end_date + "T00:00:00Z").getTime();
+  const renewalStartMs = startDate.getTime();
+  const gapDays = Math.max(0, Math.round((renewalStartMs - parentEndMs) / 86_400_000) - 1);
 
   return NextResponse.json({
     data: {
@@ -280,6 +294,9 @@ export async function POST(
       new_subtotal: newSubtotal,
       deposit_shortfall: depositShortfall,
       renewal_sequence: renewalSequence,
+      start_date: startDateStr,
+      end_date: endDateStr,
+      gap_days: gapDays,
     },
   }, { status: 201 });
 }
