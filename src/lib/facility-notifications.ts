@@ -2,10 +2,25 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { sendPushToUsers } from "@/lib/push";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 
-const IT_NOTIFY_EMAILS = [
-  "techsupport@theworkvill.com",
-  "it@theworkvilla.com",
-];
+export const IT_PRIMARY_EMAIL = "techsupport@theworkvill.com";
+export const IT_SECONDARY_EMAIL = "it@theworkvilla.com";
+
+export const IT_NOTIFY_EMAILS = [IT_PRIMARY_EMAIL, IT_SECONDARY_EMAIL];
+
+/**
+ * Returns the primary IT assignee's user row (id + full_name) or null.
+ * Used by the issue creation route to auto-assign IT-scoped tickets.
+ */
+export async function getItPrimaryAssignee(): Promise<{ id: string; full_name: string } | null> {
+  const supabase = await createAdminClient();
+  const { data } = await supabase
+    .from("users")
+    .select("id, full_name")
+    .eq("email", IT_PRIMARY_EMAIL)
+    .eq("is_active", true)
+    .single();
+  return data ?? null;
+}
 
 async function getItTeamUserIds(): Promise<string[]> {
   const supabase = await createAdminClient();

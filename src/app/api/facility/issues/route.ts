@@ -6,7 +6,7 @@ import {
   computeSlaTarget,
   logIssueEvent,
 } from "@/lib/facility";
-import { notifyItTeam } from "@/lib/facility-notifications";
+import { notifyItTeam, getItPrimaryAssignee } from "@/lib/facility-notifications";
 import type { FacilityScope, FacilityIssuePriority, FacilityReportedVia } from "@/types";
 
 const VALID_PRIORITY: FacilityIssuePriority[] = ["low", "medium", "high", "critical"];
@@ -122,6 +122,13 @@ export async function POST(request: NextRequest) {
   const issueNumber = await generateIssueNumber(supabase, scope as FacilityScope);
   const slaTargetAt = computeSlaTarget(category, priority);
 
+  // Auto-assign IT-scoped issues to the primary IT contact
+  let autoAssignee: { id: string; full_name: string } | null = null;
+  if (scope === "it") {
+    autoAssignee = await getItPrimaryAssignee();
+  }
+
+  const now = new Date().toISOString();
   const { data: issue, error } = await supabase
     .from("facility_issues")
     .insert({
@@ -143,6 +150,7 @@ export async function POST(request: NextRequest) {
       reported_via,
       linked_feedback_id: linked_feedback_id || null,
       sla_target_at: slaTargetAt,
+      ...(autoAssignee ? { assigned_to: autoAssignee.id, assigned_at: now, assigned_by: dbUser.id } : {}),
     })
     .select(`
       *,
