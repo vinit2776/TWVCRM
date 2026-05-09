@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
-import { CalendarX, Loader2, Inbox, AlertTriangle } from "lucide-react";
+import { CalendarX, Loader2, Inbox, AlertTriangle, CheckCircle2, XCircle, Bell, FileText } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Badge } from "@/components/ui/badge";
 import { formatCurrency } from "@/lib/utils";
 
 interface RenewalItem {
@@ -15,6 +16,8 @@ interface RenewalItem {
   seats: number;
   customer: string;
   lead_id: string | null;
+  renewal_status: "pending" | "reminded" | "in_progress" | "declined" | "renewed";
+  reminder_count: number;
 }
 
 interface RenewalData {
@@ -22,8 +25,18 @@ interface RenewalData {
   total_monthly_at_risk: number;
   bucket_0_30: { count: number; monthly_value: number };
   bucket_31_60: { count: number; monthly_value: number };
+  declined_count: number;
+  in_progress_count: number;
   items: RenewalItem[];
 }
+
+const RENEWAL_STATUS_CONFIG: Record<string, { label: string; color: string; icon: typeof CheckCircle2 }> = {
+  pending:     { label: "No action",    color: "bg-gray-100 text-gray-600",   icon: CalendarX },
+  reminded:    { label: "Reminded",     color: "bg-blue-100 text-blue-700",   icon: Bell },
+  in_progress: { label: "Draft",        color: "bg-emerald-100 text-emerald-700", icon: FileText },
+  declined:    { label: "Declined",     color: "bg-red-100 text-red-700",     icon: XCircle },
+  renewed:     { label: "Renewed",      color: "bg-green-100 text-green-700", icon: CheckCircle2 },
+};
 
 interface RenewalPipelineWidgetProps {
   locationFilter: string | null;
@@ -107,35 +120,63 @@ export function RenewalPipelineWidget({ locationFilter }: RenewalPipelineWidgetP
               </div>
             </div>
 
+            {/* Status summary chips */}
+            {(data.in_progress_count > 0 || data.declined_count > 0) && (
+              <div className="flex flex-wrap gap-1.5">
+                {data.in_progress_count > 0 && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-emerald-100 text-emerald-700 px-2 py-0.5 rounded-full">
+                    <FileText className="h-2.5 w-2.5" />
+                    {data.in_progress_count} renewal draft{data.in_progress_count > 1 ? "s" : ""}
+                  </span>
+                )}
+                {data.declined_count > 0 && (
+                  <span className="inline-flex items-center gap-1 text-[10px] font-medium bg-red-100 text-red-700 px-2 py-0.5 rounded-full">
+                    <XCircle className="h-2.5 w-2.5" />
+                    {data.declined_count} declined
+                  </span>
+                )}
+              </div>
+            )}
+
             <div className="space-y-1 pt-1">
-              {data.items.map((c) => (
-                <Link
-                  key={c.id}
-                  href={c.lead_id ? `/leads/${c.lead_id}` : `/contracts`}
-                  className="flex items-center justify-between rounded-md px-2 py-2 hover:bg-muted/40 transition-colors"
-                >
-                  <div className="min-w-0 flex-1">
-                    <p className="text-sm font-medium truncate">{c.customer}</p>
-                    <p className="text-xs text-muted-foreground">
-                      {c.contract_number ?? "—"} · {c.seats} seat{c.seats === 1 ? "" : "s"}
-                    </p>
-                  </div>
-                  <div className="text-right shrink-0 ml-2">
-                    <p className="text-sm font-semibold">{formatCurrency(c.monthly_value)}/mo</p>
-                    <p
-                      className={`text-[10px] ${
-                        c.days_left <= 7
-                          ? "text-red-600"
-                          : c.days_left <= 30
-                          ? "text-orange-600"
-                          : "text-muted-foreground"
-                      }`}
-                    >
-                      {c.days_left === 0 ? "Today" : `In ${c.days_left}d`}
-                    </p>
-                  </div>
-                </Link>
-              ))}
+              {data.items.map((c) => {
+                const statusConf = RENEWAL_STATUS_CONFIG[c.renewal_status] || RENEWAL_STATUS_CONFIG.pending;
+                return (
+                  <Link
+                    key={c.id}
+                    href={`/contracts/${c.id}`}
+                    className="flex items-center justify-between rounded-md px-2 py-2 hover:bg-muted/40 transition-colors"
+                  >
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5">
+                        <p className="text-sm font-medium truncate">{c.customer}</p>
+                        {c.renewal_status !== "pending" && (
+                          <Badge variant="secondary" className={`${statusConf.color} text-[9px] px-1.5 py-0 h-4 shrink-0`}>
+                            {statusConf.label}
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        {c.contract_number ?? "—"} · {c.seats} seat{c.seats === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <div className="text-right shrink-0 ml-2">
+                      <p className="text-sm font-semibold">{formatCurrency(c.monthly_value)}/mo</p>
+                      <p
+                        className={`text-[10px] ${
+                          c.days_left <= 7
+                            ? "text-red-600"
+                            : c.days_left <= 30
+                            ? "text-orange-600"
+                            : "text-muted-foreground"
+                        }`}
+                      >
+                        {c.days_left === 0 ? "Today" : `In ${c.days_left}d`}
+                      </p>
+                    </div>
+                  </Link>
+                );
+              })}
             </div>
           </div>
         )}

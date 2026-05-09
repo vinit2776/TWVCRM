@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateICS } from "@/lib/ics-generator";
-import { BOOKING_CUSTOMER_TYPE_LABELS, BOOKING_PAYMENT_MODE_LABELS } from "@/lib/constants";
+import { BOOKING_CUSTOMER_TYPE_LABELS, BOOKING_PAYMENT_MODE_LABELS, BOOKING_PAYMENT_STATUS_LABELS } from "@/lib/constants";
 import { logEmailActivity } from "@/lib/audit";
 import { getLocationIncharges, getLocationInchargeUserIds } from "@/lib/location-incharges";
 import { sendPushToUsers } from "@/lib/push";
@@ -599,6 +599,7 @@ export async function POST(
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Contact</td><td style="padding:8px;border:1px solid #ddd;">${customerEmail || "N/A"} / ${booking.lead?.phone || booking.guest_phone || "N/A"}</td></tr>
             ${facilityList ? `<tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Facilities</td><td style="padding:8px;border:1px solid #ddd;">${facilityList}</td></tr>` : ""}
             <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Amount</td><td style="padding:8px;border:1px solid #ddd;">${formatCurrency(booking.total_amount)}</td></tr>
+            <tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Payment Status</td><td style="padding:8px;border:1px solid #ddd;">${BOOKING_PAYMENT_STATUS_LABELS[booking.payment_status] || booking.payment_status || "—"}</td></tr>
             ${booking.notes ? `<tr><td style="padding:8px;border:1px solid #ddd;font-weight:bold;">Notes</td><td style="padding:8px;border:1px solid #ddd;">${booking.notes}</td></tr>` : ""}
           </table>
           <p style="color:#015E65;font-weight:bold;">Please ensure the room is prepared before ${startTime}.</p>

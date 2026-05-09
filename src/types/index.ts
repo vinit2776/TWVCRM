@@ -472,6 +472,25 @@ export interface Contract {
   signed_document_id?: string;
   signed_document?: CrmDocument;
   printer_department_id?: string;
+  // Renewal chain
+  parent_contract_id?: string | null;
+  is_renewal?: boolean;
+  renewal_sequence?: number;
+  // Escalation waiver
+  escalation_waived?: boolean;
+  escalation_waiver_reason?: string | null;
+  escalation_waived_by?: string | null;
+  // Deposit carry-forward
+  deposit_carried_from?: string | null;
+  deposit_shortfall?: number;
+  // Renewal communication
+  renewal_reminder_sent_at?: string | null;
+  renewal_reminder_count?: number;
+  // Decline tracking
+  renewal_declined?: boolean;
+  renewal_declined_reason?: string | null;
+  renewal_declined_at?: string | null;
+  renewal_declined_by?: string | null;
   created_by?: string;
   created_at: string;
   updated_at: string;

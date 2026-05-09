@@ -195,6 +195,7 @@ export function CreateContractDialog({
     if (!startDate || !tenureMonths) return "";
     const start = new Date(startDate);
     start.setMonth(start.getMonth() + tenureMonths);
+    start.setDate(start.getDate() - 1); // end = last day of final month
     return start.toISOString().split("T")[0];
   }, [startDate, tenureMonths]);
 

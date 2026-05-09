@@ -34,6 +34,7 @@ import {
   Clock,
   MoreHorizontal,
   RotateCcw,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
@@ -432,6 +433,14 @@ export function ContractDocumentsTab({
                   {doc.status === "approved" && doc.reviewer && (
                     <p className="text-xs text-green-600">
                       Approved by {doc.reviewer.full_name}
+                    </p>
+                  )}
+
+                  {/* Carried from parent contract (renewal) */}
+                  {doc.notes && doc.notes.includes("Carried from") && (
+                    <p className="text-xs text-blue-600 flex items-center gap-1">
+                      <RefreshCw className="h-2.5 w-2.5" />
+                      {doc.notes}
                     </p>
                   )}
 

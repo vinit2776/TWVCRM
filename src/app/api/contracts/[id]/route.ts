@@ -106,8 +106,12 @@ export async function PATCH(
     } else if (body.status === "rejected") {
       allowedFields.rejected_at = body.rejected_at || now;
     } else if (body.status === "active") {
-      // Payment gate: check linked proposal payments (unless admin override)
-      if (!body.payment_override_reason && oldContract.proposal_id) {
+      // Renewal contracts carry the deposit forward — skip the proposal
+      // payment gate when deposit_carried_from is set.
+      const isRenewal = !!oldContract.deposit_carried_from;
+
+      // Payment gate: check linked proposal payments (unless admin override or renewal)
+      if (!isRenewal && !body.payment_override_reason && oldContract.proposal_id) {
         const { data: proposal } = await supabase
           .from("proposals")
           .select("payment_status, deposit_payment_status")
@@ -163,8 +167,8 @@ export async function PATCH(
     await autoUpdateLeadStatus(supabase, oldContract.lead_id, "contract");
 
     // Generate the current month's billing statement immediately. The monthly
-    // cron only runs on the 1st of each month — without this hook, contracts
-    // activated mid-month would have no bill until the next cron firing.
+    // cron runs on the last day of each month at 21:00 IST — without this hook,
+    // contracts activated mid-month would have no bill until then.
     // Idempotent: skips if a statement for this month already exists.
     try {
       const admin = createAdminClient();
@@ -173,6 +177,116 @@ export async function PATCH(
       console.error("[contract-activate] auto-generate statement failed:", err);
       // Non-fatal: activation still succeeds. Operator can use the
       // "Generate Missing Bills" button in /billing to retry.
+    }
+
+    // ── Renewal voucher auto-issuance ──────────────────────────────────
+    // When a renewal contract is activated, revoke the parent's vouchers
+    // and attempt to issue fresh ones for the new tenure. Non-fatal:
+    // staff can always issue manually from the Vouchers section.
+    if (oldContract.is_renewal && oldContract.parent_contract_id) {
+      (async () => {
+        try {
+          const admin = createAdminClient();
+
+          // 1. Revoke parent contract's active vouchers
+          const { data: parentIssuances } = await admin
+            .from("voucher_issuances")
+            .select("id, voucher_id, seat_number, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(voucher_code)")
+            .eq("contract_id", oldContract.parent_contract_id)
+            .eq("is_active", true);
+
+          if (parentIssuances && parentIssuances.length > 0) {
+            const revokeNow = new Date().toISOString();
+            const issuanceIds = parentIssuances.map((i: { id: string }) => i.id);
+            await admin
+              .from("voucher_issuances")
+              .update({ is_active: false, revoked_at: revokeNow, revoke_reason: "Renewal activated" })
+              .in("id", issuanceIds);
+
+            const voucherIds = parentIssuances
+              .map((i: { voucher_id: string | null }) => i.voucher_id)
+              .filter(Boolean);
+            if (voucherIds.length > 0) {
+              await admin
+                .from("voucher_repository")
+                .update({ status: "revoked" })
+                .in("id", voucherIds);
+            }
+
+            // Notify IT about old voucher revocation
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const revokedRows = parentIssuances.map((i: any) => {
+              const code = i.voucher?.voucher_code || "—";
+              return `<tr>
+                <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;text-align:center;">${i.seat_number}</td>
+                <td style="padding:6px 12px;border-bottom:1px solid #e5e7eb;font-family:monospace;color:#e53e3e;">${code}</td>
+              </tr>`;
+            }).join("");
+
+            resend.emails.send({
+              from: EMAIL_FROM,
+              replyTo: EMAIL_REPLY_TO,
+              to: ["it@theworkvilla.com", "techsupport@theworkvilla.com"],
+              subject: `Voucher Transition — ${oldContract.contract_number} renewed as ${data.contract_number || id}`,
+              html: `
+                <div style="font-family:sans-serif;max-width:640px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+                  <div style="background:#f59e0b;padding:20px 32px;">
+                    <h1 style="color:white;margin:0;font-size:20px;">WiFi Voucher Transition — Renewal</h1>
+                    <p style="color:rgba(255,255,255,0.85);margin:4px 0 0;font-size:12px;">Old codes revoked, new codes pending issuance</p>
+                  </div>
+                  <div style="padding:28px 32px;">
+                    <p style="color:#333;font-size:14px;">Contract <strong>${oldContract.contract_number}</strong> has been renewed. The following old voucher codes have been <strong>revoked</strong> and must be disabled in the WiFi system.</p>
+                    <h3 style="color:#dc2626;font-size:14px;margin:16px 0 8px;">Codes to Revoke (${parentIssuances.length})</h3>
+                    <table style="width:100%;border-collapse:collapse;font-size:13px;">
+                      <tr style="background:#fef2f2;">
+                        <th style="padding:6px 12px;text-align:center;border-bottom:2px solid #fecaca;color:#991b1b;font-size:11px;">Seat</th>
+                        <th style="padding:6px 12px;text-align:left;border-bottom:2px solid #fecaca;color:#991b1b;font-size:11px;">Old Code</th>
+                      </tr>
+                      ${revokedRows}
+                    </table>
+                    <p style="color:#666;font-size:13px;margin-top:16px;">New voucher codes for the renewal contract will be issued and emailed separately.</p>
+                  </div>
+                  <div style="background:#015E65;padding:12px 32px;text-align:center;">
+                    <p style="color:#fff;margin:0;font-size:10px;">SREE DESIGN INFRASTRUCTURE PVT LTD | The WorkVilla</p>
+                  </div>
+                </div>
+              `,
+            }).catch((err: unknown) => console.error("[renewal-activate] IT email failed:", err));
+
+            console.log(`[renewal-activate] Revoked ${parentIssuances.length} voucher(s) from parent ${oldContract.parent_contract_id}`);
+          }
+
+          // 2. Auto-issue vouchers for the renewal contract
+          // Requires: signed_document_id set on the renewal contract.
+          // Uses an internal fetch to the voucher issuance endpoint (bulk mode).
+          if (data.signed_document_id) {
+            const baseUrl = process.env.NEXT_PUBLIC_APP_URL || `https://${process.env.VERCEL_URL || "localhost:3000"}`;
+            const issueRes = await fetch(`${baseUrl}/api/contracts/${id}/vouchers`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                // Forward the user's auth cookie for RLS
+                cookie: request.headers.get("cookie") || "",
+              },
+            });
+
+            if (issueRes.ok) {
+              const issueJson = await issueRes.json();
+              console.log(`[renewal-activate] Auto-issued ${issueJson.data?.length || 0} voucher(s) for renewal ${id}`);
+              if (issueJson.match_warning) {
+                console.warn(`[renewal-activate] Voucher match warning: ${issueJson.match_warning}`);
+              }
+            } else {
+              const errJson = await issueRes.json().catch(() => null);
+              console.warn(`[renewal-activate] Auto-issue vouchers failed: ${errJson?.error || issueRes.status}. Staff can issue manually.`);
+            }
+          } else {
+            console.info(`[renewal-activate] Signed document not uploaded yet — skipping auto-issuance for ${id}. Staff can issue after uploading.`);
+          }
+        } catch (err) {
+          console.error("[renewal-activate] voucher auto-issuance failed:", err);
+        }
+      })();
     }
   }
 

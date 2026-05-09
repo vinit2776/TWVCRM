@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { ChevronLeft, ChevronRight, ScrollText, Search, X } from "lucide-react";
+import { ChevronLeft, ChevronRight, ScrollText, Search, X, CalendarX, RefreshCw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -29,12 +29,14 @@ export default function ContractsPage() {
   const [page, setPage] = useState(1);
   const [statusFilter, setStatusFilter] = useState("");
   const [search, setSearch] = useState("");
+  const [expiringSoon, setExpiringSoon] = useState("");
 
   const fetchContracts = useCallback(async () => {
     setLoading(true);
     const params = new URLSearchParams({ page: String(page) });
     if (statusFilter) params.set("status", statusFilter);
     if (search.trim()) params.set("search", search.trim());
+    if (expiringSoon) params.set("expiring_soon", expiringSoon);
     const res = await fetch(`/api/contracts?${params}`);
     if (res.ok) {
       const json = await res.json();
@@ -42,17 +44,18 @@ export default function ContractsPage() {
       setPagination(json.pagination);
     }
     setLoading(false);
-  }, [page, statusFilter, search]);
+  }, [page, statusFilter, search, expiringSoon]);
 
   useEffect(() => { fetchContracts(); }, [fetchContracts]);
 
   const clearFilters = () => {
     setSearch("");
     setStatusFilter("");
+    setExpiringSoon("");
     setPage(1);
   };
 
-  const hasFilters = search || statusFilter;
+  const hasFilters = search || statusFilter || expiringSoon;
 
   return (
     <div className="space-y-4">
@@ -78,6 +81,18 @@ export default function ContractsPage() {
               {CONTRACT_STATUSES.map((s) => <SelectItem key={s} value={s}>{CONTRACT_STATUS_LABELS[s]}</SelectItem>)}
             </SelectContent>
           </Select>
+          <Button
+            variant={expiringSoon === "60" ? "default" : "outline"}
+            size="sm"
+            onClick={() => {
+              setExpiringSoon(expiringSoon === "60" ? "" : "60");
+              setStatusFilter("");
+              setPage(1);
+            }}
+          >
+            <CalendarX className="mr-1 h-4 w-4" />
+            Renewals Due
+          </Button>
           {hasFilters && (
             <Button variant="ghost" size="sm" onClick={clearFilters}>
               <X className="mr-1 h-4 w-4" />
@@ -126,9 +141,19 @@ export default function ContractsPage() {
                 <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{formatDate(c.end_date)}</td>
                 <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{c.location?.name || "—"}</td>
                 <td className="px-4 py-3">
-                  <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[c.status]}>
-                    {CONTRACT_STATUS_LABELS[c.status]}
-                  </Badge>
+                  <div className="flex items-center gap-1.5">
+                    <Badge variant="secondary" className={CONTRACT_STATUS_COLORS[c.status]}>
+                      {CONTRACT_STATUS_LABELS[c.status]}
+                    </Badge>
+                    {c.is_renewal && (
+                      <span title={`Renewal V${c.renewal_sequence || 2}`}>
+                        <RefreshCw className="h-3 w-3 text-blue-500" />
+                      </span>
+                    )}
+                    {c.renewal_declined && (
+                      <span className="text-[9px] text-red-600 font-medium" title="Renewal declined">✕ Declined</span>
+                    )}
+                  </div>
                 </td>
               </tr>
             ))}</tbody>

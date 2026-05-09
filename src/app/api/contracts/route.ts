@@ -15,6 +15,7 @@ export async function GET(request: NextRequest) {
   const status = searchParams.get("status");
   const leadId = searchParams.get("lead_id");
   const search = searchParams.get("search");
+  const expiringSoon = searchParams.get("expiring_soon"); // "30" or "60"
 
   const offset = (page - 1) * limit;
 
@@ -25,7 +26,19 @@ export async function GET(request: NextRequest) {
   if (status) query = query.eq("status", status);
   if (leadId) query = query.eq("lead_id", leadId);
   if (search) query = query.or(`contract_number.ilike.%${search}%,title.ilike.%${search}%`);
-  query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
+
+  // "Expiring soon" filter: active contracts ending within N days
+  if (expiringSoon) {
+    const days = parseInt(expiringSoon) || 60;
+    const todayStr = new Date().toISOString().split("T")[0];
+    const futureDate = new Date();
+    futureDate.setDate(futureDate.getDate() + days);
+    const futureStr = futureDate.toISOString().split("T")[0];
+    query = query.eq("status", "active").gte("end_date", todayStr).lte("end_date", futureStr);
+  }
+
+  const orderCol = expiringSoon ? "end_date" : "created_at";
+  query = query.order(orderCol, { ascending: !!expiringSoon }).range(offset, offset + limit - 1);
 
   const { data, error, count } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
@@ -87,10 +100,13 @@ export async function POST(request: NextRequest) {
 
   const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
 
-  // Calculate end_date from start_date + tenure_months
+  // Calculate end_date from start_date + tenure_months, minus 1 day.
+  // A contract starting Nov 1 for 11 months ends Sep 30 (last day of month 11),
+  // not Oct 1 (which is the start of month 12).
   const startDate = new Date(d.start_date);
   const endDate = new Date(startDate);
   endDate.setMonth(endDate.getMonth() + d.tenure_months);
+  endDate.setDate(endDate.getDate() - 1);
 
   // Calculate next_billing_date based on billing_cycle
   const nextBillingDate = new Date(startDate);

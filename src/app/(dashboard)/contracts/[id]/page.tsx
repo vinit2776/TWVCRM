@@ -52,6 +52,11 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { ContractLifecycle } from "@/components/contracts/contract-lifecycle";
+import {
+  ContractRenewalDialog,
+  DeclineRenewalDialog,
+  EscalationWaiverSection,
+} from "@/components/contracts/contract-renewal-dialog";
 import { toast } from "sonner";
 import { LayoutGrid, Trash2 } from "lucide-react";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
@@ -77,6 +82,8 @@ export default function ContractDetailPage({
   const [checkingSigningStatus, setCheckingSigningStatus] = useState(false);
   const [copiedLessor, setCopiedLessor] = useState(false);
   const [copiedLessee, setCopiedLessee] = useState(false);
+  const [renewDialogOpen, setRenewDialogOpen] = useState(false);
+  const [declineDialogOpen, setDeclineDialogOpen] = useState(false);
   const signedDocInputRef = useRef<HTMLInputElement>(null);
 
   const copyToClipboard = (text: string, who: "lessor" | "lessee") => {
@@ -565,6 +572,36 @@ export default function ContractDetailPage({
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main Content */}
         <div className="lg:col-span-2 space-y-6">
+          {/* Renewal Chain Banner — visible on renewal contracts */}
+          {contract.is_renewal && contract.parent_contract_id && (
+            <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
+              <RefreshCw className="h-4 w-4 text-blue-600 shrink-0" />
+              <div className="flex-1 text-sm text-blue-800">
+                <span className="font-medium">Renewal contract</span>
+                {contract.renewal_sequence && contract.renewal_sequence > 1 && (
+                  <span> (V{contract.renewal_sequence})</span>
+                )}
+                <span className="mx-1">—</span>
+                <Link
+                  href={`/contracts/${contract.parent_contract_id}`}
+                  className="text-blue-700 hover:underline font-medium"
+                >
+                  View parent contract →
+                </Link>
+              </div>
+              {contract.deposit_carried_from && (
+                <Badge variant="secondary" className="bg-green-100 text-green-700 text-[10px] shrink-0">
+                  Deposit carried over
+                </Badge>
+              )}
+              {contract.escalation_waived && (
+                <Badge variant="secondary" className="bg-amber-100 text-amber-700 text-[10px] shrink-0">
+                  Escalation waived
+                </Badge>
+              )}
+            </div>
+          )}
+
           {/* Overview Card */}
           <Card>
             <CardHeader>
@@ -635,6 +672,14 @@ export default function ContractDetailPage({
                 <div>
                   <p className="text-muted-foreground text-xs">Security Deposit</p>
                   <p className="font-medium">{formatCurrency(securityDeposit)}</p>
+                  {contract.deposit_carried_from && (
+                    <p className="text-[10px] text-green-600 mt-0.5">✓ Carried from parent</p>
+                  )}
+                  {contract.deposit_shortfall != null && contract.deposit_shortfall > 0 && (
+                    <p className="text-[10px] text-amber-600 mt-0.5">
+                      Shortfall: {formatCurrency(contract.deposit_shortfall)}
+                    </p>
+                  )}
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">Seats</p>
@@ -675,7 +720,12 @@ export default function ContractDetailPage({
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">Annual Escalation</p>
-                  <p>{contract.escalation_percentage || 10}%</p>
+                  <p>
+                    {contract.escalation_percentage || 10}%
+                    {contract.escalation_waived && (
+                      <span className="ml-1.5 text-[10px] text-amber-600 font-medium">(waived)</span>
+                    )}
+                  </p>
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">Notice Period</p>
@@ -1262,6 +1312,115 @@ export default function ContractDetailPage({
               )}
             </CardContent>
           </Card>
+
+          {/* Renewal Card — visible for active/expired/renewed contracts */}
+          {["active", "expired", "renewed"].includes(contract.status) && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base flex items-center gap-2">
+                  <RefreshCw className="h-4 w-4" />
+                  Renewal
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                {/* Renewal chain info */}
+                {contract.is_renewal && contract.parent_contract_id && (
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground text-xs">Renewal of</span>
+                    <Link
+                      href={`/contracts/${contract.parent_contract_id}`}
+                      className="text-xs text-primary hover:underline font-mono"
+                    >
+                      View parent →
+                    </Link>
+                  </div>
+                )}
+                {contract.renewal_sequence && contract.renewal_sequence > 1 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground text-xs">Renewal #</span>
+                    <Badge variant="secondary" className="text-[10px]">
+                      V{contract.renewal_sequence}
+                    </Badge>
+                  </div>
+                )}
+
+                {/* Escalation waiver — admin only, on renewal drafts */}
+                {contract.is_renewal && contract.status === "draft" && (
+                  <EscalationWaiverSection
+                    contractId={contract.id}
+                    escalationWaived={contract.escalation_waived || false}
+                    waiverReason={contract.escalation_waiver_reason || null}
+                    userRole={userRole}
+                    onSuccess={() => fetchContract(false)}
+                  />
+                )}
+
+                {/* Decline info */}
+                {contract.renewal_declined && (
+                  <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800 space-y-1">
+                    <p className="font-semibold">Renewal Declined</p>
+                    <p>{contract.renewal_declined_reason}</p>
+                    {contract.renewal_declined_at && (
+                      <p className="text-red-600">{formatDate(contract.renewal_declined_at)}</p>
+                    )}
+                  </div>
+                )}
+
+                {/* Deposit carry info for renewals */}
+                {contract.deposit_carried_from && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground text-xs">Deposit</span>
+                    <span className="text-xs text-green-700">Carried from parent</span>
+                  </div>
+                )}
+                {contract.deposit_shortfall != null && contract.deposit_shortfall > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground text-xs">Deposit Shortfall</span>
+                    <span className="text-xs text-amber-700 font-medium">
+                      {formatCurrency(contract.deposit_shortfall)}
+                    </span>
+                  </div>
+                )}
+
+                {/* Reminder tracking */}
+                {(contract.renewal_reminder_count || 0) > 0 && (
+                  <div className="flex justify-between">
+                    <span className="text-muted-foreground text-xs">Reminders Sent</span>
+                    <span className="text-xs">{contract.renewal_reminder_count}</span>
+                  </div>
+                )}
+
+                {/* Action buttons — only for active/expired, not already renewed or declined */}
+                {["active", "expired"].includes(contract.status) && !contract.renewal_declined && (
+                  <div className="flex gap-2 pt-1">
+                    <Button
+                      size="sm"
+                      className="flex-1"
+                      onClick={() => setRenewDialogOpen(true)}
+                    >
+                      <RefreshCw className="mr-1.5 h-3.5 w-3.5" />
+                      Renew
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-destructive hover:text-destructive"
+                      onClick={() => setDeclineDialogOpen(true)}
+                    >
+                      <XCircle className="mr-1.5 h-3.5 w-3.5" />
+                      Decline
+                    </Button>
+                  </div>
+                )}
+
+                {contract.status === "renewed" && (
+                  <p className="text-xs text-green-700 font-medium text-center">
+                    ✓ Contract has been renewed
+                  </p>
+                )}
+              </CardContent>
+            </Card>
+          )}
         </div>
       </div>
 
@@ -1369,6 +1528,23 @@ export default function ContractDetailPage({
         leadEmail={contract.lead?.email}
         onGeneratePDF={handleGeneratePDFBase64}
         onSuccess={fetchContract}
+      />
+
+      {/* Renewal Dialog */}
+      <ContractRenewalDialog
+        open={renewDialogOpen}
+        onOpenChange={setRenewDialogOpen}
+        contract={contract}
+        userRole={userRole}
+        onSuccess={() => fetchContract(false)}
+      />
+
+      {/* Decline Renewal Dialog */}
+      <DeclineRenewalDialog
+        open={declineDialogOpen}
+        onOpenChange={setDeclineDialogOpen}
+        contract={contract}
+        onSuccess={() => fetchContract(false)}
       />
     </div>
   );
