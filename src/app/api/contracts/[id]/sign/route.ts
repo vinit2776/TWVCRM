@@ -84,9 +84,31 @@ export async function POST(
         lead?.company ||
         `${lead?.first_name ?? ""} ${lead?.last_name ?? ""}`.trim() ||
         "Member";
-      const memberEmail = lead?.email ?? "";
-      const memberPhone = lead?.mobile ?? lead?.phone ?? "";
+      const memberEmail = (lead?.email ?? "").trim();
+      const memberPhone = (lead?.mobile ?? lead?.phone ?? "").trim();
       const signatoryName = contract.member_signatory_name || memberName;
+
+      // Validate required signer details
+      if (!memberEmail) {
+        return NextResponse.json(
+          { error: "Lead email is required for e-signing. Please add an email to the lead first." },
+          { status: 400 }
+        );
+      }
+      if (!signatoryName || signatoryName === "Member") {
+        return NextResponse.json(
+          { error: "Signatory name is required. Set the member signatory name on the contract." },
+          { status: 400 }
+        );
+      }
+
+      console.log("[contract/sign] Initiating for:", {
+        contractId,
+        signatoryName,
+        memberEmail,
+        memberPhone: memberPhone ? "***" : "(empty)",
+        contractNumber: contract.contract_number,
+      });
 
       let result;
       try {

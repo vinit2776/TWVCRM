@@ -78,12 +78,13 @@ export interface LeegalityDownloadResult {
 // ================================================================
 
 // Leegality API v3.0 base URL — endpoint is /sign/request
+// Trim env vars to guard against trailing \n or whitespace from .env files
 const BASE_URL =
-  process.env.LEEGALITY_API_URL || "https://api.leegality.com/v3.0";
-const API_KEY = process.env.LEEGALITY_API_KEY;
-const PROFILE_ID = process.env.LEEGALITY_PROFILE_ID;
-const STAMP_SERIES = process.env.LEEGALITY_STAMP_SERIES;
-const IS_SANDBOX = process.env.LEEGALITY_ENVIRONMENT !== "production";
+  (process.env.LEEGALITY_API_URL || "https://api.leegality.com/v3.0").trim();
+const API_KEY = process.env.LEEGALITY_API_KEY?.trim();
+const PROFILE_ID = process.env.LEEGALITY_PROFILE_ID?.trim();
+const _STAMP_SERIES = process.env.LEEGALITY_STAMP_SERIES?.trim();
+const IS_SANDBOX = process.env.LEEGALITY_ENVIRONMENT?.trim() !== "production";
 
 function getAuthHeaders() {
   return {
