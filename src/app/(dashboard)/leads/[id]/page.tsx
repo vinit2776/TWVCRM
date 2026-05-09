@@ -51,6 +51,7 @@ import { LeadBillingSnippet } from "@/components/leads/lead-billing-snippet";
 import { LeadTasksTab } from "@/components/leads/lead-tasks-tab";
 import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
 import { LeadLifecycle } from "@/components/leads/lead-lifecycle";
+import { LeadContactsPanel } from "@/components/leads/lead-contacts-panel";
 
 export default function LeadDetailPage({
   params,
@@ -239,6 +240,9 @@ export default function LeadDetailPage({
                   </div>
                 </CardContent>
               </Card>
+
+              {/* Contacts — multiple contact points per lead */}
+              <LeadContactsPanel leadId={lead.id} />
 
               {/* KYC Document Requirements Preview */}
               {lead.entity_type && (
