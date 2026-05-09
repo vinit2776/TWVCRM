@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { hasRole, FACILITY_ROLES, logIssueEvent } from "@/lib/facility";
+import { notifyItTeam } from "@/lib/facility-notifications";
 
 /**
  * POST /api/facility/issues/[id]/assign
@@ -37,7 +38,7 @@ export async function POST(
 
   const { data: prev } = await supabase
     .from("facility_issues")
-    .select("assigned_to, assignee:users!facility_issues_assigned_to_fkey(id, full_name)")
+    .select("issue_number, title, assigned_to, assignee:users!facility_issues_assigned_to_fkey(id, full_name)")
     .eq("id", id).single();
 
   const updates: Record<string, unknown> = {
@@ -64,6 +65,15 @@ export async function POST(
     entityType: "facility_issue", entityId: id, action: "update",
     performedBy: dbUser!.id,
     changes: { assigned_to: { old: prev?.assigned_to ?? null, new: assigneeId } },
+  });
+
+  void notifyItTeam({
+    type: "assigned",
+    issueId: id,
+    issueNumber: prev?.issue_number ?? "",
+    title: prev?.title ?? "",
+    assigneeName: assigneeName,
+    actorName: dbUser!.full_name,
   });
 
   return NextResponse.json({ data });

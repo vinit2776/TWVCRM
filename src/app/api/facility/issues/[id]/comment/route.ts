@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logIssueEvent } from "@/lib/facility";
+import { notifyItTeam } from "@/lib/facility-notifications";
 
 /**
  * POST /api/facility/issues/[id]/comment
@@ -24,9 +25,23 @@ export async function POST(
   const message = String(body.message ?? "").trim();
   if (!message) return NextResponse.json({ error: "message is required" }, { status: 400 });
 
+  const { data: issue } = await supabase
+    .from("facility_issues")
+    .select("issue_number, title")
+    .eq("id", id).single();
+
   await logIssueEvent(supabase, {
     issueId: id, eventType: "comment",
     actorId: dbUser.id, actorLabel: dbUser.full_name, message,
+  });
+
+  void notifyItTeam({
+    type: "comment",
+    issueId: id,
+    issueNumber: issue?.issue_number ?? "",
+    title: issue?.title ?? "",
+    actorName: dbUser.full_name,
+    message,
   });
 
   return NextResponse.json({ success: true }, { status: 201 });

@@ -5,6 +5,7 @@ import {
   hasRole, FACILITY_ROLES, canTransition, timestampsForStatus,
   resolutionMinutes, metSla, logIssueEvent,
 } from "@/lib/facility";
+import { notifyItTeam } from "@/lib/facility-notifications";
 import type { FacilityIssueStatus, FacilityRootCause } from "@/types";
 
 const VALID_ROOT: FacilityRootCause[] = [
@@ -40,7 +41,7 @@ export async function PATCH(
 
   const { data: existing, error: loadErr } = await supabase
     .from("facility_issues")
-    .select("id, status, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, reopen_count, reporter_email, reporter_phone")
+    .select("id, issue_number, title, status, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, reopen_count, reporter_email, reporter_phone")
     .eq("id", id).single();
   if (loadErr || !existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -95,6 +96,16 @@ export async function PATCH(
   logAudit(supabase, {
     entityType: "facility_issue", entityId: id, action: "update",
     performedBy: dbUser!.id, changes: { status: { old: existing.status, new: next } },
+  });
+
+  void notifyItTeam({
+    type: "status_changed",
+    issueId: id,
+    issueNumber: existing.issue_number,
+    title: existing.title,
+    from: existing.status,
+    to: next,
+    actorName: dbUser!.full_name,
   });
 
   return NextResponse.json({ data });

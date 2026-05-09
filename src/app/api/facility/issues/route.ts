@@ -6,6 +6,7 @@ import {
   computeSlaTarget,
   logIssueEvent,
 } from "@/lib/facility";
+import { notifyItTeam } from "@/lib/facility-notifications";
 import type { FacilityScope, FacilityIssuePriority, FacilityReportedVia } from "@/types";
 
 const VALID_PRIORITY: FacilityIssuePriority[] = ["low", "medium", "high", "critical"];
@@ -187,6 +188,16 @@ export async function POST(request: NextRequest) {
   logAudit(supabase, {
     entityType: "facility_issue", entityId: issue.id, action: "create",
     performedBy: dbUser.id, changes: { record: { old: null, new: issue } },
+  });
+
+  // Fire-and-forget: notify IT team
+  void notifyItTeam({
+    type: "created",
+    issueId: issue.id,
+    issueNumber: issueNumber,
+    title: title.trim(),
+    priority,
+    reportedBy: dbUser.full_name,
   });
 
   return NextResponse.json({ data: issue }, { status: 201 });
