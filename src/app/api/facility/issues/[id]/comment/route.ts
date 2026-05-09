@@ -35,7 +35,7 @@ export async function POST(
     actorId: dbUser.id, actorLabel: dbUser.full_name, message,
   });
 
-  void notifyItTeam({
+  await notifyItTeam({
     type: "comment",
     issueId: id,
     issueNumber: issue?.issue_number ?? "",

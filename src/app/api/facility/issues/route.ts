@@ -198,8 +198,8 @@ export async function POST(request: NextRequest) {
     performedBy: dbUser.id, changes: { record: { old: null, new: issue } },
   });
 
-  // Fire-and-forget: notify IT team + assignee
-  void notifyItTeam({
+  // Notify IT team + assignee (awaited so Vercel doesn't kill the function early)
+  await notifyItTeam({
     type: "created",
     issueId: issue.id,
     issueNumber: issueNumber,

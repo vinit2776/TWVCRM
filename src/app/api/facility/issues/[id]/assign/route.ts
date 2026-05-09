@@ -67,7 +67,7 @@ export async function POST(
     changes: { assigned_to: { old: prev?.assigned_to ?? null, new: assigneeId } },
   });
 
-  void notifyItTeam({
+  await notifyItTeam({
     type: "assigned",
     issueId: id,
     issueNumber: prev?.issue_number ?? "",

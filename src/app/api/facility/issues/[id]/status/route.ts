@@ -98,7 +98,7 @@ export async function PATCH(
     performedBy: dbUser!.id, changes: { status: { old: existing.status, new: next } },
   });
 
-  void notifyItTeam({
+  await notifyItTeam({
     type: "status_changed",
     issueId: id,
     issueNumber: existing.issue_number,
