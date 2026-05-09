@@ -106,6 +106,18 @@ export async function PATCH(
     } else if (body.status === "rejected") {
       allowedFields.rejected_at = body.rejected_at || now;
     } else if (body.status === "active") {
+      // Block activation if escalation approval is pending
+      if (oldContract.escalation_approval_status === "pending") {
+        return NextResponse.json({
+          error: "Cannot activate: escalation rate approval is pending. Ask your admin to approve the negotiated rate first.",
+        }, { status: 400 });
+      }
+      if (oldContract.escalation_approval_status === "rejected") {
+        return NextResponse.json({
+          error: "Cannot activate: the proposed escalation rate was rejected. The rate has been reverted to the default. Review and retry.",
+        }, { status: 400 });
+      }
+
       // Renewal contracts carry the deposit forward — skip the proposal
       // payment gate when deposit_carried_from is set.
       const isRenewal = !!oldContract.deposit_carried_from;

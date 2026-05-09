@@ -27,8 +27,16 @@ export async function POST(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { data: dbUser } = await supabase
-    .from("users").select("id, role").eq("auth_id", user.id).single();
+    .from("users").select("id, role, full_name").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
+
+  // Role gate: only admin, manager, floor_manager can renew
+  const renewAllowedRoles = ["admin", "manager", "floor_manager"];
+  if (!renewAllowedRoles.includes(dbUser.role)) {
+    return NextResponse.json({
+      error: "You do not have permission to renew contracts. Contact your manager or admin.",
+    }, { status: 403 });
+  }
 
   // 1. Fetch the source contract
   const { data: source, error: fetchErr } = await supabase
@@ -288,6 +296,51 @@ export async function POST(
     },
   });
 
+  // 12. Escalation approval workflow
+  // If escalation is reduced or waived (and requester is not admin), create
+  // an approval request. The draft is created with the proposed rate, but
+  // the contract is flagged as pending approval. If rejected, the rate
+  // reverts to the default escalation.
+  const parentEscPct = Number(source.escalation_percentage || 10);
+  const needsApproval = dbUser.role !== "admin" && (escalationPct < parentEscPct || escalationPct === 0);
+  let approvalStatus: string | null = null;
+
+  if (needsApproval) {
+    const approvalType = escalationPct === 0 ? "escalation_waiver" : "escalation_reduction";
+    const { data: approvalReq } = await admin
+      .from("approval_requests")
+      .insert({
+        approval_type: approvalType,
+        entity_type: "contract",
+        entity_id: newContract.id,
+        entity_reference: newContract.contract_number,
+        requested_by: dbUser.id,
+        reason: `${approvalType === "escalation_waiver" ? "Escalation waiver" : "Escalation reduction"} from ${parentEscPct}% to ${escalationPct}% on renewal of ${source.contract_number}`,
+        metadata: {
+          parent_contract_id: id,
+          parent_contract_number: source.contract_number,
+          parent_escalation_percentage: parentEscPct,
+          proposed_escalation_percentage: escalationPct,
+          parent_subtotal: Number(source.subtotal),
+          proposed_subtotal: newSubtotal,
+          requested_by_name: dbUser.full_name,
+        },
+      })
+      .select("id")
+      .single();
+
+    if (approvalReq) {
+      await admin
+        .from("contracts")
+        .update({
+          escalation_approval_status: "pending",
+          escalation_approval_id: approvalReq.id,
+        })
+        .eq("id", newContract.id);
+      approvalStatus = "pending";
+    }
+  }
+
   // Calculate gap between parent end and renewal start (0 = seamless)
   const parentEndMs = new Date(source.end_date + "T00:00:00Z").getTime();
   const renewalStartMs = startDate.getTime();
@@ -306,6 +359,7 @@ export async function POST(
       start_date: startDateStr,
       end_date: endDateStr,
       gap_days: gapDays,
+      escalation_approval_status: approvalStatus,
     },
   }, { status: 201 });
 }

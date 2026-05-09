@@ -118,6 +118,10 @@ export function ContractRenewalDialog({
     return start.toISOString().split("T")[0];
   }, [startDate, tenureMonths]);
 
+  // Check if escalation needs admin approval (reduction or waiver by non-admin)
+  const parentEscPct = contract.escalation_percentage || 0;
+  const needsEscalationApproval = userRole !== "admin" && (escalationPct < parentEscPct || escalationPct === 0);
+
   // Gap calculation
   const gapDays = useMemo(() => {
     if (!startDate) return 0;
@@ -143,8 +147,11 @@ export function ContractRenewalDialog({
 
       if (res.ok) {
         const json = await res.json();
+        const hasApproval = json.data.escalation_approval_status === "pending";
         toast.success(
-          `Renewal draft created: ${json.data.contract_number}`,
+          hasApproval
+            ? `Renewal draft created: ${json.data.contract_number} — Escalation approval sent to admin`
+            : `Renewal draft created: ${json.data.contract_number}`,
           {
             action: {
               label: "Open",
@@ -332,11 +339,31 @@ export function ContractRenewalDialog({
             </div>
           )}
 
+          {/* Escalation approval warning */}
+          {needsEscalationApproval && (
+            <div className="rounded-md border border-purple-200 bg-purple-50 px-3 py-2.5 flex items-start gap-2">
+              <ShieldAlert className="h-4 w-4 text-purple-600 shrink-0 mt-0.5" />
+              <div className="text-xs text-purple-800">
+                <p className="font-semibold">Admin Approval Required</p>
+                <p>
+                  {escalationPct === 0
+                    ? "Waiving escalation entirely requires admin approval."
+                    : `Reducing escalation from ${parentEscPct}% to ${escalationPct}% requires admin approval.`
+                  }{" "}
+                  The draft will be created with the proposed rate, but the admin must approve before the contract can be activated.
+                </p>
+              </div>
+            </div>
+          )}
+
           {/* What happens */}
           <div className="rounded-md border border-muted bg-muted/20 px-3 py-2.5 text-xs text-muted-foreground space-y-1">
             <p className="font-semibold text-foreground">What happens:</p>
             <ul className="list-disc list-inside space-y-0.5">
               <li>A <strong>draft</strong> renewal contract is created with the negotiated terms</li>
+              {needsEscalationApproval && (
+                <li className="text-purple-700">An <strong>approval request</strong> is sent to the admin for the reduced/waived escalation</li>
+              )}
               <li>KYC documents, space allocations, and facilities carry over</li>
               <li>Security deposit rolls forward — no re-collection needed</li>
               <li>Current contract stays <strong>active</strong> until the renewal is activated</li>

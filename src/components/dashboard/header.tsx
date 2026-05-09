@@ -16,6 +16,7 @@ import { createClient } from "@/lib/supabase/client";
 import { getInitials } from "@/lib/utils";
 import { useState, useEffect } from "react";
 import { NotificationBell } from "@/components/dashboard/notification-bell";
+import { ApprovalBell } from "@/components/dashboard/approval-bell";
 
 export function Header() {
   const { toggleSidebar } = useUiStore();
@@ -88,6 +89,9 @@ export function Header() {
       </button>
 
       <div className="flex items-center gap-3 ml-auto">
+        {/* Pending approvals (admin only) */}
+        <ApprovalBell />
+
         {/* Enquiry notifications */}
         <NotificationBell />
 

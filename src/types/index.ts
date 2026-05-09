@@ -481,6 +481,9 @@ export interface Contract {
   escalation_waived?: boolean;
   escalation_waiver_reason?: string | null;
   escalation_waived_by?: string | null;
+  // Escalation approval
+  escalation_approval_status?: string | null; // 'pending' | 'approved' | 'rejected'
+  escalation_approval_id?: string | null;
   // Deposit carry-forward
   deposit_carried_from?: string | null;
   deposit_shortfall?: number;
@@ -711,7 +714,8 @@ export type AuditEntityType =
   | "proposal_service_quota"
   | "service_usage_record"
   | "service_usage_import"
-  | "location_print_template";
+  | "location_print_template"
+  | "approval_request";
 
 export interface AuditLog {
   id: string;

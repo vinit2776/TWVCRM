@@ -904,8 +904,30 @@ export default function ContractDetailPage({
                   </div>
                 )}
 
+                {/* Escalation approval status — on renewal drafts */}
+                {contract.is_renewal && contract.escalation_approval_status && (
+                  <div className={`rounded-md border px-3 py-2 text-xs space-y-1 ${
+                    contract.escalation_approval_status === "pending"
+                      ? "border-purple-200 bg-purple-50 text-purple-800"
+                      : contract.escalation_approval_status === "approved"
+                        ? "border-green-200 bg-green-50 text-green-800"
+                        : "border-red-200 bg-red-50 text-red-800"
+                  }`}>
+                    <p className="font-semibold flex items-center gap-1">
+                      {contract.escalation_approval_status === "pending" && "⏳ Escalation Approval Pending"}
+                      {contract.escalation_approval_status === "approved" && "✓ Escalation Approved"}
+                      {contract.escalation_approval_status === "rejected" && "✗ Escalation Rejected"}
+                    </p>
+                    <p>
+                      {contract.escalation_approval_status === "pending" && "The reduced/waived escalation rate is awaiting admin approval. The contract cannot be activated until approved."}
+                      {contract.escalation_approval_status === "approved" && "The negotiated escalation rate has been approved by admin."}
+                      {contract.escalation_approval_status === "rejected" && "The proposed escalation was rejected. The rate has been reverted to the default escalation."}
+                    </p>
+                  </div>
+                )}
+
                 {/* Escalation waiver — admin only, on renewal drafts */}
-                {contract.is_renewal && contract.status === "draft" && (
+                {contract.is_renewal && contract.status === "draft" && !contract.escalation_approval_status && (
                   <EscalationWaiverSection
                     contractId={contract.id}
                     escalationWaived={contract.escalation_waived || false}
@@ -951,7 +973,8 @@ export default function ContractDetailPage({
                 )}
 
                 {/* Action buttons — only for active/expired, not already renewed or declined */}
-                {["active", "expired"].includes(contract.status) && !contract.renewal_declined && (
+                {/* Role gate: admin, manager, floor_manager can renew */}
+                {["active", "expired"].includes(contract.status) && !contract.renewal_declined && ["admin", "manager", "floor_manager"].includes(userRole || "") && (
                   <div className="flex gap-2 pt-1">
                     <Button
                       size="sm"
