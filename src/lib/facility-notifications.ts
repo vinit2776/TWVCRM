@@ -3,7 +3,7 @@ import { sendPushToUsers } from "@/lib/push";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { createNotificationsForUsers } from "@/lib/in-app-notifications";
 
-export const IT_PRIMARY_EMAIL = "techsupport@theworkvill.com";
+export const IT_PRIMARY_EMAIL = "techsupport@theworkvilla.com";
 export const IT_SECONDARY_EMAIL = "it@theworkvilla.com";
 
 export const IT_NOTIFY_EMAILS = [IT_PRIMARY_EMAIL, IT_SECONDARY_EMAIL];
