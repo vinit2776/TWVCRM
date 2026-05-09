@@ -5,13 +5,8 @@ import { usePushNotifications } from "@/hooks/use-push-notifications";
 
 /**
  * Subtle one-time prompt encouraging users to enable browser push notifications.
- * Only shows when:
- *   - Browser supports Web Push
- *   - NEXT_PUBLIC_VAPID_PUBLIC_KEY is configured
- *   - Permission hasn't been granted yet
- *   - User hasn't dismissed it before
- *
- * Disappears permanently once the user either enables or dismisses.
+ * Appears on all platforms (desktop, Android, iOS PWA) when push is supported
+ * and permission hasn't been granted yet.
  */
 export function PushNotificationPrompt() {
   const { canPrompt, loading, subscribe, dismiss } = usePushNotifications();
@@ -22,7 +17,7 @@ export function PushNotificationPrompt() {
     <div className="flex items-center gap-3 px-4 py-2 bg-muted/60 border-b text-sm">
       <BellRing className="h-4 w-4 text-primary shrink-0" />
       <span className="flex-1 text-muted-foreground">
-        Enable browser notifications to get alerted even when this tab is minimised.
+        Enable notifications to get real-time alerts for tickets, bookings and enquiries.
       </span>
       <button
         onClick={subscribe}

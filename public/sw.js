@@ -145,3 +145,18 @@ self.addEventListener("notificationclick", function (event) {
       })
   );
 });
+
+// ─── Subscription recovery (iOS/Android expiry handling) ──────────────────────
+self.addEventListener("pushsubscriptionchange", function (event) {
+  event.waitUntil(
+    self.registration.pushManager
+      .subscribe(event.oldSubscription.options)
+      .then(function (newSub) {
+        return fetch("/api/push/subscribe", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(newSub.toJSON()),
+        });
+      })
+  );
+});
