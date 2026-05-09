@@ -17,7 +17,7 @@ export async function GET(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  // Fetch the renewal contract with parent and lead
+  // Fetch the renewal contract with lead & location
   const { data: contract, error } = await supabase
     .from("contracts")
     .select(`
@@ -27,16 +27,13 @@ export async function GET(
         street, city, state, zip_code, country,
         pan_number, gst_number, entity_type
       ),
-      location:locations!contracts_location_id_fkey(id, name, address, city, state),
-      parent:contracts!contracts_parent_contract_id_fkey(
-        id, contract_number, start_date, end_date,
-        subtotal, seats, tenure_months, agreement_date, items
-      )
+      location:locations!contracts_location_id_fkey(id, name, address, city, state)
     `)
     .eq("id", id)
     .single();
 
   if (error || !contract) {
+    console.error("[addendum] Contract fetch failed:", error?.message, "id:", id);
     return NextResponse.json({ error: "Contract not found" }, { status: 404 });
   }
 
@@ -44,14 +41,17 @@ export async function GET(
     return NextResponse.json({ error: "Addendum can only be generated for renewal contracts" }, { status: 400 });
   }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const parent = contract.parent as any;
-  if (!parent) {
+  // Fetch parent contract separately (self-referencing FK join can be unreliable)
+  const { data: parentData, error: parentError } = await supabase
+    .from("contracts")
+    .select("id, contract_number, start_date, end_date, subtotal, seats, tenure_months, agreement_date, items")
+    .eq("id", contract.parent_contract_id)
+    .single();
+
+  if (parentError || !parentData) {
+    console.error("[addendum] Parent contract fetch failed:", parentError?.message);
     return NextResponse.json({ error: "Parent contract not found" }, { status: 400 });
   }
-
-  // Resolve parent (could be array from FK join)
-  const parentData = Array.isArray(parent) ? parent[0] : parent;
 
   // Build lead details
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

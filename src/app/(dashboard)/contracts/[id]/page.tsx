@@ -57,6 +57,7 @@ import {
   DeclineRenewalDialog,
   EscalationWaiverSection,
 } from "@/components/contracts/contract-renewal-dialog";
+import { ContractContactsPanel } from "@/components/contracts/contract-contacts-panel";
 import { toast } from "sonner";
 import { LayoutGrid, Trash2 } from "lucide-react";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
@@ -841,6 +842,13 @@ export default function ContractDetailPage({
               </CardContent>
             </Card>
           )}
+
+          {/* Contract Contacts — each contract can have its own set of
+              contact persons (finance, occupant, signatory, etc.) */}
+          <ContractContactsPanel
+            contractId={id}
+            leadId={contract.lead_id || undefined}
+          />
 
           {/* Vouchers Section */}
           <ContractVouchersSection
