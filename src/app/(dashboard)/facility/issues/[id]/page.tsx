@@ -35,6 +35,7 @@ import type {
 } from "@/types";
 
 interface AssigneeOption { id: string; full_name: string; role: string }
+interface Collaborator { id: string; user_id: string; user: { id: string; full_name: string; email: string; role: string } }
 
 export default function FacilityIssueDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -47,6 +48,8 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   const [resolveOpen, setResolveOpen] = useState(false);
   const [assignOpen, setAssignOpen] = useState(false);
   const [assignees, setAssignees] = useState<AssigneeOption[]>([]);
+  const [collaborators, setCollaborators] = useState<Collaborator[]>([]);
+  const [collabOpen, setCollabOpen] = useState(false);
 
   const fetchIssue = async () => {
     setLoading(true);
@@ -57,16 +60,22 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
     setLoading(false);
   };
 
-  useEffect(() => { fetchIssue(); /* eslint-disable-next-line */ }, [id]);
+  const fetchCollaborators = async () => {
+    const res = await fetch(`/api/facility/issues/${id}/collaborators`);
+    const json = await res.json();
+    if (res.ok) setCollaborators(json.data ?? []);
+  };
 
-  // Load assignable users for the assign dialog
+  useEffect(() => { fetchIssue(); fetchCollaborators(); /* eslint-disable-next-line */ }, [id]);
+
+  // Load assignable users for the assign/collab dialog
   useEffect(() => {
-    if (!assignOpen) return;
+    if (!assignOpen && !collabOpen) return;
     fetch("/api/facility/assignees")
       .then((r) => r.json())
       .then((j) => setAssignees((j.data || []).filter((u: AssigneeOption) => u.id)))
       .catch(() => setAssignees([]));
-  }, [assignOpen]);
+  }, [assignOpen, collabOpen]);
 
   const open = !!issue && ["new", "acknowledged", "in_progress", "reopened"].includes(issue.status);
   const allowedNext = useMemo(
@@ -141,6 +150,43 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
       if (!res.ok) throw new Error("Assign failed");
       setAssignOpen(false);
       await fetchIssue();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const addCollaborator = async (userId: string) => {
+    if (!issue) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/facility/issues/${issue.id}/collaborators`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId }),
+      });
+      if (!res.ok) throw new Error("Failed to add collaborator");
+      await fetchCollaborators();
+      setCollabOpen(false);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const removeCollaborator = async (userId: string) => {
+    if (!issue) return;
+    setBusy(true);
+    try {
+      const res = await fetch(`/api/facility/issues/${issue.id}/collaborators`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ user_id: userId }),
+      });
+      if (!res.ok) throw new Error("Failed to remove");
+      await fetchCollaborators();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed");
     } finally {
@@ -348,11 +394,31 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
           <section className="rounded-lg border bg-card p-4 space-y-2">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Assignment</div>
             {issue.assignee?.full_name ? (
-              <div className="text-sm">{issue.assignee.full_name}</div>
+              <div className="text-sm font-medium">{issue.assignee.full_name} <span className="text-xs text-muted-foreground font-normal">(primary)</span></div>
             ) : (
               <div className="text-sm text-muted-foreground italic">Unassigned</div>
             )}
             {issue.assigned_at && <div className="text-xs text-muted-foreground">{timeAgo(issue.assigned_at)}</div>}
+            {collaborators.length > 0 && (
+              <div className="pt-1 space-y-1">
+                <div className="text-xs text-muted-foreground">Collaborators:</div>
+                {collaborators.map((c) => (
+                  <div key={c.id} className="flex items-center justify-between text-sm">
+                    <span>{c.user.full_name}</span>
+                    <button
+                      type="button"
+                      onClick={() => removeCollaborator(c.user_id)}
+                      className="text-xs text-red-500 hover:underline"
+                    >remove</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <button
+              type="button"
+              onClick={() => setCollabOpen(true)}
+              className="text-xs text-primary hover:underline mt-1"
+            >+ Add people</button>
           </section>
 
           <section className="rounded-lg border bg-card p-4 space-y-2">
@@ -402,7 +468,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
         <DialogContent className="max-w-sm">
           <DialogHeader>
             <DialogTitle>Assign issue</DialogTitle>
-            <DialogDescription>Pick a technician or unassign.</DialogDescription>
+            <DialogDescription>Pick a primary assignee or unassign.</DialogDescription>
           </DialogHeader>
           <div className="space-y-2 max-h-72 overflow-y-auto">
             <button
@@ -426,6 +492,34 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
             ))}
             {assignees.length === 0 && (
               <p className="text-xs text-muted-foreground italic">No IT technicians or managers found.</p>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* ───── Add collaborators dialog ───────────────────────────────────── */}
+      <Dialog open={collabOpen} onOpenChange={setCollabOpen}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Add people</DialogTitle>
+            <DialogDescription>Add collaborators who need to be involved in this issue.</DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2 max-h-72 overflow-y-auto">
+            {assignees
+              .filter((u) => u.id !== issue.assigned_to && !collaborators.some((c) => c.user_id === u.id))
+              .map((u) => (
+              <button
+                key={u.id}
+                type="button"
+                onClick={() => addCollaborator(u.id)}
+                className="w-full text-left p-2 rounded-md border hover:bg-muted/40 text-sm flex items-center justify-between"
+              >
+                <span>{u.full_name}</span>
+                <span className="text-xs text-muted-foreground capitalize">{u.role.replace("_", " ")}</span>
+              </button>
+            ))}
+            {assignees.filter((u) => u.id !== issue.assigned_to && !collaborators.some((c) => c.user_id === u.id)).length === 0 && (
+              <p className="text-xs text-muted-foreground italic">All available people are already assigned.</p>
             )}
           </div>
         </DialogContent>

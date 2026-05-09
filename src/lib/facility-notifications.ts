@@ -73,23 +73,33 @@ export type FacilityNotifyEvent =
 
 export async function notifyItTeam(event: FacilityNotifyEvent): Promise<void> {
   try {
+    const supabase = await createAdminClient();
     const itUserIds = await getItTeamUserIds();
     const url = issueUrl(event.issueId);
 
-    // Build the full list of push recipient user IDs (IT team + assignee)
+    // Fetch collaborators for this issue
+    const { data: collabs } = await supabase
+      .from("facility_issue_collaborators")
+      .select("user_id")
+      .eq("issue_id", event.issueId);
+    const collabUserIds = (collabs ?? []).map((c) => c.user_id);
+
+    // Build the full list of push recipient user IDs (IT team + assignee + collaborators)
     const pushUserIds = [...itUserIds];
     const assigneeId = "assigneeId" in event ? event.assigneeId : undefined;
     if (assigneeId && !pushUserIds.includes(assigneeId)) {
       pushUserIds.push(assigneeId);
     }
+    for (const cid of collabUserIds) {
+      if (!pushUserIds.includes(cid)) pushUserIds.push(cid);
+    }
 
-    // Build the full list of email recipients (IT team + assignee email)
+    // Build the full list of email recipients (IT team + assignee + collaborators)
     const emailTo = [...IT_NOTIFY_EMAILS];
-    if (assigneeId) {
-      const assigneeEmail = await getUserEmailById(assigneeId);
-      if (assigneeEmail && !emailTo.includes(assigneeEmail)) {
-        emailTo.push(assigneeEmail);
-      }
+    const extraUserIds = [assigneeId, ...collabUserIds].filter(Boolean) as string[];
+    for (const uid of extraUserIds) {
+      const email = await getUserEmailById(uid);
+      if (email && !emailTo.includes(email)) emailTo.push(email);
     }
 
     let pushTitle: string;
