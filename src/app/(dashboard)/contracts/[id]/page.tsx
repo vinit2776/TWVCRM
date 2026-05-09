@@ -58,8 +58,9 @@ import {
   EscalationWaiverSection,
 } from "@/components/contracts/contract-renewal-dialog";
 import { ContractContactsPanel } from "@/components/contracts/contract-contacts-panel";
+import { ContractSpaceManager, validateSpaceAllocation } from "@/components/contracts/contract-space-manager";
 import { toast } from "sonner";
-import { LayoutGrid, Trash2 } from "lucide-react";
+// lucide-react icons imported above via main import block
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { SeatOccupantsPanel } from "@/components/spaces/seat-occupants-panel";
 import { ContractChainStrip } from "@/components/contracts/contract-chain-strip";
@@ -103,37 +104,15 @@ export default function ContractDetailPage({
   const [kycStatus, setKycStatus] = useState<{ allSatisfied: boolean; total: number; approved: number; deferred: number }>({ allSatisfied: true, total: 0, approved: 0, deferred: 0 });
   const [showOverride, setShowOverride] = useState(false);
   const [deferredActivateOpen, setDeferredActivateOpen] = useState(false);
+  const [spaceWarningOpen, setSpaceWarningOpen] = useState(false);
+  const [pendingActivateArgs, setPendingActivateArgs] = useState<{ overrideReason?: string } | null>(null);
 
   // Assigned spaces
   const [spaceAllocations, setSpaceAllocations] = useState<ContractSpaceAllocation[]>([]);
-  const [spacesLoading, setSpacesLoading] = useState(false);
-  const [unlinkingId, setUnlinkingId] = useState<string | null>(null);
 
-  const fetchSpaceAllocations = useCallback(async () => {
-    setSpacesLoading(true);
-    const res = await fetch(`/api/contracts/${id}/space-allocations`);
-    if (res.ok) {
-      const json = await res.json();
-      setSpaceAllocations((json.data || []).filter((a: ContractSpaceAllocation) => a.status === "active"));
-    }
-    setSpacesLoading(false);
-  }, [id]);
-
-  const handleUnlinkSpace = async (allocationId: string) => {
-    if (!window.confirm("Unlink this space unit from the contract?")) return;
-    setUnlinkingId(allocationId);
-    const res = await fetch(`/api/contracts/${id}/space-allocations?allocation_id=${allocationId}`, {
-      method: "DELETE",
-    });
-    if (res.ok) {
-      toast.success("Space unit unlinked");
-      setSpaceAllocations((prev) => prev.filter((a) => a.id !== allocationId));
-    } else {
-      const json = await res.json().catch(() => null);
-      toast.error(json?.error || "Failed to unlink space unit");
-    }
-    setUnlinkingId(null);
-  };
+  const handleSpaceAllocationsChange = useCallback((allocs: ContractSpaceAllocation[]) => {
+    setSpaceAllocations(allocs);
+  }, []);
 
   const handleKycStatusChange = useCallback((allSatisfied: boolean, total: number, approved: number, deferred: number) => {
     setKycStatus({ allSatisfied, total, approved, deferred });
@@ -173,9 +152,26 @@ export default function ContractDetailPage({
 
   useEffect(() => {
     fetchContract(true);
-    fetchSpaceAllocations();
     fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {});
-  }, [fetchContract, fetchSpaceAllocations]);
+  }, [fetchContract]);
+
+  /** Wraps activation to check space allocation first */
+  const attemptActivation = (overrideReason?: string) => {
+    const validation = validateSpaceAllocation(spaceAllocations, contract?.seats ?? 1);
+    if (validation.isUnderAllocated) {
+      // Show warning but still allow activation
+      setPendingActivateArgs({ overrideReason });
+      setSpaceWarningOpen(true);
+      return;
+    }
+    handleStatusUpdate("active", overrideReason);
+  };
+
+  const confirmActivationWithSpaceWarning = () => {
+    setSpaceWarningOpen(false);
+    handleStatusUpdate("active", pendingActivateArgs?.overrideReason);
+    setPendingActivateArgs(null);
+  };
 
   const handleStatusUpdate = async (newStatus: string, paymentOverrideReason?: string) => {
     setStatusUpdating(true);
@@ -507,7 +503,7 @@ export default function ContractDetailPage({
             return canActivate ? (
               <Button
                 variant="outline"
-                onClick={() => hasDeferred ? setDeferredActivateOpen(true) : handleStatusUpdate("active")}
+                onClick={() => hasDeferred ? setDeferredActivateOpen(true) : attemptActivation()}
                 disabled={statusUpdating}
                 className={hasDeferred ? "border-amber-400 text-amber-800 hover:bg-amber-50" : ""}
               >
@@ -554,7 +550,7 @@ export default function ContractDetailPage({
                           variant="outline"
                           className="border-amber-400 text-amber-800 hover:bg-amber-100"
                           disabled={!overrideReason.trim() || statusUpdating}
-                          onClick={() => handleStatusUpdate("active", overrideReason.trim())}
+                          onClick={() => attemptActivation(overrideReason.trim())}
                         >
                           {statusUpdating ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : null}
                           Activate with Override
@@ -1449,69 +1445,29 @@ export default function ContractDetailPage({
             </CardContent>
           </Card>
 
-          {/* Assigned Spaces Card */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base flex items-center gap-2">
-                <LayoutGrid className="h-4 w-4" />
-                Assigned Spaces
-              </CardTitle>
-            </CardHeader>
-            <CardContent>
-              {spacesLoading ? (
-                <div className="space-y-2">
-                  {[1, 2].map((i) => (
-                    <div key={i} className="h-10 bg-muted animate-pulse rounded" />
-                  ))}
-                </div>
-              ) : spaceAllocations.length === 0 ? (
-                <p className="text-xs text-muted-foreground text-center py-2">
-                  No space units assigned to this contract.
-                </p>
-              ) : (
-                <div className="space-y-2">
-                  {spaceAllocations.map((alloc) => {
-                    const unit = alloc.space_unit;
-                    return (
-                      <div key={alloc.id} className="flex items-center justify-between gap-2 p-2 rounded-md border bg-muted/20">
-                        <div className="min-w-0">
-                          <div className="flex items-center gap-1.5">
-                            <code className="text-[10px] font-mono bg-muted px-1 py-0.5 rounded">{unit?.code}</code>
-                            <span className="text-xs font-medium truncate">{unit?.name}</span>
-                          </div>
-                          <p className="text-[10px] text-muted-foreground mt-0.5 capitalize">
-                            {unit?.type?.replace(/_/g, " ")} · {unit?.capacity} seat{(unit?.capacity ?? 1) !== 1 ? "s" : ""}
-                          </p>
-                        </div>
-                        <Button
-                          variant="ghost"
-                          size="icon"
-                          className="h-6 w-6 text-destructive hover:text-destructive shrink-0"
-                          disabled={unlinkingId === alloc.id}
-                          onClick={() => handleUnlinkSpace(alloc.id)}
-                          title="Unlink space unit"
-                        >
-                          {unlinkingId === alloc.id ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
-                          ) : (
-                            <Trash2 className="h-3 w-3" />
-                          )}
-                        </Button>
-                      </div>
-                    );
-                  })}
-                  {/* Seat-level occupant tracking */}
-                  {contract?.location_id && (
-                    <SeatOccupantsPanel
-                      contractId={id}
-                      locationId={contract.location_id}
-                      allocations={spaceAllocations}
-                    />
-                  )}
-                </div>
-              )}
-            </CardContent>
-          </Card>
+          {/* Assigned Spaces — with unit picker and seat validation */}
+          <ContractSpaceManager
+            contractId={id}
+            locationId={contract.location_id ?? null}
+            contractSeats={contract.seats ?? 1}
+            contractStatus={contract.status}
+            contractStartDate={contract.start_date}
+            contractEndDate={contract.end_date}
+            onAllocationsChange={handleSpaceAllocationsChange}
+          />
+
+          {/* Seat-level occupant tracking */}
+          {contract?.location_id && spaceAllocations.length > 0 && (
+            <Card>
+              <CardContent className="pt-4">
+                <SeatOccupantsPanel
+                  contractId={id}
+                  locationId={contract.location_id}
+                  allocations={spaceAllocations}
+                />
+              </CardContent>
+            </Card>
+          )}
 
         </div>
       </div>
@@ -1557,7 +1513,52 @@ export default function ContractDetailPage({
             <Button
               className="bg-amber-600 hover:bg-amber-700 text-white"
               disabled={statusUpdating}
-              onClick={() => { setDeferredActivateOpen(false); handleStatusUpdate("active"); }}
+              onClick={() => { setDeferredActivateOpen(false); attemptActivation(); }}
+            >
+              {statusUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Activate Anyway
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Space Under-Allocation Warning Dialog */}
+      <Dialog open={spaceWarningOpen} onOpenChange={setSpaceWarningOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <AlertTriangle className="h-4 w-4 text-amber-600" />
+              Space Allocation Warning
+            </DialogTitle>
+            <DialogDescription>
+              The allocated space is smaller than the contract commitment.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
+            {(() => {
+              const v = validateSpaceAllocation(spaceAllocations, contract?.seats ?? 1);
+              return (
+                <>
+                  <p className="font-semibold mb-1">
+                    {v.allocatedSeats} seat{v.allocatedSeats !== 1 ? "s" : ""} allocated vs{" "}
+                    {v.contractSeats} seat{v.contractSeats !== 1 ? "s" : ""} committed
+                  </p>
+                  <p className="text-xs">
+                    You are {v.shortfall} seat{v.shortfall !== 1 ? "s" : ""} short.
+                    You can still activate, but the space may not accommodate all committed seats.
+                  </p>
+                </>
+              );
+            })()}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setSpaceWarningOpen(false)}>
+              Go Back
+            </Button>
+            <Button
+              className="bg-amber-600 hover:bg-amber-700 text-white"
+              disabled={statusUpdating}
+              onClick={confirmActivationWithSpaceWarning}
             >
               {statusUpdating && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Activate Anyway
