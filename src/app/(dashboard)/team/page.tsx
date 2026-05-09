@@ -49,6 +49,7 @@ import { USER_ROLE_LABELS } from "@/lib/constants";
 import { getInitials, formatDate } from "@/lib/utils";
 import type { User as UserType } from "@/types";
 import { toast } from "sonner";
+import { UserActivityLogDialog } from "@/components/team/user-activity-log";
 
 const ROLE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
   admin: ShieldCheck,
@@ -280,6 +281,10 @@ export default function TeamPage() {
     role: "sales_rep",
   });
   const [editing, setEditing] = useState(false);
+
+  // Activity log dialog state
+  const [activityLogOpen, setActivityLogOpen] = useState(false);
+  const [activityLogTarget, setActivityLogTarget] = useState<UserType | null>(null);
 
   // Action menu state
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
@@ -722,6 +727,17 @@ export default function TeamPage() {
                                 <KeyRound className="h-4 w-4" />
                                 Change Password
                               </button>
+                              <button
+                                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
+                                onClick={() => {
+                                  setActivityLogTarget(member);
+                                  setActivityLogOpen(true);
+                                  setOpenMenuId(null);
+                                }}
+                              >
+                                <Eye className="h-4 w-4" />
+                                Activity Log
+                              </button>
                               <div className="my-1 h-px bg-border" />
                               <button
                                 className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
@@ -1016,6 +1032,16 @@ export default function TeamPage() {
           </form>
         </DialogContent>
       </Dialog>
+
+      {/* ── User Activity Log Dialog ── */}
+      {activityLogTarget && (
+        <UserActivityLogDialog
+          open={activityLogOpen}
+          onOpenChange={setActivityLogOpen}
+          userId={activityLogTarget.id}
+          userName={activityLogTarget.full_name}
+        />
+      )}
     </div>
   );
 }
