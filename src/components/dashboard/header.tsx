@@ -17,6 +17,7 @@ import { getInitials } from "@/lib/utils";
 import { useState, useEffect } from "react";
 import { NotificationBell } from "@/components/dashboard/notification-bell";
 import { ApprovalBell } from "@/components/dashboard/approval-bell";
+import { InAppNotificationBell } from "@/components/dashboard/in-app-notification-bell";
 
 export function Header() {
   const { toggleSidebar } = useUiStore();
@@ -92,7 +93,10 @@ export function Header() {
         {/* Pending approvals (admin only) */}
         <ApprovalBell />
 
-        {/* Enquiry notifications */}
+        {/* In-app notification center (facility tickets, etc.) */}
+        <InAppNotificationBell />
+
+        {/* Enquiry notifications (leads, re-enquiries, WhatsApp) */}
         <NotificationBell />
 
         {/* Help */}

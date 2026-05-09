@@ -2837,6 +2837,29 @@ export interface ServiceUsageImport {
   updated_at: string;
 }
 
+// ==========================================
+// In-App Notification Types
+// ==========================================
+
+export type InAppNotificationType =
+  | "facility_created"
+  | "facility_comment"
+  | "facility_assigned"
+  | "facility_status_changed";
+
+export interface InAppNotification {
+  id: string;
+  user_id: string;
+  type: InAppNotificationType | string;
+  title: string;
+  body: string;
+  url: string | null;
+  entity_type: string | null;
+  entity_id: string | null;
+  read_at: string | null;
+  created_at: string;
+}
+
 export interface LocationPrintTemplate {
   id: string;
   location_id: string;
