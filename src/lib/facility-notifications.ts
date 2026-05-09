@@ -1,6 +1,7 @@
 import { createAdminClient } from "@/lib/supabase/server";
 import { sendPushToUsers } from "@/lib/push";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
+import { createNotificationsForUsers } from "@/lib/in-app-notifications";
 
 export const IT_PRIMARY_EMAIL = "techsupport@theworkvill.com";
 export const IT_SECONDARY_EMAIL = "it@theworkvilla.com";
@@ -161,14 +162,28 @@ export async function notifyItTeam(event: FacilityNotifyEvent): Promise<void> {
       replyTo: EMAIL_REPLY_TO,
     });
 
-    const [pushResult, emailResult] = await Promise.allSettled([pushPromise, emailPromise]);
+    // In-app notification (persisted, shown in bell icon dropdown)
+    const issuePath = `/facility/issues/${event.issueId}`;
+    const inAppPromise = createNotificationsForUsers(pushUserIds, {
+      type: `facility_${event.type}`,
+      title: pushTitle,
+      body: pushBody,
+      url: issuePath,
+      entityType: "facility_issue",
+      entityId: event.issueId,
+    });
+
+    const [pushResult, emailResult, inAppResult] = await Promise.allSettled([pushPromise, emailPromise, inAppPromise]);
     if (pushResult.status === "rejected") {
       console.error("[facility-notify] push failed:", pushResult.reason);
     }
     if (emailResult.status === "rejected") {
       console.error("[facility-notify] email failed:", emailResult.reason);
     }
-    console.log(`[facility-notify] ${event.type} — push to ${pushUserIds.length} users, email to ${emailTo.join(", ")}`);
+    if (inAppResult.status === "rejected") {
+      console.error("[facility-notify] in-app failed:", inAppResult.reason);
+    }
+    console.log(`[facility-notify] ${event.type} — push to ${pushUserIds.length} users, email to ${emailTo.join(", ")}, in-app to ${pushUserIds.length} users`);
   } catch (err) {
     console.error("[facility-notify] unexpected error:", err);
   }

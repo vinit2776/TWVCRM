@@ -62,7 +62,7 @@ export async function POST(
     .select("issue_number, title, assigned_to")
     .eq("id", id).single();
 
-  const names = (data ?? []).map((d) => (d.user as { full_name: string })?.full_name).filter(Boolean);
+  const names = (data ?? []).map((d) => (d.user as unknown as { full_name: string })?.full_name).filter(Boolean);
   await logIssueEvent(supabase, {
     issueId: id,
     eventType: "assigned",
