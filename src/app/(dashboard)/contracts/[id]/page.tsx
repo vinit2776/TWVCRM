@@ -858,8 +858,8 @@ export default function ContractDetailPage({
 
         {/* Sidebar */}
         <div className="space-y-4">
-          {/* Renewal Card — pinned to top of sidebar for active/expired/renewed contracts */}
-          {["active", "expired", "renewed"].includes(contract.status) && (
+          {/* Renewal Card — pinned to top of sidebar for active/expired/renewal_in_progress/renewed contracts */}
+          {["active", "expired", "renewal_in_progress", "renewed"].includes(contract.status) && (
             <Card>
               <CardHeader>
                 <CardTitle className="text-base flex items-center gap-2">
@@ -955,6 +955,13 @@ export default function ContractDetailPage({
                       <XCircle className="mr-1.5 h-3.5 w-3.5" />
                       Decline
                     </Button>
+                  </div>
+                )}
+
+                {contract.status === "renewal_in_progress" && (
+                  <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 space-y-1">
+                    <p className="font-semibold">⏳ Renewal in Progress</p>
+                    <p>A renewal draft has been created and is awaiting finalization. The current contract remains active until the renewal is activated.</p>
                   </div>
                 )}
 

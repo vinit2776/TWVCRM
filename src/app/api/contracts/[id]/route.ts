@@ -137,6 +137,8 @@ export async function PATCH(
         return NextResponse.json({ error: "Termination reason is required" }, { status: 400 });
       }
       allowedFields.terminated_at = now;
+    } else if (body.status === "renewal_in_progress") {
+      // No special timestamp — just a status change
     } else if (body.status === "renewed") {
       allowedFields.renewed_at = now;
     }
@@ -411,6 +413,21 @@ export async function DELETE(
 
   const { error } = await supabase.from("contracts").delete().eq("id", id);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // If this was a renewal draft, restore the parent contract to "active"
+  // so it isn't stuck in "renewal_in_progress".
+  if (contract.is_renewal && contract.parent_contract_id) {
+    try {
+      const admin = createAdminClient();
+      await admin
+        .from("contracts")
+        .update({ status: "active" })
+        .eq("id", contract.parent_contract_id)
+        .eq("status", "renewal_in_progress");
+    } catch (err) {
+      console.error("[contract-delete] failed to restore parent status:", err);
+    }
+  }
 
   const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
   if (dbUser?.id) {

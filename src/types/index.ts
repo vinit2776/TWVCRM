@@ -400,6 +400,7 @@ export type ContractStatus =
   | "accepted"
   | "rejected"
   | "active"
+  | "renewal_in_progress"
   | "renewed"
   | "expired"
   | "terminated";

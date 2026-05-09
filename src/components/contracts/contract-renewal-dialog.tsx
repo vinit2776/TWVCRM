@@ -30,11 +30,33 @@ import {
   ShieldAlert,
   XCircle,
   CalendarX,
+  HelpCircle,
 } from "lucide-react";
+import {
+  Tooltip,
+  TooltipContent,
+  TooltipProvider,
+  TooltipTrigger,
+} from "@/components/ui/tooltip";
 import { BILLING_CYCLE_LABELS } from "@/lib/constants";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
 import type { Contract } from "@/types";
+
+// ─── Field Help Tooltip ─────────────────────────────────────────────────────
+
+function FieldHelp({ tip }: { tip: string }) {
+  return (
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <HelpCircle className="h-3 w-3 text-muted-foreground/60 hover:text-blue-500 cursor-help inline-block ml-1 shrink-0" />
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-[240px] text-xs">
+        {tip}
+      </TooltipContent>
+    </Tooltip>
+  );
+}
 
 // ─── Renewal Dialog ─────────────────────────────────────────────────────────
 
@@ -56,7 +78,7 @@ export function ContractRenewalDialog({
   const [renewing, setRenewing] = useState(false);
   const [tenureMonths, setTenureMonths] = useState(contract.tenure_months);
   const [seats, setSeats] = useState(contract.seats || 1);
-  const [billingCycle, setBillingCycle] = useState(contract.billing_cycle || "monthly");
+  const [billingCycle, setBillingCycle] = useState<string>(contract.billing_cycle || "monthly");
   const [escalationPct, setEscalationPct] = useState(contract.escalation_percentage || 0);
   const [startDate, setStartDate] = useState(() => {
     const end = new Date(contract.end_date);
@@ -142,18 +164,47 @@ export function ContractRenewalDialog({
     setRenewing(false);
   };
 
+  const [showGuide, setShowGuide] = useState(false);
+
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-xl">
+        <TooltipProvider delayDuration={200}>
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <RefreshCw className="h-4 w-4" />
             Renew Contract — {contract.contract_number}
           </DialogTitle>
-          <DialogDescription>
-            Negotiate renewal terms. A draft addendum will be created for customer approval.
+          <DialogDescription className="flex items-center justify-between">
+            <span>Negotiate renewal terms. A draft addendum will be created for customer approval.</span>
+            <button
+              type="button"
+              onClick={() => setShowGuide(!showGuide)}
+              className="text-[10px] text-blue-600 hover:text-blue-800 underline underline-offset-2 shrink-0 ml-2"
+            >
+              {showGuide ? "Hide guide" : "First time? Quick guide"}
+            </button>
           </DialogDescription>
         </DialogHeader>
+
+        {/* Inline walkthrough guide */}
+        {showGuide && (
+          <div className="rounded-lg border border-blue-200 bg-blue-50/60 px-4 py-3 space-y-2 text-xs text-blue-900">
+            <p className="font-semibold flex items-center gap-1.5">
+              <HelpCircle className="h-3.5 w-3.5" />
+              How Renewal Works
+            </p>
+            <ol className="list-decimal list-inside space-y-1 text-[11px] leading-relaxed">
+              <li><strong>Negotiate</strong> — Adjust escalation %, tenure, seats, and start date below. The rate preview updates live.</li>
+              <li><strong>Create Draft</strong> — A new contract is created in Draft status, linked to this one. KYC and facilities carry over.</li>
+              <li><strong>Addendum</strong> — Generate an addendum from the draft for the customer to sign (no full re-signing needed).</li>
+              <li><strong>Activate</strong> — Once signed, activate the renewal. The current contract moves to &quot;Renewed&quot; status automatically.</li>
+            </ol>
+            <p className="text-[10px] text-blue-700">
+              💡 Hover over <HelpCircle className="h-2.5 w-2.5 inline" /> icons next to fields for specific guidance.
+            </p>
+          </div>
+        )}
 
         <div className="space-y-4 max-h-[65vh] overflow-y-auto pr-1">
           {/* Rate Negotiation */}
@@ -161,7 +212,7 @@ export function ContractRenewalDialog({
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Rate Negotiation</p>
             <div className="grid grid-cols-3 gap-3 items-end">
               <div className="space-y-1">
-                <Label className="text-xs">Escalation %</Label>
+                <Label className="text-xs">Escalation %<FieldHelp tip="Annual rate increase applied to each line item. Set to 0 for no change. The escalated rate is rounded to the nearest ₹10." /></Label>
                 <Input
                   type="number"
                   min={0}
@@ -207,7 +258,7 @@ export function ContractRenewalDialog({
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Renewal Terms</p>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <Label className="text-xs" htmlFor="renewal-tenure">Tenure (months)</Label>
+                <Label className="text-xs" htmlFor="renewal-tenure">Tenure (months)<FieldHelp tip="Duration of the renewal contract. Can be shorter or longer than the current contract." /></Label>
                 <Input
                   id="renewal-tenure"
                   type="number"
@@ -219,7 +270,7 @@ export function ContractRenewalDialog({
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs" htmlFor="renewal-seats">Seats</Label>
+                <Label className="text-xs" htmlFor="renewal-seats">Seats<FieldHelp tip="Number of seats in the renewal. Changing seats may affect the security deposit requirement." /></Label>
                 <Input
                   id="renewal-seats"
                   type="number"
@@ -231,7 +282,7 @@ export function ContractRenewalDialog({
                 />
               </div>
               <div className="space-y-1">
-                <Label className="text-xs" htmlFor="renewal-billing">Billing Cycle</Label>
+                <Label className="text-xs" htmlFor="renewal-billing">Billing Cycle<FieldHelp tip="How often invoices are generated. Changing the cycle does not change the total monthly rate." /></Label>
                 <Select value={billingCycle} onValueChange={setBillingCycle}>
                   <SelectTrigger className="h-9"><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -242,7 +293,7 @@ export function ContractRenewalDialog({
                 </Select>
               </div>
               <div className="space-y-1">
-                <Label className="text-xs" htmlFor="renewal-start">Start Date</Label>
+                <Label className="text-xs" htmlFor="renewal-start">Start Date<FieldHelp tip="Defaults to the day after the current contract ends. Changing this may create a gap — the member won't have an active contract during the gap." /></Label>
                 <Input
                   id="renewal-start"
                   type="date"
@@ -319,6 +370,7 @@ export function ContractRenewalDialog({
             )}
           </Button>
         </DialogFooter>
+        </TooltipProvider>
       </DialogContent>
     </Dialog>
   );

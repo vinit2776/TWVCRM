@@ -41,7 +41,7 @@ export async function POST(
     return NextResponse.json({ error: "Contract not found" }, { status: 404 });
   }
 
-  if (!["active", "expired"].includes(source.status)) {
+  if (!["active", "expired", "renewal_in_progress"].includes(source.status)) {
     return NextResponse.json({
       error: `Cannot renew a contract with status "${source.status}". Contract must be active or expired.`,
     }, { status: 400 });
@@ -183,10 +183,19 @@ export async function POST(
     return NextResponse.json({ error: insertErr.message }, { status: 500 });
   }
 
-  // 7. Parent stays active/expired — only transitions to "renewed" when
-  //    the renewal draft is activated (see PATCH /api/contracts/[id] hook).
-  //    This ensures that if the draft is deleted or rejected, the parent
-  //    contract isn't stuck in a "renewed" state with nothing to show for it.
+  // 7. Mark parent as "renewal_in_progress" — signals that a renewal
+  //    negotiation is underway, but the parent is still the active contract.
+  //    Transitions to "renewed" only when the renewal draft is activated
+  //    (see PATCH /api/contracts/[id] hook). If the draft is deleted, the
+  //    parent should be restored to "active" (see DELETE handler).
+  try {
+    await admin
+      .from("contracts")
+      .update({ status: "renewal_in_progress" })
+      .eq("id", id);
+  } catch (err) {
+    console.error("[renew] failed to mark parent as renewal_in_progress:", err);
+  }
 
   // 8. Copy approved KYC documents
   const { data: kycDocs } = await admin
