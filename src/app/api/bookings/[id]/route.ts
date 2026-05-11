@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
+import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 
 export const maxDuration = 30;
 
@@ -88,6 +89,47 @@ export async function GET(
     }
   }
 
+  // Resolve quota info for contract-holder bookings (waived = within free quota)
+  let quotaInfo: { monthly_quota: number; used_this_month: number; remaining_after: number } | null = null;
+  if (data.contract_id && data.payment_status === "waived" && data.customer_type === "contract_holder") {
+    const HOUR_UNITS = ["hr", "hrs", "hour", "hours", "h"];
+    const bDate = new Date(data.booking_date + "T00:00:00");
+    const yr = bDate.getFullYear();
+    const mo = bDate.getMonth();
+    const monthStart = new Date(yr, mo, 1).toISOString().split("T")[0];
+    const monthEnd   = new Date(yr, mo + 1, 0).toISOString().split("T")[0];
+
+    const [{ data: facilities }, { data: monthBookings }] = await Promise.all([
+      supabase
+        .from("contract_facilities")
+        .select("free_quota")
+        .eq("contract_id", data.contract_id)
+        .in("unit", HOUR_UNITS)
+        .limit(1),
+      supabase
+        .from("bookings")
+        .select("id, duration_hours")
+        .eq("contract_id", data.contract_id)
+        .gte("booking_date", monthStart)
+        .lte("booking_date", monthEnd)
+        .in("status", ["confirmed", "checked_in", "checked_out"]),
+    ]);
+
+    if (facilities && facilities.length > 0) {
+      const monthlyQuota = Number(facilities[0].free_quota);
+      const usedThisMonth = (monthBookings || []).reduce(
+        (sum: number, b: { id: string; duration_hours: number | null }) =>
+          sum + Number(b.duration_hours || 0),
+        0
+      );
+      quotaInfo = {
+        monthly_quota: monthlyQuota,
+        used_this_month: usedThisMonth,
+        remaining_after: Math.max(0, monthlyQuota - usedThisMonth),
+      };
+    }
+  }
+
   return NextResponse.json({
     data: {
       ...data,
@@ -98,6 +140,7 @@ export async function GET(
       checked_in_by_name: actorMap[data.checked_in_by] || null,
       checked_out_by_name: actorMap[data.checked_out_by] || null,
       cancelled_by_name: actorMap[data.cancelled_by] || null,
+      quota_info: quotaInfo,
     },
   });
 }
@@ -489,45 +532,16 @@ export async function PATCH(
         }
         updates.status = "cancelled";
 
-        // Revoke voucher if walk-in or guest
-        if (booking.customer_type === "walk_in" || booking.customer_type === "guest") {
-          const { data: issuances } = await supabase
-            .from("voucher_issuances")
-            .select("id, voucher_id")
-            .eq("booking_id", id)
-            .eq("is_active", true);
-
-          if (issuances) {
-            for (const iss of issuances) {
-              await supabase.from("voucher_issuances").update({ is_active: false, revoked_at: new Date().toISOString(), revoke_reason: "Booking cancelled" }).eq("id", iss.id);
-              await supabase.from("voucher_repository").update({ status: "revoked" }).eq("id", iss.voucher_id);
-            }
-          }
-        }
-
-        // Waive usage charge if contract holder or guest
-        if (booking.usage_charge_id) {
-          await supabase.from("usage_charges").update({ status: "waived" }).eq("id", booking.usage_charge_id);
-        }
-
-        // Auto-offer to waitlisted customers
-        const { data: waitlistEntries } = await supabase
-          .from("booking_waitlist")
-          .select("id")
-          .eq("space_id", booking.space_id)
-          .eq("booking_date", booking.booking_date)
-          .eq("status", "waiting")
-          .lt("start_time", booking.end_time)
-          .gt("end_time", booking.start_time)
-          .order("created_at", { ascending: true })
-          .limit(1);
-
-        if (waitlistEntries && waitlistEntries.length > 0) {
-          await supabase
-            .from("booking_waitlist")
-            .update({ status: "offered", notified_at: new Date().toISOString(), expires_at: new Date(Date.now() + 2 * 3600000).toISOString() })
-            .eq("id", waitlistEntries[0].id);
-        }
+        // Shared side-effects: voucher revocation, usage charge waiver, waitlist auto-offer
+        await executeBookingCancellationSideEffects(supabase, {
+          bookingId: id,
+          customerType: booking.customer_type,
+          usageChargeId: booking.usage_charge_id,
+          spaceId: booking.space_id,
+          bookingDate: booking.booking_date,
+          startTime: booking.start_time,
+          endTime: booking.end_time,
+        });
         break;
       }
 
@@ -539,6 +553,18 @@ export async function PATCH(
           return NextResponse.json({ error: "Only managers/floor managers can mark no-show" }, { status: 403 });
         }
         updates.status = "no_show";
+
+        // Shared side-effects: voucher revocation + usage charge waiver.
+        // skipWaitlistOffer = true because the time slot is already past.
+        await executeBookingCancellationSideEffects(supabase, {
+          bookingId: id,
+          customerType: booking.customer_type,
+          usageChargeId: booking.usage_charge_id,
+          spaceId: booking.space_id,
+          bookingDate: booking.booking_date,
+          startTime: booking.start_time,
+          endTime: booking.end_time,
+        }, { skipWaitlistOffer: true });
         break;
       }
 
@@ -552,19 +578,24 @@ export async function PATCH(
   // updates to payment_status / payment_mode / payment_reference are
   // blocked to prevent accidental or malicious status manipulation.
 
-  // Refund updates (for no-show exceptions)
-  if (body.refund_status) {
-    updates.refund_status = body.refund_status;
-  }
-  if (body.refund_amount !== undefined) {
-    updates.refund_amount = body.refund_amount;
-  }
-  if (body.refund_reason) {
-    updates.refund_reason = body.refund_reason;
-  }
-  if (body.refund_status === "approved") {
-    updates.refund_approved_by = dbUser.id;
-    updates.refund_approved_at = new Date().toISOString();
+  // Refund updates (for no-show exceptions) — restricted to admin/manager
+  // to prevent unauthorized refund approvals. The no-show refund dialog
+  // already enforces OTP verification before reaching this endpoint.
+  if (body.refund_status || body.refund_amount !== undefined || body.refund_reason) {
+    const canApproveRefund = ["admin", "manager"].includes(dbUser.role);
+    if (!canApproveRefund) {
+      return NextResponse.json(
+        { error: "Only admin or manager can approve refund exceptions" },
+        { status: 403 }
+      );
+    }
+    if (body.refund_status) updates.refund_status = body.refund_status;
+    if (body.refund_amount !== undefined) updates.refund_amount = body.refund_amount;
+    if (body.refund_reason) updates.refund_reason = body.refund_reason;
+    if (body.refund_status === "approved") {
+      updates.refund_approved_by = dbUser.id;
+      updates.refund_approved_at = new Date().toISOString();
+    }
   }
 
   if (Object.keys(updates).length === 0) {

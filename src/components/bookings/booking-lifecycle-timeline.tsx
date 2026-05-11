@@ -254,7 +254,13 @@ export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelinePr
         return `${inr(totalDue)} collected via ${label}`;
       }
       case "prepaid":        return `${inr(totalDue)} settled from prepaid pack`;
-      case "waived":         return `Within free-quota allowance — no charge`;
+      case "waived": {
+        const q = booking.quota_info;
+        if (q) {
+          return `Quota: ${q.used_this_month}hr used of ${q.monthly_quota}hr/mo · ${q.remaining_after}hr remaining`;
+        }
+        return `Within free-quota allowance — no charge`;
+      }
       case "posted_to_bill": return `${inr(totalDue)} will appear on the next monthly invoice`;
       case "pending":
       default:

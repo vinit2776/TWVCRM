@@ -873,6 +873,12 @@ export interface Booking {
   checked_in_by_name?: string | null;
   checked_out_by_name?: string | null;
   cancelled_by_name?: string | null;
+  // Quota info for contract-holder bookings with free quota
+  quota_info?: {
+    monthly_quota: number;
+    used_this_month: number;
+    remaining_after: number;
+  } | null;
 }
 
 export interface BookingFacility {
