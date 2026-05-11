@@ -4,6 +4,8 @@ import { logAudit, diffChanges } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 
+export const maxDuration = 30;
+
 const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile), facilities:booking_facilities(*)";
 
 /**
@@ -73,7 +75,31 @@ export async function GET(
   const staff_feedback = allFeedbacks?.find(f => f.source === "staff") ?? null;
   const customer_feedback = allFeedbacks?.find(f => f.source === "customer") ?? null;
 
-  return NextResponse.json({ data: { ...data, voucher_issuances: vouchers || [], feedback: staff_feedback, customer_feedback } });
+  // Resolve actor names for the lifecycle timeline
+  const actorIds = [data.created_by, data.checked_in_by, data.checked_out_by, data.cancelled_by].filter(Boolean);
+  let actorMap: Record<string, string> = {};
+  if (actorIds.length > 0) {
+    const { data: actors } = await supabase
+      .from("users")
+      .select("id, full_name")
+      .in("id", actorIds);
+    if (actors) {
+      actorMap = Object.fromEntries(actors.map((a: { id: string; full_name: string }) => [a.id, a.full_name]));
+    }
+  }
+
+  return NextResponse.json({
+    data: {
+      ...data,
+      voucher_issuances: vouchers || [],
+      feedback: staff_feedback,
+      customer_feedback,
+      created_by_name: actorMap[data.created_by] || null,
+      checked_in_by_name: actorMap[data.checked_in_by] || null,
+      checked_out_by_name: actorMap[data.checked_out_by] || null,
+      cancelled_by_name: actorMap[data.cancelled_by] || null,
+    },
+  });
 }
 
 export async function PATCH(
@@ -521,16 +547,10 @@ export async function PATCH(
     }
   }
 
-  // Payment updates
-  if (body.payment_status) {
-    updates.payment_status = body.payment_status;
-  }
-  if (body.payment_mode) {
-    updates.payment_mode = body.payment_mode;
-  }
-  if (body.payment_reference) {
-    updates.payment_reference = body.payment_reference;
-  }
+  // Payment status is managed exclusively through the payment recording
+  // workflow (booking_payments table + verified callback). Direct PATCH
+  // updates to payment_status / payment_mode / payment_reference are
+  // blocked to prevent accidental or malicious status manipulation.
 
   // Refund updates (for no-show exceptions)
   if (body.refund_status) {

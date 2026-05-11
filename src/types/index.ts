@@ -864,9 +864,15 @@ export interface Booking {
   created_by?: string;
   created_at: string;
   updated_at: string;
+  cancelled_by?: string;
   facilities?: BookingFacility[];
   feedback?: BookingFeedback | null;          // staff rating (backward compat)
   customer_feedback?: BookingFeedback | null; // customer-submitted via link
+  // Resolved actor names (populated by GET /api/bookings/[id])
+  created_by_name?: string | null;
+  checked_in_by_name?: string | null;
+  checked_out_by_name?: string | null;
+  cancelled_by_name?: string | null;
 }
 
 export interface BookingFacility {

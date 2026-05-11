@@ -146,9 +146,10 @@ interface StepProps {
   badge?: React.ReactNode;
   isLast?: boolean;
   highlight?: boolean; // physical leg styling
+  actorName?: string | null; // who performed this action
 }
 
-function Step({ state, icon, label, timestamp, sublabel, badge, isLast, highlight }: StepProps) {
+function Step({ state, icon, label, timestamp, sublabel, badge, isLast, highlight, actorName }: StepProps) {
   const isPending = state === "pending";
   return (
     <div className="flex items-start gap-0">
@@ -180,6 +181,9 @@ function Step({ state, icon, label, timestamp, sublabel, badge, isLast, highligh
         {timestamp && (
           <p className={`text-xs mt-0.5 ${highlight ? "text-blue-600" : "text-muted-foreground"}`}>
             {timestamp}
+            {actorName && (
+              <span className="text-muted-foreground font-normal"> · by {actorName}</span>
+            )}
           </p>
         )}
         {sublabel && (
@@ -363,6 +367,7 @@ export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelinePr
         label="Booked"
         timestamp={formatTs(booking.created_at)}
         sublabel={`${formatTime12(booking.start_time)} – ${formatTime12(booking.end_time)} · ${Number(booking.duration_hours)}h slot`}
+        actorName={booking.created_by_name}
       />
 
       {/* Step 1.5: Payment — surfaces "where is the money" in plain
@@ -431,6 +436,7 @@ export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelinePr
           }
           badge={checkInDeltaLabel}
           highlight={physicalLegActive && step3State !== "no_show"}
+          actorName={booking.check_in_at ? booking.checked_in_by_name : undefined}
         />
       )}
 
@@ -441,6 +447,7 @@ export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelinePr
           icon={<XCircle className="h-3.5 w-3.5" />}
           label="Cancelled"
           timestamp={formatTs(booking.updated_at)}
+          actorName={booking.cancelled_by_name}
           isLast
         />
       )}
@@ -461,6 +468,7 @@ export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelinePr
           sublabel={actualDurationLabel || undefined}
           badge={checkOutDeltaLabel}
           highlight={physicalLegActive}
+          actorName={booking.check_out_at ? booking.checked_out_by_name : undefined}
           isLast
         />
       )}
