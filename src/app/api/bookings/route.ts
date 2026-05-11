@@ -774,41 +774,21 @@ export async function POST(request: NextRequest) {
     })());
   }
 
-  // 6b. Prepaid redemption (internal sequential: fetch → update → insert)
+  // 6b. Prepaid redemption — atomic RPC prevents double-spend
   if (prepaidPurchaseId && prepaidCreditsUsed) {
     postInsertTasks.push((async () => {
-      const { data: freshPurchase } = await supabase
-        .from("prepaid_purchases")
-        .select("credits_used, total_credits")
-        .eq("id", prepaidPurchaseId)
-        .single();
+      const { data: rpcResult, error: rpcError } = await supabase.rpc("redeem_prepaid_credits", {
+        p_purchase_id: prepaidPurchaseId,
+        p_booking_id: booking.id,
+        p_credits_to_deduct: prepaidCreditsUsed,
+        p_redeemed_by: dbUser.id,
+      });
 
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const updateAndInsert: PromiseLike<any>[] = [];
-
-      if (freshPurchase) {
-        const newCreditsUsed = parseFloat(
-          (Number(freshPurchase.credits_used) + prepaidCreditsUsed).toFixed(2)
-        );
-        const isExhausted = newCreditsUsed >= Number(freshPurchase.total_credits);
-        updateAndInsert.push(
-          supabase.from("prepaid_purchases").update({
-            credits_used: newCreditsUsed,
-            ...(isExhausted ? { status: "exhausted" } : {}),
-          }).eq("id", prepaidPurchaseId)
-        );
+      if (rpcError) {
+        console.error("[booking] prepaid redemption RPC error:", rpcError);
+      } else if (rpcResult && rpcResult.length > 0 && !rpcResult[0].success) {
+        console.error("[booking] prepaid redemption failed — insufficient credits or purchase not found");
       }
-
-      updateAndInsert.push(
-        supabase.from("prepaid_redemptions").insert({
-          purchase_id: prepaidPurchaseId,
-          booking_id: booking.id,
-          credits_deducted: prepaidCreditsUsed,
-          redeemed_by: dbUser.id,
-        })
-      );
-
-      await Promise.all(updateAndInsert);
     })());
   }
 

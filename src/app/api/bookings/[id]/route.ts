@@ -596,25 +596,9 @@ export async function PATCH(
   // updates to payment_status / payment_mode / payment_reference are
   // blocked to prevent accidental or malicious status manipulation.
 
-  // Refund updates (for no-show exceptions) — restricted to admin/manager
-  // to prevent unauthorized refund approvals. The no-show refund dialog
-  // already enforces OTP verification before reaching this endpoint.
-  if (body.refund_status || body.refund_amount !== undefined || body.refund_reason) {
-    const canApproveRefund = ["admin", "manager"].includes(dbUser.role);
-    if (!canApproveRefund) {
-      return NextResponse.json(
-        { error: "Only admin or manager can approve refund exceptions" },
-        { status: 403 }
-      );
-    }
-    if (body.refund_status) updates.refund_status = body.refund_status;
-    if (body.refund_amount !== undefined) updates.refund_amount = body.refund_amount;
-    if (body.refund_reason) updates.refund_reason = body.refund_reason;
-    if (body.refund_status === "approved") {
-      updates.refund_approved_by = dbUser.id;
-      updates.refund_approved_at = new Date().toISOString();
-    }
-  }
+  // Refund fields (refund_status, refund_amount, refund_reason) are no
+  // longer accepted via direct PATCH. All refund workflows now go through
+  // the refund_requests pipeline (POST /api/refund-requests → approve/reject).
 
   if (Object.keys(updates).length === 0) {
     return NextResponse.json({ error: "No valid updates provided" }, { status: 400 });
@@ -734,17 +718,6 @@ export async function PATCH(
 </div>`,
       }).catch((e: unknown) => console.error("[checkout] feedback email failed:", e));
     }
-  }
-
-  // Log refund approval activity
-  if (booking.lead_id && body.refund_status === "approved") {
-    await supabase.from("activities").insert({
-      lead_id: booking.lead_id,
-      type: "note",
-      subject: `Refund Exception Approved — ${booking.booking_number}`,
-      description: `Refund of ₹${body.refund_amount} approved for booking #${booking.booking_number}. Reason: ${body.refund_reason}`,
-      created_by: dbUser.id,
-    });
   }
 
   return NextResponse.json({ data: updated, overtime: overtimeInfo });

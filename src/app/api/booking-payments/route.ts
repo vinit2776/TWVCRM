@@ -63,37 +63,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid payment mode" }, { status: 400 });
   }
 
-  // Fetch the booking. We compare against the GST-inclusive total because
-  // that's the figure shown in the CollectPaymentDialog and on every
-  // customer-facing receipt — using ex-GST total here meant a customer
-  // handing over ₹354 (the displayed total) was rejected with
-  // "Balance: ₹300" because the server only saw the ex-GST amount.
-  const { data: booking } = await supabase
-    .from("bookings")
-    .select("id, total_amount, total_amount_with_gst, payment_status, customer_type")
-    .eq("id", booking_id)
-    .single();
-
-  if (!booking) return NextResponse.json({ error: "Booking not found" }, { status: 404 });
-
-  // Compute existing verified total
-  const { data: existingPayments } = await supabase
-    .from("booking_payments")
-    .select("amount")
-    .eq("booking_id", booking_id)
-    .eq("status", "verified");
-
-  const paidSoFar = (existingPayments || []).reduce((sum, p) => sum + Number(p.amount), 0);
-  const grandTotal = Number(booking.total_amount_with_gst || booking.total_amount);
-  const balanceDue = grandTotal - paidSoFar;
-
-  if (amount > balanceDue + 0.01) { // small epsilon for floating point
-    return NextResponse.json({
-      error: `Amount exceeds balance due. Balance: ₹${balanceDue.toFixed(2)}`,
-      balance_due: balanceDue,
-    }, { status: 400 });
-  }
-
   // Determine initial status:
   //   • cash / card  → verified (cash physically collected; card already cleared)
   //   • upi          → pending UNLESS verify_on_create is set (staff attesting via uploaded proof)
@@ -104,43 +73,48 @@ export async function POST(request: NextRequest) {
       ? "verified"
       : "pending";
 
-  // Build payment record with cash handover tracking
-  const paymentRecord: Record<string, unknown> = {
-    booking_id,
-    amount,
-    payment_mode,
-    payment_reference: payment_reference?.trim() || null,
-    status,
-    created_by: dbUser.id,
-  };
+  // Atomic RPC: locks the booking row, verifies balance, and inserts the
+  // payment in one transaction — prevents the race where two concurrent
+  // submissions both read the same paidSoFar and both pass the balance check.
+  const { data: rpcResult, error: rpcError } = await supabase.rpc("insert_booking_payment_atomic", {
+    p_booking_id: booking_id,
+    p_amount: amount,
+    p_payment_mode: payment_mode,
+    p_payment_reference: payment_reference?.trim() || null,
+    p_status: status,
+    p_created_by: dbUser.id,
+    p_cash_handover_status: payment_mode === "cash" ? "pending_handover" : null,
+    p_collected_by: payment_mode === "cash" ? dbUser.id : null,
+    p_collected_at: payment_mode === "cash" ? new Date().toISOString() : null,
+    p_screenshot_verified: (payment_mode === "upi" && verifyOnCreate) ? true : null,
+    p_verification_notes: (payment_mode === "upi" && verifyOnCreate)
+      ? `Verified at counter by ${dbUser.id} against uploaded payment confirmation`
+      : null,
+  });
 
-  // Cash handover tracking
-  if (payment_mode === "cash") {
-    paymentRecord.cash_handover_status = "pending_handover";
-    paymentRecord.collected_by = dbUser.id;
-    paymentRecord.collected_at = new Date().toISOString();
+  if (rpcError) return NextResponse.json({ error: rpcError.message }, { status: 500 });
+
+  // RPC returns a JSONB object; check for balance error
+  if (rpcResult?.error) {
+    return NextResponse.json({
+      error: rpcResult.error,
+      balance_due: rpcResult.balance_due,
+    }, { status: 400 });
   }
 
-  // Audit trail for the verify-on-create attestation. We use the existing
-  // screenshot_verified + verification_notes columns rather than adding new
-  // ones; the audit_log row also captures who attested when.
-  if (payment_mode === "upi" && verifyOnCreate) {
-    paymentRecord.screenshot_verified = true;
-    paymentRecord.verification_notes = `Verified at counter by ${dbUser.id} against uploaded payment confirmation`;
-  }
-
+  // Re-fetch the payment with all joined relations for the response
   const { data: payment, error } = await supabase
     .from("booking_payments")
-    .insert(paymentRecord)
     .select(PAYMENT_SELECT)
+    .eq("id", rpcResult.payment.id)
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   // If this payment was auto-verified, check if booking is fully paid
-  // (compared against the same GST-inclusive total used above).
   if (status === "verified") {
-    const newTotal = paidSoFar + amount;
+    const newTotal = Number(rpcResult.new_total);
+    const grandTotal = Number(rpcResult.grand_total);
     if (newTotal >= grandTotal) {
       await supabase
         .from("bookings")
