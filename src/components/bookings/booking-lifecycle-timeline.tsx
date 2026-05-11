@@ -414,6 +414,7 @@ export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelinePr
         }
         sublabel={paymentSublabel}
         highlight={paymentState === "active"}
+        actorName={booking.payment_status === "waived" ? booking.created_by_name : undefined}
       />
 
       {/* Step 2: Session Scheduled */}
