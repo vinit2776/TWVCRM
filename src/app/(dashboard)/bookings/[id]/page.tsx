@@ -9,7 +9,7 @@ import {
   Phone, AlertTriangle, ShieldCheck, Star,
   Banknote, CheckCircle, Calendar, Timer, Copy, Coins, Gift,
   Link2, Download, MessageCircle, Repeat, RotateCcw,
-  StickyNote, Receipt, Pencil, Check, X, Plus,
+  StickyNote, Receipt, Pencil, Check, X, Plus, Share2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -382,6 +382,58 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     if (!booking?.feedback_token) { toast.error("No feedback token"); return; }
     const url = `${window.location.origin}/feedback/${booking.feedback_token}`;
     navigator.clipboard.writeText(url).then(() => toast.success("Feedback link copied")).catch(() => toast.error("Failed to copy"));
+  };
+
+  const handleCopyBookingDetails = () => {
+    if (!booking) return;
+    const customerName = booking.lead
+      ? `${booking.lead.first_name} ${booking.lead.last_name}`
+      : booking.guest_name || "Guest";
+    const customerPhone = booking.booker_phone || booking.guest_phone || booking.lead?.phone || booking.lead?.mobile || "";
+    const company = booking.lead?.company || booking.guest_company || "";
+
+    const lines: string[] = [
+      `Booking Confirmation - ${booking.booking_number}`,
+      ``,
+      `Date: ${formatDate(booking.booking_date)}`,
+      `Time: ${formatTime12(booking.start_time)} - ${formatTime12(booking.end_time)} (${booking.duration_hours}h)`,
+      `Space: ${booking.space?.name || "—"}`,
+      `Location: ${booking.location?.name || "—"}`,
+    ];
+    if (booking.location?.address) {
+      lines.push(`Address: ${booking.location.address}${booking.location.city ? `, ${booking.location.city}` : ""}`);
+    }
+
+    lines.push(``);
+    lines.push(`Customer: ${customerName}`);
+    if (company) lines.push(`Company: ${company}`);
+    if (customerPhone) lines.push(`Phone: ${customerPhone}`);
+    if (booking.lead?.email || booking.guest_email) lines.push(`Email: ${booking.lead?.email || booking.guest_email}`);
+
+    lines.push(``);
+    lines.push(`Amount: ${formatCurrency(booking.total_amount)}${booking.gst_amount ? ` + ${formatCurrency(booking.gst_amount)} GST = ${formatCurrency(booking.total_amount_with_gst || booking.total_amount + booking.gst_amount)}` : ""}`);
+    lines.push(`Payment: ${BOOKING_PAYMENT_STATUS_LABELS[booking.payment_status]}`);
+    lines.push(`Status: ${BOOKING_STATUS_LABELS[booking.status]}`);
+
+    if (booking.facilities && booking.facilities.length > 0) {
+      lines.push(``);
+      lines.push(`Add-ons: ${booking.facilities.map(f => f.facility_name).join(", ")}`);
+    }
+
+    lines.push(``);
+    lines.push(`Booking Type: ${BOOKING_CUSTOMER_TYPE_LABELS[booking.customer_type]}`);
+    if (booking.contract?.contract_number) {
+      lines.push(`Agreement: ${booking.contract.contract_number}`);
+    }
+    if (booking.notes) {
+      lines.push(`Notes: ${booking.notes}`);
+    }
+
+    navigator.clipboard.writeText(lines.join("\n")).then(() => {
+      toast.success("Booking details copied to clipboard");
+    }).catch(() => {
+      toast.error("Failed to copy details");
+    });
   };
 
   const handleSendFeedbackLink = async () => {
@@ -838,6 +890,9 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               <ShieldCheck className="mr-1 h-4 w-4" />Request Overtime Waiver
             </Button>
           )}
+          <Button variant="outline" size="sm" onClick={handleCopyBookingDetails}>
+            <Share2 className="mr-1 h-4 w-4" />Copy Details
+          </Button>
           {actionLoading && <Loader2 className="h-4 w-4 animate-spin self-center" />}
         </div>
         </NextActionTarget>

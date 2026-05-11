@@ -34,6 +34,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 
 type CancellationReason =
   | "customer_requested" | "no_show" | "overbooking_error"
@@ -165,46 +166,17 @@ export async function POST(
     );
   }
 
-  // ── 3. Side effects (mirror legacy cancel path) ─────────────────
-  // (a) Revoke walk-in/guest WiFi vouchers
-  if (booking.customer_type === "walk_in" || booking.customer_type === "guest") {
-    const { data: issuances } = await supabase
-      .from("voucher_issuances")
-      .select("id, voucher_id")
-      .eq("booking_id", id)
-      .eq("is_active", true);
-    if (issuances) {
-      for (const iss of issuances) {
-        await supabase
-          .from("voucher_issuances")
-          .update({
-            is_active: false,
-            revoked_at: new Date().toISOString(),
-            revoke_reason: "Booking cancelled",
-          })
-          .eq("id", iss.id);
-        await supabase
-          .from("voucher_repository")
-          .update({ status: "revoked" })
-          .eq("id", iss.voucher_id);
-      }
-    }
-  }
-
-  // (b) Waive linked usage_charge (contract / guest)
-  if (booking.usage_charge_id) {
-    await supabase
-      .from("usage_charges")
-      .update({ status: "waived" })
-      .eq("id", booking.usage_charge_id);
-  }
-
-  // (c) Offer slot to waitlist (not blocking — fire and forget)
-  // The waitlist auto-offer flow is implemented elsewhere; we trigger
-  // a no-op update on the booking_waitlist for this slot so the
-  // existing trigger fires. Keeping this hands-off to avoid tight
-  // coupling — if waitlist needs richer signal later, add a dedicated
-  // RPC.
+  // ── 3. Side effects (shared with PATCH cancel + no-show paths) ──
+  // Voucher revocation, usage charge waiver, and waitlist auto-offer.
+  await executeBookingCancellationSideEffects(supabase, {
+    bookingId: id,
+    customerType: booking.customer_type,
+    usageChargeId: booking.usage_charge_id,
+    spaceId: booking.space_id,
+    bookingDate: booking.booking_date,
+    startTime: booking.start_time,
+    endTime: booking.end_time,
+  });
 
   // ── 4. Optional lead caution ────────────────────────────────────
   // Auto-create a danger caution when reason = suspected_fake_booking

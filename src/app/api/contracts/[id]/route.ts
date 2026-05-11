@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
+import { CONTRACT_STATUS_TRANSITIONS } from "@/lib/constants";
 import { generateMonthlyStatements } from "@/lib/billing";
 
 export async function GET(
@@ -96,6 +97,14 @@ export async function PATCH(
   }
   // Handle special status transitions
   if (body.status && body.status !== oldContract.status) {
+    // Validate transition is allowed
+    const allowed = CONTRACT_STATUS_TRANSITIONS[oldContract.status];
+    if (!allowed || !allowed.includes(body.status)) {
+      return NextResponse.json({
+        error: `Cannot move contract from "${oldContract.status}" to "${body.status}". Allowed transitions: ${(allowed || []).join(", ") || "none (terminal status)"}`,
+      }, { status: 400 });
+    }
+
     const now = new Date().toISOString();
     if (body.status === "sent") {
       allowedFields.sent_at = body.sent_at || now;

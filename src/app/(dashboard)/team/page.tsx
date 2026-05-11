@@ -23,6 +23,8 @@ import {
   Minus,
   BellRing,
   BellOff,
+  Copy,
+  CheckCheck,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -269,6 +271,10 @@ export default function TeamPage() {
   });
   const [creating, setCreating] = useState(false);
   const [showCreatePassword, setShowCreatePassword] = useState(false);
+  const [createdCredentials, setCreatedCredentials] = useState<{
+    name: string; email: string; password: string; role: string;
+  } | null>(null);
+  const [copiedCreate, setCopiedCreate] = useState(false);
 
   // Change password dialog state
   const [passwordOpen, setPasswordOpen] = useState(false);
@@ -276,6 +282,9 @@ export default function TeamPage() {
   const [newPassword, setNewPassword] = useState("");
   const [changingPassword, setChangingPassword] = useState(false);
   const [showNewPassword, setShowNewPassword] = useState(false);
+  const [passwordChanged, setPasswordChanged] = useState(false);
+  const [changedPasswordValue, setChangedPasswordValue] = useState("");
+  const [copiedPassword, setCopiedPassword] = useState(false);
 
   // Edit user dialog state
   const [editOpen, setEditOpen] = useState(false);
@@ -346,20 +355,88 @@ export default function TeamPage() {
     setCreating(false);
     if (res.ok) {
       toast.success("Team member created successfully");
-      setCreateOpen(false);
-      setCreateForm({
-        full_name: "",
-        email: "",
-        password: "",
-        role: "sales_rep",
-        phone: "",
+      // Show credential sharing view instead of closing
+      setCreatedCredentials({
+        name: createForm.full_name,
+        email: createForm.email,
+        password: createForm.password,
+        role: USER_ROLE_LABELS[createForm.role] || createForm.role,
       });
-      setShowCreatePassword(false);
+      setCopiedCreate(false);
       fetchUsers();
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || "Failed to create user");
     }
+  };
+
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app";
+
+  const buildCreateCredentialMessage = () => {
+    if (!createdCredentials) return "";
+    return [
+      `Welcome to TheWorkVilla CRM!`,
+      ``,
+      `Hi ${createdCredentials.name},`,
+      ``,
+      `Your login credentials:`,
+      `URL: ${appUrl}/login`,
+      `Email: ${createdCredentials.email}`,
+      `Password: ${createdCredentials.password}`,
+      `Role: ${createdCredentials.role}`,
+      ``,
+      `Please change your password after your first login.`,
+    ].join("\n");
+  };
+
+  const handleCopyCreateCredentials = async () => {
+    const msg = buildCreateCredentialMessage();
+    await navigator.clipboard.writeText(msg);
+    setCopiedCreate(true);
+    toast.success("Credentials copied to clipboard");
+    setTimeout(() => setCopiedCreate(false), 2000);
+  };
+
+  const closeCreateDialog = () => {
+    setCreateOpen(false);
+    setCreatedCredentials(null);
+    setCopiedCreate(false);
+    setCreateForm({ full_name: "", email: "", password: "", role: "sales_rep", phone: "" });
+    setShowCreatePassword(false);
+  };
+
+  const buildPasswordCredentialMessage = () => {
+    if (!passwordTarget) return "";
+    return [
+      `TheWorkVilla CRM - Password Updated`,
+      ``,
+      `Hi ${passwordTarget.full_name},`,
+      ``,
+      `Your password has been updated:`,
+      `URL: ${appUrl}/login`,
+      `Email: ${passwordTarget.email}`,
+      `New Password: ${changedPasswordValue}`,
+      ``,
+      `Please keep this secure and change it after login.`,
+    ].join("\n");
+  };
+
+  const handleCopyPasswordCredentials = async () => {
+    const msg = buildPasswordCredentialMessage();
+    await navigator.clipboard.writeText(msg);
+    setCopiedPassword(true);
+    toast.success("Credentials copied to clipboard");
+    setTimeout(() => setCopiedPassword(false), 2000);
+  };
+
+  const closePasswordDialog = () => {
+    setPasswordOpen(false);
+    setPasswordTarget(null);
+    setNewPassword("");
+    setChangedPasswordValue("");
+    setPasswordChanged(false);
+    setCopiedPassword(false);
+    setShowNewPassword(false);
   };
 
   // --- Role change ---
@@ -397,6 +474,9 @@ export default function TeamPage() {
     setPasswordTarget(member);
     setNewPassword("");
     setShowNewPassword(false);
+    setPasswordChanged(false);
+    setChangedPasswordValue("");
+    setCopiedPassword(false);
     setPasswordOpen(true);
     setOpenMenuId(null);
   };
@@ -419,9 +499,10 @@ export default function TeamPage() {
     setChangingPassword(false);
     if (res.ok) {
       toast.success("Password changed successfully");
-      setPasswordOpen(false);
-      setPasswordTarget(null);
-      setNewPassword("");
+      // Show credential sharing view instead of closing
+      setChangedPasswordValue(newPassword);
+      setPasswordChanged(true);
+      setCopiedPassword(false);
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || "Failed to change password");
@@ -784,181 +865,254 @@ export default function TeamPage() {
       )}
 
       {/* ── Create User Dialog ── */}
-      <Dialog open={createOpen} onOpenChange={setCreateOpen}>
+      <Dialog open={createOpen} onOpenChange={closeCreateDialog}>
         <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Add Team Member</DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleCreateUser} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="create-name">
-                Full Name <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="create-name"
-                value={createForm.full_name}
-                onChange={(e) =>
-                  setCreateForm({ ...createForm, full_name: e.target.value })
-                }
-                placeholder="John Doe"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="create-email">
-                Email <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="create-email"
-                type="email"
-                value={createForm.email}
-                onChange={(e) =>
-                  setCreateForm({ ...createForm, email: e.target.value })
-                }
-                placeholder="john@theworkvilla.com"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="create-password">
-                Password <span className="text-destructive">*</span>
-              </Label>
-              <div className="relative">
-                <Input
-                  id="create-password"
-                  type={showCreatePassword ? "text" : "password"}
-                  value={createForm.password}
-                  onChange={(e) =>
-                    setCreateForm({ ...createForm, password: e.target.value })
-                  }
-                  placeholder="Min 6 characters"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="absolute right-0 top-0 h-full"
-                  onClick={() => setShowCreatePassword(!showCreatePassword)}
-                >
-                  {showCreatePassword ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                </Button>
+          {createdCredentials ? (
+            /* ── Success: share credentials ── */
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <CheckCircle className="h-5 w-5 text-green-600" />
+                  Team Member Created
+                </DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Copy the credentials below and share via WhatsApp or email so
+                  the user can log in.
+                </p>
+                <div className="rounded-lg border bg-muted/50 p-4 text-sm font-mono whitespace-pre-wrap leading-relaxed">
+                  {buildCreateCredentialMessage()}
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={closeCreateDialog}>
+                    Close
+                  </Button>
+                  <Button onClick={handleCopyCreateCredentials}>
+                    {copiedCreate ? (
+                      <CheckCheck className="mr-2 h-4 w-4" />
+                    ) : (
+                      <Copy className="mr-2 h-4 w-4" />
+                    )}
+                    {copiedCreate ? "Copied!" : "Copy Credentials"}
+                  </Button>
+                </div>
               </div>
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="create-phone">
-                Mobile Number <span className="text-destructive">*</span>
-              </Label>
-              <Input
-                id="create-phone"
-                type="tel"
-                value={createForm.phone}
-                onChange={(e) =>
-                  setCreateForm({ ...createForm, phone: e.target.value })
-                }
-                placeholder="+91 98765 43210"
-              />
-            </div>
-            <div className="space-y-2">
-              <Label htmlFor="create-role">Role</Label>
-              <Select
-                value={createForm.role}
-                onValueChange={(val) =>
-                  setCreateForm({ ...createForm, role: val })
-                }
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="admin">Admin</SelectItem>
-                  <SelectItem value="manager">Manager</SelectItem>
-                  <SelectItem value="sales_rep">Sales Rep</SelectItem>
-                  <SelectItem value="floor_manager">Floor Incharge</SelectItem>
-                  <SelectItem value="accounts">Accounts</SelectItem>
-                  <SelectItem value="fms">Facility Manager</SelectItem>
-                  <SelectItem value="office_admin">Office Administrator</SelectItem>
-                  <SelectItem value="it_team">IT Team</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setCreateOpen(false)}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={creating}>
-                {creating && (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                )}
-                Create User
-              </Button>
-            </div>
-          </form>
+            </>
+          ) : (
+            /* ── Form ── */
+            <>
+              <DialogHeader>
+                <DialogTitle>Add Team Member</DialogTitle>
+              </DialogHeader>
+              <form onSubmit={handleCreateUser} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="create-name">
+                    Full Name <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    id="create-name"
+                    value={createForm.full_name}
+                    onChange={(e) =>
+                      setCreateForm({ ...createForm, full_name: e.target.value })
+                    }
+                    placeholder="John Doe"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="create-email">
+                    Email <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    id="create-email"
+                    type="email"
+                    value={createForm.email}
+                    onChange={(e) =>
+                      setCreateForm({ ...createForm, email: e.target.value })
+                    }
+                    placeholder="john@theworkvilla.com"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="create-password">
+                    Password <span className="text-destructive">*</span>
+                  </Label>
+                  <div className="relative">
+                    <Input
+                      id="create-password"
+                      type={showCreatePassword ? "text" : "password"}
+                      value={createForm.password}
+                      onChange={(e) =>
+                        setCreateForm({ ...createForm, password: e.target.value })
+                      }
+                      placeholder="Min 6 characters"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-0 top-0 h-full"
+                      onClick={() => setShowCreatePassword(!showCreatePassword)}
+                    >
+                      {showCreatePassword ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="create-phone">
+                    Mobile Number <span className="text-destructive">*</span>
+                  </Label>
+                  <Input
+                    id="create-phone"
+                    type="tel"
+                    value={createForm.phone}
+                    onChange={(e) =>
+                      setCreateForm({ ...createForm, phone: e.target.value })
+                    }
+                    placeholder="+91 98765 43210"
+                  />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="create-role">Role</Label>
+                  <Select
+                    value={createForm.role}
+                    onValueChange={(val) =>
+                      setCreateForm({ ...createForm, role: val })
+                    }
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="admin">Admin</SelectItem>
+                      <SelectItem value="manager">Manager</SelectItem>
+                      <SelectItem value="sales_rep">Sales Rep</SelectItem>
+                      <SelectItem value="floor_manager">Floor Incharge</SelectItem>
+                      <SelectItem value="accounts">Accounts</SelectItem>
+                      <SelectItem value="fms">Facility Manager</SelectItem>
+                      <SelectItem value="office_admin">Office Administrator</SelectItem>
+                      <SelectItem value="it_team">IT Team</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={closeCreateDialog}
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="submit" disabled={creating}>
+                    {creating && (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    )}
+                    Create User
+                  </Button>
+                </div>
+              </form>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 
       {/* ── Change Password Dialog ── */}
-      <Dialog open={passwordOpen} onOpenChange={setPasswordOpen}>
+      <Dialog open={passwordOpen} onOpenChange={closePasswordDialog}>
         <DialogContent className="max-w-sm">
-          <DialogHeader>
-            <DialogTitle>
-              Change Password
-              {passwordTarget && (
-                <span className="block text-sm font-normal text-muted-foreground mt-1">
-                  for {passwordTarget.full_name}
-                </span>
-              )}
-            </DialogTitle>
-          </DialogHeader>
-          <form onSubmit={handleChangePassword} className="space-y-4">
-            <div className="space-y-2">
-              <Label htmlFor="new-password">
-                New Password <span className="text-destructive">*</span>
-              </Label>
-              <div className="relative">
-                <Input
-                  id="new-password"
-                  type={showNewPassword ? "text" : "password"}
-                  value={newPassword}
-                  onChange={(e) => setNewPassword(e.target.value)}
-                  placeholder="Min 6 characters"
-                />
-                <Button
-                  type="button"
-                  variant="ghost"
-                  size="icon"
-                  className="absolute right-0 top-0 h-full"
-                  onClick={() => setShowNewPassword(!showNewPassword)}
-                >
-                  {showNewPassword ? (
-                    <EyeOff className="h-4 w-4" />
-                  ) : (
-                    <Eye className="h-4 w-4" />
-                  )}
-                </Button>
+          {passwordChanged && passwordTarget ? (
+            /* ── Success: share new password ── */
+            <>
+              <DialogHeader>
+                <DialogTitle className="flex items-center gap-2">
+                  <CheckCircle className="h-5 w-5 text-green-600" />
+                  Password Updated
+                </DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4">
+                <p className="text-sm text-muted-foreground">
+                  Copy the credentials below and share via WhatsApp or email.
+                </p>
+                <div className="rounded-lg border bg-muted/50 p-4 text-sm font-mono whitespace-pre-wrap leading-relaxed">
+                  {buildPasswordCredentialMessage()}
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" onClick={closePasswordDialog}>
+                    Close
+                  </Button>
+                  <Button onClick={handleCopyPasswordCredentials}>
+                    {copiedPassword ? (
+                      <CheckCheck className="mr-2 h-4 w-4" />
+                    ) : (
+                      <Copy className="mr-2 h-4 w-4" />
+                    )}
+                    {copiedPassword ? "Copied!" : "Copy Credentials"}
+                  </Button>
+                </div>
               </div>
-            </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => setPasswordOpen(false)}
-              >
-                Cancel
-              </Button>
-              <Button type="submit" disabled={changingPassword}>
-                {changingPassword && (
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                )}
-                Update Password
-              </Button>
-            </div>
-          </form>
+            </>
+          ) : (
+            /* ── Form ── */
+            <>
+              <DialogHeader>
+                <DialogTitle>
+                  Change Password
+                  {passwordTarget && (
+                    <span className="block text-sm font-normal text-muted-foreground mt-1">
+                      for {passwordTarget.full_name}
+                    </span>
+                  )}
+                </DialogTitle>
+              </DialogHeader>
+              <form onSubmit={handleChangePassword} className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="new-password">
+                    New Password <span className="text-destructive">*</span>
+                  </Label>
+                  <div className="relative">
+                    <Input
+                      id="new-password"
+                      type={showNewPassword ? "text" : "password"}
+                      value={newPassword}
+                      onChange={(e) => setNewPassword(e.target.value)}
+                      placeholder="Min 6 characters"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="icon"
+                      className="absolute right-0 top-0 h-full"
+                      onClick={() => setShowNewPassword(!showNewPassword)}
+                    >
+                      {showNewPassword ? (
+                        <EyeOff className="h-4 w-4" />
+                      ) : (
+                        <Eye className="h-4 w-4" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex justify-end gap-2 pt-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={closePasswordDialog}
+                  >
+                    Cancel
+                  </Button>
+                  <Button type="submit" disabled={changingPassword}>
+                    {changingPassword && (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    )}
+                    Update Password
+                  </Button>
+                </div>
+              </form>
+            </>
+          )}
         </DialogContent>
       </Dialog>
 

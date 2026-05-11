@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { createUsageChargeSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 
+const CHARGE_ALLOWED_ROLES = ["admin", "manager", "accounts"];
+
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -56,7 +58,14 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Validation failed", details: result.error.issues }, { status: 400 });
   }
 
-  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+
+  if (!dbUser || !CHARGE_ALLOWED_ROLES.includes(dbUser.role)) {
+    return NextResponse.json(
+      { error: "Only admin, manager, or accounts can create usage charges" },
+      { status: 403 }
+    );
+  }
 
   let leadId: string | null = null;
 

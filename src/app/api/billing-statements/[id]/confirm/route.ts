@@ -81,11 +81,13 @@ export async function POST(
   const seqNum = (existingCount || 0) + 1;
   const invoiceNumber = `${fyPrefix}${String(seqNum).padStart(4, "0")}`;
 
-  // 2. Recalculate totals from linked charges
+  // 2. Recalculate totals from linked charges (all four charge systems)
   const usageCharges = (statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number }[];
   const usageAmount = usageCharges.reduce((s, c) => s + Number(c.total || 0), 0);
   const fixedAmount = Number(statement.fixed_amount || 0);
-  const subtotal = fixedAmount + usageAmount;
+  const serviceUsageAmount = Number(statement.service_usage_amount || 0);
+  const bookingUsageAmount = Number(statement.booking_usage_amount || 0);
+  const subtotal = fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
   const taxPercentage = Number(statement.tax_percentage || 18);
 
   const buyerState = (lead?.state || "").toLowerCase().trim();
@@ -182,29 +184,61 @@ export async function POST(
     console.error("[billing confirm] Razorpay link creation failed:", err);
   }
 
-  // 5. Build line items for PDF
+  // 5. Build line items for PDF from structured line_items JSONB (or legacy fallback)
   const lineItems: GstInvoiceData["lineItems"] = [];
+  const structuredSections = (statement.line_items || []) as Array<{ type: string; label: string; items: Record<string, unknown>[]; subtotal: number }>;
 
-  // Fixed amount (workspace fee)
-  if (fixedAmount > 0) {
-    lineItems.push({
-      description: contract.title || `Workspace — ${contract.contract_number}`,
-      hsnSac: "997212",
-      qty: 1,
-      rate: fixedAmount,
-      amount: fixedAmount,
-    });
-  }
+  if (structuredSections.length > 0) {
+    // New structured format — render each section's items
+    for (const section of structuredSections) {
+      // Add section header as a description-only row
+      for (const item of section.items) {
+        const desc = item.description || item.booking_number || item.service_id || section.label;
+        let detailParts: string[] = [];
 
-  // Usage charges
-  for (const charge of usageCharges) {
-    lineItems.push({
-      description: charge.description,
-      hsnSac: "997212",
-      qty: Number(charge.quantity || 1),
-      rate: Number(charge.unit_price),
-      amount: Number(charge.total),
-    });
+        if (section.type === "booking_usage" && item.date) {
+          detailParts = [
+            String(item.date),
+            item.space ? String(item.space) : "",
+            item.time ? String(item.time) : "",
+            item.duration ? String(item.duration) : "",
+            item.note ? `(${item.note})` : "",
+          ].filter(Boolean);
+        }
+
+        const label = section.type === "booking_usage"
+          ? detailParts.join(" · ")
+          : String(desc);
+
+        lineItems.push({
+          description: label || section.label,
+          hsnSac: "997212",
+          qty: Number(item.quantity || item.billable || 1),
+          rate: Number(item.unit_price || item.rate || item.amount || 0),
+          amount: Number(item.amount || 0),
+        });
+      }
+    }
+  } else {
+    // Legacy fallback — fixed amount + usage charges only
+    if (fixedAmount > 0) {
+      lineItems.push({
+        description: contract.title || `Workspace — ${contract.contract_number}`,
+        hsnSac: "997212",
+        qty: 1,
+        rate: fixedAmount,
+        amount: fixedAmount,
+      });
+    }
+    for (const charge of usageCharges) {
+      lineItems.push({
+        description: charge.description,
+        hsnSac: "997212",
+        qty: Number(charge.quantity || 1),
+        rate: Number(charge.unit_price),
+        amount: Number(charge.total),
+      });
+    }
   }
 
   // 6. Generate GST invoice PDF

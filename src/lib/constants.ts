@@ -256,6 +256,24 @@ export const CONTRACT_STATUS_COLORS: Record<string, string> = {
   terminated: "bg-red-100 text-red-800",
 };
 
+// Valid status transitions for the contract state machine.
+// Mirrors the CASE_STATUS_TRANSITIONS pattern. Used by the PATCH
+// handler to prevent invalid jumps (e.g. terminated → active).
+// The renew endpoint sets renewal_in_progress directly (not via PATCH),
+// so active→renewal_in_progress is allowed but guarded by the renew API.
+export const CONTRACT_STATUS_TRANSITIONS: Record<string, string[]> = {
+  draft:                 ["sent", "active", "terminated"],
+  sent:                  ["viewed", "accepted", "rejected", "draft"],
+  viewed:                ["accepted", "rejected", "sent"],
+  accepted:              ["active", "rejected", "draft"],
+  rejected:              ["draft"],
+  active:                ["renewal_in_progress", "expired", "terminated"],
+  renewal_in_progress:   ["renewed", "active", "terminated"],
+  renewed:               [],           // terminal — source contract
+  expired:               ["renewal_in_progress", "terminated"],
+  terminated:            [],           // terminal
+};
+
 export const BILLING_CYCLES = [
   "monthly",
   "quarterly",

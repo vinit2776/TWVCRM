@@ -47,7 +47,11 @@ import { LeadContractsTab } from "@/components/leads/lead-contracts-tab";
 import { LeadDocumentsTab } from "@/components/leads/lead-documents-tab";
 import { LeadCreditsCard } from "@/components/leads/lead-credits-card";
 import { LeadCautionsBanner } from "@/components/leads/lead-cautions-banner";
-import { LeadBillingSnippet } from "@/components/leads/lead-billing-snippet";
+import dynamic from "next/dynamic";
+const LeadBillingSnippet = dynamic(
+  () => import("@/components/leads/lead-billing-snippet").then((m) => m.LeadBillingSnippet),
+  { ssr: false }
+);
 import { LeadTasksTab } from "@/components/leads/lead-tasks-tab";
 import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
 import { LeadLifecycle } from "@/components/leads/lead-lifecycle";

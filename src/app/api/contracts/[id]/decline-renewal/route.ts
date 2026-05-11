@@ -24,6 +24,14 @@ export async function POST(
     .from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
+  // Role gate: only admin, manager, floor_manager can decline renewals
+  const allowedRoles = ["admin", "manager", "floor_manager"];
+  if (!allowedRoles.includes(dbUser.role)) {
+    return NextResponse.json({
+      error: "You do not have permission to decline contract renewals. Contact your manager or admin.",
+    }, { status: 403 });
+  }
+
   const body = await request.json();
   const reason = (body.reason || "").trim();
   if (!reason) {

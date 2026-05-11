@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
 
+export const maxDuration = 30;
+
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -79,11 +81,85 @@ export async function GET(
     });
   }
 
+  // Fetch service usage records for this statement (if any linked)
+  let serviceCharges: Array<{
+    id: string;
+    service_name: string;
+    quantity_used: number;
+    quota: number;
+    overage: number;
+    rate: number;
+    amount: number;
+  }> = [];
+
+  if (statement.contract_id) {
+    const periodStart = new Date(statement.period_start);
+    const pYear = periodStart.getFullYear();
+    const pMonth = periodStart.getMonth() + 1;
+
+    const { data: svcRecords } = await supabase
+      .from("service_usage_records")
+      .select(`
+        id, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount,
+        service:service_catalog!service_usage_records_service_id_fkey(name)
+      `)
+      .eq("contract_id", statement.contract_id)
+      .eq("period_year", pYear)
+      .eq("period_month", pMonth)
+      .eq("billing_statement_id", id);
+
+    serviceCharges = (svcRecords || []).map((r) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const svc = r.service as any;
+      return {
+        id: r.id as string,
+        service_name: (Array.isArray(svc) ? svc[0]?.name : svc?.name) || "Service",
+        quantity_used: Number(r.quantity_used || 0),
+        quota: Number(r.quota_snapshot || 0),
+        overage: Number(r.overage_quantity || 0),
+        rate: Number(r.overage_rate_snapshot || 0),
+        amount: Number(r.amount || 0),
+      };
+    });
+  }
+
+  // Fetch auto-rolled booking line items (bookings done in this period under the contract)
+  let bookingCharges: Array<{
+    id: string;
+    booking_number: string;
+    date: string;
+    space: string;
+    time: string;
+    duration: string;
+    amount: number;
+    is_free: boolean;
+  }> = [];
+
+  if (statement.contract_id && statement.line_items) {
+    // Pull from line_items JSONB if available (already structured)
+    const sections = statement.line_items as Array<{ type: string; items: Record<string, unknown>[] }>;
+    const bookingSec = sections.find((s) => s.type === "booking_usage");
+    if (bookingSec) {
+      bookingCharges = bookingSec.items.map((item) => ({
+        id: String(item.booking_id || ""),
+        booking_number: String(item.booking_number || ""),
+        date: String(item.date || ""),
+        space: String(item.space || ""),
+        time: String(item.time || ""),
+        duration: String(item.duration || ""),
+        amount: Number(item.amount || 0),
+        is_free: item.note === "Free quota",
+      }));
+    }
+  }
+
   return NextResponse.json({
     data: {
       ...statement,
       usage_charges: usageCharges || [],
       facility_charges: facilityCharges,
+      service_charges: serviceCharges,
+      booking_charges: bookingCharges,
     },
   });
 }

@@ -44,6 +44,7 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
 import { GenerateStatementDialog } from "@/components/billing/generate-statement-dialog";
 import { ViewStatementDialog } from "@/components/billing/view-statement-dialog";
+import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { toast } from "sonner";
 import { MonthPicker } from "@/components/accounting/month-picker";
@@ -137,6 +138,13 @@ interface BillingStatement {
   total_amount: number;
   status: string;
   notes?: string;
+  // Lifecycle fields
+  emailed_at?: string | null;
+  razorpay_payment_link_url?: string | null;
+  payment_status?: string | null;
+  accounted?: boolean | null;
+  finalized_at?: string | null;
+  gst_invoice_number?: string | null;
 }
 
 interface Pagination {
@@ -1031,7 +1039,7 @@ export default function BillingPage() {
                     <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Fixed</th>
                     <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Usage</th>
                     <th className="px-4 py-3 text-right font-medium">Total</th>
-                    <th className="px-4 py-3 text-left font-medium">Status</th>
+                    <th className="px-4 py-3 text-left font-medium">Lifecycle</th>
                     <th className="px-4 py-3 text-right font-medium">Actions</th>
                   </tr>
                 </thead>
@@ -1054,9 +1062,15 @@ export default function BillingPage() {
                       <td className="px-4 py-3 text-right hidden sm:table-cell">{formatCurrency(stmt.usage_amount)}</td>
                       <td className="px-4 py-3 text-right font-medium">{formatCurrency(stmt.total_amount)}</td>
                       <td className="px-4 py-3">
-                        <Badge variant="secondary" className={STATEMENT_STATUS_COLORS[stmt.status] || ""}>
-                          {STATEMENT_STATUS_LABELS[stmt.status] || stmt.status}
-                        </Badge>
+                        <BillingLifecycleStatus
+                          status={stmt.status}
+                          emailed_at={stmt.emailed_at}
+                          razorpay_payment_link_url={stmt.razorpay_payment_link_url}
+                          payment_status={stmt.payment_status}
+                          accounted={stmt.accounted}
+                          finalized_at={stmt.finalized_at}
+                          gst_invoice_number={stmt.gst_invoice_number}
+                        />
                       </td>
                       <td className="px-4 py-3 text-right">
                         <DropdownMenu>
@@ -1127,6 +1141,7 @@ export default function BillingPage() {
         open={!!viewStatementId}
         onOpenChange={(v) => { if (!v) setViewStatementId(null); }}
         onStatusChange={fetchStatements}
+        userRole={userRole}
       />
 
       <Dialog open={recordPaymentDialogOpen} onOpenChange={setRecordPaymentDialogOpen}>

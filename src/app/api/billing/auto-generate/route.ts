@@ -8,12 +8,34 @@ import { generateMonthlyStatements } from "@/lib/billing";
  * GET — cron-triggered. Generates draft billing statements for all active
  * contracts whose tenure overlaps the target month.
  *
+ * Cron runs daily on 28th–31st at 15:30 UTC (21:00 IST). The handler checks
+ * if today (IST) is actually the last day of the month. If not, it returns
+ * early. This gives us "last day of month at 21:00 IST" semantics despite
+ * standard cron not supporting "last day of month".
+ *
  * Query: ?month=4&year=2026 (defaults to current month IST)
+ *        ?force=1           (skip the last-day guard — for manual backfills)
  */
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const month = searchParams.get("month") ? parseInt(searchParams.get("month")!) : undefined;
   const year = searchParams.get("year") ? parseInt(searchParams.get("year")!) : undefined;
+  const force = searchParams.get("force") === "1";
+
+  // Last-day-of-month guard: cron fires on 28th–31st, but only the actual
+  // last day should generate bills. Skip unless forced or params override.
+  if (!force && !month && !year) {
+    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+    const nowIST = new Date(Date.now() + IST_OFFSET_MS);
+    const todayDate = nowIST.getUTCDate();
+    const daysInThisMonth = new Date(nowIST.getUTCFullYear(), nowIST.getUTCMonth() + 1, 0).getDate();
+
+    if (todayDate !== daysInThisMonth) {
+      return NextResponse.json({
+        skipped_reason: `Not the last day of month (day ${todayDate} of ${daysInThisMonth})`,
+      });
+    }
+  }
 
   const supabase = createAdminClient();
   const result = await generateMonthlyStatements(supabase, { month, year });
@@ -110,7 +132,7 @@ async function notifyDraftBills(
           </div>
           <div style="padding:32px;">
             <p style="color:#333;font-size:14px;"><strong>${result.generated} draft billing statement${result.generated > 1 ? "s" : ""}</strong> have been auto-generated for <strong>${monthLabel}</strong>.</p>
-            <p style="color:#333;font-size:14px;">Please review each draft, add any missing usage charges, then click <strong>"Confirm & Send Invoice"</strong> to finalize and email the GST invoice to the customer.</p>
+            <p style="color:#333;font-size:14px;">Each draft includes prepaid rent for next month and itemized current-month usage (bookings, ad-hoc charges, facility &amp; service usage). Please review, then click <strong>"Confirm & Send Invoice"</strong> to finalize and email the GST invoice.</p>
             ${result.skipped > 0 ? `<p style="color:#666;font-size:13px;">${result.skipped} contract${result.skipped > 1 ? "s" : ""} already had a statement for this period and were skipped.</p>` : ""}
             ${result.errors.length > 0 ? `<p style="color:#e53e3e;font-size:13px;">Errors: ${result.errors.join(", ")}</p>` : ""}
             <div style="text-align:center;margin:24px 0;">
