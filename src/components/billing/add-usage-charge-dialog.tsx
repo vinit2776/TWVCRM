@@ -28,6 +28,7 @@ interface Contract {
   contract_number: string;
   lead?: { first_name: string; last_name: string; company?: string };
   total_amount: number;
+  tax_percentage?: number;
 }
 
 interface Booking {
@@ -87,10 +88,11 @@ export function AddUsageChargeDialog({
   const [description, setDescription] = useState("");
   const [quantity, setQuantity] = useState<number>(1);
   const [unitPrice, setUnitPrice] = useState<number>(0);
-  // GST defaults to the standard 18% — most ad-hoc charges (overtime, F&B,
-  // damage) attract the same rate as the booking. Editable in case a
-  // particular charge is exempt or carries a different slab (12 / 5 / 0).
+  // For contract charges, GST is locked to the contract's tax_percentage so
+  // it always matches the billing statement rate. For booking charges, it
+  // defaults to 18% but is editable (exempt / different slab).
   const [gstRate, setGstRate] = useState<number>(18);
+  const [contractGstLocked, setContractGstLocked] = useState(false);
   const [chargeDate, setChargeDate] = useState(
     defaultChargeDate || new Date().toISOString().split("T")[0]
   );
@@ -185,6 +187,24 @@ export function AddUsageChargeDialog({
     }
   }, [selectedBookingId, bookings]);
 
+  // Lock GST rate to contract's tax_percentage when a contract is selected.
+  // This prevents mismatches where a charge is stored at a different rate
+  // than the billing statement will apply.
+  useEffect(() => {
+    if (chargeType === "contract" && selectedContractId) {
+      const c = contracts.find((ct) => ct.id === selectedContractId);
+      if (c?.tax_percentage != null) {
+        setGstRate(Number(c.tax_percentage));
+        setContractGstLocked(true);
+      } else {
+        setGstRate(18);
+        setContractGstLocked(true); // still lock — server will enforce contract rate
+      }
+    } else {
+      setContractGstLocked(false);
+    }
+  }, [chargeType, selectedContractId, contracts]);
+
   // Search is server-side — show all loaded results
   const filteredBookings = bookings;
 
@@ -198,6 +218,7 @@ export function AddUsageChargeDialog({
     setQuantity(1);
     setUnitPrice(0);
     setGstRate(18);
+    setContractGstLocked(false);
     setChargeDate(defaultChargeDate || new Date().toISOString().split("T")[0]);
     setNotes("");
   };
@@ -517,7 +538,9 @@ export function AddUsageChargeDialog({
               </div>
             </div>
             <div className="space-y-1">
-              <Label htmlFor="charge-gst-rate" className="text-xs text-muted-foreground">GST %</Label>
+              <Label htmlFor="charge-gst-rate" className="text-xs text-muted-foreground">
+                GST %{contractGstLocked && " (contract rate)"}
+              </Label>
               <Input
                 id="charge-gst-rate"
                 type="number"
@@ -527,6 +550,8 @@ export function AddUsageChargeDialog({
                 value={gstRate}
                 onChange={(e) => setGstRate(parseFloat(e.target.value) || 0)}
                 className="h-9"
+                disabled={contractGstLocked}
+                title={contractGstLocked ? "Locked to the contract's GST rate so it matches the billing statement" : undefined}
               />
             </div>
             <div className="space-y-1">

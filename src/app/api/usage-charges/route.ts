@@ -92,11 +92,16 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // Will hold the contract's tax_percentage when creating a contract-based
+  // charge — used below to override the client-supplied gst_rate so per-charge
+  // GST always matches the statement-level rate.
+  let contractTaxPercentage: number | null = null;
+
   if (result.data.contract_id) {
     // Contract-based charge — must exist and be active
     const { data: contract, error: contractError } = await supabase
       .from("contracts")
-      .select("id, lead_id, status")
+      .select("id, lead_id, status, tax_percentage")
       .eq("id", result.data.contract_id)
       .single();
 
@@ -126,6 +131,7 @@ export async function POST(request: NextRequest) {
     }
 
     leadId = contract.lead_id;
+    contractTaxPercentage = contract.tax_percentage != null ? Number(contract.tax_percentage) : null;
   } else if (result.data.booking_id) {
     // Booking-based charge — booking must exist
     const { data: booking, error: bookingError } = await supabase
@@ -140,11 +146,13 @@ export async function POST(request: NextRequest) {
     leadId = booking.lead_id ?? null;
   }
 
-  // GST: server is the source of truth for the computed fields. The client
-  // only chooses gst_rate (defaulting to the standard 18% if omitted).
-  // Single rounded representation everywhere — see booking-addons for the
-  // same pattern.
-  const gstRate = result.data.gst_rate ?? 18;
+  // GST: server is the source of truth for the computed fields.
+  // For contract-based charges, force gst_rate to match the contract's
+  // tax_percentage so every line item on the billing statement uses the
+  // same rate. This prevents the mismatch where a charge is stored at 5%
+  // but the statement-level total applies 18%. For non-contract charges
+  // (booking-based), the client-supplied rate (default 18%) is used.
+  const gstRate = contractTaxPercentage ?? result.data.gst_rate ?? 18;
   const subtotal = Number(result.data.total);
   const gstAmount = parseFloat((subtotal * gstRate / 100).toFixed(2));
   const totalWithGst = parseFloat((subtotal + gstAmount).toFixed(2));
