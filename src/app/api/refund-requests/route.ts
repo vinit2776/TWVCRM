@@ -24,6 +24,7 @@ const SELECT = `
   ),
   requester:users!refund_requests_requested_by_fkey(id, full_name),
   approver:users!refund_requests_approved_by_fkey(id, full_name),
+  rejector:users!refund_requests_rejected_by_fkey(id, full_name),
   processor:users!refund_requests_processed_by_fkey(id, full_name)
 `;
 

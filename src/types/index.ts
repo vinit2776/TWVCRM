@@ -1042,6 +1042,8 @@ export interface RefundRequest {
   requested_at: string;
   approved_by?: string | null;
   approved_at?: string | null;
+  rejected_by?: string | null;
+  rejected_at?: string | null;
   rejected_reason?: string | null;
   processed_by?: string | null;
   processed_at?: string | null;
@@ -1064,6 +1066,7 @@ export interface RefundRequest {
   } | null;
   requester?: { id: string; full_name: string } | null;
   approver?: { id: string; full_name: string } | null;
+  rejector?: { id: string; full_name: string } | null;
   processor?: { id: string; full_name: string } | null;
 }
 

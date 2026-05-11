@@ -56,11 +56,8 @@ export async function PATCH(
     .update({
       status: "rejected",
       rejected_reason: reason,
-      // Also stamp approved_by here as the "decided_by" — overloading
-      // the column for the rejection decision rather than adding
-      // another column.
-      approved_by: dbUser.id,
-      approved_at: new Date().toISOString(),
+      rejected_by: dbUser.id,
+      rejected_at: new Date().toISOString(),
     })
     .eq("id", id)
     .select("*")

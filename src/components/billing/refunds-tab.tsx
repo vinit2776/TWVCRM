@@ -177,9 +177,14 @@ export function RefundsTab() {
                           >
                             {REFUND_REQUEST_STATUS_LABELS[rr.status] || rr.status}
                           </Badge>
-                          {rr.status === "rejected" && rr.rejected_reason && (
-                            <div className="text-[10px] text-red-700 mt-1 max-w-[200px]" title={rr.rejected_reason}>
-                              {rr.rejected_reason.slice(0, 40)}{rr.rejected_reason.length > 40 ? "…" : ""}
+                          {rr.status === "rejected" && (
+                            <div className="text-[10px] text-red-700 mt-1 max-w-[200px]">
+                              {rr.rejector?.full_name && <span className="font-medium">by {rr.rejector.full_name} · </span>}
+                              {rr.rejected_reason && (
+                                <span title={rr.rejected_reason}>
+                                  {rr.rejected_reason.slice(0, 40)}{rr.rejected_reason.length > 40 ? "…" : ""}
+                                </span>
+                              )}
                             </div>
                           )}
                           {rr.status === "processed" && (

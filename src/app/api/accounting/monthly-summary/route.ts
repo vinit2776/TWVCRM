@@ -16,7 +16,7 @@ export async function GET(request: NextRequest) {
   const periodStart = new Date(year, month - 1, 1).toISOString().split("T")[0];
   const periodEnd = new Date(year, month, 0).toISOString().split("T")[0]; // Last day of month
 
-  // 1. Get or create accounting period
+  // ── Step 1: Get or create accounting period ─────────────────────────
   let { data: period } = await supabase
     .from("accounting_periods")
     .select("*, locker:users!accounting_periods_locked_by_fkey(id, full_name)")
@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
     period = newPeriod;
   }
 
-  // 2. Get all active contracts that overlap this period
+  // ── Step 2: Get all active contracts for this period ─────────────────
   const { data: contracts } = await supabase
     .from("contracts")
     .select(
@@ -42,7 +42,7 @@ export async function GET(request: NextRequest) {
     .lte("start_date", periodEnd)
     .in("status", ["active", "completed"]);
 
-  // Filter contracts that are actually active during this period
+  // Filter contracts actually active during this period
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const activeContracts = (contracts || []).filter((c: any) => {
     const startDate = new Date(c.start_date);
@@ -54,113 +54,129 @@ export async function GET(request: NextRequest) {
 
   const contractIds = activeContracts.map((c) => c.id);
 
-  // 3. Get facility usage records for this period
-  const { data: facilityUsages } = period?.id
-    ? await supabase
-        .from("facility_usage_records")
-        .select(
-          "*, contract_facility:contract_facilities!facility_usage_records_contract_facility_id_fkey(id, name, unit, cost_per_unit, free_quota)"
-        )
-        .eq("accounting_period_id", period.id)
-    : { data: [] };
-
-  // 4. Get contract payments for this period
-  const { data: contractPayments } = period?.id
-    ? await supabase
-        .from("contract_payments")
-        .select(
-          "*, creator:users!contract_payments_created_by_fkey(id, full_name), collector:users!contract_payments_collected_by_fkey(id, full_name)"
-        )
-        .eq("accounting_period_id", period.id)
-    : { data: [] };
-
-  // Also get payments linked to contracts but without a specific period (general payments)
-  const { data: generalPayments } = contractIds.length > 0
-    ? await supabase
-        .from("contract_payments")
-        .select(
-          "*, creator:users!contract_payments_created_by_fkey(id, full_name), collector:users!contract_payments_collected_by_fkey(id, full_name)"
-        )
-        .in("contract_id", contractIds)
-        .is("accounting_period_id", null)
-        .gte("payment_date", periodStart)
-        .lte("payment_date", periodEnd)
-    : { data: [] };
+  // ── Batch A: All current-period data in parallel ────────────────────
+  // Queries 3-7 only need contractIds + period.id — fire them together
+  // to cut 7 sequential round-trips down to 1.
+  const [
+    { data: facilityUsages },
+    { data: contractPayments },
+    { data: generalPayments },
+    { data: usageCharges },
+    { data: postedBookings },
+    { data: billingStatements },
+    { data: walkinPayments },
+  ] = await Promise.all([
+    // 3. Facility usage records
+    period?.id
+      ? supabase
+          .from("facility_usage_records")
+          .select(
+            "*, contract_facility:contract_facilities!facility_usage_records_contract_facility_id_fkey(id, name, unit, cost_per_unit, free_quota)"
+          )
+          .eq("accounting_period_id", period.id)
+      : Promise.resolve({ data: [] }),
+    // 4. Contract payments for this period
+    period?.id
+      ? supabase
+          .from("contract_payments")
+          .select(
+            "*, creator:users!contract_payments_created_by_fkey(id, full_name), collector:users!contract_payments_collected_by_fkey(id, full_name)"
+          )
+          .eq("accounting_period_id", period.id)
+      : Promise.resolve({ data: [] }),
+    // 5. General payments (linked to contracts, no period)
+    contractIds.length > 0
+      ? supabase
+          .from("contract_payments")
+          .select(
+            "*, creator:users!contract_payments_created_by_fkey(id, full_name), collector:users!contract_payments_collected_by_fkey(id, full_name)"
+          )
+          .in("contract_id", contractIds)
+          .is("accounting_period_id", null)
+          .gte("payment_date", periodStart)
+          .lte("payment_date", periodEnd)
+      : Promise.resolve({ data: [] }),
+    // 6a. Ad-hoc usage charges
+    contractIds.length > 0
+      ? supabase
+          .from("usage_charges")
+          .select("*")
+          .in("contract_id", contractIds)
+          .gte("charge_date", periodStart)
+          .lte("charge_date", periodEnd)
+      : Promise.resolve({ data: [] }),
+    // 6b. Bookings posted to bill
+    contractIds.length > 0
+      ? supabase
+          .from("bookings")
+          .select("*, space:spaces!bookings_space_id_fkey(id, name)")
+          .in("contract_id", contractIds)
+          .eq("payment_status", "posted_to_bill")
+          .gte("booking_date", periodStart)
+          .lte("booking_date", periodEnd)
+      : Promise.resolve({ data: [] }),
+    // 6c. Billing statement status per contract
+    contractIds.length > 0
+      ? supabase
+          .from("billing_statements")
+          .select("contract_id, status, statement_number")
+          .in("contract_id", contractIds)
+          .gte("period_start", periodStart)
+          .lte("period_start", periodEnd)
+      : Promise.resolve({ data: [] }),
+    // 7. Walk-in booking payments
+    supabase
+      .from("booking_payments")
+      .select(
+        "*, booking:bookings!booking_payments_booking_id_fkey(id, booking_number, booking_date, space:spaces!bookings_space_id_fkey(id, name), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company), guest_name, guest_company, customer_type)"
+      )
+      .gte("created_at", `${periodStart}T00:00:00`)
+      .lte("created_at", `${periodEnd}T23:59:59`),
+  ]);
 
   const allPaymentsThisMonth = [...(contractPayments || []), ...(generalPayments || [])];
-
-  // 5. Get ad-hoc usage charges for this period (from existing billing module)
-  const { data: usageCharges } = contractIds.length > 0
-    ? await supabase
-        .from("usage_charges")
-        .select("*")
-        .in("contract_id", contractIds)
-        .gte("charge_date", periodStart)
-        .lte("charge_date", periodEnd)
-    : { data: [] };
-
-  // 6. Get bookings posted to bill for this period
-  const { data: postedBookings } = contractIds.length > 0
-    ? await supabase
-        .from("bookings")
-        .select("*, space:spaces!bookings_space_id_fkey(id, name)")
-        .in("contract_id", contractIds)
-        .eq("payment_status", "posted_to_bill")
-        .gte("booking_date", periodStart)
-        .lte("booking_date", periodEnd)
-    : { data: [] };
-
-  // 6b. Get billing statement status per contract for this period
-  const { data: billingStatements } = contractIds.length > 0
-    ? await supabase
-        .from("billing_statements")
-        .select("contract_id, status, statement_number")
-        .in("contract_id", contractIds)
-        .gte("period_start", periodStart)
-        .lte("period_start", periodEnd)
-    : { data: [] };
 
   const statementByContract: Record<string, { status: string; statement_number: string }> = {};
   (billingStatements || []).forEach((s) => {
     if (s.contract_id) statementByContract[s.contract_id] = { status: s.status, statement_number: s.statement_number };
   });
 
-  // 7. Walk-in booking payments for this month
-  const { data: walkinPayments } = await supabase
-    .from("booking_payments")
-    .select(
-      "*, booking:bookings!booking_payments_booking_id_fkey(id, booking_number, booking_date, space:spaces!bookings_space_id_fkey(id, name), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company), guest_name, guest_company, customer_type)"
-    )
-    .gte("created_at", `${periodStart}T00:00:00`)
-    .lte("created_at", `${periodEnd}T23:59:59`);
-
-  // 8. Compute carry-forward balances per contract (all prior months)
+  // ── Batch B: Carry-forward data in parallel ─────────────────────────
+  // Prior payments, facility usages, periods, and ad-hoc charges all
+  // run together — cuts 4 sequential queries to 1 parallel batch.
   const carryForwardByContract: Record<string, number> = {};
   if (contractIds.length > 0) {
-    // Sum all prior payments (verified only)
-    const { data: priorPayments } = await supabase
-      .from("contract_payments")
-      .select("contract_id, amount, status")
-      .in("contract_id", contractIds)
-      .eq("status", "verified")
-      .lt("payment_date", periodStart);
+    const [
+      { data: priorPayments },
+      { data: priorUsages },
+      { data: priorPeriods },
+      { data: priorAdHoc },
+    ] = await Promise.all([
+      supabase
+        .from("contract_payments")
+        .select("contract_id, amount, status")
+        .in("contract_id", contractIds)
+        .eq("status", "verified")
+        .lt("payment_date", periodStart),
+      supabase
+        .from("facility_usage_records")
+        .select("contract_id, total_charge, accounting_period_id")
+        .in("contract_id", contractIds),
+      supabase
+        .from("accounting_periods")
+        .select("id, year, month")
+        .or(`year.lt.${year},and(year.eq.${year},month.lt.${month})`),
+      supabase
+        .from("usage_charges")
+        .select("contract_id, total")
+        .in("contract_id", contractIds)
+        .lt("charge_date", periodStart),
+    ]);
 
     const priorPaymentsByContract: Record<string, number> = {};
     (priorPayments || []).forEach((p) => {
       priorPaymentsByContract[p.contract_id] = (priorPaymentsByContract[p.contract_id] || 0) + Number(p.amount);
     });
-
-    // Sum all prior facility usage charges
-    const { data: priorUsages } = await supabase
-      .from("facility_usage_records")
-      .select("contract_id, total_charge, accounting_period_id")
-      .in("contract_id", contractIds);
-
-    // Get prior period IDs
-    const { data: priorPeriods } = await supabase
-      .from("accounting_periods")
-      .select("id, year, month")
-      .or(`year.lt.${year},and(year.eq.${year},month.lt.${month})`);
 
     const priorPeriodIds = new Set((priorPeriods || []).map((p) => p.id));
     const priorUsageByContract: Record<string, number> = {};
@@ -169,13 +185,6 @@ export async function GET(request: NextRequest) {
         priorUsageByContract[u.contract_id] = (priorUsageByContract[u.contract_id] || 0) + Number(u.total_charge);
       }
     });
-
-    // Sum all prior ad-hoc usage charges
-    const { data: priorAdHoc } = await supabase
-      .from("usage_charges")
-      .select("contract_id, total")
-      .in("contract_id", contractIds)
-      .lt("charge_date", periodStart);
 
     const priorAdHocByContract: Record<string, number> = {};
     (priorAdHoc || []).forEach((c) => {
@@ -203,7 +212,7 @@ export async function GET(request: NextRequest) {
     });
   }
 
-  // 9. Build per-contract summaries
+  // ── Build per-contract summaries ────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const contractSummaries = activeContracts.map((contract: any) => {
     const contractFacilityUsages = (facilityUsages || []).filter((u) => u.contract_id === contract.id);
@@ -255,7 +264,7 @@ export async function GET(request: NextRequest) {
     };
   });
 
-  // 10. Compute aging buckets
+  // ── Aging buckets ───────────────────────────────────────────────────
   const today = new Date();
   const agingBuckets = {
     current: { count: 0, total: 0, contracts: [] as string[] },
@@ -267,7 +276,6 @@ export async function GET(request: NextRequest) {
   contractSummaries.forEach((cs) => {
     if (cs.outstanding <= 0) return;
 
-    // Current month outstanding
     const currentOutstanding = Math.max(0, cs.current_month_charges - cs.total_paid_this_month);
     if (currentOutstanding > 0) {
       agingBuckets.current.count++;
@@ -275,13 +283,8 @@ export async function GET(request: NextRequest) {
       agingBuckets.current.contracts.push(cs.contract.id);
     }
 
-    // Carried forward amounts by age
     if (cs.carried_forward > 0) {
-      // Simple aging: distribute carried forward across buckets based on months overdue
       const monthsAgo1Start = new Date(year, month - 2, 1);
-      const monthsAgo2Start = new Date(year, month - 3, 1);
-      const monthsAgo3Start = new Date(year, month - 4, 1);
-
       const diffMonths = (today.getFullYear() - monthsAgo1Start.getFullYear()) * 12 +
         (today.getMonth() - monthsAgo1Start.getMonth());
 
@@ -301,7 +304,7 @@ export async function GET(request: NextRequest) {
     }
   });
 
-  // 11. Cash handover summary
+  // ── Cash handover summary ──────────────────────────────────────────
   const cashPayments = allPaymentsThisMonth.filter((p) => p.payment_mode === "cash");
   const cashPendingHandover = cashPayments
     .filter((p) => p.cash_handover_status === "pending_handover")
@@ -310,7 +313,6 @@ export async function GET(request: NextRequest) {
     .filter((p) => p.cash_handover_status === "handed_over")
     .reduce((sum, p) => sum + Number(p.amount), 0);
 
-  // Also include walk-in cash payments
   const walkinCashPayments = (walkinPayments || []).filter((p) => p.payment_mode === "cash");
   const walkinCashPending = walkinCashPayments
     .filter((p) => p.cash_handover_status === "pending_handover")
@@ -319,7 +321,7 @@ export async function GET(request: NextRequest) {
     .filter((p) => p.cash_handover_status === "handed_over")
     .reduce((sum, p) => sum + Number(p.amount), 0);
 
-  // 12. Grand totals
+  // ── Grand totals ───────────────────────────────────────────────────
   const totalBillable = contractSummaries.reduce((sum, cs) => sum + cs.current_month_charges, 0);
   const totalCollected = contractSummaries.reduce((sum, cs) => sum + cs.total_paid_this_month, 0);
   const totalOutstanding = contractSummaries.reduce((sum, cs) => sum + cs.outstanding, 0);
