@@ -237,7 +237,12 @@ export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelinePr
     switch (booking.payment_status) {
       case "paid":           return "Payment Received";
       case "prepaid":        return "Paid via Prepaid Pack";
-      case "waived":         return "Free Quota — Waived";
+      case "waived": {
+        // Complimentary bookings (manually marked ₹0) show a different label
+        // than quota-based waivers (auto-waived within contract hour quota).
+        if (booking.complimentary_reason) return "Complimentary — No charge";
+        return "Free Quota — Waived";
+      }
       case "posted_to_bill": return "Post-paid (Monthly Invoice)";
       case "pending":
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -255,6 +260,20 @@ export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelinePr
       }
       case "prepaid":        return `${inr(totalDue)} settled from prepaid pack`;
       case "waived": {
+        // Complimentary booking — show the reason
+        if (booking.complimentary_reason) {
+          const reasonLabels: Record<string, string> = {
+            client_complimentary: "Client complimentary",
+            staff_use: "Staff use",
+            maintenance: "Maintenance / testing",
+            promotional: "Promotional",
+            other: "Other",
+          };
+          const label = reasonLabels[booking.complimentary_reason] || booking.complimentary_reason;
+          const detail = booking.complimentary_details ? `: ${booking.complimentary_details}` : "";
+          return `${label}${detail}`;
+        }
+        // Quota-based waiver — show quota usage if available
         const q = booking.quota_info;
         if (q) {
           return `Quota: ${q.used_this_month}hr used of ${q.monthly_quota}hr/mo · ${q.remaining_after}hr remaining`;
