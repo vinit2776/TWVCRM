@@ -17,7 +17,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { formatDate } from "@/lib/utils";
+import { formatDateTime } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
 /*  Types & constants                                                  */
@@ -207,7 +207,7 @@ export function UserActivityLogDialog({ open, onOpenChange, userId, userName }: 
                       )}
                     </div>
                     <p className="text-[10px] text-muted-foreground">
-                      {formatDate(entry.created_at)}
+                      {formatDateTime(entry.created_at)}
                     </p>
                   </div>
                 </div>
