@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Loader2, ChevronLeft, ChevronRight, Filter } from "lucide-react";
+import { Loader2, ChevronLeft, ChevronRight, ChevronDown, Filter, ArrowRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatDateTime } from "@/lib/utils";
+import { cn } from "@/lib/utils";
 
 /* ------------------------------------------------------------------ */
 /*  Types & constants                                                  */
@@ -63,6 +64,33 @@ const ENTITY_LABELS: Record<string, string> = {
 const PAGE_SIZE = 20;
 
 /* ------------------------------------------------------------------ */
+/*  Helpers                                                            */
+/* ------------------------------------------------------------------ */
+
+/** Format a field name for display: snake_case → Title Case */
+function formatFieldName(key: string): string {
+  return key
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+/** Render a value as a readable string */
+function displayValue(val: unknown): string {
+  if (val === null || val === undefined) return "—";
+  if (typeof val === "boolean") return val ? "Yes" : "No";
+  if (typeof val === "object") {
+    try {
+      const s = JSON.stringify(val);
+      return s.length > 120 ? s.slice(0, 117) + "..." : s;
+    } catch {
+      return String(val);
+    }
+  }
+  const s = String(val);
+  return s.length > 120 ? s.slice(0, 117) + "..." : s;
+}
+
+/* ------------------------------------------------------------------ */
 /*  Component                                                          */
 /* ------------------------------------------------------------------ */
 
@@ -80,6 +108,7 @@ export function UserActivityLogDialog({ open, onOpenChange, userId, userName }: 
   const [offset, setOffset] = useState(0);
   const [entityFilter, setEntityFilter] = useState<string>("all");
   const [actionFilter, setActionFilter] = useState<string>("all");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
 
   const fetchLog = useCallback(async () => {
     setLoading(true);
@@ -107,6 +136,7 @@ export function UserActivityLogDialog({ open, onOpenChange, userId, userName }: 
   useEffect(() => {
     if (open) {
       setOffset(0);
+      setExpandedId(null);
       fetchLog();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -124,10 +154,13 @@ export function UserActivityLogDialog({ open, onOpenChange, userId, userName }: 
   const summarizeChanges = (entry: AuditEntry): string => {
     const keys = Object.keys(entry.changes || {});
     if (keys.length === 0) return "";
-    // Show up to 3 changed fields
     const shown = keys.slice(0, 3).map((k) => k.replace(/_/g, " "));
     const more = keys.length > 3 ? ` +${keys.length - 3} more` : "";
     return shown.join(", ") + more;
+  };
+
+  const hasChanges = (entry: AuditEntry): boolean => {
+    return Object.keys(entry.changes || {}).length > 0;
   };
 
   return (
@@ -182,34 +215,100 @@ export function UserActivityLogDialog({ open, onOpenChange, userId, userName }: 
           ) : (
             entries.map((entry) => {
               const summary = summarizeChanges(entry);
+              const expanded = expandedId === entry.id;
+              const clickable = hasChanges(entry);
+              const changeKeys = Object.keys(entry.changes || {});
+
               return (
-                <div
-                  key={entry.id}
-                  className="flex items-start gap-2 px-2 py-2 rounded-md border bg-muted/10 hover:bg-muted/30 transition-colors"
-                >
-                  <div className="flex-1 min-w-0 space-y-0.5">
-                    <div className="flex items-center gap-1.5 flex-wrap">
-                      <Badge
-                        variant="outline"
-                        className={`text-[9px] px-1 py-0 h-4 font-semibold uppercase ${
-                          ACTION_COLORS[entry.action] || "bg-gray-100 text-gray-700"
-                        }`}
-                      >
-                        {entry.action}
-                      </Badge>
-                      <Badge variant="secondary" className="text-[9px] px-1 py-0 h-4">
-                        {ENTITY_LABELS[entry.entity_type] || entry.entity_type}
-                      </Badge>
-                      {summary && (
-                        <span className="text-[10px] text-muted-foreground truncate">
-                          {summary}
-                        </span>
+                <div key={entry.id} className="rounded-md border bg-muted/10 overflow-hidden">
+                  {/* Row header */}
+                  <div
+                    className={cn(
+                      "flex items-start gap-2 px-2 py-2 transition-colors",
+                      clickable && "cursor-pointer hover:bg-muted/30",
+                      expanded && "bg-muted/20"
+                    )}
+                    onClick={() => {
+                      if (clickable) setExpandedId(expanded ? null : entry.id);
+                    }}
+                  >
+                    {/* Expand chevron */}
+                    <div className="pt-0.5 w-3.5 shrink-0">
+                      {clickable && (
+                        <ChevronDown
+                          className={cn(
+                            "h-3 w-3 text-muted-foreground transition-transform duration-150",
+                            expanded && "rotate-180"
+                          )}
+                        />
                       )}
                     </div>
-                    <p className="text-[10px] text-muted-foreground">
-                      {formatDateTime(entry.created_at)}
-                    </p>
+
+                    <div className="flex-1 min-w-0 space-y-0.5">
+                      <div className="flex items-center gap-1.5 flex-wrap">
+                        <Badge
+                          variant="outline"
+                          className={`text-[9px] px-1 py-0 h-4 font-semibold uppercase ${
+                            ACTION_COLORS[entry.action] || "bg-gray-100 text-gray-700"
+                          }`}
+                        >
+                          {entry.action}
+                        </Badge>
+                        <Badge variant="secondary" className="text-[9px] px-1 py-0 h-4">
+                          {ENTITY_LABELS[entry.entity_type] || entry.entity_type}
+                        </Badge>
+                        {!expanded && summary && (
+                          <span className="text-[10px] text-muted-foreground truncate">
+                            {summary}
+                          </span>
+                        )}
+                      </div>
+                      <p className="text-[10px] text-muted-foreground">
+                        {formatDateTime(entry.created_at)}
+                      </p>
+                    </div>
                   </div>
+
+                  {/* Expanded detail panel */}
+                  {expanded && changeKeys.length > 0 && (
+                    <div className="border-t bg-muted/5 px-3 py-2 space-y-1.5">
+                      <p className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+                        {changeKeys.length} field{changeKeys.length !== 1 ? "s" : ""} changed
+                      </p>
+                      <div className="space-y-1">
+                        {changeKeys.map((key) => {
+                          const change = entry.changes[key];
+                          // For "record" key on deletes, show differently
+                          if (key === "record" && entry.action === "delete") {
+                            return (
+                              <div key={key} className="text-[10px] text-muted-foreground italic">
+                                Full record snapshot stored
+                              </div>
+                            );
+                          }
+                          return (
+                            <div
+                              key={key}
+                              className="rounded bg-background border px-2 py-1.5 space-y-0.5"
+                            >
+                              <p className="text-[10px] font-medium text-foreground">
+                                {formatFieldName(key)}
+                              </p>
+                              <div className="flex items-start gap-1.5 text-[10px]">
+                                <span className="text-red-600 bg-red-50 rounded px-1 py-0.5 max-w-[45%] break-words">
+                                  {displayValue(change.old)}
+                                </span>
+                                <ArrowRight className="h-3 w-3 text-muted-foreground shrink-0 mt-0.5" />
+                                <span className="text-green-700 bg-green-50 rounded px-1 py-0.5 max-w-[45%] break-words">
+                                  {displayValue(change.new)}
+                                </span>
+                              </div>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })
