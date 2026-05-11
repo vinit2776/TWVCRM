@@ -1898,7 +1898,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             </div>
           ) : (
             <div className="px-4 py-6 text-center text-sm text-muted-foreground">
-              No charges yet — use "Add Charge" for damages, overtime, or missed items discovered after checkout.
+              No charges yet — use &ldquo;Add Charge&rdquo; for damages, overtime, or missed items discovered after checkout.
             </div>
           )}
         </div>
