@@ -23,7 +23,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("usage_charges")
     .select(
-      "*, contract:contracts!usage_charges_contract_id_fkey(id, contract_number), booking:bookings!usage_charges_booking_id_fkey(id, booking_number, booking_date, lead_id, guest_name, guest_email), lead:leads!usage_charges_lead_id_fkey(id, first_name, last_name, company)",
+      "*, contract:contracts!usage_charges_contract_id_fkey(id, contract_number, billing_cycle), booking:bookings!usage_charges_booking_id_fkey(id, booking_number, booking_date, lead_id, guest_name, guest_email), lead:leads!usage_charges_lead_id_fkey(id, first_name, last_name, company)",
       { count: "exact" }
     );
 
@@ -60,6 +60,29 @@ export async function POST(request: NextRequest) {
 
   let leadId: string | null = null;
 
+  // Derive the billing period from charge_date for lock/finalization checks
+  const chargeDate = new Date(result.data.charge_date + "T00:00:00");
+  const chargeMonth = chargeDate.getMonth() + 1;
+  const chargeYear = chargeDate.getFullYear();
+  const periodFirst = `${chargeYear}-${String(chargeMonth).padStart(2, "0")}-01`;
+  const periodLast = `${chargeYear}-${String(chargeMonth).padStart(2, "0")}-${new Date(chargeYear, chargeMonth, 0).getDate()}`;
+
+  // Check if the accounting period is locked
+  const { data: period } = await supabase
+    .from("accounting_periods")
+    .select("id, status")
+    .eq("year", chargeYear)
+    .eq("month", chargeMonth)
+    .maybeSingle();
+
+  if (period?.status === "locked") {
+    const monthLabel = chargeDate.toLocaleString("en-IN", { month: "long", year: "numeric" });
+    return NextResponse.json(
+      { error: `The ${monthLabel} billing period is locked. Charges cannot be added to a locked period.` },
+      { status: 400 },
+    );
+  }
+
   if (result.data.contract_id) {
     // Contract-based charge — must exist and be active
     const { data: contract, error: contractError } = await supabase
@@ -74,6 +97,25 @@ export async function POST(request: NextRequest) {
     if (contract.status !== "active") {
       return NextResponse.json({ error: "Contract is not active" }, { status: 400 });
     }
+
+    // Check if a finalized/exported statement already exists for this contract+period
+    const { data: existingStatement } = await supabase
+      .from("billing_statements")
+      .select("id, status, statement_number")
+      .eq("contract_id", result.data.contract_id)
+      .gte("period_start", periodFirst)
+      .lte("period_start", periodLast)
+      .in("status", ["finalized", "exported"])
+      .maybeSingle();
+
+    if (existingStatement) {
+      const monthLabel = chargeDate.toLocaleString("en-IN", { month: "long", year: "numeric" });
+      return NextResponse.json(
+        { error: `The ${monthLabel} bill (${existingStatement.statement_number}) is already finalized. Charges cannot be added to a finalized bill.` },
+        { status: 400 },
+      );
+    }
+
     leadId = contract.lead_id;
   } else if (result.data.booking_id) {
     // Booking-based charge — booking must exist

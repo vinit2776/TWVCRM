@@ -1,13 +1,14 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Plus, IndianRupee, Send } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, IndianRupee, Send, Receipt } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { FacilityUsageForm } from "./facility-usage-form";
 import { AddContractFacilityDialog } from "./add-contract-facility-dialog";
 import { AddContractPaymentDialog } from "./add-contract-payment-dialog";
+import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
 import { CONTRACT_PAYMENT_MODE_LABELS, CONTRACT_PAYMENT_STATUS_COLORS, CONTRACT_PAYMENT_STATUS_LABELS } from "@/lib/constants";
 import { toast } from "sonner";
 
@@ -89,6 +90,10 @@ interface ContractAccountingRowProps {
   summary: ContractSummary;
   accountingPeriodId: string;
   isLocked: boolean;
+  /** Whether this contract's statement for the period is finalized/exported */
+  isStatementFinalized?: boolean;
+  /** Period start date (YYYY-MM-DD) — used as default charge date */
+  periodStart?: string;
   onRefresh: () => void;
 }
 
@@ -96,11 +101,14 @@ export function ContractAccountingRow({
   summary,
   accountingPeriodId,
   isLocked,
+  isStatementFinalized,
+  periodStart,
   onRefresh,
 }: ContractAccountingRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [showAddFacility, setShowAddFacility] = useState(false);
   const [showAddPayment, setShowAddPayment] = useState(false);
+  const [showAddCharge, setShowAddCharge] = useState(false);
   const [sendingReminder, setSendingReminder] = useState<string | null>(null);
 
   const { contract } = summary;
@@ -220,9 +228,21 @@ export function ContractAccountingRow({
           </div>
 
           {/* Ad-hoc charges */}
-          {summary.ad_hoc_charges.length > 0 && (
-            <div>
-              <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-2">Ad-hoc Charges</h4>
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <h4 className="text-xs font-semibold text-muted-foreground uppercase">Ad-hoc Charges</h4>
+              {!isLocked && !isStatementFinalized ? (
+                <Button variant="outline" size="sm" onClick={() => setShowAddCharge(true)}>
+                  <Receipt className="h-3 w-3 mr-1" />
+                  Add Charge
+                </Button>
+              ) : (isLocked || isStatementFinalized) && (
+                <span className="text-xs text-muted-foreground">
+                  {isLocked ? "Period locked" : "Bill finalized"}
+                </span>
+              )}
+            </div>
+            {summary.ad_hoc_charges.length > 0 ? (
               <div className="space-y-1">
                 {summary.ad_hoc_charges.map((charge) => (
                   <div key={charge.id} className="flex justify-between text-sm px-2">
@@ -231,8 +251,10 @@ export function ContractAccountingRow({
                   </div>
                 ))}
               </div>
-            </div>
-          )}
+            ) : (
+              <p className="text-sm text-muted-foreground px-2">No ad-hoc charges</p>
+            )}
+          </div>
 
           {/* Posted bookings */}
           {summary.posted_bookings.length > 0 && (
@@ -327,6 +349,14 @@ export function ContractAccountingRow({
         onSuccess={onRefresh}
         contractId={contract.id}
         accountingPeriodId={accountingPeriodId}
+      />
+
+      <AddUsageChargeDialog
+        open={showAddCharge}
+        onOpenChange={setShowAddCharge}
+        onSuccess={onRefresh}
+        contractId={contract.id}
+        defaultChargeDate={periodStart}
       />
     </div>
   );

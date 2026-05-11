@@ -53,6 +53,9 @@ interface AddUsageChargeDialogProps {
   onSuccess: () => void;
   contractId?: string;
   bookingId?: string;
+  /** Pre-fill charge date to this value (YYYY-MM-DD). Useful when opening
+   *  from a specific billing period view so the date defaults to that month. */
+  defaultChargeDate?: string;
 }
 
 export function AddUsageChargeDialog({
@@ -61,6 +64,7 @@ export function AddUsageChargeDialog({
   onSuccess,
   contractId,
   bookingId,
+  defaultChargeDate,
 }: AddUsageChargeDialogProps) {
   // Charge type toggle — lock to "booking" if bookingId is pre-supplied
   const [chargeType, setChargeType] = useState<ChargeType>(
@@ -88,7 +92,7 @@ export function AddUsageChargeDialog({
   // particular charge is exempt or carries a different slab (12 / 5 / 0).
   const [gstRate, setGstRate] = useState<number>(18);
   const [chargeDate, setChargeDate] = useState(
-    new Date().toISOString().split("T")[0]
+    defaultChargeDate || new Date().toISOString().split("T")[0]
   );
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
@@ -194,7 +198,7 @@ export function AddUsageChargeDialog({
     setQuantity(1);
     setUnitPrice(0);
     setGstRate(18);
-    setChargeDate(new Date().toISOString().split("T")[0]);
+    setChargeDate(defaultChargeDate || new Date().toISOString().split("T")[0]);
     setNotes("");
   };
 
@@ -551,6 +555,15 @@ export function AddUsageChargeDialog({
               value={chargeDate}
               onChange={(e) => setChargeDate(e.target.value)}
             />
+            {chargeDate && (
+              <p className="text-xs text-muted-foreground">
+                Will appear in the{" "}
+                <span className="font-semibold text-foreground">
+                  {new Date(chargeDate + "T00:00:00").toLocaleString("en-IN", { month: "long", year: "numeric" })}
+                </span>{" "}
+                billing cycle
+              </p>
+            )}
           </div>
 
           {/* Notes */}

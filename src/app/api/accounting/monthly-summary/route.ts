@@ -108,6 +108,21 @@ export async function GET(request: NextRequest) {
         .lte("booking_date", periodEnd)
     : { data: [] };
 
+  // 6b. Get billing statement status per contract for this period
+  const { data: billingStatements } = contractIds.length > 0
+    ? await supabase
+        .from("billing_statements")
+        .select("contract_id, status, statement_number")
+        .in("contract_id", contractIds)
+        .gte("period_start", periodStart)
+        .lte("period_start", periodEnd)
+    : { data: [] };
+
+  const statementByContract: Record<string, { status: string; statement_number: string }> = {};
+  (billingStatements || []).forEach((s) => {
+    if (s.contract_id) statementByContract[s.contract_id] = { status: s.status, statement_number: s.statement_number };
+  });
+
   // 7. Walk-in booking payments for this month
   const { data: walkinPayments } = await supabase
     .from("booking_payments")
@@ -225,6 +240,7 @@ export async function GET(request: NextRequest) {
       payments: contractPmts,
       total_paid_this_month: totalPaidThisMonth,
       outstanding,
+      billing_statement: statementByContract[contract.id as string] || null,
       gst_invoice: gstPayment
         ? {
             number: gstPayment.gst_invoice_number,

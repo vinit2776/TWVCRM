@@ -107,15 +107,13 @@ interface UsageCharge {
   id: string;
   description: string;
   contract_id?: string | null;
-  contract?: { contract_number: string } | null;
+  contract?: { contract_number: string; billing_cycle?: string } | null;
   booking_id?: string | null;
   booking?: { booking_number: string; booking_date: string } | null;
   lead?: { first_name: string; last_name: string; company?: string } | null;
   quantity: number;
   unit_price: number;
   total: number;
-  // GST + grand total — populated by the migration 00128 default of 0 for
-  // pre-migration rows, real values for new rows.
   gst_rate?: number;
   gst_amount?: number;
   total_with_gst?: number;
@@ -710,16 +708,23 @@ export default function BillingPage() {
           ) : summary.contracts.length === 0 ? (
             <EmptyState icon={ScrollText} title="No active contracts" description="No contracts are active for this period" />
           ) : (
-            summary.contracts.map((cs) => (
-              <ContractAccountingRow
-                key={cs.contract.id}
-                // eslint-disable-next-line @typescript-eslint/no-explicit-any
-                summary={cs as any}
-                accountingPeriodId={summary.period?.id || ""}
-                isLocked={isLocked || false}
-                onRefresh={fetchData}
-              />
-            ))
+            summary.contracts.map((cs) => {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const stmt = (cs as any).billing_statement as { status: string } | null;
+              const finalized = stmt?.status === "finalized" || stmt?.status === "exported";
+              return (
+                <ContractAccountingRow
+                  key={cs.contract.id}
+                  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                  summary={cs as any}
+                  accountingPeriodId={summary.period?.id || ""}
+                  isLocked={isLocked || false}
+                  isStatementFinalized={finalized}
+                  periodStart={summary.period_start}
+                  onRefresh={fetchData}
+                />
+              );
+            })
           )}
         </TabsContent>
 
@@ -858,6 +863,7 @@ export default function BillingPage() {
                     <th className="px-4 py-3 text-right font-medium hidden md:table-cell">GST</th>
                     <th className="px-4 py-3 text-right font-medium">Total (incl. GST)</th>
                     <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Charge Date</th>
+                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Billing Period</th>
                     <th className="px-4 py-3 text-left font-medium">Status</th>
                     <th className="px-4 py-3 text-right font-medium">Actions</th>
                   </tr>
@@ -902,6 +908,20 @@ export default function BillingPage() {
                         {formatCurrency(charge.total_with_gst ?? charge.total)}
                       </td>
                       <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{formatDate(charge.charge_date)}</td>
+                      <td className="px-4 py-3 hidden md:table-cell">
+                        {(() => {
+                          const d = new Date(charge.charge_date + "T00:00:00");
+                          const monthLabel = d.toLocaleString("en-IN", { month: "short", year: "numeric" });
+                          const cycleLabels: Record<string, string> = { monthly: "Monthly", quarterly: "Quarterly", half_yearly: "Half-Yearly", yearly: "Yearly" };
+                          const cycle = charge.contract?.billing_cycle;
+                          return (
+                            <div>
+                              <span className="text-sm font-medium">{monthLabel}</span>
+                              {cycle && <span className="block text-xs text-muted-foreground">{cycleLabels[cycle] || cycle}</span>}
+                            </div>
+                          );
+                        })()}
+                      </td>
                       <td className="px-4 py-3">
                         <Badge variant="secondary" className={USAGE_STATUS_COLORS[charge.status] || ""}>
                           {USAGE_STATUS_LABELS[charge.status] || charge.status}
