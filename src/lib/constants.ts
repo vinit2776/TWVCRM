@@ -184,6 +184,7 @@ export const USER_ROLE_LABELS: Record<string, string> = {
   accounts: "Accounts",
   fms: "Facility Manager",
   office_admin: "Office Administrator",
+  it_team: "IT Team",
 };
 
 export const RATINGS = ["none", "hot", "warm", "cold"] as const;

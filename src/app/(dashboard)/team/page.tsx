@@ -59,6 +59,7 @@ const ROLE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = 
   accounts: Receipt,
   fms: Wrench,
   office_admin: Briefcase,
+  it_team: Wrench,
 };
 
 const ROLE_COLORS: Record<string, string> = {
@@ -69,6 +70,7 @@ const ROLE_COLORS: Record<string, string> = {
   accounts:      "bg-amber-100 text-amber-800",
   fms:           "bg-purple-100 text-purple-800",
   office_admin:  "bg-orange-100 text-orange-800",
+  it_team:       "bg-cyan-100 text-cyan-800",
 };
 
 const ROLE_ICON_COLORS: Record<string, string> = {
@@ -79,6 +81,7 @@ const ROLE_ICON_COLORS: Record<string, string> = {
   accounts:      "text-amber-600",
   fms:           "text-purple-600",
   office_admin:  "text-orange-600",
+  it_team:       "text-cyan-600",
 };
 
 const ROLE_DESCRIPTIONS: Record<string, string> = {
@@ -89,6 +92,7 @@ const ROLE_DESCRIPTIONS: Record<string, string> = {
   accounts:      "Billing statements, invoicing, and payment confirmation",
   fms:           "Procurement dashboard, purchase requests, and facility operations",
   office_admin:  "Vendor management, purchase requests, and reorder configuration",
+  it_team:       "IT support, technical coordination, and system access management",
 };
 
 // Feature matrix: rows = modules, cols = roles
@@ -104,11 +108,11 @@ const FEATURE_MATRIX: Array<{
     rows: [
       {
         feature: "View team members",
-        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
       {
         feature: "Create / edit / suspend users",
-        access: { admin: "full", manager: "none", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "none", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
     ],
   },
@@ -117,15 +121,15 @@ const FEATURE_MATRIX: Array<{
     rows: [
       {
         feature: "View & manage all leads",
-        access: { admin: "full", manager: "full", sales_rep: "limited", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "full", sales_rep: "limited", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
       {
         feature: "Import leads",
-        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
       {
         feature: "Activities & tasks",
-        access: { admin: "full", manager: "full", sales_rep: "limited", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "full", sales_rep: "limited", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
     ],
   },
@@ -134,15 +138,15 @@ const FEATURE_MATRIX: Array<{
     rows: [
       {
         feature: "View & manage bookings",
-        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "full", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "full", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
       {
         feature: "Waiver requests",
-        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "full", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "full", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
       {
         feature: "Space configuration",
-        access: { admin: "full", manager: "none", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "none", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
     ],
   },
@@ -151,11 +155,11 @@ const FEATURE_MATRIX: Array<{
     rows: [
       {
         feature: "View & manage contracts",
-        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "full", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "full", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
       {
         feature: "Contract payments",
-        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "full", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "full", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
     ],
   },
@@ -164,11 +168,11 @@ const FEATURE_MATRIX: Array<{
     rows: [
       {
         feature: "View billing statements",
-        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "full", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "full", fms: "none", office_admin: "none", it_team: "none" },
       },
       {
         feature: "Confirm & lock invoices",
-        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "full", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "full", fms: "none", office_admin: "none", it_team: "none" },
       },
     ],
   },
@@ -177,11 +181,11 @@ const FEATURE_MATRIX: Array<{
     rows: [
       {
         feature: "View & add petty cash entries",
-        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
       {
         feature: "Approve entries",
-        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
     ],
   },
@@ -190,19 +194,19 @@ const FEATURE_MATRIX: Array<{
     rows: [
       {
         feature: "View procurement dashboard",
-        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "full", office_admin: "none" },
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "full", office_admin: "none", it_team: "none" },
       },
       {
         feature: "Raise purchase requests",
-        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "full", office_admin: "full" },
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "full", office_admin: "full", it_team: "none" },
       },
       {
         feature: "Approve purchase requests",
-        access: { admin: "full", manager: "limited", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "limited", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
       {
         feature: "Vendor & bill management",
-        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "full" },
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "full", it_team: "none" },
       },
     ],
   },
@@ -211,11 +215,11 @@ const FEATURE_MATRIX: Array<{
     rows: [
       {
         feature: "Raise support tickets",
-        access: { admin: "full", manager: "full", sales_rep: "full", floor_manager: "full", accounts: "full", fms: "full", office_admin: "full" },
+        access: { admin: "full", manager: "full", sales_rep: "full", floor_manager: "full", accounts: "full", fms: "full", office_admin: "full", it_team: "full" },
       },
       {
         feature: "Manage all tickets",
-        access: { admin: "full", manager: "full", sales_rep: "limited", floor_manager: "limited", accounts: "limited", fms: "limited", office_admin: "limited" },
+        access: { admin: "full", manager: "full", sales_rep: "limited", floor_manager: "limited", accounts: "limited", fms: "limited", office_admin: "limited", it_team: "full" },
       },
     ],
   },
@@ -224,15 +228,15 @@ const FEATURE_MATRIX: Array<{
     rows: [
       {
         feature: "System settings",
-        access: { admin: "full", manager: "none", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "none", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
       {
         feature: "Services & reorder config",
-        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "full" },
+        access: { admin: "full", manager: "full", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "full", it_team: "none" },
       },
       {
         feature: "Audit logs",
-        access: { admin: "full", manager: "none", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none" },
+        access: { admin: "full", manager: "none", sales_rep: "none", floor_manager: "none", accounts: "none", fms: "none", office_admin: "none", it_team: "none" },
       },
     ],
   },
@@ -246,6 +250,7 @@ const ALL_ROLES = [
   { key: "accounts",      label: "Accounts" },
   { key: "fms",           label: "Facility Mgr" },
   { key: "office_admin",  label: "Office Admin" },
+  { key: "it_team",       label: "IT Team" },
 ];
 
 export default function TeamPage() {
@@ -874,6 +879,7 @@ export default function TeamPage() {
                   <SelectItem value="accounts">Accounts</SelectItem>
                   <SelectItem value="fms">Facility Manager</SelectItem>
                   <SelectItem value="office_admin">Office Administrator</SelectItem>
+                  <SelectItem value="it_team">IT Team</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1011,6 +1017,7 @@ export default function TeamPage() {
                   <SelectItem value="accounts">Accounts</SelectItem>
                   <SelectItem value="fms">Facility Manager</SelectItem>
                   <SelectItem value="office_admin">Office Administrator</SelectItem>
+                  <SelectItem value="it_team">IT Team</SelectItem>
                 </SelectContent>
               </Select>
             </div>
