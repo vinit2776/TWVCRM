@@ -68,7 +68,7 @@ export async function POST(
   }
   if (booking.payment_status === "paid") {
     return NextResponse.json(
-      { error: "Cannot add charges — payment has already been collected. Use Log Charge to record a separate post-facto charge." },
+      { error: "Cannot add charges — payment has already been collected. Use 'Add Charge' on the booking detail page to record a post-checkout charge." },
       { status: 400 }
     );
   }

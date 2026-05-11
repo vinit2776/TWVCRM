@@ -113,6 +113,9 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     booking?: { booking_number: string; booking_date: string } | null;
   }>>([]);
   const [expandedChargeId, setExpandedChargeId] = useState<string | null>(null);
+  // Post-checkout usage charges linked to THIS booking
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const [bookingCharges, setBookingCharges] = useState<any[]>([]);
   const [userRole, setUserRole] = useState<string | null>(null);
 
   // GST inline-edit state
@@ -163,6 +166,13 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         );
         setOutstandingCharges(bookingCharges);
       }
+    }
+
+    // Fetch post-checkout usage charges linked to this booking
+    const bcRes = await fetch(`/api/usage-charges?booking_id=${id}`);
+    if (bcRes.ok) {
+      const bcJson = await bcRes.json();
+      setBookingCharges(bcJson.data || []);
     }
 
     // Fetch public gateway settings
@@ -1814,6 +1824,51 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             )}
           </div>
         )
+      )}
+
+      {/* Post-checkout usage charges linked to this booking — shown when
+          any exist. These are charges logged after checkout via the
+          "Add Charge" button (damage, overtime, missed F&B, etc.).
+          For contract holders they flow into the next billing statement;
+          for walk-ins they become outstanding receivables. */}
+      {bookingCharges.length > 0 && (
+        <div className="rounded-lg border bg-card overflow-hidden">
+          <div className="px-4 py-3 border-b bg-muted/30 flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-semibold">Post-checkout charges</h3>
+              <p className="text-xs text-muted-foreground">
+                Charges logged after session ended
+              </p>
+            </div>
+            <span className="text-xs font-medium text-muted-foreground">
+              {bookingCharges.length} charge{bookingCharges.length !== 1 ? "s" : ""} · ₹{bookingCharges.reduce((s: number, c: { total: number }) => s + Number(c.total), 0).toLocaleString("en-IN")}
+            </span>
+          </div>
+          <div className="divide-y">
+            {bookingCharges.map((charge: { id: string; description: string; total: number; quantity?: number; unit_price?: number; charge_date: string; status: string; notes?: string }) => (
+              <div key={charge.id} className="px-4 py-2.5 flex items-center justify-between text-sm">
+                <div className="min-w-0 flex-1">
+                  <p className="font-medium truncate">{charge.description}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {new Date(charge.charge_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                    {charge.quantity && charge.unit_price ? ` · ${charge.quantity} × ₹${Number(charge.unit_price).toLocaleString("en-IN")}` : ""}
+                    {charge.notes ? ` · ${charge.notes}` : ""}
+                  </p>
+                </div>
+                <div className="flex items-center gap-2 ml-3">
+                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                    charge.status === "settled" ? "bg-green-100 text-green-800" :
+                    charge.status === "waived" ? "bg-gray-100 text-gray-600" :
+                    "bg-amber-100 text-amber-800"
+                  }`}>
+                    {charge.status}
+                  </span>
+                  <span className="font-semibold tabular-nums">₹{Number(charge.total).toLocaleString("en-IN")}</span>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
       )}
 
       {/* Customer History — moved to the top of the page (rendered just
