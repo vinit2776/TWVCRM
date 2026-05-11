@@ -14,7 +14,9 @@ import {
   Search,
   ChevronDown,
   History,
+  CheckCircle2,
 } from "lucide-react";
+import { formatSmartDate } from "@/lib/utils";
 
 type VendorBillItem = {
   id: string;
@@ -27,6 +29,10 @@ type VendorBillItem = {
   approval_status: string;
   approved_amount: number | null;
   approved_amount_note: string | null;
+  approved_by: string | null;
+  approved_at: string | null;
+  approval_code: string | null;
+  approver: { id: string; full_name: string } | null;
   payment_mode: string | null;
   payment_reference: string | null;
   payment_date: string | null;
@@ -205,7 +211,20 @@ export default function AccountingPage() {
                               className="border-b last:border-0 hover:bg-muted/40 cursor-pointer"
                               onClick={() => router.push(`/accounting/vendor-payments/${bill.id}`)}
                             >
-                              <td className="px-4 py-3 font-mono text-xs font-medium">{bill.bill_number}</td>
+                              <td className="px-4 py-3 font-mono text-xs font-medium">
+                                {bill.bill_number}
+                                {bill.approved_at && (
+                                  <p
+                                    className="mt-0.5 flex items-center gap-1 text-[10px] font-normal text-emerald-700"
+                                    title={bill.approval_code ? `Approval code: ${bill.approval_code}` : "Approved"}
+                                  >
+                                    <CheckCircle2 className="h-2.5 w-2.5 shrink-0" />
+                                    <span className="truncate">
+                                      {bill.approver?.full_name ?? "—"} · {formatSmartDate(bill.approved_at)}
+                                    </span>
+                                  </p>
+                                )}
+                              </td>
                               <td className="px-4 py-3">
                                 <p className="font-medium truncate max-w-[140px]">
                                   {(bill.procurement_vendors as { name: string } | null)?.name ?? "—"}
@@ -311,7 +330,20 @@ export default function AccountingPage() {
                                 className="border-b last:border-0 hover:bg-muted/30 cursor-pointer"
                                 onClick={() => router.push(`/accounting/vendor-payments/${bill.id}`)}
                               >
-                                <td className="px-4 py-2.5 font-mono text-xs font-medium">{bill.bill_number}</td>
+                                <td className="px-4 py-2.5 font-mono text-xs font-medium">
+                                  {bill.bill_number}
+                                  {bill.approved_at && (
+                                    <p
+                                      className="mt-0.5 flex items-center gap-1 text-[10px] font-normal text-emerald-700"
+                                      title={bill.approval_code ? `Approval code: ${bill.approval_code}` : "Approved"}
+                                    >
+                                      <CheckCircle2 className="h-2.5 w-2.5 shrink-0" />
+                                      <span className="truncate">
+                                        {bill.approver?.full_name ?? "—"} · {formatSmartDate(bill.approved_at)}
+                                      </span>
+                                    </p>
+                                  )}
+                                </td>
                                 <td className="px-4 py-2.5">
                                   <p className="font-medium truncate max-w-[140px] text-xs">
                                     {(bill.procurement_vendors as { name: string } | null)?.name ?? "—"}
