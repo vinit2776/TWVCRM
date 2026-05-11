@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 
 // POST — Bulk operations on bookings
 export async function POST(request: NextRequest) {
@@ -31,7 +32,7 @@ export async function POST(request: NextRequest) {
     try {
       const { data: booking } = await supabase
         .from("bookings")
-        .select("id, status, booking_number")
+        .select("id, status, booking_number, customer_type, usage_charge_id, space_id, booking_date, start_time, end_time, payment_status")
         .eq("id", bookingId)
         .single();
 
@@ -59,7 +60,29 @@ export async function POST(request: NextRequest) {
             results.push({ id: bookingId, success: false, error: "Not confirmed" });
             continue;
           }
-          await supabase.from("bookings").update({ status: "cancelled" }).eq("id", bookingId);
+
+          // Flag GST invoice when payment was collected and retained
+          const hasPayment = ["paid", "prepaid"].includes(booking.payment_status);
+
+          await supabase.from("bookings").update({
+            status: "cancelled",
+            cancellation_reason: "customer_requested",
+            cancelled_by: dbUser.id,
+            cancelled_at: new Date().toISOString(),
+            gst_invoice_required: hasPayment || undefined,
+          }).eq("id", bookingId);
+
+          // Shared side-effects: voucher revocation, usage charge waiver, waitlist auto-offer
+          await executeBookingCancellationSideEffects(supabase, {
+            bookingId,
+            customerType: booking.customer_type,
+            usageChargeId: booking.usage_charge_id,
+            spaceId: booking.space_id,
+            bookingDate: booking.booking_date,
+            startTime: booking.start_time,
+            endTime: booking.end_time,
+          });
+
           results.push({ id: bookingId, success: true });
           break;
         }

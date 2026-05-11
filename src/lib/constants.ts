@@ -261,12 +261,26 @@ export const CONTRACT_STATUS_COLORS: Record<string, string> = {
 // handler to prevent invalid jumps (e.g. terminated → active).
 // The renew endpoint sets renewal_in_progress directly (not via PATCH),
 // so active→renewal_in_progress is allowed but guarded by the renew API.
+/**
+ * Contract lifecycle state machine.
+ *
+ * Forward-only: Draft → Sent → Viewed → Accepted → Active → terminal.
+ * No backward transitions allowed (e.g. active → draft) to prevent
+ * accidental reactivation that would trigger billing generation.
+ *
+ * Special paths:
+ *   - `rejected` can only be reached from sent/viewed/accepted;
+ *     a rejected contract can be cloned into a new draft.
+ *   - `draft → active` is intentionally removed — contracts must go
+ *     through sent → viewed/accepted first to ensure the customer
+ *     has seen and agreed to the terms.
+ */
 export const CONTRACT_STATUS_TRANSITIONS: Record<string, string[]> = {
-  draft:                 ["sent", "active", "terminated"],
-  sent:                  ["viewed", "accepted", "rejected", "draft"],
-  viewed:                ["accepted", "rejected", "sent"],
-  accepted:              ["active", "rejected", "draft"],
-  rejected:              ["draft"],
+  draft:                 ["sent", "terminated"],
+  sent:                  ["viewed", "accepted", "rejected"],
+  viewed:                ["accepted", "rejected"],
+  accepted:              ["active", "rejected"],
+  rejected:              [],           // terminal — clone to new draft instead
   active:                ["renewal_in_progress", "expired", "terminated"],
   renewal_in_progress:   ["renewed", "active", "terminated"],
   renewed:               [],           // terminal — source contract

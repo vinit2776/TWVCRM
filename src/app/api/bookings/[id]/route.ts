@@ -531,6 +531,16 @@ export async function PATCH(
           return NextResponse.json({ error: "Insufficient permissions to cancel" }, { status: 403 });
         }
         updates.status = "cancelled";
+        updates.cancellation_reason = body.cancellation_reason || "customer_requested";
+        updates.cancelled_by = dbUser.id;
+        updates.cancelled_at = new Date().toISOString();
+
+        // Flag GST invoice when payment was collected and retained
+        // (consistent with POST /cancel dialog flow).
+        const hasPayment = ["paid", "prepaid"].includes(booking.payment_status);
+        if (hasPayment) {
+          updates.gst_invoice_required = true;
+        }
 
         // Shared side-effects: voucher revocation, usage charge waiver, waitlist auto-offer
         await executeBookingCancellationSideEffects(supabase, {
@@ -553,6 +563,14 @@ export async function PATCH(
           return NextResponse.json({ error: "Only managers/floor managers can mark no-show" }, { status: 403 });
         }
         updates.status = "no_show";
+
+        // Flag GST invoice when payment was collected and retained.
+        // No-show retains payment by default — finance needs to issue
+        // a GST invoice for the kept amount.
+        const hasNoShowPayment = ["paid", "prepaid"].includes(booking.payment_status);
+        if (hasNoShowPayment) {
+          updates.gst_invoice_required = true;
+        }
 
         // Shared side-effects: voucher revocation + usage charge waiver.
         // skipWaitlistOffer = true because the time slot is already past.
