@@ -85,11 +85,6 @@ const USAGE_STATUS_LABELS: Record<string, string> = {
   billed:  "Billed",
   waived:  "Waived",
 };
-const STATEMENT_STATUS_COLORS: Record<string, string> = {
-  draft:     "bg-gray-100 text-gray-800",
-  finalized: "bg-blue-100 text-blue-800",
-  exported:  "bg-green-100 text-green-800",
-};
 const STATEMENT_STATUS_LABELS: Record<string, string> = {
   draft:     "Draft",
   finalized: "Finalized",
@@ -193,7 +188,6 @@ interface ContractSummary {
   gst_invoice: unknown;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 interface WalkinPayment {
   id: string;
   amount: number;

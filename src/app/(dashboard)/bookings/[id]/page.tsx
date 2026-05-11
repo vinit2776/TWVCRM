@@ -5,11 +5,11 @@ import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, LogIn, LogOut, XCircle, Mail, Loader2,
-  Clock, Users as UsersIcon, IndianRupee, Wifi,
+  IndianRupee, Wifi,
   Phone, AlertTriangle, ShieldCheck, Star,
   Banknote, CheckCircle, Calendar, Timer, Copy, Coins, Gift,
-  Link2, Download, MessageCircle, Repeat, RotateCcw,
-  StickyNote, Receipt, Pencil, Check, X, Plus, Share2,
+  Download, MessageCircle, Repeat,
+  StickyNote, Pencil, Check, X, Plus, Share2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";

@@ -4,7 +4,6 @@ import { use, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
-  Edit2,
   Trash2,
   Mail,
   Phone,
@@ -22,7 +21,7 @@ import { useAggregator } from "@/hooks/use-aggregators";
 import { AggregatorContactsTab } from "@/components/aggregators/aggregator-contacts-tab";
 import { AggregatorRateCardsTab } from "@/components/aggregators/aggregator-rate-cards-tab";
 import { toast } from "sonner";
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { formatDate } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,

@@ -21,7 +21,6 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { Search, Loader2, Check, AlertCircle, ExternalLink } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
