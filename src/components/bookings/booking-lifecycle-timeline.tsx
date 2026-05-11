@@ -178,11 +178,11 @@ function Step({ state, icon, label, timestamp, sublabel, badge, isLast, highligh
           </span>
           {badge}
         </div>
-        {timestamp && (
+        {(timestamp || actorName) && (
           <p className={`text-xs mt-0.5 ${highlight ? "text-blue-600" : "text-muted-foreground"}`}>
             {timestamp}
             {actorName && (
-              <span className="text-muted-foreground font-normal"> · by {actorName}</span>
+              <span className="text-muted-foreground font-normal">{timestamp ? " · " : ""}by {actorName}</span>
             )}
           </p>
         )}
