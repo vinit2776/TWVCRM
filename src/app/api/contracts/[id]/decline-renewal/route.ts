@@ -24,11 +24,12 @@ export async function POST(
     .from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
-  // Role gate: only admin, manager, floor_manager can decline renewals
-  const allowedRoles = ["admin", "manager", "floor_manager"];
+  // Role gate: only admin, manager, sales_rep can decline renewals.
+  // Floor managers must request through their manager.
+  const allowedRoles = ["admin", "manager", "sales_rep"];
   if (!allowedRoles.includes(dbUser.role)) {
     return NextResponse.json({
-      error: "You do not have permission to decline contract renewals. Contact your manager or admin.",
+      error: "You do not have permission to decline contract renewals. Please ask your manager or admin.",
     }, { status: 403 });
   }
 

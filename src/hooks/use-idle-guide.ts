@@ -9,6 +9,31 @@ import type { FlowGuide, UserRole } from "@/lib/flow-guides";
 const STORAGE_KEY = (key: string) => `fg_seen_${key}`;
 const DEFAULT_IDLE_MS = 10_000;
 
+/**
+ * Attention pulse — uses localStorage (persists across sessions) to count
+ * how many times the user has interacted with a guide. For the first few
+ * encounters the hint card gets a pulsing glow to draw the eye.
+ */
+const ATTENTION_COUNTER_KEY = "fg_attention_count";
+const ATTENTION_THRESHOLD = 3; // stop pulsing after 3 encounters
+
+function getAttentionCount(): number {
+  try {
+    return parseInt(localStorage.getItem(ATTENTION_COUNTER_KEY) || "0", 10) || 0;
+  } catch {
+    return 0;
+  }
+}
+
+function incrementAttentionCount(): void {
+  try {
+    const next = getAttentionCount() + 1;
+    localStorage.setItem(ATTENTION_COUNTER_KEY, String(next));
+  } catch {
+    // localStorage unavailable — silently skip
+  }
+}
+
 function hasBeenSeen(key: string): boolean {
   try {
     return sessionStorage.getItem(STORAGE_KEY(key)) === "1";
@@ -28,9 +53,12 @@ function markSeen(key: string): void {
 export function useIdleGuide(): {
   guide: FlowGuide | null;
   dismiss: () => void;
+  /** True when the hint should pulse to attract first-time attention */
+  shouldPulse: boolean;
 } {
   const pathname = usePathname();
   const [activeGuide, setActiveGuide] = useState<FlowGuide | null>(null);
+  const [shouldPulse, setShouldPulse] = useState(false);
 
   // Stable refs — no re-renders needed when these change
   const userRoleRef = useRef<UserRole | null>(null);
@@ -105,6 +133,11 @@ export function useIdleGuide(): {
 
     markSeen(guide.key); // mark before showing so rapid re-fires don't double-show
     setActiveGuide(guide);
+
+    // Pulse for the first few encounters to draw attention
+    const count = getAttentionCount();
+    setShouldPulse(count < ATTENTION_THRESHOLD);
+    incrementAttentionCount();
   }
 
   /** Called when user clicks the × button or the CTA link */
@@ -113,5 +146,5 @@ export function useIdleGuide(): {
     // already marked seen in tryShow; nothing else to do
   }
 
-  return { guide: activeGuide, dismiss };
+  return { guide: activeGuide, dismiss, shouldPulse };
 }

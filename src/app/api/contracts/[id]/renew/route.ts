@@ -30,11 +30,12 @@ export async function POST(
     .from("users").select("id, role, full_name").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
-  // Role gate: only admin, manager, floor_manager can renew
-  const renewAllowedRoles = ["admin", "manager", "floor_manager"];
+  // Role gate: only admin, manager, sales_rep can renew.
+  // Floor managers must request a renewal through their manager.
+  const renewAllowedRoles = ["admin", "manager", "sales_rep"];
   if (!renewAllowedRoles.includes(dbUser.role)) {
     return NextResponse.json({
-      error: "You do not have permission to renew contracts. Contact your manager or admin.",
+      error: "You do not have permission to renew contracts. Please ask your manager or admin to initiate the renewal.",
     }, { status: 403 });
   }
 

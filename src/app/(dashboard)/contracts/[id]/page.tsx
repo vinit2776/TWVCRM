@@ -988,8 +988,8 @@ export default function ContractDetailPage({
                 )}
 
                 {/* Action buttons — only for active/expired, not already renewed or declined */}
-                {/* Role gate: admin, manager, floor_manager can renew */}
-                {["active", "expired"].includes(contract.status) && !contract.renewal_declined && ["admin", "manager", "floor_manager"].includes(userRole || "") && (
+                {/* Role gate: admin, manager, sales_rep can renew/decline */}
+                {["active", "expired"].includes(contract.status) && !contract.renewal_declined && ["admin", "manager", "sales_rep"].includes(userRole || "") && (
                   <div className="flex gap-2 pt-1">
                     <Button
                       size="sm"
