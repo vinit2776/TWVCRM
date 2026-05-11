@@ -2049,8 +2049,12 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
 }
 
 // ---------------------------------------------------------------------------
-// WiFi Voucher card — handles both multi-voucher display (walk-in/guest)
-// and on-demand issuance button (contract holders with invited guests).
+// WiFi Voucher card — on-demand issuance with count selector + reveal.
+//
+// Vouchers are NOT auto-issued at booking creation. Staff decides how many
+// to issue based on actual attendees (an 8-seat room with 2 people only
+// needs 1 code, not 4). Each code is hidden behind a "Reveal" tap to
+// prevent accidental exposure of unused codes.
 // ---------------------------------------------------------------------------
 
 interface VoucherIssuance {
@@ -2069,20 +2073,27 @@ function WifiVoucherCard({
   onIssued: () => void;
 }) {
   const [requesting, setRequesting] = useState(false);
+  const [revealedIds, setRevealedIds] = useState<Set<string>>(new Set());
   const activeIssuances = existingIssuances.filter((v) => v.is_active && v.voucher?.voucher_code);
 
   const numAttendees = booking.num_attendees ?? null;
-  const vouchersNeeded = numAttendees ? Math.ceil(numAttendees / 2) : 1;
-  const shortfall = Math.max(0, vouchersNeeded - activeIssuances.length);
+  const defaultCount = numAttendees ? Math.ceil(numAttendees / 2) : 1;
+  const [issueCount, setIssueCount] = useState(defaultCount);
+
+  const isActive = ["confirmed", "checked_in"].includes(booking.status);
 
   const handleRequestVouchers = async () => {
     setRequesting(true);
-    const res = await fetch(`/api/bookings/${booking.id}/vouchers`, { method: "POST" });
+    const res = await fetch(`/api/bookings/${booking.id}/vouchers`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ count: issueCount }),
+    });
     const json = await res.json();
     if (res.ok) {
       toast.success(`${json.issued} WiFi voucher${json.issued !== 1 ? "s" : ""} issued`);
       if (json.shortfall > 0) {
-        toast.warning(`${json.shortfall} voucher${json.shortfall !== 1 ? "s" : ""} could not be issued — stock is low. Top up inventory.`);
+        toast.warning(`${json.shortfall} voucher${json.shortfall !== 1 ? "s" : ""} could not be issued — stock is low.`);
       }
       onIssued();
     } else {
@@ -2091,35 +2102,61 @@ function WifiVoucherCard({
     setRequesting(false);
   };
 
-  // Contract holder — no auto-issued vouchers
-  if (booking.customer_type === "contract_holder") {
-    if (activeIssuances.length === 0) {
-      // Only offer the button for active bookings
-      if (!["confirmed", "checked_in"].includes(booking.status)) return null;
-      return (
-        <Card className="border-dashed">
-          <CardContent className="py-4 flex items-center justify-between gap-3">
-            <div className="flex items-center gap-2 text-sm text-muted-foreground">
-              <Wifi className="h-4 w-4" />
-              <span>No WiFi vouchers issued — guests attending?</span>
-            </div>
+  const toggleReveal = (id: string) => {
+    setRevealedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const copyCode = (code: string) => {
+    navigator.clipboard.writeText(code).then(
+      () => toast.success("Code copied"),
+      () => toast.error("Copy failed"),
+    );
+  };
+
+  // No vouchers issued yet — show issue form
+  if (activeIssuances.length === 0) {
+    if (!isActive) return null;
+    return (
+      <Card className="border-dashed">
+        <CardContent className="py-4 space-y-3">
+          <div className="flex items-center gap-2 text-sm text-muted-foreground">
+            <Wifi className="h-4 w-4" />
+            <span>No WiFi vouchers issued yet</span>
+          </div>
+          <div className="flex items-center gap-2">
+            <label className="text-xs text-muted-foreground shrink-0">Vouchers:</label>
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={issueCount}
+              onChange={(e) => setIssueCount(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+              className="w-16 h-8 rounded-md border border-input bg-background px-2 text-sm text-center tabular-nums"
+            />
             <Button
               size="sm"
-              variant="outline"
               onClick={handleRequestVouchers}
               disabled={requesting}
+              className="flex-1"
             >
-              {requesting ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />Issuing…</> : <><Wifi className="h-3.5 w-3.5 mr-1" />Issue Vouchers</>}
+              {requesting ? <><Loader2 className="h-3.5 w-3.5 mr-1 animate-spin" />Issuing…</> : <><Wifi className="h-3.5 w-3.5 mr-1" />Issue {issueCount} Voucher{issueCount !== 1 ? "s" : ""}</>}
             </Button>
-          </CardContent>
-        </Card>
-      );
-    }
+          </div>
+          {numAttendees && numAttendees > 2 && (
+            <p className="text-[10px] text-muted-foreground">
+              {numAttendees} attendees → {defaultCount} voucher{defaultCount !== 1 ? "s" : ""} suggested (each covers 2 devices)
+            </p>
+          )}
+        </CardContent>
+      </Card>
+    );
   }
 
-  // No vouchers at all — nothing to show for walk-in/guest (shouldn't normally happen)
-  if (activeIssuances.length === 0) return null;
-
+  // Vouchers have been issued — show with reveal-on-click
   return (
     <Card>
       <CardHeader className="pb-2">
@@ -2127,41 +2164,68 @@ function WifiVoucherCard({
           <Wifi className="h-4 w-4" />
           WiFi Vouchers
           <span className="ml-auto text-xs font-normal text-muted-foreground tabular-nums">
-            {activeIssuances.length}{numAttendees ? ` / ${vouchersNeeded} needed` : ""} issued
+            {activeIssuances.length} issued
           </span>
         </CardTitle>
       </CardHeader>
       <CardContent className="space-y-2">
-        {activeIssuances.length === 1 ? (
-          // Single voucher — keep the original prominent display
-          <div>
-            <p className="font-mono text-lg font-bold tracking-wider text-center py-1">
-              {activeIssuances[0].voucher!.voucher_code}
-            </p>
-            <p className="text-xs text-muted-foreground text-center">2 device logins · valid for 24 hours</p>
-          </div>
-        ) : (
-          // Multiple vouchers — numbered list
-          <div className="space-y-1.5">
-            {activeIssuances.map((v, idx) => (
-              <div key={v.id} className="flex items-center justify-between rounded-md bg-muted/30 px-3 py-2">
-                <span className="text-xs text-muted-foreground">Voucher {idx + 1}</span>
-                <span className="font-mono text-sm font-semibold tracking-wider">
-                  {v.voucher!.voucher_code}
-                </span>
+        <div className="space-y-1.5">
+          {activeIssuances.map((v, idx) => {
+            const vid = v.id || String(idx);
+            const isRevealed = revealedIds.has(vid);
+            const code = v.voucher!.voucher_code;
+            return (
+              <div key={vid} className="flex items-center justify-between rounded-md bg-muted/30 px-3 py-2">
+                <span className="text-xs text-muted-foreground">#{idx + 1}</span>
+                {isRevealed ? (
+                  <div className="flex items-center gap-2">
+                    <span className="font-mono text-sm font-semibold tracking-wider">
+                      {code}
+                    </span>
+                    <button
+                      onClick={() => copyCode(code)}
+                      className="text-muted-foreground hover:text-foreground transition-colors"
+                      title="Copy code"
+                    >
+                      <Copy className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => toggleReveal(vid)}
+                    className="text-xs text-primary hover:underline font-medium"
+                  >
+                    Tap to reveal
+                  </button>
+                )}
               </div>
-            ))}
-            <p className="text-xs text-muted-foreground pt-1 text-center">
-              Each code supports 2 device logins · valid for 24 hours
-            </p>
-          </div>
-        )}
+            );
+          })}
+        </div>
+        <p className="text-xs text-muted-foreground text-center">
+          Each code supports 2 device logins · tap to reveal when needed
+        </p>
 
-        {/* Low-stock warning when fewer vouchers issued than attendees need */}
-        {shortfall > 0 && (
-          <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-700 flex items-center gap-2">
-            <AlertTriangle className="h-3.5 w-3.5 shrink-0" />
-            {shortfall} voucher{shortfall !== 1 ? "s" : ""} short — only {activeIssuances.length} available in stock for {numAttendees} attendees. Top up inventory.
+        {/* Issue more — only for active bookings */}
+        {isActive && (
+          <div className="flex items-center gap-2 pt-1 border-t">
+            <input
+              type="number"
+              min={1}
+              max={20}
+              value={issueCount}
+              onChange={(e) => setIssueCount(Math.max(1, Math.min(20, parseInt(e.target.value) || 1)))}
+              className="w-14 h-7 rounded-md border border-input bg-background px-2 text-xs text-center tabular-nums"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              className="text-xs h-7 flex-1"
+              onClick={handleRequestVouchers}
+              disabled={requesting}
+            >
+              {requesting ? <Loader2 className="h-3 w-3 animate-spin" /> : <><Plus className="h-3 w-3 mr-1" />Issue More</>}
+            </Button>
           </div>
         )}
       </CardContent>

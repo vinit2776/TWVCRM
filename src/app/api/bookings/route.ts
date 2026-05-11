@@ -812,70 +812,12 @@ export async function POST(request: NextRequest) {
     })());
   }
 
-  // 7. WiFi vouchers — batched: parallel repo updates + single bulk issuance insert
-  if ((input.customer_type === "walk_in" || input.customer_type === "guest")) {
-    postInsertTasks.push((async () => {
-      const numAttendeesInt = input.num_attendees ? Math.max(1, Number(input.num_attendees)) : 1;
-      const vouchersNeeded = Math.ceil(numAttendeesInt / 2);
-
-      const isShortBooking = durationHours <= 3;
-      const preferredValidity = isShortBooking ? 0.125 : 1;
-      const fallbackValidity  = isShortBooking ? 1      : null;
-
-      const fetchVouchers = async (validity: number, limit: number) => {
-        const { data } = await supabase
-          .from("voucher_repository")
-          .select("id, voucher_code, validity_days")
-          .eq("status", "available")
-          .eq("validity_days", validity)
-          .eq("location_id", space.location_id)
-          .limit(limit);
-        return data || [];
-      };
-
-      let vouchers = await fetchVouchers(preferredValidity, vouchersNeeded);
-      if (vouchers.length < vouchersNeeded && fallbackValidity) {
-        const extras = await fetchVouchers(fallbackValidity, vouchersNeeded - vouchers.length);
-        vouchers = [...vouchers, ...extras];
-      }
-
-      if (vouchers.length > 0) {
-        const now = new Date();
-
-        // Batch: update all voucher repo statuses in parallel + insert all issuances at once
-        await Promise.all([
-          // Parallel repo updates (each voucher may have different validity → different expires_at)
-          ...vouchers.map((voucher) => {
-            const validityDays: number = voucher.validity_days ?? 1;
-            const expiryMs = validityDays < 1
-              ? Math.round(validityDays * 24 * 60 * 60 * 1000)
-              : 24 * 60 * 60 * 1000;
-            return supabase.from("voucher_repository").update({
-              status: "issued",
-              issued_at: now.toISOString(),
-              expires_at: new Date(now.getTime() + expiryMs).toISOString(),
-            }).eq("id", voucher.id);
-          }),
-          // Single bulk insert for all issuances
-          supabase.from("voucher_issuances").insert(
-            vouchers.map((voucher, i) => ({
-              contract_id: contractId || null,
-              voucher_id: voucher.id,
-              lead_id: leadId || null,
-              booking_id: booking.id,
-              seat_number: i + 1,
-              issued_by: dbUser.id,
-              issued_at: now.toISOString(),
-              valid_from: input.booking_date,
-              valid_until: input.booking_date,
-              is_active: true,
-              seat_occupant_email: i === 0 ? (input.guest_email || null) : null,
-            }))
-          ),
-        ]);
-      }
-    })());
-  }
+  // 7. WiFi vouchers — no longer auto-issued at booking creation.
+  //    Vouchers are now issued on-demand from the booking detail page
+  //    via POST /api/bookings/[id]/vouchers. This:
+  //      a) Speeds up booking creation (saves ~6 DB calls)
+  //      b) Prevents voucher waste (staff chooses how many to issue)
+  //      c) Avoids exposing unused codes on screen
 
   // 7b. Advance payment
   if (body.advance_payment && input.customer_type === "walk_in") {
