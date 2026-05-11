@@ -45,7 +45,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("vendor_bills")
     .select(
-      `*, procurement_vendors(id, name), purchase_orders(id, po_number, po_type),
+      `*, procurement_vendors(id, name, contact_email), purchase_orders(id, po_number, po_type),
        approver:users!vendor_bills_approved_by_fkey(id, full_name)`,
       { count: "exact" }
     )

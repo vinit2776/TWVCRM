@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PettyCashIssuance } from "@/components/accounting/petty-cash-issuance";
@@ -14,8 +15,11 @@ import {
   ChevronDown,
   History,
   CheckCircle2,
+  MailX,
+  ArrowRight,
 } from "lucide-react";
 import { formatSmartDate } from "@/lib/utils";
+import { VendorEmailChip } from "@/components/finance-intelligence/vendor-email-chip";
 
 type VendorBillItem = {
   id: string;
@@ -37,7 +41,7 @@ type VendorBillItem = {
   payment_date: string | null;
   vendor_id: string;
   po_id: string | null;
-  procurement_vendors: { id: string; name: string } | null;
+  procurement_vendors: { id: string; name: string; contact_email?: string | null } | null;
   purchase_orders: { id: string; po_number: string } | null;
   vendor_bill_payments?: Array<{
     id: string;
@@ -66,6 +70,10 @@ export default function AccountingPage() {
   const [billSearch, setBillSearch]     = useState("");
   const [historyLimit, setHistoryLimit] = useState(10);
 
+  // Vendor-email audit widget (touch point C)
+  const [emailAuditCount, setEmailAuditCount] = useState<number | null>(null);
+  const [emailAuditHighPriority, setEmailAuditHighPriority] = useState(0);
+
   const fetchVendorBills = useCallback(async (force = false) => {
     if (billsLoaded && !force) return;
     setBillsLoading(true);
@@ -83,6 +91,17 @@ export default function AccountingPage() {
     if (activeTab === "vendor-payments") fetchVendorBills();
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // Vendor-email audit count for the dashboard widget
+  useEffect(() => {
+    fetch("/api/finance-intelligence/vendor-email-nag/audit")
+      .then((r) => r.json())
+      .then((j) => {
+        setEmailAuditCount(j.count ?? 0);
+        setEmailAuditHighPriority(j.high_priority_count ?? 0);
+      })
+      .catch(() => { /* non-fatal */ });
+  }, [vendorBills]);  // refresh after bill list refresh — likely things have changed
 
   // ── Vendor bill helpers ───────────────────────────────────────────────────
   const matchSearch = (bill: VendorBillItem) => {
@@ -147,6 +166,42 @@ export default function AccountingPage() {
                   className="w-full pl-9 pr-4 py-2 text-sm border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-ring"
                 />
               </div>
+
+              {/* Vendor-email audit widget (touch point C — dashboard) */}
+              {emailAuditCount !== null && emailAuditCount > 0 && (
+                <Link
+                  href="/accounting/vendor-email-audit"
+                  className={`flex items-center justify-between gap-3 rounded-lg border px-4 py-2.5 transition-colors hover:bg-amber-100 ${
+                    emailAuditHighPriority > 0
+                      ? "border-red-300 bg-red-50"
+                      : "border-amber-300 bg-amber-50"
+                  }`}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <MailX
+                      className={`h-4 w-4 shrink-0 ${
+                        emailAuditHighPriority > 0 ? "text-red-600" : "text-amber-600"
+                      }`}
+                    />
+                    <p className="text-sm">
+                      <span className="font-semibold">
+                        {emailAuditCount} vendor{emailAuditCount === 1 ? "" : "s"} missing email
+                      </span>
+                      {emailAuditHighPriority > 0 && (
+                        <span className="text-red-700 ml-1">
+                          ({emailAuditHighPriority} with pending bills)
+                        </span>
+                      )}
+                      <span className="text-muted-foreground ml-1">
+                        — payment confirmations cannot be sent
+                      </span>
+                    </p>
+                  </div>
+                  <span className="text-xs font-medium inline-flex items-center gap-1 shrink-0">
+                    Fix now <ArrowRight className="h-3 w-3" />
+                  </span>
+                </Link>
+              )}
 
               {/* Summary tiles */}
               <div className="grid grid-cols-3 gap-3 text-sm">
@@ -225,9 +280,14 @@ export default function AccountingPage() {
                                 )}
                               </td>
                               <td className="px-4 py-3">
-                                <p className="font-medium truncate max-w-[140px]">
-                                  {(bill.procurement_vendors as { name: string } | null)?.name ?? "—"}
-                                </p>
+                                <div className="flex items-center gap-1.5 flex-wrap">
+                                  <p className="font-medium truncate max-w-[140px]">
+                                    {bill.procurement_vendors?.name ?? "—"}
+                                  </p>
+                                  {bill.procurement_vendors?.id && !bill.procurement_vendors.contact_email && (
+                                    <VendorEmailChip vendorId={bill.procurement_vendors.id} />
+                                  )}
+                                </div>
                               </td>
                               <td className="px-4 py-3 hidden md:table-cell text-muted-foreground text-xs">
                                 {(bill.purchase_orders as { po_number: string } | null)?.po_number ?? "—"}
@@ -344,9 +404,14 @@ export default function AccountingPage() {
                                   )}
                                 </td>
                                 <td className="px-4 py-2.5">
-                                  <p className="font-medium truncate max-w-[140px] text-xs">
-                                    {(bill.procurement_vendors as { name: string } | null)?.name ?? "—"}
-                                  </p>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <p className="font-medium truncate max-w-[140px] text-xs">
+                                      {bill.procurement_vendors?.name ?? "—"}
+                                    </p>
+                                    {bill.procurement_vendors?.id && !bill.procurement_vendors.contact_email && (
+                                      <VendorEmailChip vendorId={bill.procurement_vendors.id} />
+                                    )}
+                                  </div>
                                 </td>
                                 <td className="px-4 py-2.5 hidden md:table-cell text-muted-foreground text-xs">
                                   {(bill.purchase_orders as { po_number: string } | null)?.po_number ?? "—"}

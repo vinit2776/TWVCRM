@@ -20,6 +20,7 @@ import {
   PAYMENT_BATCH_TYPE_LABELS, PAYMENT_BATCH_TYPE_COLORS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency, formatSmartDate, cn } from "@/lib/utils";
+import { VendorEmailChip } from "@/components/finance-intelligence/vendor-email-chip";
 import { computeBatchDate, formatBatchDate, batchDateLabel } from "@/lib/payment-batch";
 import { toast } from "sonner";
 import type { VendorBill, PurchaseOrder, PaymentBatchType } from "@/types";
@@ -445,7 +446,13 @@ export default function PayablesPage() {
                           )}
                         </td>
                         <td className="px-4 py-3 font-medium">
-                          {bill.procurement_vendors?.name ?? "—"}
+                          <div className="flex items-center gap-1.5 flex-wrap">
+                            <span>{bill.procurement_vendors?.name ?? "—"}</span>
+                            {bill.procurement_vendors?.id &&
+                              !(bill.procurement_vendors as { contact_email?: string | null }).contact_email && (
+                                <VendorEmailChip vendorId={bill.procurement_vendors.id} />
+                              )}
+                          </div>
                         </td>
                         <td className="px-4 py-3 hidden md:table-cell text-muted-foreground font-mono text-xs">
                           {bill.purchase_orders ? (

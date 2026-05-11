@@ -31,6 +31,7 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { computeBatchDate, formatBatchDate } from "@/lib/payment-batch";
+import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
 import type { VendorBill, PaymentBatchType } from "@/types";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -649,6 +650,15 @@ export default function VendorBillDetailPage() {
             This invoice is awaiting approval from a manager or admin before payment can be recorded.
           </p>
         </div>
+      )}
+
+      {/* Vendor-email nag (touch point D — page-level banner) */}
+      {chain?.vendor?.id && !chain.vendor.contact_email && (
+        <VendorEmailBanner
+          vendorId={chain.vendor.id}
+          vendorName={chain.vendor.name}
+          onEmailSaved={() => fetchAll()}
+        />
       )}
 
       {/* Details grid */}
@@ -1304,6 +1314,15 @@ export default function VendorBillDetailPage() {
             <DialogTitle>Record Payment</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            {/* Vendor-email nag (Finance Intelligence) — only renders if vendor has no email */}
+            {chain?.vendor?.id && !chain.vendor.contact_email && (
+              <VendorEmailBanner
+                vendorId={chain.vendor.id}
+                vendorName={chain.vendor.name}
+                forceShow
+                onEmailSaved={() => fetchAll()}
+              />
+            )}
             <p className="text-sm text-muted-foreground">
               Balance due: <strong>{formatCurrency(remaining > 0 ? remaining : 0)}</strong>
             </p>

@@ -18,3 +18,4 @@ export * from "./suggest";
 export * from "./anomaly";
 export * from "./fuzzy-match";
 export * from "./audit";
+export * from "./vendor-email-nag";
