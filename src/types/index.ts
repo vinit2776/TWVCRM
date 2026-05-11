@@ -1964,6 +1964,7 @@ export interface VendorBill {
   approval_status: BillApprovalStatus;
   approved_by?: string;
   approved_at?: string;
+  approval_code?: string;
   approved_amount?: number | null;
   approved_amount_note?: string | null;
   rejection_reason?: string;

@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { IndianRupee, ChevronLeft, ChevronRight, Loader2, CalendarClock, AlertTriangle } from "lucide-react";
+import { IndianRupee, ChevronLeft, ChevronRight, Loader2, CalendarClock, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -19,7 +19,7 @@ import {
   PO_ADVANCE_PAYMENT_MODE_LABELS,
   PAYMENT_BATCH_TYPE_LABELS, PAYMENT_BATCH_TYPE_COLORS,
 } from "@/lib/constants";
-import { formatDate, formatCurrency, cn } from "@/lib/utils";
+import { formatDate, formatCurrency, formatSmartDate, cn } from "@/lib/utils";
 import { computeBatchDate, formatBatchDate, batchDateLabel } from "@/lib/payment-batch";
 import { toast } from "sonner";
 import type { VendorBill, PurchaseOrder, PaymentBatchType } from "@/types";
@@ -427,6 +427,21 @@ export default function PayablesPage() {
                           </Link>
                           {isOverdue(bill) && (
                             <span className="ml-1.5 text-xs text-amber-700 font-normal">Overdue</span>
+                          )}
+                          {bill.approved_at && (
+                            <p
+                              className="mt-0.5 flex items-center gap-1 text-[10px] font-normal text-emerald-700"
+                              title={
+                                bill.approval_code
+                                  ? `Approval code: ${bill.approval_code}`
+                                  : "Approved"
+                              }
+                            >
+                              <CheckCircle2 className="h-2.5 w-2.5 shrink-0" />
+                              <span className="truncate">
+                                {bill.approver?.full_name ?? "—"} · {formatSmartDate(bill.approved_at)}
+                              </span>
+                            </p>
                           )}
                         </td>
                         <td className="px-4 py-3 font-medium">

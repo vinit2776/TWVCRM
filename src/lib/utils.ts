@@ -34,6 +34,39 @@ export function formatRelativeDate(date: string | Date): string {
   return formatDistanceToNow(d, { addSuffix: true });
 }
 
+/**
+ * Smart date: "Today, 10:42 AM" / "Yesterday, 3:15 PM" / "03 May" (same year) /
+ * "03 May 2025" (older year). Useful for activity feeds + audit columns where
+ * recent timestamps deserve the time-of-day but older ones just need the date.
+ */
+export function formatSmartDate(date: string | Date): string {
+  const d = new Date(date);
+  if (!isValid(d)) return "Invalid date";
+
+  const now = new Date();
+  const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterday = new Date(today.getTime() - 24 * 60 * 60 * 1000);
+  const dDay = new Date(d.getFullYear(), d.getMonth(), d.getDate());
+
+  const time = new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  }).format(d);
+
+  if (dDay.getTime() === today.getTime()) return `Today, ${time}`;
+  if (dDay.getTime() === yesterday.getTime()) return `Yesterday, ${time}`;
+
+  const sameYear = d.getFullYear() === now.getFullYear();
+  return new Intl.DateTimeFormat("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "short",
+    ...(sameYear ? {} : { year: "numeric" }),
+  }).format(d);
+}
+
 export function formatCurrency(amount: number): string {
   return new Intl.NumberFormat("en-IN", {
     style: "currency",
