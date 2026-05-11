@@ -90,7 +90,18 @@ function getCurrentLabel(steps: Step[], props: LifecycleProps): { text: string; 
 }
 
 export function BillingLifecycleStatus(props: LifecycleProps) {
-  const { variant = "compact" } = props;
+  const { variant = "compact", status } = props;
+
+  // Voided statements get a special red badge instead of the stepper
+  if (status === "voided") {
+    return (
+      <div className="flex items-center gap-1.5" title="This statement has been voided">
+        <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500" />
+        <span className="text-[11px] font-medium text-red-700 whitespace-nowrap">Voided</span>
+      </div>
+    );
+  }
+
   const steps = resolveSteps(props);
   const completedCount = steps.filter((s) => s.done).length;
   const { text, color } = getCurrentLabel(steps, props);
