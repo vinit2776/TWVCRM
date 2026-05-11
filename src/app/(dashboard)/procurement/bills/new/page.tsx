@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, Loader2, Paperclip, X, FileText } from "lucide-react";
+import { ChevronLeft, Loader2, Paperclip, X, FileText, AlertCircle } from "lucide-react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -50,6 +51,17 @@ function NewVendorBillForm() {
   const [totalAmount, setTotalAmount] = useState("");
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // Duplicate-invoice detector (Finance Intelligence — Day 2)
+  type DupCandidate = {
+    bill_id: string; bill_number: string;
+    invoice_number: string | null; invoice_date: string;
+    total_amount: number; similarity_score: number; match_reason: string;
+    approval_status: string;
+  };
+  const [duplicates, setDuplicates] = useState<DupCandidate[]>([]);
+  const [checkingDuplicates, setCheckingDuplicates] = useState(false);
+  const [duplicateDismissed, setDuplicateDismissed] = useState(false);
 
   // File upload state
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
@@ -113,6 +125,45 @@ function NewVendorBillForm() {
       })
       .finally(() => setLoadingPo(false));
   }, [poId]);
+
+  // ── Duplicate-invoice detector — debounced check ─────────────────────────
+  useEffect(() => {
+    // Reset dismissal whenever the inputs change
+    setDuplicateDismissed(false);
+
+    const amt = parseFloat(totalAmount);
+    if (!vendorId || !invoiceNumber.trim() || !isFinite(amt) || amt <= 0 || !invoiceDate) {
+      setDuplicates([]);
+      return;
+    }
+
+    let cancelled = false;
+    setCheckingDuplicates(true);
+
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/procurement/bills/check-duplicate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            vendor_id: vendorId,
+            invoice_number: invoiceNumber.trim(),
+            total_amount: amt,
+            invoice_date: invoiceDate,
+          }),
+        });
+        if (cancelled) return;
+        const json = await res.json();
+        setDuplicates(json.candidates ?? []);
+      } catch {
+        if (!cancelled) setDuplicates([]);
+      } finally {
+        if (!cancelled) setCheckingDuplicates(false);
+      }
+    }, 500);
+
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [vendorId, invoiceNumber, totalAmount, invoiceDate]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -315,9 +366,68 @@ function NewVendorBillForm() {
             )}
           </div>
 
+          {/* Duplicate-invoice warning (Finance Intelligence) */}
+          {!duplicateDismissed && duplicates.length > 0 && (
+            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-start gap-2 min-w-0">
+                  <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-amber-900">
+                      Possible duplicate{duplicates.length > 1 ? "s" : ""} found
+                    </p>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      A bill matching these details already exists for this vendor. Review before saving.
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setDuplicateDismissed(true)}
+                  className="text-xs text-amber-700 hover:text-amber-900 shrink-0"
+                  aria-label="Dismiss"
+                >
+                  Dismiss
+                </button>
+              </div>
+              <div className="space-y-1 mt-2">
+                {duplicates.map((d) => (
+                  <div
+                    key={d.bill_id}
+                    className="flex items-center justify-between gap-2 bg-white/60 rounded px-2 py-1.5 text-xs"
+                  >
+                    <div className="flex flex-wrap items-baseline gap-x-2 min-w-0">
+                      <Link
+                        href={`/procurement/bills/${d.bill_id}`}
+                        target="_blank"
+                        className="font-mono font-medium text-amber-900 hover:underline"
+                      >
+                        {d.bill_number}
+                      </Link>
+                      <span className="text-amber-700">{formatCurrency(d.total_amount)}</span>
+                      <span className="text-amber-600">{d.invoice_date}</span>
+                      <span className="text-amber-700 text-[10px]">· {d.match_reason}</span>
+                    </div>
+                    <span className="text-amber-900 font-semibold tabular-nums text-[10px] shrink-0">
+                      {Math.round(d.similarity_score * 100)}% match
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
-              <Label htmlFor="invoice_number">Invoice Number</Label>
+              <Label htmlFor="invoice_number">
+                Invoice Number
+                {checkingDuplicates && (
+                  <span className="ml-2 text-[10px] text-muted-foreground inline-flex items-center gap-1">
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                    Checking for duplicates…
+                  </span>
+                )}
+              </Label>
               <Input
                 id="invoice_number"
                 placeholder="Vendor's invoice #"
