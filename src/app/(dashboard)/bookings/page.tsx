@@ -7,6 +7,7 @@ import {
   Plus, CalendarClock, Search, X, ChevronLeft, ChevronRight,
   LogIn, LogOut, XCircle, MoreHorizontal, Mail, AlertTriangle, Phone,
   Star, MessageSquareWarning, Calendar, BarChart3, List, Copy, RotateCcw,
+  Share2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -59,6 +60,51 @@ function isBookingPastStartTime(b: Booking): boolean {
   if (b.booking_date !== today) return false;
   const [bh, bm] = b.start_time.slice(0, 5).split(":").map(Number);
   return now.getHours() * 60 + now.getMinutes() > bh * 60 + bm;
+}
+
+function copyBookingDetails(b: Booking) {
+  const customerName = b.lead
+    ? `${b.lead.first_name} ${b.lead.last_name}`
+    : b.guest_name || "Guest";
+  const customerPhone = b.booker_phone || b.guest_phone || b.lead?.phone || "";
+  const company = b.lead?.company || b.guest_company || "";
+
+  const lines: string[] = [
+    `Booking Confirmation - ${b.booking_number}`,
+    ``,
+    `Date: ${formatDate(b.booking_date)}`,
+    `Time: ${formatTime12(b.start_time)} - ${formatTime12(b.end_time)} (${b.duration_hours}h)`,
+    `Space: ${b.space?.name || "—"}`,
+    `Location: ${b.location?.name || "—"}`,
+  ];
+
+  lines.push(``);
+  lines.push(`Customer: ${customerName}`);
+  if (company) lines.push(`Company: ${company}`);
+  if (customerPhone) lines.push(`Phone: ${customerPhone}`);
+  if (b.lead?.email || b.guest_email) lines.push(`Email: ${b.lead?.email || b.guest_email}`);
+
+  lines.push(``);
+  lines.push(`Amount: ${formatCurrency(b.total_amount)}${b.gst_amount ? ` + ${formatCurrency(b.gst_amount)} GST = ${formatCurrency(b.total_amount_with_gst || b.total_amount + b.gst_amount)}` : ""}`);
+  lines.push(`Payment: ${BOOKING_PAYMENT_STATUS_LABELS[b.payment_status]}`);
+  lines.push(`Status: ${BOOKING_STATUS_LABELS[b.status]}`);
+
+  if (b.facilities && b.facilities.length > 0) {
+    lines.push(``);
+    lines.push(`Add-ons: ${b.facilities.map(f => f.facility_name).join(", ")}`);
+  }
+
+  lines.push(``);
+  lines.push(`Booking Type: ${BOOKING_CUSTOMER_TYPE_LABELS[b.customer_type]}`);
+  if (b.contract?.contract_number) {
+    lines.push(`Agreement: ${b.contract.contract_number}`);
+  }
+
+  navigator.clipboard.writeText(lines.join("\n")).then(() => {
+    toast.success("Booking details copied to clipboard");
+  }).catch(() => {
+    toast.error("Failed to copy details");
+  });
 }
 
 type TabType = "list" | "calendar" | "analytics";
@@ -282,6 +328,9 @@ function BookingTable({
                           <DropdownMenuItem onClick={() => handleCopyLink(b.id)}>
                             <Copy className="mr-2 h-4 w-4" />Copy Link
                           </DropdownMenuItem>
+                          <DropdownMenuItem onClick={() => copyBookingDetails(b)}>
+                            <Share2 className="mr-2 h-4 w-4" />Copy Booking Details
+                          </DropdownMenuItem>
                         </DropdownMenuContent>
                       </DropdownMenu>
                     </td>
@@ -345,7 +394,7 @@ export default function BookingsPage() {
   // Fetch today and future bookings (all at once for the dashboard view)
   const fetchDashboardBookings = useCallback(async () => {
     setLoading(true);
-    const params = new URLSearchParams({ limit: "200", date_from: today });
+    const params = new URLSearchParams({ limit: "50", date_from: today });
     if (locationFilter) params.set("location_id", locationFilter);
     try {
       const res = await fetch(`/api/bookings?${params}`);
@@ -362,7 +411,7 @@ export default function BookingsPage() {
   // Fetch "all bookings" when the section is visible (for history browsing)
   const fetchAllBookings = useCallback(async () => {
     setAllLoading(true);
-    const params = new URLSearchParams({ page: String(page), limit: "25" });
+    const params = new URLSearchParams({ page: String(page), limit: "25", include_history: "true" });
     if (locationFilter) params.set("location_id", locationFilter);
     if (statusFilter) params.set("status", statusFilter);
     if (customerTypeFilter) params.set("customer_type", customerTypeFilter);
@@ -748,6 +797,10 @@ export default function BookingsPage() {
                                       <LogOut className="mr-2 h-4 w-4" />Check Out
                                     </DropdownMenuItem>
                                   )}
+                                  <DropdownMenuSeparator />
+                                  <DropdownMenuItem onClick={() => copyBookingDetails(b)}>
+                                    <Share2 className="mr-2 h-4 w-4" />Copy Booking Details
+                                  </DropdownMenuItem>
                                 </DropdownMenuContent>
                               </DropdownMenu>
                             </td>

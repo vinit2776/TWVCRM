@@ -8,6 +8,9 @@ import { Button } from "@/components/ui/button";
  * Error boundary for all dashboard routes.
  * Renders within the dashboard layout (sidebar + header remain visible).
  * If the layout itself fails, the root src/app/error.tsx catches it.
+ *
+ * Chunk-load errors (stale JS after a new deployment) are auto-recovered
+ * with a hard reload — no user action needed.
  */
 export default function DashboardError({
   error,
@@ -18,6 +21,17 @@ export default function DashboardError({
 }) {
   useEffect(() => {
     console.error("[Dashboard Error]", error);
+
+    // Auto-recover from stale chunk errors after deployment.
+    // A normal reset() doesn't help because the chunk hash is baked into
+    // the module graph — only a full page reload fetches the new manifest.
+    const isChunkError =
+      error.message?.includes("Failed to load") ||
+      error.message?.includes("ChunkLoadError") ||
+      error.message?.includes("Loading chunk");
+    if (isChunkError) {
+      window.location.reload();
+    }
   }, [error]);
 
   return (
@@ -34,7 +48,7 @@ export default function DashboardError({
           </p>
         )}
       </div>
-      <Button onClick={reset} variant="outline" size="sm">
+      <Button onClick={() => window.location.reload()} variant="outline" size="sm">
         <RefreshCw className="mr-2 h-4 w-4" />
         Try again
       </Button>

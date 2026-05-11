@@ -5,6 +5,8 @@ import { logAudit } from "@/lib/audit";
 import { messaging, dltSms } from "@/lib/whatsapp";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+export const maxDuration = 30;
+
 const DAYS_OF_WEEK = ["sunday", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday"];
 
 /**
@@ -103,7 +105,14 @@ export async function GET(request: NextRequest) {
   const bookingDate = searchParams.get("booking_date");
   const search = searchParams.get("search");
 
+  const includeHistory = searchParams.get("include_history") === "true";
   const offset = (page - 1) * limit;
+
+  // Only compute exact count when the client needs pagination (i.e. the
+  // "All Bookings" history section). The dashboard view fetches limit=200
+  // with date_from=today and never paginates — skipping the count saves a
+  // full table scan on every page load.
+  const needsCount = includeHistory || page > 1 || !!status || !!customerType || !!dateFrom || !!dateTo || !!search;
 
   // Explicit column whitelist — `select("*")` was pulling 50+ booking columns
   // (legacy printer_*, payment tokens, refund metadata, original_*, etc.) on
@@ -132,7 +141,7 @@ export async function GET(request: NextRequest) {
       " contract:contracts!bookings_contract_id_fkey(id, contract_number)," +
       " lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email)," +
       " facilities:booking_facilities(id, facility_name, charge)",
-      { count: "exact" }
+      needsCount ? { count: "exact" } : undefined
     );
 
   if (spaceId) query = query.eq("space_id", spaceId);
