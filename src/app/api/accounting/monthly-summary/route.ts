@@ -54,9 +54,12 @@ export async function GET(request: NextRequest) {
 
   const contractIds = activeContracts.map((c) => c.id);
 
-  // ── Batch A: All current-period data in parallel ────────────────────
-  // Queries 3-7 only need contractIds + period.id — fire them together
-  // to cut 7 sequential round-trips down to 1.
+  // ── Single batch: ALL 11 queries in parallel ─────────────────────────
+  // Current-period data (7 queries) + carry-forward data (4 queries)
+  // all depend only on contractIds + period.id — neither set depends on
+  // the other's results, so they all fire in one Promise.all. This cuts
+  // 2 sequential round-trips down to 1.
+  const hasContracts = contractIds.length > 0;
   const [
     { data: facilityUsages },
     { data: contractPayments },
@@ -65,7 +68,12 @@ export async function GET(request: NextRequest) {
     { data: postedBookings },
     { data: billingStatements },
     { data: walkinPayments },
+    { data: priorPayments },
+    { data: priorUsages },
+    { data: priorPeriods },
+    { data: priorAdHoc },
   ] = await Promise.all([
+    // ── Current-period queries ──
     // 3. Facility usage records
     period?.id
       ? supabase
@@ -85,7 +93,7 @@ export async function GET(request: NextRequest) {
           .eq("accounting_period_id", period.id)
       : Promise.resolve({ data: [] }),
     // 5. General payments (linked to contracts, no period)
-    contractIds.length > 0
+    hasContracts
       ? supabase
           .from("contract_payments")
           .select(
@@ -97,7 +105,7 @@ export async function GET(request: NextRequest) {
           .lte("payment_date", periodEnd)
       : Promise.resolve({ data: [] }),
     // 6a. Ad-hoc usage charges
-    contractIds.length > 0
+    hasContracts
       ? supabase
           .from("usage_charges")
           .select("*")
@@ -106,7 +114,7 @@ export async function GET(request: NextRequest) {
           .lte("charge_date", periodEnd)
       : Promise.resolve({ data: [] }),
     // 6b. Bookings posted to bill
-    contractIds.length > 0
+    hasContracts
       ? supabase
           .from("bookings")
           .select("*, space:spaces!bookings_space_id_fkey(id, name)")
@@ -116,7 +124,7 @@ export async function GET(request: NextRequest) {
           .lte("booking_date", periodEnd)
       : Promise.resolve({ data: [] }),
     // 6c. Billing statement status per contract
-    contractIds.length > 0
+    hasContracts
       ? supabase
           .from("billing_statements")
           .select("contract_id, status, statement_number")
@@ -132,6 +140,36 @@ export async function GET(request: NextRequest) {
       )
       .gte("created_at", `${periodStart}T00:00:00`)
       .lte("created_at", `${periodEnd}T23:59:59`),
+    // ── Carry-forward queries ──
+    // 8. Prior verified payments (before this period)
+    hasContracts
+      ? supabase
+          .from("contract_payments")
+          .select("contract_id, amount, status")
+          .in("contract_id", contractIds)
+          .eq("status", "verified")
+          .lt("payment_date", periodStart)
+      : Promise.resolve({ data: [] }),
+    // 9. All facility usage records (for prior periods)
+    hasContracts
+      ? supabase
+          .from("facility_usage_records")
+          .select("contract_id, total_charge, accounting_period_id")
+          .in("contract_id", contractIds)
+      : Promise.resolve({ data: [] }),
+    // 10. Prior accounting periods
+    supabase
+      .from("accounting_periods")
+      .select("id, year, month")
+      .or(`year.lt.${year},and(year.eq.${year},month.lt.${month})`),
+    // 11. Prior ad-hoc charges
+    hasContracts
+      ? supabase
+          .from("usage_charges")
+          .select("contract_id, total")
+          .in("contract_id", contractIds)
+          .lt("charge_date", periodStart)
+      : Promise.resolve({ data: [] }),
   ]);
 
   const allPaymentsThisMonth = [...(contractPayments || []), ...(generalPayments || [])];
@@ -141,37 +179,9 @@ export async function GET(request: NextRequest) {
     if (s.contract_id) statementByContract[s.contract_id] = { status: s.status, statement_number: s.statement_number };
   });
 
-  // ── Batch B: Carry-forward data in parallel ─────────────────────────
-  // Prior payments, facility usages, periods, and ad-hoc charges all
-  // run together — cuts 4 sequential queries to 1 parallel batch.
+  // ── Carry-forward computation ──────────────────────────────────────
   const carryForwardByContract: Record<string, number> = {};
-  if (contractIds.length > 0) {
-    const [
-      { data: priorPayments },
-      { data: priorUsages },
-      { data: priorPeriods },
-      { data: priorAdHoc },
-    ] = await Promise.all([
-      supabase
-        .from("contract_payments")
-        .select("contract_id, amount, status")
-        .in("contract_id", contractIds)
-        .eq("status", "verified")
-        .lt("payment_date", periodStart),
-      supabase
-        .from("facility_usage_records")
-        .select("contract_id, total_charge, accounting_period_id")
-        .in("contract_id", contractIds),
-      supabase
-        .from("accounting_periods")
-        .select("id, year, month")
-        .or(`year.lt.${year},and(year.eq.${year},month.lt.${month})`),
-      supabase
-        .from("usage_charges")
-        .select("contract_id, total")
-        .in("contract_id", contractIds)
-        .lt("charge_date", periodStart),
-    ]);
+  if (hasContracts) {
 
     const priorPaymentsByContract: Record<string, number> = {};
     (priorPayments || []).forEach((p) => {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
@@ -410,26 +410,36 @@ export default function BillingPage() {
     });
   }, []);
 
-  // ── Fetch monthly summary ────────────────────────────────────────────────
-  const fetchData = useCallback(async () => {
+  // ── Fetch monthly summary (with AbortController for cleanup) ─────────────
+  const summaryControllerRef = useRef<AbortController | null>(null);
+
+  const fetchData = useCallback(async (signal?: AbortSignal) => {
     setSummaryLoading(true);
     try {
       const [summaryRes, cashRes, gstRes] = await Promise.all([
-        fetch(`/api/accounting/monthly-summary?year=${year}&month=${month}`),
-        fetch(`/api/accounting/cash-handovers?year=${year}&month=${month}`),
-        fetch(`/api/accounting/gst-invoices?year=${year}&month=${month}`),
+        fetch(`/api/accounting/monthly-summary?year=${year}&month=${month}`, { signal }),
+        fetch(`/api/accounting/cash-handovers?year=${year}&month=${month}`, { signal }),
+        fetch(`/api/accounting/gst-invoices?year=${year}&month=${month}`, { signal }),
       ]);
+      if (signal?.aborted) return;
       if (summaryRes.ok) setSummary((await summaryRes.json()).data);
       if (cashRes.ok)    setCashHandovers((await cashRes.json()).data || []);
       if (gstRes.ok)     setGstEntries((await gstRes.json()).data || []);
-    } catch {
+    } catch (e) {
+      if ((e as Error).name === "AbortError") return;
       toast.error("Failed to load billing data");
     } finally {
-      setSummaryLoading(false);
+      if (!signal?.aborted) setSummaryLoading(false);
     }
   }, [year, month]);
 
-  useEffect(() => { fetchData(); }, [fetchData]);
+  useEffect(() => {
+    summaryControllerRef.current?.abort();
+    const controller = new AbortController();
+    summaryControllerRef.current = controller;
+    fetchData(controller.signal);
+    return () => controller.abort();
+  }, [fetchData]);
 
   // ── Fetch contracts for filter dropdowns ─────────────────────────────────
   useEffect(() => {
@@ -439,8 +449,10 @@ export default function BillingPage() {
       .catch(() => {});
   }, []);
 
-  // ── Fetch usage charges ───────────────────────────────────────────────────
-  const fetchCharges = useCallback(async () => {
+  // ── Fetch usage charges (with AbortController) ──────────────────────────
+  const chargesControllerRef = useRef<AbortController | null>(null);
+
+  const fetchCharges = useCallback(async (signal?: AbortSignal) => {
     setChargesLoading(true);
     try {
       const params = new URLSearchParams({ page: String(chargesPage), limit: "25" });
@@ -448,49 +460,65 @@ export default function BillingPage() {
       if (chargesStatusFilter)   params.set("status", chargesStatusFilter);
       if (chargesDateFrom)       params.set("date_from", chargesDateFrom);
       if (chargesDateTo)         params.set("date_to", chargesDateTo);
-      const res = await fetch(`/api/usage-charges?${params}`);
+      const res = await fetch(`/api/usage-charges?${params}`, { signal });
+      if (signal?.aborted) return;
       if (res.ok) {
         const json = await res.json();
         setCharges(json.data || []);
         setChargesPagination(json.pagination || { page: 1, limit: 25, total: 0, totalPages: 0 });
       }
-    } catch {
+    } catch (e) {
+      if ((e as Error).name === "AbortError") return;
       toast.error("Failed to load usage charges");
     } finally {
-      setChargesLoading(false);
+      if (!signal?.aborted) setChargesLoading(false);
     }
   }, [chargesPage, chargesContractFilter, chargesStatusFilter, chargesDateFrom, chargesDateTo]);
 
   // Only fire on the Usage Charges tab — saves a round-trip on first load
   // for users who never open it.
   useEffect(() => {
-    if (activeTab === "usage-charges") fetchCharges();
+    if (activeTab !== "usage-charges") return;
+    chargesControllerRef.current?.abort();
+    const controller = new AbortController();
+    chargesControllerRef.current = controller;
+    fetchCharges(controller.signal);
+    return () => controller.abort();
   }, [activeTab, fetchCharges]);
 
-  // ── Fetch billing statements ──────────────────────────────────────────────
-  const fetchStatements = useCallback(async () => {
+  // ── Fetch billing statements (with AbortController) ────────────────────
+  const statementsControllerRef = useRef<AbortController | null>(null);
+
+  const fetchStatements = useCallback(async (signal?: AbortSignal) => {
     setStatementsLoading(true);
     try {
       const params = new URLSearchParams({ page: String(statementsPage), limit: "25" });
       if (statementsContractFilter) params.set("contract_id", statementsContractFilter);
       if (statementsStatusFilter)   params.set("status", statementsStatusFilter);
-      const res = await fetch(`/api/billing-statements?${params}`);
+      const res = await fetch(`/api/billing-statements?${params}`, { signal });
+      if (signal?.aborted) return;
       if (res.ok) {
         const json = await res.json();
         setStatements(json.data || []);
         setStatementsPagination(json.pagination || { page: 1, limit: 25, total: 0, totalPages: 0 });
       }
-    } catch {
+    } catch (e) {
+      if ((e as Error).name === "AbortError") return;
       toast.error("Failed to load billing statements");
     } finally {
-      setStatementsLoading(false);
+      if (!signal?.aborted) setStatementsLoading(false);
     }
   }, [statementsPage, statementsContractFilter, statementsStatusFilter]);
 
   // Only fire on the Statements tab — saves a round-trip on first load
   // for users who land on contracts/cash/gst tabs.
   useEffect(() => {
-    if (activeTab === "statements") fetchStatements();
+    if (activeTab !== "statements") return;
+    statementsControllerRef.current?.abort();
+    const controller = new AbortController();
+    statementsControllerRef.current = controller;
+    fetchStatements(controller.signal);
+    return () => controller.abort();
   }, [activeTab, fetchStatements]);
 
   // ── Handlers ─────────────────────────────────────────────────────────────

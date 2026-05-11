@@ -19,41 +19,50 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ data: [] });
   }
 
-  // 1. Search leads by phone, mobile, or name
-  const { data: leads } = await supabase
-    .from("leads")
-    .select("id, first_name, last_name, company, email, phone, mobile")
-    .or(`phone.ilike.%${q}%,mobile.ilike.%${q}%,first_name.ilike.%${q}%,last_name.ilike.%${q}%`)
-    .limit(10);
+  // Fire all three search queries in parallel — they're independent.
+  // The trgm GIN indexes on leads (first_name, last_name, phone) and
+  // bookings (guest_name, guest_phone, booker_phone) make each ILIKE
+  // use the index instead of a sequential scan.
+  const [
+    { data: leads },
+    { data: pastBookings },
+    { data: matchingLeadIds },
+  ] = await Promise.all([
+    // 1. Search leads by phone, mobile, or name
+    supabase
+      .from("leads")
+      .select("id, first_name, last_name, company, email, phone, mobile")
+      .or(`phone.ilike.%${q}%,mobile.ilike.%${q}%,first_name.ilike.%${q}%,last_name.ilike.%${q}%`)
+      .limit(10),
+    // 2. Search past bookings for repeat walk-in / guest customers
+    supabase
+      .from("bookings")
+      .select("booker_phone, guest_name, guest_email, guest_phone, guest_company, customer_type, lead_id")
+      .or(`booker_phone.ilike.%${q}%,guest_phone.ilike.%${q}%,guest_name.ilike.%${q}%`)
+      .is("lead_id", null)
+      .order("created_at", { ascending: false })
+      .limit(20),
+    // 3. Find lead IDs matching the search (for contract lookup)
+    supabase
+      .from("leads")
+      .select("id")
+      .or(`phone.ilike.%${q}%,mobile.ilike.%${q}%,first_name.ilike.%${q}%,last_name.ilike.%${q}%`)
+      .limit(20),
+  ]);
 
-  // 2. Search past bookings for repeat walk-in / guest customers by phone or name
-  const { data: pastBookings } = await supabase
-    .from("bookings")
-    .select("booker_phone, guest_name, guest_email, guest_phone, guest_company, customer_type, lead_id")
-    .or(`booker_phone.ilike.%${q}%,guest_phone.ilike.%${q}%,guest_name.ilike.%${q}%`)
-    .is("lead_id", null)
-    .order("created_at", { ascending: false })
-    .limit(20);
-
-  // 3. Search contracts for members by phone (via lead join)
-  const { data: contracts } = await supabase
-    .from("contracts")
-    .select("id, contract_number, status, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)")
-    .eq("status", "active")
-    .limit(20);
-
-  // Filter contracts that match the search by lead phone/mobile/name
-  const matchingContracts = (contracts || []).filter(c => {
-    const lead = c.lead as unknown as { first_name: string; last_name: string; phone?: string; mobile?: string } | null;
-    if (!lead) return false;
-    const lowerQ = q.toLowerCase();
-    return (
-      (lead.phone || "").toLowerCase().includes(lowerQ) ||
-      (lead.mobile || "").toLowerCase().includes(lowerQ) ||
-      (lead.first_name || "").toLowerCase().includes(lowerQ) ||
-      (lead.last_name || "").toLowerCase().includes(lowerQ)
-    );
-  });
+  // 4. Fetch contracts only for matching leads (instead of all active + JS filter)
+  const leadIdList = (matchingLeadIds || []).map((l) => l.id);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let matchingContracts: any[] = [];
+  if (leadIdList.length > 0) {
+    const { data: contracts } = await supabase
+      .from("contracts")
+      .select("id, contract_number, status, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)")
+      .eq("status", "active")
+      .in("lead_id", leadIdList)
+      .limit(20);
+    matchingContracts = contracts || [];
+  }
 
   // Build unified results
   type CustomerSuggestion = {

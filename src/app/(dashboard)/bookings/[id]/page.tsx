@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useState, useEffect, useCallback } from "react";
+import { use, useState, useEffect, useCallback, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -135,59 +135,75 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [upiId, setUpiId] = useState("");
   const [upiQrCodePath, setUpiQrCodePath] = useState("");
 
-  const fetchBooking = useCallback(async () => {
+  // AbortController ref — cancels in-flight requests on unmount / re-fetch
+  const fetchControllerRef = useRef<AbortController | null>(null);
+
+  const fetchBooking = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
-    const res = await fetch(`/api/bookings/${id}`);
+
+    // Wave 1: booking (needed for leadId) + payments + booking charges + settings — parallel
+    const [bookingRes, paymentsRes, bcRes, settingsRes] = await Promise.all([
+      fetch(`/api/bookings/${id}`, { signal }),
+      fetch(`/api/booking-payments?booking_id=${id}`, { signal }),
+      fetch(`/api/usage-charges?booking_id=${id}`, { signal }),
+      fetch("/api/settings/public", { signal }),
+    ]).catch((e) => {
+      if ((e as Error).name === "AbortError") return [null, null, null, null] as const;
+      throw e;
+    });
+    if (signal?.aborted) return;
+
     let leadId: string | null = null;
-    if (res.ok) {
-      const json = await res.json();
+    if (bookingRes?.ok) {
+      const json = await bookingRes.json();
       setBooking(json.data || null);
       leadId = json.data?.lead_id ?? null;
     }
-
-    // Fetch existing payment records
-    const paymentsRes = await fetch(`/api/booking-payments?booking_id=${id}`);
-    if (paymentsRes.ok) {
+    if (paymentsRes?.ok) {
       const pJson = await paymentsRes.json();
       setExistingPayments(pJson.data || []);
     }
-
-    // Fetch outstanding booking charges for this customer (from other bookings)
-    if (leadId) {
-      const ocRes = await fetch(
-        `/api/usage-charges?lead_id=${leadId}&status=pending&limit=50`
-      );
-      if (ocRes.ok) {
-        const ocJson = await ocRes.json();
-        // Only show charges linked to a booking (not contract), excluding the current booking
-        const bookingCharges = (ocJson.data || []).filter(
-          (c: { booking_id?: string | null }) =>
-            c.booking_id && c.booking_id !== id
-        );
-        setOutstandingCharges(bookingCharges);
-      }
-    }
-
-    // Fetch post-checkout usage charges linked to this booking
-    const bcRes = await fetch(`/api/usage-charges?booking_id=${id}`);
-    if (bcRes.ok) {
+    if (bcRes?.ok) {
       const bcJson = await bcRes.json();
       setBookingCharges(bcJson.data || []);
     }
-
-    // Fetch public gateway settings
-    const settingsRes = await fetch("/api/settings/public");
-    if (settingsRes.ok) {
+    if (settingsRes?.ok) {
       const sJson = await settingsRes.json();
       const settings = sJson.data || {};
       setUpiId(settings.upi_id || "");
       setUpiQrCodePath(settings.upi_qr_code_path || "");
     }
 
-    setLoading(false);
+    // Wave 2: outstanding charges (needs leadId from Wave 1)
+    if (leadId && !signal?.aborted) {
+      try {
+        const ocRes = await fetch(
+          `/api/usage-charges?lead_id=${leadId}&status=pending&limit=50`,
+          { signal },
+        );
+        if (ocRes.ok) {
+          const ocJson = await ocRes.json();
+          const bookingCharges = (ocJson.data || []).filter(
+            (c: { booking_id?: string | null }) =>
+              c.booking_id && c.booking_id !== id
+          );
+          setOutstandingCharges(bookingCharges);
+        }
+      } catch (e) {
+        if ((e as Error).name === "AbortError") return;
+      }
+    }
+
+    if (!signal?.aborted) setLoading(false);
   }, [id]);
 
-  useEffect(() => { fetchBooking(); }, [fetchBooking]);
+  useEffect(() => {
+    fetchControllerRef.current?.abort();
+    const controller = new AbortController();
+    fetchControllerRef.current = controller;
+    fetchBooking(controller.signal);
+    return () => controller.abort();
+  }, [fetchBooking]);
   useEffect(() => { fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {}); }, []);
 
   const handlePricingSave = async () => {
@@ -1826,48 +1842,65 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         )
       )}
 
-      {/* Post-checkout usage charges linked to this booking — shown when
-          any exist. These are charges logged after checkout via the
-          "Add Charge" button (damage, overtime, missed F&B, etc.).
-          For contract holders they flow into the next billing statement;
-          for walk-ins they become outstanding receivables. */}
-      {bookingCharges.length > 0 && (
+      {/* Related Charges — always visible for checked-out / no-show bookings.
+          Shows post-checkout charges (damage, overtime, missed F&B) with an
+          "Add Charge" button so staff don't have to find it in the header.
+          For contract holders charges flow into the next billing statement;
+          for walk-ins / guests they become outstanding on the lead profile. */}
+      {(bookingCharges.length > 0 || ["checked_out", "no_show"].includes(booking.status)) && (
         <div className="rounded-lg border bg-card overflow-hidden">
           <div className="px-4 py-3 border-b bg-muted/30 flex items-center justify-between">
             <div>
-              <h3 className="text-sm font-semibold">Post-checkout charges</h3>
+              <h3 className="text-sm font-semibold">Related Charges</h3>
               <p className="text-xs text-muted-foreground">
-                Charges logged after session ended
+                {booking.customer_type === "contract_holder"
+                  ? "Flows into next monthly billing statement"
+                  : "Outstanding until settled on next visit"}
               </p>
             </div>
-            <span className="text-xs font-medium text-muted-foreground">
-              {bookingCharges.length} charge{bookingCharges.length !== 1 ? "s" : ""} · ₹{bookingCharges.reduce((s: number, c: { total: number }) => s + Number(c.total), 0).toLocaleString("en-IN")}
-            </span>
+            <div className="flex items-center gap-2">
+              {bookingCharges.length > 0 && (
+                <span className="text-xs font-medium text-muted-foreground tabular-nums">
+                  {bookingCharges.length} charge{bookingCharges.length !== 1 ? "s" : ""} · ₹{bookingCharges.reduce((s: number, c: { total: number }) => s + Number(c.total), 0).toLocaleString("en-IN")}
+                </span>
+              )}
+              {["checked_out", "no_show"].includes(booking.status) && (
+                <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setLogChargeOpen(true)}>
+                  <Plus className="mr-1 h-3 w-3" />Add Charge
+                </Button>
+              )}
+            </div>
           </div>
-          <div className="divide-y">
-            {bookingCharges.map((charge: { id: string; description: string; total: number; quantity?: number; unit_price?: number; charge_date: string; status: string; notes?: string }) => (
-              <div key={charge.id} className="px-4 py-2.5 flex items-center justify-between text-sm">
-                <div className="min-w-0 flex-1">
-                  <p className="font-medium truncate">{charge.description}</p>
-                  <p className="text-xs text-muted-foreground">
-                    {new Date(charge.charge_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
-                    {charge.quantity && charge.unit_price ? ` · ${charge.quantity} × ₹${Number(charge.unit_price).toLocaleString("en-IN")}` : ""}
-                    {charge.notes ? ` · ${charge.notes}` : ""}
-                  </p>
+          {bookingCharges.length > 0 ? (
+            <div className="divide-y">
+              {bookingCharges.map((charge: { id: string; description: string; total: number; quantity?: number; unit_price?: number; charge_date: string; status: string; notes?: string }) => (
+                <div key={charge.id} className="px-4 py-2.5 flex items-center justify-between text-sm">
+                  <div className="min-w-0 flex-1">
+                    <p className="font-medium truncate">{charge.description}</p>
+                    <p className="text-xs text-muted-foreground">
+                      {new Date(charge.charge_date).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}
+                      {charge.quantity && charge.unit_price ? ` · ${charge.quantity} × ₹${Number(charge.unit_price).toLocaleString("en-IN")}` : ""}
+                      {charge.notes ? ` · ${charge.notes}` : ""}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2 ml-3">
+                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
+                      charge.status === "settled" ? "bg-green-100 text-green-800" :
+                      charge.status === "waived" ? "bg-gray-100 text-gray-600" :
+                      "bg-amber-100 text-amber-800"
+                    }`}>
+                      {charge.status}
+                    </span>
+                    <span className="font-semibold tabular-nums">₹{Number(charge.total).toLocaleString("en-IN")}</span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2 ml-3">
-                  <span className={`text-[10px] px-1.5 py-0.5 rounded font-medium ${
-                    charge.status === "settled" ? "bg-green-100 text-green-800" :
-                    charge.status === "waived" ? "bg-gray-100 text-gray-600" :
-                    "bg-amber-100 text-amber-800"
-                  }`}>
-                    {charge.status}
-                  </span>
-                  <span className="font-semibold tabular-nums">₹{Number(charge.total).toLocaleString("en-IN")}</span>
-                </div>
-              </div>
-            ))}
-          </div>
+              ))}
+            </div>
+          ) : (
+            <div className="px-4 py-6 text-center text-sm text-muted-foreground">
+              No charges yet — use "Add Charge" for damages, overtime, or missed items discovered after checkout.
+            </div>
+          )}
         </div>
       )}
 
