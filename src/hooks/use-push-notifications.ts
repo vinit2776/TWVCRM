@@ -4,8 +4,10 @@ import { useState, useEffect, useCallback } from "react";
 
 const LS_KEY = "twv_push_dismissed";
 
-/** Convert a URL-safe base64 VAPID public key to an ArrayBuffer for the Push API */
-function urlBase64ToUint8Array(base64String: string): ArrayBuffer {
+/** Convert a URL-safe base64 VAPID public key to a Uint8Array for the Push API.
+ *  Safari requires Uint8Array specifically — ArrayBuffer throws
+ *  "The string did not match the expected pattern." */
+function urlBase64ToUint8Array(base64String: string): Uint8Array<ArrayBuffer> {
   const padding = "=".repeat((4 - (base64String.length % 4)) % 4);
   const base64 = (base64String + padding).replace(/-/g, "+").replace(/_/g, "/");
   const rawData = atob(base64);
@@ -13,8 +15,7 @@ function urlBase64ToUint8Array(base64String: string): ArrayBuffer {
   for (let i = 0; i < rawData.length; ++i) {
     output[i] = rawData.charCodeAt(i);
   }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  return output.buffer as any;
+  return output as Uint8Array<ArrayBuffer>;
 }
 
 /**
