@@ -25,6 +25,7 @@ import {
   BellOff,
   Copy,
   CheckCheck,
+  Share2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -300,6 +301,11 @@ export default function TeamPage() {
   const [activityLogOpen, setActivityLogOpen] = useState(false);
   const [activityLogTarget, setActivityLogTarget] = useState<UserType | null>(null);
 
+  // Share login details dialog state
+  const [shareDetailsOpen, setShareDetailsOpen] = useState(false);
+  const [shareDetailsTarget, setShareDetailsTarget] = useState<UserType | null>(null);
+  const [copiedShareDetails, setCopiedShareDetails] = useState(false);
+
   // Action menu state
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
 
@@ -403,6 +409,39 @@ export default function TeamPage() {
     setCopiedCreate(false);
     setCreateForm({ full_name: "", email: "", password: "", role: "sales_rep", phone: "" });
     setShowCreatePassword(false);
+  };
+
+  // --- Share login details (no password) ---
+  const openShareDetailsDialog = (member: UserType) => {
+    setShareDetailsTarget(member);
+    setCopiedShareDetails(false);
+    setShareDetailsOpen(true);
+    setOpenMenuId(null);
+  };
+
+  const buildShareDetailsMessage = () => {
+    if (!shareDetailsTarget) return "";
+    const roleName = USER_ROLE_LABELS[shareDetailsTarget.role] || shareDetailsTarget.role;
+    return [
+      `TheWorkVilla CRM — Login Details`,
+      ``,
+      `Hi ${shareDetailsTarget.full_name},`,
+      ``,
+      `Here are your login details:`,
+      `URL: ${appUrl}/login`,
+      `Email: ${shareDetailsTarget.email}`,
+      `Role: ${roleName}`,
+      ``,
+      `If you've forgotten your password, please contact your admin for a reset.`,
+    ].join("\n");
+  };
+
+  const handleCopyShareDetails = async () => {
+    const msg = buildShareDetailsMessage();
+    await navigator.clipboard.writeText(msg);
+    setCopiedShareDetails(true);
+    toast.success("Login details copied to clipboard");
+    setTimeout(() => setCopiedShareDetails(false), 2000);
   };
 
   const buildPasswordCredentialMessage = () => {
@@ -815,6 +854,13 @@ export default function TeamPage() {
                               </button>
                               <button
                                 className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
+                                onClick={() => openShareDetailsDialog(member)}
+                              >
+                                <Share2 className="h-4 w-4" />
+                                Share Login Details
+                              </button>
+                              <button
+                                className="flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-sm hover:bg-accent"
                                 onClick={() => {
                                   setActivityLogTarget(member);
                                   setActivityLogOpen(true);
@@ -1191,6 +1237,39 @@ export default function TeamPage() {
               </Button>
             </div>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Share Login Details Dialog ── */}
+      <Dialog open={shareDetailsOpen} onOpenChange={(open) => { if (!open) { setShareDetailsOpen(false); setShareDetailsTarget(null); setCopiedShareDetails(false); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Share2 className="h-5 w-5 text-blue-600" />
+              Share Login Details
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4">
+            <p className="text-sm text-muted-foreground">
+              Copy the login details below and share via WhatsApp or email.
+            </p>
+            <div className="rounded-lg border bg-muted/50 p-4 text-sm font-mono whitespace-pre-wrap leading-relaxed">
+              {buildShareDetailsMessage()}
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={() => { setShareDetailsOpen(false); setShareDetailsTarget(null); setCopiedShareDetails(false); }}>
+                Close
+              </Button>
+              <Button onClick={handleCopyShareDetails}>
+                {copiedShareDetails ? (
+                  <CheckCheck className="mr-2 h-4 w-4" />
+                ) : (
+                  <Copy className="mr-2 h-4 w-4" />
+                )}
+                {copiedShareDetails ? "Copied!" : "Copy Details"}
+              </Button>
+            </div>
+          </div>
         </DialogContent>
       </Dialog>
 
