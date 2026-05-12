@@ -115,17 +115,16 @@ export async function GET(request: NextRequest) {
     // When filtering by location, we need lead IDs to filter tasks/activities.
     // Parallelise the location-ID fetch with all lead aggregate queries so we
     // only pay one extra round-trip instead of one blocking sequential await.
-    // The pipeline counts use a DB-side group-by function to avoid fetching every row.
+    // Pipeline is computed in JS from the leads fetch (avoids RPC dependency).
     const [
-      { data: pipelineData },
+      { data: allLocationLeads },
       { count: totalLeads },
       { count: wonCount },
       { count: lostCount },
-      { data: locationLeads },
       { count: monthTotalCount },
       { count: monthWonCount },
     ] = await Promise.all([
-      supabase.rpc("get_pipeline_counts", { p_location_id: locationId }),
+      supabase.from("leads").select("id, status").eq("location_id", locationId),
       // Conversion totals restricted to post-CONVERSION_CUTOFF leads to keep the
       // KPI honest after the legacy bulk import. Pipeline still reflects the
       // entire pool — that's a "where does my pipeline sit right now" view,
@@ -133,13 +132,17 @@ export async function GET(request: NextRequest) {
       supabase.from("leads").select("*", { count: "exact", head: true }).eq("location_id", locationId).gte("created_at", CONVERSION_CUTOFF),
       supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "won").eq("location_id", locationId).gte("created_at", CONVERSION_CUTOFF),
       supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "lost").eq("location_id", locationId).gte("created_at", CONVERSION_CUTOFF),
-      supabase.from("leads").select("id").eq("location_id", locationId),
       // This-month cohort: leads created this month + how many of those won
       supabase.from("leads").select("*", { count: "exact", head: true }).eq("location_id", locationId).gte("created_at", MONTH_CUTOFF),
       supabase.from("leads").select("*", { count: "exact", head: true }).eq("location_id", locationId).eq("status", "won").gte("created_at", MONTH_CUTOFF),
     ]);
 
-    const locationLeadIds = (locationLeads || []).map((l) => l.id);
+    // Build pipeline from the fetched lead rows (same pattern as self-scoped path)
+    const pipelineMap: Record<string, number> = {};
+    for (const l of allLocationLeads ?? []) {
+      pipelineMap[l.status] = (pipelineMap[l.status] ?? 0) + 1;
+    }
+    const locationLeadIds = (allLocationLeads || []).map((l) => l.id);
     const hasLeads = locationLeadIds.length > 0;
 
     // Now fire tasks / activities / notes / followups in parallel using the fetched lead IDs
@@ -178,8 +181,7 @@ export async function GET(request: NextRequest) {
       followUpsQ,
     ]);
 
-    // RPC already returns [{status, count}] — no JS aggregation needed
-    const pipeline = (pipelineData || []) as { status: string; count: number }[];
+    const pipeline = Object.entries(pipelineMap).map(([status, count]) => ({ status, count }));
 
     const total = totalLeads || 0;
     const won = wonCount || 0;
@@ -206,9 +208,9 @@ export async function GET(request: NextRequest) {
   }
 
   // No location filter — fire all queries in one parallel batch.
-  // Pipeline uses a DB-side group-by RPC to avoid fetching every lead row.
+  // Pipeline is computed in JS from lead statuses (avoids RPC dependency).
   const [
-    { data: pipelineData },
+    { data: allLeads },
     { count: totalLeads },
     { count: wonCount },
     { count: lostCount },
@@ -220,7 +222,7 @@ export async function GET(request: NextRequest) {
     { count: monthTotalCount },
     { count: monthWonCount },
   ] = await Promise.all([
-    supabase.rpc("get_pipeline_counts", { p_location_id: null }),
+    supabase.from("leads").select("status"),
     // Conversion totals restricted to post-CONVERSION_CUTOFF leads to ignore
     // the legacy bulk-imported pre-April-2026 records that were skewing the
     // ratio. Pipeline view above still reflects the full pool.
@@ -249,8 +251,12 @@ export async function GET(request: NextRequest) {
     supabase.from("leads").select("*", { count: "exact", head: true }).eq("status", "won").gte("created_at", MONTH_CUTOFF),
   ]);
 
-  // RPC already returns [{status, count}] — no JS aggregation needed
-  const pipeline = (pipelineData || []) as { status: string; count: number }[];
+  // Group lead statuses in JS (avoids RPC dependency)
+  const globalPipelineMap: Record<string, number> = {};
+  for (const l of allLeads ?? []) {
+    globalPipelineMap[l.status] = (globalPipelineMap[l.status] ?? 0) + 1;
+  }
+  const pipeline = Object.entries(globalPipelineMap).map(([status, count]) => ({ status, count }));
 
   const total = totalLeads || 0;
   const won = wonCount || 0;
