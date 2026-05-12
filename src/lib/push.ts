@@ -1,3 +1,4 @@
+import { randomUUID } from "crypto";
 import webPush from "web-push";
 import { createAdminClient } from "@/lib/supabase/server";
 
@@ -46,7 +47,7 @@ export async function broadcastPush(payload: PushPayload): Promise<BroadcastResu
   ensureVapid();
   const batchId = (payload.batchId && payload.batchId.length > 0)
     ? payload.batchId
-    : crypto.randomUUID();
+    : randomUUID();
 
   if (!vapidConfigured) return { batchId, total: 0, sent: 0, failed: 0 };
 

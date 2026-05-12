@@ -42,6 +42,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ dryRun: true, eligible: count ?? 0 });
   }
 
-  const result = await broadcastPush({ title, body: text, url, tag });
-  return NextResponse.json(result);
+  try {
+    const result = await broadcastPush({ title, body: text, url, tag });
+    return NextResponse.json(result);
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[push/broadcast] crash:", msg, err);
+    return NextResponse.json({ error: msg }, { status: 500 });
+  }
 }
