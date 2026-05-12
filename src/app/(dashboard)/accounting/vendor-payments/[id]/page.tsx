@@ -535,7 +535,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 )}
               </p>
               {bill.payment_hold_notes && (
-                <p className="text-xs text-orange-700 mt-1 italic">"{bill.payment_hold_notes}"</p>
+                <p className="text-xs text-orange-700 mt-1 italic">&ldquo;{bill.payment_hold_notes}&rdquo;</p>
               )}
             </div>
           </div>
@@ -1253,7 +1253,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               <div className="rounded-lg bg-muted p-3 text-sm space-y-1">
                 <p className="text-xs text-muted-foreground font-medium">Hold reason</p>
                 <p>{HOLD_REASON_LABELS[bill.payment_hold_reason] ?? bill.payment_hold_reason}</p>
-                {bill.payment_hold_notes && <p className="text-xs italic text-muted-foreground">"{bill.payment_hold_notes}"</p>}
+                {bill.payment_hold_notes && <p className="text-xs italic text-muted-foreground">&ldquo;{bill.payment_hold_notes}&rdquo;</p>}
               </div>
             )}
             <div className="space-y-1.5">
