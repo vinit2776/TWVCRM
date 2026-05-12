@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useRef, Suspense } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { ChevronLeft, Loader2, Paperclip, X, FileText, AlertCircle } from "lucide-react";
+import { ChevronLeft, Loader2, Paperclip, X, FileText, AlertCircle, Lightbulb, TrendingUp, CalendarClock, PackageSearch } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -17,6 +17,7 @@ import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { formatCurrency } from "@/lib/utils";
 import { AlertTriangle } from "lucide-react";
 import type { ProcurementVendor, PurchaseOrder } from "@/types";
+import type { BillHintsResponse } from "@/app/api/finance-intelligence/bill-hints/route";
 
 function computeReceivedValue(po: PurchaseOrder): number | null {
   if (!po.purchase_order_items || !po.po_delivery_receipts) return null;
@@ -62,6 +63,11 @@ function NewVendorBillForm() {
   const [duplicates, setDuplicates] = useState<DupCandidate[]>([]);
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
   const [duplicateDismissed, setDuplicateDismissed] = useState(false);
+
+  // Bill hints (Finance Intelligence — Day 3-5)
+  const [hints, setHints] = useState<BillHintsResponse | null>(null);
+  const [dueDateHintDismissed, setDueDateHintDismissed] = useState(false);
+  const [anomalyDismissed, setAnomalyDismissed] = useState(false);
 
   // File upload state
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
@@ -164,6 +170,39 @@ function NewVendorBillForm() {
 
     return () => { cancelled = true; clearTimeout(t); };
   }, [vendorId, invoiceNumber, totalAmount, invoiceDate]);
+
+  // ── Bill hints — debounced fetch (Day 3-5) ──────────────────────────────────
+  useEffect(() => {
+    // Reset dismissals when inputs change
+    setDueDateHintDismissed(false);
+    setAnomalyDismissed(false);
+
+    const amt = parseFloat(totalAmount);
+    if (!vendorId) { setHints(null); return; }
+
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch("/api/finance-intelligence/bill-hints", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            vendor_id: vendorId,
+            ...(isFinite(amt) && amt > 0 ? { total_amount: amt } : {}),
+            ...(invoiceDate ? { invoice_date: invoiceDate } : {}),
+            ...(poId ? { po_id: poId } : {}),
+          }),
+        });
+        if (!cancelled && res.ok) {
+          setHints(await res.json());
+        }
+      } catch {
+        // non-fatal — hints are cosmetic
+      }
+    }, 600);
+
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [vendorId, totalAmount, invoiceDate, poId]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -417,6 +456,55 @@ function NewVendorBillForm() {
             </div>
           )}
 
+          {/* ── Finance Intelligence hints (Day 3-5) ────────────────────────── */}
+
+          {/* PO cumulative warning */}
+          {hints?.po_cumulative?.is_warning && (
+            <div className={`rounded-lg border px-3 py-2.5 text-sm flex items-start gap-2.5 ${
+              hints.po_cumulative.is_over_budget
+                ? "border-red-300 bg-red-50 text-red-900"
+                : "border-amber-200 bg-amber-50 text-amber-900"
+            }`}>
+              <PackageSearch className={`h-4 w-4 shrink-0 mt-0.5 ${hints.po_cumulative.is_over_budget ? "text-red-600" : "text-amber-600"}`} />
+              <div>
+                <p className="font-medium text-xs">
+                  {hints.po_cumulative.is_over_budget
+                    ? "Over budget — this bill exceeds the PO value"
+                    : `PO ${hints.po_cumulative.consumed_pct}% consumed after this bill`}
+                </p>
+                <p className="text-xs mt-0.5 text-current/70">
+                  Existing: {formatCurrency(hints.po_cumulative.consumed_amount)}
+                  {hints.po_cumulative.existing_bill_count > 0 && ` across ${hints.po_cumulative.existing_bill_count} bill${hints.po_cumulative.existing_bill_count !== 1 ? "s" : ""}`}
+                  {" · "}PO value: {formatCurrency(hints.po_cumulative.po_value)}
+                  {" · "}
+                  {hints.po_cumulative.remaining_after >= 0
+                    ? `Remaining: ${formatCurrency(hints.po_cumulative.remaining_after)}`
+                    : `Over by: ${formatCurrency(Math.abs(hints.po_cumulative.remaining_after))}`}
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Amount anomaly warning */}
+          {!anomalyDismissed && hints?.amount_anomaly?.is_anomaly && (
+            <div className="rounded-lg border border-orange-300 bg-orange-50 px-3 py-2.5 text-sm flex items-start justify-between gap-2">
+              <div className="flex items-start gap-2.5 min-w-0">
+                <TrendingUp className="h-4 w-4 text-orange-600 shrink-0 mt-0.5" />
+                <div>
+                  <p className="font-medium text-xs text-orange-900">Unusually high amount for this vendor</p>
+                  <p className="text-xs text-orange-800 mt-0.5">
+                    {hints.amount_anomaly.reason}
+                    {" — "}avg is {formatCurrency(hints.amount_anomaly.baseline_average)} across {hints.amount_anomaly.baseline_count} bills
+                  </p>
+                </div>
+              </div>
+              <button type="button" onClick={() => setAnomalyDismissed(true)}
+                className="text-orange-700 hover:text-orange-900 shrink-0 text-xs">
+                <X className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          )}
+
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div className="space-y-1.5">
               <Label htmlFor="invoice_number">
@@ -481,6 +569,29 @@ function NewVendorBillForm() {
                 value={dueDate}
                 onChange={(e) => setDueDate(e.target.value)}
               />
+              {/* Due-date suggestion (due_date_learning) */}
+              {!dueDateHintDismissed && hints?.due_date_suggestion && !dueDate && (
+                <div className="flex items-center justify-between gap-2 rounded border border-blue-200 bg-blue-50 px-2.5 py-1.5 text-xs text-blue-800">
+                  <div className="flex items-center gap-1.5 min-w-0">
+                    <Lightbulb className="h-3.5 w-3.5 text-blue-500 shrink-0" />
+                    <span>
+                      Suggested: <strong>{hints.due_date_suggestion.date}</strong>
+                      {" "}({hints.due_date_suggestion.net_days}d · {hints.due_date_suggestion.sample_size} bills)
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-1.5 shrink-0">
+                    <button
+                      type="button"
+                      onClick={() => setDueDate(hints.due_date_suggestion!.date)}
+                      className="font-medium text-blue-700 hover:text-blue-900 underline"
+                    >Use</button>
+                    <button type="button" onClick={() => setDueDateHintDismissed(true)}
+                      className="text-blue-500 hover:text-blue-700">
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
           </div>
 
@@ -541,6 +652,19 @@ function NewVendorBillForm() {
               rows={2}
             />
           </div>
+
+          {/* Batch-date suggestion (batch_date_suggestion) */}
+          {hints?.batch_suggestion && (
+            <div className="flex items-center gap-2 rounded border border-green-200 bg-green-50 px-2.5 py-2 text-xs text-green-800">
+              <CalendarClock className="h-3.5 w-3.5 text-green-600 shrink-0" />
+              <span>
+                <strong>Payment batch:</strong> This vendor&apos;s bills are usually paid on the{" "}
+                <strong>{hints.batch_suggestion.batch_type === "immediate" ? "same day" : hints.batch_suggestion.batch_type}</strong>
+                {" "}({hints.batch_suggestion.frequency}/{hints.batch_suggestion.sample_size} bills).
+                {" "}This will be set automatically on approval.
+              </span>
+            </div>
+          )}
         </CardContent>
       </Card>
 
