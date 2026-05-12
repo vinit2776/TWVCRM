@@ -72,6 +72,10 @@ type ChainData = {
     id: string; name: string; category: string; contact_name?: string;
     contact_phone?: string; contact_email?: string; gstin?: string; pan_number?: string;
     is_approved: boolean;
+    bank_name?: string | null;
+    bank_account_holder?: string | null;
+    bank_account_number?: string | null;
+    bank_ifsc?: string | null;
   } | null;
   po: {
     id: string; po_number: string; status: string; po_type: string;
@@ -817,6 +821,105 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               )}
             </p>
           </DialogHeader>
+
+          {/* Vendor verification strip */}
+          {vendor && (
+            <div className="rounded-lg border bg-muted/30 divide-y text-xs">
+              {/* Row 1: name + approval badge */}
+              <div className="flex items-center justify-between px-3 py-2 gap-2">
+                <div className="flex items-center gap-2 min-w-0">
+                  <Building2 className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                  <span className="font-semibold truncate">{vendor.name}</span>
+                  {vendor.is_approved && (
+                    <span className="shrink-0 bg-green-100 text-green-800 px-1.5 py-0.5 rounded text-[10px] font-medium">KYC ✓</span>
+                  )}
+                  {!vendor.is_approved && (
+                    <span className="shrink-0 bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded text-[10px]">KYC pending</span>
+                  )}
+                </div>
+                <span className="text-muted-foreground shrink-0 capitalize">{vendor.category?.replace(/_/g, " ")}</span>
+              </div>
+
+              {/* Row 2: GST + PAN */}
+              <div className="grid grid-cols-2 px-3 py-2 gap-x-4 gap-y-1">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground w-8 shrink-0">GST</span>
+                  {vendor.gstin ? (
+                    <span className="font-mono">{vendor.gstin}</span>
+                  ) : (
+                    <span className="text-amber-600 italic">not on file</span>
+                  )}
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="text-muted-foreground w-8 shrink-0">PAN</span>
+                  {vendor.pan_number ? (
+                    <span className="font-mono">{vendor.pan_number}</span>
+                  ) : (
+                    <span className="text-amber-600 italic">not on file</span>
+                  )}
+                </div>
+                {vendor.contact_email?.trim() && (
+                  <div className="flex items-center gap-1.5 col-span-2">
+                    <span className="text-muted-foreground w-8 shrink-0">Email</span>
+                    <span className="truncate">{vendor.contact_email.trim()}</span>
+                  </div>
+                )}
+                {vendor.contact_phone && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-muted-foreground w-8 shrink-0">Phone</span>
+                    <span>{vendor.contact_phone}</span>
+                  </div>
+                )}
+                {vendor.contact_name && (
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-muted-foreground w-8 shrink-0">Contact</span>
+                    <span className="truncate">{vendor.contact_name}</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Row 3: bank details */}
+              {(vendor.bank_account_number || vendor.bank_ifsc) ? (
+                <div className="px-3 py-2 space-y-0.5">
+                  <div className="flex items-center gap-1.5 text-[10px] uppercase tracking-wide text-muted-foreground mb-1 font-medium">
+                    <CreditCard className="h-3 w-3" />
+                    Bank Details
+                  </div>
+                  <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+                    {vendor.bank_name && (
+                      <div className="flex items-center gap-1.5 col-span-2">
+                        <span className="text-muted-foreground w-16 shrink-0">Bank</span>
+                        <span className="font-medium">{vendor.bank_name}</span>
+                      </div>
+                    )}
+                    {vendor.bank_account_holder && (
+                      <div className="flex items-center gap-1.5 col-span-2">
+                        <span className="text-muted-foreground w-16 shrink-0">A/c Name</span>
+                        <span>{vendor.bank_account_holder}</span>
+                      </div>
+                    )}
+                    {vendor.bank_account_number && (
+                      <div className="flex items-center gap-1.5 col-span-2">
+                        <span className="text-muted-foreground w-16 shrink-0">A/c No.</span>
+                        <span className="font-mono tracking-wider">{vendor.bank_account_number}</span>
+                      </div>
+                    )}
+                    {vendor.bank_ifsc && (
+                      <div className="flex items-center gap-1.5">
+                        <span className="text-muted-foreground w-16 shrink-0">IFSC</span>
+                        <span className="font-mono">{vendor.bank_ifsc}</span>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="px-3 py-2 flex items-center gap-1.5 text-amber-700">
+                  <AlertCircle className="h-3 w-3 shrink-0" />
+                  <span>No bank details on file — add via vendor profile before paying</span>
+                </div>
+              )}
+            </div>
+          )}
 
           <div className="space-y-4 py-1">
             {isPartialApproval && (

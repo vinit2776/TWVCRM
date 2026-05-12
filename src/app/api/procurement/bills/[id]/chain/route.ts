@@ -32,7 +32,7 @@ export async function GET(
   // ── 2. Fetch the vendor (including KYC docs) ──────────────────────────────
   const { data: vendor } = await supabase
     .from("procurement_vendors")
-    .select("id, name, category, contact_name, contact_phone, contact_email, gstin, pan_number, is_approved, pan_doc_path, gst_cert_path, reg_cert_path, aadhar_doc_path, msme_cert_path")
+    .select("id, name, category, contact_name, contact_phone, contact_email, gstin, pan_number, is_approved, pan_doc_path, gst_cert_path, reg_cert_path, aadhar_doc_path, msme_cert_path, bank_name, bank_account_holder, bank_account_number, bank_ifsc")
     .eq("id", bill.vendor_id)
     .single();
 
