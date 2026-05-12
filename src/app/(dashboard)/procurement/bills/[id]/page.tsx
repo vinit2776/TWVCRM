@@ -23,7 +23,7 @@ import {
 import { toast } from "sonner";
 import {
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
-  BILL_PAYMENT_MODES, BILL_PAYMENT_MODE_LABELS,
+  BILL_PAYMENT_MODE_LABELS,
   BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
   REJECTION_OUTCOME_LABELS, PO_ADVANCE_PAYMENT_MODE_LABELS,
   PROCUREMENT_DEPARTMENT_LABELS,
@@ -193,10 +193,6 @@ export default function VendorBillDetailPage() {
   const [loading, setLoading] = useState(true);
   const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
 
-  // Payment dialog
-  const [paymentDialog, setPaymentDialog] = useState(false);
-  const [paymentLoading, setPaymentLoading] = useState(false);
-
   // Approval
   const [approveLoading, setApproveLoading] = useState(false);
   const [approveDialog, setApproveDialog] = useState(false);
@@ -211,18 +207,12 @@ export default function VendorBillDetailPage() {
   const [rejectionReason, setRejectionReason] = useState("");
   const [rejectionOutcome, setRejectionOutcome] = useState("");
 
-  // Send confirmation toggle (inside payment dialog)
-  const [sendConfirmation, setSendConfirmation] = useState(true);
+  // Resend confirmation dialog
   const [resendDialog, setResendDialog] = useState(false);
   const [resendCc, setResendCc] = useState("");
   const [resendLoading, setResendLoading] = useState(false);
 
   const today = new Date().toISOString().split("T")[0];
-
-  const [paymentAmount, setPaymentAmount] = useState("");
-  const [paymentMode, setPaymentMode] = useState<"cash" | "upi" | "bank_transfer">("upi");
-  const [paymentReference, setPaymentReference] = useState("");
-  const [paymentDate, setPaymentDate] = useState(today);
 
   // Fetch current user role
   useEffect(() => {
@@ -253,65 +243,6 @@ export default function VendorBillDetailPage() {
   }, [id, router]);
 
   useEffect(() => { fetchAll(); }, [fetchAll]);
-
-  const openPaymentDialog = () => {
-    if (!bill) return;
-    const remaining = Number(bill.total_amount) - Number(bill.amount_paid);
-    setPaymentAmount(remaining > 0 ? String(remaining) : "");
-    setPaymentMode("upi");
-    setPaymentReference("");
-    setPaymentDate(today);
-    setSendConfirmation(!!chain?.vendor?.contact_email);
-    setPaymentDialog(true);
-  };
-
-  const handleRecordPayment = async () => {
-    const amount = parseFloat(paymentAmount);
-    if (!paymentAmount || isNaN(amount) || amount <= 0) {
-      toast.error("Enter a valid payment amount");
-      return;
-    }
-
-    setPaymentLoading(true);
-    try {
-      const res = await fetch(`/api/procurement/bills/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "record_payment",
-          amount,
-          payment_mode: paymentMode,
-          payment_reference: paymentReference.trim() || null,
-          payment_date: paymentDate || null,
-        }),
-      });
-      const json = await res.json();
-      if (!res.ok) {
-        toast.error(json.error || "Failed to record payment");
-        return;
-      }
-      toast.success("Payment recorded successfully");
-      setPaymentDialog(false);
-
-      if (sendConfirmation && chain?.vendor?.contact_email) {
-        const emailRes = await fetch(`/api/procurement/bills/${id}/payment-email`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cc: [] }),
-        });
-        if (emailRes.ok) {
-          toast.success("Confirmation sent to vendor");
-        } else {
-          const emailJson = await emailRes.json();
-          toast.error(emailJson.error || "Payment saved but email failed");
-        }
-      }
-
-      await fetchAll();
-    } finally {
-      setPaymentLoading(false);
-    }
-  };
 
   const handleResendConfirmation = async () => {
     setResendLoading(true);
@@ -567,14 +498,6 @@ export default function VendorBillDetailPage() {
                 <CheckCircle2 className="h-4 w-4 mr-1" /> Approve
               </Button>
             </>
-          )}
-          {bill.approval_status === "approved" && bill.payment_status !== "paid" && canApprove && (
-            <Button
-              onClick={openPaymentDialog}
-              className="bg-green-600 hover:bg-green-700"
-            >
-              <CreditCard className="h-4 w-4 mr-1" /> Record Payment
-            </Button>
           )}
           {bill.approval_status === "approved" &&
             bill.approved_amount !== null &&
@@ -1263,99 +1186,6 @@ export default function VendorBillDetailPage() {
           </CardContent>
         </Card>
       )}
-
-      {/* Record Payment Dialog */}
-      <Dialog open={paymentDialog} onOpenChange={setPaymentDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Record Payment</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 py-2">
-            {/* Vendor-email nag — only renders if vendor has no email */}
-            {chain?.vendor?.id && !chain.vendor.contact_email && (
-              <VendorEmailBanner
-                vendorId={chain.vendor.id}
-                vendorName={chain.vendor.name}
-                forceShow
-                onEmailSaved={() => { fetchAll(); setSendConfirmation(true); }}
-              />
-            )}
-            <p className="text-sm text-muted-foreground">
-              Balance due: <strong>{formatCurrency(remaining > 0 ? remaining : 0)}</strong>
-            </p>
-            <div className="space-y-1.5">
-              <Label>Amount (₹) <span className="text-red-500">*</span></Label>
-              <Input
-                type="number"
-                min="0.01"
-                step="0.01"
-                placeholder="0.00"
-                value={paymentAmount}
-                onChange={(e) => setPaymentAmount(e.target.value)}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Payment Mode <span className="text-red-500">*</span></Label>
-              <Select value={paymentMode} onValueChange={(v) => setPaymentMode(v as typeof paymentMode)}>
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {BILL_PAYMENT_MODES.map((m) => (
-                    <SelectItem key={m} value={m}>{BILL_PAYMENT_MODE_LABELS[m]}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1.5">
-              <Label>Reference / Transaction ID</Label>
-              <Textarea
-                placeholder="UTR number, cheque no., receipt no. (optional)"
-                value={paymentReference}
-                onChange={(e) => setPaymentReference(e.target.value)}
-                rows={2}
-              />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Payment Date</Label>
-              <Input
-                type="date"
-                value={paymentDate}
-                onChange={(e) => setPaymentDate(e.target.value)}
-              />
-            </div>
-            {/* Send confirmation toggle */}
-            <label className="flex items-center gap-2.5 rounded-lg border p-3 cursor-pointer hover:bg-muted/30 transition-colors">
-              <input
-                type="checkbox"
-                checked={sendConfirmation}
-                onChange={(e) => setSendConfirmation(e.target.checked)}
-                disabled={!chain?.vendor?.contact_email}
-                className="h-4 w-4 rounded border-gray-300 accent-green-600"
-              />
-              <div className="min-w-0">
-                <span className="text-sm font-medium">Send confirmation to vendor</span>
-                {chain?.vendor?.contact_email ? (
-                  <p className="text-xs text-muted-foreground">{chain.vendor.contact_email}</p>
-                ) : (
-                  <p className="text-xs text-amber-600">No email on file — add above to enable</p>
-                )}
-              </div>
-            </label>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setPaymentDialog(false)}>Cancel</Button>
-            <Button
-              className="bg-green-600 hover:bg-green-700"
-              onClick={handleRecordPayment}
-              disabled={paymentLoading}
-            >
-              {paymentLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              {sendConfirmation && chain?.vendor?.contact_email ? "Record & Send" : "Record Payment"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Approve Invoice Dialog */}
       <Dialog open={approveDialog} onOpenChange={setApproveDialog}>
