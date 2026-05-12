@@ -7,6 +7,7 @@ import {
   ArrowLeft, FileText, Truck, ClipboardList, Package,
   ExternalLink, CheckCircle, AlertCircle, Clock, ChevronDown,
   ChevronUp, Send, CreditCard, Building2, ShieldCheck, Info,
+  PauseCircle, PlayCircle, BookOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -49,6 +50,14 @@ type ChainData = {
     approved_at: string | null; approval_code: string | null;
     approved_amount: number | null;
     approved_amount_note: string | null;
+    payment_hold_status: string | null;
+    payment_hold_reason: string | null;
+    payment_hold_notes: string | null;
+    payment_held_at: string | null;
+    payment_hold_resolved_at: string | null;
+    payment_hold_resolution_notes: string | null;
+    holder: { id: string; full_name: string } | null;
+    hold_resolver: { id: string; full_name: string } | null;
     creator: { id: string; full_name: string } | null;
     approver: { id: string; full_name: string } | null;
     vendor_id: string; po_id: string | null;
@@ -214,6 +223,14 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const [resendCc, setResendCc] = useState("");
   const [resendLoading, setResendLoading] = useState(false);
 
+  // Hold state
+  const [holdDialog, setHoldDialog] = useState(false);
+  const [releaseDialog, setReleaseDialog] = useState(false);
+  const [holdReason, setHoldReason] = useState<string>("");
+  const [holdNotes, setHoldNotes] = useState("");
+  const [releaseNotes, setReleaseNotes] = useState("");
+  const [holdLoading, setHoldLoading] = useState(false);
+
   const fetchChain = useCallback(async () => {
     setLoading(true);
     const res = await fetch(`/api/procurement/bills/${id}/chain`);
@@ -274,6 +291,19 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const isPartialApproval = bill ? (bill.approved_amount !== null && Number(bill.approved_amount) < Number(bill.total_amount)) : false;
   const balancePendingApproval = isPartialApproval && bill ? Number(bill.total_amount) - approvedCeiling : 0;
   const isFullyPaid = bill?.payment_status === "paid";
+  const isOnHold = bill?.payment_hold_status === "on_hold";
+  const canHoldPayment = (userRole === "accounts" || userRole === "admin" || userRole === "office_admin") && !isFullyPaid;
+  const canReleaseHold = (userRole === "admin" || userRole === "manager") && isOnHold;
+
+  const HOLD_REASON_LABELS: Record<string, string> = {
+    wrong_scan: "Wrong or unclear invoice scan",
+    wrong_bank_details: "Bank details incorrect",
+    bank_rejected: "Payment rejected by bank",
+    amount_mismatch: "Amount doesn't match approved bill",
+    duplicate_suspected: "Suspected duplicate payment",
+    pending_docs: "Supporting documents missing",
+    other: "Other reason",
+  };
 
   // Payment modes available by role
   const bankModes = [
@@ -379,6 +409,46 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
     }
   }
 
+  async function handleHoldPayment() {
+    if (!holdReason) { toast.error("Select a hold reason"); return; }
+    setHoldLoading(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "hold_payment", hold_reason: holdReason, hold_notes: holdNotes || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast.error(data.error || "Failed to hold payment"); return; }
+      toast.success("Payment placed on hold — approvers notified");
+      setHoldDialog(false);
+      setHoldReason("");
+      setHoldNotes("");
+      await fetchChain();
+    } finally {
+      setHoldLoading(false);
+    }
+  }
+
+  async function handleReleaseHold() {
+    setHoldLoading(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "release_hold", resolution_notes: releaseNotes || null }),
+      });
+      const data = await res.json();
+      if (!res.ok) { toast.error(data.error || "Failed to release hold"); return; }
+      toast.success("Payment hold released — ready for payment");
+      setReleaseDialog(false);
+      setReleaseNotes("");
+      await fetchChain();
+    } finally {
+      setHoldLoading(false);
+    }
+  }
+
   if (loading) {
     return (
       <div className="p-6 space-y-4">
@@ -409,6 +479,12 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
             <Badge className={`${PAYMENT_STATUS_COLORS[bill.payment_status]} border-0`}>
               {bill.payment_status === "unpaid" ? "Unpaid" : bill.payment_status === "partially_paid" ? "Partially Paid" : "Paid"}
             </Badge>
+            {isOnHold && (
+              <Badge className="bg-orange-100 text-orange-800 border-0 flex items-center gap-1">
+                <PauseCircle className="h-3 w-3" />
+                Payment On Hold
+              </Badge>
+            )}
             {bill.due_date && new Date(bill.due_date) < new Date() && !isFullyPaid && (
               <Badge className="bg-red-100 text-red-800 border-0">Overdue</Badge>
             )}
@@ -422,14 +498,68 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           {!isFullyPaid && (
             <p className="text-sm text-amber-700 font-medium">₹{outstanding.toLocaleString("en-IN")} outstanding</p>
           )}
-          {!isFullyPaid && canRecordPayment && (
+          {!isFullyPaid && canRecordPayment && !isOnHold && (
             <Button size="sm" onClick={openPaymentDialog} className="gap-1.5">
               <CreditCard className="h-3.5 w-3.5" />
               Record Payment
             </Button>
           )}
+          {!isFullyPaid && canHoldPayment && !isOnHold && (
+            <Button size="sm" variant="outline" onClick={() => setHoldDialog(true)} className="gap-1.5 border-orange-300 text-orange-700 hover:bg-orange-50">
+              <PauseCircle className="h-3.5 w-3.5" />
+              Hold Payment
+            </Button>
+          )}
+          {canReleaseHold && (
+            <Button size="sm" onClick={() => setReleaseDialog(true)} className="gap-1.5 bg-green-600 hover:bg-green-700">
+              <PlayCircle className="h-3.5 w-3.5" />
+              Release Hold
+            </Button>
+          )}
         </div>
       </div>
+
+      {/* Payment Hold Banner */}
+      {isOnHold && (
+        <div className="rounded-lg border-2 border-orange-300 bg-orange-50 p-4 space-y-2">
+          <div className="flex items-center gap-2">
+            <PauseCircle className="h-5 w-5 text-orange-600 shrink-0" />
+            <div className="flex-1">
+              <p className="font-semibold text-orange-900">Payment On Hold</p>
+              <p className="text-sm text-orange-800 mt-0.5">
+                {bill.payment_hold_reason ? HOLD_REASON_LABELS[bill.payment_hold_reason] ?? bill.payment_hold_reason : "Hold placed"}
+                {bill.payment_held_at && (
+                  <span className="text-orange-600 ml-1.5 text-xs">
+                    · {new Date(bill.payment_held_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
+                  </span>
+                )}
+              </p>
+              {bill.payment_hold_notes && (
+                <p className="text-xs text-orange-700 mt-1 italic">"{bill.payment_hold_notes}"</p>
+              )}
+            </div>
+          </div>
+          <div className="text-xs text-orange-700 bg-orange-100 rounded px-3 py-2 space-y-1">
+            <p className="font-medium">Action required from Admin / Manager:</p>
+            <ul className="list-disc list-inside space-y-0.5">
+              {bill.payment_hold_reason === "wrong_scan" && <li>Request the vendor to re-submit a clear invoice scan via procurement</li>}
+              {bill.payment_hold_reason === "wrong_bank_details" && <li>Verify and update vendor bank details in the vendor profile, then release</li>}
+              {bill.payment_hold_reason === "bank_rejected" && <li>Contact the bank, confirm correct account details, then release for retry</li>}
+              {bill.payment_hold_reason === "amount_mismatch" && <li>Review the approved amount vs. invoice — correct via approval if needed</li>}
+              {bill.payment_hold_reason === "duplicate_suspected" && <li>Cross-check payment history and bill records before releasing</li>}
+              {bill.payment_hold_reason === "pending_docs" && <li>Ensure all required supporting documents are uploaded before releasing</li>}
+              {(!bill.payment_hold_reason || bill.payment_hold_reason === "other") && <li>Investigate the stated issue and release once resolved</li>}
+              <li>Once resolved, click <strong>Release Hold</strong> above to allow payment to proceed</li>
+            </ul>
+          </div>
+          {canReleaseHold && (
+            <Button size="sm" onClick={() => setReleaseDialog(true)} className="gap-1.5 bg-green-600 hover:bg-green-700 w-full sm:w-auto">
+              <PlayCircle className="h-3.5 w-3.5" />
+              Release Hold &amp; Allow Payment
+            </Button>
+          )}
+        </div>
+      )}
 
       {/* Document Chain */}
       <Card>
@@ -1042,6 +1172,113 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           )}
         </div>
       )}
+
+      {/* Hold Payment Dialog */}
+      <Dialog open={holdDialog} onOpenChange={setHoldDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PauseCircle className="h-4 w-4 text-orange-600" />
+              Hold Payment
+            </DialogTitle>
+            <p className="text-xs text-muted-foreground">
+              Admin and Manager will be notified to take action. Payment cannot be recorded while on hold.
+            </p>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <div className="space-y-1.5">
+              <Label>Reason for hold *</Label>
+              <Select value={holdReason} onValueChange={setHoldReason}>
+                <SelectTrigger>
+                  <SelectValue placeholder="Select reason…" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="wrong_scan">Wrong or unclear invoice scan</SelectItem>
+                  <SelectItem value="wrong_bank_details">Bank details incorrect</SelectItem>
+                  <SelectItem value="bank_rejected">Payment rejected by bank</SelectItem>
+                  <SelectItem value="amount_mismatch">Amount doesn&apos;t match approved bill</SelectItem>
+                  <SelectItem value="duplicate_suspected">Suspected duplicate payment</SelectItem>
+                  <SelectItem value="pending_docs">Supporting documents missing</SelectItem>
+                  <SelectItem value="other">Other reason</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label>Additional notes (optional)</Label>
+              <Input
+                value={holdNotes}
+                onChange={(e) => setHoldNotes(e.target.value)}
+                placeholder="Describe the specific issue…"
+                maxLength={500}
+              />
+            </div>
+            <div className="rounded-lg bg-amber-50 border border-amber-200 p-3 text-xs text-amber-800">
+              <p className="font-medium mb-1">What happens next</p>
+              <ul className="list-disc list-inside space-y-0.5">
+                <li>Admin and Manager receive an in-app notification</li>
+                <li>The bill will show &apos;Payment On Hold&apos; with the reason</li>
+                <li>Payment cannot be recorded until the hold is released</li>
+                <li>The hold and release are logged in the audit trail</li>
+              </ul>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setHoldDialog(false)} disabled={holdLoading}>Cancel</Button>
+            <Button
+              onClick={handleHoldPayment}
+              disabled={holdLoading || !holdReason}
+              className="gap-2 bg-orange-600 hover:bg-orange-700"
+            >
+              <PauseCircle className="h-4 w-4" />
+              {holdLoading ? "Placing Hold…" : "Place Hold & Notify"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Release Hold Dialog */}
+      <Dialog open={releaseDialog} onOpenChange={setReleaseDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <PlayCircle className="h-4 w-4 text-green-600" />
+              Release Payment Hold
+            </DialogTitle>
+            <p className="text-xs text-muted-foreground">
+              Confirm the issue has been resolved and payment can proceed.
+            </p>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            {bill?.payment_hold_reason && (
+              <div className="rounded-lg bg-muted p-3 text-sm space-y-1">
+                <p className="text-xs text-muted-foreground font-medium">Hold reason</p>
+                <p>{HOLD_REASON_LABELS[bill.payment_hold_reason] ?? bill.payment_hold_reason}</p>
+                {bill.payment_hold_notes && <p className="text-xs italic text-muted-foreground">"{bill.payment_hold_notes}"</p>}
+              </div>
+            )}
+            <div className="space-y-1.5">
+              <Label>Resolution notes (optional)</Label>
+              <Input
+                value={releaseNotes}
+                onChange={(e) => setReleaseNotes(e.target.value)}
+                placeholder="e.g. Correct bank details confirmed, scan re-uploaded…"
+                maxLength={500}
+              />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setReleaseDialog(false)} disabled={holdLoading}>Cancel</Button>
+            <Button
+              onClick={handleReleaseHold}
+              disabled={holdLoading}
+              className="gap-2 bg-green-600 hover:bg-green-700"
+            >
+              <PlayCircle className="h-4 w-4" />
+              {holdLoading ? "Releasing…" : "Release Hold"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Resend Confirmation Dialog */}
       <Dialog open={resendDialog} onOpenChange={setResendDialog}>

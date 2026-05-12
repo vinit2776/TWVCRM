@@ -1,0 +1,9 @@
+-- Track which user performed each contract lifecycle transition
+ALTER TABLE contracts
+  ADD COLUMN IF NOT EXISTS sent_by        UUID REFERENCES users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS viewed_by      UUID REFERENCES users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS accepted_by    UUID REFERENCES users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS rejected_by    UUID REFERENCES users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS activated_by   UUID REFERENCES users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS terminated_by  UUID REFERENCES users(id) ON DELETE SET NULL,
+  ADD COLUMN IF NOT EXISTS renewed_by     UUID REFERENCES users(id) ON DELETE SET NULL;

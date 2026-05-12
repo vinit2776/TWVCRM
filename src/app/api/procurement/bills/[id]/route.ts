@@ -7,6 +7,16 @@ import { computeBatchDate, toISODateString } from "@/lib/payment-batch";
 import { z } from "zod";
 
 const BANK_MODES = ["bank_transfer", "neft", "rtgs", "imps", "cheque"] as const;
+
+const HOLD_REASON_LABELS: Record<string, string> = {
+  wrong_scan: "Wrong or unclear invoice scan",
+  wrong_bank_details: "Bank details incorrect",
+  bank_rejected: "Payment rejected by bank",
+  amount_mismatch: "Amount doesn't match approved bill",
+  duplicate_suspected: "Suspected duplicate payment",
+  pending_docs: "Supporting documents missing",
+  other: "Other reason",
+};
 const ALL_PAYMENT_MODES = [...BANK_MODES, "cash"] as const;
 
 const tdsSchema = z.object({
@@ -46,6 +56,18 @@ const patchBillSchema = z.discriminatedUnion("action", [
     action: z.literal("reject"),
     rejection_reason: z.string().min(1, "Rejection reason is required"),
     rejection_outcome: z.enum(["return", "replacement"]).optional(),
+  }),
+  z.object({
+    action: z.literal("hold_payment"),
+    hold_reason: z.enum([
+      "wrong_scan", "wrong_bank_details", "bank_rejected",
+      "amount_mismatch", "duplicate_suspected", "pending_docs", "other",
+    ]),
+    hold_notes: z.string().max(500).nullish(),
+  }),
+  z.object({
+    action: z.literal("release_hold"),
+    resolution_notes: z.string().max(500).nullish(),
   }),
 ]);
 
@@ -445,6 +467,81 @@ export async function PATCH(
         tag: `bill-approval-${id}`,
       }).catch((err) => console.error("[push] reject notification failed:", err));
 
+      break;
+    }
+
+    case "hold_payment": {
+      const canHold = ["admin", "accounts", "office_admin"].includes(dbUser.role);
+      if (!canHold) {
+        return NextResponse.json({ error: "Only accounts team can place a payment hold" }, { status: 403 });
+      }
+      if (bill.approval_status !== "approved") {
+        return NextResponse.json({ error: "Only approved bills can be placed on hold" }, { status: 422 });
+      }
+      if (bill.payment_status === "paid") {
+        return NextResponse.json({ error: "Already paid bills cannot be placed on hold" }, { status: 422 });
+      }
+      if (bill.payment_hold_status === "on_hold") {
+        return NextResponse.json({ error: "Bill is already on hold" }, { status: 422 });
+      }
+
+      const holdData = parsed.data; // narrowed to hold_payment variant
+      updatePayload = {
+        payment_hold_status: "on_hold",
+        payment_hold_reason: holdData.hold_reason,
+        payment_hold_notes: holdData.hold_notes ?? null,
+        payment_held_by: dbUser.id,
+        payment_held_at: new Date().toISOString(),
+        payment_hold_resolved_by: null,
+        payment_hold_resolved_at: null,
+        payment_hold_resolution_notes: null,
+      };
+
+      const holdReasonLabel = HOLD_REASON_LABELS[holdData.hold_reason] ?? holdData.hold_reason;
+
+      // Notify all admin + manager users via in-app notifications
+      const { data: approvers } = await supabase
+        .from("users")
+        .select("id")
+        .in("role", ["admin", "manager"]);
+      if (approvers && approvers.length > 0) {
+        await supabase.from("notifications").insert(
+          approvers.map((u: { id: string }) => ({
+            user_id: u.id,
+            type: "payment_hold",
+            title: "Payment Placed on Hold",
+            body: `${bill.bill_number} requires your attention — ${holdReasonLabel}`,
+            url: `/accounting/vendor-payments/${id}`,
+            entity_type: "vendor_bill",
+            entity_id: id,
+          }))
+        );
+      }
+
+      sendPushToAll({
+        title: "Payment On Hold",
+        body: `${bill.bill_number} — ${holdReasonLabel}. Approver action required.`,
+        url: `/accounting/vendor-payments/${id}`,
+        tag: `payment-hold-${id}`,
+      }).catch((err) => console.error("[push] hold notification failed:", err));
+
+      break;
+    }
+
+    case "release_hold": {
+      if (!canApproveOrReject) {
+        return NextResponse.json({ error: "Only admin or manager can release a payment hold" }, { status: 403 });
+      }
+      if (bill.payment_hold_status !== "on_hold") {
+        return NextResponse.json({ error: "Bill is not on hold" }, { status: 422 });
+      }
+
+      updatePayload = {
+        payment_hold_status: "none",
+        payment_hold_resolved_by: dbUser.id,
+        payment_hold_resolved_at: new Date().toISOString(),
+        payment_hold_resolution_notes: parsed.data.resolution_notes ?? null,
+      };
       break;
     }
   }

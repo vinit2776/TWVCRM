@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import {
   AlertCircle, CheckCircle, CreditCard, ExternalLink,
-  FileText, ChevronDown, ChevronUp, Calendar, Download,
+  FileText, ChevronDown, ChevronUp, Calendar, Download, BookOpen,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -246,6 +246,138 @@ function RecordChallanDialog({
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+// ── TDS Compliance Guide ──────────────────────────────────────
+function TdsGuide() {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="rounded-lg border border-blue-200 bg-blue-50/40">
+      <button
+        className="w-full flex items-center justify-between px-4 py-3 text-sm font-medium text-blue-900 hover:bg-blue-50 transition-colors rounded-lg"
+        onClick={() => setOpen((v) => !v)}
+      >
+        <span className="flex items-center gap-2">
+          <BookOpen className="h-4 w-4 text-blue-600" />
+          TDS Compliance Guide — How to use this module
+        </span>
+        {open ? <ChevronUp className="h-4 w-4 text-blue-500" /> : <ChevronDown className="h-4 w-4 text-blue-500" />}
+      </button>
+
+      {open && (
+        <div className="px-4 pb-4 text-xs space-y-4 text-blue-900">
+          <div className="grid md:grid-cols-2 gap-4">
+
+            {/* What is TDS */}
+            <div className="space-y-1.5">
+              <p className="font-semibold text-sm">What is TDS?</p>
+              <p className="text-blue-800 leading-relaxed">
+                Tax Deducted at Source (TDS) is a mechanism where the payer deducts tax before making a payment to the vendor.
+                The deducted amount is deposited to the Income Tax department on behalf of the vendor. The vendor then claims
+                this as advance tax paid when filing their returns.
+              </p>
+            </div>
+
+            {/* Applicable sections */}
+            <div className="space-y-1.5">
+              <p className="font-semibold text-sm">Applicable Sections</p>
+              <table className="w-full text-[11px] border-collapse">
+                <thead>
+                  <tr className="bg-blue-100">
+                    <th className="text-left px-2 py-1 font-semibold">Section</th>
+                    <th className="text-left px-2 py-1 font-semibold">Nature</th>
+                    <th className="text-right px-2 py-1 font-semibold">Rate</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-blue-100">
+                  {[
+                    ["194C", "Contractors / Sub-contractors", "1% (Ind) / 2% (Co)"],
+                    ["194J(a)", "Technical Services", "2%"],
+                    ["194J(b)", "Professional Services", "10%"],
+                    ["194I(a)", "Rent – Plant & Machinery", "2%"],
+                    ["194I(b)", "Rent – Land / Building", "10%"],
+                    ["194H", "Commission & Brokerage", "5%"],
+                  ].map(([sec, nat, rate]) => (
+                    <tr key={sec} className="even:bg-blue-50/60">
+                      <td className="px-2 py-1 font-mono font-medium">{sec}</td>
+                      <td className="px-2 py-1">{nat}</td>
+                      <td className="px-2 py-1 text-right">{rate}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+              <p className="text-[10px] text-blue-600">
+                Section 206AA: If PAN is not available, rate is 20% regardless of section.
+              </p>
+            </div>
+
+            {/* Monthly workflow */}
+            <div className="space-y-1.5">
+              <p className="font-semibold text-sm">Monthly Workflow</p>
+              <ol className="list-decimal list-inside space-y-1.5 text-blue-800">
+                <li><strong>At payment time</strong> — enable TDS deduction in the payment dialog. Enter the pre-GST base amount. The system calculates TDS and net-to-vendor amounts.</li>
+                <li><strong>TDS Payable ledger</strong> — all deductions appear here grouped by month and section.</li>
+                <li><strong>Deposit to IT Dept</strong> — pay via ITNS 281 challan at your bank (online or branch). Due by the <strong>7th of the following month</strong> (March due by 30th April).</li>
+                <li><strong>Record Challan</strong> — enter the BSR code, challan serial, and deposit date in this module. This marks the TDS as deposited.</li>
+              </ol>
+            </div>
+
+            {/* Quarterly compliance */}
+            <div className="space-y-1.5">
+              <p className="font-semibold text-sm">Quarterly Compliance (26Q)</p>
+              <ol className="list-decimal list-inside space-y-1.5 text-blue-800">
+                <li><strong>Download 26Q CSV</strong> from the Reports panel below for the relevant quarter.</li>
+                <li>File 26Q on TRACES (www.tdscpc.gov.in) before the due date.</li>
+                <li>After acceptance, <strong>download Form 16A</strong> from TRACES for each vendor, or generate our in-system version for interim records.</li>
+                <li>Issue Form 16A to each vendor within 15 days of the 26Q due date.</li>
+              </ol>
+              <div className="bg-blue-100 border border-blue-200 rounded px-2 py-1.5 text-[11px] space-y-0.5">
+                <p className="font-semibold">26Q Filing deadlines</p>
+                <p>Q1 (Apr–Jun) → 31 Jul &nbsp;|&nbsp; Q2 (Jul–Sep) → 31 Oct</p>
+                <p>Q3 (Oct–Dec) → 31 Jan &nbsp;|&nbsp; Q4 (Jan–Mar) → 31 May</p>
+              </div>
+            </div>
+
+            {/* Key rules */}
+            <div className="space-y-1.5">
+              <p className="font-semibold text-sm">Key Rules to Remember</p>
+              <ul className="list-disc list-inside space-y-1 text-blue-800">
+                <li>TDS is on the <strong>pre-GST (base) amount</strong> — never on the GST portion.</li>
+                <li>Late deposit attracts interest at <strong>1.5% per month</strong> (Section 201(1A)).</li>
+                <li>Late filing of 26Q attracts <strong>₹200 per day</strong> fee (Section 234E).</li>
+                <li>Short deduction is treated as deemed default — the company is liable for the shortfall.</li>
+                <li>PAN of vendor is mandatory. Without PAN, deduct at <strong>20%</strong> (S.206AA).</li>
+                <li>Form 16A must be issued within <strong>15 days</strong> of the quarterly 26Q due date.</li>
+              </ul>
+            </div>
+
+            {/* TAN details */}
+            <div className="space-y-1.5">
+              <p className="font-semibold text-sm">Our TAN Details</p>
+              <div className="bg-white border border-blue-200 rounded px-3 py-2 space-y-1">
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-muted-foreground">TAN</span>
+                  <span className="font-mono font-semibold">CHEU00102E</span>
+                </div>
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-muted-foreground">Entity</span>
+                  <span className="font-medium">Sree Design Infrastructure Pvt Ltd</span>
+                </div>
+                <div className="flex justify-between text-[11px]">
+                  <span className="text-muted-foreground">Filing type</span>
+                  <span>26Q — Non-Salary Deductions</span>
+                </div>
+              </div>
+              <p className="text-[10px] text-blue-600">
+                Use ITNS 281 challan code 0020 (companies) or 0021 (non-companies) when depositing.
+              </p>
+            </div>
+
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -567,6 +699,9 @@ export default function TdsPayablePage() {
           </div>
         )}
       </div>
+
+      {/* Compliance guide */}
+      <TdsGuide />
 
       {/* Compliance strip */}
       {totalPending > 0 && (
