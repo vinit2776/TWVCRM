@@ -833,13 +833,15 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 <p className="text-muted-foreground text-xs">To</p>
                 <p className="font-medium">{vendor.contact_email}</p>
               </div>
-            ) : (
+            ) : vendor?.id ? (
               <VendorEmailBanner
-                vendorId={vendor?.id ?? ""}
-                vendorName={vendor?.name}
+                vendorId={vendor.id}
+                vendorName={vendor.name}
                 forceShow
                 onEmailSaved={() => fetchChain()}
               />
+            ) : (
+              <p className="text-sm text-amber-700">No vendor linked to this bill — email cannot be added here.</p>
             )}
             <div className="space-y-1.5">
               <Label>CC (optional)</Label>

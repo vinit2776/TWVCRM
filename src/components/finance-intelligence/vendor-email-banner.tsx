@@ -85,6 +85,10 @@ export function VendorEmailBanner({
       toast.error("Enter a valid email address");
       return;
     }
+    if (!vendorId) {
+      toast.error("Vendor ID is missing — cannot save email");
+      return;
+    }
     setSaving(true);
     try {
       const res = await fetch(`/api/procurement/vendors/${vendorId}/email`, {

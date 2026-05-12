@@ -1369,13 +1369,15 @@ export default function VendorBillDetailPage() {
                 <p className="text-muted-foreground text-xs">To</p>
                 <p className="font-medium">{chain.vendor.contact_email}</p>
               </div>
-            ) : (
+            ) : chain?.vendor?.id ? (
               <VendorEmailBanner
-                vendorId={chain?.vendor?.id ?? ""}
-                vendorName={chain?.vendor?.name}
+                vendorId={chain.vendor.id}
+                vendorName={chain.vendor.name}
                 forceShow
                 onEmailSaved={() => fetchAll()}
               />
+            ) : (
+              <p className="text-sm text-amber-700">No vendor linked to this bill — email cannot be added here.</p>
             )}
             <div className="space-y-1.5">
               <Label>CC (optional)</Label>
