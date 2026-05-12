@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ChevronLeft, Loader2, Truck, FileText, Calendar, CreditCard, Package, ExternalLink,
-  CheckCircle2, XCircle, Clock, Send, AlertCircle, Activity, CheckCircle,
+  CheckCircle2, XCircle, Clock, Send, Activity, CheckCircle,
   ClipboardList, ChevronDown, ChevronUp, FilePlus,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -211,13 +211,11 @@ export default function VendorBillDetailPage() {
   const [rejectionReason, setRejectionReason] = useState("");
   const [rejectionOutcome, setRejectionOutcome] = useState("");
 
-  // Email dialog
-  const [showEmailDialog, setShowEmailDialog] = useState(false);
-  const [emailCc, setEmailCc] = useState("");
-  const [sendingEmail, setSendingEmail] = useState(false);
-  const [newVendorEmail, setNewVendorEmail] = useState("");
-  const [savingEmail, setSavingEmail] = useState(false);
-  const [vendorEmailLoading, setVendorEmailLoading] = useState(false);
+  // Send confirmation toggle (inside payment dialog)
+  const [sendConfirmation, setSendConfirmation] = useState(true);
+  const [resendDialog, setResendDialog] = useState(false);
+  const [resendCc, setResendCc] = useState("");
+  const [resendLoading, setResendLoading] = useState(false);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -263,6 +261,7 @@ export default function VendorBillDetailPage() {
     setPaymentMode("upi");
     setPaymentReference("");
     setPaymentDate(today);
+    setSendConfirmation(!!chain?.vendor?.contact_email);
     setPaymentDialog(true);
   };
 
@@ -293,10 +292,46 @@ export default function VendorBillDetailPage() {
       }
       toast.success("Payment recorded successfully");
       setPaymentDialog(false);
+
+      if (sendConfirmation && chain?.vendor?.contact_email) {
+        const emailRes = await fetch(`/api/procurement/bills/${id}/payment-email`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cc: [] }),
+        });
+        if (emailRes.ok) {
+          toast.success("Confirmation sent to vendor");
+        } else {
+          const emailJson = await emailRes.json();
+          toast.error(emailJson.error || "Payment saved but email failed");
+        }
+      }
+
       await fetchAll();
-      openEmailDialog();
     } finally {
       setPaymentLoading(false);
+    }
+  };
+
+  const handleResendConfirmation = async () => {
+    setResendLoading(true);
+    try {
+      const ccList = resendCc.split(",").map((e) => e.trim()).filter(Boolean);
+      const res = await fetch(`/api/procurement/bills/${id}/payment-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cc: ccList }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error || "Failed to send email");
+      } else {
+        toast.success("Payment confirmation sent to vendor");
+        setResendDialog(false);
+        setResendCc("");
+      }
+    } finally {
+      setResendLoading(false);
     }
   };
 
@@ -392,71 +427,6 @@ export default function VendorBillDetailPage() {
     }
   };
 
-  // Re-fetch just the vendor email from DB (used when opening dialog to ensure freshness)
-  async function refreshVendorEmail() {
-    if (!chain?.vendor?.id) return;
-    setVendorEmailLoading(true);
-    const res = await fetch(`/api/procurement/vendors/${chain.vendor.id}`);
-    if (res.ok) {
-      const json = await res.json();
-      const latestEmail = json.data?.contact_email ?? null;
-      // Patch the chain state in-place so the dialog reflects the latest email
-      setChain((prev) => prev ? { ...prev, vendor: { ...prev.vendor!, contact_email: latestEmail } } : prev);
-    }
-    setVendorEmailLoading(false);
-  }
-
-  async function openEmailDialog() {
-    setNewVendorEmail("");
-    setEmailCc("");
-    setShowEmailDialog(true);
-    // Always re-fetch vendor email when opening so edits made elsewhere are reflected
-    await refreshVendorEmail();
-  }
-
-  async function handleSaveVendorEmail() {
-    const email = newVendorEmail.trim();
-    if (!email || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
-      toast.error("Enter a valid email address");
-      return;
-    }
-    if (!chain?.vendor?.id) return;
-    setSavingEmail(true);
-    const res = await fetch(`/api/procurement/vendors/${chain.vendor.id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ contact_email: email }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      toast.error(data.error || "Failed to save email");
-    } else {
-      toast.success("Email saved to vendor profile");
-      setNewVendorEmail("");
-      // Update chain state immediately so dialog reflects the saved email
-      setChain((prev) => prev ? { ...prev, vendor: { ...prev.vendor!, contact_email: email } } : prev);
-    }
-    setSavingEmail(false);
-  }
-
-  async function handleSendEmail() {
-    setSendingEmail(true);
-    const ccList = emailCc.split(",").map((e) => e.trim()).filter(Boolean);
-    const res = await fetch(`/api/procurement/bills/${id}/payment-email`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ cc: ccList }),
-    });
-    const data = await res.json();
-    if (!res.ok) {
-      toast.error(data.error || "Failed to send email");
-    } else {
-      toast.success("Payment confirmation sent to vendor");
-      setShowEmailDialog(false);
-      setEmailCc("");
-    }
-    setSendingEmail(false);
-  }
 
   if (loading) {
     return (
@@ -619,16 +589,6 @@ export default function VendorBillDetailPage() {
             >
               {approveLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Approve Balance
-            </Button>
-          )}
-          {bill.payment_status !== "unpaid" && (currentUserRole === "accounts" || currentUserRole === "admin") && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="gap-2"
-              onClick={() => openEmailDialog()}
-            >
-              <Send className="h-4 w-4" /> Send Confirmation
             </Button>
           )}
           {bill.approval_status === "rejected" && bill.rejection_outcome === "replacement" && bill.po_id && (
@@ -1211,7 +1171,7 @@ export default function VendorBillDetailPage() {
         </Card>
       )}
 
-      {/* Send Confirmation card */}
+      {/* Payment summary card with resend option */}
       {bill.payment_status !== "unpaid" && (currentUserRole === "accounts" || currentUserRole === "admin") && (
         <Card className={bill.payment_status === "paid" ? "border-green-200 bg-green-50/30" : "border-amber-200 bg-amber-50/30"}>
           <CardContent className="py-4">
@@ -1229,15 +1189,12 @@ export default function VendorBillDetailPage() {
                   </p>
                 </div>
               </div>
-              <Button
-                variant="outline"
-                size="sm"
-                className="gap-2 shrink-0"
-                onClick={() => openEmailDialog()}
+              <button
+                className="text-xs text-primary hover:underline shrink-0"
+                onClick={() => { setResendCc(""); setResendDialog(true); }}
               >
-                <Send className="h-3.5 w-3.5" />
-                Send Confirmation
-              </Button>
+                Resend confirmation
+              </button>
             </div>
           </CardContent>
         </Card>
@@ -1314,13 +1271,13 @@ export default function VendorBillDetailPage() {
             <DialogTitle>Record Payment</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            {/* Vendor-email nag (Finance Intelligence) — only renders if vendor has no email */}
+            {/* Vendor-email nag — only renders if vendor has no email */}
             {chain?.vendor?.id && !chain.vendor.contact_email && (
               <VendorEmailBanner
                 vendorId={chain.vendor.id}
                 vendorName={chain.vendor.name}
                 forceShow
-                onEmailSaved={() => fetchAll()}
+                onEmailSaved={() => { fetchAll(); setSendConfirmation(true); }}
               />
             )}
             <p className="text-sm text-muted-foreground">
@@ -1367,6 +1324,24 @@ export default function VendorBillDetailPage() {
                 onChange={(e) => setPaymentDate(e.target.value)}
               />
             </div>
+            {/* Send confirmation toggle */}
+            <label className="flex items-center gap-2.5 rounded-lg border p-3 cursor-pointer hover:bg-muted/30 transition-colors">
+              <input
+                type="checkbox"
+                checked={sendConfirmation}
+                onChange={(e) => setSendConfirmation(e.target.checked)}
+                disabled={!chain?.vendor?.contact_email}
+                className="h-4 w-4 rounded border-gray-300 accent-green-600"
+              />
+              <div className="min-w-0">
+                <span className="text-sm font-medium">Send confirmation to vendor</span>
+                {chain?.vendor?.contact_email ? (
+                  <p className="text-xs text-muted-foreground">{chain.vendor.contact_email}</p>
+                ) : (
+                  <p className="text-xs text-amber-600">No email on file — add above to enable</p>
+                )}
+              </div>
+            </label>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setPaymentDialog(false)}>Cancel</Button>
@@ -1376,7 +1351,7 @@ export default function VendorBillDetailPage() {
               disabled={paymentLoading}
             >
               {paymentLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
-              Record Payment
+              {sendConfirmation && chain?.vendor?.contact_email ? "Record & Send" : "Record Payment"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1552,75 +1527,35 @@ export default function VendorBillDetailPage() {
         </DialogContent>
       </Dialog>
 
-      {/* Send Payment Confirmation Email Dialog */}
-      <Dialog open={showEmailDialog} onOpenChange={setShowEmailDialog}>
-        <DialogContent className="max-w-md">
+      {/* Resend Confirmation Dialog */}
+      <Dialog open={resendDialog} onOpenChange={setResendDialog}>
+        <DialogContent className="max-w-sm">
           <DialogHeader>
-            <DialogTitle>Send Payment Confirmation</DialogTitle>
+            <DialogTitle>Resend Payment Confirmation</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            {/* Show where the email goes */}
             <div className="p-3 rounded-lg bg-muted/50 text-sm space-y-1">
-              <p className="text-muted-foreground text-xs uppercase tracking-wide font-medium">Email will be sent to</p>
-              {vendorEmailLoading ? (
-                <div className="flex items-center gap-1.5 text-muted-foreground">
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                  <span className="text-xs">Checking vendor email…</span>
-                </div>
-              ) : chain?.vendor?.contact_email ? (
-                <p className="font-medium">{chain.vendor.contact_email}</p>
-              ) : (
-                <p className="text-amber-700 text-sm flex items-center gap-1.5">
-                  <AlertCircle className="h-3.5 w-3.5" /> No email registered for this vendor
-                </p>
-              )}
-              <p className="text-muted-foreground text-xs">Subject: Payment Confirmation — {bill?.bill_number}</p>
+              <p className="text-muted-foreground text-xs">To</p>
+              <p className="font-medium">{chain?.vendor?.contact_email ?? "No email on file"}</p>
             </div>
-
-            {/* If email missing: show input to save it */}
-            {!chain?.vendor?.contact_email && (
-              <div className="space-y-2">
-                <Label className="text-sm font-medium">Add vendor email address</Label>
-                <div className="flex gap-2">
-                  <Input
-                    type="email"
-                    placeholder="vendor@company.com"
-                    value={newVendorEmail}
-                    onChange={(e) => setNewVendorEmail(e.target.value)}
-                    className="flex-1"
-                  />
-                  <Button
-                    size="sm"
-                    variant="outline"
-                    onClick={handleSaveVendorEmail}
-                    disabled={savingEmail}
-                  >
-                    {savingEmail ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save"}
-                  </Button>
-                </div>
-                <p className="text-xs text-muted-foreground">This will be saved permanently to the vendor&apos;s profile</p>
-              </div>
-            )}
-
-            {/* CC field */}
             <div className="space-y-1.5">
-              <Label>CC (optional, comma-separated)</Label>
+              <Label>CC (optional)</Label>
               <Input
-                value={emailCc}
-                onChange={(e) => setEmailCc(e.target.value)}
-                placeholder="e.g. accounts@company.com, manager@company.com"
+                value={resendCc}
+                onChange={(e) => setResendCc(e.target.value)}
+                placeholder="e.g. accounts@company.com"
               />
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => { setShowEmailDialog(false); setEmailCc(""); }}>Cancel</Button>
+            <Button variant="outline" onClick={() => setResendDialog(false)}>Cancel</Button>
             <Button
-              onClick={handleSendEmail}
-              disabled={sendingEmail || vendorEmailLoading || !chain?.vendor?.contact_email}
+              onClick={handleResendConfirmation}
+              disabled={resendLoading || !chain?.vendor?.contact_email}
               className="gap-2"
             >
               <Send className="h-4 w-4" />
-              {sendingEmail ? "Sending…" : "Send Confirmation"}
+              {resendLoading ? "Sending…" : "Resend"}
             </Button>
           </DialogFooter>
         </DialogContent>
