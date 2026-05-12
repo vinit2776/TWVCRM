@@ -124,7 +124,8 @@ export async function GET(request: NextRequest) {
       { count: monthTotalCount },
       { count: monthWonCount },
     ] = await Promise.all([
-      supabase.from("leads").select("id, status").eq("location_id", locationId),
+      // range(0,9999) bypasses the PostgREST 1 000-row default cap
+      supabase.from("leads").select("id, status").eq("location_id", locationId).range(0, 9999),
       // Conversion totals restricted to post-CONVERSION_CUTOFF leads to keep the
       // KPI honest after the legacy bulk import. Pipeline still reflects the
       // entire pool — that's a "where does my pipeline sit right now" view,
@@ -222,7 +223,9 @@ export async function GET(request: NextRequest) {
     { count: monthTotalCount },
     { count: monthWonCount },
   ] = await Promise.all([
-    supabase.from("leads").select("status"),
+    // PostgREST default row cap is 1 000. With 1 500+ leads the unranged query
+    // silently truncates, making pipelineTotal wrong. Fetch all rows explicitly.
+    supabase.from("leads").select("status").range(0, 9999),
     // Conversion totals restricted to post-CONVERSION_CUTOFF leads to ignore
     // the legacy bulk-imported pre-April-2026 records that were skewing the
     // ratio. Pipeline view above still reflects the full pool.
