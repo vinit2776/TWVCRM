@@ -20,6 +20,9 @@ import {
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
+import {
+  Sheet, SheetContent, SheetHeader, SheetTitle,
+} from "@/components/ui/sheet";
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -226,6 +229,10 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const [resendDialog, setResendDialog] = useState(false);
   const [resendCc, setResendCc] = useState("");
   const [resendLoading, setResendLoading] = useState(false);
+
+  // PO / MR reference sheets
+  const [poSheetOpen, setPoSheetOpen] = useState(false);
+  const [mrSheetOpen, setMrSheetOpen] = useState(false);
 
   // Hold state
   const [holdDialog, setHoldDialog] = useState(false);
@@ -583,9 +590,19 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-orange-800 uppercase tracking-wide">Material Request</span>
-                  <Link href={`/procurement/requests/${chain.mr.id}`} target="_blank" className="text-xs text-primary flex items-center gap-1 hover:underline" onClick={(e) => e.stopPropagation()}>
-                    {chain.mr.pr_number} <ExternalLink className="h-3 w-3" />
-                  </Link>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setMrSheetOpen(true)}
+                      className="text-xs text-primary flex items-center gap-1 hover:underline font-medium"
+                    >
+                      {chain.mr.pr_number} <BookOpen className="h-3 w-3" />
+                    </button>
+                    {["admin", "manager", "office_admin"].includes(userRole ?? "") && (
+                      <Link href={`/procurement/requests/${chain.mr.id}`} target="_blank" className="text-xs text-muted-foreground flex items-center gap-0.5 hover:underline">
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
+                    )}
+                  </div>
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   Dept: {PROCUREMENT_DEPARTMENT_LABELS[chain.mr.department as keyof typeof PROCUREMENT_DEPARTMENT_LABELS] ?? chain.mr.department}
@@ -611,9 +628,19 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               <div className="flex-1 min-w-0">
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs font-semibold text-purple-800 uppercase tracking-wide">Purchase Order</span>
-                  <Link href={`/procurement/orders/${chain.po.id}`} target="_blank" className="text-xs text-primary flex items-center gap-1 hover:underline">
-                    {chain.po.po_number} <ExternalLink className="h-3 w-3" />
-                  </Link>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => setPoSheetOpen(true)}
+                      className="text-xs text-primary flex items-center gap-1 hover:underline font-medium"
+                    >
+                      {chain.po.po_number} <BookOpen className="h-3 w-3" />
+                    </button>
+                    {["admin", "manager", "office_admin"].includes(userRole ?? "") && (
+                      <Link href={`/procurement/orders/${chain.po.id}`} target="_blank" className="text-xs text-muted-foreground flex items-center gap-0.5 hover:underline">
+                        <ExternalLink className="h-3 w-3" />
+                      </Link>
+                    )}
+                  </div>
                 </div>
                 <p className="text-xs text-muted-foreground mt-0.5">
                   {chain.po.po_type === "service" ? "Service PO" : "Goods PO"}
@@ -1382,6 +1409,140 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* MR Reference Sheet */}
+      <Sheet open={mrSheetOpen} onOpenChange={setMrSheetOpen}>
+        <SheetContent className="w-full sm:max-w-md overflow-y-auto">
+          <SheetHeader className="mb-4">
+            <SheetTitle className="flex items-center gap-2">
+              <ClipboardList className="h-4 w-4 text-orange-600" />
+              Material Request — {chain.mr?.pr_number}
+            </SheetTitle>
+          </SheetHeader>
+          {chain.mr && (
+            <div className="space-y-4 text-sm">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-0.5">Department</p>
+                  <p className="font-medium">
+                    {PROCUREMENT_DEPARTMENT_LABELS[chain.mr.department as keyof typeof PROCUREMENT_DEPARTMENT_LABELS] ?? chain.mr.department}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-0.5">Requested On</p>
+                  <p className="font-medium">{formatDate(chain.mr.created_at)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-0.5">Requested By</p>
+                  <p className="font-medium">{chain.mr.requester?.full_name ?? "—"}</p>
+                </div>
+                {chain.mr.total_estimated_amount != null && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-0.5">Estimated Amount</p>
+                    <p className="font-medium">{formatCurrency(chain.mr.total_estimated_amount)}</p>
+                  </div>
+                )}
+              </div>
+              <Separator />
+              {chain.mr.approved_at ? (
+                <div className="rounded-lg bg-green-50 border border-green-200 p-3 space-y-1">
+                  <p className="text-xs font-semibold text-green-800 uppercase tracking-wide flex items-center gap-1.5">
+                    <CheckCircle className="h-3.5 w-3.5" /> Approved
+                  </p>
+                  <p className="text-sm">
+                    {formatDate(chain.mr.approved_at)}
+                    {chain.mr.approver && ` by ${chain.mr.approver.full_name}`}
+                  </p>
+                  {chain.mr.approval_code && (
+                    <p className="text-xs">
+                      Code: <span className="font-mono bg-green-100 px-1.5 py-0.5 rounded">{chain.mr.approval_code}</span>
+                    </p>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-lg bg-amber-50 border border-amber-200 p-3">
+                  <p className="text-xs text-amber-700">Approval pending</p>
+                </div>
+              )}
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
+
+      {/* PO Reference Sheet */}
+      <Sheet open={poSheetOpen} onOpenChange={setPoSheetOpen}>
+        <SheetContent className="w-full sm:max-w-lg overflow-y-auto">
+          <SheetHeader className="mb-4">
+            <SheetTitle className="flex items-center gap-2">
+              <Package className="h-4 w-4 text-purple-600" />
+              Purchase Order — {chain.po?.po_number}
+            </SheetTitle>
+          </SheetHeader>
+          {chain.po && (
+            <div className="space-y-4 text-sm">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <p className="text-xs text-muted-foreground mb-0.5">Type</p>
+                  <p className="font-medium capitalize">{chain.po.po_type === "service" ? "Service PO" : "Goods PO"}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-0.5">Status</p>
+                  <Badge className="capitalize">{chain.po.status.replace(/_/g, " ")}</Badge>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-0.5">Raised On</p>
+                  <p className="font-medium">{formatDate(chain.po.created_at)}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground mb-0.5">Raised By</p>
+                  <p className="font-medium">{chain.po.orderer?.full_name ?? "—"}</p>
+                </div>
+                {chain.po.total_ordered_amount != null && (
+                  <div>
+                    <p className="text-xs text-muted-foreground mb-0.5">Total Order Value</p>
+                    <p className="font-semibold text-base">{formatCurrency(chain.po.total_ordered_amount)}</p>
+                  </div>
+                )}
+              </div>
+
+              {chain.po.purchase_order_items && chain.po.purchase_order_items.length > 0 && (
+                <>
+                  <Separator />
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Line Items</p>
+                    <div className="rounded-lg border overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-muted/40 border-b">
+                            <th className="px-3 py-2 text-left font-medium">Item</th>
+                            <th className="px-3 py-2 text-right font-medium">Qty</th>
+                            <th className="px-3 py-2 text-right font-medium">Unit Price</th>
+                            <th className="px-3 py-2 text-right font-medium">Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {chain.po.purchase_order_items.map((item, idx) => (
+                            <tr key={item.id} className={`border-b last:border-0 ${idx % 2 === 1 ? "bg-muted/20" : ""}`}>
+                              <td className="px-3 py-2">{item.item_name}</td>
+                              <td className="px-3 py-2 text-right">{item.quantity_ordered} {item.unit}</td>
+                              <td className="px-3 py-2 text-right">
+                                {item.unit_price != null ? formatCurrency(item.unit_price) : "—"}
+                              </td>
+                              <td className="px-3 py-2 text-right font-medium">
+                                {item.unit_price != null ? formatCurrency(item.quantity_ordered * item.unit_price) : "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              )}
+            </div>
+          )}
+        </SheetContent>
+      </Sheet>
 
       {/* Resend Confirmation Dialog */}
       <Dialog open={resendDialog} onOpenChange={setResendDialog}>
