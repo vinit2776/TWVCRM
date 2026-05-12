@@ -92,9 +92,35 @@ This is a strict separation — do not mix these responsibilities:
 - GST tax rates are locked to each contract's `tax_percentage` — never recalculate dynamically.
 - Payment batch scheduling: bills are batched as `immediate`, `15th`, or `25th` of the month.
 
+### Proposal → Contract Flow (strictly enforced)
+
+This is the canonical new-customer onboarding flow. The rules below are enforced in code — do not bypass or loosen them.
+
+**Responsibility split:**
+- **Proposal** handles: security deposit + pro-rata (first partial month) rent collection
+- **Contract** handles: all monthly recurring billing once active
+
+**Proposal payment rules:**
+- The deposit Razorpay link and the pro-rata invoice Razorpay link are **always separate links**
+- `POST /api/proposals/[id]/send-invoice` always creates a **fresh** Razorpay link at the computed pro-rata amount — it never reuses `proposal.razorpay_payment_link_url` (which may be for a different amount)
+- When the deposit payment link is paid, the webhook auto-accepts the proposal (`status → accepted`, `accepted_at` set) — no manual acceptance needed
+- When the pro-rata link is paid, `payment_status → paid` is set
+
+**Contract activation gate (hard):**
+- A contract CANNOT move to `active` status unless ALL of the following are true:
+  1. `proposal_id` is set on the contract (no missing proposal)
+  2. Linked proposal `payment_status = 'paid'` (pro-rata / first invoice collected)
+  3. If `security_deposit_months > 0` on the linked proposal: `deposit_payment_status = 'paid'`
+- **Renewal exception**: contracts with `deposit_carried_from` set bypass the gate (deposit carried from parent)
+- Admin bypass: include `payment_override_reason` in the PATCH body (logged in audit trail)
+
+**Escalating activation alerts:**
+- Proposals list: accepted proposals with all payments collected show an "Activate Contract" badge (amber →1 day, orange →8 days, red →21 days)
+- Contract lifecycle timeline: shows deposit + pro-rata stages; "Awaiting Activation" amber callout when payments complete but contract still pending
+
 ### Contract Lifecycle
 
-Lead → Proposal → Contract (with approval codes) → Billing → Renewal/Cancellation. Cancellation has side effects (WiFi voucher revocation, usage charge settlement) that must be handled atomically.
+Lead → Proposal (deposit + pro-rata) → Contract activation → Monthly billing → Renewal / Cancellation. Cancellation has side effects (WiFi voucher revocation, usage charge settlement) that must be handled atomically.
 
 ## Module Map
 

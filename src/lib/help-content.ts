@@ -397,18 +397,28 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Proposals",
       icon: FileText,
       overview:
-        "Proposals are formal workspace offers sent to qualified leads. Each proposal is auto-numbered (PROP-XXXX), contains pricing details and workspace specifications, and can be emailed directly to the lead as a PDF attachment from the CRM. When a proposal is rejected, a rejection reason must be recorded. KYC documents can be attached directly to a proposal.",
+        "Proposals are the gateway to every new contract. A proposal handles two payments before the customer moves in: the security deposit and the pro-rata (first partial month) rent. Both must be collected on the proposal before the linked contract can be activated. Each proposal is auto-numbered (PROP-XXXX) and can be emailed or sent via WhatsApp as a PDF.",
       workflows: [
         {
           title: "Creating and Sending a Proposal",
           steps: [
             { step: 1, title: "Navigate to the lead", description: "Open the lead's detail page and click the 'Proposals' tab.", hint: "You can also go to Proposals from the sidebar to see all proposals across all leads." },
             { step: 2, title: "Click 'Create Proposal'", description: "Click 'Create Proposal'. The lead's name, company, and contact details are pre-filled for you.", hint: "Check the pre-filled details are correct before adding pricing — a mismatch in the client name will show on the PDF." },
-            { step: 3, title: "Configure the proposal", description: "Add a title, set the workspace type, pricing, duration, and any special terms. You can also add a UPI QR code for easy payment reference.", hint: "Use the Notes field for any special conditions or custom terms you've negotiated — they'll appear on the proposal PDF." },
-            { step: 4, title: "Generate a Razorpay payment link", description: "In the proposal form, you can generate a dedicated Razorpay payment link for the security deposit. The client receives a direct link to pay online.", hint: "A dedicated payment link per proposal ensures payment tracking is linked to the right deal — no confusion about which deposit payment is for which client." },
+            { step: 3, title: "Configure the proposal", description: "Add a title, set the workspace type, pricing, duration, and any special terms. Set the security deposit months.", hint: "Use the Notes field for any special conditions or custom terms you've negotiated — they'll appear on the proposal PDF." },
+            { step: 4, title: "Generate the security deposit payment link", description: "In the proposal form, generate a dedicated Razorpay payment link for the security deposit. The client pays online directly. When payment is received, the proposal is automatically accepted.", hint: "Once the deposit link is paid, the proposal moves to 'Accepted' automatically — no manual status change needed." },
             { step: 5, title: "Save as draft", description: "Save the proposal. It starts in 'Draft' status — nothing is sent yet.", hint: "Review the PDF preview while in draft to catch any formatting issues before emailing." },
             { step: 6, title: "Email to the client", description: "Click 'Email'. A dialog opens with the lead's primary email pre-filled. You can type more email addresses and press Enter to add them. Then click 'Send'. The PDF is attached automatically.", hint: "Add your manager or colleague's email as an extra recipient if you want them to see the proposal too." },
             { step: 7, title: "Optionally also send via WhatsApp (New ✨)", description: "If the lead has a phone number on file, you will see a green 'Also send PDF via WhatsApp' checkbox in the email dialog. Tick it before clicking Send and the proposal PDF is also delivered to the lead's WhatsApp — in addition to email.", hint: "This WhatsApp checkbox is OFF by default — you choose when to use it. WhatsApp delivery is especially useful for leads who check WhatsApp more often than email." },
+          ],
+        },
+        {
+          title: "Sending the Pro-Rata Invoice (First Month)",
+          steps: [
+            { step: 1, title: "Ensure deposit is paid first", description: "The pro-rata invoice can only be sent after the security deposit is confirmed as paid.", hint: "The deposit payment auto-accepts the proposal. If the deposit is waived (0 months), you can skip straight to this step." },
+            { step: 2, title: "Open the proposal and click 'Send Invoice'", description: "On the proposal detail page, click 'Send Pro-Rata Invoice'. Enter the occupation start date (the date the customer moves in).", hint: "The pro-rata amount is calculated automatically: monthly rent × (days remaining in the month ÷ days in the month)." },
+            { step: 3, title: "Preview before sending", description: "A preview shows the exact GST invoice with the pro-rata breakdown and a 'Pay Now' button. Review the amounts.", hint: "The invoice number is assigned only when you click Send — not during preview." },
+            { step: 4, title: "Click Send Invoice", description: "Click 'Send Invoice'. A fresh Razorpay payment link is created at the pro-rata amount and included in the email. The invoice PDF is attached.", hint: "A new payment link is always created — the system never reuses the deposit link, ensuring the correct amount is shown." },
+            { step: 5, title: "Client pays", description: "When the client pays via the link, the proposal's payment status updates to 'Paid' automatically via webhook.", hint: "Once both the deposit and pro-rata are paid, an 'Activate Contract' badge appears on the Proposals list page — that's your signal to go activate the contract." },
           ],
         },
         {
@@ -430,15 +440,21 @@ export const HELP_CONTENT: HelpContentData = {
         },
       ],
       tips: [
+        "A proposal handles two payments: security deposit first, then pro-rata rent. Both must be collected before you can activate the linked contract.",
+        "The deposit payment auto-accepts the proposal — you don't need to manually change the status.",
+        "After both payments are received, an amber 'Activate Contract' badge appears on the Proposals list. The badge turns orange after 8 days and red after 21 — your signal to act.",
+        "The pro-rata invoice always gets a fresh Razorpay link with the exact calculated amount — the deposit link is never reused.",
         "You can add multiple email recipients when sending — add the lead's email plus any additional contacts.",
         "After sending, the proposal status changes to 'Sent' and the lead status updates to 'Proposal Sent'.",
         "Review the PDF preview before sending to ensure formatting is correct.",
-        "Proposal PDFs include a UPI QR code from the payment module, making it easy for clients to pay directly by scanning.",
         "Always log a rejection reason — this data helps identify why deals are lost and improve future pitches.",
         "Proposals that receive no response can be manually set to 'Expired'.",
         "If the lead has a phone number, you can tick the WhatsApp checkbox in the email dialog to send the proposal PDF to their WhatsApp as well.",
       ],
       faqs: [
+        { question: "What two payments does a proposal collect?", answer: "Every proposal collects: (1) the security deposit — paid via a dedicated Razorpay link, which auto-accepts the proposal on payment; and (2) the pro-rata (first partial month) rent — sent as a GST invoice with its own fresh Razorpay link once the deposit is paid." },
+        { question: "Why does the proposal need to be accepted before activating the contract?", answer: "The contract activation gate requires both payments to be confirmed on the linked proposal. This ensures the customer has paid the deposit and pro-rata before occupancy begins — preventing revenue leakage and maintaining a clean paper trail." },
+        { question: "What is the 'Activate Contract' badge on the proposals list?", answer: "Once both deposit and pro-rata are paid, an amber 'Activate Contract' badge appears on that proposal row. It turns orange after 8 days and red after 21 — a reminder that the customer is in the space but the contract hasn't been formally activated yet." },
         { question: "Can I edit a proposal after sending it?", answer: "Yes, you can edit the proposal content. However, the previously sent PDF will not update in the recipient's inbox. You would need to re-send the updated version." },
         { question: "What email address are proposals sent from?", answer: "All emails are sent from contact@theworkvilla.com via Google Workspace. Recipients can reply directly to this address." },
         { question: "Can I send a proposal to multiple people?", answer: "Yes. In the email dialog, type each additional email address and press Enter to add them. All recipients will receive the same email with the proposal PDF attached." },
@@ -492,18 +508,19 @@ export const HELP_CONTENT: HelpContentData = {
       title: "Contracts",
       icon: ScrollText,
       overview:
-        "Contracts (Membership Agreements) formalize the relationship between The WorkVilla and a client. Each contract specifies workspace details, monthly fees, tenure, billing cycle, and key dates. Contracts are linked to leads and track associated payments.",
+        "Contracts (Membership Agreements) formalize the ongoing relationship between The WorkVilla and a client. Contracts handle all monthly recurring billing. Before a contract can be activated, the linked proposal must have both the security deposit and pro-rata rent collected — this is enforced by the system.",
       workflows: [
         {
           title: "Creating a Membership Agreement",
           steps: [
             { step: 1, title: "Go to Contracts", description: "Navigate to the Contracts page from the sidebar and click 'New Contract'.", hint: "You can also create a contract from a lead's detail page — this pre-fills the lead's details automatically." },
             { step: 2, title: "Link to a lead", description: "Select the lead this contract is for. Their name, company, and contact details will be pre-filled.", hint: "If the lead doesn't appear in the dropdown, make sure they are marked as 'Qualified' or further in the pipeline." },
-            { step: 3, title: "Set terms", description: "Configure the title, start date, tenure (months), billing cycle (monthly/quarterly/annual), and total monthly fee.", hint: "Double-check the billing cycle — a monthly vs quarterly setting affects when GST invoices are generated in Accounting." },
-            { step: 4, title: "Set the security deposit", description: "Enter the security deposit amount. You can generate a dedicated Razorpay payment link so the client can pay the deposit online before signing.", hint: "The contract is gated — certain status transitions require the security deposit to be confirmed as paid first." },
+            { step: 3, title: "Link the proposal", description: "Select the proposal this contract is based on. The system requires a linked, completed proposal before the contract can be activated.", hint: "If you don't link a proposal now, you can link it later — but you will not be able to activate the contract until the proposal is linked and both payments are collected." },
+            { step: 4, title: "Set terms", description: "Configure the title, start date, tenure (months), billing cycle (monthly/quarterly/annual), and total monthly fee.", hint: "Double-check the billing cycle — a monthly vs quarterly setting affects when GST invoices are generated in Accounting." },
             { step: 5, title: "Save as draft", description: "Save the contract. It starts in 'Draft' status — nothing is active yet.", hint: "Draft contracts appear in the Contracts list with a grey badge. You can edit them freely before activating." },
             { step: 6, title: "Send to client", description: "Click 'Send to Client' to automatically email the signed agreement PDF to the client's email address.", hint: "The PDF is generated and attached automatically — no need to download and attach it manually." },
-            { step: 7, title: "Activate", description: "Once signed and the deposit is confirmed, update the status to 'Active'. This is now a live membership.", hint: "Active contracts feed into the Accounting module automatically — monthly GST invoices and billing statements are generated from here." },
+            { step: 7, title: "Collect payments on the proposal first", description: "Before activating, ensure the linked proposal has both: (1) security deposit paid, and (2) pro-rata invoice paid. The contract lifecycle timeline shows the status of each.", hint: "Check the Proposals list — an 'Activate Contract' badge appears on the proposal when both payments are in. That's your cue." },
+            { step: 8, title: "Activate", description: "Once both proposal payments are confirmed, change the contract status to 'Active'. The system will block activation if either payment is still outstanding.", hint: "On activation, the current month's billing statement is automatically generated. Monthly billing continues via the cron on the last day of each month." },
           ],
         },
         {
@@ -554,8 +571,11 @@ export const HELP_CONTENT: HelpContentData = {
         "All rates in renewals are rounded to the nearest ₹10 for cleaner invoicing.",
       ],
       faqs: [
+        { question: "Why can't I activate a contract?", answer: "Contracts require a linked, completed proposal before activation. The proposal must have: (1) security deposit paid (if deposit months > 0), and (2) pro-rata / first invoice paid. If you see a 'Cannot activate' error, check the contract lifecycle timeline — it shows exactly which payments are still outstanding." },
+        { question: "What is the 'Awaiting Activation' callout on the contract timeline?", answer: "This amber callout appears when both proposal payments are collected but the contract is still in draft or accepted status. It's a reminder that the customer has paid and is likely already in the space — the contract should be activated promptly so billing starts correctly." },
+        { question: "Do renewals also require a proposal?", answer: "No. Renewal contracts carry the security deposit forward from the parent contract. The proposal gate is skipped automatically for renewals — you can activate a renewal contract directly once the addendum is signed." },
         { question: "What happens when a contract ends?", answer: "When a contract reaches its end date, you can renew it using the Renew Contract button on the contract detail page. A renewal draft is created with escalated rates and carries over KYC and facilities. Alternatively, you can update the status to 'Completed' if the customer is not renewing." },
-        { question: "Can I cancel an active contract?", answer: "Yes. Change the contract status to 'Cancelled'. Note that this does not automatically handle any outstanding payments." },
+        { question: "Can I cancel an active contract?", answer: "Yes. Change the contract status to 'Terminated'. A termination reason is required. Active WiFi vouchers are automatically revoked and IT is notified." },
         { question: "How do I send the signed agreement to the client?", answer: "Use the 'Send to Client' action on the contract. The system will automatically generate the agreement PDF and email it directly to the client's registered email address." },
         { question: "Can I renew a contract before it ends?", answer: "Yes. Any active contract can be renewed at any time during its tenure. The renewal start date defaults to the day after the current contract ends, but you can adjust it." },
         { question: "What is the escalation percentage?", answer: "The escalation percentage is the annual rate increase applied when renewing. For example, 10% escalation on a ₹15,000/mo contract produces ₹16,500/mo (rounded to nearest ₹10). You can negotiate this up or down during renewal." },
