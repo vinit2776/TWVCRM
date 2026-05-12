@@ -1,21 +1,19 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Suspense } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Receipt, Plus, ChevronLeft, ChevronRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import {
-  BILL_PAYMENT_STATUSES, BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
+  BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
   BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency, cn } from "@/lib/utils";
+import { BillSearchBar, filtersToParams, parseBillFilters, type BillFilters } from "@/components/procurement/bill-search-bar";
 import type { VendorBill } from "@/types";
 
 const today = new Date().toISOString().split("T")[0];
@@ -30,25 +28,35 @@ function isOverdue(bill: VendorBill): boolean {
 
 type QuickFilter = "all" | "pending_approval" | "ready_for_payment";
 
-export default function VendorBillsPage() {
+function quickFilterToFilters(qf: QuickFilter): Partial<BillFilters> {
+  switch (qf) {
+    case "pending_approval":  return { approval_status: "pending" };
+    case "ready_for_payment": return { approval_status: "approved", payment_status_neq: "paid" };
+    default:                  return {};
+  }
+}
+
+function VendorBillsPageInner() {
   const router = useRouter();
+  const urlParams = useSearchParams();
   const [bills, setBills] = useState<VendorBill[]>([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
-  const [page, setPage] = useState(1);
-  const [statusFilter, setStatusFilter] = useState("");
   const [quickFilter, setQuickFilter] = useState<QuickFilter>("all");
 
-  const fetchBills = useCallback(async () => {
+  // Hydrate filters from URL on first render
+  const [filters, setFilters] = useState<BillFilters>(
+    () => parseBillFilters(new URLSearchParams(urlParams.toString())),
+  );
+
+  const fetchBills = useCallback(async (f: BillFilters) => {
     setLoading(true);
-    const params = new URLSearchParams({ page: String(page), limit: "25" });
-    if (quickFilter === "pending_approval") {
-      params.set("approval_status", "pending");
-    } else if (quickFilter === "ready_for_payment") {
-      params.set("approval_status", "approved");
-      if (!statusFilter) params.set("payment_status_neq", "paid");
-    }
-    if (statusFilter) params.set("payment_status", statusFilter);
+    const params = filtersToParams(f);
+    // Layer quick filter on top
+    const qfPatch = quickFilterToFilters(quickFilter);
+    Object.entries(qfPatch).forEach(([k, v]) => { if (v) params.set(k, v as string); });
+    if (!params.has("limit")) params.set("limit", "25");
+
     const res = await fetch(`/api/procurement/bills?${params}`);
     if (res.ok) {
       const json = await res.json();
@@ -56,14 +64,18 @@ export default function VendorBillsPage() {
       setPagination(json.pagination);
     }
     setLoading(false);
-  }, [page, statusFilter, quickFilter]);
 
-  useEffect(() => { fetchBills(); }, [fetchBills]);
+    // Reflect to URL (without quick-filter — the tab itself shows that)
+    const urlOnly = filtersToParams(f);
+    const newQuery = urlOnly.toString();
+    router.replace(`/procurement/bills${newQuery ? `?${newQuery}` : ""}`, { scroll: false });
+  }, [router, quickFilter]);
 
-  const handleQuickFilter = (filter: QuickFilter) => {
-    setQuickFilter(filter);
-    setStatusFilter("");
-    setPage(1);
+  useEffect(() => { fetchBills(filters); }, [fetchBills, filters]);
+
+  const handleQuickFilter = (qf: QuickFilter) => {
+    setQuickFilter(qf);
+    setFilters((f) => ({ ...f, page: "1" }));
   };
 
   return (
@@ -73,26 +85,17 @@ export default function VendorBillsPage() {
           <h1 className="text-2xl font-bold">Vendor Bills</h1>
           <p className="text-sm text-muted-foreground">{pagination.total} total bills</p>
         </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <Select
-            value={statusFilter}
-            onValueChange={(val) => { setStatusFilter(val === "all" ? "" : val); setPage(1); }}
-          >
-            <SelectTrigger className="w-[160px]">
-              <SelectValue placeholder="All Statuses" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All Statuses</SelectItem>
-              {BILL_PAYMENT_STATUSES.map((s) => (
-                <SelectItem key={s} value={s}>{BILL_PAYMENT_STATUS_LABELS[s]}</SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Button onClick={() => router.push("/procurement/bills/new")}>
-            <Plus className="h-4 w-4 mr-1" /> New Bill
-          </Button>
-        </div>
+        <Button onClick={() => router.push("/procurement/bills/new")}>
+          <Plus className="h-4 w-4 mr-1" /> New Bill
+        </Button>
       </div>
+
+      {/* Search bar */}
+      <BillSearchBar
+        initialFilters={filters}
+        onChange={setFilters}
+        showExport
+      />
 
       {/* Quick filter tabs */}
       <div className="flex gap-2">
@@ -217,16 +220,16 @@ export default function VendorBillsPage() {
             <Button
               variant="outline"
               size="sm"
-              disabled={page <= 1}
-              onClick={() => setPage(page - 1)}
+              disabled={pagination.page <= 1}
+              onClick={() => setFilters((f) => ({ ...f, page: String(pagination.page - 1) }))}
             >
               <ChevronLeft className="h-4 w-4" />
             </Button>
             <Button
               variant="outline"
               size="sm"
-              disabled={page >= pagination.totalPages}
-              onClick={() => setPage(page + 1)}
+              disabled={pagination.page >= pagination.totalPages}
+              onClick={() => setFilters((f) => ({ ...f, page: String(pagination.page + 1) }))}
             >
               <ChevronRight className="h-4 w-4" />
             </Button>
@@ -234,5 +237,13 @@ export default function VendorBillsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+export default function VendorBillsPage() {
+  return (
+    <Suspense fallback={<TableSkeleton rows={8} />}>
+      <VendorBillsPageInner />
+    </Suspense>
   );
 }

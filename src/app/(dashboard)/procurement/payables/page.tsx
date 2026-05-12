@@ -21,6 +21,9 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency, formatSmartDate, cn } from "@/lib/utils";
 import { VendorEmailChip } from "@/components/finance-intelligence/vendor-email-chip";
+import {
+  BillSearchBar, filtersToParams, EMPTY_FILTERS, type BillFilters,
+} from "@/components/procurement/bill-search-bar";
 import { computeBatchDate, formatBatchDate, batchDateLabel } from "@/lib/payment-batch";
 import { toast } from "sonner";
 import type { VendorBill, PurchaseOrder, PaymentBatchType } from "@/types";
@@ -84,22 +87,26 @@ export default function PayablesPage() {
 
   const canOverrideBatch = ["admin", "manager", "accounts"].includes(currentUserRole ?? "");
 
+  const [filters, setFilters] = useState<BillFilters>({
+    ...EMPTY_FILTERS,
+    approval_status: "approved",
+    payment_status_neq: "paid",
+    limit: "200",
+  });
+
   const fetchBills = useCallback(async () => {
     setLoadingBills(true);
-    // Fetch all approved unpaid bills (no pagination — we group client-side)
-    const params = new URLSearchParams({
-      approval_status: "approved",
-      payment_status_neq: "paid",
-      limit: "200",
-      include_totals: "true",
-    });
+    // Base scope (approved + unpaid) is baked into filters; search bar
+    // layers user-set values on top.
+    const params = filtersToParams(filters);
+    params.set("include_totals", "true");
     const res = await fetch(`/api/procurement/bills?${params}`);
     if (res.ok) {
       const json = await res.json();
       setBills(json.data || []);
     }
     setLoadingBills(false);
-  }, []);
+  }, [filters]);
 
   const fetchAdvances = useCallback(async () => {
     setLoadingAdvances(true);
@@ -373,6 +380,15 @@ export default function PayablesPage() {
               ))}
             </div>
           )}
+
+          {/* Bill search + filters */}
+          <BillSearchBar
+            initialFilters={filters}
+            baseFilters={{ approval_status: "approved", payment_status_neq: "paid" }}
+            onChange={setFilters}
+            showExport
+            placeholder="Search payable bills…"
+          />
 
           {loadingBills ? (
             <TableSkeleton rows={8} />

@@ -12,7 +12,6 @@ import {
   Banknote,
   Building2,
   AlertCircle,
-  Search,
   ChevronDown,
   History,
   CheckCircle2,
@@ -22,6 +21,9 @@ import {
 } from "lucide-react";
 import { formatSmartDate } from "@/lib/utils";
 import { VendorEmailChip } from "@/components/finance-intelligence/vendor-email-chip";
+import {
+  BillSearchBar, filtersToParams, EMPTY_FILTERS, type BillFilters,
+} from "@/components/procurement/bill-search-bar";
 
 type VendorBillItem = {
   id: string;
@@ -68,31 +70,35 @@ export default function AccountingPage() {
 
   const [vendorBills, setVendorBills]   = useState<VendorBillItem[]>([]);
   const [billsLoading, setBillsLoading] = useState(false);
-  const [billsLoaded, setBillsLoaded]   = useState(false);
-  const [billSearch, setBillSearch]     = useState("");
   const [historyLimit, setHistoryLimit] = useState(10);
 
   // Vendor-email audit widget (touch point C)
   const [emailAuditCount, setEmailAuditCount] = useState<number | null>(null);
   const [emailAuditHighPriority, setEmailAuditHighPriority] = useState(0);
 
-  const fetchVendorBills = useCallback(async (force = false) => {
-    if (billsLoaded && !force) return;
+  // Bill search (replaces the old simple textbox)
+  const [filters, setFilters] = useState<BillFilters>({
+    ...EMPTY_FILTERS,
+    approval_status: "approved",
+    limit: "300",
+  });
+
+  const fetchVendorBills = useCallback(async () => {
     setBillsLoading(true);
-    const res = await fetch("/api/procurement/bills?approval_status=approved&limit=300");
+    const params = filtersToParams(filters);
+    const res = await fetch(`/api/procurement/bills?${params}`);
     if (res.ok) {
       const { data } = await res.json();
       setVendorBills(data ?? []);
-      setBillsLoaded(true);
     }
     setBillsLoading(false);
-  }, [billsLoaded]);
+  }, [filters]);
 
-  // Auto-fetch on mount and whenever user switches back to this tab
+  // Auto-fetch on mount and whenever filters change (URL-state for free)
   useEffect(() => {
-    if (activeTab === "vendor-payments") fetchVendorBills(true);
+    if (activeTab === "vendor-payments") fetchVendorBills();
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab]);
+  }, [activeTab, filters]);
 
   // Vendor-email audit count for the dashboard widget
   useEffect(() => {
@@ -106,17 +112,8 @@ export default function AccountingPage() {
   }, [vendorBills]);  // refresh after bill list refresh — likely things have changed
 
   // ── Vendor bill helpers ───────────────────────────────────────────────────
-  const matchSearch = (bill: VendorBillItem) => {
-    if (!billSearch.trim()) return true;
-    const q = billSearch.toLowerCase();
-    return (
-      bill.bill_number.toLowerCase().includes(q) ||
-      ((bill.procurement_vendors as { name: string } | null)?.name ?? "").toLowerCase().includes(q)
-    );
-  };
-
-  const pendingBills     = vendorBills.filter((b) => b.payment_status !== "paid" && matchSearch(b));
-  const allPaidBills     = vendorBills.filter((b) => b.payment_status === "paid" && matchSearch(b));
+  const pendingBills     = vendorBills.filter((b) => b.payment_status !== "paid");
+  const allPaidBills     = vendorBills.filter((b) => b.payment_status === "paid");
   const visiblePaidBills = allPaidBills.slice(0, historyLimit);
 
   const today = new Date().toISOString().split("T")[0];
@@ -160,17 +157,14 @@ export default function AccountingPage() {
             </div>
           ) : (
             <div className="space-y-4">
-              {/* Search */}
-              <div className="relative">
-                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
-                <input
-                  type="text"
-                  placeholder="Search by vendor name or bill number…"
-                  value={billSearch}
-                  onChange={(e) => { setBillSearch(e.target.value); setHistoryLimit(10); }}
-                  className="w-full pl-9 pr-4 py-2 text-sm border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-ring"
-                />
-              </div>
+              {/* Bill search + filters */}
+              <BillSearchBar
+                initialFilters={filters}
+                baseFilters={{ approval_status: "approved" }}
+                onChange={(f) => { setFilters(f); setHistoryLimit(10); }}
+                showExport
+                placeholder="Search by bill #, invoice #, vendor, PO, notes…"
+              />
 
               {/* Vendor-email audit widget (touch point C — dashboard) */}
               {emailAuditCount !== null && emailAuditCount > 0 && (
@@ -234,7 +228,7 @@ export default function AccountingPage() {
               </div>
 
               {/* Pending bills */}
-              {pendingBills.length === 0 && !billSearch ? (
+              {pendingBills.length === 0 && !filters.q ? (
                 <EmptyState
                   icon={Building2}
                   title="No pending vendor payments"
@@ -360,7 +354,7 @@ export default function AccountingPage() {
               ) : null}
 
               {/* Payment History */}
-              {(allPaidBills.length > 0 || billSearch) && (
+              {(allPaidBills.length > 0 || filters.q) && (
                 <div>
                   <div className="flex items-center gap-2 mb-2">
                     <History className="h-4 w-4 text-muted-foreground" />

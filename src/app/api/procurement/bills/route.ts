@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { sendPushToAll } from "@/lib/push";
 import { z } from "zod";
+import { applyBillFilters, resolveFreeTextIds } from "@/lib/bills-query";
 
 const createBillSchema = z.object({
   po_id: z.string().uuid().nullish(),
@@ -34,47 +35,38 @@ export async function GET(request: NextRequest) {
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
   const { searchParams } = new URL(request.url);
-  const paymentStatus = searchParams.get("payment_status");
-  const approvalStatus = searchParams.get("approval_status");
-  const vendorId = searchParams.get("vendor_id");
-  const poId = searchParams.get("po_id");
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
-  const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
+  const limit = Math.min(100, Math.max(1, parseInt(searchParams.get("limit") || "25")));
   const offset = (page - 1) * limit;
+  const includeTotals = searchParams.get("include_totals") === "true";
+
+  // Resolve free-text → vendor + PO ids first so both queries share the result
+  const { vendorIds, poIds } = await resolveFreeTextIds(supabase, searchParams.get("q"));
 
   let query = supabase
     .from("vendor_bills")
     .select(
-      `*, procurement_vendors(id, name, contact_email), purchase_orders(id, po_number, po_type),
+      `*, procurement_vendors(id, name, contact_email, gstin), purchase_orders(id, po_number, po_type),
        approver:users!vendor_bills_approved_by_fkey(id, full_name)`,
       { count: "exact" }
     )
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
-  const paymentStatusNeq = searchParams.get("payment_status_neq");
-  const includeTotals = searchParams.get("include_totals") === "true";
-
-  if (paymentStatus) query = query.eq("payment_status", paymentStatus);
-  if (paymentStatusNeq) query = query.neq("payment_status", paymentStatusNeq);
-  if (approvalStatus) query = query.eq("approval_status", approvalStatus);
-  if (vendorId) query = query.eq("vendor_id", vendorId);
-  if (poId) query = query.eq("po_id", poId);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  query = applyBillFilters(query as any, searchParams, { vendorIdsFromQ: vendorIds, poIdsFromQ: poIds }) as typeof query;
 
   const { data, error, count } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Compute aggregate totals (used by payables summary cards)
+  // Aggregate totals over the filtered result set
   let totals = null;
   if (includeTotals) {
     let totalsQuery = supabase
       .from("vendor_bills")
       .select("total_amount, amount_paid, due_date, payment_status");
-    if (paymentStatus) totalsQuery = totalsQuery.eq("payment_status", paymentStatus);
-    if (paymentStatusNeq) totalsQuery = totalsQuery.neq("payment_status", paymentStatusNeq);
-    if (approvalStatus) totalsQuery = totalsQuery.eq("approval_status", approvalStatus);
-    if (vendorId) totalsQuery = totalsQuery.eq("vendor_id", vendorId);
-    if (poId) totalsQuery = totalsQuery.eq("po_id", poId);
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    totalsQuery = applyBillFilters(totalsQuery as any, searchParams, { vendorIdsFromQ: vendorIds, poIdsFromQ: poIds }) as typeof totalsQuery;
 
     const { data: allBills } = await totalsQuery;
     const todayStr = new Date().toISOString().split("T")[0];
@@ -98,6 +90,7 @@ export async function GET(request: NextRequest) {
     totals,
   });
 }
+
 
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
