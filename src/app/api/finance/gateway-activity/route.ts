@@ -46,15 +46,13 @@ export async function GET(request: NextRequest) {
 
   const adminSupabase = createAdminClient();
 
-  // ── 1. Primary: fetch all settlement cache rows in the date window ─────────
-  // Rows with NULL payment_created_at (not yet backfilled) are always included.
-  // Date filtering is applied only when the column is populated.
+  // ── 1. Primary: fetch all settlement cache rows ───────────────────────────
+  // Fetch all rows (no server-side date filter) — the cache is small and we
+  // apply date filtering in JS below so we can handle NULL payment_created_at
+  // gracefully (rows not yet backfilled by a re-sync are always included).
   const { data: cacheRows, error: cacheError } = await adminSupabase
     .from("razorpay_settlement_cache")
     .select("razorpay_payment_id, settled, settlement_id, settlement_utr, settled_at, fee, tax, payment_method, amount, order_id, payment_created_at")
-    .or(
-      `payment_created_at.is.null,and(payment_created_at.gte.${fromDate}T00:00:00Z,payment_created_at.lte.${toDate}T23:59:59Z)`
-    )
     .order("payment_created_at", { ascending: false, nullsFirst: false });
 
   if (cacheError) {
@@ -216,6 +214,15 @@ export async function GET(request: NextRequest) {
       payment_method:       c.payment_method ?? null,
       in_crm:               crm !== null,
     };
+  });
+
+  // Apply date filter in JS — rows with NULL payment_created_at always pass through
+  const fromMs = new Date(fromDate + "T00:00:00Z").getTime();
+  const toMs   = new Date(toDate   + "T23:59:59Z").getTime();
+  allRows = allRows.filter((r) => {
+    if (!r.created_at) return true;
+    const t = new Date(r.created_at).getTime();
+    return t >= fromMs && t <= toMs;
   });
 
   // Filter by entity type
