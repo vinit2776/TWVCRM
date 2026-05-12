@@ -470,6 +470,23 @@ export interface Contract {
   renewed_at?: string;
   terminated_at?: string;
   termination_reason?: string;
+  // Lifecycle actors (user IDs)
+  sent_by?: string | null;
+  viewed_by?: string | null;
+  accepted_by?: string | null;
+  rejected_by?: string | null;
+  activated_by?: string | null;
+  terminated_by?: string | null;
+  renewed_by?: string | null;
+  // Lifecycle actor names (resolved by GET /api/contracts/[id])
+  created_by_name?: string | null;
+  sent_by_name?: string | null;
+  viewed_by_name?: string | null;
+  accepted_by_name?: string | null;
+  rejected_by_name?: string | null;
+  activated_by_name?: string | null;
+  terminated_by_name?: string | null;
+  renewed_by_name?: string | null;
   signed_document_id?: string;
   signed_document?: CrmDocument;
   printer_department_id?: string;

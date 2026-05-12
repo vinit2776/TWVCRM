@@ -17,14 +17,22 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("contracts")
-    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, pan_number, gst_number, street, city, state, zip_code, country, entity_type), proposal:proposals!contracts_proposal_id_fkey(proposal_number, title, location_id), location:locations!contracts_location_id_fkey(id, name, code, address, city, state), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at)")
+    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, pan_number, gst_number, street, city, state, zip_code, country, entity_type), proposal:proposals!contracts_proposal_id_fkey(proposal_number, title, location_id), location:locations!contracts_location_id_fkey(id, name, code, address, city, state), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at), sent_by_user:users!contracts_sent_by_fkey(full_name), viewed_by_user:users!contracts_viewed_by_fkey(full_name), accepted_by_user:users!contracts_accepted_by_fkey(full_name), rejected_by_user:users!contracts_rejected_by_fkey(full_name), activated_by_user:users!contracts_activated_by_fkey(full_name), terminated_by_user:users!contracts_terminated_by_fkey(full_name), renewed_by_user:users!contracts_renewed_by_fkey(full_name), created_by_user:users!contracts_created_by_fkey(full_name)")
     .eq("id", id)
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!data) return NextResponse.json({ error: "Contract not found" }, { status: 404 });
 
-  return NextResponse.json({ data });
+  // Flatten actor names for the lifecycle component
+  const actorNames: Record<string, string | null> = {};
+  for (const key of ["sent", "viewed", "accepted", "rejected", "activated", "terminated", "renewed", "created"] as const) {
+    const joined = (data as Record<string, unknown>)[`${key}_by_user`] as { full_name: string } | null;
+    actorNames[`${key}_by_name`] = joined?.full_name || null;
+    delete (data as Record<string, unknown>)[`${key}_by_user`];
+  }
+
+  return NextResponse.json({ data: { ...data, ...actorNames } });
 }
 
 export async function PATCH(
@@ -95,6 +103,9 @@ export async function PATCH(
       }, { status: 409 });
     }
   }
+  // Resolve the CRM user ID early — needed for _by actor columns and audit log
+  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+
   // Handle special status transitions
   if (body.status && body.status !== oldContract.status) {
     // Validate transition is allowed
@@ -106,14 +117,19 @@ export async function PATCH(
     }
 
     const now = new Date().toISOString();
+    const actorId = dbUser?.id || null;
     if (body.status === "sent") {
       allowedFields.sent_at = body.sent_at || now;
+      allowedFields.sent_by = actorId;
     } else if (body.status === "viewed") {
       allowedFields.viewed_at = body.viewed_at || now;
+      allowedFields.viewed_by = actorId;
     } else if (body.status === "accepted") {
       allowedFields.accepted_at = body.accepted_at || now;
+      allowedFields.accepted_by = actorId;
     } else if (body.status === "rejected") {
       allowedFields.rejected_at = body.rejected_at || now;
+      allowedFields.rejected_by = actorId;
     } else if (body.status === "active") {
       // Block activation if escalation approval is pending
       if (oldContract.escalation_approval_status === "pending") {
@@ -153,15 +169,18 @@ export async function PATCH(
         }
       }
       allowedFields.activated_at = now;
+      allowedFields.activated_by = actorId;
     } else if (body.status === "terminated") {
       if (!body.termination_reason && !allowedFields.termination_reason) {
         return NextResponse.json({ error: "Termination reason is required" }, { status: 400 });
       }
       allowedFields.terminated_at = now;
+      allowedFields.terminated_by = actorId;
     } else if (body.status === "renewal_in_progress") {
       // No special timestamp — just a status change
     } else if (body.status === "renewed") {
       allowedFields.renewed_at = now;
+      allowedFields.renewed_by = actorId;
     }
   }
 
@@ -174,7 +193,6 @@ export async function PATCH(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
   if (dbUser?.id && oldContract) {
     logAudit(supabase, {
       entityType: "contract",

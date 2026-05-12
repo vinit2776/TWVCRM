@@ -25,6 +25,7 @@ interface Stage {
   sub?: string;
   date?: string | null;
   state: StageState;
+  actor?: string | null;
 }
 
 /** Badge text for the currently-active step */
@@ -50,6 +51,7 @@ export function ContractLifecycle({ contract }: Props) {
     label: "Agreement Drafted",
     date: contract.created_at,
     state: "done",
+    actor: contract.created_by_name,
   });
 
   // 2. Sent to Client
@@ -64,6 +66,7 @@ export function ContractLifecycle({ contract }: Props) {
       : contract.status === "draft"
       ? "active"
       : "done",
+    actor: contract.sent_by_name,
   });
 
   // 3. Acknowledged by Client — manually updated by staff when client confirms receipt
@@ -79,6 +82,7 @@ export function ContractLifecycle({ contract }: Props) {
         : contract.status === "sent"
         ? "active"
         : "pending",
+      actor: contract.viewed_by_name,
     });
   }
 
@@ -89,6 +93,7 @@ export function ContractLifecycle({ contract }: Props) {
       label: "Agreement Rejected",
       date: contract.rejected_at,
       state: "rejected",
+      actor: contract.rejected_by_name,
     });
   } else {
     stages.push({
@@ -100,6 +105,7 @@ export function ContractLifecycle({ contract }: Props) {
         : contract.status === "sent" || contract.status === "viewed"
         ? "active"
         : "pending",
+      actor: contract.accepted_by_name,
     });
   }
 
@@ -121,6 +127,7 @@ export function ContractLifecycle({ contract }: Props) {
           : contract.accepted_at
           ? "active"
           : "pending",
+      actor: contract.activated_by_name,
     });
   }
 
@@ -132,6 +139,7 @@ export function ContractLifecycle({ contract }: Props) {
         label: "Contract Renewed",
         date: contract.renewed_at,
         state: "done",
+        actor: contract.renewed_by_name,
       });
     } else if (
       contract.status === "terminated" &&
@@ -143,6 +151,7 @@ export function ContractLifecycle({ contract }: Props) {
         date: contract.terminated_at,
         sub: contract.termination_reason || undefined,
         state: "rejected",
+        actor: contract.terminated_by_name,
       });
     } else if (contract.status === "expired") {
       stages.push({
@@ -220,9 +229,9 @@ export function ContractLifecycle({ contract }: Props) {
                     </span>
                   )}
                 </p>
-                {stage.date && (
+                {(stage.date || stage.actor) && (
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    {fmt(stage.date)}
+                    {[fmt(stage.date), stage.actor ? `by ${stage.actor}` : null].filter(Boolean).join(" · ")}
                   </p>
                 )}
                 {stage.sub && (
