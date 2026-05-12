@@ -237,7 +237,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
     if (res.ok) {
       const { data } = await res.json();
       setChain(data);
-      setSendConfirmation(!!data.vendor?.contact_email);
+      setSendConfirmation(!!(data.vendor?.contact_email?.trim()));
       // Pre-fill payment amount with approved outstanding balance
       const approvedCeiling = Number(data.bill.approved_amount ?? data.bill.total_amount);
       const approvedOutstandingPrefill = Math.max(0, approvedCeiling - Number(data.bill.amount_paid ?? 0));
@@ -366,7 +366,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       setPaymentDialog(false);
       setPayNote("");
 
-      if (sendConfirmation && vendor?.contact_email) {
+      if (sendConfirmation && vendor?.contact_email?.trim()) {
         const emailRes = await fetch(`/api/procurement/bills/${id}/payment-email`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
@@ -742,7 +742,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                   <span className="font-mono">{vendor.pan_number}</span>
                 </div>
               )}
-              {vendor.contact_email && (
+              {vendor.contact_email?.trim() && (
                 <div className="text-sm">
                   <span className="text-muted-foreground">Email: </span>
                   <span>{vendor.contact_email}</span>
@@ -1011,7 +1011,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
             <Separator />
 
             {/* Vendor-email nag */}
-            {!vendor?.contact_email && (
+            {!vendor?.contact_email?.trim() && (
               vendor?.id ? (
                 <VendorEmailBanner
                   vendorId={vendor.id}
@@ -1033,13 +1033,13 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 type="checkbox"
                 checked={sendConfirmation}
                 onChange={(e) => setSendConfirmation(e.target.checked)}
-                disabled={!vendor?.contact_email}
+                disabled={!vendor?.contact_email?.trim()}
                 className="h-4 w-4 rounded border-gray-300 accent-green-600"
               />
               <div className="min-w-0">
                 <span className="text-sm font-medium">Send confirmation to vendor</span>
-                {vendor?.contact_email ? (
-                  <p className="text-xs text-muted-foreground">{vendor.contact_email}</p>
+                {vendor?.contact_email?.trim() ? (
+                  <p className="text-xs text-muted-foreground">{vendor.contact_email.trim()}</p>
                 ) : (
                   <p className="text-xs text-amber-600">No email on file — add above to enable</p>
                 )}
@@ -1054,7 +1054,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               disabled={paying || !payMode || !payAmount}
               className="gap-2"
             >
-              {paying ? "Recording…" : sendConfirmation && vendor?.contact_email ? "Record & Send" : "Record Payment"}
+              {paying ? "Recording…" : sendConfirmation && vendor?.contact_email?.trim() ? "Record & Send" : "Record Payment"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1287,10 +1287,10 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
             <DialogTitle>Resend Payment Confirmation</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            {vendor?.contact_email ? (
+            {vendor?.contact_email?.trim() ? (
               <div className="p-3 rounded-lg bg-muted/50 text-sm space-y-1">
                 <p className="text-muted-foreground text-xs">To</p>
-                <p className="font-medium">{vendor.contact_email}</p>
+                <p className="font-medium">{vendor.contact_email.trim()}</p>
               </div>
             ) : vendor?.id ? (
               <VendorEmailBanner
@@ -1315,7 +1315,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
             <Button variant="outline" onClick={() => setResendDialog(false)}>Cancel</Button>
             <Button
               onClick={handleResendConfirmation}
-              disabled={resendLoading || !vendor?.contact_email}
+              disabled={resendLoading || !vendor?.contact_email?.trim()}
               className="gap-2"
             >
               <Send className="h-4 w-4" />

@@ -88,11 +88,11 @@ export default function AccountingPage() {
     setBillsLoading(false);
   }, [billsLoaded]);
 
-  // Auto-fetch when landing on vendor-payments tab via URL
+  // Auto-fetch on mount and whenever user switches back to this tab
   useEffect(() => {
-    if (activeTab === "vendor-payments") fetchVendorBills();
+    if (activeTab === "vendor-payments") fetchVendorBills(true);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [activeTab]);
 
   // Vendor-email audit count for the dashboard widget
   useEffect(() => {
@@ -289,7 +289,7 @@ export default function AccountingPage() {
                                   <p className="font-medium truncate max-w-[140px]">
                                     {bill.procurement_vendors?.name ?? "—"}
                                   </p>
-                                  {bill.procurement_vendors?.id && !bill.procurement_vendors.contact_email && (
+                                  {bill.procurement_vendors?.id && !bill.procurement_vendors.contact_email?.trim() && (
                                     <VendorEmailChip vendorId={bill.procurement_vendors.id} />
                                   )}
                                 </div>
@@ -413,7 +413,7 @@ export default function AccountingPage() {
                                     <p className="font-medium truncate max-w-[140px] text-xs">
                                       {bill.procurement_vendors?.name ?? "—"}
                                     </p>
-                                    {bill.procurement_vendors?.id && !bill.procurement_vendors.contact_email && (
+                                    {bill.procurement_vendors?.id && !bill.procurement_vendors.contact_email?.trim() && (
                                       <VendorEmailChip vendorId={bill.procurement_vendors.id} />
                                     )}
                                   </div>
