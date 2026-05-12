@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, Fragment } from "react";
 import Link from "next/link";
 import {
   RefreshCw,
@@ -151,7 +151,7 @@ export default function GatewayActivityPage() {
 
   // Filters
   const [fromDate, setFromDate]         = useState(() => {
-    const d = new Date(); d.setDate(d.getDate() - 30);
+    const d = new Date(); d.setDate(d.getDate() - 90);
     return d.toISOString().slice(0, 10);
   });
   const [toDate, setToDate]             = useState(() => new Date().toISOString().slice(0, 10));
@@ -182,6 +182,9 @@ export default function GatewayActivityPage() {
       setRows(json.data || []);
       setSummary(json.summary || null);
       setLastSync(json.last_sync || null);
+      if (json.query_errors?.length) {
+        toast.error(`Data query error: ${json.query_errors[0]}`);
+      }
     } finally {
       setLoading(false);
     }
@@ -376,9 +379,8 @@ export default function GatewayActivityPage() {
                 {filtered.map((row) => {
                   const isExpanded = expandedId === row.id;
                   return (
-                    <>
+                    <Fragment key={row.id}>
                       <tr
-                        key={row.id}
                         className="hover:bg-muted/30 transition-colors cursor-pointer"
                         onClick={() => setExpandedId(isExpanded ? null : row.id)}
                       >
@@ -448,7 +450,7 @@ export default function GatewayActivityPage() {
 
                       {/* Expanded detail row */}
                       {isExpanded && (
-                        <tr key={`${row.id}-detail`} className="bg-muted/20">
+                        <tr className="bg-muted/20">
                           <td colSpan={9} className="px-6 py-4">
                             <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-xs">
                               <div>
@@ -504,7 +506,7 @@ export default function GatewayActivityPage() {
                           </td>
                         </tr>
                       )}
-                    </>
+                    </Fragment>
                   );
                 })}
               </tbody>

@@ -108,6 +108,14 @@ export async function GET(request: NextRequest) {
     syncLogQuery,
   ]);
 
+  // Surface query errors so the UI can show them (previously silently swallowed)
+  if (bookingRes.error) {
+    console.error("[gateway-activity] booking_payments query error:", bookingRes.error);
+  }
+  if (billingRes.error) {
+    console.error("[gateway-activity] billing_payments query error:", billingRes.error);
+  }
+
   // ── 4. Collect all razorpay_payment_ids and fetch settlement cache ───────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const allPaymentIds: string[] = [];
@@ -246,5 +254,9 @@ export async function GET(request: NextRequest) {
       count:           allRows.length,
     },
     last_sync: syncLogRes.data ?? null,
+    query_errors: [
+      bookingRes.error ? `booking_payments: ${bookingRes.error.message}` : null,
+      billingRes.error ? `billing_payments: ${billingRes.error.message}` : null,
+    ].filter(Boolean),
   });
 }
