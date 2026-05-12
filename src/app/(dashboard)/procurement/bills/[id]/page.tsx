@@ -1534,10 +1534,19 @@ export default function VendorBillDetailPage() {
             <DialogTitle>Resend Payment Confirmation</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
-            <div className="p-3 rounded-lg bg-muted/50 text-sm space-y-1">
-              <p className="text-muted-foreground text-xs">To</p>
-              <p className="font-medium">{chain?.vendor?.contact_email ?? "No email on file"}</p>
-            </div>
+            {chain?.vendor?.contact_email ? (
+              <div className="p-3 rounded-lg bg-muted/50 text-sm space-y-1">
+                <p className="text-muted-foreground text-xs">To</p>
+                <p className="font-medium">{chain.vendor.contact_email}</p>
+              </div>
+            ) : (
+              <VendorEmailBanner
+                vendorId={chain?.vendor?.id ?? ""}
+                vendorName={chain?.vendor?.name}
+                forceShow
+                onEmailSaved={() => fetchAll()}
+              />
+            )}
             <div className="space-y-1.5">
               <Label>CC (optional)</Label>
               <Input
