@@ -6,6 +6,7 @@ import Link from "next/link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/shared/empty-state";
 import { PettyCashIssuance } from "@/components/accounting/petty-cash-issuance";
+import TdsPayablePage from "./tds/page";
 import {
   Calculator,
   Banknote,
@@ -17,6 +18,7 @@ import {
   CheckCircle2,
   MailX,
   ArrowRight,
+  FileText,
 } from "lucide-react";
 import { formatSmartDate } from "@/lib/utils";
 import { VendorEmailChip } from "@/components/finance-intelligence/vendor-email-chip";
@@ -142,6 +144,9 @@ export default function AccountingPage() {
           </TabsTrigger>
           <TabsTrigger value="petty-cash">
             <Banknote className="h-3.5 w-3.5 mr-1" />Petty Cash
+          </TabsTrigger>
+          <TabsTrigger value="tds">
+            <FileText className="h-3.5 w-3.5 mr-1" />TDS Payable
           </TabsTrigger>
         </TabsList>
 
@@ -458,6 +463,11 @@ export default function AccountingPage() {
         {/* ── Petty Cash ───────────────────────────────────────────────── */}
         <TabsContent value="petty-cash" className="mt-4">
           <PettyCashIssuance />
+        </TabsContent>
+
+        {/* ── TDS Payable ──────────────────────────────────────────────── */}
+        <TabsContent value="tds" className="mt-0">
+          <TdsPayablePage />
         </TabsContent>
       </Tabs>
     </div>

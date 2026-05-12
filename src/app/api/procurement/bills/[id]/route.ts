@@ -9,6 +9,15 @@ import { z } from "zod";
 const BANK_MODES = ["bank_transfer", "neft", "rtgs", "imps", "cheque"] as const;
 const ALL_PAYMENT_MODES = [...BANK_MODES, "cash"] as const;
 
+const tdsSchema = z.object({
+  section_code: z.string().min(1),
+  vendor_type: z.enum(["individual", "huf", "company"]).default("company"),
+  base_amount: z.number().positive(),
+  tds_rate: z.number().positive(),
+  tds_amount: z.number().positive(),
+  pan_available: z.boolean().default(true),
+});
+
 const patchBillSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("record_payment"),
@@ -17,6 +26,7 @@ const patchBillSchema = z.discriminatedUnion("action", [
     payment_reference: z.string().nullish(),
     payment_date: z.string().nullish(),
     notes: z.string().nullish(),
+    tds: tdsSchema.nullish(),
   }),
   z.object({
     action: z.literal("approve"),
@@ -159,24 +169,48 @@ export async function PATCH(
           : "unpaid";
 
       const today = new Date().toISOString().split("T")[0];
+      const paymentDate = parsed.data.payment_date ?? today;
 
-      // Insert payment history record
-      await supabase.from("vendor_bill_payments").insert({
-        bill_id: id,
-        amount: parsed.data.amount,
-        payment_mode: parsed.data.payment_mode,
-        payment_reference: parsed.data.payment_reference ?? null,
-        payment_date: parsed.data.payment_date ?? today,
-        notes: parsed.data.notes ?? null,
-        recorded_by: dbUser.id,
-      });
+      // Insert payment history record — capture ID for TDS linkage
+      const { data: paymentRow } = await supabase
+        .from("vendor_bill_payments")
+        .insert({
+          bill_id: id,
+          amount: parsed.data.amount,
+          payment_mode: parsed.data.payment_mode,
+          payment_reference: parsed.data.payment_reference ?? null,
+          payment_date: paymentDate,
+          notes: parsed.data.notes ?? null,
+          recorded_by: dbUser.id,
+        })
+        .select("id")
+        .single();
+
+      // Atomically insert TDS deduction if provided
+      if (parsed.data.tds && paymentRow?.id) {
+        const tds = parsed.data.tds;
+        const pd = new Date(paymentDate);
+        await supabase.from("vendor_bill_tds").insert({
+          bill_id: id,
+          payment_id: paymentRow.id,
+          section_code: tds.section_code,
+          vendor_type: tds.vendor_type,
+          base_amount: tds.base_amount,
+          tds_rate: tds.tds_rate,
+          tds_amount: tds.tds_amount,
+          pan_available: tds.pan_available,
+          period_month: pd.getMonth() + 1,
+          period_year: pd.getFullYear(),
+          created_by: dbUser.id,
+        });
+      }
 
       updatePayload = {
         amount_paid: newAmountPaid,
         payment_status: paymentStatus,
         payment_mode: parsed.data.payment_mode,
         payment_reference: parsed.data.payment_reference ?? null,
-        payment_date: parsed.data.payment_date ?? today,
+        payment_date: paymentDate,
       };
       break;
     }

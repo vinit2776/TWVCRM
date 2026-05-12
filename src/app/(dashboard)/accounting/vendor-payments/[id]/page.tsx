@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   ArrowLeft, FileText, Truck, ClipboardList, Package,
   ExternalLink, CheckCircle, AlertCircle, Clock, ChevronDown,
-  ChevronUp, Send, CreditCard, Building2, ShieldCheck,
+  ChevronUp, Send, CreditCard, Building2, ShieldCheck, Info,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -190,8 +190,26 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const [payNote, setPayNote] = useState("");
   const [paying, setPaying] = useState(false);
 
-  // Send confirmation toggle (inside payment form) + resend dialog
+  // Payment dialog + send confirmation toggle + resend dialog
+  const [paymentDialog, setPaymentDialog] = useState(false);
   const [sendConfirmation, setSendConfirmation] = useState(true);
+
+  // TDS state
+  type TdsSection = {
+    code: string; description: string;
+    rate_individual: number; rate_company: number;
+    rate_min: number; rate_max: number;
+  };
+  const [tdsApplicable, setTdsApplicable] = useState(false);
+  const [tdsEnabled, setTdsEnabled] = useState(false);
+  const [tdsSections, setTdsSections] = useState<TdsSection[]>([]);
+  const [tdsSectionCode, setTdsSectionCode] = useState("");
+  const [tdsVendorType, setTdsVendorType] = useState<"individual" | "huf" | "company">("company");
+  const [tdsRate, setTdsRate] = useState(0);
+  const [tdsRateMin, setTdsRateMin] = useState(0);
+  const [tdsRateMax, setTdsRateMax] = useState(20);
+  const [tdsBaseAmount, setTdsBaseAmount] = useState("");
+  const [tdsPanAvailable, setTdsPanAvailable] = useState(true);
   const [resendDialog, setResendDialog] = useState(false);
   const [resendCc, setResendCc] = useState("");
   const [resendLoading, setResendLoading] = useState(false);
@@ -217,7 +235,36 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   useEffect(() => {
     fetchChain();
     fetch("/api/me").then((r) => r.json()).then((d) => setUserRole(d.role ?? null));
+    fetch("/api/tds/sections").then((r) => r.json()).then((d) => {
+      if (d.data) setTdsSections(d.data);
+    });
   }, [fetchChain]);
+
+  async function openPaymentDialog() {
+    setPaymentDialog(true);
+    // Fetch TDS suggestion based on vendor + PO type
+    if (chain?.vendor?.id) {
+      const poType = chain.po?.po_type ?? null;
+      const qs = new URLSearchParams({ vendor_id: chain.vendor.id });
+      if (poType) qs.set("po_type", poType);
+      const res = await fetch(`/api/tds/suggest?${qs}`);
+      const json = await res.json();
+      if (json.tds_applicable) {
+        setTdsApplicable(true);
+        setTdsEnabled(true);
+        setTdsSectionCode(json.section_code ?? "");
+        setTdsPanAvailable(json.pan_available ?? true);
+        const rate = json.pan_available ? (json.section?.rate_company ?? 0) : 20;
+        setTdsRate(rate);
+        setTdsRateMin(json.pan_available ? (json.section?.rate_min ?? rate) : 20);
+        setTdsRateMax(json.pan_available ? (json.section?.rate_max ?? rate) : 20);
+      } else {
+        setTdsApplicable(false);
+        setTdsEnabled(false);
+        setTdsSectionCode("");
+      }
+    }
+  }
 
   const bill = chain?.bill;
   const vendor = chain?.vendor;
@@ -240,6 +287,13 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const allPayModes = canRecordCash ? [...bankModes, { value: "cash", label: "Cash / Petty Cash" }] : bankModes;
   const canRecordPayment = userRole === "accounts" || userRole === "admin" || userRole === "office_admin";
 
+  const tdsAmount = tdsEnabled && tdsBaseAmount && tdsRate
+    ? Math.round(Number(tdsBaseAmount) * tdsRate) / 100
+    : 0;
+  const netToVendor = tdsEnabled && tdsAmount > 0
+    ? Number(payAmount) - tdsAmount
+    : Number(payAmount);
+
   async function handleRecordPayment() {
     if (!payMode) { toast.error("Please select a payment mode"); return; }
     if (!payAmount || Number(payAmount) <= 0) { toast.error("Enter a valid payment amount"); return; }
@@ -247,8 +301,22 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       toast.error(`Amount exceeds approved outstanding balance of ${formatCurrency(approvedOutstanding)}`);
       return;
     }
+    if (tdsEnabled) {
+      if (!tdsSectionCode) { toast.error("Select a TDS section"); return; }
+      if (!tdsBaseAmount || Number(tdsBaseAmount) <= 0) { toast.error("Enter the pre-GST base amount for TDS"); return; }
+      if (tdsAmount <= 0) { toast.error("TDS amount must be greater than zero"); return; }
+    }
     setPaying(true);
     try {
+      const tdsPayload = tdsEnabled && tdsSectionCode && tdsAmount > 0 ? {
+        section_code: tdsSectionCode,
+        vendor_type: tdsVendorType,
+        base_amount: Number(tdsBaseAmount),
+        tds_rate: tdsRate,
+        tds_amount: tdsAmount,
+        pan_available: tdsPanAvailable,
+      } : null;
+
       const res = await fetch(`/api/procurement/bills/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
@@ -259,11 +327,13 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           payment_reference: payRef || null,
           payment_date: payDate || null,
           notes: payNote || null,
+          tds: tdsPayload,
         }),
       });
       const data = await res.json();
       if (!res.ok) { toast.error(data.error || "Payment failed"); setPaying(false); return; }
       toast.success("Payment recorded successfully");
+      setPaymentDialog(false);
       setPayNote("");
 
       if (sendConfirmation && vendor?.contact_email) {
@@ -347,10 +417,16 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
             {vendor?.name} · Invoice {bill.invoice_number ?? "—"} · {formatDate(bill.invoice_date)}
           </p>
         </div>
-        <div className="text-right shrink-0">
+        <div className="text-right shrink-0 space-y-1">
           <p className="text-2xl font-bold">{formatCurrency(Number(bill.total_amount))}</p>
           {!isFullyPaid && (
             <p className="text-sm text-amber-700 font-medium">₹{outstanding.toLocaleString("en-IN")} outstanding</p>
+          )}
+          {!isFullyPaid && canRecordPayment && (
+            <Button size="sm" onClick={openPaymentDialog} className="gap-1.5">
+              <CreditCard className="h-3.5 w-3.5" />
+              Record Payment
+            </Button>
           )}
         </div>
       </div>
@@ -596,24 +672,25 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
         </CardContent>
       </Card>
 
-      {/* Record Payment */}
-      {!isFullyPaid && canRecordPayment && (
-        <Card className="border-primary/30">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-base flex items-center gap-2">
+      {/* Record Payment Dialog */}
+      <Dialog open={paymentDialog} onOpenChange={setPaymentDialog}>
+        <DialogContent className="max-w-lg">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
               <CreditCard className="h-4 w-4 text-primary" />
               Record Payment
-            </CardTitle>
+            </DialogTitle>
             <p className="text-xs text-muted-foreground">
               Outstanding: <span className="font-semibold text-amber-700">{formatCurrency(outstanding)}</span>
               {isPartialApproval && (
                 <> · Approved: <span className="font-semibold text-amber-700">{formatCurrency(approvedOutstanding)}</span></>
               )}
             </p>
-          </CardHeader>
-          <CardContent>
+          </DialogHeader>
+
+          <div className="space-y-4 py-1">
             {isPartialApproval && (
-              <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm space-y-1 mb-4">
+              <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm space-y-1">
                 <p className="font-medium text-amber-800">⚠ Partial Payment Approved</p>
                 <p className="text-amber-700">
                   Approved for payment: <strong>{formatCurrency(approvedCeiling)}</strong> of {formatCurrency(Number(bill.total_amount))} total.
@@ -624,7 +701,8 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 )}
               </div>
             )}
-            <div className="grid sm:grid-cols-2 gap-4">
+
+            <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
                 <Label>Amount (₹) *</Label>
                 <Input
@@ -656,7 +734,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 <Label>Payment Date</Label>
                 <Input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
               </div>
-              <div className="space-y-1 sm:col-span-2">
+              <div className="space-y-1 col-span-2">
                 <Label>Note / Reason (optional)</Label>
                 <Input
                   value={payNote}
@@ -666,16 +744,157 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               </div>
             </div>
 
-            <Separator className="my-4" />
+            {/* ── TDS Deduction ── */}
+            <div className="rounded-lg border border-dashed border-blue-300 bg-blue-50/40 p-3 space-y-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium text-blue-900">TDS Deduction</span>
+                  {!tdsApplicable && (
+                    <span className="text-[10px] bg-gray-100 text-gray-500 px-1.5 py-0.5 rounded">
+                      not suggested for this bill
+                    </span>
+                  )}
+                </div>
+                <label className="flex items-center gap-1.5 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={tdsEnabled}
+                    onChange={(e) => setTdsEnabled(e.target.checked)}
+                    className="h-3.5 w-3.5 rounded accent-blue-600"
+                  />
+                  <span className="text-xs text-blue-800">{tdsEnabled ? "Enabled" : "Enable"}</span>
+                </label>
+              </div>
 
-            {/* Vendor-email nag — only renders if vendor has no email */}
-            {vendor?.id && !vendor.contact_email && (
-              <VendorEmailBanner
-                vendorId={vendor.id}
-                vendorName={vendor.name}
-                forceShow
-                onEmailSaved={() => { fetchChain(); setSendConfirmation(true); }}
-              />
+              {tdsEnabled && (
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1 col-span-2">
+                    <Label className="text-xs">TDS Section</Label>
+                    <Select
+                      value={tdsSectionCode}
+                      onValueChange={(v) => {
+                        setTdsSectionCode(v);
+                        const sec = tdsSections.find((s) => s.code === v);
+                        if (sec) {
+                          const rate = tdsPanAvailable ? sec.rate_company : 20;
+                          setTdsRate(rate);
+                          setTdsRateMin(tdsPanAvailable ? sec.rate_min : 20);
+                          setTdsRateMax(tdsPanAvailable ? sec.rate_max : 20);
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue placeholder="Select section" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {tdsSections.map((s) => (
+                          <SelectItem key={s.code} value={s.code} className="text-xs">
+                            {s.code.replace("_", "(")} — {s.description}
+                            {s.code.includes("_") ? ")" : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-xs">Vendor Type</Label>
+                    <Select
+                      value={tdsVendorType}
+                      onValueChange={(v) => {
+                        setTdsVendorType(v as "individual" | "huf" | "company");
+                        const sec = tdsSections.find((s) => s.code === tdsSectionCode);
+                        if (sec && tdsPanAvailable) {
+                          const rate = v === "company" ? sec.rate_company : sec.rate_individual;
+                          setTdsRate(rate);
+                        }
+                      }}
+                    >
+                      <SelectTrigger className="h-8 text-xs">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="company">Company / LLP</SelectItem>
+                        <SelectItem value="individual">Individual / Proprietor</SelectItem>
+                        <SelectItem value="huf">HUF</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-xs">
+                      Rate (%)
+                      {!tdsPanAvailable && (
+                        <span className="ml-1 text-[10px] text-red-600">PAN missing → 20%</span>
+                      )}
+                    </Label>
+                    <Input
+                      type="number"
+                      step="0.5"
+                      min={tdsRateMin}
+                      max={tdsRateMax}
+                      value={tdsRate}
+                      onChange={(e) => setTdsRate(Number(e.target.value))}
+                      disabled={!tdsPanAvailable}
+                      className="h-8 text-xs"
+                    />
+                  </div>
+
+                  <div className="space-y-1">
+                    <Label className="text-xs">Base amount (pre-GST) *</Label>
+                    <Input
+                      type="number"
+                      step="0.01"
+                      min="0.01"
+                      value={tdsBaseAmount}
+                      onChange={(e) => setTdsBaseAmount(e.target.value)}
+                      placeholder="Amount excl. GST"
+                      className="h-8 text-xs"
+                    />
+                  </div>
+
+                  <div className="col-span-2 rounded bg-blue-100/60 px-3 py-2 text-xs space-y-0.5">
+                    <div className="flex justify-between">
+                      <span className="text-blue-700">TDS deducted ({tdsRate}%):</span>
+                      <span className="font-semibold text-blue-900">– {formatCurrency(tdsAmount)}</span>
+                    </div>
+                    <div className="flex justify-between border-t border-blue-200 pt-0.5 mt-0.5">
+                      <span className="text-blue-700">Net payable to vendor:</span>
+                      <span className="font-bold text-blue-900">{formatCurrency(netToVendor)}</span>
+                    </div>
+                    <div className="flex items-center gap-1 mt-1 text-[10px] text-blue-600">
+                      <Info className="h-3 w-3 shrink-0" />
+                      TDS of {formatCurrency(tdsAmount)} to be deposited to Income Tax by 7th of next month
+                    </div>
+                  </div>
+
+                  {!tdsPanAvailable && (
+                    <div className="col-span-2 text-xs text-red-700 bg-red-50 border border-red-200 rounded px-2.5 py-1.5">
+                      ⚠ PAN not on file for this vendor — rate defaulted to 20% as per Section 206AA.
+                      Update vendor PAN in the vendor profile to apply the standard rate.
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+
+            <Separator />
+
+            {/* Vendor-email nag */}
+            {!vendor?.contact_email && (
+              vendor?.id ? (
+                <VendorEmailBanner
+                  vendorId={vendor.id}
+                  vendorName={vendor.name}
+                  forceShow
+                  onEmailSaved={() => { fetchChain(); setSendConfirmation(true); }}
+                  className="mb-1"
+                />
+              ) : (
+                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
+                  No vendor linked to this bill — payment confirmation email cannot be sent.
+                </p>
+              )
             )}
 
             {/* Send confirmation toggle */}
@@ -696,17 +915,20 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 )}
               </div>
             </label>
+          </div>
 
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setPaymentDialog(false)} disabled={paying}>Cancel</Button>
             <Button
               onClick={() => handleRecordPayment()}
               disabled={paying || !payMode || !payAmount}
-              className="w-full"
+              className="gap-2"
             >
               {paying ? "Recording…" : sendConfirmation && vendor?.contact_email ? "Record & Send" : "Record Payment"}
             </Button>
-          </CardContent>
-        </Card>
-      )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Payment History */}
       {chain && (chain.bill.vendor_bill_payments ?? []).length > 0 && (
