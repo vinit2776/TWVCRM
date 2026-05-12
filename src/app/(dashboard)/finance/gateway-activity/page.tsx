@@ -34,7 +34,7 @@ import { toast } from "sonner";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type EntityType = "booking" | "billing_statement";
+type EntityType = "booking" | "billing_statement" | "unmatched";
 
 interface GatewayTransaction {
   id: string;
@@ -56,6 +56,7 @@ interface GatewayTransaction {
   fee: number | null;
   tax: number | null;
   payment_method: string | null;
+  in_crm: boolean;
 }
 
 interface Summary {
@@ -133,11 +134,14 @@ function MethodIcon({ method }: { method: string | null }) {
   return <Globe className="h-3.5 w-3.5 text-muted-foreground" />;
 }
 
-function EntityTypeBadge({ type }: { type: EntityType }) {
-  if (type === "booking") {
+function EntityTypeBadge({ row }: { row: GatewayTransaction }) {
+  if (row.entity_type === "booking") {
     return <Badge variant="secondary" className="text-[10px] bg-cyan-100 text-cyan-800">Booking</Badge>;
   }
-  return <Badge variant="secondary" className="text-[10px] bg-indigo-100 text-indigo-800">Invoice</Badge>;
+  if (row.entity_type === "billing_statement") {
+    return <Badge variant="secondary" className="text-[10px] bg-indigo-100 text-indigo-800">Invoice</Badge>;
+  }
+  return <Badge variant="secondary" className="text-[10px] bg-orange-100 text-orange-700">Not in CRM</Badge>;
 }
 
 // ── Page ─────────────────────────────────────────────────────────────────────
@@ -323,6 +327,7 @@ export default function GatewayActivityPage() {
             <SelectItem value="all">All types</SelectItem>
             <SelectItem value="booking">Bookings</SelectItem>
             <SelectItem value="billing_statement">Invoices</SelectItem>
+            <SelectItem value="unmatched">Not in CRM</SelectItem>
           </SelectContent>
         </Select>
         <Select value={settledFilter || "all"} onValueChange={(v) => setSettledFilter(v === "all" ? "" : v)}>
@@ -392,7 +397,7 @@ export default function GatewayActivityPage() {
                         </td>
                         <td className="px-4 py-3">
                           <div className="flex items-center gap-1.5">
-                            <EntityTypeBadge type={row.entity_type} />
+                            <EntityTypeBadge row={row} />
                             {row.entity_href ? (
                               <Link
                                 href={row.entity_href}

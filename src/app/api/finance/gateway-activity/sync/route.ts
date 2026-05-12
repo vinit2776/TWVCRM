@@ -105,6 +105,9 @@ export async function POST(request: NextRequest) {
           fee:                 it.fee   != null ? it.fee   / 100 : null,
           tax:                 it.tax   != null ? it.tax   / 100 : null,
           payment_method:      it.method ?? null,
+          amount:              it.amount != null ? it.amount / 100 : null,
+          order_id:            it.order_id ?? null,
+          payment_created_at:  it.created_at ? new Date(it.created_at * 1000).toISOString() : null,
           last_synced_at:      new Date().toISOString(),
         }));
 

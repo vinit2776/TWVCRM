@@ -6,18 +6,18 @@ export const dynamic = "force-dynamic";
 /**
  * GET /api/finance/gateway-activity
  *
- * Returns all Razorpay-captured transactions aggregated across:
- *   - booking_payments  (razorpay checkout / payment link → booking)
- *   - billing_payments  (razorpay payment link → billing statement)
+ * PRIMARY SOURCE: razorpay_settlement_cache (all synced Razorpay payments).
+ * ENRICHMENT: booking_payments + billing_payments (CRM records) matched by
+ *   razorpay_payment_id or order_id → adds customer name + entity link.
  *
- * Settlement data is fetched separately from razorpay_settlement_cache
- * and merged in JS (no FK between the tables).
+ * This ensures every synced payment shows in the list even if the CRM webhook
+ * missed recording it.
  *
  * Query params:
  *   from_date   YYYY-MM-DD  (default: 90 days ago)
  *   to_date     YYYY-MM-DD  (default: today)
- *   settled     "true" | "false" | ""  (filter by settlement status)
- *   entity_type "booking" | "billing_statement" | ""
+ *   settled     "true" | "false" | ""
+ *   entity_type "booking" | "billing_statement" | "unmatched" | ""
  */
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -37,9 +37,8 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const entityTypeFilter = searchParams.get("entity_type") || "";
-  const settledFilter = searchParams.get("settled") || "";
+  const settledFilter    = searchParams.get("settled") || "";
 
-  // Default: last 90 days
   const toDate = searchParams.get("to_date") || new Date().toISOString().slice(0, 10);
   const fromDateDefault = new Date();
   fromDateDefault.setDate(fromDateDefault.getDate() - 90);
@@ -47,16 +46,39 @@ export async function GET(request: NextRequest) {
 
   const adminSupabase = createAdminClient();
 
-  // ── 1. Booking payments via Razorpay ─────────────────────────────────────
-  const bookingQuery = adminSupabase
+  // ── 1. Primary: fetch all settlement cache rows in the date window ─────────
+  const { data: cacheRows, error: cacheError } = await adminSupabase
+    .from("razorpay_settlement_cache")
+    .select("razorpay_payment_id, settled, settlement_id, settlement_utr, settled_at, fee, tax, payment_method, amount, order_id, payment_created_at")
+    .or(
+      `payment_created_at.gte.${fromDate}T00:00:00Z,payment_created_at.is.null`
+    )
+    .lte("payment_created_at", toDate + "T23:59:59Z")
+    .order("payment_created_at", { ascending: false, nullsFirst: false });
+
+  if (cacheError) {
+    console.error("[gateway-activity] settlement_cache query error:", cacheError);
+    return NextResponse.json({ error: cacheError.message }, { status: 500 });
+  }
+
+  const cache = cacheRows ?? [];
+  if (cache.length === 0) {
+    return NextResponse.json({
+      data: [],
+      summary: { total_captured: 0, total_settled: 0, total_pending: 0, total_fees: 0, count: 0 },
+      last_sync: null,
+    });
+  }
+
+  // ── 2. Collect IDs for CRM lookup ─────────────────────────────────────────
+  const paymentIds = cache.map((r) => r.razorpay_payment_id).filter(Boolean);
+  const orderIds   = cache.map((r) => r.order_id).filter(Boolean) as string[];
+
+  // ── 3. CRM enrichment: booking_payments ───────────────────────────────────
+  const bookingPaymentsRes = await adminSupabase
     .from("booking_payments")
     .select(`
-      id,
-      amount,
-      razorpay_payment_id,
-      payment_reference,
-      status,
-      created_at,
+      id, amount, razorpay_payment_id, razorpay_order_id, payment_reference, status, created_at,
       bookings!inner(
         id,
         booking_number,
@@ -64,21 +86,22 @@ export async function GET(request: NextRequest) {
       )
     `)
     .eq("payment_mode", "razorpay")
-    .eq("status", "verified")
-    .gte("created_at", fromDate + "T00:00:00Z")
-    .lte("created_at", toDate + "T23:59:59Z")
-    .order("created_at", { ascending: false });
+    .or(
+      [
+        paymentIds.length ? `razorpay_payment_id.in.(${paymentIds.join(",")})` : null,
+        orderIds.length   ? `razorpay_order_id.in.(${orderIds.join(",")})` : null,
+      ].filter(Boolean).join(",") || "id.is.null"
+    );
 
-  // ── 2. Billing payments via Razorpay ─────────────────────────────────────
-  const billingQuery = adminSupabase
+  if (bookingPaymentsRes.error) {
+    console.error("[gateway-activity] booking_payments enrichment error:", bookingPaymentsRes.error);
+  }
+
+  // ── 4. CRM enrichment: billing_payments ───────────────────────────────────
+  const billingPaymentsRes = await adminSupabase
     .from("billing_payments")
     .select(`
-      id,
-      amount,
-      razorpay_payment_id,
-      payment_reference,
-      payment_date,
-      created_at,
+      id, amount, razorpay_payment_id, payment_reference, payment_date, created_at,
       billing_statements!inner(
         id,
         statement_number,
@@ -90,104 +113,49 @@ export async function GET(request: NextRequest) {
       )
     `)
     .eq("payment_mode", "razorpay")
-    .gte("created_at", fromDate + "T00:00:00Z")
-    .lte("created_at", toDate + "T23:59:59Z")
-    .order("created_at", { ascending: false });
+    .in("razorpay_payment_id", paymentIds.length ? paymentIds : ["__none__"]);
 
-  // ── 3. Last sync log ──────────────────────────────────────────────────────
-  const syncLogQuery = adminSupabase
-    .from("razorpay_sync_log")
-    .select("synced_at, records_updated, error_message")
-    .order("synced_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-
-  const [bookingRes, billingRes, syncLogRes] = await Promise.all([
-    bookingQuery,
-    billingQuery,
-    syncLogQuery,
-  ]);
-
-  // Surface query errors so the UI can show them (previously silently swallowed)
-  if (bookingRes.error) {
-    console.error("[gateway-activity] booking_payments query error:", bookingRes.error);
-  }
-  if (billingRes.error) {
-    console.error("[gateway-activity] billing_payments query error:", billingRes.error);
+  if (billingPaymentsRes.error) {
+    console.error("[gateway-activity] billing_payments enrichment error:", billingPaymentsRes.error);
   }
 
-  // ── 4. Collect all razorpay_payment_ids and fetch settlement cache ───────
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const allPaymentIds: string[] = [];
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  for (const row of (bookingRes.data || []) as any[]) {
-    if (row.razorpay_payment_id) allPaymentIds.push(row.razorpay_payment_id);
-  }
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  for (const row of (billingRes.data || []) as any[]) {
-    if (row.razorpay_payment_id) allPaymentIds.push(row.razorpay_payment_id);
-  }
-
-  type SettlementCache = {
-    razorpay_payment_id: string;
-    settled: boolean;
-    settlement_id: string | null;
-    settlement_utr: string | null;
-    settled_at: string | null;
-    fee: number | null;
-    tax: number | null;
-    payment_method: string | null;
+  // ── 5. Build enrichment lookup maps ──────────────────────────────────────
+  type EnrichedCRM = {
+    entity_type: "booking" | "billing_statement";
+    entity_id: string | null;
+    entity_ref: string | null;
+    entity_label: string;
+    entity_href: string | null;
+    customer_name: string;
+    crm_amount: number;
   };
 
-  const cacheMap = new Map<string, SettlementCache>();
-
-  if (allPaymentIds.length > 0) {
-    const { data: cacheRows } = await adminSupabase
-      .from("razorpay_settlement_cache")
-      .select("razorpay_payment_id, settled, settlement_id, settlement_utr, settled_at, fee, tax, payment_method")
-      .in("razorpay_payment_id", allPaymentIds);
-
-    for (const c of (cacheRows || []) as SettlementCache[]) {
-      cacheMap.set(c.razorpay_payment_id, c);
-    }
-  }
-
-  // ── Normalise booking rows ────────────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const bookingRows = (bookingRes.data || []).map((row: any) => {
+  const crmByPaymentId = new Map<string, EnrichedCRM>();
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const crmByOrderId   = new Map<string, EnrichedCRM>();
+
+  for (const row of (bookingPaymentsRes.data ?? []) as any[]) {
     const booking = Array.isArray(row.bookings) ? row.bookings[0] : row.bookings;
     const lead    = booking?.leads
       ? (Array.isArray(booking.leads) ? booking.leads[0] : booking.leads)
       : null;
-    const cache = row.razorpay_payment_id ? cacheMap.get(row.razorpay_payment_id) ?? null : null;
-
-    return {
-      id:                   row.id,
-      entity_type:          "booking" as const,
-      entity_id:            booking?.id ?? null,
-      entity_ref:           booking?.booking_number ?? null,
-      entity_label:         booking?.booking_number ? `Booking ${booking.booking_number}` : "Booking",
-      entity_href:          booking?.id ? `/bookings/${booking.id}` : null,
-      customer_name:        lead
+    const enriched: EnrichedCRM = {
+      entity_type:   "booking",
+      entity_id:     booking?.id ?? null,
+      entity_ref:    booking?.booking_number ?? null,
+      entity_label:  booking?.booking_number ? `Booking ${booking.booking_number}` : "Booking",
+      entity_href:   booking?.id ? `/bookings/${booking.id}` : null,
+      customer_name: lead
         ? [lead.first_name, lead.last_name].filter(Boolean).join(" ") || lead.company || "—"
         : "—",
-      amount:               Number(row.amount),
-      razorpay_payment_id:  row.razorpay_payment_id ?? null,
-      payment_reference:    row.payment_reference ?? null,
-      captured:             true,
-      created_at:           row.created_at,
-      settled:              cache?.settled ?? false,
-      settlement_id:        cache?.settlement_id ?? null,
-      settlement_utr:       cache?.settlement_utr ?? null,
-      settled_at:           cache?.settled_at ?? null,
-      fee:                  cache?.fee != null ? Number(cache.fee) : null,
-      tax:                  cache?.tax != null ? Number(cache.tax) : null,
-      payment_method:       cache?.payment_method ?? null,
+      crm_amount: Number(row.amount),
     };
-  });
+    if (row.razorpay_payment_id) crmByPaymentId.set(row.razorpay_payment_id, enriched);
+    if (row.razorpay_order_id)   crmByOrderId.set(row.razorpay_order_id, enriched);
+  }
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const billingRows = (billingRes.data || []).map((row: any) => {
+  for (const row of (billingPaymentsRes.data ?? []) as any[]) {
     const statement = Array.isArray(row.billing_statements)
       ? row.billing_statements[0]
       : row.billing_statements;
@@ -197,39 +165,65 @@ export async function GET(request: NextRequest) {
     const lead = contract?.leads
       ? (Array.isArray(contract.leads) ? contract.leads[0] : contract.leads)
       : null;
-    const cache = row.razorpay_payment_id ? cacheMap.get(row.razorpay_payment_id) ?? null : null;
-
-    return {
-      id:                   row.id,
-      entity_type:          "billing_statement" as const,
-      entity_id:            statement?.id ?? null,
-      entity_ref:           statement?.statement_number ?? null,
-      entity_label:         statement?.statement_number ? `Invoice ${statement.statement_number}` : "Invoice",
-      entity_href:          contract?.id ? `/billing?contract=${contract.id}` : null,
-      customer_name:        lead
+    const enriched: EnrichedCRM = {
+      entity_type:   "billing_statement",
+      entity_id:     statement?.id ?? null,
+      entity_ref:    statement?.statement_number ?? null,
+      entity_label:  statement?.statement_number ? `Invoice ${statement.statement_number}` : "Invoice",
+      entity_href:   contract?.id ? `/billing?contract=${contract.id}` : null,
+      customer_name: lead
         ? [lead.first_name, lead.last_name].filter(Boolean).join(" ") || lead.company || "—"
         : "—",
-      amount:               Number(row.amount),
-      razorpay_payment_id:  row.razorpay_payment_id ?? null,
-      payment_reference:    row.payment_reference ?? null,
+      crm_amount: Number(row.amount),
+    };
+    if (row.razorpay_payment_id) crmByPaymentId.set(row.razorpay_payment_id, enriched);
+  }
+
+  // ── 6. Last sync log ──────────────────────────────────────────────────────
+  const { data: lastSyncRow } = await adminSupabase
+    .from("razorpay_sync_log")
+    .select("synced_at, records_updated, error_message")
+    .order("synced_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  // ── 7. Merge cache rows with CRM enrichment ───────────────────────────────
+  let allRows = cache.map((c) => {
+    const crm = crmByPaymentId.get(c.razorpay_payment_id)
+              ?? (c.order_id ? crmByOrderId.get(c.order_id) : null)
+              ?? null;
+
+    return {
+      id:                   c.razorpay_payment_id,
+      entity_type:          crm?.entity_type ?? ("unmatched" as const),
+      entity_id:            crm?.entity_id ?? null,
+      entity_ref:           crm?.entity_ref ?? null,
+      entity_label:         crm?.entity_label ?? "Razorpay (not in CRM)",
+      entity_href:          crm?.entity_href ?? null,
+      customer_name:        crm?.customer_name ?? "—",
+      amount:               crm?.crm_amount ?? (c.amount != null ? Number(c.amount) : 0),
+      razorpay_payment_id:  c.razorpay_payment_id,
+      payment_reference:    c.order_id ?? null,
       captured:             true,
-      created_at:           row.created_at ?? (row.payment_date + "T00:00:00Z"),
-      settled:              cache?.settled ?? false,
-      settlement_id:        cache?.settlement_id ?? null,
-      settlement_utr:       cache?.settlement_utr ?? null,
-      settled_at:           cache?.settled_at ?? null,
-      fee:                  cache?.fee != null ? Number(cache.fee) : null,
-      tax:                  cache?.tax != null ? Number(cache.tax) : null,
-      payment_method:       cache?.payment_method ?? null,
+      created_at:           c.payment_created_at ?? new Date().toISOString(),
+      settled:              c.settled ?? false,
+      settlement_id:        c.settlement_id ?? null,
+      settlement_utr:       c.settlement_utr ?? null,
+      settled_at:           c.settled_at ?? null,
+      fee:                  c.fee != null ? Number(c.fee) : null,
+      tax:                  c.tax != null ? Number(c.tax) : null,
+      payment_method:       c.payment_method ?? null,
+      in_crm:               crm !== null,
     };
   });
 
-  // ── Merge, filter, sort ───────────────────────────────────────────────────
-  let allRows = [...bookingRows, ...billingRows];
-
-  if (entityTypeFilter) {
+  // Filter by entity type
+  if (entityTypeFilter && entityTypeFilter !== "unmatched") {
     allRows = allRows.filter((r) => r.entity_type === entityTypeFilter);
+  } else if (entityTypeFilter === "unmatched") {
+    allRows = allRows.filter((r) => !r.in_crm);
   }
+
   if (settledFilter === "true") {
     allRows = allRows.filter((r) => r.settled === true);
   } else if (settledFilter === "false") {
@@ -238,11 +232,10 @@ export async function GET(request: NextRequest) {
 
   allRows.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
 
-  // ── Summary totals ────────────────────────────────────────────────────────
-  const totalCaptured  = allRows.reduce((s, r) => s + r.amount, 0);
-  const totalSettled   = allRows.filter((r) => r.settled).reduce((s, r) => s + r.amount, 0);
-  const totalPending   = totalCaptured - totalSettled;
-  const totalFees      = allRows.reduce((s, r) => s + (r.fee ?? 0), 0);
+  const totalCaptured = allRows.reduce((s, r) => s + r.amount, 0);
+  const totalSettled  = allRows.filter((r) => r.settled).reduce((s, r) => s + r.amount, 0);
+  const totalPending  = totalCaptured - totalSettled;
+  const totalFees     = allRows.reduce((s, r) => s + (r.fee ?? 0), 0);
 
   return NextResponse.json({
     data: allRows,
@@ -253,10 +246,6 @@ export async function GET(request: NextRequest) {
       total_fees:      totalFees,
       count:           allRows.length,
     },
-    last_sync: syncLogRes.data ?? null,
-    query_errors: [
-      bookingRes.error ? `booking_payments: ${bookingRes.error.message}` : null,
-      billingRes.error ? `billing_payments: ${billingRes.error.message}` : null,
-    ].filter(Boolean),
+    last_sync: lastSyncRow ?? null,
   });
 }
