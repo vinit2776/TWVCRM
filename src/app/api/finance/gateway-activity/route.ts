@@ -47,13 +47,14 @@ export async function GET(request: NextRequest) {
   const adminSupabase = createAdminClient();
 
   // ── 1. Primary: fetch all settlement cache rows in the date window ─────────
+  // Rows with NULL payment_created_at (not yet backfilled) are always included.
+  // Date filtering is applied only when the column is populated.
   const { data: cacheRows, error: cacheError } = await adminSupabase
     .from("razorpay_settlement_cache")
     .select("razorpay_payment_id, settled, settlement_id, settlement_utr, settled_at, fee, tax, payment_method, amount, order_id, payment_created_at")
     .or(
-      `payment_created_at.gte.${fromDate}T00:00:00Z,payment_created_at.is.null`
+      `payment_created_at.is.null,and(payment_created_at.gte.${fromDate}T00:00:00Z,payment_created_at.lte.${toDate}T23:59:59Z)`
     )
-    .lte("payment_created_at", toDate + "T23:59:59Z")
     .order("payment_created_at", { ascending: false, nullsFirst: false });
 
   if (cacheError) {
