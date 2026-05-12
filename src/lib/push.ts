@@ -15,7 +15,10 @@ function ensureVapid() {
       "Run: npx web-push generate-vapid-keys");
     return;
   }
-  webPush.setVapidDetails(VAPID_SUBJECT, VAPID_PUBLIC, VAPID_PRIVATE);
+  // web-push requires URL-safe base64 WITHOUT trailing "=" padding
+  const pub = VAPID_PUBLIC.replace(/=+$/, "");
+  const priv = VAPID_PRIVATE.replace(/=+$/, "");
+  webPush.setVapidDetails(VAPID_SUBJECT, pub, priv);
   vapidConfigured = true;
 }
 
