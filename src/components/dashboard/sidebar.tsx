@@ -104,7 +104,6 @@ const navSections: NavSection[] = [
       { href: "/contracts/kyc-pending", label: "KYC Pending",   icon: ShieldCheck, roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/billing",    label: "Billing - Acc Receivables", icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/accounting", label: "Acc Payables",             icon: Calculator,  roles: [...LEGACY_ROLES, "accounts"] },
-      { href: "/accounting/vendor-email-audit", label: "Vendor Email Audit", icon: MailX, roles: [...LEGACY_ROLES, "accounts", "office_admin"] },
       { href: "/finance/gateway-activity", label: "Gateway Activity",   icon: Landmark,    roles: ["admin", "accounts"] },
     ],
   },
