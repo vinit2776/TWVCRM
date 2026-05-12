@@ -8,6 +8,10 @@ const VAPID_SUBJECT = process.env.VAPID_SUBJECT                 || "mailto:space
 
 let vapidConfigured = false;
 
+function stripVapidKey(key: string): string {
+  return key.trim().replace(/=/g, "");
+}
+
 function ensureVapid() {
   if (vapidConfigured) return;
   if (!VAPID_PUBLIC || !VAPID_PRIVATE) {
@@ -15,9 +19,10 @@ function ensureVapid() {
       "Run: npx web-push generate-vapid-keys");
     return;
   }
-  // web-push requires URL-safe base64 WITHOUT trailing "=" padding
-  const pub = VAPID_PUBLIC.replace(/=+$/, "");
-  const priv = VAPID_PRIVATE.replace(/=+$/, "");
+  // web-push requires URL-safe base64 with NO "=" at all — not even trailing
+  const pub = stripVapidKey(VAPID_PUBLIC);
+  const priv = stripVapidKey(VAPID_PRIVATE);
+  console.log("[push] VAPID configured, pub length:", pub.length, "has =:", pub.includes("="));
   webPush.setVapidDetails(VAPID_SUBJECT, pub, priv);
   vapidConfigured = true;
 }
