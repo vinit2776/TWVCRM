@@ -102,11 +102,13 @@ export async function POST(
   const invoiceNumber = `${fyPrefix}${String((existingCount || 0) + 1).padStart(4, "0")}`;
 
   // ── Razorpay link ──────────────────────────────────────────────────────────
-  // In preview mode we only reuse an existing link (never create).
-  // In send mode we create a new link when needed.
-  let razorpayUrl = proposal.razorpay_payment_link_url || null;
+  // Always create a FRESH link in send mode so the amount matches the computed
+  // pro-rata total. Never reuse an existing link — the existing link could be
+  // for a different amount (e.g. a full-month deposit link created first).
+  // In preview mode: show the existing link if one exists (no new link created).
+  let razorpayUrl: string | null = isPreview ? (proposal.razorpay_payment_link_url || null) : null;
 
-  if (!isPreview && !razorpayUrl) {
+  if (!isPreview) {
     const { data: rzpSettings } = await adminSupabase
       .from("app_settings")
       .select("key, value")

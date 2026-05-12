@@ -69,7 +69,22 @@ export default function ProposalsPage() {
                 <td className="px-4 py-3 font-mono text-xs">{p.proposal_number}</td>
                 <td className="px-4 py-3 font-medium">{p.title}</td>
                 <td className="px-4 py-3 hidden md:table-cell" onClick={(e) => e.stopPropagation()}>{p.lead ? <Link href={`/leads/${p.lead.id}`} className="text-primary hover:underline">{p.lead.first_name} {p.lead.last_name}</Link> : "-"}</td>
-                <td className="px-4 py-3"><Badge variant="secondary" className={PROPOSAL_STATUS_COLORS[p.status]}>{PROPOSAL_STATUS_LABELS[p.status]}</Badge></td>
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-1.5 flex-wrap">
+                    <Badge variant="secondary" className={PROPOSAL_STATUS_COLORS[p.status]}>{PROPOSAL_STATUS_LABELS[p.status]}</Badge>
+                    {/* Escalating "needs activation" badge — shown when both payments are in */}
+                    {p.status === "accepted" && p.payment_status === "paid" && (p.deposit_payment_status === "paid" || p.deposit_payment_status === "not_required" || !p.security_deposit_months) && (() => {
+                      const daysAgo = p.accepted_at ? Math.floor((Date.now() - new Date(p.accepted_at).getTime()) / 86400000) : 0;
+                      if (daysAgo < 1) return null;
+                      const color = daysAgo >= 21
+                        ? "bg-red-100 text-red-700 border-red-200"
+                        : daysAgo >= 8
+                        ? "bg-orange-100 text-orange-700 border-orange-200"
+                        : "bg-amber-100 text-amber-700 border-amber-200";
+                      return <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${color}`}>Activate Contract</span>;
+                    })()}
+                  </div>
+                </td>
                 <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{p.location?.name || "—"}</td>
                 <td className="px-4 py-3 text-right hidden md:table-cell font-medium">{formatCurrency(p.total_amount)}</td>
                 <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{formatDate(p.created_at)}</td>

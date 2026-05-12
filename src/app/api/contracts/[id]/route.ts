@@ -17,7 +17,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("contracts")
-    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, pan_number, gst_number, street, city, state, zip_code, country, entity_type), proposal:proposals!contracts_proposal_id_fkey(proposal_number, title, location_id), location:locations!contracts_location_id_fkey(id, name, code, address, city, state), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at), sent_by_user:users!contracts_sent_by_fkey(full_name), viewed_by_user:users!contracts_viewed_by_fkey(full_name), accepted_by_user:users!contracts_accepted_by_fkey(full_name), rejected_by_user:users!contracts_rejected_by_fkey(full_name), activated_by_user:users!contracts_activated_by_fkey(full_name), terminated_by_user:users!contracts_terminated_by_fkey(full_name), renewed_by_user:users!contracts_renewed_by_fkey(full_name), created_by_user:users!contracts_created_by_fkey(full_name)")
+    .select("*, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, pan_number, gst_number, street, city, state, zip_code, country, entity_type), proposal:proposals!contracts_proposal_id_fkey(id, proposal_number, title, location_id, payment_status, deposit_payment_status, payment_received_at, deposit_payment_received_at, security_deposit_months), location:locations!contracts_location_id_fkey(id, name, code, address, city, state), signed_document:documents!contracts_signed_document_id_fkey(id, title, file_name, file_path, mime_type, size_bytes, created_at), sent_by_user:users!contracts_sent_by_fkey(full_name), viewed_by_user:users!contracts_viewed_by_fkey(full_name), accepted_by_user:users!contracts_accepted_by_fkey(full_name), rejected_by_user:users!contracts_rejected_by_fkey(full_name), activated_by_user:users!contracts_activated_by_fkey(full_name), terminated_by_user:users!contracts_terminated_by_fkey(full_name), renewed_by_user:users!contracts_renewed_by_fkey(full_name), created_by_user:users!contracts_created_by_fkey(full_name)")
     .eq("id", id)
     .single();
 
@@ -147,23 +147,30 @@ export async function PATCH(
       // payment gate when deposit_carried_from is set.
       const isRenewal = !!oldContract.deposit_carried_from;
 
-      // Payment gate: check linked proposal payments (unless admin override or renewal)
-      if (!isRenewal && !body.payment_override_reason && oldContract.proposal_id) {
+      // Payment gate — skipped for renewals (deposit carried forward)
+      if (!isRenewal && !body.payment_override_reason) {
+        // Hard gate: proposal must be linked before any new contract can be activated.
+        // This ensures deposit + pro-rata are always collected before occupancy begins.
+        if (!oldContract.proposal_id) {
+          return NextResponse.json({
+            error: "Cannot activate: no proposal is linked to this contract. Link the corresponding proposal (which must have deposit + pro-rata collected) before activating.",
+          }, { status: 400 });
+        }
+
         const { data: proposal } = await supabase
           .from("proposals")
-          .select("payment_status, deposit_payment_status")
+          .select("payment_status, deposit_payment_status, security_deposit_months")
           .eq("id", oldContract.proposal_id)
           .single();
 
         if (proposal) {
-          const unpaid = proposal.payment_status !== "paid";
-          const depositPending = proposal.deposit_payment_status === "pending";
-          if (unpaid || depositPending) {
-            const missing: string[] = [];
-            if (unpaid) missing.push("proposal payment");
-            if (depositPending) missing.push("security deposit");
+          const missing: string[] = [];
+          if (proposal.payment_status !== "paid") missing.push("pro-rata / first invoice payment");
+          const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
+          if (depositRequired && proposal.deposit_payment_status !== "paid") missing.push("security deposit");
+          if (missing.length > 0) {
             return NextResponse.json({
-              error: `Cannot activate: ${missing.join(" and ")} not yet collected`,
+              error: `Cannot activate: ${missing.join(" and ")} not yet collected on the linked proposal`,
             }, { status: 400 });
           }
         }

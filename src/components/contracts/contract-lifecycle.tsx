@@ -1,6 +1,7 @@
 "use client";
 
 import { CheckCircle2, Circle, XCircle, Clock } from "lucide-react";
+import Link from "next/link";
 import type { Contract } from "@/types";
 
 interface Props {
@@ -44,6 +45,67 @@ export function ContractLifecycle({ contract }: Props) {
   );
 
   const stages: Stage[] = [];
+
+  // 0. Proposal Stage — shown when a proposal is linked (new flow)
+  //    or absent with a warning when none is linked (legacy / gap)
+  const proposal = contract.proposal as (typeof contract.proposal & {
+    deposit_payment_status?: string;
+    payment_status?: string;
+    deposit_payment_received_at?: string;
+    payment_received_at?: string;
+  }) | undefined;
+
+  if (proposal) {
+    const depositRequired = !!(contract.security_deposit_months && contract.security_deposit_months > 0);
+    const depositPaid = proposal.deposit_payment_status === "paid";
+    const prorataPaid = proposal.payment_status === "paid";
+    const allPaid = (!depositRequired || depositPaid) && prorataPaid;
+
+    // Deposit sub-stage
+    if (depositRequired) {
+      stages.push({
+        key: "proposal_deposit",
+        label: "Security Deposit Collected",
+        date: proposal.deposit_payment_received_at,
+        state: depositPaid ? "done" : "active",
+        actor: null,
+      });
+    }
+
+    // Pro-rata / first invoice sub-stage
+    stages.push({
+      key: "proposal_prorata",
+      label: "Pro-rata Rent Collected",
+      sub: proposal.proposal_number
+        ? `via ${proposal.proposal_number}`
+        : undefined,
+      date: proposal.payment_received_at,
+      state: prorataPaid ? "done" : (depositPaid || !depositRequired) ? "active" : "pending",
+      actor: null,
+    });
+
+    // If all payments done but contract not yet active — surface the gap
+    if (allPaid && !["active", "terminated", "expired", "renewed"].includes(contract.status)) {
+      stages.push({
+        key: "activation_pending",
+        label: "Awaiting Contract Activation",
+        sub: "All payments received — activate the contract to begin billing",
+        date: null,
+        state: "active",
+        actor: null,
+      });
+    }
+  } else if (!["draft"].includes(contract.status)) {
+    // No proposal linked — warn unless still a draft
+    stages.push({
+      key: "no_proposal",
+      label: "No Proposal Linked",
+      sub: "Link a completed proposal before activating",
+      date: null,
+      state: "active",
+      actor: null,
+    });
+  }
 
   // 1. Draft Created — always done
   stages.push({
@@ -217,7 +279,11 @@ export function ContractLifecycle({ contract }: Props) {
                       : "text-muted-foreground"
                   }`}
                 >
-                  {stage.label}
+                  {stage.key === "no_proposal" ? (
+                    <span className="text-destructive font-semibold">{stage.label}</span>
+                  ) : stage.key === "activation_pending" ? (
+                    <span className="text-amber-700">{stage.label}</span>
+                  ) : stage.label}
                   {stage.state === "active" && awaitingLabel && (
                     <span className="ml-1.5 text-[10px] font-semibold bg-amber-100 text-amber-700 px-1.5 py-0.5 rounded-full align-middle">
                       {awaitingLabel}
@@ -239,10 +305,23 @@ export function ContractLifecycle({ contract }: Props) {
                     className={`text-xs mt-0.5 ${
                       stage.state === "rejected"
                         ? "text-destructive/70"
+                        : stage.key === "activation_pending"
+                        ? "text-amber-600"
+                        : stage.key === "no_proposal"
+                        ? "text-destructive/70"
                         : "text-muted-foreground"
                     }`}
                   >
-                    {stage.sub}
+                    {stage.key === "proposal_prorata" && contract.proposal_id ? (
+                      <>via{" "}
+                        <Link
+                          href={`/proposals/${contract.proposal_id}`}
+                          className="underline hover:text-foreground transition-colors"
+                        >
+                          {contract.proposal?.proposal_number ?? "proposal"}
+                        </Link>
+                      </>
+                    ) : stage.sub}
                   </p>
                 )}
               </div>
