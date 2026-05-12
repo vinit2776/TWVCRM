@@ -129,11 +129,10 @@ export async function GET(request: NextRequest) {
     crm_amount: number;
   };
 
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const crmByPaymentId = new Map<string, EnrichedCRM>();
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const crmByOrderId   = new Map<string, EnrichedCRM>();
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const row of (bookingPaymentsRes.data ?? []) as any[]) {
     const booking = Array.isArray(row.bookings) ? row.bookings[0] : row.bookings;
     const lead    = booking?.leads
@@ -154,6 +153,7 @@ export async function GET(request: NextRequest) {
     if (row.razorpay_order_id)   crmByOrderId.set(row.razorpay_order_id, enriched);
   }
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   for (const row of (billingPaymentsRes.data ?? []) as any[]) {
     const statement = Array.isArray(row.billing_statements)
       ? row.billing_statements[0]
