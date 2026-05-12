@@ -10,11 +10,11 @@ export const dynamic = "force-dynamic";
  *   - booking_payments  (razorpay checkout / payment link → booking)
  *   - billing_payments  (razorpay payment link → billing statement)
  *
- * Each row is joined with the razorpay_settlement_cache so the
- * Finance team can see settlement status and UTR for bank reconciliation.
+ * Settlement data is fetched separately from razorpay_settlement_cache
+ * and merged in JS (no FK between the tables).
  *
  * Query params:
- *   from_date   YYYY-MM-DD  (default: 30 days ago)
+ *   from_date   YYYY-MM-DD  (default: 90 days ago)
  *   to_date     YYYY-MM-DD  (default: today)
  *   settled     "true" | "false" | ""  (filter by settlement status)
  *   entity_type "booking" | "billing_statement" | ""
@@ -61,15 +61,6 @@ export async function GET(request: NextRequest) {
         id,
         booking_number,
         leads(first_name, last_name, company)
-      ),
-      razorpay_settlement_cache(
-        settled,
-        settlement_id,
-        settlement_utr,
-        settled_at,
-        fee,
-        tax,
-        payment_method
       )
     `)
     .eq("payment_mode", "razorpay")
@@ -96,15 +87,6 @@ export async function GET(request: NextRequest) {
           contract_number,
           leads(first_name, last_name, company)
         )
-      ),
-      razorpay_settlement_cache(
-        settled,
-        settlement_id,
-        settlement_utr,
-        settled_at,
-        fee,
-        tax,
-        payment_method
       )
     `)
     .eq("payment_mode", "razorpay")
@@ -126,8 +108,20 @@ export async function GET(request: NextRequest) {
     syncLogQuery,
   ]);
 
-  // ── Normalise booking rows ────────────────────────────────────────────────
+  // ── 4. Collect all razorpay_payment_ids and fetch settlement cache ───────
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const allPaymentIds: string[] = [];
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const row of (bookingRes.data || []) as any[]) {
+    if (row.razorpay_payment_id) allPaymentIds.push(row.razorpay_payment_id);
+  }
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const row of (billingRes.data || []) as any[]) {
+    if (row.razorpay_payment_id) allPaymentIds.push(row.razorpay_payment_id);
+  }
+
   type SettlementCache = {
+    razorpay_payment_id: string;
     settled: boolean;
     settlement_id: string | null;
     settlement_utr: string | null;
@@ -137,15 +131,27 @@ export async function GET(request: NextRequest) {
     payment_method: string | null;
   };
 
+  const cacheMap = new Map<string, SettlementCache>();
+
+  if (allPaymentIds.length > 0) {
+    const { data: cacheRows } = await adminSupabase
+      .from("razorpay_settlement_cache")
+      .select("razorpay_payment_id, settled, settlement_id, settlement_utr, settled_at, fee, tax, payment_method")
+      .in("razorpay_payment_id", allPaymentIds);
+
+    for (const c of (cacheRows || []) as SettlementCache[]) {
+      cacheMap.set(c.razorpay_payment_id, c);
+    }
+  }
+
+  // ── Normalise booking rows ────────────────────────────────────────────────
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const bookingRows = (bookingRes.data || []).map((row: any) => {
     const booking = Array.isArray(row.bookings) ? row.bookings[0] : row.bookings;
     const lead    = booking?.leads
       ? (Array.isArray(booking.leads) ? booking.leads[0] : booking.leads)
       : null;
-    const cache: SettlementCache | null = Array.isArray(row.razorpay_settlement_cache)
-      ? row.razorpay_settlement_cache[0] ?? null
-      : row.razorpay_settlement_cache ?? null;
+    const cache = row.razorpay_payment_id ? cacheMap.get(row.razorpay_payment_id) ?? null : null;
 
     return {
       id:                   row.id,
@@ -166,8 +172,8 @@ export async function GET(request: NextRequest) {
       settlement_id:        cache?.settlement_id ?? null,
       settlement_utr:       cache?.settlement_utr ?? null,
       settled_at:           cache?.settled_at ?? null,
-      fee:                  cache?.fee !== null && cache?.fee !== undefined ? Number(cache.fee) : null,
-      tax:                  cache?.tax !== null && cache?.tax !== undefined ? Number(cache.tax) : null,
+      fee:                  cache?.fee != null ? Number(cache.fee) : null,
+      tax:                  cache?.tax != null ? Number(cache.tax) : null,
       payment_method:       cache?.payment_method ?? null,
     };
   });
@@ -183,9 +189,7 @@ export async function GET(request: NextRequest) {
     const lead = contract?.leads
       ? (Array.isArray(contract.leads) ? contract.leads[0] : contract.leads)
       : null;
-    const cache: SettlementCache | null = Array.isArray(row.razorpay_settlement_cache)
-      ? row.razorpay_settlement_cache[0] ?? null
-      : row.razorpay_settlement_cache ?? null;
+    const cache = row.razorpay_payment_id ? cacheMap.get(row.razorpay_payment_id) ?? null : null;
 
     return {
       id:                   row.id,
@@ -206,8 +210,8 @@ export async function GET(request: NextRequest) {
       settlement_id:        cache?.settlement_id ?? null,
       settlement_utr:       cache?.settlement_utr ?? null,
       settled_at:           cache?.settled_at ?? null,
-      fee:                  cache?.fee !== null && cache?.fee !== undefined ? Number(cache.fee) : null,
-      tax:                  cache?.tax !== null && cache?.tax !== undefined ? Number(cache.tax) : null,
+      fee:                  cache?.fee != null ? Number(cache.fee) : null,
+      tax:                  cache?.tax != null ? Number(cache.tax) : null,
       payment_method:       cache?.payment_method ?? null,
     };
   });
