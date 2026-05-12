@@ -6,7 +6,7 @@
  *  2. Offline caching with app-shell strategy
  */
 
-const CACHE_NAME = "twv-crm-v2";
+const CACHE_NAME = "twv-crm-v3";
 const OFFLINE_URL = "/offline";
 
 // ─── Install: precache app shell ───────────────────────────────────────────────
@@ -97,6 +97,20 @@ self.addEventListener("fetch", (event) => {
 
 // ─── Push Notifications (existing) ─────────────────────────────────────────────
 
+// Beacon push tracking events back to the server so we can measure reach.
+// keepalive=true lets the browser finish the request after the SW idles.
+function trackBeacon(batchId, endpoint, event) {
+  if (!batchId || !endpoint) return Promise.resolve();
+  return fetch("/api/push/track", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ batchId, endpoint, event }),
+    keepalive: true,
+  }).catch(() => {
+    /* best-effort — never block the notification on tracking */
+  });
+}
+
 // Receive push from server
 self.addEventListener("push", function (event) {
   if (!event.data) return;
@@ -113,36 +127,48 @@ self.addEventListener("push", function (event) {
     body: data.body || "A new enquiry has been received.",
     icon: "/icons/icon-192x192.png",
     badge: "/icons/icon-192x192.png",
-    data: { url: data.url || "/leads" },
+    data: {
+      url: data.url || "/leads",
+      batchId: data.batchId,
+      endpoint: data.endpoint,
+    },
     vibrate: [200, 100, 200],
     requireInteraction: true,
     tag: data.tag || "enquiry-notification", // collapse same-tag notifications
   };
 
-  event.waitUntil(self.registration.showNotification(title, options));
+  event.waitUntil(
+    Promise.all([
+      self.registration.showNotification(title, options),
+      trackBeacon(data.batchId, data.endpoint, "delivered"),
+    ])
+  );
 });
 
 // Click on notification → focus/open the CRM tab
 self.addEventListener("notificationclick", function (event) {
   event.notification.close();
-  const targetUrl = event.notification.data?.url || "/leads";
+  const { url: targetUrl = "/leads", batchId, endpoint } = event.notification.data || {};
 
   event.waitUntil(
-    clients
-      .matchAll({ type: "window", includeUncontrolled: true })
-      .then(function (clientList) {
-        // Focus an existing CRM tab if one is open
-        for (const client of clientList) {
-          if ("focus" in client) {
-            client.postMessage({ type: "NAVIGATE", url: targetUrl });
-            return client.focus();
+    Promise.all([
+      trackBeacon(batchId, endpoint, "clicked"),
+      clients
+        .matchAll({ type: "window", includeUncontrolled: true })
+        .then(function (clientList) {
+          // Focus an existing CRM tab if one is open
+          for (const client of clientList) {
+            if ("focus" in client) {
+              client.postMessage({ type: "NAVIGATE", url: targetUrl });
+              return client.focus();
+            }
           }
-        }
-        // No tab found — open a new one
-        if (clients.openWindow) {
-          return clients.openWindow(targetUrl);
-        }
-      })
+          // No tab found — open a new one
+          if (clients.openWindow) {
+            return clients.openWindow(targetUrl);
+          }
+        }),
+    ])
   );
 });
 

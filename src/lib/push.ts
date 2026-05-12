@@ -23,6 +23,94 @@ export interface PushPayload {
   body: string;
   url?: string;
   tag?: string;
+  // Optional — when present the SW will beacon delivered/clicked events
+  // back to /api/push/track so we can measure reach + engagement.
+  batchId?: string;
+}
+
+export interface BroadcastResult {
+  batchId: string;
+  total: number;
+  sent: number;
+  failed: number;
+}
+
+/**
+ * Broadcast a push to every subscribed user AND log each attempt to
+ * push_delivery_log so we can track delivered/clicked rates over time.
+ *
+ * The SW receives `batchId` and `endpoint` inside the payload and uses them
+ * to beacon back to /api/push/track on `push` and `notificationclick`.
+ */
+export async function broadcastPush(payload: PushPayload): Promise<BroadcastResult> {
+  ensureVapid();
+  const batchId = (payload.batchId && payload.batchId.length > 0)
+    ? payload.batchId
+    : crypto.randomUUID();
+
+  if (!vapidConfigured) return { batchId, total: 0, sent: 0, failed: 0 };
+
+  const supabase = createAdminClient();
+  const { data: subs } = await supabase
+    .from("push_subscriptions")
+    .select("user_id, endpoint, p256dh, auth");
+
+  if (!subs?.length) return { batchId, total: 0, sent: 0, failed: 0 };
+
+  // Pre-insert one log row per subscription as 'queued' so failures still
+  // leave a trace. We use upsert on (batch_id, endpoint) for idempotency in
+  // case the broadcast is ever re-run.
+  const queuedRows = subs.map((sub) => ({
+    batch_id: batchId,
+    user_id: sub.user_id,
+    endpoint: sub.endpoint,
+    payload: { ...payload, batchId },
+    status: "queued",
+  }));
+  await supabase.from("push_delivery_log").insert(queuedRows);
+
+  let sent = 0;
+  let failed = 0;
+  await Promise.all(
+    subs.map(async (sub) => {
+      const enriched = JSON.stringify({ ...payload, batchId, endpoint: sub.endpoint });
+      try {
+        await webPush.sendNotification(
+          { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+          enriched
+        );
+        sent++;
+        await supabase
+          .from("push_delivery_log")
+          .update({ status: "sent", sent_at: new Date().toISOString() })
+          .eq("batch_id", batchId)
+          .eq("endpoint", sub.endpoint);
+      } catch (err: unknown) {
+        failed++;
+        const e = err as { statusCode?: number; body?: string; message?: string };
+        await supabase
+          .from("push_delivery_log")
+          .update({
+            status: "failed",
+            error_code: e.statusCode || null,
+            error_message: e.body || e.message || "unknown",
+          })
+          .eq("batch_id", batchId)
+          .eq("endpoint", sub.endpoint);
+
+        // 404 / 410 = subscription is permanently gone — clean it up so the
+        // next broadcast doesn't waste an attempt and the user can re-subscribe.
+        if (e.statusCode === 404 || e.statusCode === 410) {
+          await supabase
+            .from("push_subscriptions")
+            .delete()
+            .eq("endpoint", sub.endpoint);
+        }
+      }
+    })
+  );
+
+  return { batchId, total: subs.length, sent, failed };
 }
 
 /**
