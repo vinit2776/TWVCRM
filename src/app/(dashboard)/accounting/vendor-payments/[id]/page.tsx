@@ -97,12 +97,20 @@ type ChainData = {
     approved_at: string | null; approval_code: string | null;
     requester: { id: string; full_name: string } | null;
     approver: { id: string; full_name: string } | null;
+    purchase_request_items?: Array<{
+      id: string; item_name: string; quantity: number; unit: string;
+      estimated_price: number | null; total_estimated: number | null; notes: string | null;
+    }>;
   } | null;
   deliveryChallans: Array<{
     id: string; dc_number: string | null; dc_date: string | null;
     file_url: string | null; signed_url: string | null; notes: string | null;
     received_at: string;
     receiver: { id: string; full_name: string } | null;
+    po_delivery_receipt_items?: Array<{
+      id: string; qty_received: number;
+      purchase_order_items: { item_name: string; unit: string } | null;
+    }>;
   }>;
   serviceReports: Array<{
     id: string; cycle_number: number; period_from: string; period_to: string;
@@ -691,37 +699,67 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
         <CardContent className="space-y-3">
           {/* MR */}
           {chain.mr && (
-            <div className="flex items-start gap-3 p-3 rounded-lg border bg-orange-50/50">
-              <div className="p-1.5 rounded bg-orange-100 shrink-0 mt-0.5">
-                <ClipboardList className="h-3.5 w-3.5 text-orange-700" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between gap-2">
+            <div className="rounded-lg border bg-orange-50/50 overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 bg-orange-100/60 border-b border-orange-200/60">
+                <div className="flex items-center gap-2">
+                  <ClipboardList className="h-3.5 w-3.5 text-orange-700 shrink-0" />
                   <span className="text-xs font-semibold text-orange-800 uppercase tracking-wide">Material Request</span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setMrSheetOpen(true)}
-                      className="text-xs text-primary flex items-center gap-1 hover:underline font-medium"
-                    >
-                      {chain.mr.pr_number} <BookOpen className="h-3 w-3" />
-                    </button>
-                    {["admin", "manager", "office_admin"].includes(userRole ?? "") && (
-                      <Link href={`/procurement/requests/${chain.mr.id}`} target="_blank" className="text-xs text-muted-foreground flex items-center gap-0.5 hover:underline">
-                        <ExternalLink className="h-3 w-3" />
-                      </Link>
-                    )}
-                  </div>
+                  <span className="text-xs font-mono text-orange-700">{chain.mr.pr_number}</span>
                 </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Dept: {PROCUREMENT_DEPARTMENT_LABELS[chain.mr.department as keyof typeof PROCUREMENT_DEPARTMENT_LABELS] ?? chain.mr.department}
-                  {chain.mr.requester && ` · Requested by ${chain.mr.requester.full_name}`}
-                </p>
-                {chain.mr.approved_at && (
-                  <p className="text-xs text-green-700 mt-0.5">
-                    ✓ Approved {formatDate(chain.mr.approved_at)}
-                    {chain.mr.approver && ` by ${chain.mr.approver.full_name}`}
-                    {chain.mr.approval_code && <span className="ml-2 font-mono text-[10px] bg-green-100 px-1 rounded">{chain.mr.approval_code}</span>}
-                  </p>
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setMrSheetOpen(true)}
+                    className="text-xs text-primary flex items-center gap-1 hover:underline font-medium"
+                  >
+                    Full details <BookOpen className="h-3 w-3" />
+                  </button>
+                  {["admin", "manager", "office_admin"].includes(userRole ?? "") && (
+                    <Link href={`/procurement/requests/${chain.mr.id}`} target="_blank" className="text-xs text-muted-foreground flex items-center gap-0.5 hover:underline">
+                      <ExternalLink className="h-3 w-3" />
+                    </Link>
+                  )}
+                </div>
+              </div>
+              <div className="px-3 py-2.5 space-y-2">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                  <div>
+                    <span className="text-muted-foreground">Department: </span>
+                    <span className="font-medium">{PROCUREMENT_DEPARTMENT_LABELS[chain.mr.department as keyof typeof PROCUREMENT_DEPARTMENT_LABELS] ?? chain.mr.department}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Requested: </span>
+                    <span className="font-medium">{formatDate(chain.mr.created_at)}</span>
+                  </div>
+                  {chain.mr.requester && (
+                    <div>
+                      <span className="text-muted-foreground">Requested by: </span>
+                      <span className="font-medium">{chain.mr.requester.full_name}</span>
+                    </div>
+                  )}
+                  {chain.mr.total_estimated_amount != null && (
+                    <div>
+                      <span className="text-muted-foreground">Estimated: </span>
+                      <span className="font-medium">{formatCurrency(chain.mr.total_estimated_amount)}</span>
+                    </div>
+                  )}
+                  {chain.mr.purchase_request_items && chain.mr.purchase_request_items.length > 0 && (
+                    <div className="col-span-2">
+                      <span className="text-muted-foreground">Items: </span>
+                      <span className="font-medium">{chain.mr.purchase_request_items.map((i) => `${i.item_name} (${i.quantity} ${i.unit})`).join(", ")}</span>
+                    </div>
+                  )}
+                </div>
+                {chain.mr.approved_at ? (
+                  <div className="flex items-center gap-1.5 text-xs text-green-700 bg-green-50 border border-green-100 rounded px-2 py-1">
+                    <CheckCircle className="h-3 w-3 shrink-0" />
+                    <span>Approved {formatDate(chain.mr.approved_at)}{chain.mr.approver && ` by ${chain.mr.approver.full_name}`}</span>
+                    {chain.mr.approval_code && <span className="font-mono text-[10px] bg-green-100 px-1 rounded ml-1">{chain.mr.approval_code}</span>}
+                  </div>
+                ) : (
+                  <div className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 border border-amber-100 rounded px-2 py-1">
+                    <Clock className="h-3 w-3 shrink-0" />
+                    <span>Approval pending</span>
+                  </div>
                 )}
               </div>
             </div>
@@ -729,65 +767,105 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
 
           {/* PO */}
           {chain.po && (
-            <div className="flex items-start gap-3 p-3 rounded-lg border bg-purple-50/50">
-              <div className="p-1.5 rounded bg-purple-100 shrink-0 mt-0.5">
-                <Package className="h-3.5 w-3.5 text-purple-700" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between gap-2">
+            <div className="rounded-lg border bg-purple-50/50 overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 bg-purple-100/60 border-b border-purple-200/60">
+                <div className="flex items-center gap-2">
+                  <Package className="h-3.5 w-3.5 text-purple-700 shrink-0" />
                   <span className="text-xs font-semibold text-purple-800 uppercase tracking-wide">Purchase Order</span>
-                  <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => setPoSheetOpen(true)}
-                      className="text-xs text-primary flex items-center gap-1 hover:underline font-medium"
-                    >
-                      {chain.po.po_number} <BookOpen className="h-3 w-3" />
-                    </button>
-                    {["admin", "manager", "office_admin"].includes(userRole ?? "") && (
-                      <Link href={`/procurement/orders/${chain.po.id}`} target="_blank" className="text-xs text-muted-foreground flex items-center gap-0.5 hover:underline">
-                        <ExternalLink className="h-3 w-3" />
-                      </Link>
-                    )}
-                  </div>
+                  <span className="text-xs font-mono text-purple-700">{chain.po.po_number}</span>
+                  <Badge className="text-[10px] px-1.5 py-0 capitalize bg-purple-100 text-purple-700 border border-purple-200">
+                    {chain.po.status.replace(/_/g, " ")}
+                  </Badge>
                 </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {chain.po.po_type === "service" ? "Service PO" : "Goods PO"}
-                  {chain.po.orderer && ` · Ordered by ${chain.po.orderer.full_name}`}
-                  {chain.po.total_ordered_amount != null && ` · ${formatCurrency(chain.po.total_ordered_amount)}`}
-                </p>
-                {chain.po.purchase_order_items && chain.po.purchase_order_items.length > 0 && (
-                  <p className="text-xs text-muted-foreground mt-0.5">
-                    {chain.po.purchase_order_items.slice(0, 3).map((i) => i.item_name).join(", ")}
-                    {chain.po.purchase_order_items.length > 3 && ` +${chain.po.purchase_order_items.length - 3} more`}
-                  </p>
-                )}
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={() => setPoSheetOpen(true)}
+                    className="text-xs text-primary flex items-center gap-1 hover:underline font-medium"
+                  >
+                    Full details <BookOpen className="h-3 w-3" />
+                  </button>
+                  {["admin", "manager", "office_admin"].includes(userRole ?? "") && (
+                    <Link href={`/procurement/orders/${chain.po.id}`} target="_blank" className="text-xs text-muted-foreground flex items-center gap-0.5 hover:underline">
+                      <ExternalLink className="h-3 w-3" />
+                    </Link>
+                  )}
+                </div>
+              </div>
+              <div className="px-3 py-2.5 space-y-2">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1.5 text-xs">
+                  <div>
+                    <span className="text-muted-foreground">Type: </span>
+                    <span className="font-medium">{chain.po.po_type === "service" ? "Service PO" : "Goods PO"}</span>
+                  </div>
+                  <div>
+                    <span className="text-muted-foreground">Raised: </span>
+                    <span className="font-medium">{formatDate(chain.po.created_at)}</span>
+                  </div>
+                  {chain.po.orderer && (
+                    <div>
+                      <span className="text-muted-foreground">Ordered by: </span>
+                      <span className="font-medium">{chain.po.orderer.full_name}</span>
+                    </div>
+                  )}
+                  {chain.po.total_ordered_amount != null && (
+                    <div>
+                      <span className="text-muted-foreground">Order value: </span>
+                      <span className="font-semibold">{formatCurrency(chain.po.total_ordered_amount)}</span>
+                    </div>
+                  )}
+                  {chain.po.purchase_order_items && chain.po.purchase_order_items.length > 0 && (
+                    <div className="col-span-2">
+                      <span className="text-muted-foreground">Items ({chain.po.purchase_order_items.length}): </span>
+                      <span className="font-medium">{chain.po.purchase_order_items.map((i) => `${i.item_name} × ${i.quantity_ordered} ${i.unit}`).join(", ")}</span>
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
           )}
 
           {/* Delivery Challans (goods) */}
           {isGoods && chain.deliveryChallans.length > 0 && chain.deliveryChallans.map((dc) => (
-            <div key={dc.id} className="flex items-start gap-3 p-3 rounded-lg border bg-blue-50/50">
-              <div className="p-1.5 rounded bg-blue-100 shrink-0 mt-0.5">
-                <Truck className="h-3.5 w-3.5 text-blue-700" />
-              </div>
-              <div className="flex-1 min-w-0">
-                <div className="flex items-center justify-between gap-2">
+            <div key={dc.id} className="rounded-lg border bg-blue-50/50 overflow-hidden">
+              <div className="flex items-center justify-between px-3 py-2 bg-blue-100/60 border-b border-blue-200/60">
+                <div className="flex items-center gap-2">
+                  <Truck className="h-3.5 w-3.5 text-blue-700 shrink-0" />
                   <span className="text-xs font-semibold text-blue-800 uppercase tracking-wide">Delivery Challan</span>
-                  {dc.signed_url && (
-                    <a href={dc.signed_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary flex items-center gap-1 hover:underline">
-                      View DC <ExternalLink className="h-3 w-3" />
-                    </a>
+                  {dc.dc_number && <span className="text-xs font-mono text-blue-700">{dc.dc_number}</span>}
+                </div>
+                {dc.signed_url ? (
+                  <a href={dc.signed_url} target="_blank" rel="noopener noreferrer" className="text-xs text-primary flex items-center gap-1 hover:underline">
+                    View DC <ExternalLink className="h-3 w-3" />
+                  </a>
+                ) : (
+                  <span className="text-xs text-amber-600">No file attached</span>
+                )}
+              </div>
+              <div className="px-3 py-2.5 space-y-1.5">
+                <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-xs">
+                  <div>
+                    <span className="text-muted-foreground">Received: </span>
+                    <span className="font-medium">{dc.dc_date ? formatDate(dc.dc_date) : formatDate(dc.received_at)}</span>
+                  </div>
+                  {dc.receiver && (
+                    <div>
+                      <span className="text-muted-foreground">Received by: </span>
+                      <span className="font-medium">{dc.receiver.full_name}</span>
+                    </div>
+                  )}
+                  {dc.po_delivery_receipt_items && dc.po_delivery_receipt_items.length > 0 && (
+                    <div className="col-span-2">
+                      <span className="text-muted-foreground">Items received: </span>
+                      <span className="font-medium">{dc.po_delivery_receipt_items.map((ri) => `${ri.purchase_order_items?.item_name ?? "?"} × ${ri.qty_received} ${ri.purchase_order_items?.unit ?? ""}`).join(", ")}</span>
+                    </div>
+                  )}
+                  {dc.notes && (
+                    <div className="col-span-2">
+                      <span className="text-muted-foreground">Notes: </span>
+                      <span>{dc.notes}</span>
+                    </div>
                   )}
                 </div>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  {dc.dc_number && `DC# ${dc.dc_number} · `}
-                  {dc.dc_date ? formatDate(dc.dc_date) : formatDate(dc.received_at)}
-                  {dc.receiver && ` · Received by ${dc.receiver.full_name}`}
-                </p>
-                {!dc.signed_url && (
-                  <p className="text-xs text-amber-600 mt-0.5">No file attached to this delivery</p>
-                )}
               </div>
             </div>
           ))}
@@ -1634,11 +1712,50 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 </div>
                 {chain.mr.total_estimated_amount != null && (
                   <div>
-                    <p className="text-xs text-muted-foreground mb-0.5">Estimated Amount</p>
-                    <p className="font-medium">{formatCurrency(chain.mr.total_estimated_amount)}</p>
+                    <p className="text-xs text-muted-foreground mb-0.5">Total Estimated</p>
+                    <p className="font-semibold text-base">{formatCurrency(chain.mr.total_estimated_amount)}</p>
                   </div>
                 )}
               </div>
+
+              {chain.mr.purchase_request_items && chain.mr.purchase_request_items.length > 0 && (
+                <>
+                  <Separator />
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Requested Items</p>
+                    <div className="rounded-lg border overflow-hidden">
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="bg-muted/40 border-b">
+                            <th className="px-3 py-2 text-left font-medium">Item</th>
+                            <th className="px-3 py-2 text-right font-medium">Qty</th>
+                            <th className="px-3 py-2 text-right font-medium">Est. Price</th>
+                            <th className="px-3 py-2 text-right font-medium">Est. Total</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {chain.mr.purchase_request_items.map((item, idx) => (
+                            <tr key={item.id} className={`border-b last:border-0 ${idx % 2 === 1 ? "bg-muted/20" : ""}`}>
+                              <td className="px-3 py-2">
+                                <span>{item.item_name}</span>
+                                {item.notes && <p className="text-muted-foreground text-[10px] mt-0.5">{item.notes}</p>}
+                              </td>
+                              <td className="px-3 py-2 text-right">{item.quantity} {item.unit}</td>
+                              <td className="px-3 py-2 text-right">
+                                {item.estimated_price != null ? formatCurrency(item.estimated_price) : "—"}
+                              </td>
+                              <td className="px-3 py-2 text-right font-medium">
+                                {item.total_estimated != null ? formatCurrency(item.total_estimated) : "—"}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                </>
+              )}
+
               <Separator />
               {chain.mr.approved_at ? (
                 <div className="rounded-lg bg-green-50 border border-green-200 p-3 space-y-1">

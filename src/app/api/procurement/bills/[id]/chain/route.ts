@@ -52,7 +52,8 @@ export async function GET(
           id, pr_number, department, total_estimated_amount, created_at,
           approved_at, approval_code,
           requester:users!purchase_requests_requested_by_fkey(id, full_name),
-          approver:users!purchase_requests_approved_by_fkey(id, full_name)
+          approver:users!purchase_requests_approved_by_fkey(id, full_name),
+          purchase_request_items(id, item_name, quantity, unit, estimated_price, total_estimated, notes)
         ),
         purchase_order_items(id, item_name, quantity_ordered, unit_price, unit)
       `)
