@@ -1220,9 +1220,20 @@ export default function BillingPage() {
                             <DropdownMenuItem onClick={() => setViewStatementId(stmt.id)}>
                               <Eye className="mr-2 h-4 w-4" />View Detail
                             </DropdownMenuItem>
-                            <DropdownMenuItem disabled>
-                              <Download className="mr-2 h-4 w-4" />Download PDF
-                            </DropdownMenuItem>
+                            {(stmt.status === "finalized" || stmt.status === "exported") ? (
+                              <DropdownMenuItem asChild>
+                                <a
+                                  href={`/api/billing-statements/${stmt.id}/proforma-pdf`}
+                                  download={`Proforma-${stmt.statement_number?.replace(/\//g, "-")}.pdf`}
+                                >
+                                  <Download className="mr-2 h-4 w-4" />Download Proforma PDF
+                                </a>
+                              </DropdownMenuItem>
+                            ) : (
+                              <DropdownMenuItem disabled>
+                                <Download className="mr-2 h-4 w-4" />Download PDF
+                              </DropdownMenuItem>
+                            )}
                             {stmt.status === "draft" && (
                               <DropdownMenuItem onClick={() => handleFinalizeStatement(stmt.id)}>
                                 <CheckCircle className="mr-2 h-4 w-4" />Finalize

@@ -99,6 +99,10 @@ export interface GstInvoiceData {
   taxPercentage: number;
   // Payment
   razorpayUrl?: string;
+  /** Base64 PNG QR code for the Razorpay payment link — proforma only */
+  razorpayQrBase64?: string;
+  /** Human-readable expiry date of the payment link, e.g. "May 28, 2026" */
+  razorpayExpiry?: string;
   upiId?: string;
 }
 
@@ -134,9 +138,6 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     doc.text(`Proforma Ref: ${data.invoiceNumber}`, pageWidth - 14, 22, { align: "right" });
     doc.text(`Date: ${formatDateInv(data.invoiceDate)}`, pageWidth - 14, 27, { align: "right" });
     doc.text(`Contract: ${data.contractNumber}`, pageWidth - 14, 32, { align: "right" });
-    doc.setFontSize(7);
-    doc.setTextColor(150, 80, 0);
-    doc.text("Not a tax document — GST invoice will be issued upon payment", pageWidth - 14, 37, { align: "right" });
     doc.setFontSize(9);
     doc.setTextColor(80, 80, 80);
   } else {
@@ -277,6 +278,14 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   doc.text("Payment Options", 14, y);
   y += 6;
 
+  // QR code column width (only for proforma with QR)
+  const qrSize = 36; // mm
+  const qrMargin = 6; // gap between text and QR
+  const hasQr = isProforma && !!data.razorpayQrBase64;
+  const textColWidth = hasQr ? pageWidth - 28 - qrSize - qrMargin : pageWidth - 28;
+  const qrX = 14 + textColWidth + qrMargin;
+  const qrStartY = y;
+
   // Bank details (left side)
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
@@ -288,7 +297,6 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     `Bank: ${COMPANY_BANK_DETAILS.bank}, ${COMPANY_BANK_DETAILS.branch}`,
   ];
 
-  const bankStartY = y;
   bankLines.forEach((line) => {
     doc.text(line, 14, y);
     y += 4.5;
@@ -304,23 +312,53 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     doc.setFont("helvetica", "bold");
     doc.text("Pay Online:", 14, y);
     doc.setFont("helvetica", "normal");
-    doc.text(data.razorpayUrl, 14 + 22, y);
-    y += 4.5;
+    doc.setFontSize(7.5);
+    const urlLines = doc.splitTextToSize(data.razorpayUrl, textColWidth - 24);
+    doc.text(urlLines, 14 + 22, y);
+    y += 4.5 * urlLines.length;
+    doc.setFontSize(8);
   }
 
-  y += 6;
+  // QR code block (right column) — proforma only
+  if (hasQr && data.razorpayQrBase64) {
+    try {
+      const qrY = qrStartY - 4;
+      doc.addImage(data.razorpayQrBase64, "PNG", qrX, qrY, qrSize, qrSize);
+      doc.setFontSize(6.5);
+      doc.setFont("helvetica", "bold");
+      doc.setTextColor(...BRAND_TEAL);
+      doc.text("SCAN TO PAY", qrX + qrSize / 2, qrY + qrSize + 3.5, { align: "center" });
+      if (data.razorpayExpiry) {
+        doc.setFont("helvetica", "normal");
+        doc.setTextColor(120, 60, 0);
+        doc.text(`Link valid until: ${data.razorpayExpiry}`, qrX + qrSize / 2, qrY + qrSize + 7, { align: "center" });
+      }
+      // Ensure y accounts for QR block height
+      const qrBottomY = qrY + qrSize + 10;
+      if (qrBottomY > y) y = qrBottomY;
+    } catch { /* skip QR if image fails */ }
+  }
+
+  y += 4;
 
   // ── Footer ──
   const pageHeight = doc.internal.pageSize.getHeight();
   const footerH = 18;
   const footerY = pageHeight - footerH;
 
-  // Authorized signatory
+  // Pre-footer note
   if (y < footerY - 20) {
     doc.setFontSize(8);
     doc.setFont("helvetica", "normal");
     doc.setTextColor(150, 150, 150);
     doc.text("This is a computer-generated invoice and does not require a signature.", 14, footerY - 8);
+  }
+  // Proforma disclaimer — subtle footer note
+  if (isProforma) {
+    doc.setFontSize(6.5);
+    doc.setFont("helvetica", "italic");
+    doc.setTextColor(140, 100, 40);
+    doc.text("Not a tax document — GST invoice will be issued upon payment.", pageWidth / 2, footerY - 3, { align: "center" });
   }
 
   doc.setFillColor(...BRAND_TEAL);

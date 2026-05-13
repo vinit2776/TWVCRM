@@ -4,6 +4,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
+import QRCode from "qrcode";
 
 export const maxDuration = 30;
 
@@ -216,6 +217,17 @@ export async function POST(
 
   // Generate proforma PDF (isProforma = true — no GST invoice number, labeled "PROFORMA INVOICE")
   const proformaRef = statement.statement_number; // use statement number as proforma reference
+
+  // Generate QR code for payment link
+  let razorpayQrBase64: string | undefined;
+  const linkExpiry = new Date(Date.now() + 15 * 24 * 60 * 60 * 1000);
+  const razorpayExpiry = linkExpiry.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });
+  if (razorpayLinkUrl) {
+    try {
+      razorpayQrBase64 = await QRCode.toDataURL(razorpayLinkUrl, { width: 200, margin: 1, errorCorrectionLevel: "M" });
+    } catch { /* skip QR if generation fails */ }
+  }
+
   const invoiceData: GstInvoiceData = {
     invoiceNumber: proformaRef,
     invoiceDate: new Date().toISOString().slice(0, 10),
@@ -235,6 +247,8 @@ export async function POST(
     isInterstate,
     taxPercentage,
     razorpayUrl: razorpayLinkUrl ?? undefined,
+    razorpayQrBase64,
+    razorpayExpiry: razorpayLinkUrl ? razorpayExpiry : undefined,
   };
 
   const doc = generateGstInvoicePDF(invoiceData);
