@@ -3,10 +3,9 @@
 import { MailX } from "lucide-react";
 
 /**
- * Tiny inline indicator: "📧 no email". Used in payables list rows and
- * accounting page rows so the gap is visible at a glance without
- * clicking into a bill. Click stops propagation so it doesn't trigger
- * the row click.
+ * Inline indicator shown on bill list rows when the vendor has no email.
+ * Opens the bill detail (where the user can add the email inline).
+ * Click stops propagation so it doesn't double-trigger the row click.
  */
 export function VendorEmailChip({
   vendorId,
@@ -17,11 +16,12 @@ export function VendorEmailChip({
 }) {
   return (
     <span
-      className={`inline-flex items-center gap-0.5 rounded-full bg-amber-100 text-amber-800 px-1.5 py-0.5 text-[10px] font-medium ${className ?? ""}`}
-      title={`Vendor ${vendorId.slice(0, 8)} has no email — payment confirmations cannot be sent`}
+      className={`inline-flex items-center gap-1 rounded-full bg-amber-100 border border-amber-300 text-amber-800 px-2 py-0.5 text-[11px] font-medium ${className ?? ""}`}
+      title={`This vendor has no email on file — open the bill to add it before recording payment`}
+      onClick={(e) => e.stopPropagation()}
     >
-      <MailX className="h-2.5 w-2.5" />
-      no email
+      <MailX className="h-3 w-3 shrink-0" />
+      Email missing
     </span>
   );
 }

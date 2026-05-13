@@ -11,6 +11,8 @@ interface VendorEmailBannerProps {
   vendorName?: string;
   /** When true, the banner mounts immediately without checking nag status (used when caller already knows the vendor has no email). */
   forceShow?: boolean;
+  /** When true, hides the "Skip this time" dismiss button — use in contexts where the email is required to proceed (e.g. payment dialog). */
+  hideSkip?: boolean;
   /** Called after the email is successfully saved — caller can refresh data. */
   onEmailSaved?: (newEmail: string) => void;
   /** Optional className for outer wrapper. */
@@ -44,6 +46,7 @@ export function VendorEmailBanner({
   vendorId,
   vendorName,
   forceShow,
+  hideSkip,
   onEmailSaved,
   className,
 }: VendorEmailBannerProps) {
@@ -143,10 +146,13 @@ export function VendorEmailBanner({
         <Icon className={`h-4 w-4 ${iconCls} shrink-0 mt-0.5`} />
         <div className="min-w-0 flex-1">
           <p className={`text-sm font-semibold ${headerCls}`}>
-            {escalated ? "Vendor email is still missing" : "Vendor has no email address"}
+            {escalated ? "Vendor email is still missing" : "Add vendor email to send payment confirmation"}
           </p>
           <p className={`text-xs mt-0.5 ${escalated ? "text-red-800" : "text-amber-800"}`}>
-            Payment confirmation cannot be sent to {vendorName ?? "this vendor"} until an email is added.
+            {hideSkip
+              ? `Enter ${vendorName ? `${vendorName}'s` : "the vendor's"} email below — it will be saved to their profile and the confirmation will be sent automatically after payment.`
+              : `Payment confirmation cannot be sent to ${vendorName ?? "this vendor"} until an email is added.`
+            }
             {escalated && (
               <>
                 {" "}
@@ -184,15 +190,17 @@ export function VendorEmailBanner({
           {saving ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
           Save email
         </Button>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleDismiss}
-          disabled={saving || dismissing}
-          className="text-xs"
-        >
-          Skip this time
-        </Button>
+        {!hideSkip && (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleDismiss}
+            disabled={saving || dismissing}
+            className="text-xs"
+          >
+            Skip this time
+          </Button>
+        )}
       </div>
     </div>
   );

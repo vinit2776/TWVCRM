@@ -39,8 +39,10 @@ export async function POST(
   }
 
   const vendor = bill.procurement_vendors as { id: string; name: string; contact_name?: string; contact_email?: string } | null;
-  if (!vendor?.contact_email) {
-    return NextResponse.json({ error: "Vendor has no registered email address. Please update the vendor profile first." }, { status: 422 });
+
+  // Allow send when primary email is missing only if CC addresses were provided
+  if (!vendor?.contact_email && ccEmails.length === 0) {
+    return NextResponse.json({ error: "Vendor has no registered email address. Add the vendor email or provide a CC address to send to." }, { status: 422 });
   }
 
   const po = bill.purchase_orders as { id: string; po_number: string } | null;
@@ -111,7 +113,9 @@ export async function POST(
     </div>
   `;
 
-  const recipients: string[] = [vendor.contact_email, ...ccEmails];
+  const primaryEmail = vendor?.contact_email ?? null;
+  const recipients: string[] = primaryEmail ? [primaryEmail, ...ccEmails] : ccEmails;
+
   const { error: emailError } = await resend.emails.send({
     from: EMAIL_FROM,
     to: recipients,
@@ -129,7 +133,7 @@ export async function POST(
     entityId: id,
     action: "update",
     performedBy: dbUser.id,
-    changes: { payment_confirmation_email: { old: null, new: vendor.contact_email } } as Record<string, { old: unknown; new: unknown }>,
+    changes: { payment_confirmation_email: { old: null, new: recipients.join(", ") } } as Record<string, { old: unknown; new: unknown }>,
   });
 
   return NextResponse.json({ message: "Payment confirmation sent successfully" });

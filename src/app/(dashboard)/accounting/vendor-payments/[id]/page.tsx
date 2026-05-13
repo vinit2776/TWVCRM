@@ -1187,6 +1187,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                   vendorId={vendor.id}
                   vendorName={vendor.name}
                   forceShow
+                  hideSkip
                   onEmailSaved={() => { fetchChain(); setSendConfirmation(true); }}
                   className="mb-1"
                 />
@@ -1601,25 +1602,33 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 vendorId={vendor.id}
                 vendorName={vendor.name}
                 forceShow
+                hideSkip
                 onEmailSaved={() => fetchChain()}
               />
             ) : (
               <p className="text-sm text-amber-700">No vendor linked to this bill — email cannot be added here.</p>
             )}
             <div className="space-y-1.5">
-              <Label>CC (optional)</Label>
+              <Label>
+                {vendor?.contact_email?.trim() ? "CC (optional)" : "Or send to this address"}
+              </Label>
               <Input
                 value={resendCc}
                 onChange={(e) => setResendCc(e.target.value)}
-                placeholder="e.g. accounts@company.com"
+                placeholder={vendor?.contact_email?.trim() ? "e.g. accounts@company.com" : "vendor@example.com"}
               />
+              {!vendor?.contact_email?.trim() && (
+                <p className="text-xs text-muted-foreground">
+                  No primary email on file. You can send the confirmation to any address above, or add the vendor email using the form.
+                </p>
+              )}
             </div>
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setResendDialog(false)}>Cancel</Button>
             <Button
               onClick={handleResendConfirmation}
-              disabled={resendLoading || !vendor?.contact_email?.trim()}
+              disabled={resendLoading || (!vendor?.contact_email?.trim() && !resendCc.trim())}
               className="gap-2"
             >
               <Send className="h-4 w-4" />
