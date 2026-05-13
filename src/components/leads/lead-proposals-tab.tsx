@@ -55,6 +55,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
     id: string;
     number: string;
     leadEmail?: string;
+    leadPhone?: string;
     generatePDF: () => Promise<string>;
   } | null>(null);
 
@@ -113,6 +114,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       id: p.id,
       number: p.proposal_number,
       leadEmail: lead?.email || undefined,
+      leadPhone: lead?.phone || lead?.mobile || undefined,
       generatePDF: async () => {
         const { generateProposalPDF } = await import("@/lib/pdf-generator");
         const doc = generateProposalPDF(p, lead || undefined);
@@ -130,6 +132,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       id: inv.id,
       number: inv.invoice_number,
       leadEmail: lead?.email || undefined,
+      leadPhone: lead?.phone || lead?.mobile || undefined,
       generatePDF: async () => {
         const { generateInvoicePDF } = await import("@/lib/pdf-generator");
         const doc = generateInvoicePDF(inv, lead || undefined);
@@ -527,6 +530,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
           documentId={emailConfig.id}
           documentNumber={emailConfig.number}
           leadEmail={emailConfig.leadEmail}
+          leadPhone={emailConfig.leadPhone}
           onGeneratePDF={emailConfig.generatePDF}
           onSuccess={handleSuccess}
         />
