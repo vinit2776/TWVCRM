@@ -172,14 +172,14 @@ function AuditEntry({ row, billId, poId, mrId }: { row: AuditRow; billId: string
         {/* Email sent — show To/CC inline without expand */}
         {row.action === "email_sent" && (
           <div className="mt-1 text-xs bg-teal-50 border border-teal-100 rounded px-2 py-1.5 space-y-0.5">
-            {row.changes?.to?.new && (
-              <p><span className="text-muted-foreground font-medium">To:</span> <span className="text-teal-800">{String(row.changes.to.new)}</span></p>
+            {Boolean(row.changes?.to?.new) && (
+              <p><span className="text-muted-foreground font-medium">To:</span> <span className="text-teal-800">{String(row.changes!.to.new)}</span></p>
             )}
-            {row.changes?.cc?.new && (
-              <p><span className="text-muted-foreground font-medium">CC:</span> <span className="text-teal-800">{String(row.changes.cc.new)}</span></p>
+            {Boolean(row.changes?.cc?.new) && (
+              <p><span className="text-muted-foreground font-medium">CC:</span> <span className="text-teal-800">{String(row.changes!.cc.new)}</span></p>
             )}
-            {row.changes?.subject?.new && (
-              <p><span className="text-muted-foreground font-medium">Subject:</span> <span className="text-muted-foreground">{String(row.changes.subject.new)}</span></p>
+            {Boolean(row.changes?.subject?.new) && (
+              <p><span className="text-muted-foreground font-medium">Subject:</span> <span className="text-muted-foreground">{String(row.changes!.subject.new)}</span></p>
             )}
           </div>
         )}
