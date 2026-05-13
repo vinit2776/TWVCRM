@@ -114,61 +114,78 @@ export async function POST(
     }
   } catch { /* continue without QR */ }
 
-  // Create Razorpay payment link
-  let razorpayLinkId: string | undefined;
-  let razorpayLinkUrl: string | undefined;
-  try {
-    const { data: rzpSettings } = await adminSupabase
-      .from("app_settings").select("key, value").in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret"]);
-    const rzpMap: Record<string, string> = {};
-    (rzpSettings || []).forEach((s) => { rzpMap[s.key] = s.value; });
+  // Create or reuse Razorpay payment link
+  // On resend, keep the existing link rather than creating a duplicate
+  let razorpayLinkId: string | null = (statement.razorpay_payment_link_id as string | null) || null;
+  let razorpayLinkUrl: string | null = (statement.razorpay_payment_link_url as string | null) || null;
 
-    if (rzpMap.razorpay_enabled === "true" && rzpMap.razorpay_key_id && rzpMap.razorpay_key_secret) {
-      const auth = Buffer.from(`${rzpMap.razorpay_key_id}:${rzpMap.razorpay_key_secret}`).toString("base64");
-      const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
-      const customerName = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Customer";
-      const customerEmail = lead?.email;
-      const customerPhone = lead?.phone || lead?.mobile;
+  if (!razorpayLinkId) {
+    try {
+      const { data: rzpSettings } = await adminSupabase
+        .from("app_settings").select("key, value").in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret"]);
+      const rzpMap: Record<string, string> = {};
+      (rzpSettings || []).forEach((s) => { rzpMap[s.key] = s.value; });
 
-      // Use statement_number as reference since GST invoice not assigned yet
-      const refId = `${statement.statement_number}-proforma`.replace(/[^a-zA-Z0-9_-]/g, "-");
+      if (rzpMap.razorpay_enabled === "true" && rzpMap.razorpay_key_id && rzpMap.razorpay_key_secret) {
+        const auth = Buffer.from(`${rzpMap.razorpay_key_id}:${rzpMap.razorpay_key_secret}`).toString("base64");
+        const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
+        const customerName = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Customer";
+        const customerEmail = lead?.email;
+        const customerPhone = lead?.phone || lead?.mobile;
 
-      const payload: Record<string, unknown> = {
-        amount: Math.round(totalAmount * 100),
-        currency: "INR",
-        description: `Proforma ${statement.statement_number} — ${contract.contract_number} — The WorkVilla`,
-        reference_id: refId,
-        expire_by: Math.floor(Date.now() / 1000) + 15 * 24 * 60 * 60,
-        notify: { sms: !!customerPhone, email: !!customerEmail },
-        reminder_enable: true,
-        notes: { statement_id: id, contract_number: contract.contract_number, proforma: "true" },
-        callback_url: `${appUrl}/billing`,
-        callback_method: "get",
-      };
+        // Unique per-statement reference (no timestamp — Razorpay deduplicates on reference_id)
+        const refId = `${statement.statement_number}-proforma`.replace(/[^a-zA-Z0-9_-]/g, "-");
 
-      if (customerName || customerEmail || customerPhone) {
-        payload.customer = {};
-        if (customerName) (payload.customer as Record<string, string>).name = customerName;
-        if (customerEmail) (payload.customer as Record<string, string>).email = customerEmail;
-        if (customerPhone) (payload.customer as Record<string, string>).contact = customerPhone.replace(/\s/g, "");
+        const payload: Record<string, unknown> = {
+          amount: Math.round(totalAmount * 100),
+          currency: "INR",
+          description: `Proforma ${statement.statement_number} — ${contract.contract_number} — The WorkVilla`,
+          reference_id: refId,
+          expire_by: Math.floor(Date.now() / 1000) + 15 * 24 * 60 * 60,
+          notify: { sms: !!customerPhone, email: !!customerEmail },
+          reminder_enable: true,
+          notes: { statement_id: id, contract_number: contract.contract_number, proforma: "true" },
+          callback_url: `${appUrl}/billing`,
+          callback_method: "get",
+        };
+
+        if (customerName || customerEmail || customerPhone) {
+          payload.customer = {};
+          if (customerName) (payload.customer as Record<string, string>).name = customerName;
+          if (customerEmail) (payload.customer as Record<string, string>).email = customerEmail;
+          if (customerPhone) (payload.customer as Record<string, string>).contact = customerPhone.replace(/\s/g, "");
+        }
+
+        const rzpRes = await fetch("https://api.razorpay.com/v1/payment_links", {
+          method: "POST",
+          headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+        if (rzpRes.ok) {
+          const linkData = await rzpRes.json();
+          razorpayLinkId = linkData.id;
+          razorpayLinkUrl = linkData.short_url;
+        } else {
+          // If duplicate reference_id, fetch the existing link from Razorpay
+          const errBody = await rzpRes.json().catch(() => ({})) as { error?: { description?: string } };
+          if (errBody?.error?.description?.includes("already exists")) {
+            const fetchRes = await fetch(`https://api.razorpay.com/v1/payment_links?reference_id=${refId}`, {
+              headers: { Authorization: `Basic ${auth}` },
+            });
+            if (fetchRes.ok) {
+              const fetchData = await fetchRes.json() as { items?: Array<{ id: string; short_url: string }> };
+              const existing = fetchData?.items?.[0];
+              if (existing) { razorpayLinkId = existing.id; razorpayLinkUrl = existing.short_url; }
+            }
+          } else {
+            console.error("[send-proforma] Razorpay link failed:", JSON.stringify(errBody));
+          }
+        }
       }
-
-      const rzpRes = await fetch("https://api.razorpay.com/v1/payment_links", {
-        method: "POST",
-        headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (rzpRes.ok) {
-        const linkData = await rzpRes.json();
-        razorpayLinkId = linkData.id;
-        razorpayLinkUrl = linkData.short_url;
-      } else {
-        console.error("[send-proforma] Razorpay link failed:", await rzpRes.text());
-      }
+    } catch (err) {
+      console.error("[send-proforma] Razorpay error:", err);
     }
-  } catch (err) {
-    console.error("[send-proforma] Razorpay error:", err);
   }
 
   // Build line items for PDF
@@ -221,7 +238,7 @@ export async function POST(
     totalAmount,
     isInterstate,
     taxPercentage,
-    razorpayUrl: razorpayLinkUrl,
+    razorpayUrl: razorpayLinkUrl ?? undefined,
     qrCodeBase64,
     upiId,
   };
@@ -305,25 +322,23 @@ export async function POST(
     }
   }
 
-  // Update statement
-  await adminSupabase
-    .from("billing_statements")
-    .update({
-      proforma_sent_at: now,
-      razorpay_payment_link_id: razorpayLinkId || null,
-      razorpay_payment_link_url: razorpayLinkUrl || null,
-      // Also update totals in case they changed
-      subtotal,
-      usage_amount: usageAmount,
-      tax_amount: taxAmount,
-      total_amount: totalAmount,
-      cgst_amount: cgst,
-      sgst_amount: sgst,
-      igst_amount: igst,
-      is_interstate: isInterstate,
-      buyer_gstin: lead?.gst_number || null,
-    })
-    .eq("id", id);
+  // Update statement — only write Razorpay link columns if we actually have values
+  const updatePayload: Record<string, unknown> = {
+    proforma_sent_at: now,
+    subtotal,
+    usage_amount: usageAmount,
+    tax_amount: taxAmount,
+    total_amount: totalAmount,
+    cgst_amount: cgst,
+    sgst_amount: sgst,
+    igst_amount: igst,
+    is_interstate: isInterstate,
+    buyer_gstin: lead?.gst_number || null,
+  };
+  if (razorpayLinkId) updatePayload.razorpay_payment_link_id = razorpayLinkId;
+  if (razorpayLinkUrl) updatePayload.razorpay_payment_link_url = razorpayLinkUrl;
+
+  await adminSupabase.from("billing_statements").update(updatePayload).eq("id", id);
 
   logAudit(adminSupabase, {
     entityType: "billing_statement",
