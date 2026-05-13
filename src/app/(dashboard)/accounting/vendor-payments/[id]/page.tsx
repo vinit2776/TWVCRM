@@ -210,6 +210,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   // Payment dialog + send confirmation toggle + resend dialog
   const [paymentDialog, setPaymentDialog] = useState(false);
   const [sendConfirmation, setSendConfirmation] = useState(true);
+  const [paymentCcEmail, setPaymentCcEmail] = useState("");
 
   // TDS state
   type TdsSection = {
@@ -378,11 +379,13 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       setPaymentDialog(false);
       setPayNote("");
 
-      if (sendConfirmation && vendor?.contact_email?.trim()) {
+      const hasEmail = !!(vendor?.contact_email?.trim());
+      const ccForPayment = paymentCcEmail.trim();
+      if (sendConfirmation && (hasEmail || ccForPayment)) {
         const emailRes = await fetch(`/api/procurement/bills/${id}/payment-email`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cc: [] }),
+          body: JSON.stringify({ cc: ccForPayment && !hasEmail ? [ccForPayment] : [] }),
         });
         if (emailRes.ok) {
           toast.success("Confirmation sent to vendor");
@@ -875,7 +878,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
 
       {/* Record Payment Dialog */}
       <Dialog open={paymentDialog} onOpenChange={setPaymentDialog}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <CreditCard className="h-4 w-4 text-primary" />
@@ -888,6 +891,17 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               )}
             </p>
           </DialogHeader>
+
+          {/* ── Email missing — shown FIRST so it's immediately visible ── */}
+          {!vendor?.contact_email?.trim() && vendor?.id && (
+            <VendorEmailBanner
+              vendorId={vendor.id}
+              vendorName={vendor.name}
+              forceShow
+              hideSkip
+              onEmailSaved={() => { fetchChain(); setSendConfirmation(true); setPaymentCcEmail(""); }}
+            />
+          )}
 
           {/* Vendor verification strip */}
           {vendor && (
@@ -1180,42 +1194,43 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
 
             <Separator />
 
-            {/* Vendor-email nag */}
-            {!vendor?.contact_email?.trim() && (
-              vendor?.id ? (
-                <VendorEmailBanner
-                  vendorId={vendor.id}
-                  vendorName={vendor.name}
-                  forceShow
-                  hideSkip
-                  onEmailSaved={() => { fetchChain(); setSendConfirmation(true); }}
-                  className="mb-1"
-                />
-              ) : (
-                <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2.5">
-                  No vendor linked to this bill — payment confirmation email cannot be sent.
-                </p>
-              )
-            )}
-
             {/* Send confirmation toggle */}
-            <label className="flex items-center gap-2.5 rounded-lg border p-3 cursor-pointer hover:bg-muted/30 transition-colors">
-              <input
-                type="checkbox"
-                checked={sendConfirmation}
-                onChange={(e) => setSendConfirmation(e.target.checked)}
-                disabled={!vendor?.contact_email?.trim()}
-                className="h-4 w-4 rounded border-gray-300 accent-green-600"
-              />
-              <div className="min-w-0">
-                <span className="text-sm font-medium">Send confirmation to vendor</span>
-                {vendor?.contact_email?.trim() ? (
-                  <p className="text-xs text-muted-foreground">{vendor.contact_email.trim()}</p>
-                ) : (
-                  <p className="text-xs text-amber-600">No email on file — add above to enable</p>
-                )}
-              </div>
-            </label>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2.5 rounded-lg border p-3 cursor-pointer hover:bg-muted/30 transition-colors">
+                <input
+                  type="checkbox"
+                  checked={sendConfirmation}
+                  onChange={(e) => setSendConfirmation(e.target.checked)}
+                  className="h-4 w-4 rounded border-gray-300 accent-green-600"
+                />
+                <div className="min-w-0 flex-1">
+                  <span className="text-sm font-medium">Send payment confirmation to vendor</span>
+                  {vendor?.contact_email?.trim() ? (
+                    <p className="text-xs text-muted-foreground">{vendor.contact_email.trim()}</p>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">No primary email saved — enter one above or use the field below</p>
+                  )}
+                </div>
+              </label>
+
+              {/* CC / fallback email field — shown when no primary email and confirmation is checked */}
+              {sendConfirmation && !vendor?.contact_email?.trim() && (
+                <div className="space-y-1">
+                  <Label className="text-xs">Send confirmation to (one-time address)</Label>
+                  <Input
+                    type="email"
+                    placeholder="vendor@example.com"
+                    value={paymentCcEmail}
+                    onChange={(e) => setPaymentCcEmail(e.target.value)}
+                    className="h-8 text-sm"
+                  />
+                  <p className="text-[11px] text-muted-foreground">
+                    This sends the confirmation now but does not save the email to the vendor profile.
+                    Use the &ldquo;Add vendor email&rdquo; banner above to save it permanently.
+                  </p>
+                </div>
+              )}
+            </div>
           </div>
 
           <DialogFooter>
@@ -1225,7 +1240,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               disabled={paying || !payMode || !payAmount}
               className="gap-2"
             >
-              {paying ? "Recording…" : sendConfirmation && vendor?.contact_email?.trim() ? "Record & Send" : "Record Payment"}
+              {paying ? "Recording…" : sendConfirmation && (vendor?.contact_email?.trim() || paymentCcEmail.trim()) ? "Record & Send" : "Record Payment"}
             </Button>
           </DialogFooter>
         </DialogContent>
