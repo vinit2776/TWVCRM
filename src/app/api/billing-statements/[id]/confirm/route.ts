@@ -103,31 +103,17 @@ export async function POST(
   const taxAmount = cgst + sgst + igst;
   const totalAmount = subtotal + taxAmount;
 
-  // 3. Fetch UPI QR code base64 for PDF
-  let qrCodeBase64: string | undefined;
+  // 3. Fetch UPI ID for PDF (text only — no QR)
   let upiId: string | undefined;
   try {
     const { data: settings } = await adminSupabase
       .from("app_settings")
       .select("key, value")
-      .in("key", ["upi_id", "upi_qr_code_path"]);
-
+      .eq("key", "upi_id");
     const settingsMap: Record<string, string> = {};
     (settings || []).forEach((s) => { settingsMap[s.key] = s.value; });
     upiId = settingsMap.upi_id;
-
-    if (settingsMap.upi_qr_code_path) {
-      const { data: fileData } = await adminSupabase.storage
-        .from("crm-documents")
-        .download(settingsMap.upi_qr_code_path);
-      if (fileData) {
-        const ab = await fileData.arrayBuffer();
-        const base64 = Buffer.from(ab).toString("base64");
-        const mime = settingsMap.upi_qr_code_path.endsWith(".png") ? "image/png" : "image/jpeg";
-        qrCodeBase64 = `data:${mime};base64,${base64}`;
-      }
-    }
-  } catch { /* continue without QR */ }
+  } catch { /* continue */ }
 
   // 4. Create Razorpay payment link (if enabled)
   let razorpayLinkId: string | undefined;
@@ -260,7 +246,6 @@ export async function POST(
     isInterstate,
     taxPercentage,
     razorpayUrl: razorpayLinkUrl,
-    qrCodeBase64,
     upiId,
   };
 

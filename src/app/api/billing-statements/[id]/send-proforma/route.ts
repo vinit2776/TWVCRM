@@ -101,25 +101,14 @@ export async function POST(
   const taxAmount = cgst + sgst + igst;
   const totalAmount = subtotal + taxAmount;
 
-  // Fetch UPI QR
-  let qrCodeBase64: string | undefined;
+  // Fetch UPI ID (text only — no QR)
   let upiId: string | undefined;
   try {
-    const { data: settings } = await adminSupabase
-      .from("app_settings").select("key, value").in("key", ["upi_id", "upi_qr_code_path"]);
+    const { data: settings } = await adminSupabase.from("app_settings").select("key, value").eq("key", "upi_id");
     const settingsMap: Record<string, string> = {};
     (settings || []).forEach((s) => { settingsMap[s.key] = s.value; });
     upiId = settingsMap.upi_id;
-    if (settingsMap.upi_qr_code_path) {
-      const { data: fileData } = await adminSupabase.storage.from("crm-documents").download(settingsMap.upi_qr_code_path);
-      if (fileData) {
-        const ab = await fileData.arrayBuffer();
-        const base64 = Buffer.from(ab).toString("base64");
-        const mime = settingsMap.upi_qr_code_path.endsWith(".png") ? "image/png" : "image/jpeg";
-        qrCodeBase64 = `data:${mime};base64,${base64}`;
-      }
-    }
-  } catch { /* continue without QR */ }
+  } catch { /* continue */ }
 
   // Create or reuse Razorpay payment link
   // On resend, keep the existing link rather than creating a duplicate
@@ -246,8 +235,6 @@ export async function POST(
     isInterstate,
     taxPercentage,
     razorpayUrl: razorpayLinkUrl ?? undefined,
-    qrCodeBase64,
-    upiId,
   };
 
   const doc = generateGstInvoicePDF(invoiceData);

@@ -99,7 +99,6 @@ export interface GstInvoiceData {
   taxPercentage: number;
   // Payment
   razorpayUrl?: string;
-  qrCodeBase64?: string;
   upiId?: string;
 }
 
@@ -307,31 +306,6 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     doc.setFont("helvetica", "normal");
     doc.text(data.razorpayUrl, 14 + 22, y);
     y += 4.5;
-  }
-
-  // QR code (right side, next to bank details)
-  if (data.qrCodeBase64) {
-    const qrSize = 34;
-    const qrX = pageWidth - 14 - qrSize;
-    const qrY = bankStartY - 2;
-
-    doc.setDrawColor(200, 200, 200);
-    doc.setLineWidth(0.3);
-    doc.rect(qrX - 1, qrY - 1, qrSize + 2, qrSize + 2);
-
-    try {
-      doc.addImage(data.qrCodeBase64, "PNG", qrX, qrY, qrSize, qrSize);
-    } catch {
-      try { doc.addImage(data.qrCodeBase64, "JPEG", qrX, qrY, qrSize, qrSize); } catch { /* skip */ }
-    }
-
-    doc.setFontSize(7);
-    doc.setFont("helvetica", "bold");
-    doc.setTextColor(...BRAND_TEAL);
-    doc.text("Scan to Pay", qrX + qrSize / 2, qrY + qrSize + 4, { align: "center" });
-
-    const qrBottomY = qrY + qrSize + 8;
-    if (qrBottomY > y) y = qrBottomY;
   }
 
   y += 6;

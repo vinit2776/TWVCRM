@@ -114,21 +114,13 @@ export async function POST(
   const taxAmount = cgst + sgst + igst;
   const totalAmount = subtotal + taxAmount;
 
-  // Fetch UPI QR
-  let qrCodeBase64: string | undefined;
+  // Fetch UPI ID for PDF
   let upiId: string | undefined;
   try {
-    const { data: settings } = await adminSupabase.from("app_settings").select("key, value").in("key", ["upi_id", "upi_qr_code_path"]);
+    const { data: settings } = await adminSupabase.from("app_settings").select("key, value").eq("key", "upi_id");
     const settingsMap: Record<string, string> = {};
     (settings || []).forEach((s) => { settingsMap[s.key] = s.value; });
     upiId = settingsMap.upi_id;
-    if (settingsMap.upi_qr_code_path) {
-      const { data: fileData } = await adminSupabase.storage.from("crm-documents").download(settingsMap.upi_qr_code_path);
-      if (fileData) {
-        const ab = await fileData.arrayBuffer();
-        qrCodeBase64 = `data:${settingsMap.upi_qr_code_path.endsWith(".png") ? "image/png" : "image/jpeg"};base64,${Buffer.from(ab).toString("base64")}`;
-      }
-    }
   } catch { /* continue */ }
 
   // Build line items
@@ -170,7 +162,6 @@ export async function POST(
     totalAmount,
     isInterstate,
     taxPercentage,
-    qrCodeBase64,
     upiId,
   };
 
