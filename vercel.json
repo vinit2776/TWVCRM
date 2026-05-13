@@ -13,6 +13,10 @@
       "schedule": "30 15 28-31 * *"
     },
     {
+      "path": "/api/cron/billing-proforma-dispatch",
+      "schedule": "0 16 28-31 * *"
+    },
+    {
       "path": "/api/cron/db-backup",
       "schedule": "0 20 * * *"
     },

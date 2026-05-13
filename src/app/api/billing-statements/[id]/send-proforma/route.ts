@@ -26,17 +26,24 @@ export async function POST(
 ) {
   const { id } = await params;
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-
-  const { data: dbUser } = await supabase
-    .from("users").select("id, role").eq("auth_id", user.id).single();
-  if (!dbUser || !["admin", "manager", "accounts"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Only admin, manager, or accounts can send proforma invoices" }, { status: 403 });
-  }
-
   const adminSupabase = await createAdminClient();
+
+  // Internal cron calls use x-internal-secret + skipAuth flag — no session needed
+  const isInternalCall = body.skipAuth === true && request.headers.get("x-internal-secret") === process.env.CRON_SECRET;
+  let dbUserId: string | null = null;
+
+  if (!isInternalCall) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const { data: dbUser } = await supabase
+      .from("users").select("id, role").eq("auth_id", user.id).single();
+    if (!dbUser || !["admin", "manager", "accounts"].includes(dbUser.role)) {
+      return NextResponse.json({ error: "Only admin, manager, or accounts can send proforma invoices" }, { status: 403 });
+    }
+    dbUserId = dbUser.id;
+  }
 
   const { data: statement, error: fetchErr } = await adminSupabase
     .from("billing_statements")
@@ -340,17 +347,19 @@ export async function POST(
 
   await adminSupabase.from("billing_statements").update(updatePayload).eq("id", id);
 
-  logAudit(adminSupabase, {
-    entityType: "billing_statement",
-    entityId: id,
-    action: "update",
-    performedBy: dbUser.id,
-    changes: {
-      proforma_sent_at: { old: null, new: now },
-      razorpay_payment_link_url: { old: null, new: razorpayLinkUrl || null },
-      emailed_to: { old: null, new: customerEmail || null },
-    },
-  });
+  if (dbUserId) {
+    logAudit(adminSupabase, {
+      entityType: "billing_statement",
+      entityId: id,
+      action: "update",
+      performedBy: dbUserId,
+      changes: {
+        proforma_sent_at: { old: null, new: now },
+        razorpay_payment_link_url: { old: null, new: razorpayLinkUrl || null },
+        emailed_to: { old: null, new: customerEmail || null },
+      },
+    });
+  }
 
   return NextResponse.json({
     success: true,
