@@ -287,6 +287,13 @@ export async function PATCH(
       // total_amount = base (pre-GST). gst_amount is entered directly by approver.
       const totalAmt = Number(bill.total_amount); // this IS the base
       const approveGstAmount = Math.round((parsed.data.gst_amount ?? 0) * 100) / 100;
+      const maxAllowedGst = Math.round(totalAmt * 0.28 * 100) / 100;
+      if (approveGstAmount > maxAllowedGst) {
+        return NextResponse.json(
+          { error: `GST amount (₹${approveGstAmount.toLocaleString("en-IN")}) exceeds the maximum allowed (28% of ₹${totalAmt.toLocaleString("en-IN")} = ₹${maxAllowedGst.toLocaleString("en-IN")}). Please verify the invoice.` },
+          { status: 422 },
+        );
+      }
 
       updatePayload = {
         approval_status: "approved",
@@ -577,6 +584,13 @@ export async function PATCH(
       // total_amount = base (pre-GST). gst_amount is entered directly.
       const totalAmount = Number(bill.total_amount); // this IS the base
       const newGstAmount = Math.round((parsed.data.gst_amount ?? 0) * 100) / 100;
+      const maxGst = Math.round(totalAmount * 0.28 * 100) / 100;
+      if (newGstAmount > maxGst) {
+        return NextResponse.json(
+          { error: `GST amount (₹${newGstAmount.toLocaleString("en-IN")}) exceeds the maximum allowed (28% of ₹${totalAmount.toLocaleString("en-IN")} = ₹${maxGst.toLocaleString("en-IN")}). Please verify the invoice.` },
+          { status: 422 },
+        );
+      }
 
       updatePayload = {
         gst_rate: 0,

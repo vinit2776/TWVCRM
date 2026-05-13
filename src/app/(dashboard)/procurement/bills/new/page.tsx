@@ -282,6 +282,9 @@ function NewVendorBillForm() {
     const amount = parseFloat(totalAmount);
     if (!totalAmount || isNaN(amount) || amount <= 0) return "Invoice amount must be greater than 0";
     if (amountError) return amountError;
+    const gst = parseFloat(gstAmount) || 0;
+    const maxGst = Math.round(amount * 0.28 * 100) / 100;
+    if (gst > maxGst) return `GST amount (₹${gst.toLocaleString("en-IN")}) cannot exceed 28% of the invoice base (max ₹${maxGst.toLocaleString("en-IN")})`;
     // File is mandatory when linked to a PO
     if (poId && !invoiceFile) return "Please upload the vendor invoice file";
     return null;
@@ -588,20 +591,36 @@ function NewVendorBillForm() {
             {/* GST Amount */}
             <div className="space-y-1.5">
               <Label htmlFor="gst_amount">GST Amount (₹)</Label>
-              <Input
-                id="gst_amount"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="0.00"
-                value={gstAmount}
-                onChange={(e) => setGstAmount(e.target.value)}
-              />
-              {parseFloat(gstAmount) > 0 && parseFloat(totalAmount) > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  Base ₹{parseFloat(totalAmount).toLocaleString("en-IN", { minimumFractionDigits: 2 })} + GST ₹{parseFloat(gstAmount).toLocaleString("en-IN", { minimumFractionDigits: 2 })} = Total payable ₹{(parseFloat(totalAmount) + parseFloat(gstAmount)).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
-                </p>
-              )}
+              {(() => {
+                const base = parseFloat(totalAmount) || 0;
+                const gst = parseFloat(gstAmount) || 0;
+                const maxGst = Math.round(base * 0.28 * 100) / 100;
+                const isOver = base > 0 && gst > maxGst;
+                return (
+                  <>
+                    <Input
+                      id="gst_amount"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={gstAmount}
+                      onChange={(e) => setGstAmount(e.target.value)}
+                      className={isOver ? "border-red-500 focus-visible:ring-red-500" : ""}
+                    />
+                    {isOver ? (
+                      <p className="text-xs text-red-600 flex items-start gap-1">
+                        <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" />
+                        GST cannot exceed 28% of invoice base (max ₹{maxGst.toLocaleString("en-IN", { minimumFractionDigits: 2 })})
+                      </p>
+                    ) : gst > 0 && base > 0 ? (
+                      <p className="text-xs text-muted-foreground">
+                        Base ₹{base.toLocaleString("en-IN", { minimumFractionDigits: 2 })} + GST ₹{gst.toLocaleString("en-IN", { minimumFractionDigits: 2 })} = Total payable ₹{(base + gst).toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                      </p>
+                    ) : null}
+                  </>
+                );
+              })()}
             </div>
 
             <div className="space-y-1.5">

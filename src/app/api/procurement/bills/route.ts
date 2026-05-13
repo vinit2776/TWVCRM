@@ -17,7 +17,13 @@ const createBillSchema = z.object({
   invoice_file_url: z.string().url().nullish(),
   service_report_id: z.string().uuid().nullish(),
   replaces_bill_id: z.string().uuid().nullish(),
-});
+}).refine(
+  (d) => (d.gst_amount ?? 0) <= Math.round(d.total_amount * 0.28 * 100) / 100,
+  {
+    message: "GST amount exceeds the maximum allowed (28% of invoice base). Please verify the invoice.",
+    path: ["gst_amount"],
+  },
+);
 
 function generateBillNumber(count: number): string {
   const now = new Date();

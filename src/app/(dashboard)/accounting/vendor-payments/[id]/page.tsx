@@ -371,6 +371,12 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
 
   async function handleSaveInlineGst() {
     if (!bill) return;
+    const gstVal = parseFloat(inlineGstAmount) || 0;
+    const maxGstVal = Math.round(Number(bill.total_amount) * 0.28 * 100) / 100;
+    if (gstVal > maxGstVal) {
+      toast.error(`GST amount cannot exceed 28% of the invoice base (max ₹${maxGstVal.toLocaleString("en-IN", { minimumFractionDigits: 2 })})`);
+      return;
+    }
     setSavingGst(true);
     try {
       const res = await fetch(`/api/procurement/bills/${bill.id}`, {

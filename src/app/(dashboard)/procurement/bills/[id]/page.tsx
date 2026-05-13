@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   ChevronLeft, Loader2, Truck, FileText, Calendar, CreditCard, Package, ExternalLink,
   CheckCircle2, XCircle, Clock, Send, Activity, CheckCircle,
-  ClipboardList, ChevronDown, ChevronUp, FilePlus,
+  ClipboardList, ChevronDown, ChevronUp, FilePlus, AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -273,6 +273,7 @@ export default function VendorBillDetailPage() {
   };
 
   const handleApprove = async () => {
+    if (!bill) return;
     if (!batchType) {
       toast.error("Select a payment batch schedule before approving");
       return;
@@ -280,6 +281,12 @@ export default function VendorBillDetailPage() {
     // GST amount is mandatory — must be entered (0 is valid for exempt invoices)
     if (approveGstAmount === "") {
       toast.error("Enter the GST amount from the vendor's invoice before approving (enter 0 if exempt)");
+      return;
+    }
+    const gstVal = parseFloat(approveGstAmount) || 0;
+    const maxGstVal = Math.round(Number(bill.total_amount) * 0.28 * 100) / 100;
+    if (gstVal > maxGstVal) {
+      toast.error(`GST amount cannot exceed 28% of the invoice base (max ${formatCurrency(maxGstVal)})`);
       return;
     }
     setApproveLoading(true);
@@ -372,12 +379,19 @@ export default function VendorBillDetailPage() {
 
 
   const handleUpdateGst = async () => {
+    if (!bill) return;
+    const gstVal = parseFloat(gstAmountInput) || 0;
+    const maxGstVal = Math.round(Number(bill.total_amount) * 0.28 * 100) / 100;
+    if (gstVal > maxGstVal) {
+      toast.error(`GST amount cannot exceed 28% of the invoice base (max ${formatCurrency(maxGstVal)})`);
+      return;
+    }
     setGstLoading(true);
     try {
       const res = await fetch(`/api/procurement/bills/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "update_gst", gst_amount: parseFloat(gstAmountInput) || 0 }),
+        body: JSON.stringify({ action: "update_gst", gst_amount: gstVal }),
       });
       const json = await res.json();
       if (!res.ok) { toast.error(json.error || "Failed to update GST"); return; }
@@ -1268,33 +1282,46 @@ export default function VendorBillDetailPage() {
               <p className="text-xs text-muted-foreground -mt-1">
                 Enter the total GST as shown on the vendor&apos;s invoice. Enter 0 if exempt. This sets the maximum payable above the approved base.
               </p>
-              <Input
-                id="approve-gst-amount"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="0.00"
-                value={approveGstAmount}
-                onChange={(e) => setApproveGstAmount(e.target.value)}
-              />
-              {approveGstAmount !== "" && (() => {
+              {(() => {
                 const gst = parseFloat(approveGstAmount) || 0;
                 const base = Number(bill.total_amount);
+                const maxGst = Math.round(base * 0.28 * 100) / 100;
+                const isOver = approveGstAmount !== "" && gst > maxGst;
                 return (
-                  <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-xs space-y-1">
-                    <div className="flex justify-between text-blue-800">
-                      <span>Base Amount (pre-GST)</span>
-                      <span className="font-medium">{formatCurrency(base)}</span>
-                    </div>
-                    <div className="flex justify-between text-blue-800">
-                      <span>GST</span>
-                      <span className="font-medium">+ {formatCurrency(gst)}</span>
-                    </div>
-                    <div className="flex justify-between text-blue-900 font-semibold border-t border-blue-200 pt-1">
-                      <span>Total Payable</span>
-                      <span>{formatCurrency(base + gst)}</span>
-                    </div>
-                  </div>
+                  <>
+                    <Input
+                      id="approve-gst-amount"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={approveGstAmount}
+                      onChange={(e) => setApproveGstAmount(e.target.value)}
+                      className={isOver ? "border-red-500 focus-visible:ring-red-500" : ""}
+                    />
+                    {isOver && (
+                      <p className="text-xs text-red-600 flex items-center gap-1">
+                        <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                        GST cannot exceed 28% of invoice base (max {formatCurrency(maxGst)})
+                      </p>
+                    )}
+                    {approveGstAmount !== "" && !isOver && (
+                      <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-xs space-y-1">
+                        <div className="flex justify-between text-blue-800">
+                          <span>Base Amount (pre-GST)</span>
+                          <span className="font-medium">{formatCurrency(base)}</span>
+                        </div>
+                        <div className="flex justify-between text-blue-800">
+                          <span>GST</span>
+                          <span className="font-medium">+ {formatCurrency(gst)}</span>
+                        </div>
+                        <div className="flex justify-between text-blue-900 font-semibold border-t border-blue-200 pt-1">
+                          <span>Total Payable</span>
+                          <span>{formatCurrency(base + gst)}</span>
+                        </div>
+                      </div>
+                    )}
+                  </>
                 );
               })()}
             </div>
@@ -1513,32 +1540,45 @@ export default function VendorBillDetailPage() {
             <p className="text-sm text-muted-foreground">
               Enter the total GST amount as printed on the vendor&apos;s invoice. This may be a consolidated figure across multiple GST slabs. Enter 0 if exempt.
             </p>
-            <div className="space-y-1.5">
-              <Label htmlFor="gst-amount-input">GST Amount (₹)</Label>
-              <Input
-                id="gst-amount-input"
-                type="number"
-                min="0"
-                step="0.01"
-                placeholder="0.00"
-                value={gstAmountInput}
-                onChange={(e) => setGstAmountInput(e.target.value)}
-              />
-            </div>
-            {gstAmountInput !== "" && (() => {
+            {(() => {
               const gstAmt = parseFloat(gstAmountInput) || 0;
               const base = Number(bill.total_amount);
+              const maxGst = Math.round(base * 0.28 * 100) / 100;
+              const isOver = gstAmountInput !== "" && gstAmt > maxGst;
               return (
-                <div className="rounded-md bg-blue-50 border border-blue-100 px-3 py-2 text-sm space-y-1">
-                  <div className="flex justify-between text-blue-700">
-                    <span>Base (pre-GST)</span><span className="font-medium">{formatCurrency(base)}</span>
+                <div className="space-y-2">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="gst-amount-input">GST Amount (₹)</Label>
+                    <Input
+                      id="gst-amount-input"
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={gstAmountInput}
+                      onChange={(e) => setGstAmountInput(e.target.value)}
+                      className={isOver ? "border-red-500 focus-visible:ring-red-500" : ""}
+                    />
+                    {isOver && (
+                      <p className="text-xs text-red-600 flex items-center gap-1">
+                        <AlertTriangle className="h-3.5 w-3.5 flex-shrink-0" />
+                        Cannot exceed 28% of base (max {formatCurrency(maxGst)})
+                      </p>
+                    )}
                   </div>
-                  <div className="flex justify-between text-blue-700">
-                    <span>GST</span><span className="font-medium">+ {formatCurrency(gstAmt)}</span>
-                  </div>
-                  <div className="flex justify-between text-blue-900 font-semibold border-t border-blue-200 pt-1">
-                    <span>Total Payable</span><span>{formatCurrency(base + gstAmt)}</span>
-                  </div>
+                  {gstAmountInput !== "" && !isOver && (
+                    <div className="rounded-md bg-blue-50 border border-blue-100 px-3 py-2 text-sm space-y-1">
+                      <div className="flex justify-between text-blue-700">
+                        <span>Base (pre-GST)</span><span className="font-medium">{formatCurrency(base)}</span>
+                      </div>
+                      <div className="flex justify-between text-blue-700">
+                        <span>GST</span><span className="font-medium">+ {formatCurrency(gstAmt)}</span>
+                      </div>
+                      <div className="flex justify-between text-blue-900 font-semibold border-t border-blue-200 pt-1">
+                        <span>Total Payable</span><span>{formatCurrency(base + gstAmt)}</span>
+                      </div>
+                    </div>
+                  )}
                 </div>
               );
             })()}
