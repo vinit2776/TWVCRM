@@ -131,9 +131,13 @@ export async function POST(
   await logAudit(supabase, {
     entityType: "vendor_bill",
     entityId: id,
-    action: "update",
+    action: "email_sent",
     performedBy: dbUser.id,
-    changes: { payment_confirmation_email: { old: null, new: recipients.join(", ") } } as Record<string, { old: unknown; new: unknown }>,
+    changes: {
+      to: { old: null, new: primaryEmail ?? null },
+      cc: { old: null, new: ccEmails.length > 0 ? ccEmails.join(", ") : null },
+      subject: { old: null, new: `Payment Confirmation — ${bill.bill_number}` },
+    } as Record<string, { old: unknown; new: unknown }>,
   });
 
   return NextResponse.json({ message: "Payment confirmation sent successfully" });

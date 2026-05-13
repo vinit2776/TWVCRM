@@ -120,12 +120,14 @@ const PAYMENT_STATUS_COLORS: Record<string, string> = {
 };
 
 const AUDIT_ACTION_LABELS: Record<string, string> = {
-  created: "Created",
-  updated: "Updated",
-  approved: "Approved",
-  rejected: "Rejected",
-  deleted: "Deleted",
-  status_changed: "Status Changed",
+  create:        "Created",
+  update:        "Updated",
+  delete:        "Deleted",
+  login:         "Logged In",
+  email_sent:    "Email Sent",
+  approved:      "Approved",
+  rejected:      "Rejected",
+  status_changed:"Status Changed",
 };
 
 const ENTITY_TYPE_LABELS: Record<string, string> = {
@@ -140,7 +142,8 @@ function AuditEntry({ row, billId, poId, mrId }: { row: AuditRow; billId: string
   const entityLabel = ENTITY_TYPE_LABELS[row.entity_type] ?? row.entity_type;
 
   let dotColor = "bg-gray-300";
-  if (row.entity_id === billId) dotColor = "bg-blue-400";
+  if (row.action === "email_sent") dotColor = "bg-teal-400";
+  else if (row.entity_id === billId) dotColor = "bg-blue-400";
   else if (row.entity_id === poId) dotColor = "bg-purple-400";
   else if (row.entity_id === mrId) dotColor = "bg-orange-400";
 
@@ -163,7 +166,22 @@ function AuditEntry({ row, billId, poId, mrId }: { row: AuditRow; billId: string
         <p className="text-xs text-muted-foreground mt-0.5">
           {row.performer?.full_name ?? "System"}
         </p>
-        {hasChanges && (
+        {/* Email sent — show To/CC inline without expand */}
+        {row.action === "email_sent" && (
+          <div className="mt-1 text-xs bg-teal-50 border border-teal-100 rounded px-2 py-1.5 space-y-0.5">
+            {row.changes?.to?.new && (
+              <p><span className="text-muted-foreground font-medium">To:</span> <span className="text-teal-800">{String(row.changes.to.new)}</span></p>
+            )}
+            {row.changes?.cc?.new && (
+              <p><span className="text-muted-foreground font-medium">CC:</span> <span className="text-teal-800">{String(row.changes.cc.new)}</span></p>
+            )}
+            {row.changes?.subject?.new && (
+              <p><span className="text-muted-foreground font-medium">Subject:</span> <span className="text-muted-foreground">{String(row.changes.subject.new)}</span></p>
+            )}
+          </div>
+        )}
+
+        {hasChanges && row.action !== "email_sent" && (
           <button
             onClick={() => setExpanded(!expanded)}
             className="mt-1 text-xs text-primary flex items-center gap-1 hover:underline"
@@ -172,7 +190,7 @@ function AuditEntry({ row, billId, poId, mrId }: { row: AuditRow; billId: string
             {expanded ? "Hide" : "Show"} changes
           </button>
         )}
-        {expanded && hasChanges && (
+        {expanded && hasChanges && row.action !== "email_sent" && (
           <div className="mt-2 space-y-1">
             {Object.entries(row.changes).map(([field, { old: oldVal, new: newVal }]) => (
               <div key={field} className="text-xs bg-muted/50 rounded px-2 py-1">
@@ -857,10 +875,11 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
             <Clock className="h-4 w-4 text-muted-foreground" />
             Transaction Audit Trail
           </CardTitle>
-          <p className="text-xs text-muted-foreground mt-1 flex items-center gap-3">
+          <p className="text-xs text-muted-foreground mt-1 flex flex-wrap items-center gap-3">
             <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-orange-400" />Material Request</span>
             <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-purple-400" />Purchase Order</span>
             <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-blue-400" />Invoice / Bill</span>
+            <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-teal-400" />Email Sent</span>
           </p>
         </CardHeader>
         <CardContent>

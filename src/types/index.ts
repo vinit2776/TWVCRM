@@ -675,7 +675,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent";
 export type AuditEntityType =
   | "lead"
   | "activity"
