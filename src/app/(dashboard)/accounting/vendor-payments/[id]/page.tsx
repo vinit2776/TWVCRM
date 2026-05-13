@@ -7,7 +7,7 @@ import {
   ArrowLeft, FileText, Truck, ClipboardList, Package,
   ExternalLink, CheckCircle, AlertCircle, Clock, ChevronDown,
   ChevronUp, Send, CreditCard, Building2, ShieldCheck, Info,
-  PauseCircle, PlayCircle, BookOpen,
+  PauseCircle, PlayCircle, BookOpen, Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -233,6 +233,10 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const [sendConfirmation, setSendConfirmation] = useState(true);
   const [paymentCcEmail, setPaymentCcEmail] = useState("");
 
+  // Inline GST setter (for accounts role when GST wasn't set at approval)
+  const [inlineGstRate, setInlineGstRate] = useState<string>("0");
+  const [savingGst, setSavingGst] = useState(false);
+
   // TDS state
   type TdsSection = {
     code: string; description: string;
@@ -360,6 +364,33 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const netToVendor = tdsEnabled && tdsAmount > 0
     ? Number(payAmount) - tdsAmount
     : Number(payAmount);
+
+  async function handleSaveInlineGst() {
+    if (!bill) return;
+    setSavingGst(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${bill.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update_gst", gst_rate: Number(inlineGstRate) }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Failed to save GST rate"); return; }
+      toast.success("GST rate saved");
+      // Refresh chain so the ceiling recalculates
+      const chainRes = await fetch(`/api/procurement/bills/${bill.id}/chain`);
+      if (chainRes.ok) {
+        const { data } = await chainRes.json();
+        setChain(data);
+        const gstAmtNew = Number(data.bill.gst_amount ?? 0);
+        const newCeiling = Number(data.bill.approved_amount ?? data.bill.base_amount ?? data.bill.total_amount) + gstAmtNew;
+        const newOutstanding = Math.max(0, newCeiling - Number(data.bill.amount_paid ?? 0));
+        if (newOutstanding > 0) setPayAmount(newOutstanding.toFixed(2));
+      }
+    } finally {
+      setSavingGst(false);
+    }
+  }
 
   async function handleRecordPayment() {
     if (!payMode) { toast.error("Please select a payment mode"); return; }
@@ -1045,19 +1076,38 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 )}
               </div>
             ) : (
-              <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 text-sm flex items-center justify-between gap-3">
-                <div>
-                  <p className="font-medium text-gray-700">No GST recorded on this bill</p>
-                  <p className="text-xs text-gray-500 mt-0.5">If this vendor invoice includes GST, ask the approver (admin/manager) to set the GST rate on the Procurement → Bills page before recording payment.</p>
+              <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm space-y-2">
+                <p className="font-medium text-amber-800">GST Rate Not Set</p>
+                <p className="text-xs text-amber-700">Select the applicable GST rate on this vendor invoice. The system will back-calculate the base and update the payable amount.</p>
+                <div className="flex items-center gap-2">
+                  <Select value={inlineGstRate} onValueChange={setInlineGstRate}>
+                    <SelectTrigger className="h-8 text-xs flex-1">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">0% — Exempt / Not applicable</SelectItem>
+                      <SelectItem value="5">5% GST</SelectItem>
+                      <SelectItem value="12">12% GST</SelectItem>
+                      <SelectItem value="18">18% GST</SelectItem>
+                      <SelectItem value="28">28% GST</SelectItem>
+                    </SelectContent>
+                  </Select>
+                  <Button size="sm" className="h-8 text-xs shrink-0" onClick={handleSaveInlineGst} disabled={savingGst}>
+                    {savingGst && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                    Apply
+                  </Button>
                 </div>
-                <a
-                  href={`/procurement/bills/${bill.id}`}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-xs text-blue-600 hover:underline shrink-0"
-                >
-                  Open Bill ↗
-                </a>
+                {Number(inlineGstRate) > 0 && (() => {
+                  const rate = Number(inlineGstRate);
+                  const total = Number(bill.total_amount);
+                  const gstAmt = Math.round(total * rate / (100 + rate) * 100) / 100;
+                  const baseAmt = Math.round((total - gstAmt) * 100) / 100;
+                  return (
+                    <p className="text-xs text-amber-700">
+                      Base {formatCurrency(baseAmt)} + GST {formatCurrency(gstAmt)} = Max payable {formatCurrency(total)}
+                    </p>
+                  );
+                })()}
               </div>
             )}
 

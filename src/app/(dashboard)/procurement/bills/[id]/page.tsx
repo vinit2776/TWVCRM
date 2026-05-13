@@ -200,6 +200,7 @@ export default function VendorBillDetailPage() {
   const [approveAmount, setApproveAmount] = useState("");
   const [approveNote, setApproveNote] = useState("");
   const [batchType, setBatchType] = useState<PaymentBatchType | "">("");
+  const [approveGstRate, setApproveGstRate] = useState<string>("0");
 
   // Rejection dialog
   const [rejectDialog, setRejectDialog] = useState(false);
@@ -276,8 +277,13 @@ export default function VendorBillDetailPage() {
       toast.error("Select a payment batch schedule before approving");
       return;
     }
+    // GST rate is mandatory — approver must make an explicit selection (even 0% is valid)
+    if (approveGstRate === "") {
+      toast.error("Select the applicable GST rate on this invoice before approving");
+      return;
+    }
     setApproveLoading(true);
-    const body: Record<string, unknown> = { action: "approve", batch_type: batchType };
+    const body: Record<string, unknown> = { action: "approve", batch_type: batchType, gst_rate: Number(approveGstRate) };
     if (approveType === "partial") {
       const amt = parseFloat(approveAmount);
       if (!approveAmount || isNaN(amt) || amt <= 0) {
@@ -1249,6 +1255,60 @@ export default function VendorBillDetailPage() {
             <p className="text-sm text-muted-foreground">
               Invoice total: <strong>{formatCurrency(Number(bill.total_amount))}</strong>
             </p>
+
+            {/* ── GST Rate (required) ──────────────────────────── */}
+            <div className="space-y-2">
+              <Label>
+                GST Rate on this Invoice <span className="text-red-500">*</span>
+              </Label>
+              <p className="text-xs text-muted-foreground -mt-1">
+                Select the GST rate printed on the vendor&apos;s invoice. This determines how much accounts can pay above the approved base.
+              </p>
+              <div className="grid grid-cols-5 gap-2">
+                {([0, 5, 12, 18, 28] as const).map((rate) => {
+                  const isSelected = approveGstRate === String(rate);
+                  return (
+                    <button
+                      key={rate}
+                      type="button"
+                      onClick={() => setApproveGstRate(String(rate))}
+                      className={`rounded-lg border px-2 py-2.5 text-center transition-colors ${
+                        isSelected
+                          ? "border-blue-500 bg-blue-50 text-blue-900"
+                          : "border-muted hover:bg-muted/50"
+                      }`}
+                    >
+                      <p className="text-sm font-semibold">{rate}%</p>
+                      <p className={`text-xs mt-0.5 ${isSelected ? "text-blue-700" : "text-muted-foreground"}`}>
+                        {rate === 0 ? "Exempt" : "GST"}
+                      </p>
+                    </button>
+                  );
+                })}
+              </div>
+              {approveGstRate !== "" && approveGstRate !== "0" && (() => {
+                const rate = Number(approveGstRate);
+                const total = Number(bill.total_amount);
+                const gst = Math.round(total * rate / (100 + rate) * 100) / 100;
+                const base = Math.round((total - gst) * 100) / 100;
+                return (
+                  <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-xs space-y-1">
+                    <div className="flex justify-between text-blue-800">
+                      <span>Base Amount</span>
+                      <span className="font-medium">{formatCurrency(base)}</span>
+                    </div>
+                    <div className="flex justify-between text-blue-800">
+                      <span>GST ({rate}%)</span>
+                      <span className="font-medium">{formatCurrency(gst)}</span>
+                    </div>
+                    <div className="flex justify-between text-blue-900 font-semibold border-t border-blue-200 pt-1">
+                      <span>Total</span>
+                      <span>{formatCurrency(total)}</span>
+                    </div>
+                  </div>
+                );
+              })()}
+            </div>
 
             {/* ── Payment Batch Schedule ───────────────────────── */}
             <div className="space-y-2">

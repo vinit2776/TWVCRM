@@ -43,6 +43,9 @@ const patchBillSchema = z.discriminatedUnion("action", [
     approved_amount: z.number().positive().nullish(),
     approved_amount_note: z.string().nullish(),
     batch_type: z.enum(["immediate", "15th", "25th"]),
+    gst_rate: z.number().refine((v) => [0, 5, 12, 18, 28].includes(v), {
+      message: "GST rate must be 0, 5, 12, 18, or 28",
+    }).default(0),
   }),
   z.object({
     action: z.literal("override_batch"),
@@ -283,12 +286,18 @@ export async function PATCH(
 
       const batchDate = computeBatchDate(parsed.data.batch_type);
 
+      // Calculate GST fields from the rate provided at approval
+      const approveGstRate = parsed.data.gst_rate ?? 0;
+      const totalAmt = Number(bill.total_amount);
+      const approveGstAmount = Math.round((totalAmt * approveGstRate / (100 + approveGstRate)) * 100) / 100;
+      const approveBaseAmount = Math.round((totalAmt - approveGstAmount) * 100) / 100;
+
       updatePayload = {
         approval_status: "approved",
         approved_by: dbUser.id,
         approved_at: new Date().toISOString(),
         approval_code: billApprovalCode,
-        approved_amount: approvedAmt ?? Number(bill.total_amount),
+        approved_amount: approvedAmt ?? approveBaseAmount,
         approved_amount_note: parsed.data.approved_amount_note ?? null,
         rejection_reason: null,
         rejection_outcome: null,
@@ -296,6 +305,9 @@ export async function PATCH(
         payment_batch_date: toISODateString(batchDate),
         payment_batch_assigned_by: dbUser.id,
         payment_batch_assigned_at: new Date().toISOString(),
+        gst_rate: approveGstRate,
+        gst_amount: approveGstAmount,
+        base_amount: approveBaseAmount,
       };
 
       // For goods POs: advance status to invoice_approved
@@ -557,9 +569,10 @@ export async function PATCH(
     }
 
     case "update_gst": {
-      // Allow updating GST rate on bills that haven't been fully paid yet
-      if (!canApproveOrReject) {
-        return NextResponse.json({ error: "Only admin or manager can update GST on a bill" }, { status: 403 });
+      // Allow admin, manager, and accounts to set GST (accounts needs it when processing payment)
+      const canUpdateGst = ["admin", "manager", "accounts"].includes(dbUser.role);
+      if (!canUpdateGst) {
+        return NextResponse.json({ error: "Only admin, manager, or accounts can update GST on a bill" }, { status: 403 });
       }
       if (bill.payment_status === "paid") {
         return NextResponse.json({ error: "Cannot update GST on a fully paid bill" }, { status: 422 });
