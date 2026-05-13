@@ -1,19 +1,22 @@
 "use client";
 
+import {
+  FileText, CheckCircle2, Send, CreditCard, Receipt, BookCheck,
+  XCircle, Clock, AlertCircle,
+} from "lucide-react";
+
 /**
- * BillingLifecycleStatus — compact stepper showing where a billing
- * statement is in its lifecycle and what's holding it up.
+ * BillingLifecycleStatus — status badge showing where a billing statement
+ * is in its lifecycle and what the next action is.
  *
- * Steps:
- *   1. Generated    — draft created
- *   2. Reviewed     — staff has looked at it (finalized or confirm-sent)
- *   3. Invoice Sent — GST invoice emailed to customer
- *   4. Payment Link — Razorpay link created (optional — some pay by NEFT)
- *   5. Payment      — partially or fully paid
- *   6. Accounted    — entered into books
- *
- * Renders as: ●●●○○○  Label
- * The label shows the NEXT action needed (where it's stuck).
+ * Lifecycle stages:
+ *   Draft       → Needs finalizing
+ *   Finalized   → Send proforma invoice
+ *   Proforma    → Awaiting payment
+ *   Paid        → Generate GST invoice
+ *   Invoiced    → Accounted
+ *   Complete    → Done
+ *   Voided
  */
 
 interface LifecycleProps {
@@ -25,129 +28,135 @@ interface LifecycleProps {
   finalized_at?: string | null;
   gst_invoice_number?: string | null;
   proforma_sent_at?: string | null;
-  /** compact = dots only with tooltip; full = dots + label inline */
+  /** compact = badge only; full = badge + next-action hint below */
   variant?: "compact" | "full";
 }
 
-interface Step {
-  key: string;
+type Stage =
+  | "voided"
+  | "draft"
+  | "finalized"
+  | "proforma_sent"
+  | "partially_paid"
+  | "paid"
+  | "invoiced"
+  | "complete";
+
+interface StageConfig {
   label: string;
-  done: boolean;
+  next: string | null;
+  /** Tailwind classes for pill bg + text */
+  pill: string;
+  /** Tailwind class for icon color */
+  iconColor: string;
+  Icon: React.ElementType;
 }
 
-function resolveSteps(props: LifecycleProps): Step[] {
+const STAGE_CONFIG: Record<Stage, StageConfig> = {
+  voided: {
+    label: "Voided",
+    next: null,
+    pill: "bg-red-100 text-red-700 border border-red-200",
+    iconColor: "text-red-500",
+    Icon: XCircle,
+  },
+  draft: {
+    label: "Draft",
+    next: "Finalize to proceed",
+    pill: "bg-gray-100 text-gray-600 border border-gray-200",
+    iconColor: "text-gray-400",
+    Icon: FileText,
+  },
+  finalized: {
+    label: "Finalized",
+    next: "Send proforma invoice",
+    pill: "bg-amber-50 text-amber-700 border border-amber-200",
+    iconColor: "text-amber-500",
+    Icon: AlertCircle,
+  },
+  proforma_sent: {
+    label: "Proforma Sent",
+    next: "Awaiting payment",
+    pill: "bg-blue-50 text-blue-700 border border-blue-200",
+    iconColor: "text-blue-500",
+    Icon: Send,
+  },
+  partially_paid: {
+    label: "Partially Paid",
+    next: "Balance payment pending",
+    pill: "bg-orange-50 text-orange-700 border border-orange-200",
+    iconColor: "text-orange-500",
+    Icon: CreditCard,
+  },
+  paid: {
+    label: "Payment Received",
+    next: "Generate GST invoice",
+    pill: "bg-violet-50 text-violet-700 border border-violet-200",
+    iconColor: "text-violet-500",
+    Icon: CreditCard,
+  },
+  invoiced: {
+    label: "GST Invoice Sent",
+    next: "Mark as accounted",
+    pill: "bg-teal-50 text-teal-700 border border-teal-200",
+    iconColor: "text-teal-500",
+    Icon: Receipt,
+  },
+  complete: {
+    label: "Accounted",
+    next: null,
+    pill: "bg-green-50 text-green-700 border border-green-200",
+    iconColor: "text-green-500",
+    Icon: BookCheck,
+  },
+};
+
+function resolveStage(props: LifecycleProps): Stage {
   const {
     status,
-    emailed_at,
-    razorpay_payment_link_url,
     payment_status,
     accounted,
-    finalized_at,
     gst_invoice_number,
     proforma_sent_at,
   } = props;
 
+  if (status === "voided") return "voided";
+
   const isFinalized = status === "finalized" || status === "exported";
   const hasGstInvoice = !!gst_invoice_number;
-  const isEmailed = !!emailed_at && hasGstInvoice; // emailed_at now only set when GST invoice sent
-  const hasPayLink = !!razorpay_payment_link_url || !!proforma_sent_at;
+  const hasProforma = !!proforma_sent_at;
   const isPaid = payment_status === "paid";
   const isPartiallyPaid = payment_status === "partially_paid";
   const isAccounted = !!accounted;
-  void finalized_at; // used only to satisfy linting; isFinalized covers it
 
-  return [
-    { key: "generated", label: "Generated", done: true },
-    { key: "reviewed", label: "Reviewed", done: isFinalized },
-    { key: "proforma", label: "Proforma sent", done: hasPayLink || isPaid || isPartiallyPaid || hasGstInvoice },
-    { key: "payment", label: "Payment", done: isPaid || isPartiallyPaid },
-    { key: "invoiced", label: "GST invoice", done: isEmailed || hasGstInvoice },
-    { key: "accounted", label: "Accounted", done: isAccounted },
-  ];
-}
-
-function getCurrentLabel(steps: Step[], props: LifecycleProps): { text: string; color: string } {
-  const { payment_status } = props;
-
-  // Find first incomplete step
-  const firstIncomplete = steps.find((s) => !s.done);
-
-  if (!firstIncomplete) {
-    return { text: "Complete", color: "text-green-700" };
-  }
-
-  // Payment is a special case — partially paid shows differently
-  if (firstIncomplete.key === "payment" && payment_status === "partially_paid") {
-    return { text: "Partially paid", color: "text-amber-700" };
-  }
-
-  const labelMap: Record<string, { text: string; color: string }> = {
-    reviewed:  { text: "Awaiting review", color: "text-gray-600" },
-    proforma:  { text: "Send proforma", color: "text-amber-600" },
-    payment:   { text: "Awaiting payment", color: "text-orange-700" },
-    invoiced:  { text: "GST invoice pending", color: "text-amber-700" },
-    accounted: { text: "Not accounted", color: "text-blue-700" },
-  };
-
-  return labelMap[firstIncomplete.key] || { text: "In progress", color: "text-gray-600" };
+  if (!isFinalized) return "draft";
+  if (isAccounted && hasGstInvoice) return "complete";
+  if (hasGstInvoice) return "invoiced";
+  if (isPaid) return "paid";
+  if (isPartiallyPaid) return "partially_paid";
+  if (hasProforma) return "proforma_sent";
+  return "finalized";
 }
 
 export function BillingLifecycleStatus(props: LifecycleProps) {
-  const { variant = "compact", status } = props;
-
-  // Voided statements get a special red badge instead of the stepper
-  if (status === "voided") {
-    return (
-      <div className="flex items-center gap-1.5" title="This statement has been voided">
-        <span className="inline-block h-1.5 w-1.5 rounded-full bg-red-500" />
-        <span className="text-[11px] font-medium text-red-700 whitespace-nowrap">Voided</span>
-      </div>
-    );
-  }
-
-  const steps = resolveSteps(props);
-  const completedCount = steps.filter((s) => s.done).length;
-  const { text, color } = getCurrentLabel(steps, props);
-
-  // Build tooltip text listing all steps
-  const tooltipLines = steps
-    .map((s) => `${s.done ? "✓" : "•"} ${s.label}`)
-    .join("\n");
-  const tooltipText = `${text}\n\n${tooltipLines}`;
+  const { variant = "compact" } = props;
+  const stage = resolveStage(props);
+  const config = STAGE_CONFIG[stage];
+  const { Icon, pill, iconColor, label, next } = config;
 
   return (
-    <div
-      className="flex items-center gap-1.5"
-      title={tooltipText}
-    >
-      {/* Dots */}
-      <div className="flex items-center gap-0.5">
-        {steps.map((step, i) => (
-          <span
-            key={step.key}
-            className={`inline-block h-1.5 w-1.5 rounded-full ${
-              step.done
-                ? completedCount === steps.length
-                  ? "bg-green-500"
-                  : "bg-primary"
-                : "bg-gray-300"
-            }`}
-          />
-        ))}
-      </div>
+    <div className="flex flex-col gap-0.5 min-w-0">
+      {/* Main badge */}
+      <span className={`inline-flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium whitespace-nowrap ${pill}`}>
+        <Icon className={`h-3 w-3 shrink-0 ${iconColor}`} />
+        {label}
+      </span>
 
-      {/* Label — only in full variant */}
-      {variant === "full" && (
-        <span className={`text-xs font-medium whitespace-nowrap ${color}`}>
-          {text}
-        </span>
-      )}
-
-      {/* Compact variant shows a tiny label on hover via the title attr above,
-          but also shows a short inline hint */}
-      {variant === "compact" && (
-        <span className={`text-[11px] whitespace-nowrap ${color}`}>
-          {text}
+      {/* Next-action hint — shown in full variant, or always when there's a next action */}
+      {next && (
+        <span className="text-[10px] text-muted-foreground pl-1 flex items-center gap-1 whitespace-nowrap">
+          <Clock className="h-2.5 w-2.5 shrink-0" />
+          {next}
         </span>
       )}
     </div>
