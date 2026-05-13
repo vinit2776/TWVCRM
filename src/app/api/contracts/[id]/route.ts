@@ -163,16 +163,20 @@ export async function PATCH(
           .eq("id", oldContract.proposal_id)
           .single();
 
-        if (proposal) {
-          const missing: string[] = [];
-          if (proposal.payment_status !== "paid") missing.push("pro-rata / first invoice payment");
-          const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
-          if (depositRequired && proposal.deposit_payment_status !== "paid") missing.push("security deposit");
-          if (missing.length > 0) {
-            return NextResponse.json({
-              error: `Cannot activate: ${missing.join(" and ")} not yet collected on the linked proposal`,
-            }, { status: 400 });
-          }
+        if (!proposal) {
+          return NextResponse.json({
+            error: "Cannot activate: linked proposal could not be retrieved. Verify the proposal exists and is accessible.",
+          }, { status: 400 });
+        }
+
+        const missing: string[] = [];
+        if (proposal.payment_status !== "paid") missing.push("pro-rata / first invoice payment");
+        const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
+        if (depositRequired && proposal.deposit_payment_status !== "paid") missing.push("security deposit");
+        if (missing.length > 0) {
+          return NextResponse.json({
+            error: `Cannot activate: ${missing.join(" and ")} not yet collected on the linked proposal`,
+          }, { status: 400 });
         }
       }
       allowedFields.activated_at = now;
@@ -201,12 +205,17 @@ export async function PATCH(
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   if (dbUser?.id && oldContract) {
+    const auditChanges = diffChanges(oldContract as Record<string, unknown>, allowedFields);
+    // If admin used the payment override, record the reason explicitly in the audit trail
+    if (body.payment_override_reason && body.status === "active") {
+      auditChanges["payment_override_reason"] = { old: null, new: body.payment_override_reason };
+    }
     logAudit(supabase, {
       entityType: "contract",
       entityId: id,
       action: "update",
       performedBy: dbUser.id,
-      changes: diffChanges(oldContract as Record<string, unknown>, allowedFields),
+      changes: auditChanges,
     });
   }
 

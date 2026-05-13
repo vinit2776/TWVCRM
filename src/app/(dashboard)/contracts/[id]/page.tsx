@@ -495,7 +495,8 @@ export default function ContractDetailPage({
           )}
           {contract.status === "accepted" && (() => {
             const proposalPaid = !linkedProposal || linkedProposal.payment_status === "paid";
-            const depositPaid = !linkedProposal || linkedProposal.deposit_payment_status !== "pending";
+            const depositRequired = linkedProposal ? Number(linkedProposal.security_deposit_months || 0) > 0 : false;
+            const depositPaid = !linkedProposal || !depositRequired || linkedProposal.deposit_payment_status === "paid";
             const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
             const canActivate = proposalPaid && depositPaid && kycComplete;
             const hasDeferred = kycStatus.deferred > 0;

@@ -56,7 +56,7 @@ export function ContractLifecycle({ contract }: Props) {
   }) | undefined;
 
   if (proposal) {
-    const depositRequired = !!(contract.security_deposit_months && contract.security_deposit_months > 0);
+    const depositRequired = !!(proposal?.security_deposit_months && Number(proposal.security_deposit_months) > 0);
     const depositPaid = proposal.deposit_payment_status === "paid";
     const prorataPaid = proposal.payment_status === "paid";
     const allPaid = (!depositRequired || depositPaid) && prorataPaid;
