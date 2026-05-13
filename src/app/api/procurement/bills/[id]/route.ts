@@ -178,10 +178,12 @@ export async function PATCH(
         return NextResponse.json({ error: "This bill is already fully paid" }, { status: 422 });
       }
 
-      // Determine approved ceiling: approved base + GST (GST is always payable on top of approved amount)
+      // Determine approved ceiling: approved base + GST, capped at total_amount.
+      // Pre-GST-feature bills had approved_amount = full total (incl. GST); adding gst_amount again would overshoot.
       const gstAmount = Number(bill.gst_amount ?? 0);
-      const approvedBase = Number(bill.approved_amount ?? bill.base_amount ?? bill.total_amount);
-      const approvedCeiling = approvedBase + gstAmount;
+      const totalAmount = Number(bill.total_amount ?? 0);
+      const approvedBase = Number(bill.approved_amount ?? bill.base_amount ?? totalAmount);
+      const approvedCeiling = Math.min(approvedBase + gstAmount, totalAmount);
       const alreadyPaid = Number(bill.amount_paid ?? 0);
       const remainingApproved = approvedCeiling - alreadyPaid;
 

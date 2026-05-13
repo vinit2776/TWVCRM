@@ -8,6 +8,18 @@ TWV CRM is the internal operations platform for **The WorkVilla**, a coworking s
 
 **Production**: https://twv-crm.vercel.app (auto-deploys from `origin/main` via Vercel)
 
+## Mandatory: Build → Deploy → Browser Verify
+
+**Every feature or bug fix must follow this sequence before declaring it done:**
+
+1. `npm run build` — must compile with 0 TypeScript errors
+2. `git push origin main` — triggers CI (lint + build) and Vercel auto-deploy
+3. Wait for CI to pass: `gh run watch <run-id> --exit-status --repo vinit2776/TWVCRM`
+4. Reload the live page in the browser (Chrome MCP) and click through the actual UI change
+5. Only confirm completion to the user after seeing it work in the live browser
+
+**Never claim a feature is done based on local code alone.** The user expects a live browser screenshot proving it works. If it doesn't look right in the browser, investigate and fix before confirming.
+
 ## Commands
 
 ```bash

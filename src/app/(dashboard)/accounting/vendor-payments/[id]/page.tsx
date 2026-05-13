@@ -277,8 +277,13 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       setChain(data);
       setSendConfirmation(!!(data.vendor?.contact_email?.trim()));
       // Pre-fill payment amount with approved outstanding balance (base + GST)
+      // Cap at total_amount: old bills had approved_amount = total (incl. GST), adding gst again overshoots
       const gstAmtPrefill = Number(data.bill.gst_amount ?? 0);
-      const approvedCeiling = Number(data.bill.approved_amount ?? data.bill.base_amount ?? data.bill.total_amount) + gstAmtPrefill;
+      const totalAmtPrefill = Number(data.bill.total_amount ?? 0);
+      const approvedCeiling = Math.min(
+        Number(data.bill.approved_amount ?? data.bill.base_amount ?? totalAmtPrefill) + gstAmtPrefill,
+        totalAmtPrefill,
+      );
       const approvedOutstandingPrefill = Math.max(0, approvedCeiling - Number(data.bill.amount_paid ?? 0));
       if (approvedOutstandingPrefill > 0) setPayAmount(approvedOutstandingPrefill.toFixed(2));
     } else {
@@ -327,7 +332,11 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const outstanding = bill ? Math.max(0, Number(bill.total_amount) - Number(bill.amount_paid ?? 0)) : 0;
   const billGstAmount = bill ? Number(bill.gst_amount ?? 0) : 0;
   const billBaseAmount = bill ? Number(bill.base_amount ?? bill.total_amount) : 0;
-  const approvedCeiling = bill ? Number(bill.approved_amount ?? billBaseAmount) + billGstAmount : 0;
+  const billTotalAmount = bill ? Number(bill.total_amount ?? 0) : 0;
+  // Cap at total_amount: pre-GST-feature bills had approved_amount = full total; adding gst_amount on top overshoots
+  const approvedCeiling = bill
+    ? Math.min(Number(bill.approved_amount ?? billBaseAmount) + billGstAmount, billTotalAmount)
+    : 0;
   const approvedOutstanding = bill ? Math.max(0, approvedCeiling - Number(bill.amount_paid ?? 0)) : 0;
   const isPartialApproval = bill ? (bill.approved_amount !== null && Number(bill.approved_amount) < billBaseAmount) : false;
   const balancePendingApproval = isPartialApproval && bill ? billBaseAmount - Number(bill.approved_amount ?? 0) : 0;
