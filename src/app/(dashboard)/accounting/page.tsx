@@ -509,7 +509,12 @@ export default function AccountingPage() {
                                     : "—"}
                                 </td>
                                 <td className="px-4 py-2.5 text-right text-xs font-medium">
-                                  ₹{Number(bill.total_amount).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                                  <div>
+                                    <p>₹{Number(bill.total_amount).toLocaleString("en-IN", { minimumFractionDigits: 0 })}</p>
+                                    {Number(bill.gst_rate ?? 0) > 0 && (
+                                      <p className="text-[10px] text-blue-600 font-normal">+₹{Number(bill.gst_amount ?? 0).toLocaleString("en-IN", { minimumFractionDigits: 0 })} GST</p>
+                                    )}
+                                  </div>
                                 </td>
                                 <td className="px-4 py-2.5 hidden sm:table-cell text-xs text-muted-foreground">
                                   {bill.payment_date
