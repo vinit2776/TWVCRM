@@ -32,6 +32,8 @@ type VendorBillItem = {
   invoice_date: string;
   due_date: string | null;
   total_amount: number;
+  gst_rate: number | null;
+  gst_amount: number | null;
   amount_paid: number;
   payment_status: string;
   approval_status: string;
@@ -72,6 +74,8 @@ export default function AccountingPage() {
   const [vendorBills, setVendorBills]   = useState<VendorBillItem[]>([]);
   const [billsLoading, setBillsLoading] = useState(false);
   const [historyLimit, setHistoryLimit] = useState(10);
+  const [pendingPage, setPendingPage]   = useState(1);
+  const PENDING_PAGE_SIZE = 20;
 
   // Vendor-email audit widget (touch point C)
   const [emailAuditCount, setEmailAuditCount] = useState<number | null>(null);
@@ -81,11 +85,12 @@ export default function AccountingPage() {
   const [filters, setFilters] = useState<BillFilters>({
     ...EMPTY_FILTERS,
     approval_status: "approved",
-    limit: "300",
+    limit: "500",
   });
 
   const fetchVendorBills = useCallback(async () => {
     setBillsLoading(true);
+    setPendingPage(1); // reset to first page on any data refresh
     const params = filtersToParams(filters);
     const res = await fetch(`/api/procurement/bills?${params}`);
     if (res.ok) {
@@ -113,9 +118,11 @@ export default function AccountingPage() {
   }, [vendorBills]);  // refresh after bill list refresh — likely things have changed
 
   // ── Vendor bill helpers ───────────────────────────────────────────────────
-  const pendingBills     = vendorBills.filter((b) => b.payment_status !== "paid");
-  const allPaidBills     = vendorBills.filter((b) => b.payment_status === "paid");
-  const visiblePaidBills = allPaidBills.slice(0, historyLimit);
+  const pendingBills        = vendorBills.filter((b) => b.payment_status !== "paid");
+  const pendingTotalPages   = Math.ceil(pendingBills.length / PENDING_PAGE_SIZE);
+  const visiblePendingBills = pendingBills.slice((pendingPage - 1) * PENDING_PAGE_SIZE, pendingPage * PENDING_PAGE_SIZE);
+  const allPaidBills        = vendorBills.filter((b) => b.payment_status === "paid");
+  const visiblePaidBills    = allPaidBills.slice(0, historyLimit);
 
   const today = new Date().toISOString().split("T")[0];
 
@@ -294,11 +301,15 @@ export default function AccountingPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {pendingBills.map((bill) => {
-                          const outstanding        = Math.max(0, Number(bill.total_amount) - Number(bill.amount_paid ?? 0));
-                          const approvedCeiling    = Number(bill.approved_amount ?? bill.total_amount);
+                        {visiblePendingBills.map((bill) => {
+                          const gstAmt             = Number(bill.gst_amount ?? 0);
+                          const gstRate            = Number(bill.gst_rate ?? 0);
+                          const baseAmt            = Number(bill.total_amount);
+                          const totalPayable       = baseAmt + gstAmt; // base + additive GST
+                          const outstanding        = Math.max(0, totalPayable - Number(bill.amount_paid ?? 0));
+                          const approvedCeiling    = Number(bill.approved_amount ?? baseAmt) + gstAmt;
                           const approvedOutstanding = Math.max(0, approvedCeiling - Number(bill.amount_paid ?? 0));
-                          const isPartialApproval  = bill.approved_amount !== null && bill.approved_amount < bill.total_amount;
+                          const isPartialApproval  = bill.approved_amount !== null && Number(bill.approved_amount) < baseAmt - 0.01;
                           const isOverdue          = !!(bill.due_date && bill.due_date < today);
                           return (
                             <tr
@@ -342,7 +353,12 @@ export default function AccountingPage() {
                                 ) : <span className="text-muted-foreground">—</span>}
                               </td>
                               <td className="px-4 py-3 text-right text-xs">
-                                ₹{Number(bill.total_amount).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                                <div>
+                                  <p>₹{baseAmt.toLocaleString("en-IN", { minimumFractionDigits: 0 })}</p>
+                                  {gstRate > 0 && (
+                                    <p className="text-[10px] text-blue-600 font-normal">+₹{gstAmt.toLocaleString("en-IN", { minimumFractionDigits: 0 })} GST</p>
+                                  )}
+                                </div>
                               </td>
                               <td className="px-4 py-3 text-right text-xs hidden sm:table-cell text-green-700 font-medium">
                                 {Number(bill.amount_paid ?? 0) > 0 ? `₹${Number(bill.amount_paid).toLocaleString("en-IN", { minimumFractionDigits: 0 })}` : "—"}
@@ -383,15 +399,45 @@ export default function AccountingPage() {
                         <tr className="bg-muted/20 border-t">
                           <td colSpan={4} className="px-4 py-2.5 text-xs text-muted-foreground font-medium">
                             {pendingBills.length} bill{pendingBills.length !== 1 ? "s" : ""} pending payment
+                            {pendingTotalPages > 1 && ` · page ${pendingPage} of ${pendingTotalPages}`}
                           </td>
                           <td colSpan={3} className="px-4 py-2.5 text-right font-bold text-sm">
-                            ₹{pendingBills.reduce((s, b) => s + Math.max(0, Number(b.total_amount) - Number(b.amount_paid ?? 0)), 0).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
+                            ₹{pendingBills.reduce((s, b) => s + Math.max(0, Number(b.total_amount) + Number(b.gst_amount ?? 0) - Number(b.amount_paid ?? 0)), 0).toLocaleString("en-IN", { minimumFractionDigits: 0 })}
                           </td>
                           <td />
                         </tr>
                       </tfoot>
                     </table>
                   </div>
+
+                  {/* Pagination for pending bills */}
+                  {pendingTotalPages > 1 && (
+                    <div className="flex items-center justify-center gap-2 mt-3">
+                      <button
+                        className="px-3 py-1.5 text-xs rounded-md border hover:bg-muted/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                        onClick={() => setPendingPage((p) => Math.max(1, p - 1))}
+                        disabled={pendingPage === 1}
+                      >
+                        ← Prev
+                      </button>
+                      {Array.from({ length: pendingTotalPages }, (_, i) => i + 1).map((p) => (
+                        <button
+                          key={p}
+                          onClick={() => setPendingPage(p)}
+                          className={`px-3 py-1.5 text-xs rounded-md border transition-colors ${p === pendingPage ? "bg-primary text-primary-foreground border-primary" : "hover:bg-muted/50"}`}
+                        >
+                          {p}
+                        </button>
+                      ))}
+                      <button
+                        className="px-3 py-1.5 text-xs rounded-md border hover:bg-muted/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                        onClick={() => setPendingPage((p) => Math.min(pendingTotalPages, p + 1))}
+                        disabled={pendingPage === pendingTotalPages}
+                      >
+                        Next →
+                      </button>
+                    </div>
+                  )}
                 </div>
               ) : null}
 

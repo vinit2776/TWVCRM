@@ -1720,7 +1720,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           <div className="space-y-4 py-2">
             {vendor?.contact_email?.trim() ? (
               <div className="p-3 rounded-lg bg-muted/50 text-sm space-y-1">
-                <p className="text-muted-foreground text-xs">To</p>
+                <p className="text-muted-foreground text-xs">To (registered vendor email)</p>
                 <p className="font-medium">{vendor.contact_email.trim()}</p>
               </div>
             ) : vendor?.id ? (
@@ -1731,21 +1731,19 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 hideSkip
                 onEmailSaved={() => fetchChain()}
               />
-            ) : (
-              <p className="text-sm text-amber-700">No vendor linked to this bill — email cannot be added here.</p>
-            )}
+            ) : null}
             <div className="space-y-1.5">
               <Label>
-                {vendor?.contact_email?.trim() ? "CC (optional)" : "Or send to this address"}
+                {vendor?.contact_email?.trim() ? "CC / Additional recipient (optional)" : "Send to this address"}
               </Label>
               <Input
                 value={resendCc}
                 onChange={(e) => setResendCc(e.target.value)}
-                placeholder={vendor?.contact_email?.trim() ? "e.g. accounts@company.com" : "vendor@example.com"}
+                placeholder="vendor@example.com, accounts@company.com"
               />
               {!vendor?.contact_email?.trim() && (
                 <p className="text-xs text-muted-foreground">
-                  No primary email on file. You can send the confirmation to any address above, or add the vendor email using the form.
+                  Enter one or more email addresses (comma-separated). The confirmation will be sent to these addresses.
                 </p>
               )}
             </div>
