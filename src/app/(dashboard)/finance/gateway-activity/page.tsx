@@ -31,6 +31,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
+import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -235,7 +236,10 @@ export default function GatewayActivityPage() {
       {/* ── Header ── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Gateway Activity</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-2xl font-bold tracking-tight">Gateway Activity</h1>
+            <GuideReopenButton guideKey="gateway-activity" label="How it works" />
+          </div>
           <p className="text-sm text-muted-foreground mt-0.5">
             Razorpay transactions captured — cash flow expected in bank
           </p>
@@ -256,6 +260,41 @@ export default function GatewayActivityPage() {
           </Button>
         </div>
       </div>
+
+      <FinanceGuideCard
+        guideKey="gateway-activity"
+        accentColor="purple"
+        title="Welcome to Gateway Activity 👋"
+        subtitle="This is your live feed of every Razorpay payment — bookings, invoices, and anything paid via the gateway. Use it to reconcile what Razorpay collected vs. what landed in your bank."
+        steps={[
+          {
+            number: 1,
+            title: "Sync first",
+            description: "Click 'Sync Settlement Status' in the top-right to pull the latest data from Razorpay. Do this before reconciling.",
+          },
+          {
+            number: 2,
+            title: "Read the status columns",
+            description: "'Captured' means Razorpay has the money. 'Settled' means it's been transferred to your bank. 'Pending' means it's in transit (usually T+2 business days).",
+          },
+          {
+            number: 3,
+            title: "Find your transaction",
+            description: "Use the date range, payment method, or settlement filter to narrow down. The search box also matches payment IDs, UTRs, and customer names.",
+          },
+          {
+            number: 4,
+            title: "Match to your bank statement",
+            description: "The UTR column shows the exact reference that appears in your bank credit line. Copy it to verify a deposit.",
+          },
+          {
+            number: 5,
+            title: "'Not in CRM' transactions",
+            description: "Orange badges mean the payment was made via Razorpay but not through CRM flow (no booking or invoice linked). Flag these for review — they may be direct link payments.",
+          },
+        ]}
+        tip="The sync auto-extends backwards — if you sync with 3 months selected, it always covers from the oldest transaction ever synced, so you'll never have gaps."
+      />
 
       {/* ── Settlement info callout ── */}
       <div className="rounded-lg border border-blue-100 bg-blue-50 px-4 py-3 text-sm text-blue-800 flex gap-2.5">

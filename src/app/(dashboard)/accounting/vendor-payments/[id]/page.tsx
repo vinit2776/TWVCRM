@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { PROCUREMENT_DEPARTMENT_LABELS } from "@/lib/constants";
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
+import { FinanceGuideCard } from "@/components/finance/finance-guide-card";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -478,6 +479,45 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
 
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-4xl mx-auto">
+
+      {/* First-time guide — shown only to accounts role on first visit */}
+      {userRole === "accounts" && (
+        <FinanceGuideCard
+          guideKey="vendor-payment-detail"
+          accentColor="orange"
+          title="How to process this payment 👋"
+          subtitle="You're on an approved vendor invoice. Here's a quick checklist before you record the payment."
+          steps={[
+            {
+              number: 1,
+              title: "Check the Document Chain",
+              description: "Scroll down to see the MR → PO → Invoice chain. Click any reference to view details inline. This confirms the purchase was properly authorised.",
+            },
+            {
+              number: 2,
+              title: "Verify vendor KYC",
+              description: "Check that GSTIN, PAN, and bank account details are correct. Never pay a vendor with missing bank details or KYC pending.",
+            },
+            {
+              number: 3,
+              title: "Record the payment",
+              description: "Click 'Record Payment' at the top right. Enter the exact amount, mode (NEFT/RTGS/IMPS), UTR reference, and the payment date.",
+            },
+            {
+              number: 4,
+              title: "Something wrong?",
+              description: "Use 'Hold Payment' if anything looks off — wrong scan, wrong bank details, amount mismatch. Admin will be notified. Don't pay in doubt.",
+            },
+            {
+              number: 5,
+              title: "TDS applies?",
+              description: "The system will suggest TDS automatically. If applicable, enable it in the payment dialog and enter the pre-GST base amount. Net payable is calculated.",
+            },
+          ]}
+          tip="After recording, a confirmation email is automatically sent to the vendor's registered email. Make sure the email is on file before saving."
+        />
+      )}
+
       {/* Header */}
       <div className="flex items-start gap-3">
         <Button variant="ghost" size="sm" className="h-8 w-8 p-0 mt-0.5" onClick={() => router.push("/accounting?tab=vendor-payments")}>

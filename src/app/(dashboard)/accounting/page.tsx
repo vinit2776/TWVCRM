@@ -24,6 +24,7 @@ import { VendorEmailChip } from "@/components/finance-intelligence/vendor-email-
 import {
   BillSearchBar, filtersToParams, EMPTY_FILTERS, type BillFilters,
 } from "@/components/procurement/bill-search-bar";
+import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
 
 type VendorBillItem = {
   id: string;
@@ -126,7 +127,48 @@ export default function AccountingPage() {
       <div className="flex items-center gap-3">
         <Calculator className="h-6 w-6 text-primary" />
         <h1 className="text-2xl font-bold">Acc Payables</h1>
+        <GuideReopenButton guideKey="acc-payables" label="How it works" />
       </div>
+
+      <FinanceGuideCard
+        guideKey="acc-payables"
+        accentColor="blue"
+        title="Welcome to Accounts Payable 👋"
+        subtitle="This is where you pay approved vendor invoices. Procurement raises the bills — your job here is to verify and release payments."
+        steps={[
+          {
+            number: 1,
+            title: "Find the bill to pay",
+            description: "Approved bills from Procurement appear in the Pending tab. Click a bill number to open the full detail view.",
+          },
+          {
+            number: 2,
+            title: "Verify before paying",
+            description: "Inside the bill, check the vendor bank details, GST, PAN, and the attached invoice scan. Never pay without verifying.",
+          },
+          {
+            number: 3,
+            title: "Record the payment",
+            description: "Click 'Record Payment', enter the amount, mode (NEFT/RTGS etc.), UTR reference, and date. The vendor gets an email confirmation automatically.",
+          },
+          {
+            number: 4,
+            title: "Something doesn't look right?",
+            description: "Use 'Hold Payment' to flag the bill. Admin or Manager will be notified to resolve it before payment can proceed.",
+          },
+          {
+            number: 5,
+            title: "TDS deduction",
+            description: "If TDS applies (suggested automatically), enable it in the payment dialog, pick the section, and enter the pre-GST base amount. The net payable is calculated for you.",
+          },
+          {
+            number: 6,
+            title: "Petty cash",
+            description: "For small cash expenses (not vendor bills), use the Petty Cash tab to issue or record a disbursement.",
+          },
+        ]}
+        tip="If a vendor's email is missing, a banner will prompt you to add it before recording payment — confirmations can't be sent without it."
+      />
 
       <Tabs value={activeTab} onValueChange={setActiveTab}>
         <TabsList>
