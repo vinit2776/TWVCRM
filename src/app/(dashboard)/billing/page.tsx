@@ -18,6 +18,8 @@ import {
   IndianRupee,
   ScrollText,
   RefreshCcw,
+  Send,
+  FileCheck,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
@@ -143,6 +145,7 @@ interface BillingStatement {
   finalized_at?: string | null;
   gst_invoice_number?: string | null;
   voided_statement_id?: string | null;
+  proforma_sent_at?: string | null;
 }
 
 interface Pagination {
@@ -641,6 +644,46 @@ export default function BillingPage() {
       if (res.ok) { toast.success("Statement exported"); fetchStatements(); }
       else { const err = await res.json().catch(() => null); toast.error(err?.error || "Failed to export"); }
     } catch { toast.error("Failed to export statement"); }
+  };
+
+  const handleSendProforma = async (id: string) => {
+    const tid = toast.loading("Generating proforma & payment link…");
+    try {
+      const res = await fetch(`/api/billing-statements/${id}/send-proforma`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.dismiss(tid);
+        toast.success(json.emailedTo ? `Proforma sent to ${json.emailedTo}` : json.razorpayLinkUrl ? "Proforma generated. No email on file — share the payment link manually." : "Proforma generated");
+        fetchStatements();
+      } else {
+        toast.dismiss(tid);
+        toast.error(json.error || "Failed to send proforma");
+      }
+    } catch { toast.dismiss(tid); toast.error("Failed to send proforma"); }
+  };
+
+  const handleGenerateGstInvoice = async (id: string) => {
+    const tid = toast.loading("Generating GST invoice…");
+    try {
+      const res = await fetch(`/api/billing-statements/${id}/generate-gst-invoice`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.dismiss(tid);
+        toast.success(json.emailedTo ? `GST invoice ${json.invoiceNumber} sent to ${json.emailedTo}` : `GST invoice ${json.invoiceNumber} generated`);
+        fetchStatements();
+      } else {
+        toast.dismiss(tid);
+        toast.error(json.error || "Failed to generate GST invoice");
+      }
+    } catch { toast.dismiss(tid); toast.error("Failed to generate GST invoice"); }
   };
 
   const clearChargesFilters = () => {
@@ -1165,6 +1208,7 @@ export default function BillingPage() {
                           accounted={stmt.accounted}
                           finalized_at={stmt.finalized_at}
                           gst_invoice_number={stmt.gst_invoice_number}
+                          proforma_sent_at={stmt.proforma_sent_at}
                         />
                       </td>
                       <td className="px-4 py-3 text-right">
@@ -1184,20 +1228,30 @@ export default function BillingPage() {
                                 <CheckCircle className="mr-2 h-4 w-4" />Finalize
                               </DropdownMenuItem>
                             )}
+                            {(stmt.status === "finalized" || stmt.status === "exported") && !stmt.proforma_sent_at && !stmt.gst_invoice_number && (
+                              <DropdownMenuItem onClick={() => handleSendProforma(stmt.id)}>
+                                <Send className="mr-2 h-4 w-4" />Send Proforma + Payment Link
+                              </DropdownMenuItem>
+                            )}
+                            {stmt.status === "finalized" && stmt.proforma_sent_at && !stmt.gst_invoice_number && (
+                              <DropdownMenuItem onClick={() => handleSendProforma(stmt.id)}>
+                                <Send className="mr-2 h-4 w-4" />Resend Proforma
+                              </DropdownMenuItem>
+                            )}
+                            {(stmt.status === "finalized" || stmt.status === "exported") && !stmt.gst_invoice_number && (stmt.payment_status === "paid" || stmt.payment_status === "partially_paid") && (
+                              <DropdownMenuItem onClick={() => handleGenerateGstInvoice(stmt.id)}>
+                                <FileCheck className="mr-2 h-4 w-4" />Generate & Send GST Invoice
+                              </DropdownMenuItem>
+                            )}
                             {stmt.status === "finalized" && (
-                              <>
-                                <DropdownMenuItem onClick={() => handleExportStatement(stmt.id)}>
-                                  <Upload className="mr-2 h-4 w-4" />Export
-                                </DropdownMenuItem>
-                                <DropdownMenuItem
-                                  onClick={() => {
-                                    setRecordPaymentStatementId(stmt.id);
-                                    setRecordPaymentDialogOpen(true);
-                                  }}
-                                >
-                                  <IndianRupee className="mr-2 h-4 w-4" />Record Payment
-                                </DropdownMenuItem>
-                              </>
+                              <DropdownMenuItem
+                                onClick={() => {
+                                  setRecordPaymentStatementId(stmt.id);
+                                  setRecordPaymentDialogOpen(true);
+                                }}
+                              >
+                                <IndianRupee className="mr-2 h-4 w-4" />Record Offline Payment
+                              </DropdownMenuItem>
                             )}
                             {(stmt.status === "finalized" || stmt.status === "exported") && userRole === "admin" && (
                               <DropdownMenuItem

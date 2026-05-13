@@ -24,6 +24,7 @@ interface LifecycleProps {
   accounted?: boolean | null;
   finalized_at?: string | null;
   gst_invoice_number?: string | null;
+  proforma_sent_at?: string | null;
   /** compact = dots only with tooltip; full = dots + label inline */
   variant?: "compact" | "full";
 }
@@ -43,22 +44,24 @@ function resolveSteps(props: LifecycleProps): Step[] {
     accounted,
     finalized_at,
     gst_invoice_number,
+    proforma_sent_at,
   } = props;
 
   const isFinalized = status === "finalized" || status === "exported";
-  const hasInvoice = !!gst_invoice_number || !!finalized_at;
-  const isEmailed = !!emailed_at;
-  const hasPayLink = !!razorpay_payment_link_url;
+  const hasGstInvoice = !!gst_invoice_number;
+  const isEmailed = !!emailed_at && hasGstInvoice; // emailed_at now only set when GST invoice sent
+  const hasPayLink = !!razorpay_payment_link_url || !!proforma_sent_at;
   const isPaid = payment_status === "paid";
   const isPartiallyPaid = payment_status === "partially_paid";
   const isAccounted = !!accounted;
+  void finalized_at; // used only to satisfy linting; isFinalized covers it
 
   return [
-    { key: "generated", label: "Generated", done: true }, // always true if we have a row
-    { key: "reviewed", label: "Reviewed", done: isFinalized || hasInvoice },
-    { key: "invoiced", label: "Invoice sent", done: isEmailed && hasInvoice },
-    { key: "pay_link", label: "Payment link", done: hasPayLink || isPaid || isPartiallyPaid },
+    { key: "generated", label: "Generated", done: true },
+    { key: "reviewed", label: "Reviewed", done: isFinalized },
+    { key: "proforma", label: "Proforma sent", done: hasPayLink || isPaid || isPartiallyPaid || hasGstInvoice },
     { key: "payment", label: "Payment", done: isPaid || isPartiallyPaid },
+    { key: "invoiced", label: "GST invoice", done: isEmailed || hasGstInvoice },
     { key: "accounted", label: "Accounted", done: isAccounted },
   ];
 }
@@ -80,9 +83,9 @@ function getCurrentLabel(steps: Step[], props: LifecycleProps): { text: string; 
 
   const labelMap: Record<string, { text: string; color: string }> = {
     reviewed:  { text: "Awaiting review", color: "text-gray-600" },
-    invoiced:  { text: "Invoice not sent", color: "text-amber-700" },
-    pay_link:  { text: "No payment link", color: "text-amber-600" },
+    proforma:  { text: "Send proforma", color: "text-amber-600" },
     payment:   { text: "Awaiting payment", color: "text-orange-700" },
+    invoiced:  { text: "GST invoice pending", color: "text-amber-700" },
     accounted: { text: "Not accounted", color: "text-blue-700" },
   };
 

@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 import { Skeleton } from "@/components/shared/loading-skeleton";
-import { Loader2, CheckCircle, Upload, Plus, X } from "lucide-react";
+import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
@@ -83,6 +83,7 @@ interface Statement {
   accounted?: boolean | null;
   finalized_at?: string | null;
   gst_invoice_number?: string | null;
+  proforma_sent_at?: string | null;
   notes?: string;
   contract?: { id: string; contract_number: string; title?: string } | null;
   booking?: { id: string; booking_number: string; booking_date: string; guest_name?: string } | null;
@@ -115,6 +116,8 @@ export function ViewStatementDialog({
   const [statement, setStatement] = useState<Statement | null>(null);
   const [loading, setLoading] = useState(false);
   const [actioning, setActioning] = useState(false);
+  const [sendingProforma, setSendingProforma] = useState(false);
+  const [generatingGst, setGeneratingGst] = useState(false);
 
   // ── Inline "Add charge" form state ────────────────────────────────
   const [showAddCharge, setShowAddCharge] = useState(false);
@@ -225,6 +228,46 @@ export function ViewStatementDialog({
     } finally {
       setActioning(false);
     }
+  };
+
+  const handleSendProforma = async () => {
+    if (!statementId) return;
+    setSendingProforma(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/send-proforma`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(json.emailedTo ? `Proforma sent to ${json.emailedTo}` : "Proforma generated (no email on file)");
+        onStatusChange();
+        const refreshed = await fetch(`/api/billing-statements/${statementId}`);
+        if (refreshed.ok) { const j = await refreshed.json(); setStatement(j.data || null); }
+      } else {
+        toast.error(json.error || "Failed to send proforma");
+      }
+    } catch { toast.error("Something went wrong"); }
+    setSendingProforma(false);
+  };
+
+  const handleGenerateGstInvoice = async () => {
+    if (!statementId) return;
+    setGeneratingGst(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/generate-gst-invoice`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(json.emailedTo ? `GST invoice ${json.invoiceNumber} sent to ${json.emailedTo}` : `GST invoice ${json.invoiceNumber} generated`);
+        onStatusChange();
+        const refreshed = await fetch(`/api/billing-statements/${statementId}`);
+        if (refreshed.ok) { const j = await refreshed.json(); setStatement(j.data || null); }
+      } else {
+        toast.error(json.error || "Failed to generate GST invoice");
+      }
+    } catch { toast.error("Something went wrong"); }
+    setGeneratingGst(false);
   };
 
   const customerName = statement?.lead
@@ -590,27 +633,36 @@ export function ViewStatementDialog({
           <p className="text-sm text-muted-foreground py-4 text-center">Statement not found.</p>
         )}
 
-        <DialogFooter className="gap-2">
+        <DialogFooter className="gap-2 flex-wrap">
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
           {statement?.status === "draft" && (
-            <Button
-              onClick={() => handleStatusTransition("finalized")}
-              disabled={actioning}
-            >
+            <Button onClick={() => handleStatusTransition("finalized")} disabled={actioning}>
               {actioning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
               Finalize
             </Button>
           )}
-          {statement?.status === "finalized" && (
-            <Button
-              onClick={() => handleStatusTransition("exported")}
-              disabled={actioning}
-            >
-              {actioning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Upload className="mr-2 h-4 w-4" />}
-              Export
+          {/* Finalized: Send proforma (or resend) */}
+          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
+            <Button onClick={handleSendProforma} disabled={sendingProforma} variant={statement?.proforma_sent_at ? "outline" : "default"}>
+              {sendingProforma ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+              {statement?.proforma_sent_at ? "Resend Proforma" : "Send Proforma + Payment Link"}
             </Button>
+          )}
+          {/* Payment received offline: Generate GST invoice */}
+          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && (statement?.payment_status === "paid" || statement?.payment_status === "partially_paid") && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
+            <Button onClick={handleGenerateGstInvoice} disabled={generatingGst} className="bg-green-700 hover:bg-green-800">
+              {generatingGst ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileCheck className="mr-2 h-4 w-4" />}
+              Generate &amp; Send GST Invoice
+            </Button>
+          )}
+          {/* GST invoice already generated: show number */}
+          {statement?.gst_invoice_number && (
+            <div className="flex items-center gap-2 text-sm text-green-700 font-medium">
+              <FileCheck className="h-4 w-4" />
+              {statement.gst_invoice_number}
+            </div>
           )}
         </DialogFooter>
       </DialogContent>

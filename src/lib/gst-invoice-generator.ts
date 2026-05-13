@@ -75,6 +75,8 @@ function amountInWords(n: number): string {
 export interface GstInvoiceData {
   invoiceNumber: string;
   invoiceDate: string; // YYYY-MM-DD
+  /** When true, renders as "PROFORMA INVOICE" and omits GST registration footer note */
+  isProforma?: boolean;
   // Buyer
   buyerName: string;
   buyerAddress?: string;
@@ -106,6 +108,8 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   const pageWidth = doc.internal.pageSize.getWidth();
   let y = 10;
 
+  const isProforma = data.isProforma === true;
+
   // ── Header: Teal bar + logo ──
   doc.setFillColor(...BRAND_TEAL);
   doc.rect(0, 0, pageWidth, 4, "F");
@@ -117,19 +121,30 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     doc.addImage(TWV_LOGO_BASE64, "PNG", 14, 8, 52, 13);
   } catch { /* skip if logo fails */ }
 
-  // TAX INVOICE title
+  // Title: TAX INVOICE or PROFORMA INVOICE
   doc.setFontSize(16);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_TEAL);
-  doc.text("TAX INVOICE", pageWidth - 14, 16, { align: "right" });
+  doc.text(isProforma ? "PROFORMA INVOICE" : "TAX INVOICE", pageWidth - 14, 16, { align: "right" });
 
   // Invoice details (right side)
   doc.setFontSize(9);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(80, 80, 80);
-  doc.text(`Invoice No: ${data.invoiceNumber}`, pageWidth - 14, 22, { align: "right" });
-  doc.text(`Date: ${formatDateInv(data.invoiceDate)}`, pageWidth - 14, 27, { align: "right" });
-  doc.text(`Contract: ${data.contractNumber}`, pageWidth - 14, 32, { align: "right" });
+  if (isProforma) {
+    doc.text(`Proforma Ref: ${data.invoiceNumber}`, pageWidth - 14, 22, { align: "right" });
+    doc.text(`Date: ${formatDateInv(data.invoiceDate)}`, pageWidth - 14, 27, { align: "right" });
+    doc.text(`Contract: ${data.contractNumber}`, pageWidth - 14, 32, { align: "right" });
+    doc.setFontSize(7);
+    doc.setTextColor(150, 80, 0);
+    doc.text("Not a tax document — GST invoice will be issued upon payment", pageWidth - 14, 37, { align: "right" });
+    doc.setFontSize(9);
+    doc.setTextColor(80, 80, 80);
+  } else {
+    doc.text(`Invoice No: ${data.invoiceNumber}`, pageWidth - 14, 22, { align: "right" });
+    doc.text(`Date: ${formatDateInv(data.invoiceDate)}`, pageWidth - 14, 27, { align: "right" });
+    doc.text(`Contract: ${data.contractNumber}`, pageWidth - 14, 32, { align: "right" });
+  }
 
   y = 38;
 

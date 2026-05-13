@@ -234,6 +234,23 @@ export async function POST(request: NextRequest) {
         .update({ payment_status: newStatus })
         .eq("id", billingStatement.id);
 
+      // Auto-generate GST invoice when fully paid online
+      if (newStatus === "paid") {
+        try {
+          const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
+          fetch(`${appUrl}/api/billing-statements/${billingStatement.id}/generate-gst-invoice`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-internal-secret": process.env.CRON_SECRET || "",
+            },
+            body: JSON.stringify({ skipAuth: true }),
+          }).catch((err) => console.error("[webhook] GST invoice generation failed:", err));
+        } catch (err) {
+          console.error("[webhook] Could not trigger GST invoice generation:", err);
+        }
+      }
+
       return NextResponse.json({ status: "ok", entity: "billing_statement" });
     }
 
