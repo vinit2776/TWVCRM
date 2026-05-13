@@ -317,6 +317,24 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     doc.text(urlLines, 14 + 22, y);
     y += 4.5 * urlLines.length;
     doc.setFontSize(8);
+
+    // "PAY NOW" clickable button
+    if (isProforma) {
+      const btnW = 28;
+      const btnH = 7;
+      const btnX = 14;
+      const btnY = y;
+      // Green filled button
+      doc.setFillColor(0, 160, 95);
+      doc.roundedRect(btnX, btnY, btnW, btnH, 1.5, 1.5, "F");
+      doc.setFont("helvetica", "bold");
+      doc.setFontSize(8);
+      doc.setTextColor(255, 255, 255);
+      doc.text("PAY NOW →", btnX + btnW / 2, btnY + 4.8, { align: "center" });
+      // Make the button area a clickable hyperlink
+      doc.link(btnX, btnY, btnW, btnH, { url: data.razorpayUrl });
+      y += btnH + 3;
+    }
   }
 
   // QR code block (right column) — proforma only
