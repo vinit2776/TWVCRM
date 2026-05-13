@@ -40,8 +40,12 @@ export async function POST(
 
   const vendor = bill.procurement_vendors as { id: string; name: string; contact_name?: string; contact_email?: string } | null;
 
+  if (!vendor) {
+    return NextResponse.json({ error: "Vendor not found for this bill" }, { status: 404 });
+  }
+
   // Allow send when primary email is missing only if CC addresses were provided
-  if (!vendor?.contact_email && ccEmails.length === 0) {
+  if (!vendor.contact_email && ccEmails.length === 0) {
     return NextResponse.json({ error: "Vendor has no registered email address. Add the vendor email or provide a CC address to send to." }, { status: 422 });
   }
 
