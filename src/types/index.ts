@@ -1999,6 +1999,9 @@ export interface VendorBill {
   approval_code?: string;
   approved_amount?: number | null;
   approved_amount_note?: string | null;
+  gst_rate?: number | null;
+  gst_amount?: number | null;
+  base_amount?: number | null;
   rejection_reason?: string;
   rejection_outcome?: RejectionOutcome;
   // Payment batch scheduling

@@ -212,6 +212,11 @@ export default function VendorBillDetailPage() {
   const [resendCc, setResendCc] = useState("");
   const [resendLoading, setResendLoading] = useState(false);
 
+  // GST update
+  const [gstDialog, setGstDialog] = useState(false);
+  const [gstRate, setGstRate] = useState<string>("0");
+  const [gstLoading, setGstLoading] = useState(false);
+
   const today = new Date().toISOString().split("T")[0];
 
   // Fetch current user role
@@ -358,6 +363,24 @@ export default function VendorBillDetailPage() {
     }
   };
 
+
+  const handleUpdateGst = async () => {
+    setGstLoading(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update_gst", gst_rate: Number(gstRate) }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Failed to update GST"); return; }
+      toast.success("GST rate updated");
+      setGstDialog(false);
+      await fetchAll();
+    } finally {
+      setGstLoading(false);
+    }
+  };
 
   if (loading) {
     return (
@@ -681,6 +704,35 @@ export default function VendorBillDetailPage() {
               <span className="text-sm text-muted-foreground">Invoice Amount</span>
               <span className="text-xl font-bold">{formatCurrency(bill.total_amount)}</span>
             </div>
+
+            {/* GST Breakdown */}
+            {(() => {
+              const gstAmt = Number(bill.gst_amount ?? 0);
+              const baseAmt = Number(bill.base_amount ?? bill.total_amount);
+              const gstRateVal = Number(bill.gst_rate ?? 0);
+              return (
+                <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 space-y-1">
+                  <div className="flex justify-between text-xs text-blue-700">
+                    <span>Base (excl. GST)</span>
+                    <span className="font-medium">{formatCurrency(baseAmt)}</span>
+                  </div>
+                  <div className="flex justify-between text-xs text-blue-700">
+                    <span>GST @{gstRateVal}%</span>
+                    <span className="font-medium">{gstRateVal > 0 ? `+ ${formatCurrency(gstAmt)}` : "—"}</span>
+                  </div>
+                  {canApprove && bill.payment_status !== "paid" && (
+                    <button
+                      type="button"
+                      onClick={() => { setGstRate(String(gstRateVal)); setGstDialog(true); }}
+                      className="text-[10px] text-blue-500 hover:text-blue-700 underline mt-0.5"
+                    >
+                      {gstRateVal > 0 ? "Change GST rate" : "Set GST rate"}
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
+
             {bill.approved_amount !== null && Number(bill.approved_amount) < Number(bill.total_amount) && (
               <div className="flex justify-between text-sm">
                 <span className="text-amber-700 font-medium">Approved for Payment</span>
@@ -1397,6 +1449,61 @@ export default function VendorBillDetailPage() {
             >
               <Send className="h-4 w-4" />
               {resendLoading ? "Sending…" : "Resend"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* GST Rate Dialog */}
+      <Dialog open={gstDialog} onOpenChange={setGstDialog}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Set GST Rate</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Select the GST rate applicable on this vendor invoice. The system will back-calculate the GST amount from the GST-inclusive total of {formatCurrency(bill.total_amount)}.
+            </p>
+            <div className="space-y-1.5">
+              <Label>GST Rate</Label>
+              <Select value={gstRate} onValueChange={setGstRate}>
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">0% — Exempt / Not applicable</SelectItem>
+                  <SelectItem value="5">5% GST</SelectItem>
+                  <SelectItem value="12">12% GST</SelectItem>
+                  <SelectItem value="18">18% GST</SelectItem>
+                  <SelectItem value="28">28% GST</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            {Number(gstRate) > 0 && (() => {
+              const rate = Number(gstRate);
+              const total = Number(bill.total_amount);
+              const gstAmt = Math.round(total * rate / (100 + rate) * 100) / 100;
+              const baseAmt = Math.round((total - gstAmt) * 100) / 100;
+              return (
+                <div className="rounded-md bg-blue-50 border border-blue-100 px-3 py-2 text-sm space-y-1">
+                  <div className="flex justify-between text-blue-700">
+                    <span>Base (excl. GST)</span><span className="font-medium">{formatCurrency(baseAmt)}</span>
+                  </div>
+                  <div className="flex justify-between text-blue-700">
+                    <span>GST @{rate}%</span><span className="font-medium">+ {formatCurrency(gstAmt)}</span>
+                  </div>
+                  <div className="flex justify-between text-blue-900 font-semibold border-t border-blue-200 pt-1">
+                    <span>Total (GST-inclusive)</span><span>{formatCurrency(total)}</span>
+                  </div>
+                </div>
+              );
+            })()}
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setGstDialog(false)} disabled={gstLoading}>Cancel</Button>
+            <Button onClick={handleUpdateGst} disabled={gstLoading}>
+              {gstLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Save GST Rate
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -1028,8 +1028,8 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           )}
 
           <div className="space-y-4 py-1">
-            {/* GST Breakdown Banner */}
-            {billGstAmount > 0 && (
+            {/* GST Breakdown Banner — always visible */}
+            {billGstAmount > 0 ? (
               <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm space-y-1">
                 <p className="font-medium text-blue-800">GST Included in This Invoice</p>
                 <div className="text-blue-700 grid grid-cols-3 gap-1 text-xs">
@@ -1043,6 +1043,21 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 {isPartialApproval && (
                   <p className="text-xs text-blue-600 italic">Base approved: {formatCurrency(Number(bill.approved_amount))} + GST: {formatCurrency(billGstAmount)}</p>
                 )}
+              </div>
+            ) : (
+              <div className="p-3 rounded-lg bg-gray-50 border border-gray-200 text-sm flex items-center justify-between gap-3">
+                <div>
+                  <p className="font-medium text-gray-700">No GST recorded on this bill</p>
+                  <p className="text-xs text-gray-500 mt-0.5">If this vendor invoice includes GST, ask the approver (admin/manager) to set the GST rate on the Procurement → Bills page before recording payment.</p>
+                </div>
+                <a
+                  href={`/procurement/bills/${bill.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-blue-600 hover:underline shrink-0"
+                >
+                  Open Bill ↗
+                </a>
               </div>
             )}
 
