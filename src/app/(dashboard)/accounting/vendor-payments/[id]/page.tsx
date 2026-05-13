@@ -276,14 +276,10 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       const { data } = await res.json();
       setChain(data);
       setSendConfirmation(!!(data.vendor?.contact_email?.trim()));
-      // Pre-fill payment amount with approved outstanding balance (base + GST)
-      // Cap at total_amount: old bills had approved_amount = total (incl. GST), adding gst again overshoots
+      // total_amount = base (pre-GST). gst_amount is additive. Ceiling = approved_base + gst_amount.
       const gstAmtPrefill = Number(data.bill.gst_amount ?? 0);
       const totalAmtPrefill = Number(data.bill.total_amount ?? 0);
-      const approvedCeiling = Math.min(
-        Number(data.bill.approved_amount ?? data.bill.base_amount ?? totalAmtPrefill) + gstAmtPrefill,
-        totalAmtPrefill,
-      );
+      const approvedCeiling = Number(data.bill.approved_amount ?? totalAmtPrefill) + gstAmtPrefill;
       const approvedOutstandingPrefill = Math.max(0, approvedCeiling - Number(data.bill.amount_paid ?? 0));
       if (approvedOutstandingPrefill > 0) setPayAmount(approvedOutstandingPrefill.toFixed(2));
     } else {
@@ -331,11 +327,10 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const vendor = chain?.vendor;
   const outstanding = bill ? Math.max(0, Number(bill.total_amount) - Number(bill.amount_paid ?? 0)) : 0;
   const billGstAmount = bill ? Number(bill.gst_amount ?? 0) : 0;
-  const billBaseAmount = bill ? Number(bill.base_amount ?? bill.total_amount) : 0;
-  const billTotalAmount = bill ? Number(bill.total_amount ?? 0) : 0;
-  // Cap at total_amount: pre-GST-feature bills had approved_amount = full total; adding gst_amount on top overshoots
+  // total_amount IS the base (pre-GST). gst_amount is additive on top.
+  const billBaseAmount = bill ? Number(bill.total_amount ?? 0) : 0;
   const approvedCeiling = bill
-    ? Math.min(Number(bill.approved_amount ?? billBaseAmount) + billGstAmount, billTotalAmount)
+    ? Number(bill.approved_amount ?? billBaseAmount) + billGstAmount
     : 0;
   const approvedOutstanding = bill ? Math.max(0, approvedCeiling - Number(bill.amount_paid ?? 0)) : 0;
   const isPartialApproval = bill ? (bill.approved_amount !== null && Number(bill.approved_amount) < billBaseAmount) : false;
@@ -1108,12 +1103,11 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 </div>
                 {Number(inlineGstRate) > 0 && (() => {
                   const rate = Number(inlineGstRate);
-                  const total = Number(bill.total_amount);
-                  const gstAmt = Math.round(total * rate / (100 + rate) * 100) / 100;
-                  const baseAmt = Math.round((total - gstAmt) * 100) / 100;
+                  const base = Number(bill.total_amount); // total_amount IS the base (pre-GST)
+                  const gstAmt = Math.round(base * rate / 100 * 100) / 100;
                   return (
                     <p className="text-xs text-amber-700">
-                      Base {formatCurrency(baseAmt)} + GST {formatCurrency(gstAmt)} = Max payable {formatCurrency(total)}
+                      Base {formatCurrency(base)} + GST {formatCurrency(gstAmt)} = Max payable {formatCurrency(base + gstAmt)}
                     </p>
                   );
                 })()}

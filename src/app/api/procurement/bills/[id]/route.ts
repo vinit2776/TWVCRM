@@ -178,12 +178,12 @@ export async function PATCH(
         return NextResponse.json({ error: "This bill is already fully paid" }, { status: 422 });
       }
 
-      // Determine approved ceiling: approved base + GST, capped at total_amount.
-      // Pre-GST-feature bills had approved_amount = full total (incl. GST); adding gst_amount again would overshoot.
+      // total_amount = base (pre-GST). gst_amount is additive on top.
+      // Approved ceiling = approved base + GST. This will exceed total_amount — that is correct.
       const gstAmount = Number(bill.gst_amount ?? 0);
       const totalAmount = Number(bill.total_amount ?? 0);
-      const approvedBase = Number(bill.approved_amount ?? bill.base_amount ?? totalAmount);
-      const approvedCeiling = Math.min(approvedBase + gstAmount, totalAmount);
+      const approvedBase = Number(bill.approved_amount ?? totalAmount);
+      const approvedCeiling = approvedBase + gstAmount;
       const alreadyPaid = Number(bill.amount_paid ?? 0);
       const remainingApproved = approvedCeiling - alreadyPaid;
 
@@ -288,11 +288,11 @@ export async function PATCH(
 
       const batchDate = computeBatchDate(parsed.data.batch_type);
 
-      // Calculate GST fields from the rate provided at approval
+      // total_amount = base (pre-GST). GST is additive: gst_amount = base × rate/100.
       const approveGstRate = parsed.data.gst_rate ?? 0;
-      const totalAmt = Number(bill.total_amount);
-      const approveGstAmount = Math.round((totalAmt * approveGstRate / (100 + approveGstRate)) * 100) / 100;
-      const approveBaseAmount = Math.round((totalAmt - approveGstAmount) * 100) / 100;
+      const totalAmt = Number(bill.total_amount); // this IS the base
+      const approveGstAmount = Math.round(totalAmt * approveGstRate / 100 * 100) / 100;
+      const approveBaseAmount = totalAmt; // base = total_amount
 
       updatePayload = {
         approval_status: "approved",
@@ -580,15 +580,15 @@ export async function PATCH(
         return NextResponse.json({ error: "Cannot update GST on a fully paid bill" }, { status: 422 });
       }
 
-      const totalAmount = Number(bill.total_amount);
+      // total_amount = base (pre-GST). GST is additive: gst_amount = base × rate/100.
+      const totalAmount = Number(bill.total_amount); // this IS the base
       const newGstRate = parsed.data.gst_rate;
-      const newGstAmount = Math.round((totalAmount * newGstRate / (100 + newGstRate)) * 100) / 100;
-      const newBaseAmount = Math.round((totalAmount - newGstAmount) * 100) / 100;
+      const newGstAmount = Math.round(totalAmount * newGstRate / 100 * 100) / 100;
 
       updatePayload = {
         gst_rate: newGstRate,
         gst_amount: newGstAmount,
-        base_amount: newBaseAmount,
+        base_amount: totalAmount, // base_amount = total_amount (same thing)
       };
       break;
     }

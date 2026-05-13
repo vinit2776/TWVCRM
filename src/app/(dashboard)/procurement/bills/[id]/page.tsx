@@ -711,15 +711,15 @@ export default function VendorBillDetailPage() {
               <span className="text-xl font-bold">{formatCurrency(bill.total_amount)}</span>
             </div>
 
-            {/* GST Breakdown */}
+            {/* GST Breakdown — total_amount is base (pre-GST), gst_amount is additive */}
             {(() => {
               const gstAmt = Number(bill.gst_amount ?? 0);
-              const baseAmt = Number(bill.base_amount ?? bill.total_amount);
+              const baseAmt = Number(bill.total_amount); // total_amount IS the base
               const gstRateVal = Number(bill.gst_rate ?? 0);
               return (
                 <div className="rounded-md border border-blue-100 bg-blue-50 px-3 py-2 space-y-1">
                   <div className="flex justify-between text-xs text-blue-700">
-                    <span>Base (excl. GST)</span>
+                    <span>Base (pre-GST)</span>
                     <span className="font-medium">{formatCurrency(baseAmt)}</span>
                   </div>
                   <div className="flex justify-between text-xs text-blue-700">
@@ -1288,22 +1288,21 @@ export default function VendorBillDetailPage() {
               </div>
               {approveGstRate !== "" && approveGstRate !== "0" && (() => {
                 const rate = Number(approveGstRate);
-                const total = Number(bill.total_amount);
-                const gst = Math.round(total * rate / (100 + rate) * 100) / 100;
-                const base = Math.round((total - gst) * 100) / 100;
+                const base = Number(bill.total_amount); // total_amount IS the base (pre-GST)
+                const gst = Math.round(base * rate / 100 * 100) / 100;
                 return (
                   <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-xs space-y-1">
                     <div className="flex justify-between text-blue-800">
-                      <span>Base Amount</span>
+                      <span>Base Amount (pre-GST)</span>
                       <span className="font-medium">{formatCurrency(base)}</span>
                     </div>
                     <div className="flex justify-between text-blue-800">
                       <span>GST ({rate}%)</span>
-                      <span className="font-medium">{formatCurrency(gst)}</span>
+                      <span className="font-medium">+ {formatCurrency(gst)}</span>
                     </div>
                     <div className="flex justify-between text-blue-900 font-semibold border-t border-blue-200 pt-1">
-                      <span>Total</span>
-                      <span>{formatCurrency(total)}</span>
+                      <span>Total Payable</span>
+                      <span>{formatCurrency(base + gst)}</span>
                     </div>
                   </div>
                 );
@@ -1541,19 +1540,18 @@ export default function VendorBillDetailPage() {
             </div>
             {Number(gstRate) > 0 && (() => {
               const rate = Number(gstRate);
-              const total = Number(bill.total_amount);
-              const gstAmt = Math.round(total * rate / (100 + rate) * 100) / 100;
-              const baseAmt = Math.round((total - gstAmt) * 100) / 100;
+              const base = Number(bill.total_amount); // total_amount IS the base (pre-GST)
+              const gstAmt = Math.round(base * rate / 100 * 100) / 100;
               return (
                 <div className="rounded-md bg-blue-50 border border-blue-100 px-3 py-2 text-sm space-y-1">
                   <div className="flex justify-between text-blue-700">
-                    <span>Base (excl. GST)</span><span className="font-medium">{formatCurrency(baseAmt)}</span>
+                    <span>Base (pre-GST)</span><span className="font-medium">{formatCurrency(base)}</span>
                   </div>
                   <div className="flex justify-between text-blue-700">
                     <span>GST @{rate}%</span><span className="font-medium">+ {formatCurrency(gstAmt)}</span>
                   </div>
                   <div className="flex justify-between text-blue-900 font-semibold border-t border-blue-200 pt-1">
-                    <span>Total (GST-inclusive)</span><span>{formatCurrency(total)}</span>
+                    <span>Total Payable</span><span>{formatCurrency(base + gstAmt)}</span>
                   </div>
                 </div>
               );
