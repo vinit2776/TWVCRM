@@ -54,6 +54,9 @@ type ChainData = {
     approved_at: string | null; approval_code: string | null;
     approved_amount: number | null;
     approved_amount_note: string | null;
+    gst_rate: number | null;
+    gst_amount: number | null;
+    base_amount: number | null;
     payment_hold_status: string | null;
     payment_hold_reason: string | null;
     payment_hold_notes: string | null;
@@ -269,8 +272,9 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       const { data } = await res.json();
       setChain(data);
       setSendConfirmation(!!(data.vendor?.contact_email?.trim()));
-      // Pre-fill payment amount with approved outstanding balance
-      const approvedCeiling = Number(data.bill.approved_amount ?? data.bill.total_amount);
+      // Pre-fill payment amount with approved outstanding balance (base + GST)
+      const gstAmtPrefill = Number(data.bill.gst_amount ?? 0);
+      const approvedCeiling = Number(data.bill.approved_amount ?? data.bill.base_amount ?? data.bill.total_amount) + gstAmtPrefill;
       const approvedOutstandingPrefill = Math.max(0, approvedCeiling - Number(data.bill.amount_paid ?? 0));
       if (approvedOutstandingPrefill > 0) setPayAmount(approvedOutstandingPrefill.toFixed(2));
     } else {
@@ -317,10 +321,12 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const bill = chain?.bill;
   const vendor = chain?.vendor;
   const outstanding = bill ? Math.max(0, Number(bill.total_amount) - Number(bill.amount_paid ?? 0)) : 0;
-  const approvedCeiling = bill ? Number(bill.approved_amount ?? bill.total_amount) : 0;
+  const billGstAmount = bill ? Number(bill.gst_amount ?? 0) : 0;
+  const billBaseAmount = bill ? Number(bill.base_amount ?? bill.total_amount) : 0;
+  const approvedCeiling = bill ? Number(bill.approved_amount ?? billBaseAmount) + billGstAmount : 0;
   const approvedOutstanding = bill ? Math.max(0, approvedCeiling - Number(bill.amount_paid ?? 0)) : 0;
-  const isPartialApproval = bill ? (bill.approved_amount !== null && Number(bill.approved_amount) < Number(bill.total_amount)) : false;
-  const balancePendingApproval = isPartialApproval && bill ? Number(bill.total_amount) - approvedCeiling : 0;
+  const isPartialApproval = bill ? (bill.approved_amount !== null && Number(bill.approved_amount) < billBaseAmount) : false;
+  const balancePendingApproval = isPartialApproval && bill ? billBaseAmount - Number(bill.approved_amount ?? 0) : 0;
   const isFullyPaid = bill?.payment_status === "paid";
   const isOnHold = bill?.payment_hold_status === "on_hold";
   const canHoldPayment = (userRole === "accounts" || userRole === "admin" || userRole === "office_admin") && !isFullyPaid;
@@ -1022,6 +1028,24 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           )}
 
           <div className="space-y-4 py-1">
+            {/* GST Breakdown Banner */}
+            {billGstAmount > 0 && (
+              <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-sm space-y-1">
+                <p className="font-medium text-blue-800">GST Included in This Invoice</p>
+                <div className="text-blue-700 grid grid-cols-3 gap-1 text-xs">
+                  <span>Base (excl. GST)</span>
+                  <span className="text-center">GST @{bill.gst_rate ?? 0}%</span>
+                  <span className="text-right">Max Payable</span>
+                  <span className="font-semibold">{formatCurrency(billBaseAmount)}</span>
+                  <span className="text-center font-semibold">+ {formatCurrency(billGstAmount)}</span>
+                  <span className="text-right font-semibold text-blue-900">{formatCurrency(approvedCeiling)}</span>
+                </div>
+                {isPartialApproval && (
+                  <p className="text-xs text-blue-600 italic">Base approved: {formatCurrency(Number(bill.approved_amount))} + GST: {formatCurrency(billGstAmount)}</p>
+                )}
+              </div>
+            )}
+
             {isPartialApproval && (
               <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm space-y-1">
                 <p className="font-medium text-amber-800">⚠ Partial Payment Approved</p>

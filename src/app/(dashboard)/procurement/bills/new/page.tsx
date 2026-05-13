@@ -50,6 +50,7 @@ function NewVendorBillForm() {
   const [invoiceDate, setInvoiceDate] = useState(today);
   const [dueDate, setDueDate] = useState("");
   const [totalAmount, setTotalAmount] = useState("");
+  const [gstRate, setGstRate] = useState<number>(0);
   const [notes, setNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
 
@@ -321,6 +322,7 @@ function NewVendorBillForm() {
         invoice_date: invoiceDate,
         due_date: dueDate || null,
         total_amount: parseFloat(totalAmount),
+        gst_rate: gstRate,
         notes: notes.trim() || null,
         invoice_file_url: invoiceFileUrl,
         replaces_bill_id: replacesBill?.id ?? null,
@@ -581,6 +583,33 @@ function NewVendorBillForm() {
                   Max: {formatCurrency(effectiveCeiling)} ({hasShortfall ? "proportionate received value" : "PO value"})
                 </p>
               ) : null}
+            </div>
+
+            {/* GST Rate */}
+            <div className="space-y-1.5">
+              <Label htmlFor="gst_rate">GST Rate</Label>
+              <Select value={String(gstRate)} onValueChange={(v) => setGstRate(Number(v))}>
+                <SelectTrigger id="gst_rate">
+                  <SelectValue placeholder="Select GST rate" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="0">0% — Exempt / Not applicable</SelectItem>
+                  <SelectItem value="5">5% GST</SelectItem>
+                  <SelectItem value="12">12% GST</SelectItem>
+                  <SelectItem value="18">18% GST</SelectItem>
+                  <SelectItem value="28">28% GST</SelectItem>
+                </SelectContent>
+              </Select>
+              {gstRate > 0 && totalAmount && !isNaN(parseFloat(totalAmount)) && parseFloat(totalAmount) > 0 && (() => {
+                const amt = parseFloat(totalAmount);
+                const gstAmt = Math.round(amt * gstRate / (100 + gstRate) * 100) / 100;
+                const baseAmt = Math.round((amt - gstAmt) * 100) / 100;
+                return (
+                  <p className="text-xs text-muted-foreground">
+                    Base ₹{baseAmt.toLocaleString("en-IN", { minimumFractionDigits: 2 })} + GST ₹{gstAmt.toLocaleString("en-IN", { minimumFractionDigits: 2 })} = Total ₹{amt.toLocaleString("en-IN", { minimumFractionDigits: 2 })}
+                  </p>
+                );
+              })()}
             </div>
 
             <div className="space-y-1.5">

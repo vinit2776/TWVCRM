@@ -69,6 +69,12 @@ const patchBillSchema = z.discriminatedUnion("action", [
     action: z.literal("release_hold"),
     resolution_notes: z.string().max(500).nullish(),
   }),
+  z.object({
+    action: z.literal("update_gst"),
+    gst_rate: z.number().refine((v) => [0, 5, 12, 18, 28].includes(v), {
+      message: "GST rate must be 0, 5, 12, 18, or 28",
+    }),
+  }),
 ]);
 
 export async function GET(
@@ -169,23 +175,28 @@ export async function PATCH(
         return NextResponse.json({ error: "This bill is already fully paid" }, { status: 422 });
       }
 
-      // Determine approved ceiling: approved_amount if set, else total_amount
-      const approvedCeiling = Number(bill.approved_amount ?? bill.total_amount);
+      // Determine approved ceiling: approved base + GST (GST is always payable on top of approved amount)
+      const gstAmount = Number(bill.gst_amount ?? 0);
+      const approvedBase = Number(bill.approved_amount ?? bill.base_amount ?? bill.total_amount);
+      const approvedCeiling = approvedBase + gstAmount;
       const alreadyPaid = Number(bill.amount_paid ?? 0);
       const remainingApproved = approvedCeiling - alreadyPaid;
 
       if (parsed.data.amount > remainingApproved + 0.01) {
+        const ceilingLabel = gstAmount > 0
+          ? `₹${approvedBase.toFixed(2)} (base) + ₹${gstAmount.toFixed(2)} (GST) = ₹${approvedCeiling.toFixed(2)}`
+          : `₹${approvedCeiling.toFixed(2)}`;
         return NextResponse.json(
-          { error: `Payment of ₹${parsed.data.amount} exceeds the approved balance of ₹${remainingApproved.toFixed(2)}. Only the approved amount can be paid.` },
+          { error: `Payment of ₹${parsed.data.amount} exceeds the approved balance of ₹${remainingApproved.toFixed(2)}. Approved ceiling: ${ceilingLabel}.` },
           { status: 422 }
         );
       }
 
       const newAmountPaid = alreadyPaid + parsed.data.amount;
-      // Mark as paid when approved ceiling is reached (not necessarily total_amount)
+      // Mark as paid when approved ceiling (base + GST) is fully settled
       const paymentStatus =
         newAmountPaid >= approvedCeiling - 0.01
-          ? newAmountPaid >= Number(bill.total_amount) - 0.01 ? "paid" : "partially_paid"
+          ? "paid"
           : newAmountPaid > 0
           ? "partially_paid"
           : "unpaid";
@@ -541,6 +552,28 @@ export async function PATCH(
         payment_hold_resolved_by: dbUser.id,
         payment_hold_resolved_at: new Date().toISOString(),
         payment_hold_resolution_notes: parsed.data.resolution_notes ?? null,
+      };
+      break;
+    }
+
+    case "update_gst": {
+      // Allow updating GST rate on bills that haven't been fully paid yet
+      if (!canApproveOrReject) {
+        return NextResponse.json({ error: "Only admin or manager can update GST on a bill" }, { status: 403 });
+      }
+      if (bill.payment_status === "paid") {
+        return NextResponse.json({ error: "Cannot update GST on a fully paid bill" }, { status: 422 });
+      }
+
+      const totalAmount = Number(bill.total_amount);
+      const newGstRate = parsed.data.gst_rate;
+      const newGstAmount = Math.round((totalAmount * newGstRate / (100 + newGstRate)) * 100) / 100;
+      const newBaseAmount = Math.round((totalAmount - newGstAmount) * 100) / 100;
+
+      updatePayload = {
+        gst_rate: newGstRate,
+        gst_amount: newGstAmount,
+        base_amount: newBaseAmount,
       };
       break;
     }
