@@ -69,6 +69,10 @@ function NewVendorBillForm() {
   const [dueDateHintDismissed, setDueDateHintDismissed] = useState(false);
   const [anomalyDismissed, setAnomalyDismissed] = useState(false);
 
+  // Note suggestions (Finance Intelligence — Day 7)
+  const [noteSuggestions, setNoteSuggestions] = useState<string[]>([]);
+  const [notesFocused, setNotesFocused] = useState(false);
+
   // File upload state
   const [invoiceFile, setInvoiceFile] = useState<File | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -203,6 +207,34 @@ function NewVendorBillForm() {
 
     return () => { cancelled = true; clearTimeout(t); };
   }, [vendorId, totalAmount, invoiceDate, poId]);
+
+  // ── Note suggestions — debounced fetch (Day 7) ──────────────────────────────
+  useEffect(() => {
+    if (!vendorId || !notesFocused) { setNoteSuggestions([]); return; }
+    const q = notes.trim();
+    // Only query when ≥3 chars typed, or on first focus (show recent notes)
+    if (q.length > 0 && q.length < 3) { setNoteSuggestions([]); return; }
+
+    let cancelled = false;
+    const delay = q.length === 0 ? 0 : 300;
+    const t = setTimeout(async () => {
+      try {
+        const params = new URLSearchParams({ vendor_id: vendorId });
+        if (q) params.set("q", q);
+        const res = await fetch(`/api/finance-intelligence/note-suggestions?${params}`);
+        if (!cancelled && res.ok) {
+          const json = await res.json();
+          // Don't show suggestions that exactly match what's already typed
+          const filtered = (json.suggestions as string[]).filter(
+            (s) => s.toLowerCase() !== q.toLowerCase(),
+          );
+          setNoteSuggestions(filtered);
+        }
+      } catch { /* non-fatal */ }
+    }, delay);
+
+    return () => { cancelled = true; clearTimeout(t); };
+  }, [vendorId, notes, notesFocused]);
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -649,8 +681,30 @@ function NewVendorBillForm() {
               placeholder="Any additional notes..."
               value={notes}
               onChange={(e) => setNotes(e.target.value)}
+              onFocus={() => setNotesFocused(true)}
+              onBlur={() => setTimeout(() => setNotesFocused(false), 150)}
               rows={2}
             />
+            {/* Past-notes suggestion chips (description_templates) */}
+            {notesFocused && noteSuggestions.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 pt-0.5">
+                {noteSuggestions.map((s) => (
+                  <button
+                    key={s}
+                    type="button"
+                    onMouseDown={(e) => {
+                      e.preventDefault(); // keep textarea focused
+                      setNotes(s);
+                      setNoteSuggestions([]);
+                    }}
+                    className="text-xs bg-muted hover:bg-muted/70 border border-border rounded-full px-2.5 py-1 text-foreground/80 transition-colors text-left max-w-[280px] truncate"
+                    title={s}
+                  >
+                    {s}
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
 
           {/* Batch-date suggestion (batch_date_suggestion) */}

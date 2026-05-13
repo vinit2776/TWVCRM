@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { IndianRupee, ChevronLeft, ChevronRight, Loader2, CalendarClock, AlertTriangle, CheckCircle2 } from "lucide-react";
+import { IndianRupee, ChevronLeft, ChevronRight, Loader2, CalendarClock, AlertTriangle, CheckCircle2, ClockAlert, ChevronDown, ChevronUp, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -27,6 +27,7 @@ import {
 import { computeBatchDate, formatBatchDate, batchDateLabel } from "@/lib/payment-batch";
 import { toast } from "sonner";
 import type { VendorBill, PurchaseOrder, PaymentBatchType } from "@/types";
+import type { GapAlertItem } from "@/app/api/finance-intelligence/gap-alerts/route";
 
 const today = new Date().toISOString().split("T")[0];
 
@@ -76,6 +77,10 @@ export default function PayablesPage() {
   const [processingPo, setProcessingPo] = useState<PurchaseOrder | null>(null);
   const [advancePaymentDate, setAdvancePaymentDate] = useState(today);
   const [processingLoading, setProcessingLoading] = useState(false);
+
+  // ── Gap alerts (Finance Intelligence — Day 8) ─────────────────────────────
+  const [gapAlerts, setGapAlerts] = useState<GapAlertItem[]>([]);
+  const [gapAlertsExpanded, setGapAlertsExpanded] = useState(false);
 
   // ── Fetch current user role ───────────────────────────────────────────────
   useEffect(() => {
@@ -132,6 +137,14 @@ export default function PayablesPage() {
   useEffect(() => { fetchBills(); }, [fetchBills]);
   useEffect(() => { fetchAdvances(); }, [fetchAdvances]);
   useEffect(() => { fetchBatchSummary(); }, [fetchBatchSummary]);
+
+  // Fetch gap alerts once on mount
+  useEffect(() => {
+    fetch("/api/finance-intelligence/gap-alerts")
+      .then((r) => r.ok ? r.json() : { alerts: [] })
+      .then((j) => setGapAlerts(j.alerts ?? []))
+      .catch(() => {});
+  }, []);
 
   // ── Derive batch tabs from bills ─────────────────────────────────────────
   const batchTabs = (() => {
@@ -378,6 +391,75 @@ export default function PayablesPage() {
                   )}
                 </button>
               ))}
+            </div>
+          )}
+
+          {/* ── Invoice Gap Alerts (Finance Intelligence — Day 8) ──────────── */}
+          {gapAlerts.length > 0 && (
+            <div className="rounded-lg border border-orange-200 bg-orange-50">
+              <button
+                type="button"
+                className="w-full flex items-center justify-between gap-3 px-4 py-3 text-left"
+                onClick={() => setGapAlertsExpanded((v) => !v)}
+              >
+                <div className="flex items-center gap-2.5">
+                  <ClockAlert className="h-4 w-4 text-orange-600 shrink-0" />
+                  <div>
+                    <p className="text-sm font-semibold text-orange-900">
+                      {gapAlerts.length} vendor invoice{gapAlerts.length > 1 ? "s" : ""} overdue
+                    </p>
+                    <p className="text-xs text-orange-700">
+                      {gapAlerts.slice(0, 2).map((a) => a.vendor_name ?? "Unknown").join(", ")}
+                      {gapAlerts.length > 2 ? ` +${gapAlerts.length - 2} more` : ""} — haven&apos;t billed in longer than usual
+                    </p>
+                  </div>
+                </div>
+                {gapAlertsExpanded
+                  ? <ChevronUp className="h-4 w-4 text-orange-500 shrink-0" />
+                  : <ChevronDown className="h-4 w-4 text-orange-500 shrink-0" />}
+              </button>
+
+              {gapAlertsExpanded && (
+                <div className="border-t border-orange-200 divide-y divide-orange-100">
+                  {gapAlerts.map((alert) => (
+                    <div key={alert.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                      <div className="min-w-0">
+                        <p className="text-sm font-medium text-orange-900 truncate">
+                          {alert.vendor_name ?? "Unknown vendor"}
+                        </p>
+                        <p className="text-xs text-orange-700 mt-0.5">
+                          Last bill: <span className="font-medium">{formatDate(alert.last_invoice_date)}</span>
+                          {" · "}{alert.days_since_last} days ago
+                          {" · "}normal cadence every {alert.median_interval} days
+                          {" · "}expected by {formatDate(alert.expected_by)}
+                        </p>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        {alert.last_bill_id && (
+                          <Link
+                            href={`/procurement/bills/${alert.last_bill_id}`}
+                            className="text-xs text-orange-700 hover:text-orange-900 underline font-mono"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {alert.last_bill_number}
+                          </Link>
+                        )}
+                        <button
+                          type="button"
+                          title="Dismiss alert"
+                          onClick={async () => {
+                            await fetch(`/api/finance-intelligence/gap-alerts?id=${alert.id}`, { method: "DELETE" });
+                            setGapAlerts((prev) => prev.filter((a) => a.id !== alert.id));
+                          }}
+                          className="text-orange-400 hover:text-orange-700"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
 
