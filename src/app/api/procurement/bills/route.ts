@@ -5,8 +5,6 @@ import { sendPushToAll } from "@/lib/push";
 import { z } from "zod";
 import { applyBillFilters, resolveFreeTextIds } from "@/lib/bills-query";
 
-const GST_RATES = [0, 5, 12, 18, 28] as const;
-
 const createBillSchema = z.object({
   po_id: z.string().uuid().nullish(),
   vendor_id: z.string().uuid(),
@@ -14,9 +12,7 @@ const createBillSchema = z.object({
   invoice_date: z.string().min(1, "Invoice date is required"),
   due_date: z.string().nullish(),
   total_amount: z.number().positive("Total amount must be greater than 0"),
-  gst_rate: z.number().refine((v) => (GST_RATES as readonly number[]).includes(v), {
-    message: "GST rate must be 0, 5, 12, 18, or 28",
-  }).default(0),
+  gst_amount: z.number().min(0).default(0),
   notes: z.string().nullish(),
   invoice_file_url: z.string().url().nullish(),
   service_report_id: z.string().uuid().nullish(),
@@ -230,9 +226,8 @@ export async function POST(request: NextRequest) {
     poAdvanceCredit > 0 ? "partially_paid" :
     "unpaid";
 
-  const gstRate   = parsed.data.gst_rate ?? 0;
-  const gstAmount = Math.round((parsed.data.total_amount * gstRate / (100 + gstRate)) * 100) / 100;
-  const baseAmount = Math.round((parsed.data.total_amount - gstAmount) * 100) / 100;
+  const gstAmount = Math.round((parsed.data.gst_amount ?? 0) * 100) / 100;
+  const baseAmount = parsed.data.total_amount; // total_amount IS the base (pre-GST)
 
   const { data: bill, error: billError } = await supabase
     .from("vendor_bills")
@@ -243,7 +238,7 @@ export async function POST(request: NextRequest) {
       invoice_date: parsed.data.invoice_date,
       due_date: parsed.data.due_date ?? null,
       total_amount: parsed.data.total_amount,
-      gst_rate: gstRate,
+      gst_rate: 0,
       gst_amount: gstAmount,
       base_amount: baseAmount,
       notes: parsed.data.notes ?? null,

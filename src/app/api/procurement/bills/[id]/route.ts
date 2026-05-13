@@ -43,9 +43,7 @@ const patchBillSchema = z.discriminatedUnion("action", [
     approved_amount: z.number().positive().nullish(),
     approved_amount_note: z.string().nullish(),
     batch_type: z.enum(["immediate", "15th", "25th"]),
-    gst_rate: z.number().refine((v) => [0, 5, 12, 18, 28].includes(v), {
-      message: "GST rate must be 0, 5, 12, 18, or 28",
-    }).default(0),
+    gst_amount: z.number().min(0, "GST amount must be 0 or greater"),
   }),
   z.object({
     action: z.literal("override_batch"),
@@ -74,9 +72,7 @@ const patchBillSchema = z.discriminatedUnion("action", [
   }),
   z.object({
     action: z.literal("update_gst"),
-    gst_rate: z.number().refine((v) => [0, 5, 12, 18, 28].includes(v), {
-      message: "GST rate must be 0, 5, 12, 18, or 28",
-    }),
+    gst_amount: z.number().min(0, "GST amount must be 0 or greater"),
   }),
 ]);
 
@@ -288,18 +284,16 @@ export async function PATCH(
 
       const batchDate = computeBatchDate(parsed.data.batch_type);
 
-      // total_amount = base (pre-GST). GST is additive: gst_amount = base × rate/100.
-      const approveGstRate = parsed.data.gst_rate ?? 0;
+      // total_amount = base (pre-GST). gst_amount is entered directly by approver.
       const totalAmt = Number(bill.total_amount); // this IS the base
-      const approveGstAmount = Math.round(totalAmt * approveGstRate / 100 * 100) / 100;
-      const approveBaseAmount = totalAmt; // base = total_amount
+      const approveGstAmount = Math.round((parsed.data.gst_amount ?? 0) * 100) / 100;
 
       updatePayload = {
         approval_status: "approved",
         approved_by: dbUser.id,
         approved_at: new Date().toISOString(),
         approval_code: billApprovalCode,
-        approved_amount: approvedAmt ?? approveBaseAmount,
+        approved_amount: approvedAmt ?? totalAmt,
         approved_amount_note: parsed.data.approved_amount_note ?? null,
         rejection_reason: null,
         rejection_outcome: null,
@@ -307,9 +301,9 @@ export async function PATCH(
         payment_batch_date: toISODateString(batchDate),
         payment_batch_assigned_by: dbUser.id,
         payment_batch_assigned_at: new Date().toISOString(),
-        gst_rate: approveGstRate,
+        gst_rate: 0,
         gst_amount: approveGstAmount,
-        base_amount: approveBaseAmount,
+        base_amount: totalAmt,
       };
 
       // For goods POs: advance status to invoice_approved
@@ -580,13 +574,12 @@ export async function PATCH(
         return NextResponse.json({ error: "Cannot update GST on a fully paid bill" }, { status: 422 });
       }
 
-      // total_amount = base (pre-GST). GST is additive: gst_amount = base × rate/100.
+      // total_amount = base (pre-GST). gst_amount is entered directly.
       const totalAmount = Number(bill.total_amount); // this IS the base
-      const newGstRate = parsed.data.gst_rate;
-      const newGstAmount = Math.round(totalAmount * newGstRate / 100 * 100) / 100;
+      const newGstAmount = Math.round((parsed.data.gst_amount ?? 0) * 100) / 100;
 
       updatePayload = {
-        gst_rate: newGstRate,
+        gst_rate: 0,
         gst_amount: newGstAmount,
         base_amount: totalAmount, // base_amount = total_amount (same thing)
       };

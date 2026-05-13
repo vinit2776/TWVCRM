@@ -234,7 +234,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const [paymentCcEmail, setPaymentCcEmail] = useState("");
 
   // Inline GST setter (for accounts role when GST wasn't set at approval)
-  const [inlineGstRate, setInlineGstRate] = useState<string>("0");
+  const [inlineGstAmount, setInlineGstAmount] = useState<string>("");
   const [savingGst, setSavingGst] = useState(false);
 
   // TDS state
@@ -376,11 +376,11 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       const res = await fetch(`/api/procurement/bills/${bill.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "update_gst", gst_rate: Number(inlineGstRate) }),
+        body: JSON.stringify({ action: "update_gst", gst_amount: parseFloat(inlineGstAmount) || 0 }),
       });
       const json = await res.json();
-      if (!res.ok) { toast.error(json.error || "Failed to save GST rate"); return; }
-      toast.success("GST rate saved");
+      if (!res.ok) { toast.error(json.error || "Failed to save GST amount"); return; }
+      toast.success("GST amount saved");
       // Refresh chain so the ceiling recalculates
       const chainRes = await fetch(`/api/procurement/bills/${bill.id}/chain`);
       if (chainRes.ok) {
@@ -1069,7 +1069,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 <p className="font-medium text-blue-800">GST Included in This Invoice</p>
                 <div className="text-blue-700 grid grid-cols-3 gap-1 text-xs">
                   <span>Base (excl. GST)</span>
-                  <span className="text-center">GST @{bill.gst_rate ?? 0}%</span>
+                  <span className="text-center">GST</span>
                   <span className="text-right">Max Payable</span>
                   <span className="font-semibold">{formatCurrency(billBaseAmount)}</span>
                   <span className="text-center font-semibold">+ {formatCurrency(billGstAmount)}</span>
@@ -1078,33 +1078,56 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 {isPartialApproval && (
                   <p className="text-xs text-blue-600 italic">Base approved: {formatCurrency(Number(bill.approved_amount))} + GST: {formatCurrency(billGstAmount)}</p>
                 )}
+                <button
+                  type="button"
+                  onClick={() => { setInlineGstAmount(String(billGstAmount)); }}
+                  className="text-[10px] text-blue-500 hover:text-blue-700 underline"
+                >
+                  Change GST amount
+                </button>
+                {inlineGstAmount !== "" && (
+                  <div className="flex items-center gap-2 pt-1">
+                    <Input
+                      type="number"
+                      min="0"
+                      step="0.01"
+                      placeholder="0.00"
+                      value={inlineGstAmount}
+                      onChange={(e) => setInlineGstAmount(e.target.value)}
+                      className="h-8 text-xs flex-1"
+                    />
+                    <Button size="sm" className="h-8 text-xs shrink-0" onClick={handleSaveInlineGst} disabled={savingGst}>
+                      {savingGst && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                      Save
+                    </Button>
+                    <Button size="sm" variant="ghost" className="h-8 text-xs shrink-0" onClick={() => setInlineGstAmount("")} disabled={savingGst}>
+                      Cancel
+                    </Button>
+                  </div>
+                )}
               </div>
             ) : (
               <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-sm space-y-2">
-                <p className="font-medium text-amber-800">GST Rate Not Set</p>
-                <p className="text-xs text-amber-700">Select the applicable GST rate on this vendor invoice. The system will back-calculate the base and update the payable amount.</p>
+                <p className="font-medium text-amber-800">GST Amount Not Set</p>
+                <p className="text-xs text-amber-700">Enter the GST amount from the vendor&apos;s invoice. This may be a consolidated figure across multiple GST slabs. Enter 0 if exempt.</p>
                 <div className="flex items-center gap-2">
-                  <Select value={inlineGstRate} onValueChange={setInlineGstRate}>
-                    <SelectTrigger className="h-8 text-xs flex-1">
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="0">0% — Exempt / Not applicable</SelectItem>
-                      <SelectItem value="5">5% GST</SelectItem>
-                      <SelectItem value="12">12% GST</SelectItem>
-                      <SelectItem value="18">18% GST</SelectItem>
-                      <SelectItem value="28">28% GST</SelectItem>
-                    </SelectContent>
-                  </Select>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={inlineGstAmount}
+                    onChange={(e) => setInlineGstAmount(e.target.value)}
+                    className="h-8 text-xs flex-1"
+                  />
                   <Button size="sm" className="h-8 text-xs shrink-0" onClick={handleSaveInlineGst} disabled={savingGst}>
                     {savingGst && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
                     Apply
                   </Button>
                 </div>
-                {Number(inlineGstRate) > 0 && (() => {
-                  const rate = Number(inlineGstRate);
-                  const base = Number(bill.total_amount); // total_amount IS the base (pre-GST)
-                  const gstAmt = Math.round(base * rate / 100 * 100) / 100;
+                {parseFloat(inlineGstAmount) > 0 && (() => {
+                  const gstAmt = parseFloat(inlineGstAmount);
+                  const base = Number(bill.total_amount);
                   return (
                     <p className="text-xs text-amber-700">
                       Base {formatCurrency(base)} + GST {formatCurrency(gstAmt)} = Max payable {formatCurrency(base + gstAmt)}
