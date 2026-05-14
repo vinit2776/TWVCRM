@@ -456,6 +456,19 @@ export async function generateMonthlyStatements(
           .in("id", serviceIds);
       }
 
+      // Link bookings to the new statement so the monthly-summary stops
+      // showing them as "unbilled". Previously bookings were silently omitted
+      // from this update — usage_charges and service_usage_records were marked
+      // correctly but bookings were not, causing them to keep appearing as
+      // "Unbilled Bookings" even after the statement was finalized.
+      if (bookings.length > 0 && statement) {
+        const bookingIds = bookings.map((b) => b.id);
+        await supabase
+          .from("bookings")
+          .update({ billing_statement_id: statement.id })
+          .in("id", bookingIds);
+      }
+
       result.generated++;
       if (statement?.id) result.statementIds.push(statement.id as string);
     } catch (err) {

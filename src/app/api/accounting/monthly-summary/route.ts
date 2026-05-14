@@ -116,13 +116,16 @@ export async function GET(request: NextRequest) {
           .gte("charge_date", periodStart)
           .lte("charge_date", periodEnd)
       : Promise.resolve({ data: [] }),
-    // 6b. Bookings posted to bill
+    // 6b. Bookings posted to bill — exclude bookings already linked to a
+    //     billing statement (billing.ts sets billing_statement_id when it
+    //     includes a booking in a statement, so these are already billed)
     hasContracts
       ? adminSupabase
           .from("bookings")
           .select("*, space:spaces!bookings_space_id_fkey(id, name)")
           .in("contract_id", contractIds)
           .eq("payment_status", "posted_to_bill")
+          .is("billing_statement_id", null)
           .gte("booking_date", periodStart)
           .lte("booking_date", periodEnd)
       : Promise.resolve({ data: [] }),

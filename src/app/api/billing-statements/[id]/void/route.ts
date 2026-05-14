@@ -101,11 +101,19 @@ export async function POST(
     return NextResponse.json({ error: voidErr.message }, { status: 500 });
   }
 
-  // 2. Un-link usage charges from the voided statement so they can be
-  //    re-billed on the replacement draft
+  // 2a. Un-link usage charges from the voided statement so they can be
+  //     re-billed on the replacement draft
   await supabase
     .from("usage_charges")
     .update({ billing_statement_id: null, status: "pending" })
+    .eq("billing_statement_id", id);
+
+  // 2b. Un-link bookings from the voided statement so they re-appear
+  //     as "unbilled" in the Contracts tab and can be picked up by the
+  //     replacement draft statement
+  await supabase
+    .from("bookings")
+    .update({ billing_statement_id: null })
     .eq("billing_statement_id", id);
 
   // 3. Create a fresh draft copy (carries over the billing-relevant data
