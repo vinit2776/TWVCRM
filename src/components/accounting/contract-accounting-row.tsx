@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Plus, IndianRupee, Send, Receipt, CheckCircle, Clock, Calendar } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, IndianRupee, Send, Receipt, CheckCircle, Clock, Calendar, Eye, FileCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -9,6 +9,7 @@ import { FacilityUsageForm } from "./facility-usage-form";
 import { AddContractFacilityDialog } from "./add-contract-facility-dialog";
 import { AddContractPaymentDialog } from "./add-contract-payment-dialog";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
+import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { CONTRACT_PAYMENT_MODE_LABELS, CONTRACT_PAYMENT_STATUS_COLORS, CONTRACT_PAYMENT_STATUS_LABELS } from "@/lib/constants";
 import { toast } from "sonner";
 
@@ -89,11 +90,22 @@ interface ContractSummary {
     sent_at: string | null;
     sent_to: string | null;
   } | null;
-  /** Billing statement for this contract in this period, if any */
+  /** Full billing statement record for this contract in this period, if any */
   billing_statement?: {
     id: string;
     status: string;
     statement_number: string;
+    total_amount?: number | null;
+    fixed_amount?: number | null;
+    usage_amount?: number | null;
+    booking_usage_amount?: number | null;
+    finalized_at?: string | null;
+    proforma_sent_at?: string | null;
+    gst_invoice_number?: string | null;
+    payment_status?: string | null;
+    accounted?: boolean | null;
+    razorpay_payment_link_url?: string | null;
+    emailed_at?: string | null;
   } | null;
 }
 
@@ -108,6 +120,18 @@ interface ContractAccountingRowProps {
   onRefresh: () => void;
   /** Called when user clicks Finalize Draft — pass the statement id */
   onFinalize?: (statementId: string) => Promise<void>;
+  /** Called when user clicks Send Proforma — pass the statement id */
+  onSendProforma?: (statementId: string) => Promise<void>;
+  /** Called when user clicks Generate GST Invoice — pass the statement id */
+  onGenerateGst?: (statementId: string) => Promise<void>;
+  /** Called when user clicks Record Payment — opens dialog in parent */
+  onRecordStatementPayment?: (statementId: string) => void;
+  /** Called when user clicks View — opens view dialog in parent */
+  onViewStatement?: (statementId: string) => void;
+  /** Called when user clicks Void — opens void dialog in parent */
+  onVoidStatement?: (statementId: string) => void;
+  /** Current user role — used to gate admin-only actions */
+  userRole?: string | null;
 }
 
 export function ContractAccountingRow({
@@ -118,6 +142,12 @@ export function ContractAccountingRow({
   periodStart,
   onRefresh,
   onFinalize,
+  onSendProforma,
+  onGenerateGst,
+  onRecordStatementPayment,
+  onViewStatement,
+  onVoidStatement,
+  userRole,
 }: ContractAccountingRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [showAddFacility, setShowAddFacility] = useState(false);
@@ -125,6 +155,8 @@ export function ContractAccountingRow({
   const [showAddCharge, setShowAddCharge] = useState(false);
   const [sendingReminder, setSendingReminder] = useState<string | null>(null);
   const [finalizing, setFinalizing] = useState(false);
+  const [sendingProforma, setSendingProforma] = useState(false);
+  const [generatingGst, setGeneratingGst] = useState(false);
 
   const { contract } = summary;
   const company = contract.lead?.company || `${contract.lead?.first_name || ""} ${contract.lead?.last_name || ""}`.trim();
@@ -132,7 +164,7 @@ export function ContractAccountingRow({
   const statement = summary.billing_statement;
   const isDraft = statement?.status === "draft";
 
-  // Unbilled bookings: posted_to_bill bookings for this period
+  // Unbilled bookings: posted_to_bill bookings for this period not yet on a statement
   const unbilledBookings = summary.posted_bookings;
   const unbilledTotal = summary.booking_total;
   const hasUnbilledBookings = unbilledBookings.length > 0;
@@ -177,6 +209,28 @@ export function ContractAccountingRow({
     }
   };
 
+  const handleSendProforma = async () => {
+    if (!statement?.id || !onSendProforma) return;
+    setSendingProforma(true);
+    try {
+      await onSendProforma(statement.id);
+    } finally {
+      setSendingProforma(false);
+    }
+  };
+
+  const handleGenerateGst = async () => {
+    if (!statement?.id || !onGenerateGst) return;
+    setGeneratingGst(true);
+    try {
+      await onGenerateGst(statement.id);
+    } finally {
+      setGeneratingGst(false);
+    }
+  };
+
+  const isFinalized = statement?.status === "finalized" || statement?.status === "exported";
+
   return (
     <div className="border rounded-lg">
       {/* Collapsed row */}
@@ -195,7 +249,20 @@ export function ContractAccountingRow({
           <div className="flex items-center gap-2">
             <span className="font-medium text-sm">{contract.contract_number}</span>
             <span className="text-sm text-muted-foreground truncate">{company}</span>
-            {/* Unbilled bookings indicator on the collapsed row */}
+            {/* Statement status chip on collapsed row */}
+            {statement ? (
+              isDraft ? (
+                <Badge className="text-xs bg-yellow-100 text-yellow-700 border-yellow-200 ml-1">
+                  <Clock className="h-3 w-3 mr-1" />Draft
+                </Badge>
+              ) : (
+                <Badge className="text-xs bg-green-100 text-green-700 border-green-200 ml-1">
+                  <CheckCircle className="h-3 w-3 mr-1" />{statement.status === "finalized" ? "Finalized" : "Exported"}
+                </Badge>
+              )
+            ) : (
+              <Badge variant="secondary" className="text-xs ml-1">No statement</Badge>
+            )}
             {hasUnbilledBookings && !isStatementFinalized && (
               <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-200 ml-1">
                 {unbilledBookings.length} unbilled booking{unbilledBookings.length > 1 ? "s" : ""}
@@ -243,123 +310,6 @@ export function ContractAccountingRow({
               <span className="text-xs text-amber-600 ml-2">(from previous months)</span>
             </div>
           )}
-
-          {/* ── Unbilled Bookings (pending next statement) ── */}
-          <div>
-            <div className="flex items-center justify-between mb-2">
-              <div className="flex items-center gap-2">
-                <h4 className="text-xs font-semibold text-muted-foreground uppercase">
-                  Unbilled Bookings
-                </h4>
-                {hasUnbilledBookings && (
-                  <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-200">
-                    {unbilledBookings.length} pending
-                  </Badge>
-                )}
-              </div>
-              {/* Statement status chip */}
-              {statement ? (
-                isDraft ? (
-                  <div className="flex items-center gap-2">
-                    <span className="flex items-center gap-1 text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded px-2 py-0.5">
-                      <Clock className="h-3 w-3" />
-                      Draft {statement.statement_number}
-                    </span>
-                    {!isLocked && onFinalize && (
-                      <Button
-                        size="sm"
-                        className="h-7 text-xs bg-teal-600 hover:bg-teal-700 text-white"
-                        onClick={(e) => { e.stopPropagation(); handleFinalize(); }}
-                        disabled={finalizing}
-                      >
-                        {finalizing ? (
-                          <><span className="mr-1 h-3 w-3 rounded-full border-2 border-white border-r-transparent animate-spin inline-block" />Finalizing…</>
-                        ) : (
-                          <><CheckCircle className="h-3 w-3 mr-1" />Finalize Bill</>
-                        )}
-                      </Button>
-                    )}
-                  </div>
-                ) : (
-                  <span className="flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 rounded px-2 py-0.5">
-                    <CheckCircle className="h-3 w-3" />
-                    {statement.status === "finalized" ? "Finalized" : "Exported"} — {statement.statement_number}
-                  </span>
-                )
-              ) : (
-                <span className="flex items-center gap-1 text-xs text-muted-foreground bg-muted rounded px-2 py-0.5">
-                  <Calendar className="h-3 w-3" />
-                  Auto-generates ~28th
-                </span>
-              )}
-            </div>
-
-            {hasUnbilledBookings ? (
-              <div className="rounded-md border overflow-hidden">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="bg-orange-50 border-b">
-                      <th className="px-3 py-2 text-left text-xs font-medium text-orange-800">Booking #</th>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-orange-800">Date</th>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-orange-800">Space</th>
-                      <th className="px-3 py-2 text-left text-xs font-medium text-orange-800">Time</th>
-                      <th className="px-3 py-2 text-right text-xs font-medium text-orange-800">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {unbilledBookings.map((b) => (
-                      <tr key={b.id} className="border-b last:border-0 hover:bg-orange-50/40">
-                        <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
-                          {b.booking_number || "—"}
-                        </td>
-                        <td className="px-3 py-2 text-xs">{formatDate(b.booking_date)}</td>
-                        <td className="px-3 py-2 text-xs">{b.space?.name || "—"}</td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">
-                          {b.start_time && b.end_time
-                            ? `${b.start_time.slice(0, 5)}–${b.end_time.slice(0, 5)}`
-                            : "—"}
-                        </td>
-                        <td className="px-3 py-2 text-right font-medium">
-                          {Number(b.total_amount) === 0 ? (
-                            <span className="text-xs text-muted-foreground">Free quota</span>
-                          ) : (
-                            formatCurrency(b.total_amount)
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot>
-                    <tr className="bg-orange-50 border-t">
-                      <td colSpan={4} className="px-3 py-2 text-xs font-semibold text-orange-800">
-                        Total Unbilled
-                      </td>
-                      <td className="px-3 py-2 text-right text-sm font-bold text-orange-800">
-                        {formatCurrency(unbilledTotal)}
-                      </td>
-                    </tr>
-                  </tfoot>
-                </table>
-                {/* Context note */}
-                {isDraft && (
-                  <div className="bg-yellow-50 border-t border-yellow-100 px-3 py-2 text-xs text-yellow-700 flex items-center gap-1.5">
-                    <CheckCircle className="h-3 w-3 flex-shrink-0" />
-                    These bookings are already included in the draft statement. Finalize the bill when ready.
-                  </div>
-                )}
-                {!statement && (
-                  <div className="bg-blue-50 border-t border-blue-100 px-3 py-2 text-xs text-blue-700 flex items-center gap-1.5">
-                    <Calendar className="h-3 w-3 flex-shrink-0" />
-                    These will be automatically included when the monthly statement is generated (~28th).
-                  </div>
-                )}
-              </div>
-            ) : (
-              <p className="text-sm text-muted-foreground px-2">
-                No unbilled bookings for this period
-              </p>
-            )}
-          </div>
 
           {/* Recurring charge */}
           <div>
@@ -418,6 +368,78 @@ export function ContractAccountingRow({
             )}
           </div>
 
+          {/* ── Unbilled Bookings (pending next statement) ── */}
+          {hasUnbilledBookings && (
+            <div>
+              <div className="flex items-center gap-2 mb-2">
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase">
+                  Unbilled Bookings
+                </h4>
+                <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-200">
+                  {unbilledBookings.length} pending
+                </Badge>
+              </div>
+              <div className="rounded-md border overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-orange-50 border-b">
+                      <th className="px-3 py-2 text-left text-xs font-medium text-orange-800">Booking #</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-orange-800">Date</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-orange-800">Space</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-orange-800">Time</th>
+                      <th className="px-3 py-2 text-right text-xs font-medium text-orange-800">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {unbilledBookings.map((b) => (
+                      <tr key={b.id} className="border-b last:border-0 hover:bg-orange-50/40">
+                        <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
+                          {b.booking_number || "—"}
+                        </td>
+                        <td className="px-3 py-2 text-xs">{formatDate(b.booking_date)}</td>
+                        <td className="px-3 py-2 text-xs">{b.space?.name || "—"}</td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">
+                          {b.start_time && b.end_time
+                            ? `${b.start_time.slice(0, 5)}–${b.end_time.slice(0, 5)}`
+                            : "—"}
+                        </td>
+                        <td className="px-3 py-2 text-right font-medium">
+                          {Number(b.total_amount) === 0 ? (
+                            <span className="text-xs text-muted-foreground">Free quota</span>
+                          ) : (
+                            formatCurrency(b.total_amount)
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-orange-50 border-t">
+                      <td colSpan={4} className="px-3 py-2 text-xs font-semibold text-orange-800">
+                        Total Unbilled
+                      </td>
+                      <td className="px-3 py-2 text-right text-sm font-bold text-orange-800">
+                        {formatCurrency(unbilledTotal)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+                {isDraft && (
+                  <div className="bg-yellow-50 border-t border-yellow-100 px-3 py-2 text-xs text-yellow-700 flex items-center gap-1.5">
+                    <CheckCircle className="h-3 w-3 flex-shrink-0" />
+                    These bookings are already included in the draft statement. Finalize when ready.
+                  </div>
+                )}
+                {!statement && (
+                  <div className="bg-blue-50 border-t border-blue-100 px-3 py-2 text-xs text-blue-700 flex items-center gap-1.5">
+                    <Calendar className="h-3 w-3 flex-shrink-0" />
+                    These will be automatically included when the monthly statement is generated (~28th).
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Payments */}
           <div>
             <div className="flex items-center justify-between mb-2">
@@ -463,6 +485,143 @@ export function ContractAccountingRow({
               </div>
             ) : (
               <p className="text-sm text-muted-foreground px-2">No payments recorded</p>
+            )}
+          </div>
+
+          {/* ── Billing Statement ── */}
+          <div>
+            <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-2">Billing Statement</h4>
+            {statement ? (
+              <div className="rounded-md border bg-background p-3 space-y-3">
+                {/* Statement identity + lifecycle badge */}
+                <div className="flex items-start justify-between gap-3 flex-wrap">
+                  <div>
+                    <span className="font-medium text-sm">
+                      {statement.statement_number || (isDraft ? "Draft (not yet numbered)" : statement.id.slice(0, 8))}
+                    </span>
+                    {statement.total_amount != null && (
+                      <span className="ml-2 text-sm text-muted-foreground">{formatCurrency(statement.total_amount)}</span>
+                    )}
+                  </div>
+                  <BillingLifecycleStatus
+                    status={statement.status}
+                    emailed_at={statement.emailed_at}
+                    razorpay_payment_link_url={statement.razorpay_payment_link_url}
+                    payment_status={statement.payment_status}
+                    accounted={statement.accounted}
+                    finalized_at={statement.finalized_at}
+                    gst_invoice_number={statement.gst_invoice_number}
+                    proforma_sent_at={statement.proforma_sent_at}
+                  />
+                </div>
+
+                {/* Action buttons */}
+                <div className="flex flex-wrap gap-2">
+                  {/* Finalize — only on draft */}
+                  {isDraft && !isLocked && onFinalize && (
+                    <Button
+                      size="sm"
+                      className="h-7 text-xs bg-teal-600 hover:bg-teal-700 text-white"
+                      onClick={(e) => { e.stopPropagation(); handleFinalize(); }}
+                      disabled={finalizing}
+                    >
+                      {finalizing ? (
+                        <><span className="mr-1 h-3 w-3 rounded-full border-2 border-white border-r-transparent animate-spin inline-block" />Finalizing…</>
+                      ) : (
+                        <><CheckCircle className="h-3 w-3 mr-1" />Finalize</>
+                      )}
+                    </Button>
+                  )}
+
+                  {/* Send / Resend Proforma */}
+                  {isFinalized && onSendProforma && !statement.gst_invoice_number && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={(e) => { e.stopPropagation(); handleSendProforma(); }}
+                      disabled={sendingProforma}
+                    >
+                      {sendingProforma ? (
+                        <><span className="mr-1 h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin inline-block" />Sending…</>
+                      ) : (
+                        <><Send className="h-3 w-3 mr-1" />{statement.proforma_sent_at ? "Resend Proforma" : "Send Proforma"}</>
+                      )}
+                    </Button>
+                  )}
+
+                  {/* Generate GST Invoice */}
+                  {isFinalized && !statement.gst_invoice_number && onGenerateGst && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={(e) => { e.stopPropagation(); handleGenerateGst(); }}
+                      disabled={generatingGst}
+                    >
+                      {generatingGst ? (
+                        <><span className="mr-1 h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin inline-block" />Generating…</>
+                      ) : (
+                        <><FileCheck className="h-3 w-3 mr-1" />GST Invoice</>
+                      )}
+                    </Button>
+                  )}
+
+                  {/* Record Billing Payment */}
+                  {statement.status === "finalized" && onRecordStatementPayment && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs"
+                      onClick={(e) => { e.stopPropagation(); onRecordStatementPayment(statement.id); }}
+                    >
+                      <IndianRupee className="h-3 w-3 mr-1" />Record Payment
+                    </Button>
+                  )}
+
+                  {/* View statement detail */}
+                  {onViewStatement && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs"
+                      onClick={(e) => { e.stopPropagation(); onViewStatement(statement.id); }}
+                    >
+                      <Eye className="h-3 w-3 mr-1" />View
+                    </Button>
+                  )}
+
+                  {/* Download proforma PDF */}
+                  {isFinalized && (
+                    <Button size="sm" variant="ghost" className="h-7 text-xs" asChild>
+                      <a
+                        href={`/api/billing-statements/${statement.id}/proforma-pdf`}
+                        download={`Proforma-${statement.statement_number?.replace(/\//g, "-") || statement.id.slice(0, 8)}.pdf`}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <FileCheck className="h-3 w-3 mr-1" />PDF
+                      </a>
+                    </Button>
+                  )}
+
+                  {/* Void — admin only */}
+                  {isFinalized && userRole === "admin" && onVoidStatement && (
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      className="h-7 text-xs text-destructive hover:text-destructive hover:bg-destructive/10"
+                      onClick={(e) => { e.stopPropagation(); onVoidStatement(statement.id); }}
+                    >
+                      <X className="h-3 w-3 mr-1" />Void
+                    </Button>
+                  )}
+                </div>
+              </div>
+            ) : (
+              <div className="flex items-center gap-2 text-sm text-muted-foreground py-2 px-1 rounded-md border border-dashed">
+                <Calendar className="h-4 w-4 flex-shrink-0 ml-2" />
+                <span>Statement auto-generates around the 28th of the month</span>
+              </div>
             )}
           </div>
 

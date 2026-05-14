@@ -169,7 +169,7 @@ interface ContractSummary {
     id: string;
     contract_number: string;
     title: string;
-    monthly_membership_fee: number;
+    total_amount: number;
     lead?: {
       id: string;
       first_name: string;
@@ -193,6 +193,22 @@ interface ContractSummary {
   total_paid_this_month: number;
   outstanding: number;
   gst_invoice: unknown;
+  billing_statement?: {
+    id: string;
+    status: string;
+    statement_number: string;
+    total_amount?: number | null;
+    fixed_amount?: number | null;
+    usage_amount?: number | null;
+    booking_usage_amount?: number | null;
+    finalized_at?: string | null;
+    proforma_sent_at?: string | null;
+    gst_invoice_number?: string | null;
+    payment_status?: string | null;
+    accounted?: boolean | null;
+    razorpay_payment_link_url?: string | null;
+    emailed_at?: string | null;
+  } | null;
 }
 
 interface WalkinPayment {
@@ -298,26 +314,30 @@ export default function BillingPage() {
   // ── Tab ───────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState(() => {
     if (typeof window !== "undefined") {
-      return new URLSearchParams(window.location.search).get("tab") ?? "contracts";
+      const tab = new URLSearchParams(window.location.search).get("tab") ?? "statements";
+      // "contracts" was merged into "statements" — redirect legacy URLs
+      return tab === "contracts" ? "statements" : tab;
     }
-    return "contracts";
+    return "statements";
   });
 
   // ── Section grouping (Phase 3 finance consolidation) ─────────────────────
-  // The 7 underlying tabs roll up into 3 finance-friendly buckets so the page
-  // doesn't feel like a scavenger hunt. Each section renders its own
-  // sub-tabs; the existing TabsContent components stay untouched.
+  // Three finance-centric buckets. "contracts" merged into "statements" (Invoicing)
+  // so the full billing workflow — usage entry, finalize, send proforma, record payment —
+  // lives in one unified view under Invoicing > Statements.
   const SECTION_TABS = {
-    receivables: ["contracts", "proposals", "usage-charges"],
+    receivables: ["proposals", "usage-charges"],
     collections: ["walkin", "cash", "refunds"],
     invoicing:   ["statements", "gst", "retained-payments"],
   } as const;
   type Section = keyof typeof SECTION_TABS;
   const sectionForTab = (tab: string): Section => {
+    // Legacy: "contracts" tab was merged into "statements" under invoicing
+    if (tab === "contracts") return "invoicing";
     for (const s of Object.keys(SECTION_TABS) as Section[]) {
       if ((SECTION_TABS[s] as readonly string[]).includes(tab)) return s;
     }
-    return "receivables";
+    return "invoicing";
   };
   const [section, setSection] = useState<Section>(() => sectionForTab(activeTab));
 
@@ -600,6 +620,7 @@ export default function BillingPage() {
       setRecordPaymentDialogOpen(false);
       setRpAmount(""); setRpReference(""); setRpNotes("");
       fetchStatements();
+      fetchData();
     } else {
       const err = await res.json().catch(() => null);
       toast.error(err?.error || "Failed to record payment");
@@ -634,6 +655,7 @@ export default function BillingPage() {
         setVoidStatementId(null);
         setVoidReason("");
         fetchStatements();
+        fetchData();
       } else {
         toast.error(json.error || "Failed to void statement");
       }
@@ -666,6 +688,7 @@ export default function BillingPage() {
         toast.dismiss(tid);
         toast.success(json.emailedTo ? `Proforma sent to ${json.emailedTo}` : json.razorpayLinkUrl ? "Proforma generated. No email on file — share the payment link manually." : "Proforma generated");
         fetchStatements();
+        fetchData();
       } else {
         toast.dismiss(tid);
         toast.error(json.error || "Failed to send proforma");
@@ -686,6 +709,7 @@ export default function BillingPage() {
         toast.dismiss(tid);
         toast.success(json.emailedTo ? `GST invoice ${json.invoiceNumber} sent to ${json.emailedTo}` : `GST invoice ${json.invoiceNumber} generated`);
         fetchStatements();
+        fetchData();
       } else {
         toast.dismiss(tid);
         toast.error(json.error || "Failed to generate GST invoice");
@@ -793,9 +817,9 @@ export default function BillingPage() {
       */}
       <div className="flex flex-wrap gap-2 border-b pb-2">
         {([
-          { key: "receivables", label: "Receivables", hint: "What customers owe" },
+          { key: "receivables", label: "Receivables", hint: "Proposals & charges" },
           { key: "collections", label: "Collections", hint: "Cash that came in" },
-          { key: "invoicing",   label: "Invoicing",   hint: "Documents going out" },
+          { key: "invoicing",   label: "Invoicing",   hint: "Billing & statements" },
         ] as const).map((s) => {
           const isActive = section === s.key;
           return (
@@ -822,23 +846,7 @@ export default function BillingPage() {
       {section === "invoicing" && pipeline && (
         <BillingPipelineBar
           data={pipeline}
-          onStageClick={(stage) => {
-            // Switch to Statements tab and pass the stage via statementsStatusFilter
-            setActiveTab("statements");
-            // Map pipeline stage key → billing_statement status filter value
-            // (draft → "draft", finalized → "finalized", exported → same as finalized in UI, etc.)
-            const stageToStatusFilter: Record<string, string> = {
-              draft:          "draft",
-              finalized:      "finalized",
-              proforma_sent:  "finalized",
-              partially_paid: "finalized",
-              paid:           "finalized",
-              invoiced:       "finalized",
-              complete:       "exported",
-            };
-            const filter = stageToStatusFilter[stage] ?? "";
-            setStatementsStatusFilter(filter);
-          }}
+          onStageClick={() => setActiveTab("statements")}
         />
       )}
 
@@ -848,9 +856,6 @@ export default function BillingPage() {
           <TabsList className="w-max">
             {section === "receivables" && (
               <>
-                <TabsTrigger value="contracts">
-                  Contracts{!summaryLoading && summary ? ` (${summary.contracts.length})` : ""}
-                </TabsTrigger>
                 <TabsTrigger value="proposals">Proposals</TabsTrigger>
                 <TabsTrigger value="usage-charges">Usage Charges</TabsTrigger>
               </>
@@ -868,7 +873,9 @@ export default function BillingPage() {
             )}
             {section === "invoicing" && (
               <>
-                <TabsTrigger value="statements">Statements</TabsTrigger>
+                <TabsTrigger value="statements">
+                  Billing{!summaryLoading && summary ? ` (${summary.contracts.length})` : ""}
+                </TabsTrigger>
                 <TabsTrigger value="gst">GST Invoices</TabsTrigger>
                 <TabsTrigger value="retained-payments">Retained Payments</TabsTrigger>
               </>
@@ -1139,39 +1146,13 @@ export default function BillingPage() {
           )}
         </TabsContent>
 
-        {/* ── Billing Statements ────────────────────────────────────────── */}
+        {/* ── Billing Statements (Merged view: contract accordions + booking-only statements) ── */}
         <TabsContent value="statements" className="space-y-4 mt-4">
+          {/* Header row */}
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <Select
-                value={statementsContractFilter}
-                onValueChange={(val) => { setStatementsContractFilter(val === "all" ? "" : val); setStatementsPage(1); }}
-              >
-                <SelectTrigger className="w-[200px]"><SelectValue placeholder="All Contracts" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Contracts</SelectItem>
-                  {contractFilters.map((c) => (
-                    <SelectItem key={c.id} value={c.id}>{c.contract_number}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <Select
-                value={statementsStatusFilter}
-                onValueChange={(val) => { setStatementsStatusFilter(val === "all" ? "" : val); setStatementsPage(1); }}
-              >
-                <SelectTrigger className="w-[140px]"><SelectValue placeholder="All Statuses" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All Statuses</SelectItem>
-                  {Object.entries(STATEMENT_STATUS_LABELS).map(([key, label]) => (
-                    <SelectItem key={key} value={key}>{label}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {hasStatementsFilters && (
-                <Button variant="ghost" size="sm" onClick={clearStatementsFilters}>
-                  <X className="mr-1 h-4 w-4" />Clear
-                </Button>
-              )}
+            <div>
+              <h3 className="text-sm font-semibold">Active Contract Billing</h3>
+              <p className="text-xs text-muted-foreground">Expand a row to see charges, review the statement, and take action.</p>
             </div>
             <div className="flex items-center gap-2">
               <Button variant="outline" onClick={handleGenerateMissingBills} disabled={generatingMissing}>
@@ -1187,152 +1168,145 @@ export default function BillingPage() {
             </div>
           </div>
 
-          {statementsLoading ? (
-            <TableSkeleton rows={6} />
-          ) : statements.length === 0 ? (
-            <EmptyState
-              icon={FileText}
-              title="No billing statements found"
-              description={hasStatementsFilters ? "Try adjusting your filters." : "Generate your first billing statement to get started."}
-              actionLabel={!hasStatementsFilters ? "Generate Statement" : undefined}
-              onAction={!hasStatementsFilters ? () => setGenerateStatementOpen(true) : undefined}
-            />
+          {/* Contract accordion rows */}
+          {summaryLoading ? (
+            <TableSkeleton />
+          ) : !summary ? (
+            <EmptyState icon={ScrollText} title="No data" description="Could not load billing data for this period" />
+          ) : summary.contracts.length === 0 ? (
+            <EmptyState icon={ScrollText} title="No active contracts" description="No contracts are active for this period" />
           ) : (
-            <div className="rounded-md border overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b bg-muted/50">
-                    <th className="px-4 py-3 text-left font-medium">Statement #</th>
-                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Reference</th>
-                    <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Lead</th>
-                    <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Period</th>
-                    <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Fixed</th>
-                    <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Usage</th>
-                    <th className="px-4 py-3 text-right font-medium">Total</th>
-                    <th className="px-4 py-3 text-left font-medium">Lifecycle</th>
-                    <th className="px-4 py-3 text-right font-medium">Actions</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {statements.map((stmt) => (
-                    <tr key={stmt.id} className="border-b hover:bg-muted/30 transition-colors">
-                      <td className="px-4 py-3 font-mono text-xs">{stmt.statement_number}</td>
-                      <td className="px-4 py-3 font-mono text-xs hidden md:table-cell">
-                        {stmt.contract?.contract_number || stmt.booking?.booking_number || "—"}
-                      </td>
-                      <td className="px-4 py-3 hidden lg:table-cell">
-                        {stmt.lead
-                          ? stmt.lead.company || `${stmt.lead.first_name} ${stmt.lead.last_name}`
-                          : stmt.booking?.guest_name || "—"}
-                      </td>
-                      <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
-                        {formatDate(stmt.period_start)} – {formatDate(stmt.period_end)}
-                      </td>
-                      <td className="px-4 py-3 text-right hidden sm:table-cell">{formatCurrency(stmt.fixed_amount)}</td>
-                      <td className="px-4 py-3 text-right hidden sm:table-cell">{formatCurrency(stmt.usage_amount)}</td>
-                      <td className="px-4 py-3 text-right font-medium">{formatCurrency(stmt.total_amount)}</td>
-                      <td className="px-4 py-3">
-                        <BillingLifecycleStatus
-                          status={stmt.status}
-                          emailed_at={stmt.emailed_at}
-                          razorpay_payment_link_url={stmt.razorpay_payment_link_url}
-                          payment_status={stmt.payment_status}
-                          accounted={stmt.accounted}
-                          finalized_at={stmt.finalized_at}
-                          gst_invoice_number={stmt.gst_invoice_number}
-                          proforma_sent_at={stmt.proforma_sent_at}
-                        />
-                      </td>
-                      <td className="px-4 py-3 text-right">
-                        <DropdownMenu>
-                          <DropdownMenuTrigger asChild>
-                            <Button variant="ghost" size="sm"><MoreHorizontal className="h-4 w-4" /></Button>
-                          </DropdownMenuTrigger>
-                          <DropdownMenuContent align="end">
-                            <DropdownMenuItem onClick={() => setViewStatementId(stmt.id)}>
-                              <Eye className="mr-2 h-4 w-4" />View Detail
-                            </DropdownMenuItem>
-                            {(stmt.status === "finalized" || stmt.status === "exported") ? (
-                              <DropdownMenuItem asChild>
-                                <a
-                                  href={`/api/billing-statements/${stmt.id}/proforma-pdf`}
-                                  download={`Proforma-${stmt.statement_number?.replace(/\//g, "-")}.pdf`}
-                                >
-                                  <Download className="mr-2 h-4 w-4" />Download Proforma PDF
-                                </a>
-                              </DropdownMenuItem>
-                            ) : (
-                              <DropdownMenuItem disabled>
-                                <Download className="mr-2 h-4 w-4" />Download PDF
-                              </DropdownMenuItem>
-                            )}
-                            {stmt.status === "draft" && (
-                              <DropdownMenuItem onClick={() => handleFinalizeStatement(stmt.id)}>
-                                <CheckCircle className="mr-2 h-4 w-4" />Finalize
-                              </DropdownMenuItem>
-                            )}
-                            {(stmt.status === "finalized" || stmt.status === "exported") && !stmt.proforma_sent_at && !stmt.gst_invoice_number && (
-                              <DropdownMenuItem onClick={() => handleSendProforma(stmt.id)}>
-                                <Send className="mr-2 h-4 w-4" />Send Proforma + Payment Link
-                              </DropdownMenuItem>
-                            )}
-                            {stmt.status === "finalized" && stmt.proforma_sent_at && !stmt.gst_invoice_number && (
-                              <DropdownMenuItem onClick={() => handleSendProforma(stmt.id)}>
-                                <Send className="mr-2 h-4 w-4" />Resend Proforma
-                              </DropdownMenuItem>
-                            )}
-                            {(stmt.status === "finalized" || stmt.status === "exported") && !stmt.gst_invoice_number && (
-                              <DropdownMenuItem onClick={() => handleGenerateGstInvoice(stmt.id)}>
-                                <FileCheck className="mr-2 h-4 w-4" />Generate & Send GST Invoice
-                              </DropdownMenuItem>
-                            )}
-                            {stmt.status === "finalized" && (
-                              <DropdownMenuItem
-                                onClick={() => {
-                                  setRecordPaymentStatementId(stmt.id);
-                                  setRecordPaymentDialogOpen(true);
-                                }}
-                              >
-                                <IndianRupee className="mr-2 h-4 w-4" />Record Offline Payment
-                              </DropdownMenuItem>
-                            )}
-                            {(stmt.status === "finalized" || stmt.status === "exported") && userRole === "admin" && (
-                              <DropdownMenuItem
-                                className="text-destructive focus:text-destructive"
-                                onClick={() => {
-                                  setVoidStatementId(stmt.id);
-                                  setVoidReason("");
-                                  setVoidDialogOpen(true);
-                                }}
-                              >
-                                <X className="mr-2 h-4 w-4" />Void & Re-issue
-                              </DropdownMenuItem>
-                            )}
-                          </DropdownMenuContent>
-                        </DropdownMenu>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
+            <div className="space-y-3">
+              {summary.contracts.map((cs) => {
+                const stmt = cs.billing_statement;
+                const finalized = stmt?.status === "finalized" || stmt?.status === "exported";
+                return (
+                  <ContractAccountingRow
+                    key={cs.contract.id}
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    summary={cs as any}
+                    accountingPeriodId={summary.period?.id || ""}
+                    isLocked={isLocked || false}
+                    isStatementFinalized={finalized}
+                    periodStart={summary.period_start}
+                    onRefresh={fetchData}
+                    onFinalize={handleFinalizeStatement}
+                    onSendProforma={handleSendProforma}
+                    onGenerateGst={handleGenerateGstInvoice}
+                    onRecordStatementPayment={(id) => { setRecordPaymentStatementId(id); setRecordPaymentDialogOpen(true); }}
+                    onViewStatement={(id) => setViewStatementId(id)}
+                    onVoidStatement={(id) => { setVoidStatementId(id); setVoidReason(""); setVoidDialogOpen(true); }}
+                    userRole={userRole}
+                  />
+                );
+              })}
             </div>
           )}
 
-          {statementsPagination.totalPages > 1 && (
-            <div className="flex items-center justify-between">
-              <p className="text-sm text-muted-foreground">
-                Page {statementsPagination.page} of {statementsPagination.totalPages} ({statementsPagination.total} total)
-              </p>
-              <div className="flex gap-2">
-                <Button variant="outline" size="sm" disabled={statementsPage <= 1} onClick={() => setStatementsPage(statementsPage - 1)}>
-                  <ChevronLeft className="h-4 w-4" />
-                </Button>
-                <Button variant="outline" size="sm" disabled={statementsPage >= statementsPagination.totalPages} onClick={() => setStatementsPage(statementsPage + 1)}>
-                  <ChevronRight className="h-4 w-4" />
-                </Button>
+          {/* Booking-only statements (non-contract) */}
+          {!statementsLoading && (() => {
+            const bookingStmts = statements.filter((s) => !s.contract_id);
+            if (bookingStmts.length === 0) return null;
+            return (
+              <div className="space-y-3 pt-4">
+                <div className="flex items-center gap-2">
+                  <h3 className="text-sm font-semibold text-muted-foreground uppercase">Booking Statements</h3>
+                  <span className="text-xs text-muted-foreground">({bookingStmts.length})</span>
+                </div>
+                <div className="rounded-md border overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50">
+                        <th className="px-4 py-3 text-left font-medium">Statement #</th>
+                        <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Booking</th>
+                        <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Guest</th>
+                        <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Period</th>
+                        <th className="px-4 py-3 text-right font-medium">Total</th>
+                        <th className="px-4 py-3 text-left font-medium">Lifecycle</th>
+                        <th className="px-4 py-3 text-right font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {bookingStmts.map((stmt) => (
+                        <tr key={stmt.id} className="border-b hover:bg-muted/30 transition-colors">
+                          <td className="px-4 py-3 font-mono text-xs">{stmt.statement_number}</td>
+                          <td className="px-4 py-3 font-mono text-xs hidden md:table-cell">
+                            {stmt.booking?.booking_number || "—"}
+                          </td>
+                          <td className="px-4 py-3 hidden lg:table-cell">
+                            {stmt.booking?.guest_name || (stmt.lead ? stmt.lead.company || `${stmt.lead.first_name} ${stmt.lead.last_name}` : "—")}
+                          </td>
+                          <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">
+                            {formatDate(stmt.period_start)} – {formatDate(stmt.period_end)}
+                          </td>
+                          <td className="px-4 py-3 text-right font-medium">{formatCurrency(stmt.total_amount)}</td>
+                          <td className="px-4 py-3">
+                            <BillingLifecycleStatus
+                              status={stmt.status}
+                              emailed_at={stmt.emailed_at}
+                              razorpay_payment_link_url={stmt.razorpay_payment_link_url}
+                              payment_status={stmt.payment_status}
+                              accounted={stmt.accounted}
+                              finalized_at={stmt.finalized_at}
+                              gst_invoice_number={stmt.gst_invoice_number}
+                              proforma_sent_at={stmt.proforma_sent_at}
+                            />
+                          </td>
+                          <td className="px-4 py-3 text-right">
+                            <DropdownMenu>
+                              <DropdownMenuTrigger asChild>
+                                <Button variant="ghost" size="sm"><MoreHorizontal className="h-4 w-4" /></Button>
+                              </DropdownMenuTrigger>
+                              <DropdownMenuContent align="end">
+                                <DropdownMenuItem onClick={() => setViewStatementId(stmt.id)}>
+                                  <Eye className="mr-2 h-4 w-4" />View Detail
+                                </DropdownMenuItem>
+                                {(stmt.status === "finalized" || stmt.status === "exported") && (
+                                  <DropdownMenuItem asChild>
+                                    <a href={`/api/billing-statements/${stmt.id}/proforma-pdf`} download={`Proforma-${stmt.statement_number?.replace(/\//g, "-")}.pdf`}>
+                                      <Download className="mr-2 h-4 w-4" />Download PDF
+                                    </a>
+                                  </DropdownMenuItem>
+                                )}
+                                {stmt.status === "draft" && (
+                                  <DropdownMenuItem onClick={() => handleFinalizeStatement(stmt.id)}>
+                                    <CheckCircle className="mr-2 h-4 w-4" />Finalize
+                                  </DropdownMenuItem>
+                                )}
+                                {(stmt.status === "finalized" || stmt.status === "exported") && !stmt.gst_invoice_number && (
+                                  <DropdownMenuItem onClick={() => handleSendProforma(stmt.id)}>
+                                    <Send className="mr-2 h-4 w-4" />{stmt.proforma_sent_at ? "Resend Proforma" : "Send Proforma"}
+                                  </DropdownMenuItem>
+                                )}
+                                {(stmt.status === "finalized" || stmt.status === "exported") && !stmt.gst_invoice_number && (
+                                  <DropdownMenuItem onClick={() => handleGenerateGstInvoice(stmt.id)}>
+                                    <FileCheck className="mr-2 h-4 w-4" />Generate & Send GST Invoice
+                                  </DropdownMenuItem>
+                                )}
+                                {stmt.status === "finalized" && (
+                                  <DropdownMenuItem onClick={() => { setRecordPaymentStatementId(stmt.id); setRecordPaymentDialogOpen(true); }}>
+                                    <IndianRupee className="mr-2 h-4 w-4" />Record Offline Payment
+                                  </DropdownMenuItem>
+                                )}
+                                {(stmt.status === "finalized" || stmt.status === "exported") && userRole === "admin" && (
+                                  <DropdownMenuItem
+                                    className="text-destructive focus:text-destructive"
+                                    onClick={() => { setVoidStatementId(stmt.id); setVoidReason(""); setVoidDialogOpen(true); }}
+                                  >
+                                    <X className="mr-2 h-4 w-4" />Void & Re-issue
+                                  </DropdownMenuItem>
+                                )}
+                              </DropdownMenuContent>
+                            </DropdownMenu>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
               </div>
-            </div>
-          )}
+            );
+          })()}
         </TabsContent>
       </Tabs>
 

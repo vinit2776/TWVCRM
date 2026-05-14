@@ -129,11 +129,11 @@ export async function GET(request: NextRequest) {
           .gte("booking_date", periodStart)
           .lte("booking_date", periodEnd)
       : Promise.resolve({ data: [] }),
-    // 6c. Billing statement status per contract
+    // 6c. Billing statement status per contract (full lifecycle fields for merged view)
     hasContracts
       ? adminSupabase
           .from("billing_statements")
-          .select("id, contract_id, status, statement_number")
+          .select("id, contract_id, status, statement_number, total_amount, fixed_amount, usage_amount, booking_usage_amount, finalized_at, proforma_sent_at, gst_invoice_number, payment_status, accounted, razorpay_payment_link_url, emailed_at")
           .in("contract_id", contractIds)
           .gte("period_start", periodStart)
           .lte("period_start", periodEnd)
@@ -182,9 +182,10 @@ export async function GET(request: NextRequest) {
 
   const allPaymentsThisMonth = [...(contractPayments || []), ...(generalPayments || [])];
 
-  const statementByContract: Record<string, { id: string; status: string; statement_number: string }> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const statementByContract: Record<string, any> = {};
   (billingStatements || []).forEach((s) => {
-    if (s.contract_id) statementByContract[s.contract_id] = { id: s.id, status: s.status, statement_number: s.statement_number };
+    if (s.contract_id) statementByContract[s.contract_id] = s;
   });
 
   // ── Carry-forward computation ──────────────────────────────────────
