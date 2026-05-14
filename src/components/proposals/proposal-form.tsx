@@ -13,10 +13,21 @@ import {
 } from "@/components/ui/dialog";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { LineItemsEditor, type LineItemData } from "@/components/shared/line-items-editor";
-import { AlertTriangle, Loader2 } from "lucide-react";
+import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { DEFAULT_PROPOSAL_TERMS } from "@/lib/constants";
 import { LocationSelector } from "@/components/shared/location-selector";
+import { formatCurrency } from "@/lib/utils";
+import type { ServiceCatalogItem } from "@/types";
+
+interface ServiceQuotaRow {
+  service_id: string;
+  name: string;
+  unit_label: string;
+  default_overage_rate: number;
+  monthly_quota: number;
+  overage_rate: number;
+}
 
 interface ProposalFormProps {
   leadId: string;
@@ -36,8 +47,8 @@ export function ProposalForm({
   const [title, setTitle] = useState("");
   const [locationId, setLocationId] = useState<string | null>(leadLocationId || null);
   const [description, setDescription] = useState("");
-  const [complimentaryItems, setComplimentaryItems] = useState<{ name: string; unit: string; quantity: number; price_per_unit: number; service_id?: string }[]>([]);
-  const [availableServices, setAvailableServices] = useState<{ id: string; name: string; unit: string; price_per_unit: number }[]>([]);
+  const [serviceQuotas, setServiceQuotas] = useState<ServiceQuotaRow[]>([]);
+  const [catalogLoaded, setCatalogLoaded] = useState(false);
   const [items, setItems] = useState<LineItemData[]>([
     { description: "", quantity: 1, unit_price: 0, total: 0 },
   ]);
@@ -51,14 +62,24 @@ export function ProposalForm({
   const [depositOverridden, setDepositOverridden] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
-  // Fetch available services when location changes
+  // Load service catalog once on mount
   useEffect(() => {
-    if (!locationId) { setAvailableServices([]); return; }
-    fetch(`/api/location-services?location_id=${locationId}&is_active=true`)
+    fetch("/api/service-catalog")
       .then(r => r.json())
-      .then(json => setAvailableServices(json.data || []))
-      .catch(() => setAvailableServices([]));
-  }, [locationId]);
+      .then(json => {
+        const catalog = (json.data || []) as ServiceCatalogItem[];
+        setServiceQuotas(catalog.map(s => ({
+          service_id: s.id,
+          name: s.name,
+          unit_label: s.unit_label,
+          default_overage_rate: s.default_overage_rate,
+          monthly_quota: 0,
+          overage_rate: s.default_overage_rate,
+        })));
+        setCatalogLoaded(true);
+      })
+      .catch(() => setCatalogLoaded(true));
+  }, []);
 
   // Compute subtotal for deposit auto-calculation
   const computedSubtotal = items
@@ -75,10 +96,21 @@ export function ProposalForm({
     setTermsAndConditions(DEFAULT_PROPOSAL_TERMS);
     setNotes("");
     setLocationId(leadLocationId || null);
-    setComplimentaryItems([]);
     setDepositMonths(0);
     setDepositAmount(0);
     setDepositOverridden(false);
+    // Reset quotas to defaults
+    setServiceQuotas(prev => prev.map(sq => ({
+      ...sq,
+      monthly_quota: 0,
+      overage_rate: sq.default_overage_rate,
+    })));
+  };
+
+  const updateQuota = (serviceId: string, field: "monthly_quota" | "overage_rate", value: number) => {
+    setServiceQuotas(prev => prev.map(sq =>
+      sq.service_id === serviceId ? { ...sq, [field]: value } : sq
+    ));
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -103,17 +135,20 @@ export function ProposalForm({
 
     setSubmitting(true);
 
-    // Build complimentary text for PDF backward compat
-    const activeComplimentary = complimentaryItems.filter(ci => ci.quantity > 0);
-    const complimentaryText = activeComplimentary
-      .map(ci => `${ci.name}: ${ci.quantity} ${ci.unit}/month`)
-      .join("\n");
+    // Only send quotas that have been configured (quota > 0 or rate differs from default)
+    const activeQuotas = serviceQuotas
+      .filter(sq => sq.monthly_quota > 0 || sq.overage_rate !== sq.default_overage_rate)
+      .map(sq => ({
+        service_id: sq.service_id,
+        monthly_quota: sq.monthly_quota,
+        overage_rate: sq.overage_rate,
+      }));
 
     const body = {
       lead_id: leadId,
       location_id: locationId || undefined,
       title: title.trim(),
-      description: complimentaryText || description.trim() || undefined,
+      description: description.trim() || undefined,
       items: validItems.map((item) => ({
         description: item.description,
         quantity: Math.max(1, item.quantity),
@@ -126,7 +161,7 @@ export function ProposalForm({
       valid_until: validUntil || undefined,
       terms_and_conditions: termsAndConditions.trim() || undefined,
       notes: notes.trim() || undefined,
-      complimentary_items: activeComplimentary.length > 0 ? activeComplimentary : undefined,
+      service_quotas: activeQuotas.length > 0 ? activeQuotas : undefined,
       security_deposit_months: depositMonths,
       security_deposit_amount: depositMonths > 0 ? depositAmount : 0,
     };
@@ -191,115 +226,68 @@ export function ProposalForm({
             />
           </div>
 
-          {/* Complimentary Services — from location master */}
+          {/* Service Quotas — from global service catalog */}
           <div className="border rounded-lg p-4 space-y-3 bg-muted/30">
-            <div className="flex items-center justify-between">
-              <Label className="text-sm font-semibold">Complimentary Services (per month)</Label>
-              {locationId && availableServices.length > 0 && (
-                <Select
-                  value=""
-                  onValueChange={(serviceId) => {
-                    const svc = availableServices.find(s => s.id === serviceId);
-                    if (!svc) return;
-                    if (complimentaryItems.some(ci => ci.service_id === serviceId)) {
-                      toast.error(`${svc.name} is already added`);
-                      return;
-                    }
-                    setComplimentaryItems([...complimentaryItems, {
-                      name: svc.name,
-                      unit: svc.unit,
-                      quantity: 0,
-                      price_per_unit: svc.price_per_unit,
-                      service_id: svc.id,
-                    }]);
-                  }}
-                >
-                  <SelectTrigger className="h-8 text-xs w-auto min-w-[140px]">
-                    <SelectValue placeholder="+ Add service" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {availableServices
-                      .filter(s => !complimentaryItems.some(ci => ci.service_id === s.id))
-                      .map(s => (
-                        <SelectItem key={s.id} value={s.id}>
-                          {s.name} ({s.unit})
-                        </SelectItem>
-                      ))}
-                  </SelectContent>
-                </Select>
-              )}
+            <div>
+              <Label className="text-sm font-semibold">Service Quotas</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Set the free monthly allowance per service for this customer. Leave at 0 if fully chargeable. The overage rate applies above the free quota.
+              </p>
             </div>
-            {!locationId && (
-              <p className="text-xs text-muted-foreground py-2">Select a location above to see available services.</p>
-            )}
-            {locationId && availableServices.length === 0 && (
-              <p className="text-xs text-muted-foreground py-2">No services configured for this location. Add them in Settings → Services.</p>
-            )}
-            {locationId && availableServices.length > 0 && complimentaryItems.length === 0 && (
-              <div className="flex items-start gap-2 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5">
-                <AlertTriangle className="h-4 w-4 text-amber-600 mt-0.5 shrink-0" />
-                <div className="text-xs text-amber-800">
-                  <p className="font-semibold">Amenities not included in this proposal</p>
-                  <p className="mt-0.5">
-                    This location has {availableServices.length} service{availableServices.length > 1 ? "s" : ""} configured.
-                    Use the <span className="font-medium">+ Add service</span> dropdown above to include them — free or paid — so they appear correctly in the proposal PDF.
-                    Do not list amenities in the Terms &amp; Conditions.
-                  </p>
-                </div>
-              </div>
-            )}
-            {complimentaryItems.length > 0 && (
+            {!catalogLoaded ? (
+              <p className="text-xs text-muted-foreground py-2 flex items-center gap-1.5">
+                <Loader2 className="h-3 w-3 animate-spin" /> Loading services…
+              </p>
+            ) : serviceQuotas.length === 0 ? (
+              <p className="text-xs text-muted-foreground py-2">
+                No services in catalog. Add them in Admin → Service Catalog.
+              </p>
+            ) : (
               <div className="space-y-2">
-                <div className="grid grid-cols-12 gap-2 text-xs text-muted-foreground font-medium">
-                  <div className="col-span-5">Service</div>
-                  <div className="col-span-2">Free Qty</div>
+                <div className="grid grid-cols-12 gap-2 text-xs text-muted-foreground font-medium px-1">
+                  <div className="col-span-4">Service</div>
                   <div className="col-span-2">Unit</div>
-                  <div className="col-span-2 text-right">Rate (excess)</div>
-                  <div className="col-span-1"></div>
+                  <div className="col-span-3">Free quota / month</div>
+                  <div className="col-span-3">Overage rate</div>
                 </div>
-                {complimentaryItems.map((ci, idx) => (
-                  <div key={idx} className="grid grid-cols-12 gap-2 items-center">
-                    <div className="col-span-5">
-                      <span className="text-sm font-medium">{ci.name}</span>
+                {serviceQuotas.map((sq) => (
+                  <div key={sq.service_id} className="grid grid-cols-12 gap-2 items-center">
+                    <div className="col-span-4">
+                      <span className="text-sm font-medium">{sq.name}</span>
                     </div>
                     <div className="col-span-2">
+                      <span className="text-xs text-muted-foreground">{sq.unit_label}</span>
+                    </div>
+                    <div className="col-span-3">
                       <Input
                         type="number"
+                        min="0"
+                        step="1"
                         placeholder="0"
-                        value={ci.quantity || ""}
-                        onChange={(e) => {
-                          const updated = [...complimentaryItems];
-                          updated[idx] = { ...ci, quantity: parseInt(e.target.value) || 0 };
-                          setComplimentaryItems(updated);
-                        }}
-                        className="text-sm h-8"
+                        value={sq.monthly_quota || ""}
+                        onChange={(e) => updateQuota(sq.service_id, "monthly_quota", Number(e.target.value) || 0)}
+                        className="h-8 text-sm"
                       />
                     </div>
-                    <div className="col-span-2">
-                      <span className="text-xs text-muted-foreground">{ci.unit}</span>
-                    </div>
-                    <div className="col-span-2 text-right">
-                      <span className="text-xs font-mono text-muted-foreground">
-                        {Number(ci.price_per_unit) > 0 ? `₹${Number(ci.price_per_unit).toLocaleString("en-IN")}` : "Free"}
-                      </span>
-                    </div>
-                    <div className="col-span-1 flex justify-center">
-                      <button
-                        type="button"
-                        className="text-muted-foreground hover:text-destructive text-sm"
-                        onClick={() => setComplimentaryItems(complimentaryItems.filter((_, i) => i !== idx))}
-                      >
-                        ×
-                      </button>
+                    <div className="col-span-3">
+                      <div className="relative">
+                        <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">₹</span>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          value={sq.overage_rate || ""}
+                          onChange={(e) => updateQuota(sq.service_id, "overage_rate", Number(e.target.value) || 0)}
+                          className="h-8 text-sm pl-6"
+                        />
+                      </div>
                     </div>
                   </div>
                 ))}
+                <p className="text-xs text-muted-foreground pt-1">
+                  Default rates from the service catalog are pre-filled. Adjust per negotiation.
+                </p>
               </div>
-            )}
-            {complimentaryItems.length > 0 && (
-              <p className="text-xs text-muted-foreground">
-                Usage beyond the free quantity will be charged at the listed rate per unit.
-              </p>
             )}
           </div>
 
@@ -350,7 +338,7 @@ export function ProposalForm({
                   <Label htmlFor="deposit-amount" className="text-xs text-muted-foreground">
                     Deposit Amount (pre-GST)
                     {!depositOverridden && computedSubtotal > 0 && (
-                      <span className="ml-1 text-muted-foreground">= {depositMonths} × ₹{computedSubtotal.toLocaleString("en-IN")}</span>
+                      <span className="ml-1 text-muted-foreground">= {depositMonths} × {formatCurrency(computedSubtotal)}</span>
                     )}
                   </Label>
                   <Input
@@ -395,7 +383,7 @@ export function ProposalForm({
               rows={3}
             />
             <p className="text-xs text-muted-foreground">
-              List legal and commercial terms here only. To include amenities (conference room hours, prints, etc.), use the <span className="font-medium">Complimentary Services</span> section above.
+              List legal and commercial terms here only. Set amenity quotas (conference rooms, prints, etc.) in the <span className="font-medium">Service Quotas</span> section above.
             </p>
           </div>
 

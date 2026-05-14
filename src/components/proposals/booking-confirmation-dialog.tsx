@@ -62,8 +62,11 @@ export function BookingConfirmationDialog({
     try {
       // Generate proposal PDF on the client. Dynamic import keeps jsPDF + autotable
       // out of the initial bundle; loads only when the user accepts a proposal.
-      const { generateProposalPDF } = await import("@/lib/pdf-generator");
-      const doc = generateProposalPDF(proposal, lead || undefined);
+      const [{ generateProposalPDF }, sqRes] = await Promise.all([
+        import("@/lib/pdf-generator"),
+        fetch(`/api/proposals/${proposal.id}/service-quotas`).then((r) => r.ok ? r.json() : { data: [] }),
+      ]);
+      const doc = generateProposalPDF(proposal, lead || undefined, undefined, undefined, sqRes.data ?? []);
       const pdfArrayBuffer = doc.output("arraybuffer");
       const pdfBlob = new Blob([pdfArrayBuffer], { type: "application/pdf" });
 

@@ -104,7 +104,15 @@ export async function PATCH(
     }
   }
   // Resolve the CRM user ID early — needed for _by actor columns and audit log
-  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
+  const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+
+  // Only admins may bypass the proposal payment gate
+  if (body.payment_override_reason && dbUser?.role !== "admin") {
+    return NextResponse.json(
+      { error: "Only admins can override the payment requirement" },
+      { status: 403 }
+    );
+  }
 
   // Handle special status transitions
   if (body.status && body.status !== oldContract.status) {
@@ -159,7 +167,7 @@ export async function PATCH(
 
         const { data: proposal } = await supabase
           .from("proposals")
-          .select("payment_status, deposit_payment_status, security_deposit_months")
+          .select("payment_status, deposit_payment_status, security_deposit_months, deposit_waiver_verified_at")
           .eq("id", oldContract.proposal_id)
           .single();
 
@@ -173,6 +181,7 @@ export async function PATCH(
         if (proposal.payment_status !== "paid") missing.push("pro-rata / first invoice payment");
         const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
         if (depositRequired && proposal.deposit_payment_status !== "paid") missing.push("security deposit");
+        if (!depositRequired && !proposal.deposit_waiver_verified_at) missing.push("admin deposit waiver OTP approval");
         if (missing.length > 0) {
           return NextResponse.json({
             error: `Cannot activate: ${missing.join(" and ")} not yet collected on the linked proposal`,

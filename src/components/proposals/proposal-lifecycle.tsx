@@ -19,6 +19,7 @@ interface Stage {
 
 /** Descriptive badge text shown on the active step instead of generic "Pending" */
 const AWAITING_LABEL: Record<string, string> = {
+  waiver: "OTP Required",
   sent: "Awaiting Send",
   viewed: "Awaiting Email Open",
   accepted: "Awaiting Decision",
@@ -50,6 +51,24 @@ export function ProposalLifecycle({ proposal }: Props) {
     state: "done",
   });
 
+  // 1b. Deposit Waiver Approval (only for zero-deposit proposals)
+  if (!hasDeposit && !isRejected) {
+    const waiverVerified = !!proposal.deposit_waiver_verified_at;
+    stages.push({
+      key: "waiver",
+      label: "Admin Deposit Waiver",
+      date: proposal.deposit_waiver_verified_at,
+      sub: waiverVerified
+        ? "Zero-deposit approved via OTP"
+        : proposal.deposit_waiver_requested_at
+        ? "OTP sent to admin — awaiting entry"
+        : "OTP approval required before sending",
+      state: waiverVerified ? "done"
+        : proposal.status === "draft" ? "active"
+        : "done",
+    });
+  }
+
   // 2. Sent
   stages.push({
     key: "sent",
@@ -57,7 +76,7 @@ export function ProposalLifecycle({ proposal }: Props) {
     date: proposal.sent_at,
     state: proposal.sent_at ? "done"
       : isRejected ? "skipped"
-      : proposal.status === "draft" ? "active"
+      : proposal.status === "draft" ? ((!hasDeposit && !proposal.deposit_waiver_verified_at) ? "pending" : "active")
       : "done",
   });
 

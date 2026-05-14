@@ -63,10 +63,12 @@ export async function POST(request: NextRequest) {
   const depositAmount = result.data.security_deposit_amount ?? (depositMonths * subtotal);
   const depositPaymentStatus = depositMonths > 0 ? "pending" : "not_required";
 
+  const { service_quotas, ...proposalFields } = result.data;
+
   const { data, error } = await supabase
     .from("proposals")
     .insert({
-      ...result.data,
+      ...proposalFields,
       proposal_number: proposalNumber,
       status: "draft",
       subtotal,
@@ -91,6 +93,21 @@ export async function POST(request: NextRequest) {
       performedBy: dbUser.id,
       changes: { record: { old: null, new: data } },
     });
+  }
+
+  // Persist service quotas from the proposal form into proposal_service_quotas
+  if (data && service_quotas && service_quotas.length > 0) {
+    try {
+      const quotaRows = service_quotas.map(q => ({
+        proposal_id: data.id,
+        service_id: q.service_id,
+        monthly_quota: q.monthly_quota,
+        overage_rate: q.overage_rate,
+      }));
+      await supabase.from("proposal_service_quotas").insert(quotaRows);
+    } catch (err) {
+      console.error("[proposals] Failed to insert proposal_service_quotas:", err);
+    }
   }
 
   // Auto-advance lead status → proposal_sent

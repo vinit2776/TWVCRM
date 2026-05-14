@@ -171,13 +171,56 @@ export async function POST(request: NextRequest) {
       performedBy: dbUser.id,
       changes: { record: { old: null, new: data } },
     });
+
+    // Direct (no proposal) contract with a future start date — flag for review.
+    // The UI warns the user, but we also log server-side so there is an
+    // immutable audit trail regardless of how the request was made.
+    const today = new Date().toISOString().slice(0, 10);
+    if (!d.proposal_id && d.start_date > today) {
+      logAudit(supabase, {
+        entityType: "contract",
+        entityId: data.id,
+        action: "direct_future_contract",
+        performedBy: dbUser.id,
+        changes: {
+          note: {
+            old: null,
+            new: `Direct contract created without a proposal and with a future start date (${d.start_date}). No deposit or pro-rata was collected through the CRM.`,
+          },
+        },
+      });
+    }
   }
 
-  // ── Auto-seed contract_facilities from proposal complimentary_items ────────
-  // When a contract is created from an accepted proposal, the structured
-  // complimentary_items (service name, free monthly quota, overage rate) are
-  // directly transferred into contract_facilities so billing can track usage
-  // against the negotiated entitlements without any manual re-entry.
+  // ── Copy proposal_service_quotas → contract_service_quotas ────────────────
+  // This is the primary path: quotas negotiated on the proposal carry over to
+  // the contract so the Service Quotas section is pre-populated without any
+  // manual re-entry. Billing uses contract_service_quotas for overage charges.
+  if (data && d.proposal_id) {
+    try {
+      const { data: psqRows } = await supabase
+        .from("proposal_service_quotas")
+        .select("service_id, monthly_quota, overage_rate")
+        .eq("proposal_id", d.proposal_id);
+
+      if (psqRows && psqRows.length > 0) {
+        const csqRows = psqRows.map(q => ({
+          contract_id: data.id,
+          service_id: q.service_id,
+          monthly_quota: q.monthly_quota,
+          overage_rate: q.overage_rate,
+          created_by: dbUser?.id ?? null,
+        }));
+        await supabase.from("contract_service_quotas").insert(csqRows);
+      }
+    } catch (err) {
+      console.error("[contracts] Failed to copy proposal_service_quotas:", err);
+    }
+  }
+
+  // ── Legacy: seed contract_facilities from proposal complimentary_items ─────
+  // Kept for backward compatibility with proposals created before service quotas
+  // were wired up. New proposals write to proposal_service_quotas instead.
   if (data && d.proposal_id) {
     try {
       const { data: proposalData } = await supabase
@@ -194,10 +237,10 @@ export async function POST(request: NextRequest) {
         service_id?: string;
       };
 
-      const items = proposalData?.complimentary_items as ComplimentaryItem[] | null;
+      const legacyItems = proposalData?.complimentary_items as ComplimentaryItem[] | null;
 
-      if (items && items.length > 0) {
-        const facilitiesToInsert = items
+      if (legacyItems && legacyItems.length > 0) {
+        const facilitiesToInsert = legacyItems
           .filter((item) => item.name?.trim() && item.unit?.trim())
           .map((item) => ({
             contract_id: data.id,
@@ -213,7 +256,6 @@ export async function POST(request: NextRequest) {
         }
       }
     } catch (err) {
-      // Non-fatal — log but don't fail the contract creation
       console.error("[contracts] Failed to seed contract_facilities from proposal:", err);
     }
   }

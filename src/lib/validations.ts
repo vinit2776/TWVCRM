@@ -204,6 +204,11 @@ export const createProposalSchema = z.object({
     unit: z.string().min(1),
     quantity: z.number().min(0),
   })).optional(),
+  service_quotas: z.array(z.object({
+    service_id: z.string().uuid(),
+    monthly_quota: z.number().min(0),
+    overage_rate: z.number().min(0),
+  })).optional(),
   security_deposit_months: z.number().min(0).max(6).optional(),
   security_deposit_amount: z.number().min(0).optional(),
 });
