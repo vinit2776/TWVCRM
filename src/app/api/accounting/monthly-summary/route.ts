@@ -144,13 +144,14 @@ export async function GET(request: NextRequest) {
       .gte("created_at", `${periodStart}T00:00:00`)
       .lte("created_at", `${periodEnd}T23:59:59`),
     // ── Carry-forward queries ──
-    // 8. Prior verified payments (before this period)
+    // 8. Prior verified payments (from go-live onwards, before this period)
     hasContracts
       ? adminSupabase
           .from("contract_payments")
           .select("contract_id, amount, status")
           .in("contract_id", contractIds)
           .eq("status", "verified")
+          .gte("payment_date", "2026-05-01")
           .lt("payment_date", periodStart)
       : Promise.resolve({ data: [] }),
     // 9. All facility usage records (for prior periods)
@@ -165,12 +166,13 @@ export async function GET(request: NextRequest) {
       .from("accounting_periods")
       .select("id, year, month")
       .or(`year.lt.${year},and(year.eq.${year},month.lt.${month})`),
-    // 11. Prior ad-hoc charges
+    // 11. Prior ad-hoc charges (only from go-live onwards)
     hasContracts
       ? adminSupabase
           .from("usage_charges")
           .select("contract_id, total")
           .in("contract_id", contractIds)
+          .gte("charge_date", "2026-05-01")
           .lt("charge_date", periodStart)
       : Promise.resolve({ data: [] }),
   ]);
@@ -191,10 +193,27 @@ export async function GET(request: NextRequest) {
       priorPaymentsByContract[p.contract_id] = (priorPaymentsByContract[p.contract_id] || 0) + Number(p.amount);
     });
 
+    // ── Go-live anchor ───────────────────────────────────────────────────
+    // The billing system went live in May 2026. All months before this were
+    // invoiced and collected manually (outside the system). We only track
+    // charges and payments from May 2026 onwards so those manual months don't
+    // appear as outstanding carry-forward.
+    const BILLING_GO_LIVE = new Date(2026, 4, 1); // May 1 2026 (month is 0-indexed)
+    const GO_LIVE_YEAR = 2026;
+    const GO_LIVE_MONTH = 5;
+
+    // Build a set of period IDs that are at or after go-live
+    const validPriorPeriodIds = new Set(
+      (priorPeriods || [])
+        .filter(p => p.year > GO_LIVE_YEAR || (p.year === GO_LIVE_YEAR && p.month >= GO_LIVE_MONTH))
+        .map(p => p.id)
+    );
+
     const priorPeriodIds = new Set((priorPeriods || []).map((p) => p.id));
     const priorUsageByContract: Record<string, number> = {};
     (priorUsages || []).forEach((u) => {
-      if (priorPeriodIds.has(u.accounting_period_id)) {
+      // Only count usage from periods at or after go-live
+      if (validPriorPeriodIds.has(u.accounting_period_id)) {
         priorUsageByContract[u.contract_id] = (priorUsageByContract[u.contract_id] || 0) + Number(u.total_charge);
       }
     });
@@ -208,8 +227,12 @@ export async function GET(request: NextRequest) {
     activeContracts.forEach((contract) => {
       const contractStart = new Date(contract.start_date);
       const thisMonthStart = new Date(year, month - 1, 1);
+
+      // Count from the later of: contract start OR system go-live.
+      // Months before go-live are treated as settled externally.
+      const countFrom = contractStart > BILLING_GO_LIVE ? contractStart : BILLING_GO_LIVE;
       let monthsBeforeThisPeriod = 0;
-      const cursor = new Date(contractStart.getFullYear(), contractStart.getMonth(), 1);
+      const cursor = new Date(countFrom.getFullYear(), countFrom.getMonth(), 1);
       while (cursor < thisMonthStart) {
         monthsBeforeThisPeriod++;
         cursor.setMonth(cursor.getMonth() + 1);
