@@ -31,6 +31,8 @@ interface Props {
   contractId: string;
   /** Locks the editor for non-active contracts (still renders, read-only). */
   readOnly?: boolean;
+  /** Called after any successful save or remove, so the parent can refresh its quota count. */
+  onSave?: () => void;
 }
 
 interface RowState {
@@ -42,7 +44,7 @@ interface RowState {
   saving: boolean;
 }
 
-export function ContractQuotasSection({ contractId, readOnly = false }: Props) {
+export function ContractQuotasSection({ contractId, readOnly = false, onSave }: Props) {
   const [rows, setRows] = useState<RowState[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -106,6 +108,7 @@ export function ContractQuotasSection({ contractId, readOnly = false }: Props) {
       if (!res.ok) throw new Error(json.error || "Save failed");
       toast.success(`${row.service.name} quota saved`);
       await reload();
+      onSave?.();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Save failed");
       setRows((prev) => prev.map((r, i) => i === idx ? { ...r, saving: false } : r));
@@ -128,6 +131,7 @@ export function ContractQuotasSection({ contractId, readOnly = false }: Props) {
       }
       toast.success(`${row.service.name} quota removed`);
       await reload();
+      onSave?.();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed");
       setRows((prev) => prev.map((r, i) => i === idx ? { ...r, saving: false } : r));
