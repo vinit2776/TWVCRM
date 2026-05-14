@@ -37,13 +37,15 @@ export async function GET(request: NextRequest) {
   }
 
   // ── Step 2: Get all active contracts for this period ─────────────────
-  const { data: contracts } = await adminSupabase
+  const { data: contracts, error: contractsError } = await adminSupabase
     .from("contracts")
     .select(
       "id, contract_number, title, status, start_date, seats, monthly_membership_fee, billing_cycle, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, secondary_email)"
     )
     .lte("start_date", periodEnd)
     .in("status", ["active", "completed"]);
+
+  console.log("[monthly-summary] contracts query:", { count: contracts?.length, error: contractsError?.message, periodEnd });
 
   // Filter contracts actually active during this period
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -341,6 +343,7 @@ export async function GET(request: NextRequest) {
   const totalCarriedForward = contractSummaries.reduce((sum, cs) => sum + cs.carried_forward, 0);
 
   return NextResponse.json({
+    _debug: { raw_contracts_count: contracts?.length ?? null, contracts_error: contractsError?.message ?? null, active_contracts_count: activeContracts.length, period_start: periodStart, period_end: periodEnd },
     data: {
       period,
       year,
