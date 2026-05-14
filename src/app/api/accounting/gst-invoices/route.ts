@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
 // GET — List GST invoice status for all contracts in a period
@@ -7,6 +7,8 @@ export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const adminSupabase = createAdminClient();
 
   const { searchParams } = new URL(request.url);
   const year = parseInt(searchParams.get("year") || new Date().getFullYear().toString());
@@ -16,7 +18,7 @@ export async function GET(request: NextRequest) {
   const periodEnd = new Date(year, month, 0).toISOString().split("T")[0];
 
   // Get accounting period
-  const { data: period } = await supabase
+  const { data: period } = await adminSupabase
     .from("accounting_periods")
     .select("id")
     .eq("year", year)
@@ -24,13 +26,13 @@ export async function GET(request: NextRequest) {
     .single();
 
   // Get active contracts
-  const { data: contracts } = await supabase
+  const { data: contracts } = await adminSupabase
     .from("contracts")
     .select(
       "id, contract_number, title, status, start_date, total_amount, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, secondary_email, phone, mobile)"
     )
     .lte("start_date", periodEnd)
-    .in("status", ["active", "completed"]);
+    .in("status", ["active", "renewal_in_progress"]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const activeContracts = (contracts || []).filter((c: any) => {
@@ -43,7 +45,7 @@ export async function GET(request: NextRequest) {
   // Get contract payments with GST info for this period
   const contractIds = activeContracts.map((c) => c.id);
   const { data: payments } = contractIds.length > 0 && period
-    ? await supabase
+    ? await adminSupabase
         .from("contract_payments")
         .select("id, contract_id, amount, gst_invoice_number, gst_invoice_path, gst_invoice_status, gst_invoice_sent_at, gst_invoice_sent_to, status")
         .eq("accounting_period_id", period.id)
