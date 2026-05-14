@@ -16,6 +16,7 @@ interface ContractSummary {
     lead?: { first_name: string; last_name: string; company?: string };
   };
   outstanding: number;
+  carried_forward: number;
 }
 
 interface CashHandoverItem {
@@ -31,6 +32,7 @@ interface GstEntry {
   contract_number: string;
   company: string;
   total_billable: number;
+  total_paid: number;
   gst_invoice_number: string | null;
   gst_invoice_sent_at: string | null;
 }
@@ -76,18 +78,18 @@ export function ActionRequiredBanner({ contracts, cashHandovers, gstEntries, onS
   // Build unified action items
   const items: ActionItem[] = [];
 
-  // 1. Contracts with outstanding > 0
+  // 1. Contracts with overdue carry-forward (genuinely past-due, not just current-month unpaid)
   for (const cs of contracts) {
-    if (cs.outstanding > 0) {
+    if (cs.carried_forward > 0) {
       const name = cs.contract.lead
         ? `${cs.contract.lead.first_name} ${cs.contract.lead.last_name}${cs.contract.lead.company ? ` (${cs.contract.lead.company})` : ""}`
         : cs.contract.title;
       items.push({
         id: `outstanding-${cs.contract.id}`,
         type: "outstanding",
-        label: "Outstanding",
+        label: "Overdue",
         description: `${cs.contract.contract_number} — ${name}`,
-        amount: cs.outstanding,
+        amount: cs.carried_forward,
         tab: "contracts",
       });
     }
@@ -105,9 +107,9 @@ export function ActionRequiredBanner({ contracts, cashHandovers, gstEntries, onS
     });
   }
 
-  // 3. GST invoices not yet sent
+  // 3. GST invoices not yet sent — only flag after payment received (can't invoice before payment)
   for (const gst of gstEntries) {
-    if (!gst.gst_invoice_sent_at && gst.total_billable > 0) {
+    if (!gst.gst_invoice_sent_at && gst.total_paid > 0 && gst.total_billable > 0) {
       items.push({
         id: `gst-${gst.contract_id}`,
         type: "gst_pending",

@@ -768,9 +768,9 @@ export default function BillingPage() {
           />
           <AgingBuckets buckets={summary.aging_buckets} />
           <ActionRequiredBanner
-            contracts={summary.contracts as { contract: { id: string; contract_number: string; title: string; lead?: { first_name: string; last_name: string; company?: string } }; outstanding: number }[]}
+            contracts={summary.contracts as { contract: { id: string; contract_number: string; title: string; lead?: { first_name: string; last_name: string; company?: string } }; outstanding: number; carried_forward: number }[]}
             cashHandovers={pendingHandover}
-            gstEntries={gstEntries as { contract_id: string; contract_number: string; company: string; total_billable: number; gst_invoice_number: string | null; gst_invoice_sent_at: string | null }[]}
+            gstEntries={gstEntries as { contract_id: string; contract_number: string; company: string; total_billable: number; total_paid: number; gst_invoice_number: string | null; gst_invoice_sent_at: string | null }[]}
             onSwitchTab={setActiveTab}
           />
         </>
