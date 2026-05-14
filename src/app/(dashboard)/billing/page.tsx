@@ -305,7 +305,7 @@ export default function BillingPage() {
   const SECTION_TABS = {
     receivables: ["contracts", "proposals", "usage-charges"],
     collections: ["walkin", "cash", "refunds"],
-    invoicing:   ["gst", "statements", "retained-payments"],
+    invoicing:   ["statements", "gst", "retained-payments"],
   } as const;
   type Section = keyof typeof SECTION_TABS;
   const sectionForTab = (tab: string): Section => {
@@ -837,8 +837,8 @@ export default function BillingPage() {
             )}
             {section === "invoicing" && (
               <>
-                <TabsTrigger value="gst">GST Invoices</TabsTrigger>
                 <TabsTrigger value="statements">Statements</TabsTrigger>
+                <TabsTrigger value="gst">GST Invoices</TabsTrigger>
                 <TabsTrigger value="retained-payments">Retained Payments</TabsTrigger>
               </>
             )}
