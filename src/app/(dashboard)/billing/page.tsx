@@ -55,6 +55,7 @@ import { AgingBuckets } from "@/components/accounting/aging-buckets";
 import { ContractAccountingRow } from "@/components/accounting/contract-accounting-row";
 import { ActionRequiredBanner } from "@/components/accounting/action-required-banner";
 import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
+import { BillingPipelineBar } from "@/components/billing/billing-pipeline-bar";
 // Per-tab components are dynamic-imported so the JS for tabs the user
 // never opens isn't downloaded. Each loader shows a small skeleton block.
 // SSR off because all four are client-state-driven (filters, dialogs).
@@ -292,6 +293,7 @@ export default function BillingPage() {
   const [userRole, setUserRole]           = useState<string | null>(null);
   const [isLocking, setIsLocking]         = useState(false);
   const [showExport, setShowExport]       = useState(false);
+  const [pipeline, setPipeline]           = useState<{ counts: Record<string, number>; amounts: Record<string, number>; total: number } | null>(null);
 
   // ── Tab ───────────────────────────────────────────────────────────────────
   const [activeTab, setActiveTab] = useState(() => {
@@ -431,15 +433,17 @@ export default function BillingPage() {
   const fetchData = useCallback(async (signal?: AbortSignal) => {
     setSummaryLoading(true);
     try {
-      const [summaryRes, cashRes, gstRes] = await Promise.all([
+      const [summaryRes, cashRes, gstRes, pipelineRes] = await Promise.all([
         fetch(`/api/accounting/monthly-summary?year=${year}&month=${month}`, { signal }),
         fetch(`/api/accounting/cash-handovers?year=${year}&month=${month}`, { signal }),
         fetch(`/api/accounting/gst-invoices?year=${year}&month=${month}`, { signal }),
+        fetch(`/api/billing-statements/pipeline?year=${year}&month=${month}`, { signal }),
       ]);
       if (signal?.aborted) return;
-      if (summaryRes.ok) setSummary((await summaryRes.json()).data);
-      if (cashRes.ok)    setCashHandovers((await cashRes.json()).data || []);
-      if (gstRes.ok)     setGstEntries((await gstRes.json()).data || []);
+      if (summaryRes.ok)  setSummary((await summaryRes.json()).data);
+      if (cashRes.ok)     setCashHandovers((await cashRes.json()).data || []);
+      if (gstRes.ok)      setGstEntries((await gstRes.json()).data || []);
+      if (pipelineRes.ok) setPipeline((await pipelineRes.json()).data);
     } catch (e) {
       if ((e as Error).name === "AbortError") return;
       toast.error("Failed to load billing data");
@@ -813,6 +817,30 @@ export default function BillingPage() {
           );
         })}
       </div>
+
+      {/* Billing pipeline — visible in the Invoicing section */}
+      {section === "invoicing" && pipeline && (
+        <BillingPipelineBar
+          data={pipeline}
+          onStageClick={(stage) => {
+            // Switch to Statements tab and pass the stage via statementsStatusFilter
+            setActiveTab("statements");
+            // Map pipeline stage key → billing_statement status filter value
+            // (draft → "draft", finalized → "finalized", exported → same as finalized in UI, etc.)
+            const stageToStatusFilter: Record<string, string> = {
+              draft:          "draft",
+              finalized:      "finalized",
+              proforma_sent:  "finalized",
+              partially_paid: "finalized",
+              paid:           "finalized",
+              invoiced:       "finalized",
+              complete:       "exported",
+            };
+            const filter = stageToStatusFilter[stage] ?? "";
+            setStatementsStatusFilter(filter);
+          }}
+        />
+      )}
 
       {/* Sub-tabs — only the ones inside the active section render. */}
       <Tabs value={activeTab} onValueChange={setActiveTab}>
