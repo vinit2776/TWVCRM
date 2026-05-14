@@ -236,6 +236,9 @@ interface GstEntry {
   total_billable: number;
   total_paid: number;
   payment_id: string | null;
+  billing_statement_id: string | null;
+  billing_statement_status: string | null;
+  gst_source: "statement" | "payment" | null;
   gst_invoice_number: string | null;
   gst_invoice_path: string | null;
   gst_invoice_status: string | null;
@@ -1250,7 +1253,7 @@ export default function BillingPage() {
                                 <Send className="mr-2 h-4 w-4" />Resend Proforma
                               </DropdownMenuItem>
                             )}
-                            {(stmt.status === "finalized" || stmt.status === "exported") && !stmt.gst_invoice_number && (stmt.payment_status === "paid" || stmt.payment_status === "partially_paid") && (
+                            {(stmt.status === "finalized" || stmt.status === "exported") && !stmt.gst_invoice_number && (
                               <DropdownMenuItem onClick={() => handleGenerateGstInvoice(stmt.id)}>
                                 <FileCheck className="mr-2 h-4 w-4" />Generate & Send GST Invoice
                               </DropdownMenuItem>
