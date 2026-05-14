@@ -37,17 +37,13 @@ export async function GET(request: NextRequest) {
   }
 
   // ── Step 2: Get all active contracts for this period ─────────────────
-  const { data: contracts, error: contractsError } = await adminSupabase
+  const { data: contracts } = await adminSupabase
     .from("contracts")
     .select(
       "id, contract_number, title, status, start_date, seats, total_amount, billing_cycle, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, secondary_email)"
     )
     .lte("start_date", periodEnd)
-    .in("status", ["active", "completed"]);
-
-  if (contractsError) {
-    return NextResponse.json({ error: "contracts_query_failed", detail: contractsError.message }, { status: 500 });
-  }
+    .in("status", ["active", "renewal_in_progress"]);
 
   // Filter contracts actually active during this period
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -345,7 +341,6 @@ export async function GET(request: NextRequest) {
   const totalCarriedForward = contractSummaries.reduce((sum, cs) => sum + cs.carried_forward, 0);
 
   return NextResponse.json({
-    _debug2: { raw: contracts?.length, active: activeContracts.length },
     data: {
       period,
       year,
