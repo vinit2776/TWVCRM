@@ -465,6 +465,18 @@ export function Sidebar() {
 
         {/* Help — pinned at bottom, always visible */}
         <div className="shrink-0 border-t border-sidebar-accent px-3 py-3">
+          {/* Build identifier — helps spot stale cached versions */}
+          {(() => {
+            const sha = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7);
+            const date = process.env.NEXT_PUBLIC_BUILD_DATE;
+            if (!sha && !date) return null;
+            const label = [date, sha].filter(Boolean).join(" · ");
+            return (
+              <p className="px-3 pb-2 text-[10px] text-sidebar-foreground/35 select-none" title={`Build: ${label}`}>
+                {label}
+              </p>
+            );
+          })()}
           <Link
             href="/help"
             onClick={closeSidebar}
