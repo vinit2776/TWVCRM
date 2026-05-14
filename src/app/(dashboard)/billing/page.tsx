@@ -1244,12 +1244,12 @@ export default function BillingPage() {
                                     <CheckCircle className="mr-2 h-4 w-4" />Finalize
                                   </DropdownMenuItem>
                                 )}
-                                {(stmt.status === "finalized" || stmt.status === "exported") && !stmt.gst_invoice_number && (
+                                {(stmt.status === "finalized" || stmt.status === "exported") && !stmt.gst_invoice_number && stmt.payment_status !== "paid" && (
                                   <DropdownMenuItem onClick={() => handleSendProforma(stmt.id)}>
                                     <Send className="mr-2 h-4 w-4" />{stmt.proforma_sent_at ? "Resend Proforma" : "Send Proforma"}
                                   </DropdownMenuItem>
                                 )}
-                                {(stmt.status === "finalized" || stmt.status === "exported") && !stmt.gst_invoice_number && (
+                                {(stmt.status === "finalized" || stmt.status === "exported") && !stmt.gst_invoice_number && stmt.payment_status === "paid" && (
                                   <DropdownMenuItem onClick={() => handleGenerateGstInvoice(stmt.id)}>
                                     <FileCheck className="mr-2 h-4 w-4" />Generate & Send GST Invoice
                                   </DropdownMenuItem>

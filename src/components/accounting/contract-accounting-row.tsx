@@ -533,8 +533,8 @@ export function ContractAccountingRow({
                     </Button>
                   )}
 
-                  {/* Send / Resend Proforma */}
-                  {isFinalized && onSendProforma && !statement.gst_invoice_number && (
+                  {/* Send / Resend Proforma — only while payment not yet fully received */}
+                  {isFinalized && onSendProforma && !statement.gst_invoice_number && statement.payment_status !== "paid" && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -550,8 +550,15 @@ export function ContractAccountingRow({
                     </Button>
                   )}
 
-                  {/* Generate GST Invoice */}
-                  {isFinalized && !statement.gst_invoice_number && onGenerateGst && (
+                  {/* Hint: payment received, GST next */}
+                  {isFinalized && !statement.gst_invoice_number && statement.payment_status === "paid" && !onGenerateGst && (
+                    <span className="text-xs text-violet-700 bg-violet-50 border border-violet-200 rounded px-2 py-1">
+                      ✓ Payment received — Generate GST invoice
+                    </span>
+                  )}
+
+                  {/* Generate GST Invoice — only after full payment received */}
+                  {isFinalized && !statement.gst_invoice_number && statement.payment_status === "paid" && onGenerateGst && (
                     <Button
                       size="sm"
                       variant="outline"

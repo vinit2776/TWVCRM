@@ -69,6 +69,15 @@ export async function POST(
   if (statement.status === "voided") {
     return NextResponse.json({ error: "Statement is voided" }, { status: 400 });
   }
+  // Payment must be fully received before a tax invoice can be issued.
+  // (The Razorpay webhook always sets payment_status = "paid" before calling
+  //  this endpoint, so the webhook path is unaffected by this check.)
+  if (statement.payment_status !== "paid") {
+    return NextResponse.json(
+      { error: "GST invoice can only be generated after full payment is received. Record the payment first." },
+      { status: 400 }
+    );
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const contract = statement.contract as any;
