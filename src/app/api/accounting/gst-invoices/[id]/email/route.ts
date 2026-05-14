@@ -33,7 +33,7 @@ export async function POST(
   const { data: payment, error: fetchError } = await supabase
     .from("contract_payments")
     .select(
-      "*, contract:contracts!contract_payments_contract_id_fkey(id, contract_number, title, lead_id, monthly_membership_fee, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, phone, mobile))"
+      "*, contract:contracts!contract_payments_contract_id_fkey(id, contract_number, title, lead_id, total_amount, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, phone, mobile))"
     )
     .eq("id", id)
     .single();

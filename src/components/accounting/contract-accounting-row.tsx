@@ -17,7 +17,7 @@ interface ContractSummary {
     id: string;
     contract_number: string;
     title: string;
-    monthly_membership_fee: number;
+    total_amount: number;
     lead?: {
       id: string;
       first_name: string;

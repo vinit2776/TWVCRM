@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
   // Total billed (recurring * months + facility usage + ad-hoc)
   const { data: contract } = await supabase
     .from("contracts")
-    .select("id, start_date, monthly_membership_fee, tenure_months, status")
+    .select("id, start_date, total_amount, tenure_months, status")
     .eq("id", contractId)
     .single();
 
@@ -58,7 +58,7 @@ export async function GET(request: NextRequest) {
       (now.getDate() >= startDate.getDate() ? 1 : 0)
   );
   const activMonths = Math.min(monthsElapsed, contract.tenure_months);
-  const totalRecurring = activMonths * Number(contract.monthly_membership_fee);
+  const totalRecurring = activMonths * Number(contract.total_amount);
 
   // Facility usage total (all time)
   const { data: allUsages } = await supabase
@@ -120,7 +120,7 @@ export async function GET(request: NextRequest) {
 
   const currentAdHocTotal = (currentAdHoc || []).reduce((s, c) => s + Number(c.total), 0);
 
-  const currentMonthCharges = Number(contract.monthly_membership_fee) + currentFacilityTotal + currentAdHocTotal;
+  const currentMonthCharges = Number(contract.total_amount) + currentFacilityTotal + currentAdHocTotal;
 
   const { data: currentPayments } = await supabase
     .from("contract_payments")

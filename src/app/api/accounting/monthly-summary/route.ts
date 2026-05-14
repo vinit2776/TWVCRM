@@ -37,15 +37,13 @@ export async function GET(request: NextRequest) {
   }
 
   // ── Step 2: Get all active contracts for this period ─────────────────
-  const { data: contracts, error: contractsError } = await adminSupabase
+  const { data: contracts } = await adminSupabase
     .from("contracts")
     .select(
-      "id, contract_number, title, status, start_date, seats, monthly_membership_fee, billing_cycle, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, secondary_email)"
+      "id, contract_number, title, status, start_date, seats, total_amount, billing_cycle, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, secondary_email)"
     )
     .lte("start_date", periodEnd)
     .in("status", ["active", "completed"]);
-
-  console.log("[monthly-summary] contracts query:", { count: contracts?.length, error: contractsError?.message, periodEnd });
 
   // Filter contracts actually active during this period
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -217,7 +215,7 @@ export async function GET(request: NextRequest) {
         cursor.setMonth(cursor.getMonth() + 1);
       }
 
-      const totalRecurringBefore = monthsBeforeThisPeriod * Number(contract.monthly_membership_fee);
+      const totalRecurringBefore = monthsBeforeThisPeriod * Number(contract.total_amount);
       const totalChargesBefore =
         totalRecurringBefore +
         (priorUsageByContract[contract.id] || 0) +
@@ -238,7 +236,7 @@ export async function GET(request: NextRequest) {
     const facilityUsageTotal = contractFacilityUsages.reduce((sum, u) => sum + Number(u.total_charge), 0);
     const adHocTotal = contractAdHocCharges.reduce((sum, c) => sum + Number(c.total), 0);
     const bookingTotal = contractBookings.reduce((sum, b) => sum + Number(b.total_amount || 0), 0);
-    const recurringAmount = Number(contract.monthly_membership_fee);
+    const recurringAmount = Number(contract.total_amount);
     const currentMonthCharges = recurringAmount + facilityUsageTotal + adHocTotal + bookingTotal;
 
     const verifiedPayments = contractPmts.filter((p) => p.status === "verified");
@@ -343,7 +341,6 @@ export async function GET(request: NextRequest) {
   const totalCarriedForward = contractSummaries.reduce((sum, cs) => sum + cs.carried_forward, 0);
 
   return NextResponse.json({
-    _debug: { raw_contracts_count: contracts?.length ?? null, contracts_error: contractsError?.message ?? null, active_contracts_count: activeContracts.length, period_start: periodStart, period_end: periodEnd },
     data: {
       period,
       year,

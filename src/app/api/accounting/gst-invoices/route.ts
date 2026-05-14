@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
   const { data: contracts } = await supabase
     .from("contracts")
     .select(
-      "id, contract_number, title, status, start_date, monthly_membership_fee, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, secondary_email, phone, mobile)"
+      "id, contract_number, title, status, start_date, total_amount, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, secondary_email, phone, mobile)"
     )
     .lte("start_date", periodEnd)
     .in("status", ["active", "completed"]);
@@ -63,7 +63,7 @@ export async function GET(request: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const entries = activeContracts.map((contract: any) => {
     const contractPayments = paymentsByContract.get(contract.id) ?? [];
-    const totalBillable = Number(contract.monthly_membership_fee);
+    const totalBillable = Number(contract.total_amount);
     const totalPaid = contractPayments
       .filter((p) => p.status === "verified")
       .reduce((s, p) => s + Number(p.amount), 0);

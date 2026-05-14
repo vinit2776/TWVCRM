@@ -32,7 +32,7 @@ export async function GET(request: NextRequest) {
   const { data: contracts } = await supabase
     .from("contracts")
     .select(
-      "id, contract_number, title, status, start_date, seats, monthly_membership_fee, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)"
+      "id, contract_number, title, status, start_date, seats, total_amount, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)"
     )
     .lte("start_date", periodEnd)
     .in("status", ["active", "completed"]);
@@ -94,7 +94,7 @@ export async function GET(request: NextRequest) {
 
     const facilityTotal = usages.reduce((s, u) => s + Number(u.total_charge), 0);
     const adhocTotal = adhoc.reduce((s, c) => s + Number(c.total), 0);
-    const recurring = Number(contract.monthly_membership_fee);
+    const recurring = Number(contract.total_amount);
     const totalCharges = recurring + facilityTotal + adhocTotal;
     const totalPaid = pmts.reduce((s, p) => s + Number(p.amount), 0);
 
