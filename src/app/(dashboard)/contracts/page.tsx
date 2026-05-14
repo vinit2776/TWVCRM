@@ -16,6 +16,7 @@ import {
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { ContractQuotasSection } from "@/components/contracts/contract-quotas-section";
+import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
 import {
   CONTRACT_STATUSES,
   CONTRACT_STATUS_LABELS,
@@ -289,11 +290,18 @@ export default function ContractsPage() {
                   </span>
                 </SheetTitle>
               </SheetHeader>
-              <ContractQuotasSection
-                contractId={selectedContract.id}
-                readOnly={!canEditQuotas}
-                onSave={refreshSelectedQuotaCount}
-              />
+              <div className="space-y-4">
+                <ContractQuotasSection
+                  contractId={selectedContract.id}
+                  readOnly={!canEditQuotas}
+                  onSave={refreshSelectedQuotaCount}
+                />
+                <ContractFacilitiesSection
+                  contractId={selectedContract.id}
+                  readOnly={!canEditQuotas}
+                  onSave={refreshSelectedQuotaCount}
+                />
+              </div>
             </>
           )}
         </SheetContent>
