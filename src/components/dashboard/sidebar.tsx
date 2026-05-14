@@ -50,6 +50,7 @@ import {
   Fingerprint,
   MailX,
   Landmark,
+  Wallet,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -105,6 +106,7 @@ const navSections: NavSection[] = [
       { href: "/billing",    label: "Billing - Acc Receivables", icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/accounting", label: "Acc Payables",             icon: Calculator,  roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/finance/gateway-activity", label: "Gateway Activity",   icon: Landmark,    roles: ["admin", "accounts"] },
+      { href: "/petty-cash",               label: "Petty Cash",          icon: Wallet,      roles: null },
     ],
   },
   {
