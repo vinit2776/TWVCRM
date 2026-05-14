@@ -7,13 +7,11 @@ import {
   ChevronLeft,
   ChevronRight,
   Plus,
-  FileText,
   Receipt,
   MoreHorizontal,
   Eye,
   Download,
   CheckCircle,
-  Upload,
   X,
   IndianRupee,
   ScrollText,
@@ -88,12 +86,6 @@ const USAGE_STATUS_LABELS: Record<string, string> = {
   pending: "Pending",
   billed:  "Billed",
   waived:  "Waived",
-};
-const STATEMENT_STATUS_LABELS: Record<string, string> = {
-  draft:     "Draft",
-  finalized: "Finalized",
-  exported:  "Exported",
-  voided:    "Voided",
 };
 
 // ── Types — billing ──────────────────────────────────────────────────────────
@@ -369,13 +361,10 @@ export default function BillingPage() {
   const [chargesDateTo, setChargesDateTo]             = useState("");
   const [addChargeOpen, setAddChargeOpen]             = useState(false);
 
-  // ── Billing Statements ────────────────────────────────────────────────────
+  // ── Billing Statements (booking-only, non-contract) ──────────────────────
   const [statements, setStatements]                       = useState<BillingStatement[]>([]);
-  const [statementsPagination, setStatementsPagination]   = useState<Pagination>({ page: 1, limit: 25, total: 0, totalPages: 0 });
   const [statementsLoading, setStatementsLoading]         = useState(true);
   const [statementsPage, setStatementsPage]               = useState(1);
-  const [statementsContractFilter, setStatementsContractFilter] = useState("");
-  const [statementsStatusFilter, setStatementsStatusFilter]     = useState("");
   const [generateStatementOpen, setGenerateStatementOpen] = useState(false);
   const [generatingMissing, setGeneratingMissing] = useState(false);
 
@@ -531,15 +520,13 @@ export default function BillingPage() {
   const fetchStatements = useCallback(async (signal?: AbortSignal) => {
     setStatementsLoading(true);
     try {
-      const params = new URLSearchParams({ page: String(statementsPage), limit: "25" });
-      if (statementsContractFilter) params.set("contract_id", statementsContractFilter);
-      if (statementsStatusFilter)   params.set("status", statementsStatusFilter);
+      // Fetch all statements; we display only non-contract ones (booking-only) in the merged view
+      const params = new URLSearchParams({ page: String(statementsPage), limit: "50" });
       const res = await fetch(`/api/billing-statements?${params}`, { signal });
       if (signal?.aborted) return;
       if (res.ok) {
         const json = await res.json();
         setStatements(json.data || []);
-        setStatementsPagination(json.pagination || { page: 1, limit: 25, total: 0, totalPages: 0 });
       }
     } catch (e) {
       if ((e as Error).name === "AbortError") return;
@@ -547,7 +534,7 @@ export default function BillingPage() {
     } finally {
       if (!signal?.aborted) setStatementsLoading(false);
     }
-  }, [statementsPage, statementsContractFilter, statementsStatusFilter]);
+  }, [statementsPage]);
 
   // Only fire on the Statements tab — saves a round-trip on first load
   // for users who land on contracts/cash/gst tabs.
@@ -663,18 +650,6 @@ export default function BillingPage() {
     setVoidSubmitting(false);
   };
 
-  const handleExportStatement = async (id: string) => {
-    try {
-      const res = await fetch(`/api/billing-statements/${id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: "exported" }),
-      });
-      if (res.ok) { toast.success("Statement exported"); fetchStatements(); }
-      else { const err = await res.json().catch(() => null); toast.error(err?.error || "Failed to export"); }
-    } catch { toast.error("Failed to export statement"); }
-  };
-
   const handleSendProforma = async (id: string) => {
     const tid = toast.loading("Generating proforma & payment link…");
     try {
@@ -721,12 +696,8 @@ export default function BillingPage() {
     setChargesContractFilter(""); setChargesStatusFilter("");
     setChargesDateFrom(""); setChargesDateTo(""); setChargesPage(1);
   };
-  const clearStatementsFilters = () => {
-    setStatementsContractFilter(""); setStatementsStatusFilter(""); setStatementsPage(1);
-  };
 
-  const hasChargesFilters   = chargesContractFilter || chargesStatusFilter || chargesDateFrom || chargesDateTo;
-  const hasStatementsFilters = statementsContractFilter || statementsStatusFilter;
+  const hasChargesFilters = chargesContractFilter || chargesStatusFilter || chargesDateFrom || chargesDateTo;
   const isLocked      = summary?.period?.status === "locked";
   const selectedMonth = `${year}-${String(month).padStart(2, "0")}`;
   const pendingHandover = cashHandovers.filter((c) => c.cash_handover_status === "pending_handover");
