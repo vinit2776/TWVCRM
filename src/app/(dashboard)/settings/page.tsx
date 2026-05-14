@@ -11,7 +11,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { createClient } from "@/lib/supabase/client"; // still needed for handleSave
 import { getInitials } from "@/lib/utils";
 import { toast } from "sonner";
-import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart, LayoutDashboard, Banknote, AlertTriangle, PieChart, FileText, Building2 } from "lucide-react";
+import { User, Mail, Phone, Shield, CreditCard, DoorOpen, FolderOpen, ArrowRight, ShoppingCart, LayoutDashboard, Banknote, AlertTriangle, PieChart, FileText } from "lucide-react";
 import { PaymentGatewaySettings } from "@/components/settings/payment-gateway-settings";
 import { ProcurementSettings } from "@/components/settings/procurement-settings";
 import { DashboardSettings } from "@/components/settings/dashboard-settings";
@@ -20,7 +20,6 @@ import { ServicesSettings } from "@/components/settings/services-settings";
 import { ReorderSettings } from "@/components/settings/reorder-settings";
 import { ProcurementBudgetSettings } from "@/components/settings/procurement-budget-settings";
 import { EInvoiceSettings } from "@/components/settings/e-invoice-settings";
-import { FacilityCatalogSettings } from "@/components/settings/facility-catalog-settings";
 import Link from "next/link";
 
 export default function SettingsPage() {
@@ -126,11 +125,6 @@ export default function SettingsPage() {
           {["admin", "manager"].includes(profile.role) && (
             <TabsTrigger value="services" className="justify-start gap-2 px-3 py-2 text-sm">
               <DoorOpen className="h-4 w-4 shrink-0" />Services
-            </TabsTrigger>
-          )}
-          {["admin", "manager"].includes(profile.role) && (
-            <TabsTrigger value="facilities" className="justify-start gap-2 px-3 py-2 text-sm">
-              <Building2 className="h-4 w-4 shrink-0" />Facilities
             </TabsTrigger>
           )}
           {profile.role === "admin" && (
@@ -324,11 +318,6 @@ export default function SettingsPage() {
           </TabsContent>
         )}
 
-        {["admin", "manager"].includes(profile.role) && (
-          <TabsContent value="facilities" className="mt-0">
-            <FacilityCatalogSettings />
-          </TabsContent>
-        )}
 
         {profile.role === "admin" && (
           <TabsContent value="procurement" className="mt-0">

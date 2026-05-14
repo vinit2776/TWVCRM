@@ -29,7 +29,7 @@ interface CatalogItem {
   id: string;
   name: string;
   unit: string;
-  default_cost_per_unit: number;
+  price_per_unit: number; // from location_services
 }
 
 interface Facility {
@@ -82,10 +82,10 @@ export function ContractFacilitiesSection({ contractId, locationId, readOnly = f
 
   useEffect(() => { reload(); /* eslint-disable-next-line */ }, [contractId]);
 
-  // Load catalogue when locationId is available, filtered to items not already on the contract
+  // Load location_services as catalogue when locationId is available
   useEffect(() => {
     if (!locationId) { setCatalog([]); return; }
-    fetch(`/api/facility-catalog?location_id=${locationId}`)
+    fetch(`/api/location-services?location_id=${locationId}&is_active=true`)
       .then((r) => r.json())
       .then((j) => setCatalog(j.data || []));
   }, [locationId]);
@@ -282,7 +282,7 @@ export function ContractFacilitiesSection({ contractId, locationId, readOnly = f
                           <button
                             key={c.id}
                             type="button"
-                            onClick={() => setNewForm({ name: c.name, unit: c.unit, freeQty: "0", rate: String(c.default_cost_per_unit) })}
+                            onClick={() => setNewForm({ name: c.name, unit: c.unit, freeQty: "0", rate: String(c.price_per_unit) })}
                             className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-dashed border-primary/40 bg-primary/5 text-primary hover:bg-primary/10 transition-colors"
                           >
                             {c.name}
