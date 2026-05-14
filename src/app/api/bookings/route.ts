@@ -574,15 +574,16 @@ export async function POST(request: NextRequest) {
     const { data: charge, error: chargeErr } = await supabase
       .from("usage_charges")
       .insert({
-        contract_id: contract.id,
-        lead_id:     contract.lead_id,
-        description: chargeDescription,
-        quantity:    chargeQty,
-        unit_price:  chargeUnitPrice,
-        total:       chargeTotal,
-        charge_date: input.booking_date,
-        status:      chargeStatus,
-        created_by:  dbUser.id,
+        contract_id:          contract.id,
+        lead_id:              contract.lead_id,
+        description:          chargeDescription,
+        quantity:             chargeQty,
+        unit_price:           chargeUnitPrice,
+        total:                chargeTotal,
+        charge_date:          input.booking_date,
+        status:               chargeStatus,
+        created_by:           dbUser.id,
+        contract_facility_id: contractFacilityForQuota?.id ?? null,
       })
       .select("id")
       .single();
