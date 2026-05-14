@@ -95,8 +95,11 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
 
   // ── Download Proposal PDF ──
   const handleDownloadProposalPDF = async (p: Proposal) => {
-    const { generateProposalPDF } = await import("@/lib/pdf-generator");
-    const doc = generateProposalPDF(p, lead || undefined);
+    const [{ generateProposalPDF }, sqRes] = await Promise.all([
+      import("@/lib/pdf-generator"),
+      fetch(`/api/proposals/${p.id}/service-quotas`).then((r) => r.ok ? r.json() : { data: [] }),
+    ]);
+    const doc = generateProposalPDF(p, lead || undefined, undefined, undefined, sqRes.data ?? []);
     doc.save(`${p.proposal_number}.pdf`);
   };
 
@@ -116,9 +119,11 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       leadEmail: lead?.email || undefined,
       leadPhone: lead?.phone || lead?.mobile || undefined,
       generatePDF: async () => {
-        const { generateProposalPDF } = await import("@/lib/pdf-generator");
-        const doc = generateProposalPDF(p, lead || undefined);
-        // Get base64 without data URI prefix
+        const [{ generateProposalPDF }, sqRes] = await Promise.all([
+          import("@/lib/pdf-generator"),
+          fetch(`/api/proposals/${p.id}/service-quotas`).then((r) => r.ok ? r.json() : { data: [] }),
+        ]);
+        const doc = generateProposalPDF(p, lead || undefined, undefined, undefined, sqRes.data ?? []);
         return doc.output("datauristring").split(",")[1];
       },
     });

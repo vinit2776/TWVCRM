@@ -53,6 +53,7 @@ import { formatDate, formatCurrency } from "@/lib/utils";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
+import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
 import { CreateContractDialog } from "@/components/contracts/create-contract-dialog";
 import { toast } from "sonner";
 import type { Proposal, Lead } from "@/types";
@@ -69,6 +70,9 @@ export default function ProposalDetailPage({
 
   // Current user (rep) profile for PDF/email attribution
   const [currentUser, setCurrentUser] = useState<{ full_name: string; email: string; phone: string } | null>(null);
+
+  // Service quotas for PDF rendering
+  const [serviceQuotas, setServiceQuotas] = useState<{ name: string; unit_label: string; monthly_quota: number; overage_rate: number }[]>([]);
 
   // Email dialog state
   const [emailDialogOpen, setEmailDialogOpen] = useState(false);
@@ -141,7 +145,15 @@ export default function ProposalDetailPage({
         if (data?.full_name) setCurrentUser({ full_name: data.full_name, email: data.email || "", phone: data.phone || "" });
       })
       .catch(() => {});
-  }, [fetchProposal]);
+
+    // Fetch service quotas for this proposal to include in PDF
+    fetch(`/api/proposals/${id}/service-quotas`)
+      .then((r) => r.ok ? r.json() : null)
+      .then((data) => {
+        if (data?.data) setServiceQuotas(data.data);
+      })
+      .catch(() => {});
+  }, [fetchProposal, id]);
 
   const handleDownloadPDF = async () => {
     if (!proposal) return;
@@ -156,7 +168,8 @@ export default function ProposalDetailPage({
       proposal,
       proposal.lead || undefined,
       { razorpayPaymentLink: proposal.razorpay_payment_link_url || undefined },
-      preparedBy
+      preparedBy,
+      serviceQuotas
     );
     doc.save(`${proposal.proposal_number}.pdf`);
   };
@@ -348,6 +361,10 @@ export default function ProposalDetailPage({
   const isExpired =
     proposal?.valid_until && new Date(proposal.valid_until) < new Date();
 
+  const isZeroDeposit = Number(proposal?.security_deposit_months || 0) === 0;
+  const waiverVerified = !!proposal?.deposit_waiver_verified_at;
+  const needsWaiver = isZeroDeposit && !waiverVerified;
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -487,11 +504,16 @@ export default function ProposalDetailPage({
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" className="w-64">
                   {/* ── Send Proposal ─────────────────────────────────── */}
-                  <DropdownMenuItem onClick={handleEmailProposal}>
+                  <DropdownMenuItem
+                    onClick={needsWaiver ? undefined : handleEmailProposal}
+                    disabled={needsWaiver}
+                  >
                     <FileText className="mr-2 h-4 w-4 shrink-0 text-muted-foreground" />
                     <div>
                       <p className="font-medium">Send Proposal</p>
-                      <p className="text-xs text-muted-foreground">Proposal PDF · negotiation phase</p>
+                      <p className="text-xs text-muted-foreground">
+                        {needsWaiver ? "Locked — admin OTP approval required" : "Proposal PDF · negotiation phase"}
+                      </p>
                     </div>
                   </DropdownMenuItem>
 
@@ -565,7 +587,13 @@ export default function ProposalDetailPage({
               </DropdownMenu>
             );
           })()}
-          <Button variant="outline" size="sm" onClick={handleDownloadPDF}>
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={needsWaiver ? () => toast.error("Admin OTP approval required before downloading. Complete the deposit waiver approval first.") : handleDownloadPDF}
+            disabled={needsWaiver}
+            title={needsWaiver ? "Admin OTP approval required" : undefined}
+          >
             <Download className="mr-2 h-4 w-4" />
             Download PDF
           </Button>
@@ -812,6 +840,17 @@ export default function ProposalDetailPage({
               </div>
             </CardContent>
           </Card>
+
+          {/* Deposit Waiver Gate — shown for zero-deposit proposals */}
+          {isZeroDeposit && (
+            <DepositWaiverGate
+              proposalId={proposal.id}
+              proposalNumber={proposal.proposal_number}
+              isVerified={waiverVerified}
+              requestedAt={proposal.deposit_waiver_requested_at}
+              onVerified={fetchProposal}
+            />
+          )}
 
           {/* Lifecycle Timeline */}
           <Card>
@@ -1141,7 +1180,7 @@ export default function ProposalDetailPage({
             ? { name: currentUser.full_name, email: currentUser.email || undefined, phone: currentUser.phone || undefined }
             : undefined;
           const { generateProposalPDF } = await import("@/lib/pdf-generator");
-          const doc = generateProposalPDF(proposal, proposal.lead || undefined, undefined, preparedBy);
+          const doc = generateProposalPDF(proposal, proposal.lead || undefined, undefined, preparedBy, serviceQuotas);
           return doc.output("datauristring").split(",")[1];
         }}
         onSuccess={fetchProposal}

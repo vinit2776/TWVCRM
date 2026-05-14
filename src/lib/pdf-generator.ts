@@ -66,6 +66,7 @@ interface PDFOptions {
   razorpayPaymentLink?: string; // Razorpay payment link URL
   preparedBy?: { name: string; email?: string; phone?: string }; // Sales rep info
   showServicesIncluded?: boolean; // Show the "What's Included" icon strip (proposals only)
+  serviceQuotas?: { name: string; unit_label: string; monthly_quota: number; overage_rate: number }[];
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -491,6 +492,41 @@ function generatePDF(options: PDFOptions): jsPDF {
     y += descLines.length * 4.5 + 6;
   }
 
+  // ── Service Quotas table (proposals) ──
+  if (options.serviceQuotas && options.serviceQuotas.length > 0) {
+    if (y + 20 > doc.internal.pageSize.getHeight() - 20) { doc.addPage(); y = 20; }
+    doc.setFontSize(10);
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(...BRAND_TEAL);
+    doc.text("Service Quotas", 14, y);
+    y += 6;
+
+    const quotaRows = options.serviceQuotas.map(q => [
+      q.name,
+      q.unit_label,
+      q.monthly_quota > 0 ? String(q.monthly_quota) : "—",
+      q.overage_rate > 0 ? `${formatCurrencyPDF(q.overage_rate)} / ${q.unit_label}` : "No charge",
+    ]);
+
+    autoTable(doc, {
+      startY: y,
+      head: [["Service", "Unit", "Free quota / month", "Overage rate"]],
+      body: quotaRows,
+      theme: "striped",
+      headStyles: { fillColor: BRAND_TEAL, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 9 },
+      alternateRowStyles: { fillColor: [240, 250, 245] },
+      bodyStyles: { fontSize: 8, textColor: BRAND_DARK },
+      columnStyles: {
+        0: { cellWidth: "auto" },
+        1: { cellWidth: 28 },
+        2: { cellWidth: 38, halign: "center" },
+        3: { cellWidth: 48, halign: "right" },
+      },
+      margin: { left: 14, right: 14 },
+    });
+    y = (doc as jsPDF & { lastAutoTable: { finalY: number } }).lastAutoTable.finalY + 6;
+  }
+
   // ── Terms & Conditions ──
   if (options.termsAndConditions) {
     doc.setFontSize(10);
@@ -694,7 +730,8 @@ export function generateProposalPDF(
   proposal: Proposal & { location?: Partial<Location> },
   lead?: Partial<Lead>,
   paymentOptions?: { qrCodeBase64?: string; upiId?: string; razorpayPaymentLink?: string },
-  preparedBy?: { name: string; email?: string; phone?: string }
+  preparedBy?: { name: string; email?: string; phone?: string },
+  serviceQuotas?: { name: string; unit_label: string; monthly_quota: number; overage_rate: number }[]
 ): jsPDF {
   return generatePDF({
     title: "PRO-FORMA INVOICE / PROPOSAL",
@@ -722,6 +759,7 @@ export function generateProposalPDF(
     razorpayPaymentLink: paymentOptions?.razorpayPaymentLink,
     preparedBy,
     showServicesIncluded: true,
+    serviceQuotas,
   });
 }
 

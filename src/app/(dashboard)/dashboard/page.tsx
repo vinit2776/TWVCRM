@@ -29,6 +29,7 @@ import { SourceRoiWidget } from "@/components/dashboard/widgets/source-roi-widge
 import { AggregatorPerformanceWidget } from "@/components/dashboard/widgets/aggregator-performance-widget";
 import { ProcurementSpendWidget } from "@/components/dashboard/widgets/procurement-spend-widget";
 import { QuotaOveruseWidget } from "@/components/dashboard/widgets/quota-overuse-widget";
+import { PendingActionsWidget } from "@/components/dashboard/widgets/pending-actions-widget";
 
 import Link from "next/link";
 import { Bell, RefreshCw, Zap } from "lucide-react";
@@ -255,6 +256,8 @@ export default function DashboardPage() {
   // Map widget ID → rendered component
   function renderWidget(id: WidgetId) {
     switch (id) {
+      case "pending_actions":
+        return <PendingActionsWidget key="pending_actions" />;
       case "live_enquiries":
         return <LiveEnquiriesWidget key="live_enquiries" />;
       case "kpi_stats":
@@ -307,7 +310,7 @@ export default function DashboardPage() {
   }
 
   // live_enquiries and kpi_stats always render full-width outside the grid
-  const FULL_WIDTH: WidgetId[] = ["live_enquiries", "kpi_stats"];
+  const FULL_WIDTH: WidgetId[] = ["pending_actions", "live_enquiries", "kpi_stats"];
   const topWidgets = widgetIds.filter((id) => FULL_WIDTH.includes(id));
   const gridWidgets = widgetIds.filter((id) => !FULL_WIDTH.includes(id));
 

@@ -4,6 +4,7 @@ import type { UserRole } from "@/types";
 
 export type WidgetId =
   // Existing
+  | "pending_actions"
   | "live_enquiries"
   | "kpi_stats"
   | "followups"
@@ -39,6 +40,7 @@ export interface WidgetMeta {
 }
 
 export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
+  pending_actions:        { id: "pending_actions",        title: "Pending Actions" },
   live_enquiries:         { id: "live_enquiries",         title: "Live Enquiries" },
   kpi_stats:              { id: "kpi_stats",              title: "Key Metrics" },
   followups:              { id: "followups",              title: "Follow-ups" },
@@ -71,6 +73,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
 
 export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   admin: [
+    "pending_actions",
     "live_enquiries",
     "kpi_stats",
     "revenue_pulse",
@@ -90,6 +93,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   ],
 
   manager: [
+    "pending_actions",
     "live_enquiries",
     "kpi_stats",
     "schedule",

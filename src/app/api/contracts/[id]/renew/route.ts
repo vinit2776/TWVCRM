@@ -113,12 +113,15 @@ export async function POST(
   const roundToTen = (n: number) => Math.round(n / 10) * 10;
 
   type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string };
+  const oldSeats = Number(source.seats || 1);
   const oldItems = (source.items || []) as Item[];
   const newItems: Item[] = oldItems.map((item) => {
+    // Scale seat-based items proportionally; leave flat-fee items (quantity !== oldSeats) unchanged.
+    const newQuantity = item.quantity === oldSeats ? seats : item.quantity;
     const rawUnitPrice = item.unit_price * escalationMultiplier;
     const newUnitPrice = roundToTen(rawUnitPrice);
-    const newTotal = newUnitPrice * item.quantity;
-    return { ...item, unit_price: newUnitPrice, total: newTotal };
+    const newTotal = newUnitPrice * newQuantity;
+    return { ...item, quantity: newQuantity, unit_price: newUnitPrice, total: newTotal };
   });
 
   const newSubtotal = newItems.reduce((sum, i) => sum + i.total, 0);
@@ -270,7 +273,24 @@ export async function POST(
     }
   }
 
-  // 11. Audit trail
+  // 11. Copy service quotas from parent contract
+  const { data: parentQuotas } = await admin
+    .from("contract_service_quotas")
+    .select("service_id, monthly_quota, overage_rate")
+    .eq("contract_id", id);
+
+  if (parentQuotas && parentQuotas.length > 0) {
+    const renewalQuotas = parentQuotas.map(q => ({
+      contract_id: newContract.id,
+      service_id: q.service_id,
+      monthly_quota: q.monthly_quota,
+      overage_rate: q.overage_rate,
+      created_by: dbUser.id,
+    }));
+    await admin.from("contract_service_quotas").insert(renewalQuotas);
+  }
+
+  // 13. Audit trail
   logAudit(admin, {
     entityType: "contract",
     entityId: newContract.id,
@@ -297,7 +317,7 @@ export async function POST(
     },
   });
 
-  // 12. Escalation approval workflow
+  // 14. Escalation approval workflow
   // If escalation is reduced or waived (and requester is not admin), create
   // an approval request. The draft is created with the proposed rate, but
   // the contract is flagged as pending approval. If rejected, the rate
@@ -395,7 +415,7 @@ export async function PATCH(
   const admin = createAdminClient();
   const { data: contract } = await admin
     .from("contracts")
-    .select("*, parent:contracts!contracts_parent_contract_id_fkey(id, items, subtotal)")
+    .select("*, parent:contracts!contracts_parent_contract_id_fkey(id, items, subtotal, seats)")
     .eq("id", id)
     .single();
 
@@ -415,26 +435,36 @@ export async function PATCH(
 
     type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string };
     const parentItems = (Array.isArray(parent) ? parent[0]?.items : parent.items) as Item[] || [];
-    const parentSubtotal = Number(Array.isArray(parent) ? parent[0]?.subtotal : parent.subtotal) || 0;
+    const parentSeatsWaive = Number(Array.isArray(parent) ? parent[0]?.seats : parent.seats) || 1;
+    const renewalSeatsWaive = Number(contract.seats || 1);
+
+    // Adjust parent item quantities to match renewal seat count
+    const adjustedItems = parentItems.map((item: Item) => {
+      const newQuantity = item.quantity === parentSeatsWaive ? renewalSeatsWaive : item.quantity;
+      const newTotal = Math.round(item.unit_price * newQuantity * 100) / 100;
+      return { ...item, quantity: newQuantity, total: newTotal };
+    });
+    const adjustedSubtotal = adjustedItems.reduce((sum: number, i: Item) => sum + i.total, 0);
 
     const taxPercentage = Number(contract.tax_percentage || 18);
     const discountPercentage = Number(contract.discount_percentage || 0);
-    const discountAmount = Math.round(parentSubtotal * (discountPercentage / 100) * 100) / 100;
-    const taxableAmount = parentSubtotal - discountAmount;
+    const discountAmount = Math.round(adjustedSubtotal * (discountPercentage / 100) * 100) / 100;
+    const taxableAmount = adjustedSubtotal - discountAmount;
     const taxAmount = Math.round(taxableAmount * (taxPercentage / 100) * 100) / 100;
     const totalAmount = taxableAmount + taxAmount;
 
-    // Recalculate deposit shortfall (0 when no escalation)
+    // Deposit shortfall: compare against parent's subtotal at parent's seat count
+    const parentSubtotal = Number(Array.isArray(parent) ? parent[0]?.subtotal : parent.subtotal) || 0;
     const secDepMonths = Number(contract.security_deposit_months || 3);
     const oldDeposit = parentSubtotal * secDepMonths;
-    const newDeposit = parentSubtotal * secDepMonths;
+    const newDeposit = adjustedSubtotal * secDepMonths;
     const depositShortfall = Math.max(0, Math.round((newDeposit - oldDeposit) * 100) / 100);
 
     await admin
       .from("contracts")
       .update({
-        items: parentItems,
-        subtotal: parentSubtotal,
+        items: adjustedItems,
+        subtotal: adjustedSubtotal,
         tax_amount: taxAmount,
         discount_amount: discountAmount,
         total_amount: totalAmount,
@@ -453,11 +483,11 @@ export async function PATCH(
       changes: {
         escalation_waived: { old: false, new: true },
         waiver_reason: body.waiver_reason.trim(),
-        subtotal: { old: Number(contract.subtotal), new: parentSubtotal },
+        subtotal: { old: Number(contract.subtotal), new: adjustedSubtotal },
       },
     });
 
-    return NextResponse.json({ success: true, escalation_waived: true, new_subtotal: parentSubtotal });
+    return NextResponse.json({ success: true, escalation_waived: true, new_subtotal: adjustedSubtotal });
   } else {
     // Restore escalation — re-apply from parent's prices
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -466,13 +496,16 @@ export async function PATCH(
 
     type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string };
     const parentItems = (Array.isArray(parent) ? parent[0]?.items : parent.items) as Item[] || [];
+    const parentSeatsRestore = Number(Array.isArray(parent) ? parent[0]?.seats : parent.seats) || 1;
+    const renewalSeatsRestore = Number(contract.seats || 1);
     const escalationPct = Number(contract.escalation_percentage || 10);
     const multiplier = 1 + escalationPct / 100;
 
-    const newItems: Item[] = parentItems.map((item) => {
+    const newItems: Item[] = parentItems.map((item: Item) => {
+      const newQuantity = item.quantity === parentSeatsRestore ? renewalSeatsRestore : item.quantity;
       const newUnitPrice = Math.round(item.unit_price * multiplier * 100) / 100;
-      const newTotal = Math.round(newUnitPrice * item.quantity * 100) / 100;
-      return { ...item, unit_price: newUnitPrice, total: newTotal };
+      const newTotal = Math.round(newUnitPrice * newQuantity * 100) / 100;
+      return { ...item, quantity: newQuantity, unit_price: newUnitPrice, total: newTotal };
     });
 
     const newSubtotal = newItems.reduce((sum, i) => sum + i.total, 0);

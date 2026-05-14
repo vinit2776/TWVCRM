@@ -67,6 +67,21 @@ export async function POST(
     );
   }
 
+  // ── Deposit waiver gate: block send for zero-deposit proposals without OTP approval
+  {
+    const { data: waiverCheck } = await supabase
+      .from("proposals")
+      .select("security_deposit_months, deposit_waiver_verified_at")
+      .eq("id", id)
+      .single();
+    if (waiverCheck && Number(waiverCheck.security_deposit_months || 0) === 0 && !waiverCheck.deposit_waiver_verified_at) {
+      return NextResponse.json(
+        { error: "This proposal has zero security deposit and requires admin OTP approval before it can be sent. Please request and verify the OTP first." },
+        { status: 403 }
+      );
+    }
+  }
+
   // Fetch proposal with lead info
   const { data: proposal, error: fetchError } = await supabase
     .from("proposals")

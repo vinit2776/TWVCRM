@@ -317,6 +317,12 @@ export interface Proposal {
   deposit_accounted?: boolean;
   deposit_accounted_at?: string;
   deposit_accounted_by?: string;
+  // Deposit waiver OTP (zero-deposit approval)
+  deposit_waiver_otp?: string;
+  deposit_waiver_otp_expires?: string;
+  deposit_waiver_verified_at?: string;
+  deposit_waiver_verified_by?: string;
+  deposit_waiver_requested_at?: string;
 }
 
 // ==========================================
@@ -675,7 +681,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract";
 export type AuditEntityType =
   | "lead"
   | "activity"
