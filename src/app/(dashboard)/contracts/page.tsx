@@ -298,6 +298,7 @@ export default function ContractsPage() {
                 />
                 <ContractFacilitiesSection
                   contractId={selectedContract.id}
+                  locationId={selectedContract.location_id ?? null}
                   readOnly={!canEditQuotas}
                   onSave={refreshSelectedQuotaCount}
                 />
