@@ -8,6 +8,7 @@ type Stage =
   | "proforma_sent"
   | "partially_paid"
   | "paid"
+  | "gst_sent_unpaid"
   | "invoiced"
   | "complete";
 
@@ -22,7 +23,8 @@ function resolveStage(s: {
   const isFinalized = s.status === "finalized" || s.status === "exported";
   if (!isFinalized) return "draft";
   if (s.accounted && s.gst_invoice_number) return "complete";
-  if (s.gst_invoice_number) return "invoiced";
+  if (s.gst_invoice_number && s.payment_status === "paid") return "invoiced";
+  if (s.gst_invoice_number) return "gst_sent_unpaid"; // GST sent but not yet paid
   if (s.payment_status === "paid") return "paid";
   if (s.payment_status === "partially_paid") return "partially_paid";
   if (s.proforma_sent_at) return "proforma_sent";
@@ -57,14 +59,15 @@ export async function GET(request: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   const counts: Record<Stage, number> = {
-    draft:          0,
-    finalized:      0,
-    proforma_sent:  0,
-    partially_paid: 0,
-    paid:           0,
-    invoiced:       0,
-    complete:       0,
-    voided:         0,
+    draft:           0,
+    finalized:       0,
+    proforma_sent:   0,
+    partially_paid:  0,
+    paid:            0,
+    gst_sent_unpaid: 0,
+    invoiced:        0,
+    complete:        0,
+    voided:          0,
   };
   const amounts: Record<Stage, number> = { ...counts };
 

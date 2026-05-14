@@ -39,6 +39,7 @@ type Stage =
   | "proforma_sent"
   | "partially_paid"
   | "paid"
+  | "gst_sent_unpaid"
   | "invoiced"
   | "complete";
 
@@ -95,6 +96,13 @@ const STAGE_CONFIG: Record<Stage, StageConfig> = {
     iconColor: "text-violet-500",
     Icon: CreditCard,
   },
+  gst_sent_unpaid: {
+    label: "GST Sent — Unpaid",
+    next: "Collect payment",
+    pill: "bg-orange-50 text-orange-700 border border-orange-200",
+    iconColor: "text-orange-500",
+    Icon: AlertCircle,
+  },
   invoiced: {
     label: "GST Invoice Sent",
     next: "Mark as accounted",
@@ -131,7 +139,9 @@ function resolveStage(props: LifecycleProps): Stage {
 
   if (!isFinalized) return "draft";
   if (isAccounted && hasGstInvoice) return "complete";
-  if (hasGstInvoice) return "invoiced";
+  // If GST invoice exists, check whether payment was also received
+  if (hasGstInvoice && isPaid) return "invoiced";
+  if (hasGstInvoice) return "gst_sent_unpaid"; // GST sent but money still owed
   if (isPaid) return "paid";
   if (isPartiallyPaid) return "partially_paid";
   if (hasProforma) return "proforma_sent";

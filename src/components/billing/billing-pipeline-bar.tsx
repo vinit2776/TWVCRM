@@ -8,6 +8,7 @@ import {
   Receipt,
   BookCheck,
   ChevronRight,
+  TriangleAlert,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 
@@ -78,6 +79,17 @@ const STAGES = [
     border: "border-violet-200",
     dot: "bg-violet-400",
     activeBg: "bg-violet-100",
+  },
+  {
+    key: "gst_sent_unpaid",
+    label: "GST – Unpaid",
+    hint: "Collect payment",
+    Icon: TriangleAlert,
+    bg: "bg-orange-50",
+    text: "text-orange-700",
+    border: "border-orange-200",
+    dot: "bg-orange-400",
+    activeBg: "bg-orange-100",
   },
   {
     key: "invoiced",

@@ -31,6 +31,8 @@ interface Props {
   contractId: string;
   /** Locks the editor for non-active contracts (still renders, read-only). */
   readOnly?: boolean;
+  /** Optional callback fired after a quota is saved. */
+  onSave?: () => void | Promise<void>;
 }
 
 interface RowState {
@@ -42,7 +44,7 @@ interface RowState {
   saving: boolean;
 }
 
-export function ContractQuotasSection({ contractId, readOnly = false }: Props) {
+export function ContractQuotasSection({ contractId, readOnly = false, onSave }: Props) {
   const [rows, setRows] = useState<RowState[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -106,6 +108,7 @@ export function ContractQuotasSection({ contractId, readOnly = false }: Props) {
       if (!res.ok) throw new Error(json.error || "Save failed");
       toast.success(`${row.service.name} quota saved`);
       await reload();
+      onSave?.();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Save failed");
       setRows((prev) => prev.map((r, i) => i === idx ? { ...r, saving: false } : r));
