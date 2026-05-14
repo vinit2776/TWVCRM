@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 export const maxDuration = 30;
 
@@ -7,6 +7,9 @@ export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  // Use admin client to bypass RLS for accounting reads
+  const adminSupabase = await createAdminClient();
 
   const { searchParams } = new URL(request.url);
   const year = parseInt(searchParams.get("year") || new Date().getFullYear().toString());
@@ -17,7 +20,7 @@ export async function GET(request: NextRequest) {
   const periodEnd = new Date(year, month, 0).toISOString().split("T")[0]; // Last day of month
 
   // ── Step 1: Get or create accounting period ─────────────────────────
-  let { data: period } = await supabase
+  let { data: period } = await adminSupabase
     .from("accounting_periods")
     .select("*, locker:users!accounting_periods_locked_by_fkey(id, full_name)")
     .eq("year", year)
@@ -25,7 +28,7 @@ export async function GET(request: NextRequest) {
     .single();
 
   if (!period) {
-    const { data: newPeriod } = await supabase
+    const { data: newPeriod } = await adminSupabase
       .from("accounting_periods")
       .insert({ year, month, status: "open" })
       .select("*, locker:users!accounting_periods_locked_by_fkey(id, full_name)")
@@ -34,7 +37,7 @@ export async function GET(request: NextRequest) {
   }
 
   // ── Step 2: Get all active contracts for this period ─────────────────
-  const { data: contracts } = await supabase
+  const { data: contracts } = await adminSupabase
     .from("contracts")
     .select(
       "id, contract_number, title, status, start_date, seats, monthly_membership_fee, billing_cycle, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, secondary_email)"
@@ -76,7 +79,7 @@ export async function GET(request: NextRequest) {
     // ── Current-period queries ──
     // 3. Facility usage records
     period?.id
-      ? supabase
+      ? adminSupabase
           .from("facility_usage_records")
           .select(
             "*, contract_facility:contract_facilities!facility_usage_records_contract_facility_id_fkey(id, name, unit, cost_per_unit, free_quota)"
@@ -85,7 +88,7 @@ export async function GET(request: NextRequest) {
       : Promise.resolve({ data: [] }),
     // 4. Contract payments for this period
     period?.id
-      ? supabase
+      ? adminSupabase
           .from("contract_payments")
           .select(
             "*, creator:users!contract_payments_created_by_fkey(id, full_name), collector:users!contract_payments_collected_by_fkey(id, full_name)"
@@ -94,7 +97,7 @@ export async function GET(request: NextRequest) {
       : Promise.resolve({ data: [] }),
     // 5. General payments (linked to contracts, no period)
     hasContracts
-      ? supabase
+      ? adminSupabase
           .from("contract_payments")
           .select(
             "*, creator:users!contract_payments_created_by_fkey(id, full_name), collector:users!contract_payments_collected_by_fkey(id, full_name)"
@@ -106,7 +109,7 @@ export async function GET(request: NextRequest) {
       : Promise.resolve({ data: [] }),
     // 6a. Ad-hoc usage charges
     hasContracts
-      ? supabase
+      ? adminSupabase
           .from("usage_charges")
           .select("*")
           .in("contract_id", contractIds)
@@ -115,7 +118,7 @@ export async function GET(request: NextRequest) {
       : Promise.resolve({ data: [] }),
     // 6b. Bookings posted to bill
     hasContracts
-      ? supabase
+      ? adminSupabase
           .from("bookings")
           .select("*, space:spaces!bookings_space_id_fkey(id, name)")
           .in("contract_id", contractIds)
@@ -125,7 +128,7 @@ export async function GET(request: NextRequest) {
       : Promise.resolve({ data: [] }),
     // 6c. Billing statement status per contract
     hasContracts
-      ? supabase
+      ? adminSupabase
           .from("billing_statements")
           .select("id, contract_id, status, statement_number")
           .in("contract_id", contractIds)
@@ -133,7 +136,7 @@ export async function GET(request: NextRequest) {
           .lte("period_start", periodEnd)
       : Promise.resolve({ data: [] }),
     // 7. Walk-in booking payments
-    supabase
+    adminSupabase
       .from("booking_payments")
       .select(
         "*, booking:bookings!booking_payments_booking_id_fkey(id, booking_number, booking_date, space:spaces!bookings_space_id_fkey(id, name), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company), guest_name, guest_company, customer_type)"
@@ -143,7 +146,7 @@ export async function GET(request: NextRequest) {
     // ── Carry-forward queries ──
     // 8. Prior verified payments (before this period)
     hasContracts
-      ? supabase
+      ? adminSupabase
           .from("contract_payments")
           .select("contract_id, amount, status")
           .in("contract_id", contractIds)
@@ -152,19 +155,19 @@ export async function GET(request: NextRequest) {
       : Promise.resolve({ data: [] }),
     // 9. All facility usage records (for prior periods)
     hasContracts
-      ? supabase
+      ? adminSupabase
           .from("facility_usage_records")
           .select("contract_id, total_charge, accounting_period_id")
           .in("contract_id", contractIds)
       : Promise.resolve({ data: [] }),
     // 10. Prior accounting periods
-    supabase
+    adminSupabase
       .from("accounting_periods")
       .select("id, year, month")
       .or(`year.lt.${year},and(year.eq.${year},month.lt.${month})`),
     // 11. Prior ad-hoc charges
     hasContracts
-      ? supabase
+      ? adminSupabase
           .from("usage_charges")
           .select("contract_id, total")
           .in("contract_id", contractIds)
