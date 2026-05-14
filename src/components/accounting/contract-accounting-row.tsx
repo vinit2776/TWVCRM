@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Plus, IndianRupee, Send, Receipt } from "lucide-react";
+import { ChevronDown, ChevronRight, Plus, IndianRupee, Send, Receipt, CheckCircle, Clock, Calendar } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -57,9 +57,14 @@ interface ContractSummary {
   booking_total: number;
   posted_bookings: Array<{
     id: string;
+    booking_number?: string;
     total_amount: number;
     space?: { name: string };
     booking_date: string;
+    start_time?: string;
+    end_time?: string;
+    status?: string;
+    payment_status?: string;
   }>;
   current_month_charges: number;
   carried_forward: number;
@@ -84,6 +89,12 @@ interface ContractSummary {
     sent_at: string | null;
     sent_to: string | null;
   } | null;
+  /** Billing statement for this contract in this period, if any */
+  billing_statement?: {
+    id: string;
+    status: string;
+    statement_number: string;
+  } | null;
 }
 
 interface ContractAccountingRowProps {
@@ -95,6 +106,8 @@ interface ContractAccountingRowProps {
   /** Period start date (YYYY-MM-DD) — used as default charge date */
   periodStart?: string;
   onRefresh: () => void;
+  /** Called when user clicks Finalize Draft — pass the statement id */
+  onFinalize?: (statementId: string) => Promise<void>;
 }
 
 export function ContractAccountingRow({
@@ -104,15 +117,25 @@ export function ContractAccountingRow({
   isStatementFinalized,
   periodStart,
   onRefresh,
+  onFinalize,
 }: ContractAccountingRowProps) {
   const [expanded, setExpanded] = useState(false);
   const [showAddFacility, setShowAddFacility] = useState(false);
   const [showAddPayment, setShowAddPayment] = useState(false);
   const [showAddCharge, setShowAddCharge] = useState(false);
   const [sendingReminder, setSendingReminder] = useState<string | null>(null);
+  const [finalizing, setFinalizing] = useState(false);
 
   const { contract } = summary;
   const company = contract.lead?.company || `${contract.lead?.first_name || ""} ${contract.lead?.last_name || ""}`.trim();
+
+  const statement = summary.billing_statement;
+  const isDraft = statement?.status === "draft";
+
+  // Unbilled bookings: posted_to_bill bookings for this period
+  const unbilledBookings = summary.posted_bookings;
+  const unbilledTotal = summary.booking_total;
+  const hasUnbilledBookings = unbilledBookings.length > 0;
 
   const handleSendReminder = async (paymentId: string) => {
     const emails = [contract.lead?.email, contract.lead?.secondary_email].filter(Boolean) as string[];
@@ -144,6 +167,16 @@ export function ContractAccountingRow({
     }
   };
 
+  const handleFinalize = async () => {
+    if (!statement?.id || !onFinalize) return;
+    setFinalizing(true);
+    try {
+      await onFinalize(statement.id);
+    } finally {
+      setFinalizing(false);
+    }
+  };
+
   return (
     <div className="border rounded-lg">
       {/* Collapsed row */}
@@ -162,6 +195,12 @@ export function ContractAccountingRow({
           <div className="flex items-center gap-2">
             <span className="font-medium text-sm">{contract.contract_number}</span>
             <span className="text-sm text-muted-foreground truncate">{company}</span>
+            {/* Unbilled bookings indicator on the collapsed row */}
+            {hasUnbilledBookings && !isStatementFinalized && (
+              <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-200 ml-1">
+                {unbilledBookings.length} unbilled booking{unbilledBookings.length > 1 ? "s" : ""}
+              </Badge>
+            )}
           </div>
         </div>
         <div className="flex items-center gap-6 text-sm">
@@ -173,6 +212,12 @@ export function ContractAccountingRow({
             <span className="text-muted-foreground text-xs">Usage</span>
             <p className="font-medium">{formatCurrency(summary.facility_usage_total + summary.ad_hoc_total)}</p>
           </div>
+          {hasUnbilledBookings && (
+            <div className="text-right">
+              <span className="text-muted-foreground text-xs">Bookings</span>
+              <p className="font-medium text-orange-600">{formatCurrency(unbilledTotal)}</p>
+            </div>
+          )}
           <div className="text-right">
             <span className="text-muted-foreground text-xs">Paid</span>
             <p className="font-medium text-green-600">{formatCurrency(summary.total_paid_this_month)}</p>
@@ -198,6 +243,123 @@ export function ContractAccountingRow({
               <span className="text-xs text-amber-600 ml-2">(from previous months)</span>
             </div>
           )}
+
+          {/* ── Unbilled Bookings (pending next statement) ── */}
+          <div>
+            <div className="flex items-center justify-between mb-2">
+              <div className="flex items-center gap-2">
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase">
+                  Unbilled Bookings
+                </h4>
+                {hasUnbilledBookings && (
+                  <Badge className="text-xs bg-orange-100 text-orange-700 border-orange-200">
+                    {unbilledBookings.length} pending
+                  </Badge>
+                )}
+              </div>
+              {/* Statement status chip */}
+              {statement ? (
+                isDraft ? (
+                  <div className="flex items-center gap-2">
+                    <span className="flex items-center gap-1 text-xs text-yellow-700 bg-yellow-50 border border-yellow-200 rounded px-2 py-0.5">
+                      <Clock className="h-3 w-3" />
+                      Draft {statement.statement_number}
+                    </span>
+                    {!isLocked && onFinalize && (
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs bg-teal-600 hover:bg-teal-700 text-white"
+                        onClick={(e) => { e.stopPropagation(); handleFinalize(); }}
+                        disabled={finalizing}
+                      >
+                        {finalizing ? (
+                          <><span className="mr-1 h-3 w-3 rounded-full border-2 border-white border-r-transparent animate-spin inline-block" />Finalizing…</>
+                        ) : (
+                          <><CheckCircle className="h-3 w-3 mr-1" />Finalize Bill</>
+                        )}
+                      </Button>
+                    )}
+                  </div>
+                ) : (
+                  <span className="flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 rounded px-2 py-0.5">
+                    <CheckCircle className="h-3 w-3" />
+                    {statement.status === "finalized" ? "Finalized" : "Exported"} — {statement.statement_number}
+                  </span>
+                )
+              ) : (
+                <span className="flex items-center gap-1 text-xs text-muted-foreground bg-muted rounded px-2 py-0.5">
+                  <Calendar className="h-3 w-3" />
+                  Auto-generates ~28th
+                </span>
+              )}
+            </div>
+
+            {hasUnbilledBookings ? (
+              <div className="rounded-md border overflow-hidden">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="bg-orange-50 border-b">
+                      <th className="px-3 py-2 text-left text-xs font-medium text-orange-800">Booking #</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-orange-800">Date</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-orange-800">Space</th>
+                      <th className="px-3 py-2 text-left text-xs font-medium text-orange-800">Time</th>
+                      <th className="px-3 py-2 text-right text-xs font-medium text-orange-800">Amount</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {unbilledBookings.map((b) => (
+                      <tr key={b.id} className="border-b last:border-0 hover:bg-orange-50/40">
+                        <td className="px-3 py-2 font-mono text-xs text-muted-foreground">
+                          {b.booking_number || "—"}
+                        </td>
+                        <td className="px-3 py-2 text-xs">{formatDate(b.booking_date)}</td>
+                        <td className="px-3 py-2 text-xs">{b.space?.name || "—"}</td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground">
+                          {b.start_time && b.end_time
+                            ? `${b.start_time.slice(0, 5)}–${b.end_time.slice(0, 5)}`
+                            : "—"}
+                        </td>
+                        <td className="px-3 py-2 text-right font-medium">
+                          {Number(b.total_amount) === 0 ? (
+                            <span className="text-xs text-muted-foreground">Free quota</span>
+                          ) : (
+                            formatCurrency(b.total_amount)
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-orange-50 border-t">
+                      <td colSpan={4} className="px-3 py-2 text-xs font-semibold text-orange-800">
+                        Total Unbilled
+                      </td>
+                      <td className="px-3 py-2 text-right text-sm font-bold text-orange-800">
+                        {formatCurrency(unbilledTotal)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+                {/* Context note */}
+                {isDraft && (
+                  <div className="bg-yellow-50 border-t border-yellow-100 px-3 py-2 text-xs text-yellow-700 flex items-center gap-1.5">
+                    <CheckCircle className="h-3 w-3 flex-shrink-0" />
+                    These bookings are already included in the draft statement. Finalize the bill when ready.
+                  </div>
+                )}
+                {!statement && (
+                  <div className="bg-blue-50 border-t border-blue-100 px-3 py-2 text-xs text-blue-700 flex items-center gap-1.5">
+                    <Calendar className="h-3 w-3 flex-shrink-0" />
+                    These will be automatically included when the monthly statement is generated (~28th).
+                  </div>
+                )}
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground px-2">
+                No unbilled bookings for this period
+              </p>
+            )}
+          </div>
 
           {/* Recurring charge */}
           <div>
@@ -256,23 +418,6 @@ export function ContractAccountingRow({
             )}
           </div>
 
-          {/* Posted bookings */}
-          {summary.posted_bookings.length > 0 && (
-            <div>
-              <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-2">Posted Bookings</h4>
-              <div className="space-y-1">
-                {summary.posted_bookings.map((booking) => (
-                  <div key={booking.id} className="flex justify-between text-sm px-2">
-                    <span>
-                      {booking.space?.name || "Space"} — {formatDate(booking.booking_date)}
-                    </span>
-                    <span className="font-medium">{formatCurrency(booking.total_amount)}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
           {/* Payments */}
           <div>
             <div className="flex items-center justify-between mb-2">
@@ -326,6 +471,9 @@ export function ContractAccountingRow({
             <span>Total This Month</span>
             <div className="flex items-center gap-6">
               <span>Charges: {formatCurrency(summary.current_month_charges)}</span>
+              {hasUnbilledBookings && (
+                <span className="text-orange-600">Bookings: {formatCurrency(unbilledTotal)}</span>
+              )}
               <span className="text-green-600">Paid: {formatCurrency(summary.total_paid_this_month)}</span>
               <span className={summary.outstanding > 0 ? "text-red-600" : ""}>
                 Outstanding: {formatCurrency(summary.outstanding)}

@@ -127,7 +127,7 @@ export async function GET(request: NextRequest) {
     hasContracts
       ? supabase
           .from("billing_statements")
-          .select("contract_id, status, statement_number")
+          .select("id, contract_id, status, statement_number")
           .in("contract_id", contractIds)
           .gte("period_start", periodStart)
           .lte("period_start", periodEnd)
@@ -174,9 +174,9 @@ export async function GET(request: NextRequest) {
 
   const allPaymentsThisMonth = [...(contractPayments || []), ...(generalPayments || [])];
 
-  const statementByContract: Record<string, { status: string; statement_number: string }> = {};
+  const statementByContract: Record<string, { id: string; status: string; statement_number: string }> = {};
   (billingStatements || []).forEach((s) => {
-    if (s.contract_id) statementByContract[s.contract_id] = { status: s.status, statement_number: s.statement_number };
+    if (s.contract_id) statementByContract[s.contract_id] = { id: s.id, status: s.status, statement_number: s.statement_number };
   });
 
   // ── Carry-forward computation ──────────────────────────────────────

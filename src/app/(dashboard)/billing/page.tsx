@@ -606,7 +606,7 @@ export default function BillingPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "finalized" }),
       });
-      if (res.ok) { toast.success("Statement finalized"); fetchStatements(); }
+      if (res.ok) { toast.success("Statement finalized"); fetchStatements(); fetchData(); }
       else { const err = await res.json().catch(() => null); toast.error(err?.error || "Failed to finalize"); }
     } catch { toast.error("Failed to finalize statement"); }
   };
@@ -856,7 +856,7 @@ export default function BillingPage() {
           ) : (
             summary.contracts.map((cs) => {
               // eslint-disable-next-line @typescript-eslint/no-explicit-any
-              const stmt = (cs as any).billing_statement as { status: string } | null;
+              const stmt = (cs as any).billing_statement as { id: string; status: string; statement_number: string } | null;
               const finalized = stmt?.status === "finalized" || stmt?.status === "exported";
               return (
                 <ContractAccountingRow
@@ -868,6 +868,7 @@ export default function BillingPage() {
                   isStatementFinalized={finalized}
                   periodStart={summary.period_start}
                   onRefresh={fetchData}
+                  onFinalize={handleFinalizeStatement}
                 />
               );
             })
