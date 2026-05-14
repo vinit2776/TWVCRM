@@ -21,9 +21,16 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Pencil, Trash2, Loader2, Check, X, Plus } from "lucide-react";
+import { Pencil, Trash2, Loader2, Check, X, Plus, BookOpen } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
+
+interface CatalogItem {
+  id: string;
+  name: string;
+  unit: string;
+  default_cost_per_unit: number;
+}
 
 interface Facility {
   id: string;
@@ -42,18 +49,21 @@ interface RowState extends Facility {
 
 interface Props {
   contractId: string;
+  /** Location ID of the contract — used to load catalogue suggestions. */
+  locationId?: string | null;
   readOnly?: boolean;
   onSave?: () => void;
 }
 
 const BLANK_NEW = { name: "", unit: "hr", freeQty: "0", rate: "0" };
 
-export function ContractFacilitiesSection({ contractId, readOnly = false, onSave }: Props) {
+export function ContractFacilitiesSection({ contractId, locationId, readOnly = false, onSave }: Props) {
   const [rows, setRows] = useState<RowState[]>([]);
   const [loading, setLoading] = useState(true);
   const [adding, setAdding] = useState(false);
   const [newForm, setNewForm] = useState(BLANK_NEW);
   const [newSaving, setNewSaving] = useState(false);
+  const [catalog, setCatalog] = useState<CatalogItem[]>([]);
 
   const reload = async () => {
     setLoading(true);
@@ -71,6 +81,14 @@ export function ContractFacilitiesSection({ contractId, readOnly = false, onSave
   };
 
   useEffect(() => { reload(); /* eslint-disable-next-line */ }, [contractId]);
+
+  // Load catalogue when locationId is available, filtered to items not already on the contract
+  useEffect(() => {
+    if (!locationId) { setCatalog([]); return; }
+    fetch(`/api/facility-catalog?location_id=${locationId}`)
+      .then((r) => r.json())
+      .then((j) => setCatalog(j.data || []));
+  }, [locationId]);
 
   const startEdit = (idx: number) => {
     setRows((prev) => prev.map((r, i) => i === idx ? {
@@ -251,6 +269,29 @@ export function ContractFacilitiesSection({ contractId, readOnly = false, onSave
             {/* Add new facility inline form */}
             {adding && (
               <div className="border rounded-lg p-3 space-y-2 bg-muted/30">
+                {/* Catalogue quick-picks — only shown when catalogue items exist */}
+                {catalog.length > 0 && (
+                  <div>
+                    <p className="text-[10px] text-muted-foreground uppercase tracking-wide mb-1 flex items-center gap-1">
+                      <BookOpen className="h-3 w-3" />From catalogue
+                    </p>
+                    <div className="flex flex-wrap gap-1">
+                      {catalog
+                        .filter((c) => !rows.some((r) => r.name.toLowerCase() === c.name.toLowerCase()))
+                        .map((c) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => setNewForm({ name: c.name, unit: c.unit, freeQty: "0", rate: String(c.default_cost_per_unit) })}
+                            className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded-full border border-dashed border-primary/40 bg-primary/5 text-primary hover:bg-primary/10 transition-colors"
+                          >
+                            {c.name}
+                          </button>
+                        ))}
+                    </div>
+                    <div className="border-t my-2" />
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   <div>
                     <Label className="text-[10px]">Facility name</Label>
