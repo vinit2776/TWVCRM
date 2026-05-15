@@ -198,8 +198,14 @@ interface ContractSummary {
     gst_invoice_number?: string | null;
     payment_status?: string | null;
     accounted?: boolean | null;
+    accounted_at?: string | null;
     razorpay_payment_link_url?: string | null;
     emailed_at?: string | null;
+    /** Actor names from joined users table */
+    finalized_by_user?: { full_name: string } | null;
+    proforma_sent_by_user?: { full_name: string } | null;
+    gst_generated_by_user?: { full_name: string } | null;
+    accounted_by_user?: { full_name: string } | null;
   } | null;
 }
 
@@ -661,7 +667,13 @@ export default function BillingPage() {
       const json = await res.json();
       if (res.ok) {
         toast.dismiss(tid);
-        toast.success(json.emailedTo ? `Proforma sent to ${json.emailedTo}` : json.razorpayLinkUrl ? "Proforma generated. No email on file — share the payment link manually." : "Proforma generated");
+        if (json.emailedTo) {
+          toast.success(`Proforma sent to ${json.emailedTo}`);
+        } else if (json.razorpayLinkUrl) {
+          toast.warning("Proforma generated — no email on file. Share the payment link manually with the client.");
+        } else {
+          toast.warning("Proforma recorded but no email was sent and no payment link was created. Add a client email or enable Razorpay to complete this step.");
+        }
         fetchStatements();
         fetchData();
       } else {

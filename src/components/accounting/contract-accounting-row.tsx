@@ -465,11 +465,31 @@ export function ContractAccountingRow({
           {/* Payments */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <h4 className="text-xs font-semibold text-muted-foreground uppercase">Payments Received</h4>
-              <Button variant="outline" size="sm" onClick={() => setShowAddPayment(true)}>
-                <IndianRupee className="h-3 w-3 mr-1" />
-                Record Payment
-              </Button>
+              <div>
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase">Payments Received</h4>
+                {isFinalized && (
+                  <p className="text-[10px] text-muted-foreground mt-0.5">Tracked against the billing statement below</p>
+                )}
+              </div>
+              {/* When a finalized statement exists, route to statement-level payment (updates payment_status).
+                  Hide button when statement is fully paid — no further payment needed. */}
+              {isFinalized && statement?.payment_status !== "paid" && onRecordStatementPayment && (
+                <Button variant="outline" size="sm" onClick={() => onRecordStatementPayment(statement!.id)}>
+                  <IndianRupee className="h-3 w-3 mr-1" />
+                  Record Payment
+                </Button>
+              )}
+              {isFinalized && statement?.payment_status === "paid" && (
+                <span className="text-xs text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1">
+                  ✓ Fully paid
+                </span>
+              )}
+              {!isFinalized && (
+                <Button variant="outline" size="sm" onClick={() => setShowAddPayment(true)}>
+                  <IndianRupee className="h-3 w-3 mr-1" />
+                  Record Payment
+                </Button>
+              )}
             </div>
             {summary.payments.length > 0 ? (
               <div className="space-y-1">
@@ -651,17 +671,8 @@ export function ContractAccountingRow({
                     </Button>
                   )}
 
-                  {/* Record Billing Payment — available on finalized or exported (same thing for lifecycle) */}
-                  {(statement.status === "finalized" || statement.status === "exported") && onRecordStatementPayment && (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      className="h-7 text-xs"
-                      onClick={(e) => { e.stopPropagation(); onRecordStatementPayment(statement.id); }}
-                    >
-                      <IndianRupee className="h-3 w-3 mr-1" />Record Payment
-                    </Button>
-                  )}
+                  {/* Record Payment button removed from here — it now lives in the "Payments Received"
+                      section above so users always find payment recording in one consistent place. */}
 
                   {/* View statement detail */}
                   {onViewStatement && (
