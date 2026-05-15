@@ -1597,7 +1597,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 <div>
                   <p className="font-medium text-green-800">Fully Paid</p>
                   <p className="text-xs text-muted-foreground">
-                    {formatCurrency(Number(bill.total_amount))} via {bill.payment_mode ?? "—"}
+                    {formatCurrency(Number(bill.amount_paid))} via {bill.payment_mode ?? "—"}
                     {bill.payment_reference && ` · Ref: ${bill.payment_reference}`}
                     {bill.payment_date && ` · ${formatDate(bill.payment_date)}`}
                   </p>
