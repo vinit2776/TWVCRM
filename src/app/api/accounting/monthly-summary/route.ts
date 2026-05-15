@@ -133,7 +133,7 @@ export async function GET(request: NextRequest) {
     hasContracts
       ? adminSupabase
           .from("billing_statements")
-          .select("id, contract_id, status, statement_number, total_amount, fixed_amount, usage_amount, booking_usage_amount, finalized_at, proforma_sent_at, gst_invoice_number, payment_status, accounted, razorpay_payment_link_url, emailed_at")
+          .select("id, contract_id, status, statement_number, total_amount, fixed_amount, usage_amount, booking_usage_amount, finalized_at, proforma_sent_at, gst_invoice_number, payment_status, accounted, accounted_at, razorpay_payment_link_url, emailed_at, finalized_by_user:users!billing_statements_finalized_by_fkey(full_name), proforma_sent_by_user:users!billing_statements_proforma_sent_by_fkey(full_name), gst_generated_by_user:users!billing_statements_gst_generated_by_fkey(full_name), accounted_by_user:users!billing_statements_accounted_by_fkey(full_name)")
           .in("contract_id", contractIds)
           .gte("period_start", periodStart)
           .lte("period_start", periodEnd)
