@@ -64,11 +64,12 @@ export async function GET(request: Request) {
   ]);
 
   // Today-only: location breakdown, attention items, portfolio snapshot, extended data
-  const [locations, attention, portfolio, extended] = await Promise.all([
+  const [locations, attention, portfolio, extended, receivables] = await Promise.all([
     fetchLocationBreakdown(supabase, todayIST),
     fetchAttentionItems(supabase, todayIST),
     fetchPortfolio(supabase),
     fetchExtended(supabase, todayIST),
+    fetchReceivablesAging(supabase, todayIST),
   ]);
 
   // Build and send email
@@ -80,7 +81,7 @@ export async function GET(request: Request) {
     year: "numeric",
   });
 
-  const html = buildDigestHtml(dateLabel, todayIST, weekStart, today, lw, ly, wtd, locations, attention, portfolio, extended);
+  const html = buildDigestHtml(dateLabel, todayIST, weekStart, today, lw, ly, wtd, locations, attention, portfolio, extended, receivables);
 
   let sent = 0;
   for (const email of recipients) {
@@ -109,6 +110,7 @@ export async function GET(request: Request) {
     attention,
     portfolio,
     extended,
+    receivables,
   });
 }
 
@@ -413,6 +415,79 @@ async function fetchPortfolio(supabase: any): Promise<Portfolio> {
 }
 
 // ---------------------------------------------------------------------------
+// Receivables aging — billing statements with unpaid payment_status
+// ---------------------------------------------------------------------------
+
+interface AgingBucket {
+  count: number;
+  amount: number;
+}
+
+interface ReceivablesAging {
+  total: number;          // total outstanding across all statements
+  count: number;          // number of unpaid statements
+  current: AgingBucket;  // 0-30 days since finalized
+  d31_60: AgingBucket;   // 31-60 days
+  d61_90: AgingBucket;   // 61-90 days
+  d90plus: AgingBucket;  // 90+ days
+  gstIssued: number;      // statements that have a GST invoice number (tax invoice sent)
+  gstPending: number;     // finalized but GST invoice not yet generated
+}
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function fetchReceivablesAging(supabase: any, date: string): Promise<ReceivablesAging> {
+  // Fetch all billing statements that are finalized/exported and unpaid
+  const { data: rows } = await supabase
+    .from("billing_statements")
+    .select("id, total_amount, finalized_at, period_end, gst_invoice_number, payment_status")
+    .in("status", ["finalized", "exported"])
+    .neq("payment_status", "paid")
+    .neq("status", "voided");
+
+  const now = new Date(date + "T23:59:59Z").getTime();
+
+  const aging: ReceivablesAging = {
+    total: 0, count: 0,
+    current: { count: 0, amount: 0 },
+    d31_60: { count: 0, amount: 0 },
+    d61_90: { count: 0, amount: 0 },
+    d90plus: { count: 0, amount: 0 },
+    gstIssued: 0,
+    gstPending: 0,
+  };
+
+  for (const row of (rows || []) as { total_amount: number; finalized_at: string | null; period_end: string; gst_invoice_number: string | null; payment_status: string }[]) {
+    const amount = Number(row.total_amount || 0);
+    // Use finalized_at as the aging anchor; fall back to period_end
+    const anchor = row.finalized_at
+      ? new Date(row.finalized_at).getTime()
+      : new Date(row.period_end + "T00:00:00Z").getTime();
+    const days = Math.floor((now - anchor) / 86400000);
+
+    aging.total += amount;
+    aging.count += 1;
+
+    if (row.gst_invoice_number) {
+      aging.gstIssued += 1;
+    } else {
+      aging.gstPending += 1;
+    }
+
+    if (days <= 30) {
+      aging.current.count += 1; aging.current.amount += amount;
+    } else if (days <= 60) {
+      aging.d31_60.count += 1; aging.d31_60.amount += amount;
+    } else if (days <= 90) {
+      aging.d61_90.count += 1; aging.d61_90.amount += amount;
+    } else {
+      aging.d90plus.count += 1; aging.d90plus.amount += amount;
+    }
+  }
+
+  return aging;
+}
+
+// ---------------------------------------------------------------------------
 // Extended data — today's wins, pipeline funnel, stuck items, team, client invoices
 // ---------------------------------------------------------------------------
 
@@ -712,6 +787,63 @@ function stagePill(label: string, count: number, isWarn: boolean): string {
     </td>`;
 }
 
+// Aging bucket cell for the receivables panel
+function agingCell(
+  label: string,
+  sub: string,
+  bucket: AgingBucket,
+  bgColor: string,
+  textColor: string,
+  borderColor: string,
+  isLast = false
+): string {
+  return `
+    <td style="text-align:center;padding:14px 12px;background:${bgColor};border-right:${isLast ? "none" : `1px solid ${borderColor}`};">
+      <p style="margin:0;font-size:10px;font-weight:700;color:${textColor};text-transform:uppercase;letter-spacing:0.5px;">${label}</p>
+      <p style="margin:2px 0 0;font-size:10px;color:${textColor};opacity:0.7;">${sub}</p>
+      <p style="margin:8px 0 2px;font-size:20px;font-weight:700;color:${textColor};line-height:1;">${bucket.amount > 0 ? rupees(bucket.amount) : "—"}</p>
+      <p style="margin:0;font-size:11px;color:${textColor};opacity:0.8;">${bucket.count} ${bucket.count === 1 ? "invoice" : "invoices"}</p>
+    </td>`;
+}
+
+function buildReceivablesAgingHtml(aging: ReceivablesAging): string {
+  if (aging.count === 0) return "";
+
+  const hasOverdue = aging.d61_90.count > 0 || aging.d90plus.count > 0;
+  const headerBg = hasOverdue ? "#fff5f5" : "#f0fdf4";
+  const headerBorder = hasOverdue ? "#feb2b2" : "#bbf7d0";
+  const headerAccent = hasOverdue ? "#c53030" : "#065f46";
+
+  // GST status note
+  const gstNote = aging.gstPending > 0
+    ? `<span style="background:#fef3c7;border:1px solid #fcd34d;border-radius:4px;padding:2px 7px;font-size:10px;color:#92400e;font-weight:600;margin-left:10px;">⚠ ${aging.gstPending} without GST invoice</span>`
+    : `<span style="background:#ecfdf5;border:1px solid #6ee7b7;border-radius:4px;padding:2px 7px;font-size:10px;color:#065f46;font-weight:600;margin-left:10px;">✓ All GST invoices issued</span>`;
+
+  return `
+    <div style="border:1px solid ${headerBorder};border-radius:8px;overflow:hidden;margin-bottom:24px;">
+      <!-- Header row -->
+      <div style="background:${headerBg};padding:12px 16px;border-bottom:1px solid ${headerBorder};display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <span style="font-size:12px;font-weight:700;color:${headerAccent};text-transform:uppercase;letter-spacing:0.5px;">Receivables Aging — GST Invoices</span>
+          ${gstNote}
+        </div>
+        <div style="text-align:right;">
+          <span style="font-size:22px;font-weight:700;color:${hasOverdue ? "#c53030" : "#015E65"};">${rupees(aging.total)}</span>
+          <span style="font-size:11px;color:#888;margin-left:6px;">${aging.count} outstanding</span>
+        </div>
+      </div>
+      <!-- Aging buckets -->
+      <table style="width:100%;border-collapse:collapse;">
+        <tr>
+          ${agingCell("Current", "0 – 30 days", aging.current, "#f0fdf4", "#065f46", "#bbf7d0")}
+          ${agingCell("Aging", "31 – 60 days", aging.d31_60, "#fffbeb", "#92400e", "#fcd34d")}
+          ${agingCell("Late", "61 – 90 days", aging.d61_90, "#fff7ed", "#c2410c", "#fed7aa")}
+          ${agingCell("Critical", "90+ days", aging.d90plus, aging.d90plus.count > 0 ? "#fff5f5" : "#fafafa", aging.d90plus.count > 0 ? "#c53030" : "#aaa", aging.d90plus.count > 0 ? "#feb2b2" : "#e5e7eb", true)}
+        </tr>
+      </table>
+    </div>`;
+}
+
 // ---------------------------------------------------------------------------
 // Main HTML builder
 // ---------------------------------------------------------------------------
@@ -745,7 +877,8 @@ function buildDigestHtml(
   locations: LocationRow[],
   attention: AttentionItems,
   portfolio: Portfolio,
-  extended: ExtendedData
+  extended: ExtendedData,
+  receivables: ReceivablesAging
 ): string {
   const revenueToday = today.collections + today.bookingRevenue;
 
@@ -983,6 +1116,9 @@ function buildDigestHtml(
 
     <!-- KPI Snapshot -->
     ${kpiHtml}
+
+    <!-- Receivables Aging -->
+    ${buildReceivablesAgingHtml(receivables)}
 
     <!-- Week to Date -->
     ${wtdHtml}
