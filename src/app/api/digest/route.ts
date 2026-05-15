@@ -426,23 +426,27 @@ interface AgingBucket {
 interface ReceivablesAging {
   total: number;          // total outstanding across all statements
   count: number;          // number of unpaid statements
-  current: AgingBucket;  // 0-30 days since finalized
+  current: AgingBucket;  // 0-30 days since period_end
   d31_60: AgingBucket;   // 31-60 days
   d61_90: AgingBucket;   // 61-90 days
   d90plus: AgingBucket;  // 90+ days
-  gstIssued: number;      // statements that have a GST invoice number (tax invoice sent)
-  gstPending: number;     // finalized but GST invoice not yet generated
+  finalizedCount: number;  // statements formally invoiced to customer
+  draftCount: number;      // auto-generated, not yet sent to customer
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function fetchReceivablesAging(supabase: any, date: string): Promise<ReceivablesAging> {
-  // Fetch all billing statements that are finalized/exported and unpaid
+  // Outstanding receivables = any billing statement that hasn't been fully paid.
+  // This includes:
+  //   "draft"     — auto-generated monthly statements awaiting review/collection
+  //   "finalized" — invoiced to customer, payment pending
+  // "exported" statements are excluded because GST generation requires payment_status="paid",
+  // so exported always means fully settled.
   const { data: rows } = await supabase
     .from("billing_statements")
-    .select("id, total_amount, finalized_at, period_end, gst_invoice_number, payment_status")
-    .in("status", ["finalized", "exported"])
-    .neq("payment_status", "paid")
-    .neq("status", "voided");
+    .select("id, total_amount, period_end, status, payment_status")
+    .in("status", ["draft", "finalized"])
+    .neq("payment_status", "paid");
 
   const now = new Date(date + "T23:59:59Z").getTime();
 
@@ -452,25 +456,23 @@ async function fetchReceivablesAging(supabase: any, date: string): Promise<Recei
     d31_60: { count: 0, amount: 0 },
     d61_90: { count: 0, amount: 0 },
     d90plus: { count: 0, amount: 0 },
-    gstIssued: 0,
-    gstPending: 0,
+    finalizedCount: 0,
+    draftCount: 0,
   };
 
-  for (const row of (rows || []) as { total_amount: number; finalized_at: string | null; period_end: string; gst_invoice_number: string | null; payment_status: string }[]) {
+  for (const row of (rows || []) as { total_amount: number; period_end: string; status: string; payment_status: string }[]) {
     const amount = Number(row.total_amount || 0);
-    // Use finalized_at as the aging anchor; fall back to period_end
-    const anchor = row.finalized_at
-      ? new Date(row.finalized_at).getTime()
-      : new Date(row.period_end + "T00:00:00Z").getTime();
+    // Aging is measured from period_end — when the billing cycle closed and money became due
+    const anchor = new Date(row.period_end + "T00:00:00Z").getTime();
     const days = Math.floor((now - anchor) / 86400000);
 
     aging.total += amount;
     aging.count += 1;
 
-    if (row.gst_invoice_number) {
-      aging.gstIssued += 1;
+    if (row.status === "finalized") {
+      aging.finalizedCount += 1;
     } else {
-      aging.gstPending += 1;
+      aging.draftCount += 1;
     }
 
     if (days <= 30) {
@@ -814,18 +816,18 @@ function buildReceivablesAgingHtml(aging: ReceivablesAging): string {
   const headerBorder = hasOverdue ? "#feb2b2" : "#bbf7d0";
   const headerAccent = hasOverdue ? "#c53030" : "#065f46";
 
-  // GST status note
-  const gstNote = aging.gstPending > 0
-    ? `<span style="background:#fef3c7;border:1px solid #fcd34d;border-radius:4px;padding:2px 7px;font-size:10px;color:#92400e;font-weight:600;margin-left:10px;">⚠ ${aging.gstPending} without GST invoice</span>`
-    : `<span style="background:#ecfdf5;border:1px solid #6ee7b7;border-radius:4px;padding:2px 7px;font-size:10px;color:#065f46;font-weight:600;margin-left:10px;">✓ All GST invoices issued</span>`;
+  // Draft vs finalized status note
+  const statusNote = aging.draftCount > 0
+    ? `<span style="background:#fef3c7;border:1px solid #fcd34d;border-radius:4px;padding:2px 7px;font-size:10px;color:#92400e;font-weight:600;margin-left:10px;">⚠ ${aging.draftCount} pending finalization</span>`
+    : `<span style="background:#ecfdf5;border:1px solid #6ee7b7;border-radius:4px;padding:2px 7px;font-size:10px;color:#065f46;font-weight:600;margin-left:10px;">✓ ${aging.finalizedCount} finalized, awaiting payment</span>`;
 
   return `
     <div style="border:1px solid ${headerBorder};border-radius:8px;overflow:hidden;margin-bottom:24px;">
       <!-- Header row -->
       <div style="background:${headerBg};padding:12px 16px;border-bottom:1px solid ${headerBorder};display:flex;justify-content:space-between;align-items:center;">
         <div>
-          <span style="font-size:12px;font-weight:700;color:${headerAccent};text-transform:uppercase;letter-spacing:0.5px;">Receivables Aging — GST Invoices</span>
-          ${gstNote}
+          <span style="font-size:12px;font-weight:700;color:${headerAccent};text-transform:uppercase;letter-spacing:0.5px;">Receivables Aging</span>
+          ${statusNote}
         </div>
         <div style="text-align:right;">
           <span style="font-size:22px;font-weight:700;color:${hasOverdue ? "#c53030" : "#015E65"};">${rupees(aging.total)}</span>
