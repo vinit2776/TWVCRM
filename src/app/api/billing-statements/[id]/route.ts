@@ -185,6 +185,9 @@ export async function PATCH(
   const body = await request.json();
   const allowedFields: Record<string, unknown> = {};
 
+  // Resolve the calling user's DB id (needed for actor columns)
+  const { data: dbUserEarly } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+
   // Handle status transitions
   if (body.status !== undefined) {
     const currentStatus = oldStatement.status;
@@ -193,6 +196,7 @@ export async function PATCH(
     if (currentStatus === "draft" && newStatus === "finalized") {
       allowedFields.status = "finalized";
       allowedFields.finalized_at = new Date().toISOString();
+      if (dbUserEarly?.id) allowedFields.finalized_by = dbUserEarly.id;
     } else if (currentStatus === "finalized" && newStatus === "exported") {
       allowedFields.status = "exported";
       allowedFields.exported_at = new Date().toISOString();
@@ -202,6 +206,19 @@ export async function PATCH(
         { status: 400 }
       );
     }
+  }
+
+  // Mark as accounted — admin/manager/accounts only
+  if (body.accounted === true) {
+    if (!dbUserEarly || !["admin", "manager", "accounts"].includes(dbUserEarly.role)) {
+      return NextResponse.json({ error: "Only admin, manager, or accounts can mark as accounted" }, { status: 403 });
+    }
+    if (!oldStatement.gst_invoice_number) {
+      return NextResponse.json({ error: "GST invoice must be generated before marking as accounted" }, { status: 400 });
+    }
+    allowedFields.accounted = true;
+    allowedFields.accounted_at = new Date().toISOString();
+    allowedFields.accounted_by = dbUserEarly.id;
   }
 
   // Allow updating notes
@@ -245,13 +262,12 @@ export async function PATCH(
     })();
   }
 
-  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
-  if (dbUser?.id && oldStatement) {
+  if (dbUserEarly?.id && oldStatement) {
     logAudit(supabase, {
       entityType: "billing_statement",
       entityId: id,
       action: "update",
-      performedBy: dbUser.id,
+      performedBy: dbUserEarly.id,
       changes: diffChanges(oldStatement as Record<string, unknown>, allowedFields),
     });
   }
