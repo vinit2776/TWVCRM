@@ -25,10 +25,10 @@ export async function GET(
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   if (!statement) return NextResponse.json({ error: "Billing statement not found" }, { status: 404 });
 
-  // Fetch associated usage charges
+  // Fetch associated usage charges — include waiver fields and the waivers' user name
   const { data: usageCharges } = await supabase
     .from("usage_charges")
-    .select("*")
+    .select("*, waived_by_user:users!usage_charges_waived_by_fkey(full_name)")
     .eq("billing_statement_id", id)
     .order("charge_date", { ascending: true });
 
@@ -187,6 +187,25 @@ export async function PATCH(
 
   // Resolve the calling user's DB id (needed for actor columns)
   const { data: dbUserEarly } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
+
+  // Revert finalized → draft (admin/manager only)
+  if (body.action === "revert_to_draft") {
+    if (!dbUserEarly || !["admin", "manager"].includes(dbUserEarly.role)) {
+      return NextResponse.json(
+        { error: "Only admin or manager can revert a finalized statement to draft" },
+        { status: 403 }
+      );
+    }
+    if (oldStatement.status !== "finalized") {
+      return NextResponse.json(
+        { error: "Only finalized statements can be reverted to draft" },
+        { status: 400 }
+      );
+    }
+    allowedFields.status = "draft";
+    allowedFields.finalized_at = null;
+    allowedFields.finalized_by = null;
+  }
 
   // Handle status transitions
   if (body.status !== undefined) {

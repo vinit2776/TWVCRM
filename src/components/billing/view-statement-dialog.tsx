@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import React, { useState, useEffect } from "react";
 import {
   Dialog,
   DialogContent,
@@ -13,7 +13,8 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 import { Skeleton } from "@/components/shared/loading-skeleton";
-import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck } from "lucide-react";
+import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck, Ban, RotateCcw } from "lucide-react";
+import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
@@ -26,6 +27,10 @@ interface UsageCharge {
   total: number;
   charge_date: string;
   status: string;
+  is_waived?: boolean;
+  waived_at?: string | null;
+  waive_reason?: string | null;
+  waived_by_user?: { full_name: string } | null;
 }
 
 interface FacilityCharge {
@@ -96,6 +101,7 @@ interface Statement {
 
 
 const ADD_CHARGE_ROLES = ["admin", "manager", "accounts"];
+const WAIVE_ROLES = ["admin", "manager"];
 
 interface ViewStatementDialogProps {
   statementId: string | null;
@@ -118,6 +124,12 @@ export function ViewStatementDialog({
   const [actioning, setActioning] = useState(false);
   const [sendingProforma, setSendingProforma] = useState(false);
   const [generatingGst, setGeneratingGst] = useState(false);
+  const [revertingToDraft, setRevertingToDraft] = useState(false);
+
+  // Waive-charge state — tracks which charge row has the waive form open
+  const [waivedChargeId, setWaivedChargeId] = useState<string | null>(null);
+  const [waiveReason, setWaiveReason] = useState("");
+  const [waivedChargeLoading, setWaivedChargeLoading] = useState<string | null>(null);
 
   // ── Inline "Add charge" form state ────────────────────────────────
   const [showAddCharge, setShowAddCharge] = useState(false);
@@ -268,6 +280,78 @@ export function ViewStatementDialog({
       }
     } catch { toast.error("Something went wrong"); }
     setGeneratingGst(false);
+  };
+
+  const canWaive =
+    statement?.status === "draft" &&
+    !!userRole &&
+    WAIVE_ROLES.includes(userRole);
+
+  const canRevertToDraft =
+    statement?.status === "finalized" &&
+    !!userRole &&
+    WAIVE_ROLES.includes(userRole);
+
+  const handleWaiveCharge = async (chargeId: string, waive: boolean) => {
+    if (!statementId) return;
+    if (waive && !waiveReason.trim()) {
+      toast.error("Please enter a reason before waiving");
+      return;
+    }
+    setWaivedChargeLoading(chargeId);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/waive-charge`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ charge_id: chargeId, waive, reason: waiveReason.trim() }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(waive ? "Charge waived" : "Waiver removed");
+        setWaivedChargeId(null);
+        setWaiveReason("");
+        onStatusChange();
+        const refreshed = await fetch(`/api/billing-statements/${statementId}`);
+        if (refreshed.ok) {
+          const j = await refreshed.json();
+          setStatement(j.data || null);
+        }
+      } else {
+        toast.error(json.error || "Failed to update charge");
+      }
+    } catch {
+      toast.error("Something went wrong");
+    } finally {
+      setWaivedChargeLoading(null);
+    }
+  };
+
+  const handleRevertToDraft = async () => {
+    if (!statementId) return;
+    setRevertingToDraft(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "revert_to_draft" }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success("Statement reverted to draft — edits are now open");
+        onStatusChange();
+        const refreshed = await fetch(`/api/billing-statements/${statementId}`);
+        if (refreshed.ok) {
+          const j = await refreshed.json();
+          setStatement(j.data || null);
+        }
+      } else {
+        toast.error(json.error || "Failed to revert statement");
+      }
+    } catch {
+      toast.error("Something went wrong");
+    } finally {
+      setRevertingToDraft(false);
+    }
   };
 
   const customerName = statement?.lead
@@ -429,7 +513,7 @@ export function ViewStatementDialog({
             {/* Usage charges table (ad-hoc + facility) */}
             {((statement.usage_charges?.length ?? 0) > 0 || (statement.facility_charges?.length ?? 0) > 0) && (
               <div>
-                <h4 className="text-sm font-semibold mb-2">Ad-hoc & Facility Charges</h4>
+                <h4 className="text-sm font-semibold mb-2">Ad-hoc &amp; Facility Charges</h4>
                 <div className="rounded-md border overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
@@ -438,19 +522,112 @@ export function ViewStatementDialog({
                         <th className="px-3 py-2 text-right font-medium">Qty</th>
                         <th className="px-3 py-2 text-right font-medium">Rate</th>
                         <th className="px-3 py-2 text-right font-medium">Total</th>
+                        {canWaive && <th className="px-3 py-2 text-right font-medium w-24"></th>}
                       </tr>
                     </thead>
                     <tbody>
                       {(statement.usage_charges ?? []).map((charge) => (
-                        <tr key={charge.id} className="border-b last:border-0">
-                          <td className="px-3 py-2">
-                            <div className="font-medium">{charge.description}</div>
-                            <div className="text-xs text-muted-foreground">{formatDate(charge.charge_date)}</div>
-                          </td>
-                          <td className="px-3 py-2 text-right">{charge.quantity}</td>
-                          <td className="px-3 py-2 text-right">{formatCurrency(charge.unit_price)}</td>
-                          <td className="px-3 py-2 text-right font-medium">{formatCurrency(charge.total)}</td>
-                        </tr>
+                        <React.Fragment key={charge.id}>
+                          <tr
+                            className={`border-b ${charge.is_waived ? "bg-red-50/40" : ""}`}
+                          >
+                            <td className="px-3 py-2">
+                              <div className={`font-medium ${charge.is_waived ? "line-through text-muted-foreground" : ""}`}>
+                                {charge.description}
+                              </div>
+                              <div className="text-xs text-muted-foreground">{formatDate(charge.charge_date)}</div>
+                              {charge.is_waived && charge.waived_by_user && (
+                                <div className="text-xs text-red-600 mt-0.5">
+                                  Waived by {charge.waived_by_user.full_name}
+                                  {charge.waive_reason ? ` — "${charge.waive_reason}"` : ""}
+                                </div>
+                              )}
+                            </td>
+                            <td className={`px-3 py-2 text-right ${charge.is_waived ? "text-muted-foreground line-through" : ""}`}>
+                              {charge.quantity}
+                            </td>
+                            <td className={`px-3 py-2 text-right ${charge.is_waived ? "text-muted-foreground line-through" : ""}`}>
+                              {formatCurrency(charge.unit_price)}
+                            </td>
+                            <td className={`px-3 py-2 text-right font-medium ${charge.is_waived ? "text-muted-foreground line-through" : ""}`}>
+                              {formatCurrency(charge.total)}
+                            </td>
+                            {canWaive && (
+                              <td className="px-3 py-2 text-right">
+                                {charge.is_waived ? (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 text-xs text-muted-foreground hover:text-foreground"
+                                    disabled={waivedChargeLoading === charge.id}
+                                    onClick={() => handleWaiveCharge(charge.id, false)}
+                                  >
+                                    {waivedChargeLoading === charge.id ? (
+                                      <Loader2 className="h-3 w-3 animate-spin" />
+                                    ) : (
+                                      "Un-waive"
+                                    )}
+                                  </Button>
+                                ) : (
+                                  <Button
+                                    variant="ghost"
+                                    size="sm"
+                                    className="h-7 text-xs text-red-600 hover:text-red-700 hover:bg-red-50"
+                                    onClick={() => {
+                                      setWaivedChargeId(charge.id);
+                                      setWaiveReason("");
+                                    }}
+                                  >
+                                    <Ban className="h-3 w-3 mr-1" />
+                                    Waive
+                                  </Button>
+                                )}
+                              </td>
+                            )}
+                          </tr>
+                          {/* Inline waive reason form */}
+                          {canWaive && waivedChargeId === charge.id && !charge.is_waived && (
+                            <tr key={`${charge.id}-waive-form`} className="bg-red-50/60 border-b">
+                              <td colSpan={canWaive ? 5 : 4} className="px-3 py-3">
+                                <div className="flex flex-col gap-2">
+                                  <p className="text-xs font-medium text-red-700">
+                                    Reason for waiving &ldquo;{charge.description}&rdquo; <span className="text-destructive">*</span>
+                                  </p>
+                                  <Textarea
+                                    placeholder="e.g., Customer complained, goodwill gesture, data entry error…"
+                                    value={waiveReason}
+                                    onChange={(e) => setWaiveReason(e.target.value)}
+                                    className="h-16 text-sm resize-none"
+                                    autoFocus
+                                  />
+                                  <div className="flex gap-2">
+                                    <Button
+                                      size="sm"
+                                      className="h-7 bg-red-600 hover:bg-red-700 text-white text-xs"
+                                      disabled={!waiveReason.trim() || waivedChargeLoading === charge.id}
+                                      onClick={() => handleWaiveCharge(charge.id, true)}
+                                    >
+                                      {waivedChargeLoading === charge.id ? (
+                                        <Loader2 className="h-3 w-3 mr-1 animate-spin" />
+                                      ) : (
+                                        <Ban className="h-3 w-3 mr-1" />
+                                      )}
+                                      Confirm Waive
+                                    </Button>
+                                    <Button
+                                      variant="ghost"
+                                      size="sm"
+                                      className="h-7 text-xs"
+                                      onClick={() => { setWaivedChargeId(null); setWaiveReason(""); }}
+                                    >
+                                      Cancel
+                                    </Button>
+                                  </div>
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
                       ))}
                       {(statement.facility_charges ?? []).map((fc) => (
                         <tr key={fc.id} className="border-b last:border-0 bg-blue-50/30">
@@ -463,6 +640,7 @@ export function ViewStatementDialog({
                           <td className="px-3 py-2 text-right">{fc.billable_quantity}</td>
                           <td className="px-3 py-2 text-right">{formatCurrency(fc.unit_price)}</td>
                           <td className="px-3 py-2 text-right font-medium">{formatCurrency(fc.total_charge)}</td>
+                          {canWaive && <td className="px-3 py-2" />}
                         </tr>
                       ))}
                     </tbody>
@@ -637,6 +815,22 @@ export function ViewStatementDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
+          {/* Revert to Draft — admin/manager only, finalized statements */}
+          {canRevertToDraft && (
+            <Button
+              variant="outline"
+              className="border-amber-400 text-amber-700 hover:bg-amber-50"
+              onClick={handleRevertToDraft}
+              disabled={revertingToDraft}
+            >
+              {revertingToDraft ? (
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+              ) : (
+                <RotateCcw className="mr-2 h-4 w-4" />
+              )}
+              Revert to Draft
+            </Button>
+          )}
           {statement?.status === "draft" && (
             <Button onClick={() => handleStatusTransition("finalized")} disabled={actioning}>
               {actioning ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <CheckCircle className="mr-2 h-4 w-4" />}
