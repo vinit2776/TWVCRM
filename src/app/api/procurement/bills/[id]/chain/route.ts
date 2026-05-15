@@ -24,7 +24,8 @@ export async function GET(
       creator:users!vendor_bills_created_by_fkey(id, full_name),
       approver:users!vendor_bills_approved_by_fkey(id, full_name),
       gst_setter:users!vendor_bills_gst_set_by_fkey(id, full_name),
-      gst_zero_confirmer:users!vendor_bills_gst_zero_confirmed_by_fkey(id, full_name)
+      gst_zero_confirmer:users!vendor_bills_gst_zero_confirmed_by_fkey(id, full_name),
+      vendor_bill_payments(id, amount, payment_mode, payment_reference, payment_date, notes, created_at, recorder:users!vendor_bill_payments_recorded_by_fkey(id, full_name))
     `)
     .eq("id", id)
     .single();
