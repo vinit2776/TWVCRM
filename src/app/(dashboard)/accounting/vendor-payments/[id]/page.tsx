@@ -56,6 +56,12 @@ type ChainData = {
     approved_amount_note: string | null;
     gst_rate: number | null;
     gst_amount: number | null;
+    gst_set_by: string | null;
+    gst_set_at: string | null;
+    gst_zero_confirmed: boolean | null;
+    gst_zero_confirmed_by: string | null;
+    gst_setter?: { id: string; full_name: string } | null;
+    gst_zero_confirmer?: { id: string; full_name: string } | null;
     base_amount: number | null;
     payment_hold_status: string | null;
     payment_hold_reason: string | null;
@@ -244,6 +250,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   // Inline GST setter (for accounts role when GST wasn't set at approval)
   const [inlineGstAmount, setInlineGstAmount] = useState<string>("");
   const [savingGst, setSavingGst] = useState(false);
+  const [gstZeroConfirm, setGstZeroConfirm] = useState(false);
 
   // TDS state
   type TdsSection = {
@@ -392,16 +399,25 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       toast.error(`GST amount cannot exceed 28% of the invoice base (max ₹${maxGstVal.toLocaleString("en-IN", { minimumFractionDigits: 2 })})`);
       return;
     }
+    if (gstVal === 0 && !gstZeroConfirm) {
+      toast.error("Please check the confirmation box to confirm this bill has no GST.");
+      return;
+    }
     setSavingGst(true);
     try {
       const res = await fetch(`/api/procurement/bills/${bill.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "update_gst", gst_amount: parseFloat(inlineGstAmount) || 0 }),
+        body: JSON.stringify({
+          action: "update_gst",
+          gst_amount: gstVal,
+          gst_zero_confirmed: gstVal === 0 ? true : undefined,
+        }),
       });
       const json = await res.json();
       if (!res.ok) { toast.error(json.error || "Failed to save GST amount"); return; }
-      toast.success("GST amount saved");
+      toast.success(gstVal === 0 ? "Zero GST confirmed and saved" : "GST amount saved");
+      setGstZeroConfirm(false);
       // Refresh chain so the ceiling recalculates
       const chainRes = await fetch(`/api/procurement/bills/${bill.id}/chain`);
       if (chainRes.ok) {
@@ -1169,9 +1185,23 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 {isPartialApproval && (
                   <p className="text-xs text-blue-600 italic">Base approved: {formatCurrency(Number(bill.approved_amount))} + GST: {formatCurrency(billGstAmount)}</p>
                 )}
+                {/* GST attribution trail */}
+                {bill.gst_set_by && (
+                  <p className="text-[10px] text-blue-500 mt-1">
+                    {billGstAmount === 0
+                      ? <>Zero GST confirmed by <span className="font-semibold">{bill.gst_setter?.full_name ?? "—"}</span></>
+                      : <>GST set by <span className="font-semibold">{bill.gst_setter?.full_name ?? "—"}</span></>}
+                    {bill.gst_set_at && <> · {new Date(bill.gst_set_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</>}
+                  </p>
+                )}
+                {bill.gst_zero_confirmed && bill.gst_zero_confirmed_by && bill.gst_zero_confirmer && (
+                  <p className="text-[10px] text-blue-500">
+                    Confirmed no-GST: <span className="font-semibold">{bill.gst_zero_confirmer.full_name}</span>
+                  </p>
+                )}
                 <button
                   type="button"
-                  onClick={() => { setInlineGstAmount(String(billGstAmount)); }}
+                  onClick={() => { setInlineGstAmount(String(billGstAmount)); setGstZeroConfirm(false); }}
                   className="text-[10px] text-blue-500 hover:text-blue-700 underline"
                 >
                   Change GST amount
@@ -1208,19 +1238,31 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                     step="0.01"
                     placeholder="0.00"
                     value={inlineGstAmount}
-                    onChange={(e) => setInlineGstAmount(e.target.value)}
+                    onChange={(e) => { setInlineGstAmount(e.target.value); setGstZeroConfirm(false); }}
                     className={`h-8 text-xs flex-1 ${hasUnappliedGst ? "border-amber-500 ring-1 ring-amber-400" : ""}`}
                   />
                   <Button
                     size="sm"
                     className={`h-8 text-xs shrink-0 ${hasUnappliedGst ? "bg-amber-600 hover:bg-amber-700 animate-pulse" : ""}`}
                     onClick={handleSaveInlineGst}
-                    disabled={savingGst}
+                    disabled={savingGst || (parseFloat(inlineGstAmount) === 0 && !gstZeroConfirm)}
                   >
                     {savingGst && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
                     Apply
                   </Button>
                 </div>
+                {/* Zero-GST requires explicit confirmation */}
+                {(inlineGstAmount === "0" || parseFloat(inlineGstAmount) === 0) && inlineGstAmount !== "" && (
+                  <label className="flex items-start gap-2 cursor-pointer text-xs text-amber-800 bg-amber-100 border border-amber-300 rounded px-2 py-1.5">
+                    <input
+                      type="checkbox"
+                      checked={gstZeroConfirm}
+                      onChange={(e) => setGstZeroConfirm(e.target.checked)}
+                      className="mt-0.5 rounded border-amber-400"
+                    />
+                    <span>I confirm this bill has <strong>no GST</strong>. This action will be logged against my name.</span>
+                  </label>
+                )}
                 {parseFloat(inlineGstAmount) > 0 && (() => {
                   const gstAmt = parseFloat(inlineGstAmount);
                   const base = Number(bill.total_amount);

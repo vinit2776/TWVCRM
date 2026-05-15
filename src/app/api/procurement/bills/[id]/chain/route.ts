@@ -22,7 +22,9 @@ export async function GET(
     .select(`
       *,
       creator:users!vendor_bills_created_by_fkey(id, full_name),
-      approver:users!vendor_bills_approved_by_fkey(id, full_name)
+      approver:users!vendor_bills_approved_by_fkey(id, full_name),
+      gst_setter:users!vendor_bills_gst_set_by_fkey(id, full_name),
+      gst_zero_confirmer:users!vendor_bills_gst_zero_confirmed_by_fkey(id, full_name)
     `)
     .eq("id", id)
     .single();

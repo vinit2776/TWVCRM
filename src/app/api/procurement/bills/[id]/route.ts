@@ -44,6 +44,7 @@ const patchBillSchema = z.discriminatedUnion("action", [
     approved_amount_note: z.string().nullish(),
     batch_type: z.enum(["immediate", "15th", "25th"]),
     gst_amount: z.number().min(0, "GST amount must be 0 or greater"),
+    gst_zero_confirmed: z.boolean().optional(),
   }),
   z.object({
     action: z.literal("override_batch"),
@@ -73,6 +74,8 @@ const patchBillSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("update_gst"),
     gst_amount: z.number().min(0, "GST amount must be 0 or greater"),
+    /** Required when gst_amount === 0 — user must explicitly confirm no-GST */
+    gst_zero_confirmed: z.boolean().optional(),
   }),
 ]);
 
@@ -295,10 +298,19 @@ export async function PATCH(
         );
       }
 
+      // Zero-GST at approval must be explicitly confirmed
+      if (approveGstAmount === 0 && !parsed.data.gst_zero_confirmed) {
+        return NextResponse.json(
+          { error: "Please confirm that this bill has no GST before approving." },
+          { status: 422 },
+        );
+      }
+
+      const approveNow = new Date().toISOString();
       updatePayload = {
         approval_status: "approved",
         approved_by: dbUser.id,
-        approved_at: new Date().toISOString(),
+        approved_at: approveNow,
         approval_code: billApprovalCode,
         approved_amount: approvedAmt ?? totalAmt,
         approved_amount_note: parsed.data.approved_amount_note ?? null,
@@ -307,10 +319,14 @@ export async function PATCH(
         payment_batch_type: parsed.data.batch_type,
         payment_batch_date: toISODateString(batchDate),
         payment_batch_assigned_by: dbUser.id,
-        payment_batch_assigned_at: new Date().toISOString(),
+        payment_batch_assigned_at: approveNow,
         gst_rate: 0,
         gst_amount: approveGstAmount,
         base_amount: totalAmt,
+        gst_set_by: dbUser.id,
+        gst_set_at: approveNow,
+        gst_zero_confirmed: approveGstAmount === 0,
+        gst_zero_confirmed_by: approveGstAmount === 0 ? dbUser.id : null,
       };
 
       // For goods POs: advance status to invoice_approved
@@ -592,10 +608,23 @@ export async function PATCH(
         );
       }
 
+      // Zero-GST must be explicitly confirmed by the user
+      if (newGstAmount === 0 && !parsed.data.gst_zero_confirmed) {
+        return NextResponse.json(
+          { error: "Please confirm that this bill has no GST before applying a zero amount." },
+          { status: 422 },
+        );
+      }
+
+      const gstNow = new Date().toISOString();
       updatePayload = {
         gst_rate: 0,
         gst_amount: newGstAmount,
         base_amount: totalAmount, // base_amount = total_amount (same thing)
+        gst_set_by: dbUser.id,
+        gst_set_at: gstNow,
+        gst_zero_confirmed: newGstAmount === 0,
+        gst_zero_confirmed_by: newGstAmount === 0 ? dbUser.id : null,
       };
       break;
     }
