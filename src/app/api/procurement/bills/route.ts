@@ -23,6 +23,15 @@ const createBillSchema = z.object({
     message: "GST amount exceeds the maximum allowed (28% of invoice base). Please verify the invoice.",
     path: ["gst_amount"],
   },
+).refine(
+  (d) => {
+    const today = new Date().toISOString().split("T")[0];
+    return d.invoice_date >= today;
+  },
+  {
+    message: "Invoice date cannot be in the past. Only today or a future date is allowed.",
+    path: ["invoice_date"],
+  },
 );
 
 function generateBillNumber(count: number): string {

@@ -474,6 +474,7 @@ export default function PurchaseOrderDetailPage() {
   // ── Record Delivery ────────────────────────────────────────────────────────
   const submitDelivery = async () => {
     if (!dcDate) { toast.error("Delivery date is required"); return; }
+    if (dcDate < today) { toast.error("Delivery date cannot be in the past. Please select today or a future date."); return; }
     if (!dcFile) { toast.error("Please upload the delivery challan file"); return; }
 
     const items = (po?.purchase_order_items ?? []).map((item) => ({
@@ -588,6 +589,7 @@ export default function PurchaseOrderDetailPage() {
   // ── Add Invoice (inline) ───────────────────────────────────────────────────
   const submitInvoice = async () => {
     if (!invDate) { toast.error("Invoice date is required"); return; }
+    if (invDate < today) { toast.error("Invoice date cannot be in the past. Please select today or a future date."); return; }
     const amount = parseFloat(invAmount);
     if (!invAmount || isNaN(amount) || amount <= 0) {
       toast.error("Invoice amount must be greater than 0");
@@ -1828,9 +1830,13 @@ export default function PurchaseOrderDetailPage() {
                 <Label>DC Date <span className="text-red-500">*</span></Label>
                 <Input
                   type="date"
+                  min={today}
                   value={dcDate}
                   onChange={(e) => setDcDate(e.target.value)}
                 />
+                {dcDate && dcDate < today && (
+                  <p className="text-xs text-red-600">Date cannot be in the past.</p>
+                )}
               </div>
             </div>
 
@@ -2017,9 +2023,13 @@ export default function PurchaseOrderDetailPage() {
                 <Label>Invoice Date <span className="text-red-500">*</span></Label>
                 <Input
                   type="date"
+                  min={today}
                   value={invDate}
                   onChange={(e) => setInvDate(e.target.value)}
                 />
+                {invDate && invDate < today && (
+                  <p className="text-xs text-red-600">Date cannot be in the past.</p>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label>Due Date</Label>

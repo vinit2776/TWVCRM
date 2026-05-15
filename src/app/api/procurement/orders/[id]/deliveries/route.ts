@@ -17,7 +17,16 @@ const createDeliverySchema = z.object({
       })
     )
     .min(1, "At least one item is required"),
-});
+}).refine(
+  (d) => {
+    const today = new Date().toISOString().split("T")[0];
+    return d.dc_date >= today;
+  },
+  {
+    message: "Delivery date cannot be in the past. Only today or a future date is allowed.",
+    path: ["dc_date"],
+  },
+);
 
 export async function GET(
   _request: NextRequest,

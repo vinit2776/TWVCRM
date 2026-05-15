@@ -32,7 +32,17 @@ const createGoodsPoSchema = z.object({
   payment_terms: z.string().nullish(),
   terms_and_conditions: z.string().nullish(),
   items: z.array(createPoItemSchema).min(1, "At least one item is required"),
-}).merge(advancePaymentSchema);
+}).merge(advancePaymentSchema).refine(
+  (d) => {
+    if (!d.expected_delivery_date) return true; // field is optional
+    const today = new Date().toISOString().split("T")[0];
+    return d.expected_delivery_date >= today;
+  },
+  {
+    message: "Expected delivery date cannot be in the past. Only today or a future date is allowed.",
+    path: ["expected_delivery_date"],
+  },
+);
 
 const createServicePoSchema = z.object({
   po_type: z.literal("service"),

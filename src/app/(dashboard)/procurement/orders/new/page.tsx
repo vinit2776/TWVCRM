@@ -35,6 +35,8 @@ interface LineItem {
   fully_ordered?: boolean;
 }
 
+const today = new Date().toISOString().split("T")[0];
+
 function generateLocalId() {
   return Math.random().toString(36).slice(2);
 }
@@ -300,6 +302,9 @@ function NewPurchaseOrderFormWithPr({
         return `Advance amount (₹${parseFloat(advanceAmount).toLocaleString("en-IN")}) cannot exceed PO total (₹${poTotal.toLocaleString("en-IN")})`;
       }
     }
+    if (expectedDeliveryDate && expectedDeliveryDate < today) {
+      return "Expected delivery date cannot be in the past. Please select today or a future date.";
+    }
     const orderable = activeItems.filter(li => parseFloat(li.quantity_ordered) > 0);
     if (orderable.length === 0) return "At least one item must have a quantity greater than 0";
     for (const li of orderable) {
@@ -457,9 +462,13 @@ function NewPurchaseOrderFormWithPr({
             <Input
               id="expected_delivery"
               type="date"
+              min={today}
               value={expectedDeliveryDate}
               onChange={(e) => setExpectedDeliveryDate(e.target.value)}
             />
+            {expectedDeliveryDate && expectedDeliveryDate < today && (
+              <p className="text-xs text-red-600">Date cannot be in the past.</p>
+            )}
           </div>
 
           <div className="space-y-1.5 sm:col-span-2">
