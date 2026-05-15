@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/sheet";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
-import { ContractQuotasSection } from "@/components/contracts/contract-quotas-section";
 import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
 import {
   CONTRACT_STATUSES,
@@ -28,11 +27,11 @@ import type { Contract } from "@/types";
 
 type ContractWithQuotaCount = Contract & {
   lead?: { id: string; first_name: string; last_name: string; company?: string };
-  service_quotas?: { count: number }[];
+  facility_quotas?: { count: number }[];
 };
 
 function quotaCount(c: ContractWithQuotaCount): number {
-  return c.service_quotas?.[0]?.count ?? 0;
+  return c.facility_quotas?.[0]?.count ?? 0;
 }
 
 const QUOTA_EDITABLE_ROLES = ["admin", "manager", "accounts"];
@@ -99,20 +98,20 @@ export default function ContractsPage() {
     setSelectedContract(c);
   };
 
-  // Refresh quota count for the contract in the list after sheet edits
+  // Refresh facility quota count for the contract in the list after sheet edits
   const refreshSelectedQuotaCount = async () => {
     if (!selectedContract) return;
-    const res = await fetch(`/api/contracts/${selectedContract.id}/quotas`);
+    const res = await fetch(`/api/contracts/${selectedContract.id}/facilities`);
     if (!res.ok) return;
     const json = await res.json();
     const count = (json.data || []).length;
     setContracts(prev => prev.map(c =>
       c.id === selectedContract.id
-        ? { ...c, service_quotas: [{ count }] }
+        ? { ...c, facility_quotas: [{ count }] }
         : c
     ));
     // Update selectedContract too so the sheet header badge reflects the change
-    setSelectedContract(prev => prev ? { ...prev, service_quotas: [{ count }] } : prev);
+    setSelectedContract(prev => prev ? { ...prev, facility_quotas: [{ count }] } : prev);
   };
 
   return (
@@ -303,11 +302,6 @@ export default function ContractsPage() {
                         This contract is active. Only an admin can modify quotas.
                       </p>
                     )}
-                    <ContractQuotasSection
-                      contractId={selectedContract.id}
-                      readOnly={sheetReadOnly}
-                      onSave={refreshSelectedQuotaCount}
-                    />
                     <ContractFacilitiesSection
                       contractId={selectedContract.id}
                       locationId={selectedContract.location_id ?? null}

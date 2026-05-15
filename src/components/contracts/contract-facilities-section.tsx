@@ -188,7 +188,7 @@ export function ContractFacilitiesSection({ contractId, locationId, readOnly = f
     <Card>
       <CardHeader>
         <CardTitle className="text-base flex items-center justify-between">
-          <span>Facility Quotas</span>
+          <span>Quotas</span>
           <span className="text-xs font-normal text-muted-foreground">
             Free units/month · resets 1st of each month
           </span>
