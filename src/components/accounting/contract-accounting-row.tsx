@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, IndianRupee, Send, Receipt, CheckCircle, Clock, Calendar, Eye, FileCheck, X } from "lucide-react";
+import { ChevronDown, ChevronRight, IndianRupee, Send, Receipt, CheckCircle, Calendar, Eye, FileCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -248,17 +248,21 @@ export function ContractAccountingRow({
           <div className="flex items-center gap-2">
             <span className="font-medium text-sm">{contract.contract_number}</span>
             <span className="text-sm text-muted-foreground truncate">{company}</span>
-            {/* Statement status chip on collapsed row */}
+            {/* Statement lifecycle badge on collapsed row — shows actual stage, not raw DB status */}
             {statement ? (
-              isDraft ? (
-                <Badge className="text-xs bg-yellow-100 text-yellow-700 border-yellow-200 ml-1">
-                  <Clock className="h-3 w-3 mr-1" />Draft
-                </Badge>
-              ) : (
-                <Badge className="text-xs bg-green-100 text-green-700 border-green-200 ml-1">
-                  <CheckCircle className="h-3 w-3 mr-1" />{statement.status === "finalized" ? "Finalized" : "Exported"}
-                </Badge>
-              )
+              <div className="ml-1" onClick={(e) => e.stopPropagation()}>
+                <BillingLifecycleStatus
+                  status={statement.status}
+                  emailed_at={statement.emailed_at}
+                  razorpay_payment_link_url={statement.razorpay_payment_link_url}
+                  payment_status={statement.payment_status}
+                  accounted={statement.accounted}
+                  finalized_at={statement.finalized_at}
+                  gst_invoice_number={statement.gst_invoice_number}
+                  proforma_sent_at={statement.proforma_sent_at}
+                  variant="compact"
+                />
+              </div>
             ) : (
               <Badge variant="secondary" className="text-xs ml-1">No statement</Badge>
             )}
@@ -453,6 +457,7 @@ export function ContractAccountingRow({
                   <div key={p.id} className="flex items-center justify-between text-sm px-2 py-1 rounded hover:bg-accent/50">
                     <div className="flex items-center gap-2">
                       <span className="text-muted-foreground">{p.payment_number}</span>
+                      <span className="text-xs text-muted-foreground">{formatDate(p.payment_date)}</span>
                       <Badge variant="outline" className="text-xs">
                         {CONTRACT_PAYMENT_MODE_LABELS[p.payment_mode] || p.payment_mode}
                       </Badge>
@@ -531,6 +536,33 @@ export function ContractAccountingRow({
                   </div>
                 )}
 
+                {/* GST Invoice details — shown once GST invoice has been generated */}
+                {statement.gst_invoice_number && (
+                  <div className="rounded-md border border-teal-200 bg-teal-50 px-3 py-2 flex items-start justify-between gap-3 flex-wrap">
+                    <div className="space-y-0.5">
+                      <p className="text-[10px] font-semibold text-teal-700 uppercase tracking-wide">GST Invoice</p>
+                      <p className="text-sm font-medium text-teal-900">{statement.gst_invoice_number}</p>
+                      {summary.gst_invoice?.sent_at && (
+                        <p className="text-xs text-teal-700">
+                          Sent {formatDate(summary.gst_invoice.sent_at)}
+                          {summary.gst_invoice.sent_to && (
+                            <span className="text-teal-600"> → {summary.gst_invoice.sent_to}</span>
+                          )}
+                        </p>
+                      )}
+                    </div>
+                    <Button size="sm" variant="outline" className="h-7 text-xs border-teal-300 text-teal-700 hover:bg-teal-100" asChild>
+                      <a
+                        href={`/api/billing-statements/${statement.id}/gst-invoice-pdf`}
+                        download={`GST-${statement.gst_invoice_number?.replace(/\//g, "-")}.pdf`}
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        <FileCheck className="h-3 w-3 mr-1" />Download GST PDF
+                      </a>
+                    </Button>
+                  </div>
+                )}
+
                 {/* Action buttons */}
                 <div className="flex flex-wrap gap-2">
                   {/* Finalize — only on draft */}
@@ -590,8 +622,8 @@ export function ContractAccountingRow({
                     </Button>
                   )}
 
-                  {/* Record Billing Payment */}
-                  {statement.status === "finalized" && onRecordStatementPayment && (
+                  {/* Record Billing Payment — available on finalized or exported (same thing for lifecycle) */}
+                  {(statement.status === "finalized" || statement.status === "exported") && onRecordStatementPayment && (
                     <Button
                       size="sm"
                       variant="outline"
