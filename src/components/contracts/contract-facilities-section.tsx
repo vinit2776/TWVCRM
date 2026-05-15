@@ -38,6 +38,7 @@ interface Facility {
   unit: string;
   free_quota: number;
   cost_per_unit: number;
+  hours_used_this_month?: number;
 }
 
 interface RowState extends Facility {
@@ -209,11 +210,39 @@ export function ContractFacilitiesSection({ contractId, locationId, readOnly = f
                     <span className="font-medium text-sm">{r.name}</span>
                     <Badge variant="outline" className="text-[10px]">{r.unit}</Badge>
                   </div>
-                  {!r.editing && (
-                    <div className="text-xs text-muted-foreground mt-0.5">
-                      <span className="font-medium text-foreground">{Number(r.free_quota)}</span> {r.unit} free; then {formatCurrency(Number(r.cost_per_unit))}/{r.unit}
-                    </div>
-                  )}
+                  {!r.editing && (() => {
+                    const quota = Number(r.free_quota);
+                    const used = Number(r.hours_used_this_month ?? 0);
+                    const balance = Math.max(0, quota - used);
+                    const pct = quota > 0 ? Math.min(100, (used / quota) * 100) : 0;
+                    const over = used > quota;
+                    return (
+                      <div className="mt-1 space-y-1">
+                        <div className="text-xs text-muted-foreground">
+                          <span className="font-medium text-foreground">{quota}</span> {r.unit} free/mo · ₹{Number(r.cost_per_unit).toLocaleString()}/overage
+                        </div>
+                        {quota > 0 && (
+                          <>
+                            <div className="flex items-center gap-2 text-[11px]">
+                              <span className="text-muted-foreground">Used:</span>
+                              <span className={`font-medium ${over ? "text-red-600" : "text-foreground"}`}>{used} {r.unit}</span>
+                              <span className="text-muted-foreground">·</span>
+                              <span className="text-muted-foreground">Balance:</span>
+                              <span className={`font-medium ${over ? "text-red-600" : "text-green-700"}`}>
+                                {over ? `${(used - quota).toFixed(1)} ${r.unit} over` : `${balance.toFixed(balance % 1 === 0 ? 0 : 1)} ${r.unit}`}
+                              </span>
+                            </div>
+                            <div className="h-1.5 rounded-full bg-muted overflow-hidden w-full max-w-xs">
+                              <div
+                                className={`h-full rounded-full transition-all ${over ? "bg-red-500" : pct > 80 ? "bg-amber-500" : "bg-green-500"}`}
+                                style={{ width: `${Math.min(100, pct)}%` }}
+                              />
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    );
+                  })()}
                   {r.editing && (
                     <div className="grid grid-cols-2 gap-2 mt-2 max-w-md">
                       <div>

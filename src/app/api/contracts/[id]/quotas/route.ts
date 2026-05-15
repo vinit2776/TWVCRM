@@ -4,8 +4,8 @@ import { logAudit } from "@/lib/audit";
 
 /**
  * GET /api/contracts/[id]/quotas
- * Returns the contract's service quotas joined with the catalog item.
- * Frontend uses this to render the Quotas tab on the contract detail page.
+ * Returns the contract's service quotas joined with the catalog item,
+ * plus current-month usage data from service_usage_records (printer reports).
  */
 export async function GET(
   _request: NextRequest,
@@ -16,17 +16,47 @@ export async function GET(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data, error } = await supabase
-    .from("contract_service_quotas")
-    .select(`
-      *,
-      service:service_catalog(id, slug, name, unit_label, default_overage_rate, gst_rate, printer_column, sort_order)
-    `)
-    .eq("contract_id", id)
-    .order("created_at", { ascending: true });
+  const now = new Date();
+  const year = now.getFullYear();
+  const month = now.getMonth() + 1; // 1-based
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ data: data || [] });
+  const [quotasRes, usageRes] = await Promise.all([
+    supabase
+      .from("contract_service_quotas")
+      .select(`
+        *,
+        service:service_catalog(id, slug, name, unit_label, default_overage_rate, gst_rate, printer_column, sort_order)
+      `)
+      .eq("contract_id", id)
+      .order("created_at", { ascending: true }),
+    // Fetch the latest service_usage_records for this contract this month
+    supabase
+      .from("service_usage_records")
+      .select("service_id, quantity_used, overage_quantity, period_year, period_month, source")
+      .eq("contract_id", id)
+      .eq("period_year", year)
+      .eq("period_month", month),
+  ]);
+
+  if (quotasRes.error) return NextResponse.json({ error: quotasRes.error.message }, { status: 500 });
+
+  // Build a map: service_id → usage this month
+  const usageByService: Record<string, { quantity_used: number; overage_quantity: number }> = {};
+  for (const rec of usageRes.data || []) {
+    // Sum in case there are multiple records (shouldn't happen due to unique constraint, but be safe)
+    const existing = usageByService[rec.service_id] ?? { quantity_used: 0, overage_quantity: 0 };
+    usageByService[rec.service_id] = {
+      quantity_used: existing.quantity_used + Number(rec.quantity_used),
+      overage_quantity: existing.overage_quantity + Number(rec.overage_quantity),
+    };
+  }
+
+  const data = (quotasRes.data || []).map((q) => ({
+    ...q,
+    usage_this_month: usageByService[q.service_id] ?? null,
+  }));
+
+  return NextResponse.json({ data, period: { year, month } });
 }
 
 /**

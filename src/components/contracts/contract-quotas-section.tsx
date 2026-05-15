@@ -27,6 +27,11 @@ import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 import type { ContractServiceQuota, ServiceCatalogItem } from "@/types";
 
+interface QuotaUsage {
+  quantity_used: number;
+  overage_quantity: number;
+}
+
 interface Props {
   contractId: string;
   /** Locks the editor for non-active contracts (still renders, read-only). */
@@ -38,6 +43,7 @@ interface Props {
 interface RowState {
   service: ServiceCatalogItem;
   quota: ContractServiceQuota | null;
+  usage: QuotaUsage | null;
   editing: boolean;
   draftQty: string;
   draftRate: string;
@@ -55,16 +61,20 @@ export function ContractQuotasSection({ contractId, readOnly = false, onSave }: 
       fetch(`/api/contracts/${contractId}/quotas`).then((r) => r.json()),
     ]);
     const catalog = (catalogRes.data || []) as ServiceCatalogItem[];
-    const quotas = (quotaRes.data || []) as ContractServiceQuota[];
+    const quotas = (quotaRes.data || []) as (ContractServiceQuota & { usage_this_month: QuotaUsage | null })[];
     setRows(
-      catalog.map((service) => ({
-        service,
-        quota: quotas.find((q) => q.service_id === service.id) ?? null,
-        editing: false,
-        draftQty: "",
-        draftRate: "",
-        saving: false,
-      }))
+      catalog.map((service) => {
+        const q = quotas.find((q) => q.service_id === service.id) ?? null;
+        return {
+          service,
+          quota: q,
+          usage: q?.usage_this_month ?? null,
+          editing: false,
+          draftQty: "",
+          draftRate: "",
+          saving: false,
+        };
+      })
     );
     setLoading(false);
   };
@@ -167,11 +177,43 @@ export function ContractQuotasSection({ contractId, readOnly = false, onSave }: 
                       <span className="font-medium text-sm">{r.service.name}</span>
                       <Badge variant="outline" className="text-[10px]">{r.service.unit_label}</Badge>
                     </div>
-                    {!r.editing && hasQuota && (
-                      <div className="text-xs text-muted-foreground mt-0.5">
-                        <span className="font-medium text-foreground">{Number(r.quota!.monthly_quota)}</span> {r.service.unit_label} free; then {formatCurrency(Number(r.quota!.overage_rate))} {r.service.unit_label}
-                      </div>
-                    )}
+                    {!r.editing && hasQuota && (() => {
+                      const quota = Number(r.quota!.monthly_quota);
+                      const used = r.usage ? Number(r.usage.quantity_used) : null;
+                      const balance = used !== null ? Math.max(0, quota - used) : null;
+                      const pct = used !== null && quota > 0 ? Math.min(100, (used / quota) * 100) : 0;
+                      const over = used !== null && used > quota;
+                      return (
+                        <div className="mt-1 space-y-1">
+                          <div className="text-xs text-muted-foreground">
+                            <span className="font-medium text-foreground">{quota}</span> {r.service.unit_label} free · {formatCurrency(Number(r.quota!.overage_rate))}/overage
+                          </div>
+                          {used !== null ? (
+                            <>
+                              <div className="flex items-center gap-2 text-[11px]">
+                                <span className="text-muted-foreground">Used:</span>
+                                <span className={`font-medium ${over ? "text-red-600" : "text-foreground"}`}>{used} {r.service.unit_label}</span>
+                                <span className="text-muted-foreground">·</span>
+                                <span className="text-muted-foreground">Balance:</span>
+                                <span className={`font-medium ${over ? "text-red-600" : "text-green-700"}`}>
+                                  {over ? `${(used - quota).toFixed(0)} over` : `${balance} ${r.service.unit_label}`}
+                                </span>
+                              </div>
+                              {quota > 0 && (
+                                <div className="h-1.5 rounded-full bg-muted overflow-hidden w-full max-w-xs">
+                                  <div
+                                    className={`h-full rounded-full transition-all ${over ? "bg-red-500" : pct > 80 ? "bg-amber-500" : "bg-green-500"}`}
+                                    style={{ width: `${Math.min(100, pct)}%` }}
+                                  />
+                                </div>
+                              )}
+                            </>
+                          ) : (
+                            <p className="text-[11px] text-muted-foreground italic">Usage tracked via monthly printer report upload</p>
+                          )}
+                        </div>
+                      );
+                    })()}
                     {!r.editing && !hasQuota && (
                       <div className="text-xs text-muted-foreground mt-0.5 flex items-center gap-1">
                         <Info className="h-3 w-3" />

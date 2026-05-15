@@ -46,6 +46,8 @@ async function enforceActiveGate(
 }
 
 // ── GET ──────────────────────────────────────────────────────────────────────
+// Returns active facilities for the contract, with current-month usage data
+// (hours used this month from confirmed/checked_in/checked_out bookings).
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
@@ -55,15 +57,46 @@ export async function GET(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data, error } = await supabase
-    .from("contract_facilities")
-    .select("id, name, unit, free_quota, cost_per_unit, is_active, created_at")
-    .eq("contract_id", contractId)
-    .eq("is_active", true)
-    .order("name");
+  const now = new Date();
+  const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
+  const monthEnd   = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ data });
+  // Fetch active facilities + this month's linked bookings in parallel
+  const [facilitiesRes, chargesRes] = await Promise.all([
+    supabase
+      .from("contract_facilities")
+      .select("id, name, unit, free_quota, cost_per_unit, is_active, created_at")
+      .eq("contract_id", contractId)
+      .eq("is_active", true)
+      .order("name"),
+    // usage_charges → bookings join: get duration_hours per facility this month
+    supabase
+      .from("usage_charges")
+      .select("contract_facility_id, booking:bookings!booking_id(duration_hours, status)")
+      .eq("contract_id", contractId)
+      .not("contract_facility_id", "is", null)
+      .gte("charge_date", monthStart)
+      .lte("charge_date", monthEnd),
+  ]);
+
+  if (facilitiesRes.error) return NextResponse.json({ error: facilitiesRes.error.message }, { status: 500 });
+
+  // Build a map: facilityId → total hours consumed this month from linked bookings
+  const usageByFacility: Record<string, number> = {};
+  for (const uc of chargesRes.data || []) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const b = (uc.booking as unknown as { duration_hours: number | null; status: string } | null);
+    if (!b || !["confirmed", "checked_in", "checked_out"].includes(b.status)) continue;
+    const fid = uc.contract_facility_id as string;
+    usageByFacility[fid] = (usageByFacility[fid] || 0) + Number(b.duration_hours || 0);
+  }
+
+  const data = (facilitiesRes.data || []).map((f) => ({
+    ...f,
+    hours_used_this_month: usageByFacility[f.id] ?? 0,
+  }));
+
+  return NextResponse.json({ data, period: { start: monthStart, end: monthEnd } });
 }
 
 // ── POST ─────────────────────────────────────────────────────────────────────

@@ -14,6 +14,7 @@ import { LeadCautionsBanner } from "@/components/leads/lead-cautions-banner";
 import type { BookingCredit, BookingComplimentaryReason } from "@/types";
 import { WaitlistDialog } from "@/components/bookings/waitlist-dialog";
 import { CreateRecurringDialog } from "@/components/bookings/create-recurring-dialog";
+import { ContractQuotaBanner } from "@/components/bookings/new-booking/contract-quota-banner";
 import {
   BookingFormProvider,
   RoomSelectionSection,
@@ -661,6 +662,15 @@ function NewBookingForm() {
         <RoomSelectionSection />
         <TimeSelectionSection />
         <CustomerDetailsSection />
+
+        {/* Contract quota status — shown when booking for a contract holder */}
+        {(customerType === "contract_holder" || customerType === "guest") && contractId && (
+          <ContractQuotaBanner
+            contractId={contractId}
+            durationHours={durationHours}
+            bookingDate={bookingDate}
+          />
+        )}
 
         {/* Customer history */}
         {bookerPhone && bookerPhone.length >= 10 && (
