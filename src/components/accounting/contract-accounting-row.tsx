@@ -104,8 +104,14 @@ interface ContractSummary {
     gst_invoice_number?: string | null;
     payment_status?: string | null;
     accounted?: boolean | null;
+    accounted_at?: string | null;
     razorpay_payment_link_url?: string | null;
     emailed_at?: string | null;
+    /** Actor names from joined users table */
+    finalized_by_user?: { full_name: string } | null;
+    proforma_sent_by_user?: { full_name: string } | null;
+    gst_generated_by_user?: { full_name: string } | null;
+    accounted_by_user?: { full_name: string } | null;
   } | null;
 }
 
@@ -130,6 +136,8 @@ interface ContractAccountingRowProps {
   onViewStatement?: (statementId: string) => void;
   /** Called when user clicks Void — opens void dialog in parent */
   onVoidStatement?: (statementId: string) => void;
+  /** Called when user clicks Mark as Accounted */
+  onMarkAccounted?: (statementId: string) => Promise<void>;
   /** Current user role — used to gate admin-only actions */
   userRole?: string | null;
 }
@@ -147,6 +155,7 @@ export function ContractAccountingRow({
   onRecordStatementPayment,
   onViewStatement,
   onVoidStatement,
+  onMarkAccounted,
   userRole,
 }: ContractAccountingRowProps) {
   const [expanded, setExpanded] = useState(false);
@@ -156,6 +165,7 @@ export function ContractAccountingRow({
   const [finalizing, setFinalizing] = useState(false);
   const [sendingProforma, setSendingProforma] = useState(false);
   const [generatingGst, setGeneratingGst] = useState(false);
+  const [markingAccounted, setMarkingAccounted] = useState(false);
 
   const { contract } = summary;
   const company = contract.lead?.company || `${contract.lead?.first_name || ""} ${contract.lead?.last_name || ""}`.trim();
@@ -225,6 +235,16 @@ export function ContractAccountingRow({
       await onGenerateGst(statement.id);
     } finally {
       setGeneratingGst(false);
+    }
+  };
+
+  const handleMarkAccounted = async () => {
+    if (!statement?.id || !onMarkAccounted) return;
+    setMarkingAccounted(true);
+    try {
+      await onMarkAccounted(statement.id);
+    } finally {
+      setMarkingAccounted(false);
     }
   };
 
@@ -532,6 +552,15 @@ export function ContractAccountingRow({
                         accounted: statement.accounted,
                         proformaSentAt: statement.proforma_sent_at,
                       })}
+                      statementId={statement.id}
+                      statementNumber={statement.statement_number}
+                      gstInvoiceNumber={statement.gst_invoice_number}
+                      actors={{
+                        finalized_by: statement.finalized_by_user?.full_name,
+                        proforma_sent_by: statement.proforma_sent_by_user?.full_name,
+                        gst_generated_by: statement.gst_generated_by_user?.full_name,
+                        accounted_by: statement.accounted_by_user?.full_name,
+                      }}
                     />
                   </div>
                 )}
@@ -657,6 +686,31 @@ export function ContractAccountingRow({
                         <FileCheck className="h-3 w-3 mr-1" />PDF
                       </a>
                     </Button>
+                  )}
+
+                  {/* Mark as Accounted — shown once GST invoice exists and not yet accounted */}
+                  {isFinalized && statement.gst_invoice_number && !statement.accounted && onMarkAccounted && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="h-7 text-xs border-green-300 text-green-700 hover:bg-green-50"
+                      onClick={(e) => { e.stopPropagation(); handleMarkAccounted(); }}
+                      disabled={markingAccounted}
+                    >
+                      {markingAccounted ? (
+                        <><span className="mr-1 h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin inline-block" />Saving…</>
+                      ) : (
+                        <><CheckCircle className="h-3 w-3 mr-1" />Mark as Accounted</>
+                      )}
+                    </Button>
+                  )}
+
+                  {/* Accounted — read-only confirmation */}
+                  {statement.accounted && (
+                    <span className="inline-flex items-center gap-1 text-xs text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1 h-7">
+                      <CheckCircle className="h-3 w-3" />
+                      Accounted{statement.accounted_at ? ` · ${formatDate(statement.accounted_at)}` : ""}
+                    </span>
                   )}
 
                   {/* Void — admin only */}
