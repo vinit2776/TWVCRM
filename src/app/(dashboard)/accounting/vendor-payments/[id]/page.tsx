@@ -272,6 +272,9 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const [resendCc, setResendCc] = useState("");
   const [resendLoading, setResendLoading] = useState(false);
 
+  // Payment confirmation dialog (shown after validation, before submitting)
+  const [showPayConfirm, setShowPayConfirm] = useState(false);
+
   // PO / MR reference sheets
   const [poSheetOpen, setPoSheetOpen] = useState(false);
   const [mrSheetOpen, setMrSheetOpen] = useState(false);
@@ -434,7 +437,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
     }
   }
 
-  async function handleRecordPayment() {
+  function handleRecordPayment() {
     if (!payMode) { toast.error("Please select a payment mode"); return; }
     if (!payAmount || Number(payAmount) <= 0) { toast.error("Enter a valid payment amount"); return; }
     if (Number(payAmount) > approvedOutstanding + 0.01) {
@@ -446,6 +449,12 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       if (!tdsBaseAmount || Number(tdsBaseAmount) <= 0) { toast.error("Enter the pre-GST base amount for TDS"); return; }
       if (tdsAmount <= 0) { toast.error("TDS amount must be greater than zero"); return; }
     }
+    // All valid — show confirmation before submitting
+    setShowPayConfirm(true);
+  }
+
+  async function executeRecordPayment() {
+    setShowPayConfirm(false);
     setPaying(true);
     try {
       const tdsPayload = tdsEnabled && tdsSectionCode && tdsAmount > 0 ? {
@@ -1519,6 +1528,64 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               className="gap-2"
             >
               {paying ? "Recording…" : sendConfirmation && (vendor?.contact_email?.trim() || paymentCcEmail.trim()) ? "Record & Send" : "Record Payment"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Payment Confirmation Dialog */}
+      <Dialog open={showPayConfirm} onOpenChange={setShowPayConfirm}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <CreditCard className="h-5 w-5 text-amber-500" />
+              Confirm Payment
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <p className="text-sm text-muted-foreground">
+              Please verify the following details before recording this payment. This action cannot be undone.
+            </p>
+            <div className="rounded-lg border bg-muted/40 p-4 space-y-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Vendor</span>
+                <span className="font-medium">{chain?.vendor?.name ?? "—"}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Bill</span>
+                <span className="font-medium">{bill?.bill_number ?? "—"}</span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-muted-foreground">Amount to pay</span>
+                <span className="text-lg font-bold text-foreground">{formatCurrency(Number(payAmount))}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Payment mode</span>
+                <span className="font-medium uppercase">{payMode ?? "—"}</span>
+              </div>
+              {payRef && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Reference / UTR</span>
+                  <span className="font-medium font-mono">{payRef}</span>
+                </div>
+              )}
+              {payDate && (
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Payment date</span>
+                  <span className="font-medium">{formatDate(payDate)}</span>
+                </div>
+              )}
+            </div>
+            <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+              Ensure <strong>{formatCurrency(Number(payAmount))}</strong> has been or will be issued via {payMode?.toUpperCase() ?? "the selected instrument"} before confirming.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setShowPayConfirm(false)} disabled={paying}>
+              Go Back
+            </Button>
+            <Button onClick={() => executeRecordPayment()} disabled={paying} className="gap-2">
+              {paying ? <><Loader2 className="h-4 w-4 animate-spin" /> Recording…</> : "Confirm & Record"}
             </Button>
           </DialogFooter>
         </DialogContent>
