@@ -29,6 +29,8 @@ import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/financ
 type VendorBillItem = {
   id: string;
   bill_number: string;
+  invoice_number: string | null;
+  invoice_file_url: string | null;
   invoice_date: string;
   due_date: string | null;
   total_amount: number;
@@ -319,6 +321,25 @@ export default function AccountingPage() {
                             >
                               <td className="px-4 py-3 font-mono text-xs font-medium">
                                 {bill.bill_number}
+                                {bill.invoice_number && (
+                                  <p className="mt-0.5 flex items-center gap-1 text-[10px] font-normal text-muted-foreground"
+                                     onClick={(e) => e.stopPropagation()}>
+                                    <FileText className="h-2.5 w-2.5 shrink-0" />
+                                    {bill.invoice_file_url ? (
+                                      <a
+                                        href={bill.invoice_file_url}
+                                        target="_blank"
+                                        rel="noopener noreferrer"
+                                        className="font-mono text-blue-600 hover:text-blue-800 hover:underline"
+                                        title="View vendor invoice"
+                                      >
+                                        {bill.invoice_number}
+                                      </a>
+                                    ) : (
+                                      <span className="font-mono">{bill.invoice_number}</span>
+                                    )}
+                                  </p>
+                                )}
                                 {bill.approved_at && (
                                   <p
                                     className="mt-0.5 flex items-center gap-1 text-[10px] font-normal text-emerald-700"
@@ -478,6 +499,25 @@ export default function AccountingPage() {
                               >
                                 <td className="px-4 py-2.5 font-mono text-xs font-medium">
                                   {bill.bill_number}
+                                  {bill.invoice_number && (
+                                    <p className="mt-0.5 flex items-center gap-1 text-[10px] font-normal text-muted-foreground"
+                                       onClick={(e) => e.stopPropagation()}>
+                                      <FileText className="h-2.5 w-2.5 shrink-0" />
+                                      {bill.invoice_file_url ? (
+                                        <a
+                                          href={bill.invoice_file_url}
+                                          target="_blank"
+                                          rel="noopener noreferrer"
+                                          className="font-mono text-blue-600 hover:text-blue-800 hover:underline"
+                                          title="View vendor invoice"
+                                        >
+                                          {bill.invoice_number}
+                                        </a>
+                                      ) : (
+                                        <span className="font-mono">{bill.invoice_number}</span>
+                                      )}
+                                    </p>
+                                  )}
                                   {bill.approved_at && (
                                     <p
                                       className="mt-0.5 flex items-center gap-1 text-[10px] font-normal text-emerald-700"
