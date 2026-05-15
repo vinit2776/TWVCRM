@@ -30,7 +30,8 @@ export type WidgetId =
   | "source_roi"
   | "aggregator_performance"
   | "procurement_spend"
-  | "quota_overuse";
+  | "quota_overuse"
+  | "mtd_bookings";
 
 // ─── Widget metadata registry ──────────────────────────────────────────────
 
@@ -64,6 +65,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   aggregator_performance: { id: "aggregator_performance", title: "Aggregator Performance" },
   procurement_spend:      { id: "procurement_spend",      title: "Procurement Spend" },
   quota_overuse:          { id: "quota_overuse",          title: "Quota Overuse" },
+  mtd_bookings:           { id: "mtd_bookings",           title: "Bookings Value (MTD)" },
 };
 
 // ─── Role → widget order ───────────────────────────────────────────────────
@@ -76,6 +78,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "pending_actions",
     "live_enquiries",
     "kpi_stats",
+    "mtd_bookings",
     "revenue_pulse",
     "renewal_pipeline",
     "cash_aging",
@@ -96,6 +99,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "pending_actions",
     "live_enquiries",
     "kpi_stats",
+    "mtd_bookings",
     "schedule",
     "renewal_pipeline",
     "occupancy",
@@ -121,12 +125,14 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "live_enquiries",
     "schedule",
     "booking_summary",
+    "mtd_bookings",
     "kpi_stats",
     "followups",
   ],
 
   // Accounts: finance/accounts team
   accounts: [
+    "mtd_bookings",
     "cash_aging",
     "revenue_pulse",
     "renewal_pipeline",
@@ -146,6 +152,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   // Office Administrator
   office_admin: [
     "schedule",
+    "mtd_bookings",
     "procurement_spend",
     "sla_risk",
     "procurement_summary",

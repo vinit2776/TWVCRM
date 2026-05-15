@@ -29,6 +29,7 @@ import { SourceRoiWidget } from "@/components/dashboard/widgets/source-roi-widge
 import { AggregatorPerformanceWidget } from "@/components/dashboard/widgets/aggregator-performance-widget";
 import { ProcurementSpendWidget } from "@/components/dashboard/widgets/procurement-spend-widget";
 import { QuotaOveruseWidget } from "@/components/dashboard/widgets/quota-overuse-widget";
+import { MtdBookingsWidget } from "@/components/dashboard/widgets/mtd-bookings-widget";
 import { PendingActionsWidget } from "@/components/dashboard/widgets/pending-actions-widget";
 
 import Link from "next/link";
@@ -304,6 +305,8 @@ export default function DashboardPage() {
         return <ProcurementSpendWidget key="procurement_spend" locationFilter={locationFilter} />;
       case "quota_overuse":
         return <QuotaOveruseWidget key="quota_overuse" />;
+      case "mtd_bookings":
+        return <MtdBookingsWidget key="mtd_bookings" locationFilter={locationFilter} />;
       default:
         return null;
     }
