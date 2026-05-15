@@ -30,7 +30,7 @@ export async function GET(request: NextRequest) {
   const { data: techs, error: tErr } = await supabase
     .from("users")
     .select("id, full_name, role, is_active")
-    .in("role", ["it_technician", "it_manager"])
+    .in("role", ["it_technician", "it_manager", "it_team"])
     .eq("is_active", true);
   if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
 

@@ -50,9 +50,12 @@ export async function POST(
     added_by: dbUser!.id,
   }));
 
+  // ignoreDuplicates: true — if this collaborator was already added, treat it as
+  // a no-op rather than triggering ON CONFLICT DO UPDATE (which requires an UPDATE
+  // RLS policy and is semantically meaningless for a junction row anyway).
   const { data, error } = await supabase
     .from("facility_issue_collaborators")
-    .upsert(rows, { onConflict: "issue_id,user_id" })
+    .upsert(rows, { onConflict: "issue_id,user_id", ignoreDuplicates: true })
     .select("id, user_id, added_at, user:users!facility_issue_collaborators_user_id_fkey(id, full_name, email, role)");
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

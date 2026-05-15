@@ -15,7 +15,7 @@ export async function GET(_request: NextRequest) {
   const { data, error } = await supabase
     .from("users")
     .select("id, full_name, email, role")
-    .or(`role.in.(it_technician,it_manager,admin),email.in.(${IT_NOTIFY_EMAILS.join(",")})`)
+    .or(`role.in.(it_technician,it_manager,it_team,admin),email.in.(${IT_NOTIFY_EMAILS.join(",")})`)
     .eq("is_active", true)
     .order("full_name", { ascending: true });
 
