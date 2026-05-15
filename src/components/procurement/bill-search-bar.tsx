@@ -61,16 +61,20 @@ export function BillSearchBar({
   const [expanded, setExpanded] = useState(false);
   const fired = useRef(false);
 
-  // Debounce the search text for the always-on input
+  // Debounce the search text for the always-on input.
+  // 500ms gives comfortable buffer for moderate typists.
+  // Functional update compares against latest state at fire time so we don't
+  // need filters.q in the dep array (which caused unnecessary timer resets).
   const [qInput, setQInput] = useState(filters.q);
   useEffect(() => {
     const t = setTimeout(() => {
-      if (qInput !== filters.q) {
-        setFilters((prev) => ({ ...prev, q: qInput, page: "1" }));
-      }
-    }, 350);
+      setFilters((prev) => {
+        if (prev.q === qInput) return prev; // nothing changed — skip re-render
+        return { ...prev, q: qInput, page: "1" };
+      });
+    }, 500);
     return () => clearTimeout(t);
-  }, [qInput, filters.q]);
+  }, [qInput]);
 
   // Fire onChange whenever applied filters change (skip first render to avoid double-fetch)
   useEffect(() => {
@@ -94,6 +98,9 @@ export function BillSearchBar({
 
   const removeChip = useCallback((key: keyof BillFilters) => {
     const keys = CHIP_RESET_GROUPS[key] ?? [key];
+    // Keep qInput in sync when the search-text chip is dismissed so the
+    // debounce timer doesn't re-add it after the chip removal.
+    if (keys.includes("q")) setQInput("");
     setFilters((prev) => {
       const next = { ...prev };
       for (const k of keys) (next as Record<string, string>)[k] = "";
