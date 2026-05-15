@@ -778,7 +778,7 @@ export default function PayablesPage() {
                           </Badge>
                         </td>
                         <td className="px-4 py-3 text-right font-medium">
-                          {formatCurrency(effectiveTotal)}
+                          {formatCurrency(Number(bill.total_amount))}
                           {billGst > 0 && (
                             <div className="text-xs text-muted-foreground font-normal">
                               +GST {formatCurrency(billGst)}
