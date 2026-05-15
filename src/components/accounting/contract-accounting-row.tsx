@@ -10,6 +10,7 @@ import { AddContractFacilityDialog } from "./add-contract-facility-dialog";
 import { AddContractPaymentDialog } from "./add-contract-payment-dialog";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
+import { BillingLifecycleFlow, resolveBillingStage } from "@/components/billing/billing-lifecycle-flow";
 import { CONTRACT_PAYMENT_MODE_LABELS, CONTRACT_PAYMENT_STATUS_COLORS, CONTRACT_PAYMENT_STATUS_LABELS } from "@/lib/constants";
 import { toast } from "sonner";
 
@@ -368,7 +369,7 @@ export function ContractAccountingRow({
             )}
           </div>
 
-          {/* ── Unbilled Bookings (pending next statement) ── */}
+          {/* Unbilled Bookings (pending next statement) */}
           {hasUnbilledBookings && (
             <div>
               <div className="flex items-center gap-2 mb-2">
@@ -488,12 +489,12 @@ export function ContractAccountingRow({
             )}
           </div>
 
-          {/* ── Billing Statement ── */}
+          {/* Billing Statement */}
           <div>
             <h4 className="text-xs font-semibold text-muted-foreground uppercase mb-2">Billing Statement</h4>
             {statement ? (
               <div className="rounded-md border bg-background p-3 space-y-3">
-                {/* Statement identity + lifecycle badge */}
+                {/* Statement identity + compact lifecycle badge */}
                 <div className="flex items-start justify-between gap-3 flex-wrap">
                   <div>
                     <span className="font-medium text-sm">
@@ -514,6 +515,24 @@ export function ContractAccountingRow({
                     proforma_sent_at={statement.proforma_sent_at}
                   />
                 </div>
+
+                {/* Visual lifecycle flow stepper */}
+                {statement.status !== "voided" && (
+                  <div className="border rounded-md bg-muted/30 px-3 pt-2 pb-3">
+                    <p className="text-[10px] font-semibold text-muted-foreground uppercase tracking-wide mb-1">
+                      Billing Lifecycle
+                    </p>
+                    <BillingLifecycleFlow
+                      stage={resolveBillingStage({
+                        status: statement.status,
+                        paymentStatus: statement.payment_status,
+                        gstInvoiceNumber: statement.gst_invoice_number,
+                        accounted: statement.accounted,
+                        proformaSentAt: statement.proforma_sent_at,
+                      })}
+                    />
+                  </div>
+                )}
 
                 {/* Action buttons */}
                 <div className="flex flex-wrap gap-2">
