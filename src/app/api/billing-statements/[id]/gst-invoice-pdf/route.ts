@@ -1,12 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+
+export const maxDuration = 30;
 
 /**
  * GET /api/billing-statements/[id]/gst-invoice-pdf
  *
- * Returns a signed download URL for the GST invoice PDF stored on the billing statement.
- * Used by the GST Invoices tab when the invoice was generated via the billing statement flow
- * (as opposed to the older contract_payments upload flow).
+ * Streams the stored GST tax invoice PDF as a downloadable attachment.
+ * Uses the admin client to access the private storage bucket.
  */
 export async function GET(
   _request: NextRequest,
@@ -29,19 +30,26 @@ export async function GET(
     return NextResponse.json({ error: "No GST invoice PDF available for this statement" }, { status: 404 });
   }
 
-  const { data: signedUrl, error: signedError } = await supabase.storage
+  // Stream PDF bytes directly so the browser downloads a real PDF, not JSON
+  const adminSupabase = await createAdminClient();
+  const { data: fileBlob, error: downloadErr } = await adminSupabase.storage
     .from("crm-documents")
-    .createSignedUrl(statement.gst_invoice_path, 3600);
+    .download(statement.gst_invoice_path);
 
-  if (signedError || !signedUrl) {
-    return NextResponse.json({ error: "Failed to generate download URL" }, { status: 500 });
+  if (downloadErr || !fileBlob) {
+    return NextResponse.json({ error: "Failed to retrieve GST invoice PDF" }, { status: 500 });
   }
 
-  return NextResponse.json({
-    data: {
-      download_url: signedUrl.signedUrl,
-      invoice_number: statement.gst_invoice_number,
-      file_path: statement.gst_invoice_path,
+  const pdfBuffer = Buffer.from(await fileBlob.arrayBuffer());
+  const invoiceNum = (statement.gst_invoice_number as string | null) ?? id.slice(0, 8);
+  const filename = `GST-${invoiceNum.replace(/\//g, "-")}.pdf`;
+
+  return new NextResponse(pdfBuffer, {
+    status: 200,
+    headers: {
+      "Content-Type": "application/pdf",
+      "Content-Disposition": `attachment; filename="${filename}"`,
+      "Content-Length": String(pdfBuffer.length),
     },
   });
 }
