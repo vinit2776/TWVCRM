@@ -32,6 +32,7 @@ import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
 import { ContractQuotasSection } from "@/components/contracts/contract-quotas-section";
+import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
@@ -862,12 +863,28 @@ export default function ContractDetailPage({
             onDepartmentIdUpdate={fetchContract}
           />
 
-          {/* Service Quotas — printer (B&W / Colour) and any future quota services.
-              Available for any non-terminated contract; values flow into monthly
-              billing once usage reports (e.g. printer reports) are uploaded. */}
-          {contract.status !== "terminated" && contract.status !== "expired" && (
-            <ContractQuotasSection contractId={id} readOnly={contract.status === "rejected"} />
-          )}
+          {/* ── Quota sections ──────────────────────────────────────────────
+               Active contracts: only admin can edit. Draft/Sent: admin,
+               manager, accounts. Terminated/Expired: always read-only.
+               readOnly is true if:
+                 • contract is terminated/rejected/expired, OR
+                 • contract is active and user is not admin            */}
+          {contract.status !== "terminated" && contract.status !== "expired" && (() => {
+            const lockStatuses = ["active", "renewal_in_progress", "renewed", "completed"];
+            const isLocked = lockStatuses.includes(contract.status);
+            const canEdit = userRole === "admin" || (!isLocked && ["manager", "accounts"].includes(userRole || ""));
+            const readOnly = !canEdit || contract.status === "rejected";
+            return (
+              <>
+                <ContractQuotasSection contractId={id} readOnly={readOnly} />
+                <ContractFacilitiesSection
+                  contractId={id}
+                  locationId={contract.location_id ?? null}
+                  readOnly={readOnly}
+                />
+              </>
+            );
+          })()}
 
           {/* Billing Section */}
           {["active", "completed"].includes(contract.status) && (

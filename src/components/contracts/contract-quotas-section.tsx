@@ -144,7 +144,7 @@ export function ContractQuotasSection({ contractId, readOnly = false, onSave }: 
         <CardTitle className="text-base flex items-center justify-between">
           <span>Service Quotas</span>
           <span className="text-xs font-normal text-muted-foreground">
-            Free units per month + overage rate
+            Free units/month · resets 1st of each month
           </span>
         </CardTitle>
       </CardHeader>
