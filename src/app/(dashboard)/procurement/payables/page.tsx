@@ -1034,15 +1034,44 @@ export default function PayablesPage() {
 
               {/* Mini preview */}
               <div className="rounded-lg border divide-y text-sm">
-                {selectedBills.map((b) => (
-                  <div key={b.id} className="flex items-center justify-between px-3 py-2">
-                    <div className="min-w-0">
-                      <span className="font-mono text-xs font-medium text-primary">{b.bill_number}</span>
-                      <span className="text-muted-foreground ml-2 truncate">{b.procurement_vendors?.name}</span>
+                {selectedBills.map((b) => {
+                  const billGst = Number(b.gst_amount ?? 0);
+                  const billBase = Number(b.approved_amount ?? b.total_amount);
+                  const billTotal = Math.max(0, billBase + billGst - Number(b.amount_paid ?? 0));
+                  return (
+                    <div key={b.id} className="flex items-center justify-between px-3 py-2 gap-2">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span className="font-mono text-xs font-medium text-primary">{b.bill_number}</span>
+                          <span className="text-muted-foreground text-xs truncate">{b.procurement_vendors?.name}</span>
+                        </div>
+                        {b.invoice_number && (
+                          <div className="flex items-center gap-1 mt-0.5">
+                            <span className="text-[10px] text-muted-foreground">Inv #</span>
+                            {b.invoice_file_url ? (
+                              <a
+                                href={b.invoice_file_url}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[10px] font-mono text-blue-600 hover:text-blue-800 hover:underline"
+                              >
+                                {b.invoice_number}
+                              </a>
+                            ) : (
+                              <span className="text-[10px] font-mono text-muted-foreground">{b.invoice_number}</span>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <span className="font-medium text-xs">{formatCurrency(billTotal)}</span>
+                        {billGst > 0 && (
+                          <div className="text-[10px] text-muted-foreground">incl. GST {formatCurrency(billGst)}</div>
+                        )}
+                      </div>
                     </div>
-                    <span className="font-medium text-xs shrink-0 ml-2">{formatCurrency(b.total_amount)}</span>
-                  </div>
-                ))}
+                  );
+                })}
                 <div className="flex items-center justify-between px-3 py-2 bg-muted/40 font-semibold">
                   <span>Total to pay</span>
                   <span className="text-emerald-700">{formatCurrency(selectedTotal)}</span>
@@ -1080,7 +1109,19 @@ export default function PayablesPage() {
                   {bill.invoice_number && (
                     <div className="flex items-center justify-between text-muted-foreground">
                       <span>Invoice #</span>
-                      <span className="font-mono text-xs">{bill.invoice_number}</span>
+                      {bill.invoice_file_url ? (
+                        <a
+                          href={bill.invoice_file_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="font-mono text-xs text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1"
+                        >
+                          {bill.invoice_number}
+                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
+                        </a>
+                      ) : (
+                        <span className="font-mono text-xs">{bill.invoice_number}</span>
+                      )}
                     </div>
                   )}
                 </div>
@@ -1106,6 +1147,68 @@ export default function PayablesPage() {
                 <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2.5 flex items-center justify-between">
                   <span className="text-sm text-emerald-800">Amount to pay</span>
                   <span className="text-lg font-bold text-emerald-700">{formatCurrency(outstanding)}</span>
+                </div>
+
+                {/* ── Running total strip ──────────────────────────────── */}
+                <div className="rounded-lg border bg-muted/20 divide-y text-xs overflow-hidden">
+                  <div className="px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/40">
+                    Running Total — all {selectedBills.length} bills
+                  </div>
+                  {selectedBills.map((b, i) => {
+                    const stepIndex = i + 1;
+                    const isConfirmed = stepIndex < batchStep;
+                    const isCurrent = stepIndex === batchStep;
+                    const bGst = parseFloat(batchGst[b.id] || "0") || 0;
+                    const bBase = Number(b.approved_amount ?? b.total_amount);
+                    const bTotal = Math.max(0, bBase + bGst - Number(b.amount_paid ?? 0));
+                    return (
+                      <div
+                        key={b.id}
+                        className={cn(
+                          "flex items-center justify-between px-3 py-1.5 gap-2",
+                          isCurrent && "bg-emerald-50/80",
+                        )}
+                      >
+                        <div className="flex items-center gap-1.5 min-w-0">
+                          {isConfirmed ? (
+                            <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" />
+                          ) : isCurrent ? (
+                            <ArrowRight className="h-3 w-3 text-emerald-600 shrink-0" />
+                          ) : (
+                            <span className="h-3 w-3 rounded-full border border-muted-foreground/30 shrink-0 inline-block" />
+                          )}
+                          <span className={cn(
+                            "font-mono truncate",
+                            isCurrent ? "text-emerald-700 font-semibold" : isConfirmed ? "text-foreground" : "text-muted-foreground/70",
+                          )}>
+                            {b.bill_number}
+                          </span>
+                          {!isConfirmed && !isCurrent && (
+                            <span className="text-[10px] text-muted-foreground/50 shrink-0">est.</span>
+                          )}
+                        </div>
+                        <span className={cn(
+                          "font-semibold shrink-0",
+                          isCurrent ? "text-emerald-700" : isConfirmed ? "text-foreground" : "text-muted-foreground/60",
+                        )}>
+                          {formatCurrency(bTotal)}
+                        </span>
+                      </div>
+                    );
+                  })}
+                  {/* Grand total */}
+                  <div className="flex items-center justify-between px-3 py-2 bg-emerald-50 font-bold">
+                    <span className="text-emerald-800 text-xs">Grand Total</span>
+                    <span className="text-emerald-700 text-sm">
+                      {formatCurrency(
+                        selectedBills.reduce((s, b) => {
+                          const bGst = parseFloat(batchGst[b.id] || "0") || 0;
+                          const bBase = Number(b.approved_amount ?? b.total_amount);
+                          return s + Math.max(0, bBase + bGst - Number(b.amount_paid ?? 0));
+                        }, 0)
+                      )}
+                    </span>
+                  </div>
                 </div>
               </div>
             );
