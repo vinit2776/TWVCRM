@@ -424,23 +424,23 @@ interface AgingBucket {
 }
 
 interface ReceivablesAging {
-  total: number;          // total outstanding across all statements
-  count: number;          // number of unpaid statements
+  // Finalized statements only — these are actual receivables sent (or to be sent) to clients
+  total: number;          // total outstanding (finalized only)
+  count: number;          // number of unpaid finalized statements
   current: AgingBucket;  // 0-30 days since period_end
   d31_60: AgingBucket;   // 31-60 days
   d61_90: AgingBucket;   // 61-90 days
   d90plus: AgingBucket;  // 90+ days
-  finalizedCount: number;  // statements formally invoiced to customer
-  draftCount: number;      // auto-generated, not yet sent to customer
+  // Draft statements — generated but not yet sent to client; shown separately, not as overdue
+  pendingFinalization: AgingBucket;
 }
 
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function fetchReceivablesAging(supabase: any, date: string): Promise<ReceivablesAging> {
-  // Outstanding receivables = any billing statement that hasn't been fully paid.
-  // This includes:
-  //   "draft"     — auto-generated monthly statements awaiting review/collection
-  //   "finalized" — invoiced to customer, payment pending
-  // "exported" statements are excluded because GST generation requires payment_status="paid",
+  // Aging buckets contain ONLY finalized statements — those are actual invoices communicated
+  // to the client. Draft statements are internal working documents (not yet sent to client)
+  // and must not appear as overdue; they are tracked separately as "pending finalization".
+  // "exported" statements are excluded: GST generation requires payment_status="paid",
   // so exported always means fully settled.
   const { data: rows } = await supabase
     .from("billing_statements")
@@ -456,24 +456,26 @@ async function fetchReceivablesAging(supabase: any, date: string): Promise<Recei
     d31_60: { count: 0, amount: 0 },
     d61_90: { count: 0, amount: 0 },
     d90plus: { count: 0, amount: 0 },
-    finalizedCount: 0,
-    draftCount: 0,
+    pendingFinalization: { count: 0, amount: 0 },
   };
 
   for (const row of (rows || []) as { total_amount: number; period_end: string; status: string; payment_status: string }[]) {
     const amount = Number(row.total_amount || 0);
-    // Aging is measured from period_end — when the billing cycle closed and money became due
+
+    if (row.status === "draft") {
+      // Draft statements haven't been sent to the client yet — not overdue, just pending work.
+      // Track them separately so the aging buckets only reflect real receivables.
+      aging.pendingFinalization.count += 1;
+      aging.pendingFinalization.amount += amount;
+      continue;
+    }
+
+    // Finalized statement — aging measured from period_end (when billing cycle closed)
     const anchor = new Date(row.period_end + "T00:00:00Z").getTime();
     const days = Math.floor((now - anchor) / 86400000);
 
     aging.total += amount;
     aging.count += 1;
-
-    if (row.status === "finalized") {
-      aging.finalizedCount += 1;
-    } else {
-      aging.draftCount += 1;
-    }
 
     if (days <= 30) {
       aging.current.count += 1; aging.current.amount += amount;
@@ -809,17 +811,35 @@ function agingCell(
 }
 
 function buildReceivablesAgingHtml(aging: ReceivablesAging): string {
-  if (aging.count === 0) return "";
+  // Nothing to show if no finalized statements and no pending drafts
+  if (aging.count === 0 && aging.pendingFinalization.count === 0) return "";
 
   const hasOverdue = aging.d61_90.count > 0 || aging.d90plus.count > 0;
   const headerBg = hasOverdue ? "#fff5f5" : "#f0fdf4";
   const headerBorder = hasOverdue ? "#feb2b2" : "#bbf7d0";
   const headerAccent = hasOverdue ? "#c53030" : "#065f46";
 
-  // Draft vs finalized status note
-  const statusNote = aging.draftCount > 0
-    ? `<span style="background:#fef3c7;border:1px solid #fcd34d;border-radius:4px;padding:2px 7px;font-size:10px;color:#92400e;font-weight:600;margin-left:10px;">⚠ ${aging.draftCount} pending finalization</span>`
-    : `<span style="background:#ecfdf5;border:1px solid #6ee7b7;border-radius:4px;padding:2px 7px;font-size:10px;color:#065f46;font-weight:600;margin-left:10px;">✓ ${aging.finalizedCount} finalized, awaiting payment</span>`;
+  // Pending finalization banner — shown above aging when there are drafts awaiting action
+  const pendingHtml = aging.pendingFinalization.count > 0
+    ? `<div style="background:#fefce8;border-bottom:1px solid #fef08a;padding:8px 16px;display:flex;justify-content:space-between;align-items:center;">
+        <span style="font-size:12px;color:#713f12;">
+          📋 <strong>${aging.pendingFinalization.count} statement${aging.pendingFinalization.count === 1 ? "" : "s"} pending finalization</strong>
+          — not yet sent to clients, will be due at month-end
+        </span>
+        <span style="font-size:13px;font-weight:700;color:#713f12;">${rupees(aging.pendingFinalization.amount)}</span>
+      </div>`
+    : "";
+
+  // If no finalized statements at all, just show the pending banner with no aging table
+  if (aging.count === 0) {
+    return `
+      <div style="border:1px solid #fef08a;border-radius:8px;overflow:hidden;margin-bottom:24px;">
+        <div style="background:#fefce8;padding:12px 16px;border-bottom:1px solid #fef08a;">
+          <span style="font-size:12px;font-weight:700;color:#713f12;text-transform:uppercase;letter-spacing:0.5px;">Receivables</span>
+        </div>
+        ${pendingHtml}
+      </div>`;
+  }
 
   return `
     <div style="border:1px solid ${headerBorder};border-radius:8px;overflow:hidden;margin-bottom:24px;">
@@ -827,13 +847,15 @@ function buildReceivablesAgingHtml(aging: ReceivablesAging): string {
       <div style="background:${headerBg};padding:12px 16px;border-bottom:1px solid ${headerBorder};display:flex;justify-content:space-between;align-items:center;">
         <div>
           <span style="font-size:12px;font-weight:700;color:${headerAccent};text-transform:uppercase;letter-spacing:0.5px;">Receivables Aging</span>
-          ${statusNote}
+          <span style="font-size:11px;color:#888;margin-left:8px;">(finalized invoices only)</span>
         </div>
         <div style="text-align:right;">
           <span style="font-size:22px;font-weight:700;color:${hasOverdue ? "#c53030" : "#015E65"};">${rupees(aging.total)}</span>
           <span style="font-size:11px;color:#888;margin-left:6px;">${aging.count} outstanding</span>
         </div>
       </div>
+      <!-- Pending finalization callout (if any) -->
+      ${pendingHtml}
       <!-- Aging buckets -->
       <table style="width:100%;border-collapse:collapse;">
         <tr>
