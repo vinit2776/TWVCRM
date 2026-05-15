@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { IndianRupee, ChevronLeft, ChevronRight, Loader2, CalendarClock, AlertTriangle, CheckCircle2, ClockAlert, ChevronDown, ChevronUp, X, Layers, ArrowRight, ArrowLeft } from "lucide-react";
+import { IndianRupee, ChevronLeft, ChevronRight, Loader2, CalendarClock, AlertTriangle, CheckCircle2, ClockAlert, ChevronDown, ChevronUp, X, Layers, ArrowRight, ArrowLeft, FileText, Banknote, ClipboardCheck, ShoppingCart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -709,6 +709,25 @@ export default function PayablesPage() {
                           {isOverdue(bill) && (
                             <span className="ml-1.5 text-xs text-amber-700 font-normal">Overdue</span>
                           )}
+                          {bill.invoice_number && (
+                            <p className="mt-0.5 flex items-center gap-1 text-[10px] font-normal text-muted-foreground"
+                               onClick={(e) => e.stopPropagation()}>
+                              <FileText className="h-2.5 w-2.5 shrink-0" />
+                              {bill.invoice_file_url ? (
+                                <a
+                                  href={bill.invoice_file_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="font-mono text-blue-600 hover:text-blue-800 hover:underline"
+                                  title="View vendor invoice"
+                                >
+                                  {bill.invoice_number}
+                                </a>
+                              ) : (
+                                <span className="font-mono">{bill.invoice_number}</span>
+                              )}
+                            </p>
+                          )}
                           {bill.approved_at && (
                             <p
                               className="mt-0.5 flex items-center gap-1 text-[10px] font-normal text-emerald-700"
@@ -971,12 +990,44 @@ export default function PayablesPage() {
           if (!batchSubmitting) setBatchWizardOpen(open);
         }}
       >
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-xl">
           <DialogHeader>
             <DialogTitle className="flex items-center gap-2">
               <Layers className="h-5 w-5 text-emerald-600" />
               Batch Payment — {selectedBills.length} bills
             </DialogTitle>
+            {/* ── Procurement lifecycle indicator ───────────────────────── */}
+            <div className="flex items-center gap-0.5 pt-2 pb-0.5 overflow-x-auto">
+              {([
+                { label: "Invoice", icon: FileText },
+                { label: "Bill Created", icon: ClipboardCheck },
+                { label: "Approved", icon: CheckCircle2 },
+                { label: "PO / Delivery", icon: ShoppingCart, optional: true },
+                { label: "Record Payment", icon: Banknote, active: true },
+              ] as { label: string; icon: React.ElementType; active?: boolean; optional?: boolean }[]).map((step, i, arr) => (
+                <div key={step.label} className="flex items-center gap-0.5 shrink-0">
+                  <div className={cn(
+                    "flex items-center gap-1 rounded px-1.5 py-0.5",
+                    step.active
+                      ? "bg-emerald-100 text-emerald-800"
+                      : step.optional
+                        ? "text-muted-foreground/40"
+                        : "text-muted-foreground/70"
+                  )}>
+                    <step.icon className={cn("h-2.5 w-2.5 shrink-0", step.active && "text-emerald-600")} />
+                    <span className={cn("text-[10px] whitespace-nowrap", step.active && "font-semibold")}>
+                      {step.label}
+                    </span>
+                    {!step.active && !step.optional && (
+                      <CheckCircle2 className="h-2.5 w-2.5 text-emerald-500 shrink-0" />
+                    )}
+                  </div>
+                  {i < arr.length - 1 && (
+                    <ChevronRight className="h-3 w-3 text-muted-foreground/30 shrink-0" />
+                  )}
+                </div>
+              ))}
+            </div>
           </DialogHeader>
 
           {/* ── Step 0: Payment instrument ─────────────────────────────── */}
