@@ -306,6 +306,11 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   }, [fetchChain]);
 
   async function openPaymentDialog() {
+    // Block if the user has typed a GST value but not clicked Apply
+    if (hasUnappliedGst) {
+      toast.error("GST amount entered but not applied — click \"Apply\" to save it before recording payment");
+      return;
+    }
     setPaymentDialog(true);
     // Fetch TDS suggestion based on vendor + PO type
     if (chain?.vendor?.id) {
@@ -335,6 +340,8 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const vendor = chain?.vendor;
   const outstanding = bill ? Math.max(0, Number(bill.total_amount) - Number(bill.amount_paid ?? 0)) : 0;
   const billGstAmount = bill ? Number(bill.gst_amount ?? 0) : 0;
+  // True when a GST value is typed in the input but Apply has not been clicked yet
+  const hasUnappliedGst = parseFloat(inlineGstAmount) > 0 && billGstAmount === 0;
   // total_amount IS the base (pre-GST). gst_amount is additive on top.
   const billBaseAmount = bill ? Number(bill.total_amount ?? 0) : 0;
   const approvedCeiling = bill
@@ -1202,9 +1209,14 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                     placeholder="0.00"
                     value={inlineGstAmount}
                     onChange={(e) => setInlineGstAmount(e.target.value)}
-                    className="h-8 text-xs flex-1"
+                    className={`h-8 text-xs flex-1 ${hasUnappliedGst ? "border-amber-500 ring-1 ring-amber-400" : ""}`}
                   />
-                  <Button size="sm" className="h-8 text-xs shrink-0" onClick={handleSaveInlineGst} disabled={savingGst}>
+                  <Button
+                    size="sm"
+                    className={`h-8 text-xs shrink-0 ${hasUnappliedGst ? "bg-amber-600 hover:bg-amber-700 animate-pulse" : ""}`}
+                    onClick={handleSaveInlineGst}
+                    disabled={savingGst}
+                  >
                     {savingGst && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
                     Apply
                   </Button>
@@ -1213,9 +1225,14 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                   const gstAmt = parseFloat(inlineGstAmount);
                   const base = Number(bill.total_amount);
                   return (
-                    <p className="text-xs text-amber-700">
-                      Base {formatCurrency(base)} + GST {formatCurrency(gstAmt)} = Max payable {formatCurrency(base + gstAmt)}
-                    </p>
+                    <div className="space-y-1">
+                      <p className="text-xs text-amber-700">
+                        Base {formatCurrency(base)} + GST {formatCurrency(gstAmt)} = Max payable {formatCurrency(base + gstAmt)}
+                      </p>
+                      <p className="text-xs font-semibold text-amber-800 flex items-center gap-1">
+                        ⚠ Not saved yet — click <strong>Apply</strong> to confirm before recording payment
+                      </p>
+                    </div>
                   );
                 })()}
               </div>
