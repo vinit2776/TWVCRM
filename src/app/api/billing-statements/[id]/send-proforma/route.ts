@@ -343,6 +343,7 @@ export async function POST(
     is_interstate: isInterstate,
     buyer_gstin: lead?.gst_number || null,
   };
+  if (dbUserId) updatePayload.proforma_sent_by = dbUserId;
   if (razorpayLinkId) updatePayload.razorpay_payment_link_id = razorpayLinkId;
   if (razorpayLinkUrl) updatePayload.razorpay_payment_link_url = razorpayLinkUrl;
 
