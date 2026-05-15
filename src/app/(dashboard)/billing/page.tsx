@@ -692,6 +692,24 @@ export default function BillingPage() {
     } catch { toast.dismiss(tid); toast.error("Failed to generate GST invoice"); }
   };
 
+  const handleMarkAccounted = async (id: string) => {
+    try {
+      const res = await fetch(`/api/billing-statements/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ accounted: true }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success("Statement marked as accounted");
+        fetchStatements();
+        fetchData();
+      } else {
+        toast.error(json.error || "Failed to mark as accounted");
+      }
+    } catch { toast.error("Failed to mark as accounted"); }
+  };
+
   const clearChargesFilters = () => {
     setChargesContractFilter(""); setChargesStatusFilter("");
     setChargesDateFrom(""); setChargesDateTo(""); setChargesPage(1);
@@ -878,6 +896,8 @@ export default function BillingPage() {
                   periodStart={summary.period_start}
                   onRefresh={fetchData}
                   onFinalize={handleFinalizeStatement}
+                  onMarkAccounted={handleMarkAccounted}
+                  userRole={userRole}
                 />
               );
             })
@@ -1164,6 +1184,7 @@ export default function BillingPage() {
                     onFinalize={handleFinalizeStatement}
                     onSendProforma={handleSendProforma}
                     onGenerateGst={handleGenerateGstInvoice}
+                    onMarkAccounted={handleMarkAccounted}
                     onRecordStatementPayment={(id) => { setRecordPaymentStatementId(id); setRecordPaymentDialogOpen(true); }}
                     onViewStatement={(id) => setViewStatementId(id)}
                     onVoidStatement={(id) => { setVoidStatementId(id); setVoidReason(""); setVoidDialogOpen(true); }}
