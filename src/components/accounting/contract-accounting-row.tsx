@@ -1,12 +1,11 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, Plus, IndianRupee, Send, Receipt, CheckCircle, Clock, Calendar, Eye, FileCheck, X } from "lucide-react";
+import { ChevronDown, ChevronRight, IndianRupee, Send, Receipt, CheckCircle, Clock, Calendar, Eye, FileCheck, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { FacilityUsageForm } from "./facility-usage-form";
-import { AddContractFacilityDialog } from "./add-contract-facility-dialog";
 import { AddContractPaymentDialog } from "./add-contract-payment-dialog";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
@@ -151,7 +150,6 @@ export function ContractAccountingRow({
   userRole,
 }: ContractAccountingRowProps) {
   const [expanded, setExpanded] = useState(false);
-  const [showAddFacility, setShowAddFacility] = useState(false);
   const [showAddPayment, setShowAddPayment] = useState(false);
   const [showAddCharge, setShowAddCharge] = useState(false);
   const [sendingReminder, setSendingReminder] = useState<string | null>(null);
@@ -320,16 +318,15 @@ export function ContractAccountingRow({
             </p>
           </div>
 
-          {/* Facility Usage */}
+          {/* Facility Usage — read-only facility list, accounts enters quantity used */}
           <div>
             <div className="flex items-center justify-between mb-2">
-              <h4 className="text-xs font-semibold text-muted-foreground uppercase">Facility Usage</h4>
-              {!isLocked && (
-                <Button variant="outline" size="sm" onClick={() => setShowAddFacility(true)}>
-                  <Plus className="h-3 w-3 mr-1" />
-                  Add Facility
-                </Button>
-              )}
+              <div>
+                <h4 className="text-xs font-semibold text-muted-foreground uppercase">Facility Usage</h4>
+                <p className="text-[10px] text-muted-foreground mt-0.5">
+                  Rate cards &amp; free quotas are set on the contract. Enter units used this month.
+                </p>
+              </div>
             </div>
             <FacilityUsageForm
               usages={summary.facility_usages}
@@ -369,7 +366,7 @@ export function ContractAccountingRow({
             )}
           </div>
 
-          {/* Unbilled Bookings (pending next statement) */}
+          {/* Unbilled Bookings */}
           {hasUnbilledBookings && (
             <div>
               <div className="flex items-center gap-2 mb-2">
@@ -669,13 +666,6 @@ export function ContractAccountingRow({
       )}
 
       {/* Dialogs */}
-      <AddContractFacilityDialog
-        open={showAddFacility}
-        onOpenChange={setShowAddFacility}
-        onSuccess={onRefresh}
-        contractId={contract.id}
-      />
-
       <AddContractPaymentDialog
         open={showAddPayment}
         onOpenChange={setShowAddPayment}
