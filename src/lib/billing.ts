@@ -123,7 +123,7 @@ export async function generateMonthlyStatements(
       location_id, lead_id,
       lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number)
     `)
-    .eq("status", "active")
+    .in("status", ["active", "renewal_in_progress"])
     .lte("start_date", lastOfMonth)
     .gte("end_date", firstOfMonth);
 
