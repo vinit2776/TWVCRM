@@ -345,8 +345,9 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
 
   const bill = chain?.bill;
   const vendor = chain?.vendor;
-  const outstanding = bill ? Math.max(0, Number(bill.total_amount) - Number(bill.amount_paid ?? 0)) : 0;
   const billGstAmount = bill ? Number(bill.gst_amount ?? 0) : 0;
+  // Effective total = pre-GST base + GST (additive). This is what was actually due.
+  const outstanding = bill ? Math.max(0, Number(bill.total_amount) + billGstAmount - Number(bill.amount_paid ?? 0)) : 0;
   // True when a GST value is typed in the input but Apply has not been clicked yet
   const hasUnappliedGst = parseFloat(inlineGstAmount) > 0 && billGstAmount === 0;
   // total_amount IS the base (pre-GST). gst_amount is additive on top.
@@ -644,7 +645,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           </p>
         </div>
         <div className="text-right shrink-0 space-y-1">
-          <p className="text-2xl font-bold">{formatCurrency(Number(bill.total_amount))}</p>
+          <p className="text-2xl font-bold">{formatCurrency(billBaseAmount + billGstAmount)}</p>
           {!isFullyPaid && (
             <p className="text-sm text-amber-700 font-medium">₹{outstanding.toLocaleString("en-IN")} outstanding</p>
           )}
