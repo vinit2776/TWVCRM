@@ -257,6 +257,7 @@ export async function POST(
       igst_amount: igst,
       is_interstate: isInterstate,
       buyer_gstin: lead?.gst_number || null,
+      ...(dbUserId ? { gst_generated_by: dbUserId } : {}),
     })
     .eq("id", id);
 
