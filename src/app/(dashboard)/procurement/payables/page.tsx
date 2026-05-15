@@ -199,7 +199,7 @@ export default function PayablesPage() {
         label: "All",
         date: null,
         count: grouped["all"].bills.length,
-        total: grouped["all"].bills.reduce((s, b) => s + Number(b.total_amount) - Number(b.amount_paid), 0),
+        total: grouped["all"].bills.reduce((s, b) => s + Number(b.total_amount) + Number(b.gst_amount ?? 0) - Number(b.amount_paid ?? 0), 0),
       },
     ];
 
@@ -215,7 +215,7 @@ export default function PayablesPage() {
         label: batchDateLabel(k),
         date: k,
         count: group.bills.length,
-        total: group.bills.reduce((s, b) => s + Number(b.total_amount) - Number(b.amount_paid), 0),
+        total: group.bills.reduce((s, b) => s + Number(b.total_amount) + Number(b.gst_amount ?? 0) - Number(b.amount_paid ?? 0), 0),
       });
     }
 
@@ -225,7 +225,7 @@ export default function PayablesPage() {
         label: "Unscheduled",
         date: null,
         count: grouped["unscheduled"].bills.length,
-        total: grouped["unscheduled"].bills.reduce((s, b) => s + Number(b.total_amount) - Number(b.amount_paid), 0),
+        total: grouped["unscheduled"].bills.reduce((s, b) => s + Number(b.total_amount) + Number(b.gst_amount ?? 0) - Number(b.amount_paid ?? 0), 0),
       });
     }
 
@@ -327,8 +327,8 @@ export default function PayablesPage() {
     }
   }
 
-  const totalPayable = bills.reduce((s, b) => s + Number(b.total_amount), 0);
-  const totalDue = bills.reduce((s, b) => s + (Number(b.total_amount) - Number(b.amount_paid)), 0);
+  const totalPayable = bills.reduce((s, b) => s + Number(b.total_amount) + Number(b.gst_amount ?? 0), 0);
+  const totalDue = bills.reduce((s, b) => s + Math.max(0, Number(b.total_amount) + Number(b.gst_amount ?? 0) - Number(b.amount_paid ?? 0)), 0);
   const overdueCount = bills.filter(isOverdue).length;
   const pendingAdvanceSum = pendingAdvances.reduce((s, po) => s + Number(po.advance_amount ?? 0), 0);
 
@@ -667,7 +667,9 @@ export default function PayablesPage() {
                 </thead>
                 <tbody>
                   {visibleBills.map((bill) => {
-                    const balance = Number(bill.total_amount) - Number(bill.amount_paid);
+                    const billGst = Number(bill.gst_amount ?? 0);
+                    const effectiveTotal = Number(bill.total_amount) + billGst;
+                    const balance = Math.max(0, effectiveTotal - Number(bill.amount_paid ?? 0));
                     const isSelected = selectedBillIds.has(bill.id);
                     return (
                       <tr
@@ -776,7 +778,12 @@ export default function PayablesPage() {
                           </Badge>
                         </td>
                         <td className="px-4 py-3 text-right font-medium">
-                          {formatCurrency(bill.total_amount)}
+                          {formatCurrency(effectiveTotal)}
+                          {billGst > 0 && (
+                            <div className="text-xs text-muted-foreground font-normal">
+                              +GST {formatCurrency(billGst)}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3 text-right font-bold text-red-600">
                           {formatCurrency(balance > 0 ? balance : 0)}
