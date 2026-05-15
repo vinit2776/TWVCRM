@@ -93,6 +93,12 @@ type ChainData = {
   po: {
     id: string; po_number: string; status: string; po_type: string;
     created_at: string; total_ordered_amount: number | null;
+    expected_delivery_date: string | null;
+    actual_delivery_date: string | null;
+    notes: string | null;
+    payment_terms: string | null;
+    terms_and_conditions: string | null;
+    location: { id: string; name: string } | null;
     orderer: { id: string; full_name: string } | null;
     purchase_request_items?: unknown;
     purchase_order_items?: Array<{ id: string; item_name: string; quantity_ordered: number; unit_price: number | null; unit: string }>;
@@ -270,6 +276,8 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const [tdsPanAvailable, setTdsPanAvailable] = useState(true);
   const [resendDialog, setResendDialog] = useState(false);
   const [resendCc, setResendCc] = useState("");
+  const [auditExpanded, setAuditExpanded] = useState(false);
+  const AUDIT_PREVIEW_COUNT = 5;
   const [resendLoading, setResendLoading] = useState(false);
 
   // Payment confirmation dialog (shown after validation, before submitting)
@@ -1028,11 +1036,21 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
 
       {/* Audit Trail */}
       <Card>
-        <CardHeader className="pb-2">
-          <CardTitle className="text-base flex items-center gap-2">
-            <Clock className="h-4 w-4 text-muted-foreground" />
-            Transaction Audit Trail
-          </CardTitle>
+        <CardHeader className="pb-2 cursor-pointer select-none" onClick={() => chain.auditTrail.length > 0 && setAuditExpanded((v) => !v)}>
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Clock className="h-4 w-4 text-muted-foreground" />
+              Transaction Audit Trail
+              {chain.auditTrail.length > 0 && (
+                <span className="text-xs font-normal text-muted-foreground">({chain.auditTrail.length} events)</span>
+              )}
+            </CardTitle>
+            {chain.auditTrail.length > AUDIT_PREVIEW_COUNT && (
+              <Button variant="ghost" size="sm" className="h-7 px-2 text-xs gap-1 text-muted-foreground" onClick={(e) => { e.stopPropagation(); setAuditExpanded((v) => !v); }}>
+                {auditExpanded ? <><ChevronUp className="h-3 w-3" /> Show less</> : <><ChevronDown className="h-3 w-3" /> Show all {chain.auditTrail.length}</>}
+              </Button>
+            )}
+          </div>
           <p className="text-xs text-muted-foreground mt-1 flex flex-wrap items-center gap-3">
             <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-orange-400" />Material Request</span>
             <span className="flex items-center gap-1"><span className="inline-block w-2 h-2 rounded-full bg-purple-400" />Purchase Order</span>
@@ -1045,9 +1063,27 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
             <p className="text-sm text-muted-foreground text-center py-4">No audit events recorded</p>
           ) : (
             <div>
-              {chain.auditTrail.map((row) => (
+              {(auditExpanded ? chain.auditTrail : chain.auditTrail.slice(-AUDIT_PREVIEW_COUNT)).map((row) => (
                 <AuditEntry key={row.id} row={row} billId={bill.id} poId={poId} mrId={mrId} />
               ))}
+              {!auditExpanded && chain.auditTrail.length > AUDIT_PREVIEW_COUNT && (
+                <button
+                  onClick={() => setAuditExpanded(true)}
+                  className="w-full mt-2 py-2 text-xs text-muted-foreground hover:text-foreground flex items-center justify-center gap-1 border border-dashed rounded-md hover:border-border transition-colors"
+                >
+                  <ChevronDown className="h-3 w-3" />
+                  {chain.auditTrail.length - AUDIT_PREVIEW_COUNT} earlier events hidden — click to expand
+                </button>
+              )}
+              {auditExpanded && chain.auditTrail.length > AUDIT_PREVIEW_COUNT && (
+                <button
+                  onClick={() => setAuditExpanded(false)}
+                  className="w-full mt-2 py-2 text-xs text-muted-foreground hover:text-foreground flex items-center justify-center gap-1 border border-dashed rounded-md hover:border-border transition-colors"
+                >
+                  <ChevronUp className="h-3 w-3" />
+                  Show less
+                </button>
+              )}
             </div>
           )}
         </CardContent>
@@ -1920,31 +1956,105 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           </SheetHeader>
           {chain.po && (
             <div className="space-y-4 text-sm">
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <p className="text-xs text-muted-foreground mb-0.5">Type</p>
-                  <p className="font-medium capitalize">{chain.po.po_type === "service" ? "Service PO" : "Goods PO"}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground mb-0.5">Status</p>
-                  <Badge className="capitalize">{chain.po.status.replace(/_/g, " ")}</Badge>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground mb-0.5">Raised On</p>
-                  <p className="font-medium">{formatDate(chain.po.created_at)}</p>
-                </div>
-                <div>
-                  <p className="text-xs text-muted-foreground mb-0.5">Raised By</p>
-                  <p className="font-medium">{chain.po.orderer?.full_name ?? "—"}</p>
-                </div>
-                {chain.po.total_ordered_amount != null && (
-                  <div>
-                    <p className="text-xs text-muted-foreground mb-0.5">Total Order Value</p>
-                    <p className="font-semibold text-base">{formatCurrency(chain.po.total_ordered_amount)}</p>
+
+              {/* ── Order Info ─────────────────────────────────── */}
+              <div>
+                <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Order Info</p>
+                <div className="rounded-lg border divide-y text-sm">
+                  {/* Vendor */}
+                  {vendor && (
+                    <div className="px-3 py-2 flex justify-between gap-2">
+                      <span className="text-muted-foreground shrink-0">Vendor</span>
+                      <span className="font-medium text-right">
+                        {vendor.name}
+                        {(vendor.contact_name || vendor.contact_phone) && (
+                          <span className="block text-xs text-muted-foreground font-normal">
+                            {[vendor.contact_name, vendor.contact_phone ? `+91 ${vendor.contact_phone.replace(/^\+91/, "").trim()}` : null].filter(Boolean).join(" · ")}
+                          </span>
+                        )}
+                      </span>
+                    </div>
+                  )}
+                  {/* Location */}
+                  {chain.po.location?.name && (
+                    <div className="px-3 py-2 flex justify-between gap-2">
+                      <span className="text-muted-foreground shrink-0">Location</span>
+                      <span className="font-medium text-right">{chain.po.location.name}</span>
+                    </div>
+                  )}
+                  {/* Ordered by */}
+                  {chain.po.orderer?.full_name && (
+                    <div className="px-3 py-2 flex justify-between gap-2">
+                      <span className="text-muted-foreground shrink-0">Ordered by</span>
+                      <span className="font-medium text-right">{chain.po.orderer.full_name}</span>
+                    </div>
+                  )}
+                  {/* PO type + status */}
+                  <div className="px-3 py-2 flex justify-between gap-2">
+                    <span className="text-muted-foreground shrink-0">Type</span>
+                    <span className="font-medium text-right">{chain.po.po_type === "service" ? "Service PO" : "Goods PO"}</span>
                   </div>
-                )}
+                  <div className="px-3 py-2 flex justify-between gap-2">
+                    <span className="text-muted-foreground shrink-0">Status</span>
+                    <Badge className="capitalize">{chain.po.status.replace(/_/g, " ")}</Badge>
+                  </div>
+                  {/* Expected delivery */}
+                  {chain.po.expected_delivery_date && (
+                    <div className="px-3 py-2 flex justify-between gap-2">
+                      <span className="text-muted-foreground shrink-0">Expected delivery</span>
+                      <span className="font-medium text-right">{formatDate(chain.po.expected_delivery_date)}</span>
+                    </div>
+                  )}
+                  {/* Actual delivery */}
+                  {chain.po.actual_delivery_date && (
+                    <div className="px-3 py-2 flex justify-between gap-2">
+                      <span className="text-muted-foreground shrink-0">Actual delivery</span>
+                      <span className="font-medium text-right">{formatDate(chain.po.actual_delivery_date)}</span>
+                    </div>
+                  )}
+                  {/* Source PR */}
+                  {chain.mr && (
+                    <div className="px-3 py-2 flex justify-between gap-2">
+                      <span className="text-muted-foreground shrink-0">Source PR</span>
+                      <span className="font-medium text-right font-mono">{chain.mr.pr_number}</span>
+                    </div>
+                  )}
+                  {/* Total order value */}
+                  {chain.po.total_ordered_amount != null && (
+                    <div className="px-3 py-2 flex justify-between gap-2">
+                      <span className="text-muted-foreground shrink-0">Order Value</span>
+                      <span className="font-semibold text-right">{formatCurrency(chain.po.total_ordered_amount)}</span>
+                    </div>
+                  )}
+                  {/* Notes */}
+                  {chain.po.notes && (
+                    <div className="px-3 py-2 flex justify-between gap-2">
+                      <span className="text-muted-foreground shrink-0">Notes</span>
+                      <span className="text-right">{chain.po.notes}</span>
+                    </div>
+                  )}
+                  {/* Payment Terms */}
+                  {chain.po.payment_terms && (
+                    <div className="px-3 py-2 flex justify-between gap-2">
+                      <span className="text-muted-foreground shrink-0">Payment Terms</span>
+                      <span className="font-medium text-right">{chain.po.payment_terms}</span>
+                    </div>
+                  )}
+                </div>
               </div>
 
+              {/* ── Terms & Conditions ──────────────────────────── */}
+              {chain.po.terms_and_conditions && (
+                <>
+                  <Separator />
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">Terms &amp; Conditions</p>
+                    <p className="text-sm whitespace-pre-wrap rounded-lg border px-3 py-2 bg-muted/30">{chain.po.terms_and_conditions}</p>
+                  </div>
+                </>
+              )}
+
+              {/* ── Line Items ──────────────────────────────────── */}
               {chain.po.purchase_order_items && chain.po.purchase_order_items.length > 0 && (
                 <>
                   <Separator />

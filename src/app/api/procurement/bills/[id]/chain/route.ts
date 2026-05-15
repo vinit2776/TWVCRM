@@ -50,6 +50,9 @@ export async function GET(
       .from("purchase_orders")
       .select(`
         id, po_number, status, po_type, created_at, total_ordered_amount,
+        expected_delivery_date, actual_delivery_date, notes,
+        payment_terms, terms_and_conditions,
+        location:locations!purchase_orders_location_id_fkey(id, name),
         orderer:users!purchase_orders_ordered_by_fkey(id, full_name),
         purchase_requests(
           id, pr_number, department, total_estimated_amount, created_at,
