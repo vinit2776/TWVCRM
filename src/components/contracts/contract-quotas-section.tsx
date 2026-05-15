@@ -31,8 +31,8 @@ interface Props {
   contractId: string;
   /** Locks the editor for non-active contracts (still renders, read-only). */
   readOnly?: boolean;
-  /** Optional callback fired after a quota is saved. */
-  onSave?: () => void | Promise<void>;
+  /** Called after any successful save or remove, so the parent can refresh its quota count. */
+  onSave?: () => void;
 }
 
 interface RowState {
@@ -131,6 +131,7 @@ export function ContractQuotasSection({ contractId, readOnly = false, onSave }: 
       }
       toast.success(`${row.service.name} quota removed`);
       await reload();
+      onSave?.();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed");
       setRows((prev) => prev.map((r, i) => i === idx ? { ...r, saving: false } : r));
@@ -143,7 +144,7 @@ export function ContractQuotasSection({ contractId, readOnly = false, onSave }: 
         <CardTitle className="text-base flex items-center justify-between">
           <span>Service Quotas</span>
           <span className="text-xs font-normal text-muted-foreground">
-            Free units per month + overage rate
+            Free units/month · resets 1st of each month
           </span>
         </CardTitle>
       </CardHeader>

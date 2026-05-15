@@ -189,7 +189,7 @@ export function ContractFacilitiesSection({ contractId, locationId, readOnly = f
         <CardTitle className="text-base flex items-center justify-between">
           <span>Facility Quotas</span>
           <span className="text-xs font-normal text-muted-foreground">
-            Free hours/month for conference rooms etc.
+            Free units/month · resets 1st of each month
           </span>
         </CardTitle>
       </CardHeader>

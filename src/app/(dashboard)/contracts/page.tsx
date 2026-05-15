@@ -290,19 +290,33 @@ export default function ContractsPage() {
                   </span>
                 </SheetTitle>
               </SheetHeader>
-              <div className="space-y-4">
-                <ContractQuotasSection
-                  contractId={selectedContract.id}
-                  readOnly={!canEditQuotas}
-                  onSave={refreshSelectedQuotaCount}
-                />
-                <ContractFacilitiesSection
-                  contractId={selectedContract.id}
-                  locationId={selectedContract.location_id ?? null}
-                  readOnly={!canEditQuotas}
-                  onSave={refreshSelectedQuotaCount}
-                />
-              </div>
+              {(() => {
+                // Active contracts: only admin can edit quotas.
+                // Draft/Sent: admin + manager + accounts can edit.
+                const lockStatuses = ["active", "renewal_in_progress", "renewed", "completed", "terminated", "expired"];
+                const isLocked = lockStatuses.includes(selectedContract.status);
+                const sheetReadOnly = !canEditQuotas || (isLocked && userRole !== "admin");
+                return (
+                  <div className="space-y-4">
+                    {isLocked && userRole !== "admin" && (
+                      <p className="text-xs text-amber-600 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                        This contract is active. Only an admin can modify quotas.
+                      </p>
+                    )}
+                    <ContractQuotasSection
+                      contractId={selectedContract.id}
+                      readOnly={sheetReadOnly}
+                      onSave={refreshSelectedQuotaCount}
+                    />
+                    <ContractFacilitiesSection
+                      contractId={selectedContract.id}
+                      locationId={selectedContract.location_id ?? null}
+                      readOnly={sheetReadOnly}
+                      onSave={refreshSelectedQuotaCount}
+                    />
+                  </div>
+                );
+              })()}
             </>
           )}
         </SheetContent>

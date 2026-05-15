@@ -52,6 +52,15 @@ export async function POST(
     return NextResponse.json({ error: "Admin / Manager / Accounts access required" }, { status: 403 });
   }
 
+  // Active (and beyond) contracts: only admin may change quotas
+  if (dbUser.role !== "admin") {
+    const { data: contract } = await supabase.from("contracts").select("status").eq("id", id).single();
+    const lockStatuses = ["active", "renewal_in_progress", "renewed", "completed", "terminated", "expired"];
+    if (contract && lockStatuses.includes(contract.status)) {
+      return NextResponse.json({ error: "Quotas on an active contract can only be changed by an admin." }, { status: 403 });
+    }
+  }
+
   const body = await request.json();
   const { service_id, monthly_quota, overage_rate, notes } = body;
 
@@ -110,6 +119,14 @@ export async function DELETE(
     .from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser || !["admin", "manager", "accounts"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Admin / Manager / Accounts access required" }, { status: 403 });
+  }
+
+  if (dbUser.role !== "admin") {
+    const { data: contract } = await supabase.from("contracts").select("status").eq("id", id).single();
+    const lockStatuses = ["active", "renewal_in_progress", "renewed", "completed", "terminated", "expired"];
+    if (contract && lockStatuses.includes(contract.status)) {
+      return NextResponse.json({ error: "Quotas on an active contract can only be changed by an admin." }, { status: 403 });
+    }
   }
 
   const quotaId = request.nextUrl.searchParams.get("quota_id");
