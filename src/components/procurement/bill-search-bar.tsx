@@ -72,7 +72,7 @@ export function BillSearchBar({
         if (prev.q === qInput) return prev; // nothing changed — skip re-render
         return { ...prev, q: qInput, page: "1" };
       });
-    }, 500);
+    }, 900);
     return () => clearTimeout(t);
   }, [qInput]);
 
