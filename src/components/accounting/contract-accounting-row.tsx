@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, ChevronRight, IndianRupee, Send, Receipt, CheckCircle, Calendar, Eye, FileCheck, X } from "lucide-react";
+import { ChevronDown, ChevronRight, IndianRupee, Send, Receipt, CheckCircle, Calendar, Eye, FileCheck, X, ExternalLink } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
@@ -112,6 +112,16 @@ interface ContractSummary {
     proforma_sent_by_user?: { full_name: string } | null;
     gst_generated_by_user?: { full_name: string } | null;
     accounted_by_user?: { full_name: string } | null;
+    /** Statement-level payments (billing_payments table) */
+    billing_payments?: Array<{
+      id: string;
+      amount: number;
+      payment_date: string;
+      payment_mode: string;
+      payment_reference?: string | null;
+      razorpay_payment_id?: string | null;
+      recorded_by_user?: { full_name: string } | null;
+    }> | null;
   } | null;
 }
 
@@ -491,7 +501,53 @@ export function ContractAccountingRow({
                 </Button>
               )}
             </div>
-            {summary.payments.length > 0 ? (
+
+            {/* Statement-level payments (billing_payments) — shown when statement is finalized */}
+            {isFinalized && statement?.billing_payments && statement.billing_payments.length > 0 ? (
+              <div className="space-y-1">
+                {statement.billing_payments.map((p) => {
+                  const isRazorpay = p.payment_mode === "razorpay" || !!p.razorpay_payment_id;
+                  const modeLabel = isRazorpay ? "Razorpay" : (p.payment_mode?.toUpperCase() || "—");
+                  return (
+                    <div key={p.id} className="flex items-center justify-between text-sm px-2 py-1.5 rounded bg-background border">
+                      <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                        <span className="text-xs text-muted-foreground">{formatDate(p.payment_date)}</span>
+                        <Badge variant="outline" className={`text-xs ${isRazorpay ? "border-violet-300 text-violet-700 bg-violet-50" : ""}`}>
+                          {modeLabel}
+                        </Badge>
+                        {/* Razorpay payment ID — hyperlinked to dashboard */}
+                        {p.razorpay_payment_id ? (
+                          <a
+                            href={`https://dashboard.razorpay.com/app/payments/${p.razorpay_payment_id}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-0.5 text-xs text-violet-700 hover:text-violet-900 underline underline-offset-1 font-mono"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            {p.razorpay_payment_id}
+                            <ExternalLink className="h-2.5 w-2.5 flex-shrink-0" />
+                          </a>
+                        ) : p.payment_reference ? (
+                          <span className="text-xs text-muted-foreground font-mono">Ref: {p.payment_reference}</span>
+                        ) : null}
+                        {/* Who recorded this payment */}
+                        {p.recorded_by_user?.full_name ? (
+                          <span className="text-xs text-muted-foreground">· {p.recorded_by_user.full_name}</span>
+                        ) : isRazorpay ? (
+                          <span className="text-xs text-muted-foreground italic">· via gateway</span>
+                        ) : null}
+                      </div>
+                      <span className="font-medium text-green-700 ml-2 flex-shrink-0">{formatCurrency(p.amount)}</span>
+                    </div>
+                  );
+                })}
+              </div>
+            ) : isFinalized ? (
+              <p className="text-sm text-muted-foreground px-2">No payments recorded</p>
+            ) : null}
+
+            {/* Legacy contract_payments — shown only when no finalized statement */}
+            {!isFinalized && summary.payments.length > 0 && (
               <div className="space-y-1">
                 {summary.payments.map((p) => (
                   <div key={p.id} className="flex items-center justify-between text-sm px-2 py-1 rounded hover:bg-accent/50">
@@ -526,7 +582,8 @@ export function ContractAccountingRow({
                   </div>
                 ))}
               </div>
-            ) : (
+            )}
+            {!isFinalized && summary.payments.length === 0 && (
               <p className="text-sm text-muted-foreground px-2">No payments recorded</p>
             )}
           </div>

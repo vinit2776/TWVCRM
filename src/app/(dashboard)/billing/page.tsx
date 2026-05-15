@@ -206,6 +206,16 @@ interface ContractSummary {
     proforma_sent_by_user?: { full_name: string } | null;
     gst_generated_by_user?: { full_name: string } | null;
     accounted_by_user?: { full_name: string } | null;
+    /** Statement-level payments (billing_payments table) */
+    billing_payments?: Array<{
+      id: string;
+      amount: number;
+      payment_date: string;
+      payment_mode: string;
+      payment_reference?: string | null;
+      razorpay_payment_id?: string | null;
+      recorded_by_user?: { full_name: string } | null;
+    }> | null;
   } | null;
 }
 
