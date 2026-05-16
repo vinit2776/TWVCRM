@@ -70,10 +70,10 @@ type NavSection = {
 };
 
 // Roles that existed before the accounts/fms additions — used as a shorthand below.
-const LEGACY_ROLES = ["admin", "manager", "sales_rep", "floor_manager"];
+const LEGACY_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "viewer"];
 
 // Operations menu (Bookings, Spaces, Packages, Vouchers): all active roles.
-const OPERATIONS_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin"];
+const OPERATIONS_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin", "viewer"];
 
 // Top-level items — always visible, never grouped
 const topNavItems: NavItem[] = [
@@ -105,7 +105,7 @@ const navSections: NavSection[] = [
       { href: "/contracts/kyc-pending", label: "KYC Pending",   icon: ShieldCheck, roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/billing",    label: "Billing - Acc Receivables", icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/accounting", label: "Acc Payables",             icon: Calculator,  roles: [...LEGACY_ROLES, "accounts"] },
-      { href: "/finance/gateway-activity", label: "Gateway Activity",   icon: Landmark,    roles: ["admin", "accounts"] },
+      { href: "/finance/gateway-activity", label: "Gateway Activity",   icon: Landmark,    roles: ["admin", "accounts", "viewer"] },
       { href: "/petty-cash",               label: "Petty Cash",          icon: Wallet,      roles: null },
     ],
   },
@@ -119,7 +119,7 @@ const navSections: NavSection[] = [
       { href: "/headcount", label: "Headcount", icon: UsersRound,    roles: OPERATIONS_ROLES },
       { href: "/packages",  label: "Packages",  icon: TicketCheck,   roles: OPERATIONS_ROLES },
       { href: "/vouchers",    label: "Vouchers",    icon: Wifi,          roles: [...OPERATIONS_ROLES, "facility_staff"] },
-      { href: "/attendance",  label: "Attendance",  icon: Fingerprint,   roles: ["admin", "manager"] },
+      { href: "/attendance",  label: "Attendance",  icon: Fingerprint,   roles: ["admin", "manager", "viewer"] },
     ],
   },
   {
@@ -136,17 +136,17 @@ const navSections: NavSection[] = [
     label: "Procurement",
     icon: ShoppingCart,
     items: [
-      { href: "/procurement",              label: "Dashboard",         icon: BarChart3Icon,     roles: ["admin", "manager", "office_admin"] },
-      { href: "/procurement/requests",    label: "Material Requests", icon: ClipboardListIcon, roles: ["admin", "manager", "office_admin"] },
-      { href: "/procurement/orders",      label: "Purchase Orders",   icon: Package,           roles: ["admin", "manager", "office_admin"] },
-      { href: "/procurement/bills",       label: "Vendor Bills",      icon: ReceiptIcon,       roles: ["admin", "manager", "office_admin"] },
-      { href: "/procurement/payables",    label: "Payables",          icon: IndianRupee,       roles: ["admin", "manager", "office_admin"] },
-      { href: "/procurement/vendors",     label: "Vendors",           icon: Truck,             roles: ["admin", "manager", "office_admin", "accounts"] },
-      { href: "/procurement/catalog",     label: "Item Catalog",      icon: Archive,           roles: ["admin", "manager", "office_admin"] },
-      { href: "/procurement/inventory",   label: "Inventory",         icon: Warehouse,         roles: ["admin", "manager", "office_admin"] },
-      { href: "/procurement/transfers",   label: "Transfers",         icon: ArrowLeftRight,    roles: ["admin", "manager", "office_admin"] },
-      { href: "/procurement/consumption", label: "Consumption",       icon: UtensilsCrossed,   roles: ["admin", "manager", "office_admin"] },
-      { href: "/procurement/amc",         label: "AMC Contracts",     icon: Wrench,            roles: ["admin", "manager", "office_admin"] },
+      { href: "/procurement",              label: "Dashboard",         icon: BarChart3Icon,     roles: ["admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/requests",    label: "Material Requests", icon: ClipboardListIcon, roles: ["admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/orders",      label: "Purchase Orders",   icon: Package,           roles: ["admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/bills",       label: "Vendor Bills",      icon: ReceiptIcon,       roles: ["admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/payables",    label: "Payables",          icon: IndianRupee,       roles: ["admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/vendors",     label: "Vendors",           icon: Truck,             roles: ["admin", "manager", "office_admin", "accounts", "viewer"] },
+      { href: "/procurement/catalog",     label: "Item Catalog",      icon: Archive,           roles: ["admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/inventory",   label: "Inventory",         icon: Warehouse,         roles: ["admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/transfers",   label: "Transfers",         icon: ArrowLeftRight,    roles: ["admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/consumption", label: "Consumption",       icon: UtensilsCrossed,   roles: ["admin", "manager", "office_admin", "viewer"] },
+      { href: "/procurement/amc",         label: "AMC Contracts",     icon: Wrench,            roles: ["admin", "manager", "office_admin", "viewer"] },
       { href: "/procurement/verify",      label: "Verify Approval",   icon: ShieldCheck,       roles: ["admin", "manager", "office_admin"] },
     ],
   },
@@ -155,11 +155,11 @@ const navSections: NavSection[] = [
     label: "Facility",
     icon: Wrench,
     items: [
-      { href: "/facility",            label: "Dashboard",  icon: BarChart3Icon, roles: ["admin", "it_manager"] },
+      { href: "/facility",            label: "Dashboard",  icon: BarChart3Icon, roles: ["admin", "it_manager", "viewer"] },
       { href: "/facility/issues",     label: "Issues",     icon: ClipboardList, roles: null },
       { href: "/facility/my-issues",  label: "My Issues",  icon: Ticket,        roles: null },
-      { href: "/facility/assets",     label: "Assets",     icon: Server,        roles: ["admin", "manager", "it_manager", "it_technician"] },
-      { href: "/facility/team-kpi",   label: "Team KPI",   icon: TrendingUp,    roles: ["admin", "it_manager"] },
+      { href: "/facility/assets",     label: "Assets",     icon: Server,        roles: ["admin", "manager", "it_manager", "it_technician", "viewer"] },
+      { href: "/facility/team-kpi",   label: "Team KPI",   icon: TrendingUp,    roles: ["admin", "it_manager", "viewer"] },
     ],
   },
   {

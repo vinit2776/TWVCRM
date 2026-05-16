@@ -174,7 +174,7 @@ export const INVOICE_STATUS_LABELS: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-export const USER_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin"] as const;
+export const USER_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin", "viewer"] as const;
 
 export const USER_ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
@@ -185,6 +185,7 @@ export const USER_ROLE_LABELS: Record<string, string> = {
   fms: "Facility Manager",
   office_admin: "Office Administrator",
   it_team: "IT Team",
+  viewer: "Viewer",
 };
 
 export const RATINGS = ["none", "hot", "warm", "cold"] as const;
