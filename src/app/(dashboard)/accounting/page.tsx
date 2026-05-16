@@ -776,43 +776,15 @@ export default function AccountingPage() {
             </DialogTitle>
           </DialogHeader>
 
-          {/* Step 0: Payment instrument */}
+          {/* Step 0: Bill review */}
           {batchStep === 0 && (
             <div className="space-y-4 py-1">
               <p className="text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2">
-                Enter the single payment reference that covers all selected bills. GST for each bill will be confirmed in the next steps.
+                Review the selected bills. GST will be confirmed per bill in the next steps, and payment details collected at the end.
               </p>
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="bp_date">Payment Date <span className="text-red-500">*</span></Label>
-                  <Input id="bp_date" type="date" value={batchDate} onChange={(e) => setBatchDate(e.target.value)} />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="bp_mode">Payment Mode <span className="text-red-500">*</span></Label>
-                  <Select value={batchMode} onValueChange={setBatchMode}>
-                    <SelectTrigger id="bp_mode"><SelectValue placeholder="Select mode" /></SelectTrigger>
-                    <SelectContent>
-                      {allBatchPayModes.map((m) => (
-                        <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="bp_ref">UTR / Reference Number <span className="text-red-500">*</span></Label>
-                <Input id="bp_ref" placeholder="e.g. UTR123456789012" value={batchRef} onChange={(e) => setBatchRef(e.target.value)} />
-              </div>
-              <div className="space-y-1.5">
-                <Label htmlFor="bp_notes">Notes <span className="text-muted-foreground font-normal">(optional)</span></Label>
-                <Textarea id="bp_notes" placeholder="e.g. May vendor payments" value={batchNotes} onChange={(e) => setBatchNotes(e.target.value)} rows={2} />
-              </div>
-              {/* Mini bill preview */}
               <div className="rounded-lg border divide-y text-sm">
                 {selectedBills.map((b) => {
-                  const billGst = Number(b.gst_amount ?? 0);
                   const billBase = Number(b.approved_amount ?? b.total_amount);
-                  const billTotal = Math.max(0, billBase + billGst - Number(b.amount_paid ?? 0));
                   return (
                     <div key={b.id} className="flex items-center justify-between px-3 py-2 gap-2">
                       <div className="min-w-0">
@@ -823,16 +795,12 @@ export default function AccountingPage() {
                         )}
                       </div>
                       <div className="text-right shrink-0">
-                        <span className="font-medium text-xs">{formatCurrency(billTotal)}</span>
-                        {billGst > 0 && <div className="text-[10px] text-muted-foreground">incl. GST {formatCurrency(billGst)}</div>}
+                        <span className="font-medium text-xs">{formatCurrency(billBase)}</span>
+                        <div className="text-[10px] text-muted-foreground">+ GST to confirm</div>
                       </div>
                     </div>
                   );
                 })}
-                <div className="flex items-center justify-between px-3 py-2 bg-muted/40 font-semibold">
-                  <span>Total to pay</span>
-                  <span className="text-emerald-700">{formatCurrency(selectedTotal)}</span>
-                </div>
               </div>
             </div>
           )}
@@ -880,7 +848,7 @@ export default function AccountingPage() {
             );
           })()}
 
-          {/* Summary step */}
+          {/* Final step: Payment details + confirmed summary */}
           {batchStep === selectedBills.length + 1 && (() => {
             const totalWithGst = selectedBills.reduce((s, b) => {
               const gst = parseFloat(batchGst[b.id] || "0") || 0;
@@ -888,10 +856,8 @@ export default function AccountingPage() {
               return s + Math.max(0, base + gst - Number(b.amount_paid ?? 0));
             }, 0);
             return (
-              <div className="space-y-3 py-1">
-                <p className="text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2">
-                  Review and confirm. All bills will be marked as paid under reference <span className="font-mono font-medium">{batchRef}</span>.
-                </p>
+              <div className="space-y-4 py-1">
+                {/* Bill summary with confirmed GST */}
                 <div className="rounded-lg border divide-y text-sm">
                   <div className="grid grid-cols-4 px-3 py-2 text-xs font-semibold text-muted-foreground bg-muted/40">
                     <span>Bill</span><span>Vendor</span><span className="text-right">GST</span><span className="text-right">Total</span>
@@ -910,15 +876,35 @@ export default function AccountingPage() {
                     );
                   })}
                   <div className="grid grid-cols-4 px-3 py-2.5 bg-emerald-50 font-bold text-emerald-800">
-                    <span className="col-span-3">Total payment</span>
+                    <span className="col-span-3">Grand total</span>
                     <span className="text-right text-emerald-700">{formatCurrency(totalWithGst)}</span>
                   </div>
                 </div>
-                <div className="rounded-lg border p-3 text-xs space-y-1 text-muted-foreground">
-                  <div className="flex justify-between"><span>Date</span><span className="font-medium text-foreground">{formatDate(batchDate)}</span></div>
-                  <div className="flex justify-between"><span>Mode</span><span className="font-medium text-foreground uppercase">{batchMode}</span></div>
-                  <div className="flex justify-between"><span>Reference</span><span className="font-mono font-medium text-foreground">{batchRef}</span></div>
-                  {batchNotes && <div className="flex justify-between"><span>Notes</span><span className="font-medium text-foreground">{batchNotes}</span></div>}
+                {/* Payment fields */}
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1.5">
+                    <Label htmlFor="bp_date">Payment Date <span className="text-red-500">*</span></Label>
+                    <Input id="bp_date" type="date" value={batchDate} onChange={(e) => setBatchDate(e.target.value)} />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="bp_mode">Payment Mode <span className="text-red-500">*</span></Label>
+                    <Select value={batchMode} onValueChange={setBatchMode}>
+                      <SelectTrigger id="bp_mode"><SelectValue placeholder="Select mode" /></SelectTrigger>
+                      <SelectContent>
+                        {allBatchPayModes.map((m) => (
+                          <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="bp_ref">UTR / Reference Number <span className="text-red-500">*</span></Label>
+                  <Input id="bp_ref" placeholder="e.g. UTR123456789012" value={batchRef} onChange={(e) => setBatchRef(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label htmlFor="bp_notes">Notes <span className="text-muted-foreground font-normal">(optional)</span></Label>
+                  <Textarea id="bp_notes" placeholder="e.g. May vendor payments" value={batchNotes} onChange={(e) => setBatchNotes(e.target.value)} rows={2} />
                 </div>
               </div>
             );
@@ -941,18 +927,11 @@ export default function AccountingPage() {
             )}
             {batchStep < selectedBills.length + 1 && (
               <button
-                onClick={() => {
-                  if (batchStep === 0) {
-                    if (!batchMode) { toast.error("Select a payment mode"); return; }
-                    if (!batchDate) { toast.error("Select a payment date"); return; }
-                    if (!batchRef.trim()) { toast.error("Enter the payment reference / UTR"); return; }
-                  }
-                  setBatchStep((s) => s + 1);
-                }}
+                onClick={() => setBatchStep((s) => s + 1)}
                 disabled={batchSubmitting}
                 className="inline-flex items-center gap-1 rounded-md bg-primary text-primary-foreground px-3 py-2 text-sm hover:bg-primary/90 disabled:opacity-50"
               >
-                {batchStep === selectedBills.length ? "Review" : "Next"} <ArrowRight className="h-4 w-4" />
+                {batchStep === selectedBills.length ? "Payment Details" : "Next"} <ArrowRight className="h-4 w-4" />
               </button>
             )}
             {batchStep === selectedBills.length + 1 && (
