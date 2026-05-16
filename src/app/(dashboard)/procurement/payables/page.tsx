@@ -1,17 +1,14 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
-import { IndianRupee, ChevronLeft, ChevronRight, Loader2, CalendarClock, AlertTriangle, CheckCircle2, ClockAlert, ChevronDown, ChevronUp, X, Layers, ArrowRight, ArrowLeft, FileText, Banknote, ClipboardCheck, ShoppingCart } from "lucide-react";
+import { IndianRupee, ChevronLeft, ChevronRight, Loader2, CalendarClock, AlertTriangle, CheckCircle2, ClockAlert, ChevronDown, ChevronUp, X, FileText } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -85,24 +82,6 @@ export default function PayablesPage() {
   const [gapAlerts, setGapAlerts] = useState<GapAlertItem[]>([]);
   const [gapAlertsExpanded, setGapAlertsExpanded] = useState(false);
 
-  // ── Batch payment (multi-bill) ────────────────────────────────────────────
-  const [selectedBillIds, setSelectedBillIds] = useState<Set<string>>(new Set());
-
-  // Wizard state: step 0 = payment details, steps 1..N = per-bill GST, step N+1 = summary
-  const [batchWizardOpen, setBatchWizardOpen] = useState(false);
-  const [batchStep, setBatchStep] = useState(0);
-
-  // Step 0 fields (shared payment instrument)
-  const [batchDate, setBatchDate] = useState(today);
-  const [batchMode, setBatchMode] = useState<string>("");
-  const [batchRef, setBatchRef] = useState("");
-  const [batchNotes, setBatchNotes] = useState("");
-
-  // Per-bill GST overrides: map of bill_id → gst string value
-  const [batchGst, setBatchGst] = useState<Record<string, string>>({});
-
-  const [batchSubmitting, setBatchSubmitting] = useState(false);
-
   // ── Fetch current user role ───────────────────────────────────────────────
   useEffect(() => {
     fetch("/api/me")
@@ -112,19 +91,6 @@ export default function PayablesPage() {
   }, []);
 
   const canOverrideBatch = ["admin", "manager", "accounts"].includes(currentUserRole ?? "");
-  const canRecordPayment = ["admin", "accounts", "office_admin"].includes(currentUserRole ?? "");
-  const canRecordCash = currentUserRole === "admin" || currentUserRole === "office_admin";
-
-  const bankPayModes = [
-    { value: "neft", label: "NEFT" },
-    { value: "rtgs", label: "RTGS" },
-    { value: "imps", label: "IMPS" },
-    { value: "bank_transfer", label: "Bank Transfer" },
-    { value: "cheque", label: "Cheque" },
-  ];
-  const allBatchPayModes = canRecordCash
-    ? [...bankPayModes, { value: "cash", label: "Cash / Petty Cash" }]
-    : bankPayModes;
 
   const [filters, setFilters] = useState<BillFilters>({
     ...EMPTY_FILTERS,
@@ -237,95 +203,6 @@ export default function PayablesPage() {
     if (activeBatchKey === "unscheduled") return bills.filter((b) => !b.payment_batch_date);
     return bills.filter((b) => b.payment_batch_date === activeBatchKey);
   })();
-
-  // ── Derived: selected bills for batch payment ─────────────────────────────
-  const selectedBills = useMemo(
-    () => bills.filter((b) => selectedBillIds.has(b.id)),
-    [bills, selectedBillIds]
-  );
-  const selectedTotal = useMemo(
-    () => selectedBills.reduce((s, b) => {
-      const gst = Number(b.gst_amount ?? 0);
-      const base = Number(b.approved_amount ?? b.total_amount);
-      const outstanding = Math.max(0, base + gst - Number(b.amount_paid ?? 0));
-      return s + outstanding;
-    }, 0),
-    [selectedBills]
-  );
-
-  function openBatchWizard() {
-    // Pre-fill GST from each bill's stored gst_amount
-    const gstInit: Record<string, string> = {};
-    for (const b of selectedBills) {
-      gstInit[b.id] = b.gst_amount ? String(b.gst_amount) : "";
-    }
-    setBatchGst(gstInit);
-    setBatchDate(today);
-    // Restore last used mode from localStorage
-    const saved = typeof window !== "undefined" ? localStorage.getItem("batch_pay_last_mode") : "";
-    setBatchMode(saved || "");
-    setBatchRef("");
-    setBatchNotes("");
-    setBatchStep(0);
-    setBatchWizardOpen(true);
-  }
-
-  async function handleBatchSubmit() {
-    if (!batchMode) { toast.error("Select a payment mode"); return; }
-    if (!batchDate) { toast.error("Select a payment date"); return; }
-    if (!batchRef.trim()) { toast.error("Enter the payment reference / UTR"); return; }
-
-    setBatchSubmitting(true);
-    try {
-      // Remember last used mode
-      if (typeof window !== "undefined") localStorage.setItem("batch_pay_last_mode", batchMode);
-
-      const batchRefUuid = crypto.randomUUID();
-      const billsPayload = selectedBills.map((b) => {
-        const gst = parseFloat(batchGst[b.id] || "0") || 0;
-        const base = Number(b.approved_amount ?? b.total_amount);
-        const outstanding = Math.max(0, base + gst - Number(b.amount_paid ?? 0));
-        return {
-          bill_id: b.id,
-          amount: Math.round(outstanding * 100) / 100,
-          gst_amount: gst,
-        };
-      });
-
-      const res = await fetch("/api/accounting/batch-payment", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          batch_ref: batchRefUuid,
-          payment_date: batchDate,
-          payment_mode: batchMode,
-          payment_reference: batchRef.trim() || null,
-          notes: batchNotes.trim() || null,
-          bills: billsPayload,
-        }),
-      });
-      const json = await res.json();
-
-      if (!res.ok && res.status !== 207) {
-        toast.error(typeof json.error === "string" ? json.error : "Batch payment failed");
-        return;
-      }
-
-      if (json.failed_count > 0) {
-        toast.error(`${json.failed_count} bill(s) failed: ${json.failed.map((f: { bill_number: string }) => f.bill_number).join(", ")}`);
-      }
-      if (json.processed_count > 0) {
-        toast.success(`${json.processed_count} bill${json.processed_count > 1 ? "s" : ""} paid — ${formatCurrency(json.total_paid)}`);
-      }
-
-      setBatchWizardOpen(false);
-      setSelectedBillIds(new Set());
-      await fetchBills();
-      await fetchBatchSummary();
-    } finally {
-      setBatchSubmitting(false);
-    }
-  }
 
   const totalPayable = bills.reduce((s, b) => s + Number(b.total_amount) + Number(b.gst_amount ?? 0), 0);
   const totalDue = bills.reduce((s, b) => s + Math.max(0, Number(b.total_amount) + Number(b.gst_amount ?? 0) - Number(b.amount_paid ?? 0)), 0);
@@ -586,27 +463,14 @@ export default function PayablesPage() {
             </div>
           )}
 
-          {/* Bill search + filters + Pay Selected */}
-          <div className="flex items-start gap-2">
-            <div className="flex-1">
-              <BillSearchBar
-                initialFilters={filters}
-                baseFilters={{ approval_status: "approved", payment_status_neq: "paid" }}
-                onChange={setFilters}
-                showExport
-                placeholder="Search payable bills…"
-              />
-            </div>
-            {canRecordPayment && selectedBillIds.size >= 2 && (
-              <Button
-                className="shrink-0 bg-emerald-600 hover:bg-emerald-700 h-9 gap-1.5"
-                onClick={openBatchWizard}
-              >
-                <Layers className="h-4 w-4" />
-                Pay {selectedBillIds.size} bills · {formatCurrency(selectedTotal)}
-              </Button>
-            )}
-          </div>
+          {/* Bill search + filters */}
+          <BillSearchBar
+            initialFilters={filters}
+            baseFilters={{ approval_status: "approved", payment_status_neq: "paid" }}
+            onChange={setFilters}
+            showExport
+            placeholder="Search payable bills…"
+          />
 
           {loadingBills ? (
             <TableSkeleton rows={8} />
@@ -627,31 +491,6 @@ export default function PayablesPage() {
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
-                    {canRecordPayment && (
-                      <th className="px-3 py-3 w-8">
-                        <input
-                          type="checkbox"
-                          className="rounded border-gray-300"
-                          checked={visibleBills.length > 0 && visibleBills.every((b) => selectedBillIds.has(b.id))}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedBillIds((prev) => {
-                                const next = new Set(prev);
-                                visibleBills.forEach((b) => next.add(b.id));
-                                return next;
-                              });
-                            } else {
-                              setSelectedBillIds((prev) => {
-                                const next = new Set(prev);
-                                visibleBills.forEach((b) => next.delete(b.id));
-                                return next;
-                              });
-                            }
-                          }}
-                          title="Select all visible bills"
-                        />
-                      </th>
-                    )}
                     <th className="px-4 py-3 text-left font-medium">Bill #</th>
                     <th className="px-4 py-3 text-left font-medium">Vendor</th>
                     <th className="px-4 py-3 text-left font-medium hidden md:table-cell">PO #</th>
@@ -670,34 +509,15 @@ export default function PayablesPage() {
                     const billGst = Number(bill.gst_amount ?? 0);
                     const effectiveTotal = Number(bill.total_amount) + billGst;
                     const balance = Math.max(0, effectiveTotal - Number(bill.amount_paid ?? 0));
-                    const isSelected = selectedBillIds.has(bill.id);
                     return (
                       <tr
                         key={bill.id}
                         className={cn(
                           "border-b hover:bg-muted/30 transition-colors cursor-pointer",
                           isOverdue(bill) && "bg-amber-50/60",
-                          isSelected && "bg-emerald-50/60"
                         )}
                         onClick={() => router.push(`/procurement/bills/${bill.id}`)}
                       >
-                        {canRecordPayment && (
-                          <td className="px-3 py-3" onClick={(e) => e.stopPropagation()}>
-                            <input
-                              type="checkbox"
-                              className="rounded border-gray-300"
-                              checked={isSelected}
-                              onChange={(e) => {
-                                setSelectedBillIds((prev) => {
-                                  const next = new Set(prev);
-                                  if (e.target.checked) next.add(bill.id);
-                                  else next.delete(bill.id);
-                                  return next;
-                                });
-                              }}
-                            />
-                          </td>
-                        )}
                         <td className="px-4 py-3 font-mono text-xs font-medium">
                           <Link
                             href={`/procurement/bills/${bill.id}`}
@@ -979,387 +799,6 @@ export default function PayablesPage() {
               {processingLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Confirm Payment
             </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
-
-      {/* ── Batch Payment Wizard ─────────────────────────────────────────── */}
-      <Dialog
-        open={batchWizardOpen}
-        onOpenChange={(open) => {
-          if (!batchSubmitting) setBatchWizardOpen(open);
-        }}
-      >
-        <DialogContent className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <Layers className="h-5 w-5 text-emerald-600" />
-              Batch Payment — {selectedBills.length} bills
-            </DialogTitle>
-            {/* ── Procurement lifecycle indicator ───────────────────────── */}
-            <div className="flex items-center gap-0.5 pt-2 pb-0.5 overflow-x-auto">
-              {([
-                { label: "Invoice", icon: FileText },
-                { label: "Bill Created", icon: ClipboardCheck },
-                { label: "Approved", icon: CheckCircle2 },
-                { label: "PO / Delivery", icon: ShoppingCart, optional: true },
-                { label: "Record Payment", icon: Banknote, active: true },
-              ] as { label: string; icon: React.ElementType; active?: boolean; optional?: boolean }[]).map((step, i, arr) => (
-                <div key={step.label} className="flex items-center gap-0.5 shrink-0">
-                  <div className={cn(
-                    "flex items-center gap-1 rounded px-1.5 py-0.5",
-                    step.active
-                      ? "bg-emerald-100 text-emerald-800"
-                      : step.optional
-                        ? "text-muted-foreground/40"
-                        : "text-muted-foreground/70"
-                  )}>
-                    <step.icon className={cn("h-2.5 w-2.5 shrink-0", step.active && "text-emerald-600")} />
-                    <span className={cn("text-[10px] whitespace-nowrap", step.active && "font-semibold")}>
-                      {step.label}
-                    </span>
-                    {!step.active && !step.optional && (
-                      <CheckCircle2 className="h-2.5 w-2.5 text-emerald-500 shrink-0" />
-                    )}
-                  </div>
-                  {i < arr.length - 1 && (
-                    <ChevronRight className="h-3 w-3 text-muted-foreground/30 shrink-0" />
-                  )}
-                </div>
-              ))}
-            </div>
-          </DialogHeader>
-
-          {/* ── Step 0: Payment instrument ─────────────────────────────── */}
-          {batchStep === 0 && (
-            <div className="space-y-4 py-1">
-              <p className="text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2">
-                Enter the single payment reference that covers all selected bills. GST for each bill will be confirmed in the next steps.
-              </p>
-
-              <div className="grid grid-cols-2 gap-3">
-                <div className="space-y-1.5">
-                  <Label htmlFor="bp_date">Payment Date <span className="text-red-500">*</span></Label>
-                  <Input
-                    id="bp_date"
-                    type="date"
-                    value={batchDate}
-                    onChange={(e) => setBatchDate(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label htmlFor="bp_mode">Payment Mode <span className="text-red-500">*</span></Label>
-                  <Select value={batchMode} onValueChange={setBatchMode}>
-                    <SelectTrigger id="bp_mode">
-                      <SelectValue placeholder="Select mode" />
-                    </SelectTrigger>
-                    <SelectContent>
-                      {allBatchPayModes.map((m) => (
-                        <SelectItem key={m.value} value={m.value}>{m.label}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="bp_ref">UTR / Reference Number <span className="text-red-500">*</span></Label>
-                <Input
-                  id="bp_ref"
-                  placeholder="e.g. UTR123456789012"
-                  value={batchRef}
-                  onChange={(e) => setBatchRef(e.target.value)}
-                />
-              </div>
-
-              <div className="space-y-1.5">
-                <Label htmlFor="bp_notes">Notes <span className="text-muted-foreground font-normal">(optional)</span></Label>
-                <Textarea
-                  id="bp_notes"
-                  placeholder="e.g. May vendor payments"
-                  value={batchNotes}
-                  onChange={(e) => setBatchNotes(e.target.value)}
-                  rows={2}
-                />
-              </div>
-
-              {/* Mini preview */}
-              <div className="rounded-lg border divide-y text-sm">
-                {selectedBills.map((b) => {
-                  const billGst = Number(b.gst_amount ?? 0);
-                  const billBase = Number(b.approved_amount ?? b.total_amount);
-                  const billTotal = Math.max(0, billBase + billGst - Number(b.amount_paid ?? 0));
-                  return (
-                    <div key={b.id} className="flex items-center justify-between px-3 py-2 gap-2">
-                      <div className="min-w-0">
-                        <div className="flex items-center gap-1.5 flex-wrap">
-                          <span className="font-mono text-xs font-medium text-primary">{b.bill_number}</span>
-                          <span className="text-muted-foreground text-xs truncate">{b.procurement_vendors?.name}</span>
-                        </div>
-                        {b.invoice_number && (
-                          <div className="flex items-center gap-1 mt-0.5">
-                            <span className="text-[10px] text-muted-foreground">Inv #</span>
-                            {b.invoice_file_url ? (
-                              <a
-                                href={b.invoice_file_url}
-                                target="_blank"
-                                rel="noopener noreferrer"
-                                className="text-[10px] font-mono text-blue-600 hover:text-blue-800 hover:underline"
-                              >
-                                {b.invoice_number}
-                              </a>
-                            ) : (
-                              <span className="text-[10px] font-mono text-muted-foreground">{b.invoice_number}</span>
-                            )}
-                          </div>
-                        )}
-                      </div>
-                      <div className="text-right shrink-0">
-                        <span className="font-medium text-xs">{formatCurrency(billTotal)}</span>
-                        {billGst > 0 && (
-                          <div className="text-[10px] text-muted-foreground">incl. GST {formatCurrency(billGst)}</div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-                <div className="flex items-center justify-between px-3 py-2 bg-muted/40 font-semibold">
-                  <span>Total to pay</span>
-                  <span className="text-emerald-700">{formatCurrency(selectedTotal)}</span>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* ── Steps 1..N: Per-bill GST ───────────────────────────────── */}
-          {batchStep >= 1 && batchStep <= selectedBills.length && (() => {
-            const bill = selectedBills[batchStep - 1];
-            const gst = parseFloat(batchGst[bill.id] || "0") || 0;
-            const base = Number(bill.approved_amount ?? bill.total_amount);
-            const outstanding = Math.max(0, base + gst - Number(bill.amount_paid ?? 0));
-            return (
-              <div className="space-y-4 py-1">
-                <div className="flex items-center justify-between text-xs text-muted-foreground">
-                  <span>Bill {batchStep} of {selectedBills.length}</span>
-                  <div className="flex gap-1">
-                    {selectedBills.map((_, i) => (
-                      <span key={i} className={cn("h-1.5 w-5 rounded-full", i < batchStep ? "bg-emerald-500" : "bg-muted")} />
-                    ))}
-                  </div>
-                </div>
-
-                <div className="rounded-lg border p-3 space-y-1 text-sm">
-                  <div className="flex items-center justify-between">
-                    <span className="font-mono font-medium text-primary">{bill.bill_number}</span>
-                    <Badge variant="secondary" className="text-xs">{bill.procurement_vendors?.name ?? "—"}</Badge>
-                  </div>
-                  <div className="flex items-center justify-between text-muted-foreground">
-                    <span>Base amount</span>
-                    <span className="font-medium text-foreground">{formatCurrency(base)}</span>
-                  </div>
-                  {bill.invoice_number && (
-                    <div className="flex items-center justify-between text-muted-foreground">
-                      <span>Invoice #</span>
-                      {bill.invoice_file_url ? (
-                        <a
-                          href={bill.invoice_file_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="font-mono text-xs text-blue-600 hover:text-blue-800 hover:underline flex items-center gap-1"
-                        >
-                          {bill.invoice_number}
-                          <svg xmlns="http://www.w3.org/2000/svg" className="h-3 w-3" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><polyline points="15 3 21 3 21 9"/><line x1="10" y1="14" x2="21" y2="3"/></svg>
-                        </a>
-                      ) : (
-                        <span className="font-mono text-xs">{bill.invoice_number}</span>
-                      )}
-                    </div>
-                  )}
-                </div>
-
-                <div className="space-y-1.5">
-                  <Label htmlFor="bp_gst">GST Amount <span className="text-muted-foreground font-normal">(leave 0 if no GST)</span></Label>
-                  <Input
-                    id="bp_gst"
-                    type="number"
-                    min="0"
-                    step="0.01"
-                    placeholder="0.00"
-                    value={batchGst[bill.id] ?? ""}
-                    onChange={(e) => setBatchGst((prev) => ({ ...prev, [bill.id]: e.target.value }))}
-                  />
-                  {gst > 0 && (
-                    <p className="text-xs text-muted-foreground">
-                      GST rate ≈ {((gst / base) * 100).toFixed(1)}%
-                    </p>
-                  )}
-                </div>
-
-                <div className="rounded-lg bg-emerald-50 border border-emerald-200 px-3 py-2.5 flex items-center justify-between">
-                  <span className="text-sm text-emerald-800">Amount to pay</span>
-                  <span className="text-lg font-bold text-emerald-700">{formatCurrency(outstanding)}</span>
-                </div>
-
-                {/* ── Running total strip ──────────────────────────────── */}
-                <div className="rounded-lg border bg-muted/20 divide-y text-xs overflow-hidden">
-                  <div className="px-3 py-1.5 text-[10px] font-semibold text-muted-foreground uppercase tracking-wider bg-muted/40">
-                    Running Total — all {selectedBills.length} bills
-                  </div>
-                  {selectedBills.map((b, i) => {
-                    const stepIndex = i + 1;
-                    const isConfirmed = stepIndex < batchStep;
-                    const isCurrent = stepIndex === batchStep;
-                    const bGst = parseFloat(batchGst[b.id] || "0") || 0;
-                    const bBase = Number(b.approved_amount ?? b.total_amount);
-                    const bTotal = Math.max(0, bBase + bGst - Number(b.amount_paid ?? 0));
-                    return (
-                      <div
-                        key={b.id}
-                        className={cn(
-                          "flex items-center justify-between px-3 py-1.5 gap-2",
-                          isCurrent && "bg-emerald-50/80",
-                        )}
-                      >
-                        <div className="flex items-center gap-1.5 min-w-0">
-                          {isConfirmed ? (
-                            <CheckCircle2 className="h-3 w-3 text-emerald-500 shrink-0" />
-                          ) : isCurrent ? (
-                            <ArrowRight className="h-3 w-3 text-emerald-600 shrink-0" />
-                          ) : (
-                            <span className="h-3 w-3 rounded-full border border-muted-foreground/30 shrink-0 inline-block" />
-                          )}
-                          <span className={cn(
-                            "font-mono truncate",
-                            isCurrent ? "text-emerald-700 font-semibold" : isConfirmed ? "text-foreground" : "text-muted-foreground/70",
-                          )}>
-                            {b.bill_number}
-                          </span>
-                          {!isConfirmed && !isCurrent && (
-                            <span className="text-[10px] text-muted-foreground/50 shrink-0">est.</span>
-                          )}
-                        </div>
-                        <span className={cn(
-                          "font-semibold shrink-0",
-                          isCurrent ? "text-emerald-700" : isConfirmed ? "text-foreground" : "text-muted-foreground/60",
-                        )}>
-                          {formatCurrency(bTotal)}
-                        </span>
-                      </div>
-                    );
-                  })}
-                  {/* Grand total */}
-                  <div className="flex items-center justify-between px-3 py-2 bg-emerald-50 font-bold">
-                    <span className="text-emerald-800 text-xs">Grand Total</span>
-                    <span className="text-emerald-700 text-sm">
-                      {formatCurrency(
-                        selectedBills.reduce((s, b) => {
-                          const bGst = parseFloat(batchGst[b.id] || "0") || 0;
-                          const bBase = Number(b.approved_amount ?? b.total_amount);
-                          return s + Math.max(0, bBase + bGst - Number(b.amount_paid ?? 0));
-                        }, 0)
-                      )}
-                    </span>
-                  </div>
-                </div>
-              </div>
-            );
-          })()}
-
-          {/* ── Summary step ──────────────────────────────────────────── */}
-          {batchStep === selectedBills.length + 1 && (() => {
-            const totalWithGst = selectedBills.reduce((s, b) => {
-              const gst = parseFloat(batchGst[b.id] || "0") || 0;
-              const base = Number(b.approved_amount ?? b.total_amount);
-              return s + Math.max(0, base + gst - Number(b.amount_paid ?? 0));
-            }, 0);
-            return (
-              <div className="space-y-3 py-1">
-                <p className="text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2">
-                  Review and confirm. All bills will be marked as paid under reference <span className="font-mono font-medium">{batchRef}</span>.
-                </p>
-
-                <div className="rounded-lg border divide-y text-sm">
-                  <div className="grid grid-cols-4 px-3 py-2 text-xs font-semibold text-muted-foreground bg-muted/40">
-                    <span>Bill</span><span>Vendor</span><span className="text-right">GST</span><span className="text-right">Total</span>
-                  </div>
-                  {selectedBills.map((b) => {
-                    const gst = parseFloat(batchGst[b.id] || "0") || 0;
-                    const base = Number(b.approved_amount ?? b.total_amount);
-                    const total = Math.max(0, base + gst - Number(b.amount_paid ?? 0));
-                    return (
-                      <div key={b.id} className="grid grid-cols-4 px-3 py-2.5 items-center">
-                        <span className="font-mono text-xs font-medium text-primary">{b.bill_number}</span>
-                        <span className="truncate text-xs text-muted-foreground pr-2">{b.procurement_vendors?.name ?? "—"}</span>
-                        <span className="text-right text-xs">{gst > 0 ? formatCurrency(gst) : "—"}</span>
-                        <span className="text-right font-semibold">{formatCurrency(total)}</span>
-                      </div>
-                    );
-                  })}
-                  <div className="grid grid-cols-4 px-3 py-2.5 bg-emerald-50 font-bold text-emerald-800">
-                    <span className="col-span-3">Total payment</span>
-                    <span className="text-right text-emerald-700">{formatCurrency(totalWithGst)}</span>
-                  </div>
-                </div>
-
-                <div className="rounded-lg border p-3 text-xs space-y-1 text-muted-foreground">
-                  <div className="flex justify-between"><span>Date</span><span className="font-medium text-foreground">{formatDate(batchDate)}</span></div>
-                  <div className="flex justify-between"><span>Mode</span><span className="font-medium text-foreground uppercase">{batchMode}</span></div>
-                  <div className="flex justify-between"><span>Reference</span><span className="font-mono font-medium text-foreground">{batchRef}</span></div>
-                  {batchNotes && <div className="flex justify-between"><span>Notes</span><span className="font-medium text-foreground">{batchNotes}</span></div>}
-                </div>
-              </div>
-            );
-          })()}
-
-          <DialogFooter className="gap-2 sm:gap-0">
-            {/* Back */}
-            {batchStep > 0 && (
-              <Button
-                variant="outline"
-                onClick={() => setBatchStep((s) => s - 1)}
-                disabled={batchSubmitting}
-                className="gap-1"
-              >
-                <ArrowLeft className="h-4 w-4" /> Back
-              </Button>
-            )}
-
-            {/* Cancel (step 0 only) */}
-            {batchStep === 0 && (
-              <Button variant="outline" onClick={() => setBatchWizardOpen(false)}>
-                Cancel
-              </Button>
-            )}
-
-            {/* Next (steps 0..N-1) */}
-            {batchStep < selectedBills.length + 1 && (
-              <Button
-                onClick={() => {
-                  if (batchStep === 0) {
-                    if (!batchMode) { toast.error("Select a payment mode"); return; }
-                    if (!batchDate) { toast.error("Select a payment date"); return; }
-                    if (!batchRef.trim()) { toast.error("Enter the payment reference / UTR"); return; }
-                  }
-                  setBatchStep((s) => s + 1);
-                }}
-                className={batchStep === 0 ? "gap-1" : "gap-1"}
-                disabled={batchSubmitting}
-              >
-                {batchStep === selectedBills.length ? "Review" : batchStep === 0 ? "Next" : "Next"} <ArrowRight className="h-4 w-4" />
-              </Button>
-            )}
-
-            {/* Confirm (summary step) */}
-            {batchStep === selectedBills.length + 1 && (
-              <Button
-                className="bg-emerald-600 hover:bg-emerald-700 gap-1"
-                onClick={handleBatchSubmit}
-                disabled={batchSubmitting}
-              >
-                {batchSubmitting && <Loader2 className="h-4 w-4 animate-spin" />}
-                Confirm Payment
-              </Button>
-            )}
           </DialogFooter>
         </DialogContent>
       </Dialog>
