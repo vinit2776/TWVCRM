@@ -18,8 +18,8 @@ export async function POST(
     return NextResponse.json({ error: "Only Accounts or Admin can send payment confirmations" }, { status: 403 });
   }
 
-  const body = await request.json();
-  const ccEmails: string[] = Array.isArray(body.cc) ? body.cc.filter(Boolean) : [];
+  // Fixed CC recipients for all payment confirmation emails
+  const FIXED_CC = ["admin@stonecolour.com", "admin@theworkvilla.com"];
 
   // Fetch bill with vendor and PO
   const { data: bill, error } = await supabase
@@ -44,10 +44,7 @@ export async function POST(
     return NextResponse.json({ error: "Vendor not found for this bill" }, { status: 404 });
   }
 
-  // Allow send when primary email is missing only if CC addresses were provided
-  if (!vendor.contact_email && ccEmails.length === 0) {
-    return NextResponse.json({ error: "Vendor has no registered email address. Add the vendor email or provide a CC address to send to." }, { status: 422 });
-  }
+  // Always sendable — if vendor email is missing, confirmation goes to fixed CC addresses
 
   const po = bill.purchase_orders as { id: string; po_number: string } | null;
 
@@ -60,10 +57,13 @@ export async function POST(
     cash: "Cash / Petty Cash",
   };
 
-  const amountPaid = Number(bill.amount_paid ?? 0);
-  const totalAmount = Number(bill.total_amount ?? 0);
-  const outstanding = Math.max(0, totalAmount - amountPaid);
+  const baseAmount  = Number(bill.total_amount ?? 0);
+  const gstAmount   = Number(bill.gst_amount ?? 0);
+  const invoiceTotal = baseAmount + gstAmount;          // total payable incl. GST
+  const amountPaid  = Number(bill.amount_paid ?? 0);
+  const outstanding = Math.max(0, invoiceTotal - amountPaid);
   const isFullyPaid = outstanding <= 0;
+  const hasGst      = gstAmount > 0;
 
   const formattedDate = bill.payment_date
     ? new Date(bill.payment_date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "long", year: "numeric" })
@@ -97,7 +97,14 @@ export async function POST(
             <td style="padding: 10px 16px; color: #6b7280; font-size: 13px; border-bottom: 1px solid #e5e7eb;">Payment Mode</td>
             <td style="padding: 10px 16px; font-size: 13px; color: #374151; border-bottom: 1px solid #e5e7eb;">${paymentModeLabel[bill.payment_mode ?? ""] ?? bill.payment_mode ?? "—"}</td>
           </tr>
-          ${bill.payment_reference ? `<tr style="background: #f3f4f6;"><td style="padding: 10px 16px; color: #6b7280; font-size: 13px; border-bottom: 1px solid #e5e7eb;">Reference / UTR</td><td style="padding: 10px 16px; font-size: 13px; font-weight: bold; color: #374151; border-bottom: 1px solid #e5e7eb;">${bill.payment_reference}</td></tr>` : ""}
+          <tr style="background: #f3f4f6;"><td style="padding: 10px 16px; color: #6b7280; font-size: 13px; border-bottom: 1px solid #e5e7eb;">Reference / UTR</td><td style="padding: 10px 16px; font-size: 13px; font-weight: bold; color: #374151; border-bottom: 1px solid #e5e7eb;">${bill.payment_reference ?? "—"}</td></tr>
+          ${hasGst ? `
+          <tr><td style="padding: 10px 16px; color: #6b7280; font-size: 13px; border-bottom: 1px solid #e5e7eb;">Invoice Amount (excl. GST)</td><td style="padding: 10px 16px; font-size: 13px; color: #374151; border-bottom: 1px solid #e5e7eb;">₹${baseAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+          <tr><td style="padding: 10px 16px; color: #6b7280; font-size: 13px; border-bottom: 1px solid #e5e7eb;">GST</td><td style="padding: 10px 16px; font-size: 13px; color: #374151; border-bottom: 1px solid #e5e7eb;">₹${gstAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+          <tr style="background: #f3f4f6;"><td style="padding: 10px 16px; color: #374151; font-size: 13px; font-weight: bold; border-bottom: 1px solid #e5e7eb;">Invoice Total (incl. GST)</td><td style="padding: 10px 16px; font-size: 13px; font-weight: bold; color: #374151; border-bottom: 1px solid #e5e7eb;">₹${invoiceTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+          ` : `
+          <tr style="background: #f3f4f6;"><td style="padding: 10px 16px; color: #374151; font-size: 13px; font-weight: bold; border-bottom: 1px solid #e5e7eb;">Invoice Total</td><td style="padding: 10px 16px; font-size: 13px; font-weight: bold; color: #374151; border-bottom: 1px solid #e5e7eb;">₹${invoiceTotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+          `}
           <tr style="background: #f0fdf4;">
             <td style="padding: 12px 16px; color: #166534; font-size: 14px; font-weight: bold; border-bottom: 1px solid #bbf7d0;">Amount Paid</td>
             <td style="padding: 12px 16px; font-size: 16px; font-weight: bold; color: #15803d; border-bottom: 1px solid #bbf7d0;">₹${amountPaid.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td>
@@ -117,12 +124,18 @@ export async function POST(
     </div>
   `;
 
-  const primaryEmail = vendor?.contact_email ?? null;
-  const recipients: string[] = primaryEmail ? [primaryEmail, ...ccEmails] : ccEmails;
+  const primaryEmail = vendor?.contact_email?.trim() || null;
+
+  // Rule 1: vendor email available → send to vendor, CC fixed admins
+  // Rule 2: vendor email missing → send directly to fixed admins (no CC field)
+  const toAddrs: string[] = primaryEmail ? [primaryEmail] : FIXED_CC;
+  const ccAddrs: string[] | undefined = primaryEmail ? FIXED_CC : undefined;
+  const sentToVendor = !!primaryEmail;
 
   const { error: emailError } = await resend.emails.send({
     from: EMAIL_FROM,
-    to: recipients,
+    to: toAddrs,
+    cc: ccAddrs,
     replyTo: EMAIL_REPLY_TO,
     subject: `Payment Confirmation — ${bill.bill_number}`,
     html,
@@ -138,8 +151,9 @@ export async function POST(
     action: "email_sent",
     performedBy: dbUser.id,
     changes: {
-      to: { old: null, new: primaryEmail ?? null },
-      cc: { old: null, new: ccEmails.length > 0 ? ccEmails.join(", ") : null },
+      sent_to_vendor: { old: null, new: sentToVendor },
+      to: { old: null, new: toAddrs.join(", ") },
+      cc: { old: null, new: ccAddrs ? ccAddrs.join(", ") : null },
       subject: { old: null, new: `Payment Confirmation — ${bill.bill_number}` },
     } as Record<string, { old: unknown; new: unknown }>,
   });

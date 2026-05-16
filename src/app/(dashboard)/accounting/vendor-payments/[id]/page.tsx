@@ -251,7 +251,6 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   // Payment dialog + send confirmation toggle + resend dialog
   const [paymentDialog, setPaymentDialog] = useState(false);
   const [sendConfirmation, setSendConfirmation] = useState(true);
-  const [paymentCcEmail, setPaymentCcEmail] = useState("");
 
   // Inline GST setter (for accounts role when GST wasn't set at approval)
   const [inlineGstAmount, setInlineGstAmount] = useState<string>("");
@@ -275,7 +274,6 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const [tdsBaseAmount, setTdsBaseAmount] = useState("");
   const [tdsPanAvailable, setTdsPanAvailable] = useState(true);
   const [resendDialog, setResendDialog] = useState(false);
-  const [resendCc, setResendCc] = useState("");
   const [auditExpanded, setAuditExpanded] = useState(false);
   const AUDIT_PREVIEW_COUNT = 5;
   const [resendLoading, setResendLoading] = useState(false);
@@ -493,13 +491,11 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       setPaymentDialog(false);
       setPayNote("");
 
-      const hasEmail = !!(vendor?.contact_email?.trim());
-      const ccForPayment = paymentCcEmail.trim();
-      if (sendConfirmation && (hasEmail || ccForPayment)) {
+      if (sendConfirmation) {
         const emailRes = await fetch(`/api/procurement/bills/${id}/payment-email`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cc: ccForPayment && !hasEmail ? [ccForPayment] : [] }),
+          body: JSON.stringify({}),
         });
         if (emailRes.ok) {
           toast.success("Confirmation sent to vendor");
@@ -519,11 +515,10 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   async function handleResendConfirmation() {
     setResendLoading(true);
     try {
-      const ccList = resendCc.split(",").map((e) => e.trim()).filter(Boolean);
       const res = await fetch(`/api/procurement/bills/${id}/payment-email`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cc: ccList }),
+        body: JSON.stringify({}),
       });
       const data = await res.json();
       if (!res.ok) {
@@ -531,7 +526,6 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       } else {
         toast.success("Payment confirmation sent to vendor");
         setResendDialog(false);
-        setResendCc("");
       }
     } finally {
       setResendLoading(false);
@@ -1112,7 +1106,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               vendorName={vendor.name}
               forceShow
               hideSkip
-              onEmailSaved={() => { fetchChain(); setSendConfirmation(true); setPaymentCcEmail(""); }}
+              onEmailSaved={() => { fetchChain(); setSendConfirmation(true); }}
             />
           )}
 
@@ -1529,30 +1523,16 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 <div className="min-w-0 flex-1">
                   <span className="text-sm font-medium">Send payment confirmation to vendor</span>
                   {vendor?.contact_email?.trim() ? (
-                    <p className="text-xs text-muted-foreground">{vendor.contact_email.trim()}</p>
+                    <p className="text-xs text-muted-foreground">
+                      To: {vendor.contact_email.trim()} · CC: admin@stonecolour.com, admin@theworkvilla.com
+                    </p>
                   ) : (
-                    <p className="text-xs text-muted-foreground">No primary email saved — enter one above or use the field below</p>
+                    <p className="text-xs text-muted-foreground">
+                      No vendor email — confirmation sent to admin@stonecolour.com, admin@theworkvilla.com
+                    </p>
                   )}
                 </div>
               </label>
-
-              {/* CC / fallback email field — shown when no primary email and confirmation is checked */}
-              {sendConfirmation && !vendor?.contact_email?.trim() && (
-                <div className="space-y-1">
-                  <Label className="text-xs">Send confirmation to (one-time address)</Label>
-                  <Input
-                    type="email"
-                    placeholder="vendor@example.com"
-                    value={paymentCcEmail}
-                    onChange={(e) => setPaymentCcEmail(e.target.value)}
-                    className="h-8 text-sm"
-                  />
-                  <p className="text-[11px] text-muted-foreground">
-                    This sends the confirmation now but does not save the email to the vendor profile.
-                    Use the &ldquo;Add vendor email&rdquo; banner above to save it permanently.
-                  </p>
-                </div>
-              )}
             </div>
           </div>
 
@@ -1563,7 +1543,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               disabled={paying || !payMode || !payAmount}
               className="gap-2"
             >
-              {paying ? "Recording…" : sendConfirmation && (vendor?.contact_email?.trim() || paymentCcEmail.trim()) ? "Record & Send" : "Record Payment"}
+              {paying ? "Recording…" : sendConfirmation ? "Record & Send" : "Record Payment"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1710,7 +1690,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               {(userRole === "accounts" || userRole === "admin") && (
                 <button
                   className="text-xs text-primary hover:underline shrink-0"
-                  onClick={() => { setResendCc(""); setResendDialog(true); }}
+                  onClick={() => setResendDialog(true)}
                 >
                   Resend confirmation
                 </button>
@@ -1732,7 +1712,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           {(userRole === "accounts" || userRole === "admin") && (
             <button
               className="ml-auto text-xs text-primary hover:underline shrink-0"
-              onClick={() => { setResendCc(""); setResendDialog(true); }}
+              onClick={() => setResendDialog(true)}
             >
               Resend confirmation
             </button>
@@ -2115,19 +2095,14 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 onEmailSaved={() => fetchChain()}
               />
             ) : null}
-            <div className="space-y-1.5">
-              <Label>
-                {vendor?.contact_email?.trim() ? "CC / Additional recipient (optional)" : "Send to this address"}
-              </Label>
-              <Input
-                value={resendCc}
-                onChange={(e) => setResendCc(e.target.value)}
-                placeholder="vendor@example.com, accounts@company.com"
-              />
-              {!vendor?.contact_email?.trim() && (
-                <p className="text-xs text-muted-foreground">
-                  Enter one or more email addresses (comma-separated). The confirmation will be sent to these addresses.
-                </p>
+            <div className="rounded-md bg-muted/50 border px-3 py-2.5 space-y-1 text-xs text-muted-foreground">
+              {vendor?.contact_email?.trim() ? (
+                <>
+                  <p><span className="font-medium text-foreground">To:</span> {vendor.contact_email.trim()}</p>
+                  <p><span className="font-medium text-foreground">CC:</span> admin@stonecolour.com, admin@theworkvilla.com</p>
+                </>
+              ) : (
+                <p><span className="font-medium text-foreground">To:</span> admin@stonecolour.com, admin@theworkvilla.com (no vendor email on file)</p>
               )}
             </div>
           </div>
@@ -2135,7 +2110,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
             <Button variant="outline" onClick={() => setResendDialog(false)}>Cancel</Button>
             <Button
               onClick={handleResendConfirmation}
-              disabled={resendLoading || (!vendor?.contact_email?.trim() && !resendCc.trim())}
+              disabled={resendLoading}
               className="gap-2"
             >
               <Send className="h-4 w-4" />
