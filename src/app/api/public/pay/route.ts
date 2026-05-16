@@ -57,7 +57,13 @@ export async function GET(request: NextRequest) {
   });
 }
 
-// POST — Record a payment via public link
+// POST — Record a payment submission via public link.
+// SECURITY: This route always inserts with status="pending" regardless of any
+// Razorpay fields supplied by the client. Verification to "verified" happens
+// exclusively through the signed Razorpay webhook (payment.captured /
+// payment_link.paid) which performs HMAC signature validation. Accepting
+// client-supplied payment IDs as proof of payment would allow anyone with a
+// valid booking token to fabricate a verified payment.
 export async function POST(request: NextRequest) {
   const body = await request.json();
   const { token, amount, payment_mode, payment_reference, razorpay_payment_id, razorpay_order_id, razorpay_signature } = body;
@@ -85,29 +91,22 @@ export async function POST(request: NextRequest) {
     .insert({
       booking_id: booking.id,
       amount: amount || Number(booking.total_amount),
-      payment_mode: payment_mode || "razorpay",
+      payment_mode: payment_mode || "bank_transfer",
       payment_reference: payment_reference || null,
+      // Store Razorpay fields for reference only — status stays "pending".
+      // The webhook verifies the HMAC and promotes to "verified".
       razorpay_payment_id: razorpay_payment_id || null,
       razorpay_order_id: razorpay_order_id || null,
       razorpay_signature: razorpay_signature || null,
-      status: razorpay_payment_id ? "verified" : "pending",
+      status: "pending",
     })
     .select()
     .single();
 
   if (insertError) return NextResponse.json({ error: insertError.message }, { status: 500 });
 
-  // Check if fully paid → update booking
-  const { data: allPayments } = await supabase
-    .from("booking_payments")
-    .select("amount")
-    .eq("booking_id", booking.id)
-    .eq("status", "verified");
+  // NOTE: We intentionally do NOT check total paid or update payment_status here.
+  // Only the Razorpay webhook (which has verified the HMAC signature) may do that.
 
-  const totalPaid = (allPayments || []).reduce((s, p) => s + Number(p.amount), 0);
-  if (totalPaid >= Number(booking.total_amount)) {
-    await supabase.from("bookings").update({ payment_status: "paid" }).eq("id", booking.id);
-  }
-
-  return NextResponse.json({ data: payment, message: "Payment recorded" });
+  return NextResponse.json({ data: payment, message: "Payment submission recorded. Our team will verify and confirm shortly." });
 }

@@ -10,9 +10,24 @@ import { createHmac } from "crypto";
  *
  * The signature makes the code impossible to forge without the secret.
  * Anyone can verify by re-computing the HMAC from the stored record.
+ *
+ * SECURITY: APPROVAL_CODE_SECRET must be set as a dedicated env variable.
+ * Do not reuse SUPABASE_SERVICE_ROLE_KEY for signing — it is a DB credential,
+ * not a signing secret, and key rotation for one purpose should not invalidate
+ * the other. Set APPROVAL_CODE_SECRET in Vercel → Settings → Environment Variables.
  */
 
-const APPROVAL_SECRET = process.env.APPROVAL_CODE_SECRET || process.env.SUPABASE_SERVICE_ROLE_KEY || "twv-approval-fallback-key";
+function getApprovalSecret(): string {
+  const secret = process.env.APPROVAL_CODE_SECRET;
+  if (!secret) {
+    throw new Error(
+      "[approval-code] APPROVAL_CODE_SECRET environment variable is not set. " +
+      "Add it to Vercel → Settings → Environment Variables before deploying. " +
+      "Generate with: node -e \"console.log(require('crypto').randomBytes(32).toString('hex'))\""
+    );
+  }
+  return secret;
+}
 
 export type ApprovalType = "pr" | "bill" | "transfer";
 
@@ -44,7 +59,7 @@ export function generateSignedApprovalCode(
 
   // HMAC signature: hash(entityId + baseCode + timestamp)
   const payload = `${entityId}:${baseCode}:${now.toISOString().split("T")[0]}`;
-  const hmac = createHmac("sha256", APPROVAL_SECRET).update(payload).digest("hex");
+  const hmac = createHmac("sha256", getApprovalSecret()).update(payload).digest("hex");
   const sig = hmac.slice(0, 4).toUpperCase();
 
   return `${baseCode}-${sig}`;
@@ -74,7 +89,7 @@ export function verifyApprovalCode(
   // Re-compute HMAC with the approval date
   const approvalDate = approvedAt.split("T")[0];
   const payload = `${entityId}:${baseCode}:${approvalDate}`;
-  const hmac = createHmac("sha256", APPROVAL_SECRET).update(payload).digest("hex");
+  const hmac = createHmac("sha256", getApprovalSecret()).update(payload).digest("hex");
   const expectedSig = hmac.slice(0, 4).toUpperCase();
 
   return providedSig === expectedSig;
