@@ -31,7 +31,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
-import { ContractQuotasSection } from "@/components/contracts/contract-quotas-section";
 import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
@@ -875,14 +874,11 @@ export default function ContractDetailPage({
             const canEdit = hasQuotaRole && (userRole === "admin" || !isLocked);
             const quotaReadOnly = !canEdit;
             return (
-              <>
-                <ContractQuotasSection contractId={id} readOnly={quotaReadOnly} />
-                <ContractFacilitiesSection
-                  contractId={id}
-                  locationId={contract.location_id ?? null}
-                  readOnly={quotaReadOnly}
-                />
-              </>
+              <ContractFacilitiesSection
+                contractId={id}
+                locationId={contract.location_id ?? null}
+                readOnly={quotaReadOnly}
+              />
             );
           })()}
 
