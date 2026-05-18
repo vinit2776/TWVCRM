@@ -46,6 +46,7 @@ type ChainData = {
     approved_at: string | null;
     approved_amount: number | null;
     approved_amount_note: string | null;
+    gst_amount: number | null;
     creator: { id: string; full_name: string } | null;
     approver: { id: string; full_name: string } | null;
     vendor_id: string; po_id: string | null;
@@ -414,7 +415,8 @@ export default function VendorBillDetailPage() {
   if (!bill) return null;
 
   const vendor = bill.procurement_vendors as { id: string; name: string; contact_name?: string; contact_phone?: string } | null;
-  const remaining = Number(bill.total_amount) - Number(bill.amount_paid);
+  const billGst   = Number(bill.gst_amount ?? 0);
+  const remaining = Number(bill.total_amount) + billGst - Number(bill.amount_paid);
   const canApprove = ["admin", "manager"].includes(currentUserRole ?? "");
   const isGoodsPo = bill.purchase_orders && (bill.purchase_orders as { po_type?: string }).po_type !== "service";
 
@@ -788,7 +790,7 @@ export default function VendorBillDetailPage() {
                 <div className="flex justify-between text-sm">
                   <span className="text-teal-700 font-medium">Balance Approved</span>
                   <span className="font-medium text-teal-700">
-                    {formatCurrency(Math.max(0, Number(bill.approved_amount) - Number(bill.amount_paid)))}
+                    {formatCurrency(Math.max(0, Number(bill.approved_amount) + billGst - Number(bill.amount_paid)))}
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
@@ -1252,8 +1254,8 @@ export default function VendorBillDetailPage() {
                   </td>
                   <td colSpan={4} className="px-4 py-2.5 text-xs text-muted-foreground">
                     {bill.approved_amount !== null && Number(bill.approved_amount) < Number(bill.total_amount)
-                      ? `Balance approved: ${formatCurrency(Math.max(0, Number(bill.approved_amount) - Number(bill.amount_paid)))} · Pending approval: ${formatCurrency(Number(bill.total_amount) - Number(bill.approved_amount))}`
-                      : `Outstanding: ${formatCurrency(Math.max(0, Number(bill.total_amount) - Number(bill.amount_paid)))}`
+                      ? `Balance approved: ${formatCurrency(Math.max(0, Number(bill.approved_amount) + billGst - Number(bill.amount_paid)))} · Pending approval: ${formatCurrency(Number(bill.total_amount) - Number(bill.approved_amount))}`
+                      : `Outstanding: ${formatCurrency(Math.max(0, Number(bill.total_amount) + billGst - Number(bill.amount_paid)))}`
                     }
                   </td>
                 </tr>
