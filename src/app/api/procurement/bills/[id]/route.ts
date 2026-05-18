@@ -470,22 +470,6 @@ export async function PATCH(
           });
         }
 
-        // Goods PO: require rejection outcome
-        if (!parsed.data.rejection_outcome) {
-          return NextResponse.json(
-            { error: "Rejection outcome is required for goods invoices (return or replacement)" },
-            { status: 400 }
-          );
-        }
-
-        // If return: cancel the PO
-        if (parsed.data.rejection_outcome === "return") {
-          await supabase
-            .from("purchase_orders")
-            .update({ status: "cancelled" })
-            .eq("id", bill.po_id)
-            .in("status", ["invoice_received"]);
-        }
       }
 
       updatePayload = {
@@ -493,18 +477,12 @@ export async function PATCH(
         approved_by: dbUser.id,
         approved_at: new Date().toISOString(),
         rejection_reason: parsed.data.rejection_reason,
-        rejection_outcome: parsed.data.rejection_outcome ?? null,
+        rejection_outcome: null,
       };
-
-      const outcomeLabel = parsed.data.rejection_outcome === "return"
-        ? "Goods to be returned"
-        : parsed.data.rejection_outcome === "replacement"
-        ? "Replacement requested"
-        : "Invoice rejected";
 
       sendPushToAll({
         title: "Invoice Rejected",
-        body: `${bill.bill_number} rejected — ${outcomeLabel}`,
+        body: `${bill.bill_number} rejected — ${parsed.data.rejection_reason}`,
         url: `/procurement/bills/${id}`,
         tag: `bill-approval-${id}`,
       }).catch((err) => console.error("[push] reject notification failed:", err));

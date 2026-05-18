@@ -17,9 +17,6 @@ import { Textarea } from "@/components/ui/textarea";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
-import {
-  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
-} from "@/components/ui/select";
 import { toast } from "sonner";
 import {
   BILL_PAYMENT_STATUS_LABELS, BILL_PAYMENT_STATUS_COLORS,
@@ -208,7 +205,6 @@ export default function VendorBillDetailPage() {
   const [rejectDialog, setRejectDialog] = useState(false);
   const [rejectLoading, setRejectLoading] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
-  const [rejectionOutcome, setRejectionOutcome] = useState("");
 
   // Resend confirmation dialog
   const [resendDialog, setResendDialog] = useState(false);
@@ -349,11 +345,6 @@ export default function VendorBillDetailPage() {
       toast.error("Rejection reason is required");
       return;
     }
-    const poIsGoods = bill?.purchase_orders && (bill.purchase_orders as { po_type?: string }).po_type !== "service";
-    if (poIsGoods && !rejectionOutcome) {
-      toast.error("Select a rejection outcome");
-      return;
-    }
 
     setRejectLoading(true);
     let navigated = false;
@@ -364,7 +355,6 @@ export default function VendorBillDetailPage() {
         body: JSON.stringify({
           action: "reject",
           rejection_reason: rejectionReason.trim(),
-          ...(poIsGoods && { rejection_outcome: rejectionOutcome }),
         }),
       });
       const json = await res.json();
@@ -431,7 +421,6 @@ export default function VendorBillDetailPage() {
   const billGst   = Number(bill.gst_amount ?? 0);
   const remaining = Number(bill.total_amount) + billGst - Number(bill.amount_paid);
   const canApprove = ["admin", "manager"].includes(currentUserRole ?? "");
-  const isGoodsPo = bill.purchase_orders && (bill.purchase_orders as { po_type?: string }).po_type !== "service";
 
   const linkedPo = bill.purchase_orders as {
     id: string; po_number: string; status: string; po_type?: string;
@@ -535,7 +524,6 @@ export default function VendorBillDetailPage() {
                 variant="outline"
                 onClick={() => {
                   setRejectionReason("");
-                  setRejectionOutcome("");
                   setRejectDialog(true);
                 }}
                 className="text-red-600 border-red-200 hover:bg-red-50"
@@ -1484,25 +1472,6 @@ export default function VendorBillDetailPage() {
                 rows={3}
               />
             </div>
-            {isGoodsPo && (
-              <div className="space-y-1.5">
-                <Label>Outcome <span className="text-red-500">*</span></Label>
-                <Select value={rejectionOutcome} onValueChange={setRejectionOutcome}>
-                  <SelectTrigger>
-                    <SelectValue placeholder="Select outcome" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="return">Return Goods &amp; Cancel PO</SelectItem>
-                    <SelectItem value="replacement">Request Replacement (New PR)</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            )}
-            {!isGoodsPo && bill.purchase_orders && (
-              <p className="text-sm text-muted-foreground">
-                This is a service invoice. Rejecting it will void the bill, allowing a new invoice to be uploaded for this cycle.
-              </p>
-            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setRejectDialog(false)}>Cancel</Button>
