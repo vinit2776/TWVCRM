@@ -8,6 +8,29 @@ TWV CRM is the internal operations platform for **The WorkVilla**, a coworking s
 
 **Production**: https://twv-crm.vercel.app (auto-deploys from `origin/main` via Vercel)
 
+## Critical Rules — Read Before Every Task
+
+### ALWAYS
+
+- Ask clarifying questions before writing code if the request touches auth, payments, customer data, migrations, or third-party integrations.
+- Sync with main and create a feature branch before starting: `git checkout main && git pull && git checkout -b feat/<short-description>`.
+- Match existing patterns in the codebase before introducing new ones. Check how similar features are built first.
+- Test locally end-to-end before committing. Run the full flow, not just the changed function.
+- Update documentation in the same PR if you change an API contract, env var, schema, or public function signature.
+- Verify before assuming — if you're unsure a function exists, a file is at a path, or a pattern is used elsewhere, grep the codebase.
+
+### NEVER
+
+- Never commit secrets — no `.env` files, no API keys, no Supabase service role keys, no credentials in code or comments. Use `.env.example` for documenting required vars.
+- Never push directly to `main` — all changes go through a PR.
+- Never run destructive operations on production — no `DROP`, `TRUNCATE`, mass `DELETE`, or `supabase db reset` against prod.
+- Never disable RLS on a table that contains user data. If RLS is blocking you, fix the policy — don't disable it.
+- Never refactor unrelated code in a feature PR. Open a separate PR for refactors.
+- Never use the Supabase service role key in client code — service role is server-only.
+- Never log PII, passwords, tokens, or API keys even at debug level.
+
+---
+
 ## Mandatory: Build → Deploy → Browser Verify
 
 **Every feature or bug fix must follow this sequence before declaring it done:**
@@ -196,3 +219,146 @@ Razorpay keys are stored in the `app_settings` DB table, not env vars.
 | Operations | `/bookings`, `/vouchers`, `/headcount` | Day-to-day space ops |
 | Spaces | `/spaces` | Seat occupancy, floor canvas |
 | Admin | `/admin/*` | Users, settings, locations |
+
+---
+
+## Workflow Checklists
+
+### Before starting
+
+- Read the relevant ticket / spec. If unclear, ask.
+- `git checkout main && git pull`
+- `git checkout -b <type>/<short-description>` (types: `feat`, `fix`, `chore`, `refactor`, `docs`)
+- Run `npm install` if `package.json` or lockfile changed.
+- Skim existing code in the area you're about to touch — understand patterns before adding to them.
+
+### During the task
+
+- Make small, focused commits with conventional commit messages (see Git & PR Workflow below).
+- If the scope grows beyond the original ticket, stop and ask before continuing.
+- Write tests alongside the code, not after.
+
+### Before committing
+
+- [ ] `npm run lint` passes
+- [ ] `npm run build` succeeds
+- [ ] Manually tested the full user flow locally
+- [ ] No `console.log` debug statements left behind
+- [ ] No commented-out code
+- [ ] No secrets in the diff (`git diff` and look)
+
+### Before merging
+
+- [ ] PR description explains why, not just what
+- [ ] Migration rollback noted (if applicable)
+- [ ] Tested on staging (for anything touching auth, payments, or data)
+- [ ] Reviewed by at least one other person (once team is in place)
+
+---
+
+## Code Conventions
+
+- **TypeScript strict mode.** No `any` without a comment explaining why.
+- **Server Components by default.** Add `"use client"` only when you need interactivity, hooks, or browser APIs.
+- **Server Actions for mutations from the client.** Validate inputs with Zod.
+- **No prop drilling beyond 2 levels** — use composition or context.
+- **File naming**: `kebab-case.ts` for files, `PascalCase` for components.
+- **Imports**: absolute imports via `@/` alias. No relative imports beyond `./` and `../`.
+- **Error handling**: never swallow errors silently. Either handle, log (without PII), or rethrow.
+- **Comments**: explain *why*, not *what*. Code should be self-documenting for the what.
+
+---
+
+## Database & Migrations (Supabase)
+
+- All schema changes go through migrations. Never edit schema via the Supabase dashboard in production.
+- Migration files live in `/supabase/migrations/`. Naming: `NNNNN_description.sql` (sequential 5-digit prefix, matching existing convention).
+- Test migrations locally first: `npx supabase db push` against your local instance.
+- RLS is mandatory on every table containing user data. Default policy: deny all, then allow specific.
+- Reversible migrations where possible — include a rollback path in the PR description for destructive changes.
+- Never query Supabase from client components with the anon key without RLS — RLS is your only protection on the wire.
+
+---
+
+## Security & Secrets
+
+- All secrets live in environment variables, documented in `.env.example` (with placeholder values, no real keys).
+- Service role key: server-side only. Never expose to the browser.
+- Webhook endpoints: verify signatures before processing.
+- User input: validate server-side with Zod, even if the client also validates.
+- External APIs: rate-limit and timeout. Never trust third-party response shapes — validate them.
+- Auth checks: verify session in every API Route Handler that touches user data. Do not rely on middleware alone.
+
+---
+
+## Git & PR Workflow
+
+### Commit format (conventional commits)
+
+```
+feat: add credential vault export endpoint
+fix: handle expired session in dashboard loader
+chore: bump next to 14.2.5
+refactor: extract billing helpers to lib/billing
+docs: update env var list in README
+```
+
+### Branches
+
+- `main` — always deployable, protected
+- `feat/*`, `fix/*`, `chore/*` — short-lived feature branches
+- Delete branches after merge
+
+### PR description template
+
+```
+## What
+Brief summary of the change.
+
+## Why
+The reason for the change — link to issue / customer report / context.
+
+## How to test
+Steps to verify the change works.
+
+## Migration / rollback notes
+(If schema changes or destructive operations)
+
+## Screenshots / screen recordings
+(For UI changes)
+```
+
+Keep PRs small. If it's bigger than ~400 lines of diff, consider splitting.
+
+### Deployment
+
+- Production deploys happen via merge to `main` after PR approval.
+- Feature flags for risky launches — ship dark, enable for a small cohort, then expand.
+- Rollback: Vercel "Promote previous deployment" is one click. Supabase migrations need explicit rollback SQL.
+
+---
+
+## When in Doubt
+
+- **Ask.** A 30-second clarifying question is cheaper than a 3-hour rebuild.
+- **Read the code.** The pattern probably already exists.
+- **Smaller PR.** When in doubt about scope, ship less.
+- **Don't guess on security.** If you're unsure whether something is safe to expose, assume it isn't and ask.
+
+## Skill routing
+
+When the user's request matches an available skill, invoke it via the Skill tool. When in doubt, invoke the skill.
+
+Key routing rules:
+- Product ideas/brainstorming → invoke /office-hours
+- Strategy/scope → invoke /plan-ceo-review
+- Architecture → invoke /plan-eng-review
+- Design system/plan review → invoke /design-consultation or /plan-design-review
+- Full review pipeline → invoke /autoplan
+- Bugs/errors → invoke /investigate
+- QA/testing site behavior → invoke /qa or /qa-only
+- Code review/diff check → invoke /review
+- Visual polish → invoke /design-review
+- Ship/deploy/PR → invoke /ship or /land-and-deploy
+- Save progress → invoke /context-save
+- Resume context → invoke /context-restore
