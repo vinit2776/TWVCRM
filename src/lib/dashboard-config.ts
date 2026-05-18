@@ -169,7 +169,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "sla_risk",
   ],
 
-  // Viewer — read-only observer; sees high-level KPIs across all areas
+  // Management Viewer — read-only observer; sees high-level KPIs across all areas
   viewer: [
     "kpi_stats",
     "mtd_bookings",

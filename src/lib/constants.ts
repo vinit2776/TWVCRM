@@ -185,7 +185,7 @@ export const USER_ROLE_LABELS: Record<string, string> = {
   fms: "Facility Manager",
   office_admin: "Office Administrator",
   it_team: "IT Team",
-  viewer: "Viewer",
+  viewer: "Management Viewer",
 };
 
 export const RATINGS = ["none", "hot", "warm", "cold"] as const;
