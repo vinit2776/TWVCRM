@@ -217,6 +217,7 @@ export default function VendorBillDetailPage() {
   // GST update
   const [gstDialog, setGstDialog] = useState(false);
   const [gstAmountInput, setGstAmountInput] = useState<string>("");
+  const [gstZeroConfirm, setGstZeroConfirm] = useState(false);
   const [gstLoading, setGstLoading] = useState(false);
 
   const today = new Date().toISOString().split("T")[0];
@@ -381,10 +382,15 @@ export default function VendorBillDetailPage() {
 
   const handleUpdateGst = async () => {
     if (!bill) return;
-    const gstVal = parseFloat(gstAmountInput) || 0;
+    const gstVal = gstAmountInput === "" ? 0 : parseFloat(gstAmountInput);
+    if (isNaN(gstVal) || gstVal < 0) { toast.error("Enter a valid GST amount"); return; }
     const maxGstVal = Math.round(Number(bill.total_amount) * 0.28 * 100) / 100;
     if (gstVal > maxGstVal) {
       toast.error(`GST amount cannot exceed 28% of the invoice base (max ${formatCurrency(maxGstVal)})`);
+      return;
+    }
+    if (gstVal === 0 && !gstZeroConfirm) {
+      toast.error("Please tick the confirmation checkbox to set GST to zero");
       return;
     }
     setGstLoading(true);
@@ -392,12 +398,13 @@ export default function VendorBillDetailPage() {
       const res = await fetch(`/api/procurement/bills/${id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action: "update_gst", gst_amount: gstVal }),
+        body: JSON.stringify({ action: "update_gst", gst_amount: gstVal, gst_zero_confirmed: gstVal === 0 ? true : undefined }),
       });
       const json = await res.json();
       if (!res.ok) { toast.error(json.error || "Failed to update GST"); return; }
       toast.success("GST rate updated");
       setGstDialog(false);
+      setGstZeroConfirm(false);
       await fetchAll();
     } finally {
       setGstLoading(false);
@@ -749,7 +756,7 @@ export default function VendorBillDetailPage() {
                   {canApprove && bill.payment_status !== "paid" && (
                     <button
                       type="button"
-                      onClick={() => { setGstAmountInput(gstAmt > 0 ? String(gstAmt) : ""); setGstDialog(true); }}
+                      onClick={() => { setGstAmountInput(gstAmt > 0 ? String(gstAmt) : ""); setGstZeroConfirm(false); setGstDialog(true); }}
                       className="text-[10px] text-blue-500 hover:text-blue-700 underline mt-0.5"
                     >
                       {gstAmt > 0 ? "Change GST amount" : "Set GST amount"}
@@ -1540,15 +1547,16 @@ export default function VendorBillDetailPage() {
           </DialogHeader>
           <div className="space-y-4 py-2">
             <p className="text-sm text-muted-foreground">
-              Enter the total GST amount as printed on the vendor&apos;s invoice. This may be a consolidated figure across multiple GST slabs. Enter 0 if exempt.
+              Enter the total GST amount as printed on the vendor&apos;s invoice. This may be a consolidated figure across multiple GST slabs.
             </p>
             {(() => {
-              const gstAmt = parseFloat(gstAmountInput) || 0;
+              const gstAmt = gstAmountInput === "" ? null : parseFloat(gstAmountInput);
+              const isZero = gstAmt !== null && gstAmt === 0;
               const base = Number(bill.total_amount);
               const maxGst = Math.round(base * 0.28 * 100) / 100;
-              const isOver = gstAmountInput !== "" && gstAmt > maxGst;
+              const isOver = gstAmt !== null && !isNaN(gstAmt) && gstAmt > maxGst;
               return (
-                <div className="space-y-2">
+                <div className="space-y-3">
                   <div className="space-y-1.5">
                     <Label htmlFor="gst-amount-input">GST Amount (₹)</Label>
                     <Input
@@ -1556,9 +1564,9 @@ export default function VendorBillDetailPage() {
                       type="number"
                       min="0"
                       step="0.01"
-                      placeholder="0.00"
+                      placeholder="e.g. 1872.00"
                       value={gstAmountInput}
-                      onChange={(e) => setGstAmountInput(e.target.value)}
+                      onChange={(e) => { setGstAmountInput(e.target.value); if (parseFloat(e.target.value) > 0) setGstZeroConfirm(false); }}
                       className={isOver ? "border-red-500 focus-visible:ring-red-500" : ""}
                     />
                     {isOver && (
@@ -1568,7 +1576,24 @@ export default function VendorBillDetailPage() {
                       </p>
                     )}
                   </div>
-                  {gstAmountInput !== "" && !isOver && (
+
+                  {/* Zero-GST confirmation — shown only when amount is explicitly 0 */}
+                  {isZero && (
+                    <label className="flex items-start gap-2.5 cursor-pointer rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5">
+                      <input
+                        type="checkbox"
+                        checked={gstZeroConfirm}
+                        onChange={(e) => setGstZeroConfirm(e.target.checked)}
+                        className="mt-0.5 h-4 w-4 rounded border-amber-400 accent-amber-600 shrink-0"
+                      />
+                      <span className="text-xs text-amber-800 leading-relaxed">
+                        I confirm this vendor&apos;s invoice has <strong>no GST</strong> (zero-rated, exempt, or unregistered vendor). Total payable = base amount only.
+                      </span>
+                    </label>
+                  )}
+
+                  {/* Preview breakdown — shown when amount > 0 and valid */}
+                  {gstAmt !== null && !isNaN(gstAmt) && gstAmt > 0 && !isOver && (
                     <div className="rounded-md bg-blue-50 border border-blue-100 px-3 py-2 text-sm space-y-1">
                       <div className="flex justify-between text-blue-700">
                         <span>Base (pre-GST)</span><span className="font-medium">{formatCurrency(base)}</span>
@@ -1586,8 +1611,11 @@ export default function VendorBillDetailPage() {
             })()}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setGstDialog(false)} disabled={gstLoading}>Cancel</Button>
-            <Button onClick={handleUpdateGst} disabled={gstLoading}>
+            <Button variant="outline" onClick={() => { setGstDialog(false); setGstZeroConfirm(false); }} disabled={gstLoading}>Cancel</Button>
+            <Button
+              onClick={handleUpdateGst}
+              disabled={gstLoading || (gstAmountInput !== "" && parseFloat(gstAmountInput) === 0 && !gstZeroConfirm)}
+            >
               {gstLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Save GST Amount
             </Button>
