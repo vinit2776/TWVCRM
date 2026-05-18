@@ -3,7 +3,11 @@ import { createClient } from "@/lib/supabase/server";
 import { createUsageChargeSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 
-const CHARGE_ALLOWED_ROLES = ["admin", "manager", "accounts"];
+// POST (create): admin, manager, accounts, floor_manager, sales_rep.
+// No DELETE handler exists — once created, charges can only be voided/removed
+// by admin via statement management. This is intentional: floor managers can
+// submit charges but cannot remove them.
+const CHARGE_ALLOWED_ROLES = ["admin", "manager", "accounts", "floor_manager", "sales_rep"];
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -62,7 +66,7 @@ export async function POST(request: NextRequest) {
 
   if (!dbUser || !CHARGE_ALLOWED_ROLES.includes(dbUser.role)) {
     return NextResponse.json(
-      { error: "Only admin, manager, or accounts can create usage charges" },
+      { error: "You do not have permission to create usage charges" },
       { status: 403 }
     );
   }

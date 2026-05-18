@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { z } from "zod";
 import { logAudit } from "@/lib/audit";
+import { CONTRACT_QUOTA_LOCKED_STATUSES, CONTRACT_QUOTA_ROLES } from "@/lib/constants";
 
 const upsertSchema = z.object({
   name: z.string().min(1).max(100),
@@ -16,8 +17,8 @@ const patchSchema = z.object({
   cost_per_unit: z.number().min(0),
 });
 
-// Roles that can ever edit quotas
-const QUOTA_ROLES = ["admin", "manager", "accounts"];
+// Roles that can ever edit quotas (imported from constants, includes sales_rep)
+const QUOTA_ROLES: readonly string[] = CONTRACT_QUOTA_ROLES;
 
 // On an active (or beyond) contract, only admin may change quotas.
 // Returns an error response if the caller is not allowed, else null.
@@ -29,14 +30,16 @@ async function enforceActiveGate(
 ): Promise<NextResponse | null> {
   if (userRole === "admin") return null; // admin always allowed
 
-  const { data: contract } = await supabase
+  const { data: contract, error } = await supabase
     .from("contracts")
     .select("status")
     .eq("id", contractId)
     .single();
 
-  const lockStatuses = ["active", "renewal_in_progress", "renewed", "completed", "terminated", "expired"];
-  if (contract && lockStatuses.includes(contract.status)) {
+  if (error || !contract) {
+    return NextResponse.json({ error: "Contract not found" }, { status: 404 });
+  }
+  if ((CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status)) {
     return NextResponse.json(
       { error: "Quotas on an active contract can only be changed by an admin." },
       { status: 403 }
@@ -84,8 +87,7 @@ export async function GET(
   // Build a map: facilityId → total hours consumed this month from linked bookings
   const usageByFacility: Record<string, number> = {};
   for (const uc of chargesRes.data || []) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const b = (uc.booking as unknown as { duration_hours: number | null; status: string } | null);
+    const b = uc.booking as unknown as { duration_hours: number | null; status: string } | null;
     if (!b || !["confirmed", "checked_in", "checked_out"].includes(b.status)) continue;
     const fid = uc.contract_facility_id as string;
     usageByFacility[fid] = (usageByFacility[fid] || 0) + Number(b.duration_hours || 0);
@@ -269,14 +271,13 @@ export async function DELETE(
 }
 
 // ── Recalculation helper ──────────────────────────────────────────────────────
-// Uses the admin client (bypasses RLS) so it can update waived charges too.
+// Delegates to the `recalc_facility_charges` Postgres RPC (migration 00172).
 //
-// retroactive=true (POST / new facility):
-//   Also claims charges that have contract_facility_id IS NULL for this contract
-//   in the current month — these were created before the facility was set up.
-//
-// retroactive=false (PATCH / quota change):
-//   Only touches charges already linked to this facility (FK match).
+// The RPC runs both steps — retroactive link + rescore loop — inside a single
+// transaction with FOR UPDATE row locking, fixing two issues that existed in
+// the previous multi-round-trip JS implementation:
+//   C2: non-transactional loop (partial crash left charges half-rescored)
+//   C3: TOCTOU race between SELECT-unlinked and UPDATE-to-link
 async function recalcFacilityCharges(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   admin: any,
@@ -290,59 +291,15 @@ async function recalcFacilityCharges(
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
   const monthEnd   = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
 
-  // When retroactive: also pick up unlinked charges (null FK) for this contract
-  // that haven't been posted to a billing statement yet.
-  if (retroactive) {
-    const { data: unlinked } = await admin
-      .from("usage_charges")
-      .select("id")
-      .eq("contract_id", contractId)
-      .is("contract_facility_id", null)
-      .is("billing_statement_id", null)
-      .in("status", ["pending", "waived"])
-      .gte("charge_date", monthStart)
-      .lte("charge_date", monthEnd);
+  const { error } = await admin.rpc("recalc_facility_charges", {
+    p_contract_id:       contractId,
+    p_facility_id:       facilityId,
+    p_new_free_quota:    newFreeQuota,
+    p_new_cost_per_unit: newCostPerUnit,
+    p_retroactive:       retroactive,
+    p_month_start:       monthStart,
+    p_month_end:         monthEnd,
+  });
 
-    if (unlinked && unlinked.length > 0) {
-      const ids = unlinked.map((c: { id: string }) => c.id);
-      await admin
-        .from("usage_charges")
-        .update({ contract_facility_id: facilityId })
-        .in("id", ids);
-    }
-  }
-
-  // Now fetch ALL charges linked to this facility this month (including ones
-  // we just linked above), sorted chronologically.
-  const { data: charges, error } = await admin
-    .from("usage_charges")
-    .select("id, quantity, charge_date, status")
-    .eq("contract_id", contractId)
-    .eq("contract_facility_id", facilityId)
-    .is("billing_statement_id", null)
-    .in("status", ["pending", "waived"])
-    .gte("charge_date", monthStart)
-    .lte("charge_date", monthEnd)
-    .order("charge_date", { ascending: true });
-
-  if (error || !charges || charges.length === 0) return;
-
-  // Re-score chronologically against the (new) free quota.
-  let consumed = 0;
-  for (const charge of charges) {
-    const qty = Number(charge.quantity);
-    const freeRemaining = Math.max(0, newFreeQuota - consumed);
-    const overageQty    = Math.max(0, qty - freeRemaining);
-    consumed += qty;
-
-    await admin
-      .from("usage_charges")
-      .update({
-        status:     overageQty > 0 ? "pending" : "waived",
-        quantity:   overageQty > 0 ? overageQty : qty,
-        unit_price: overageQty > 0 ? newCostPerUnit : 0,
-        total:      overageQty > 0 ? parseFloat((overageQty * newCostPerUnit).toFixed(2)) : 0,
-      })
-      .eq("id", charge.id);
-  }
+  if (error) throw error;
 }

@@ -88,10 +88,10 @@ export function ContractBillingSection({ contractId }: ContractBillingSectionPro
     <Card>
       <CardHeader className="flex flex-row items-center justify-between">
         <CardTitle className="text-base">Billing</CardTitle>
-        <Link href="/accounting">
+        <Link href="/billing?tab=statements">
           <Button variant="ghost" size="sm">
             <ExternalLink className="h-3.5 w-3.5 mr-1" />
-            Full Accounting
+            View Billing
           </Button>
         </Link>
       </CardHeader>

@@ -15,11 +15,14 @@ import {
 } from "@/components/ui/sheet";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
+import { ContractQuotasSection } from "@/components/contracts/contract-quotas-section";
 import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
 import {
   CONTRACT_STATUSES,
   CONTRACT_STATUS_LABELS,
   CONTRACT_STATUS_COLORS,
+  CONTRACT_QUOTA_LOCKED_STATUSES,
+  CONTRACT_QUOTA_ROLES,
   BILLING_CYCLE_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
@@ -27,14 +30,12 @@ import type { Contract } from "@/types";
 
 type ContractWithQuotaCount = Contract & {
   lead?: { id: string; first_name: string; last_name: string; company?: string };
-  facility_quotas?: { count: number }[];
+  service_quotas?: { count: number }[];
 };
 
 function quotaCount(c: ContractWithQuotaCount): number {
-  return c.facility_quotas?.[0]?.count ?? 0;
+  return c.service_quotas?.[0]?.count ?? 0;
 }
-
-const QUOTA_EDITABLE_ROLES = ["admin", "manager", "accounts"];
 
 export default function ContractsPage() {
   const router = useRouter();
@@ -91,27 +92,27 @@ export default function ContractsPage() {
   };
 
   const hasFilters = search || statusFilter || expiringSoon || noQuotasFilter;
-  const canEditQuotas = userRole && QUOTA_EDITABLE_ROLES.includes(userRole);
+  const canEditQuotas = userRole && (CONTRACT_QUOTA_ROLES as readonly string[]).includes(userRole);
 
   const openQuotaSheet = (e: React.MouseEvent, c: ContractWithQuotaCount) => {
     e.stopPropagation();
     setSelectedContract(c);
   };
 
-  // Refresh facility quota count for the contract in the list after sheet edits
+  // Refresh quota count for the contract in the list after sheet edits
   const refreshSelectedQuotaCount = async () => {
     if (!selectedContract) return;
-    const res = await fetch(`/api/contracts/${selectedContract.id}/facilities`);
+    const res = await fetch(`/api/contracts/${selectedContract.id}/quotas`);
     if (!res.ok) return;
     const json = await res.json();
     const count = (json.data || []).length;
     setContracts(prev => prev.map(c =>
       c.id === selectedContract.id
-        ? { ...c, facility_quotas: [{ count }] }
+        ? { ...c, service_quotas: [{ count }] }
         : c
     ));
     // Update selectedContract too so the sheet header badge reflects the change
-    setSelectedContract(prev => prev ? { ...prev, facility_quotas: [{ count }] } : prev);
+    setSelectedContract(prev => prev ? { ...prev, service_quotas: [{ count }] } : prev);
   };
 
   return (
@@ -289,11 +290,9 @@ export default function ContractsPage() {
                   </span>
                 </SheetTitle>
               </SheetHeader>
-              {(() => {
-                // Active contracts: only admin can edit quotas.
-                // Draft/Sent: admin + manager + accounts can edit.
-                const lockStatuses = ["active", "renewal_in_progress", "renewed", "completed", "terminated", "expired"];
-                const isLocked = lockStatuses.includes(selectedContract.status);
+              {/* Active/terminal contracts: only admin can edit quotas. */}
+              {selectedContract && (() => {
+                const isLocked = (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(selectedContract.status);
                 const sheetReadOnly = !canEditQuotas || (isLocked && userRole !== "admin");
                 return (
                   <div className="space-y-4">
@@ -302,6 +301,11 @@ export default function ContractsPage() {
                         This contract is active. Only an admin can modify quotas.
                       </p>
                     )}
+                    <ContractQuotasSection
+                      contractId={selectedContract.id}
+                      readOnly={sheetReadOnly}
+                      onSave={refreshSelectedQuotaCount}
+                    />
                     <ContractFacilitiesSection
                       contractId={selectedContract.id}
                       locationId={selectedContract.location_id ?? null}

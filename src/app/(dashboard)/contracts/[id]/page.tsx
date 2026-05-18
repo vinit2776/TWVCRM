@@ -31,6 +31,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
+import { ContractQuotasSection } from "@/components/contracts/contract-quotas-section";
 import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
@@ -46,6 +47,8 @@ import {
 import {
   CONTRACT_STATUS_LABELS,
   CONTRACT_STATUS_COLORS,
+  CONTRACT_QUOTA_LOCKED_STATUSES,
+  CONTRACT_QUOTA_ROLES,
   BILLING_CYCLE_LABELS,
   KYC_DOCUMENTS,
   ENTITY_TYPE_LABELS,
@@ -863,22 +866,23 @@ export default function ContractDetailPage({
           />
 
           {/* ── Quota sections ──────────────────────────────────────────────
-               Active contracts: only admin can edit. Draft/Sent: admin,
-               manager, accounts. Terminated/Expired: always read-only.
-               readOnly is true if:
-                 • contract is terminated/rejected/expired, OR
-                 • contract is active and user is not admin            */}
-          {contract.status !== "terminated" && contract.status !== "expired" && (() => {
-            const lockStatuses = ["active", "renewal_in_progress", "renewed", "completed"];
-            const isLocked = lockStatuses.includes(contract.status);
-            const canEdit = userRole === "admin" || (!isLocked && ["manager", "accounts"].includes(userRole || ""));
-            const readOnly = !canEdit || contract.status === "rejected";
+               Active (and beyond) contracts: only admin can edit.
+               Draft/Sent/Accepted: admin, manager, accounts can edit.
+               Terminated/Expired/Rejected: hidden (no edits needed). */}
+          {contract.status !== "terminated" && contract.status !== "expired" && contract.status !== "rejected" && (() => {
+            const isLocked = (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status);
+            const hasQuotaRole = (CONTRACT_QUOTA_ROLES as readonly string[]).includes(userRole || "");
+            const canEdit = hasQuotaRole && (userRole === "admin" || !isLocked);
+            const quotaReadOnly = !canEdit;
             return (
-              <ContractFacilitiesSection
-                contractId={id}
-                locationId={contract.location_id ?? null}
-                readOnly={readOnly}
-              />
+              <>
+                <ContractQuotasSection contractId={id} readOnly={quotaReadOnly} />
+                <ContractFacilitiesSection
+                  contractId={id}
+                  locationId={contract.location_id ?? null}
+                  readOnly={quotaReadOnly}
+                />
+              </>
             );
           })()}
 

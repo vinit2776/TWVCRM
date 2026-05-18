@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { CONTRACT_QUOTA_LOCKED_STATUSES, CONTRACT_QUOTA_ROLES } from "@/lib/constants";
 
 /**
  * GET /api/contracts/[id]/quotas
@@ -78,15 +79,14 @@ export async function POST(
 
   const { data: dbUser } = await supabase
     .from("users").select("id, role").eq("auth_id", user.id).single();
-  if (!dbUser || !["admin", "manager", "accounts"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Admin / Manager / Accounts access required" }, { status: 403 });
+  if (!dbUser || !(CONTRACT_QUOTA_ROLES as readonly string[]).includes(dbUser.role)) {
+    return NextResponse.json({ error: "Insufficient permissions to manage contract quotas" }, { status: 403 });
   }
 
   // Active (and beyond) contracts: only admin may change quotas
   if (dbUser.role !== "admin") {
     const { data: contract } = await supabase.from("contracts").select("status").eq("id", id).single();
-    const lockStatuses = ["active", "renewal_in_progress", "renewed", "completed", "terminated", "expired"];
-    if (contract && lockStatuses.includes(contract.status)) {
+    if (contract && (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status)) {
       return NextResponse.json({ error: "Quotas on an active contract can only be changed by an admin." }, { status: 403 });
     }
   }
@@ -147,14 +147,13 @@ export async function DELETE(
 
   const { data: dbUser } = await supabase
     .from("users").select("id, role").eq("auth_id", user.id).single();
-  if (!dbUser || !["admin", "manager", "accounts"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Admin / Manager / Accounts access required" }, { status: 403 });
+  if (!dbUser || !(CONTRACT_QUOTA_ROLES as readonly string[]).includes(dbUser.role)) {
+    return NextResponse.json({ error: "Insufficient permissions to manage contract quotas" }, { status: 403 });
   }
 
   if (dbUser.role !== "admin") {
     const { data: contract } = await supabase.from("contracts").select("status").eq("id", id).single();
-    const lockStatuses = ["active", "renewal_in_progress", "renewed", "completed", "terminated", "expired"];
-    if (contract && lockStatuses.includes(contract.status)) {
+    if (contract && (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status)) {
       return NextResponse.json({ error: "Quotas on an active contract can only be changed by an admin." }, { status: 403 });
     }
   }

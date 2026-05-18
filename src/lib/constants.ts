@@ -174,7 +174,7 @@ export const INVOICE_STATUS_LABELS: Record<string, string> = {
   cancelled: "Cancelled",
 };
 
-export const USER_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin", "viewer"] as const;
+export const USER_ROLES = ["admin", "manager", "sales_rep", "floor_manager", "accounts", "fms", "office_admin"] as const;
 
 export const USER_ROLE_LABELS: Record<string, string> = {
   admin: "Admin",
@@ -185,7 +185,6 @@ export const USER_ROLE_LABELS: Record<string, string> = {
   fms: "Facility Manager",
   office_admin: "Office Administrator",
   it_team: "IT Team",
-  viewer: "Management Viewer",
 };
 
 export const RATINGS = ["none", "hot", "warm", "cold"] as const;
@@ -230,6 +229,24 @@ export const CONTRACT_STATUSES = [
   "expired",
   "terminated",
 ] as const;
+
+export type ContractStatus = (typeof CONTRACT_STATUSES)[number];
+
+// Contracts in these statuses are "locked": only admin may edit quotas/facilities.
+// Mirrors the API gate in /api/contracts/[id]/facilities and /quotas.
+export const CONTRACT_QUOTA_LOCKED_STATUSES: readonly ContractStatus[] = [
+  "active",
+  "renewal_in_progress",
+  "renewed",
+  "terminated",
+  "expired",
+];
+
+// Roles that may ever edit contract quotas/facilities.
+// On locked contracts (active+), only admin is allowed (enforced by API gate).
+// On draft/sent/accepted contracts, all four roles can configure quotas.
+export const CONTRACT_QUOTA_ROLES = ["admin", "manager", "sales_rep", "accounts"] as const;
+export type ContractQuotaRole = (typeof CONTRACT_QUOTA_ROLES)[number];
 
 export const CONTRACT_STATUS_LABELS: Record<string, string> = {
   draft: "Draft",
