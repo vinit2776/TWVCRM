@@ -202,6 +202,7 @@ export default function VendorBillDetailPage() {
   const [approveNote, setApproveNote] = useState("");
   const [batchType, setBatchType] = useState<PaymentBatchType | "">("");
   const [approveGstAmount, setApproveGstAmount] = useState<string>("");
+  const [approveGstZeroConfirm, setApproveGstZeroConfirm] = useState(false);
 
   // Rejection dialog
   const [rejectDialog, setRejectDialog] = useState(false);
@@ -291,8 +292,12 @@ export default function VendorBillDetailPage() {
       toast.error(`GST amount cannot exceed 28% of the invoice base (max ${formatCurrency(maxGstVal)})`);
       return;
     }
+    if (gstVal === 0 && !approveGstZeroConfirm) {
+      toast.error("Please tick the confirmation checkbox to set GST to zero");
+      return;
+    }
     setApproveLoading(true);
-    const body: Record<string, unknown> = { action: "approve", batch_type: batchType, gst_amount: parseFloat(approveGstAmount) || 0 };
+    const body: Record<string, unknown> = { action: "approve", batch_type: batchType, gst_amount: gstVal, ...(gstVal === 0 ? { gst_zero_confirmed: true } : {}) };
     if (approveType === "partial") {
       const amt = parseFloat(approveAmount);
       if (!approveAmount || isNaN(amt) || amt <= 0) {
@@ -315,6 +320,7 @@ export default function VendorBillDetailPage() {
       setApproveDialog(false);
       setBatchType("");
       setApproveGstAmount("");
+      setApproveGstZeroConfirm(false);
       await fetchAll();
     } finally {
       setApproveLoading(false);
@@ -542,6 +548,7 @@ export default function VendorBillDetailPage() {
                   setApproveType("full");
                   setApproveAmount("");
                   setApproveNote("");
+                  setApproveGstZeroConfirm(false);
                   setApproveDialog(true);
                 }}
                 className="bg-green-600 hover:bg-green-700"
@@ -1292,10 +1299,12 @@ export default function VendorBillDetailPage() {
                 Enter the total GST as shown on the vendor&apos;s invoice. Enter 0 if exempt. This sets the maximum payable above the approved base.
               </p>
               {(() => {
-                const gst = parseFloat(approveGstAmount) || 0;
+                const gstAmt = approveGstAmount === "" ? null : parseFloat(approveGstAmount);
+                const gst = gstAmt ?? 0;
+                const isZero = gstAmt !== null && gstAmt === 0;
                 const base = Number(bill.total_amount);
                 const maxGst = Math.round(base * 0.28 * 100) / 100;
-                const isOver = approveGstAmount !== "" && gst > maxGst;
+                const isOver = gstAmt !== null && !isNaN(gstAmt) && gstAmt > maxGst;
                 return (
                   <>
                     <Input
@@ -1303,9 +1312,9 @@ export default function VendorBillDetailPage() {
                       type="number"
                       min="0"
                       step="0.01"
-                      placeholder="0.00"
+                      placeholder="e.g. 1872.00"
                       value={approveGstAmount}
-                      onChange={(e) => setApproveGstAmount(e.target.value)}
+                      onChange={(e) => { setApproveGstAmount(e.target.value); if (parseFloat(e.target.value) > 0) setApproveGstZeroConfirm(false); }}
                       className={isOver ? "border-red-500 focus-visible:ring-red-500" : ""}
                     />
                     {isOver && (
@@ -1314,7 +1323,22 @@ export default function VendorBillDetailPage() {
                         GST cannot exceed 28% of invoice base (max {formatCurrency(maxGst)})
                       </p>
                     )}
-                    {approveGstAmount !== "" && !isOver && (
+                    {/* Zero-GST confirmation */}
+                    {isZero && (
+                      <label className="flex items-start gap-2.5 cursor-pointer rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5">
+                        <input
+                          type="checkbox"
+                          checked={approveGstZeroConfirm}
+                          onChange={(e) => setApproveGstZeroConfirm(e.target.checked)}
+                          className="mt-0.5 h-4 w-4 rounded border-amber-400 accent-amber-600 shrink-0"
+                        />
+                        <span className="text-xs text-amber-800 leading-relaxed">
+                          I confirm this vendor&apos;s invoice has <strong>no GST</strong> (zero-rated, exempt, or unregistered vendor). Total payable = base amount only.
+                        </span>
+                      </label>
+                    )}
+                    {/* Preview breakdown — only when amount > 0 and valid */}
+                    {gstAmt !== null && !isNaN(gstAmt) && gstAmt > 0 && !isOver && (
                       <div className="p-3 rounded-lg bg-blue-50 border border-blue-200 text-xs space-y-1">
                         <div className="flex justify-between text-blue-800">
                           <span>Base Amount (pre-GST)</span>
@@ -1431,11 +1455,11 @@ export default function VendorBillDetailPage() {
             )}
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setApproveDialog(false)}>Cancel</Button>
+            <Button variant="outline" onClick={() => { setApproveDialog(false); setApproveGstZeroConfirm(false); }}>Cancel</Button>
             <Button
               className="bg-green-600 hover:bg-green-700"
               onClick={handleApprove}
-              disabled={approveLoading}
+              disabled={approveLoading || (approveGstAmount !== "" && parseFloat(approveGstAmount) === 0 && !approveGstZeroConfirm)}
             >
               {approveLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               {approveType === "partial" ? "Approve Partial" : "Approve Invoice"}
