@@ -2956,7 +2956,7 @@ export type LeaseStatus = "active" | "expired" | "terminated" | "on_hold";
 export type LeaseEscalationType = "none" | "percentage" | "flat" | "step_up";
 export type LeaseEscalationFrequency = "annual" | "bi_annual" | "custom";
 export type LeaseEscalationStatus = "scheduled" | "applied" | "disputed" | "waived";
-export type LeasePaymentStatus = "pending" | "paid" | "overdue" | "on_hold" | "disputed";
+export type LeasePaymentStatus = "pending" | "approved" | "paid" | "overdue" | "on_hold" | "disputed";
 export type LeasePaymentMode = "bank_transfer" | "cheque" | "neft" | "rtgs" | "upi";
 export type LeaseHandoverType = "takeover" | "return" | "mid_term_addition";
 export type LeaseHandoverStatus = "pending" | "completed" | "disputed";
@@ -3017,6 +3017,7 @@ export interface PropertyLease {
   tds_section: TdsSection;
   tds_rate: number;
   status: LeaseStatus;
+  approval_mode: "manual" | "blanket";
   notes?: string | null;
   created_by?: string | null;
   created_at: string;
