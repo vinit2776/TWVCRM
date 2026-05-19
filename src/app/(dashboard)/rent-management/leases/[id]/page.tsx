@@ -126,13 +126,18 @@ export default function LeaseDetailPage() {
 
   // Payment actions
   async function approvePayment(paymentId: string) {
-    const r = await fetch(`/api/rent-management/leases/${id}/payments/${paymentId}/approve`, { method: "POST" });
+    const r = await fetch(`/api/rent-management/leases/${id}/payments/${paymentId}/approve`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
     if (r.ok) {
       toast.success("Payment approved");
       const updated = await fetch(`/api/rent-management/leases/${id}/payments`);
       if (updated.ok) setPayments((await updated.json()).data || []);
     } else {
-      toast.error("Failed to approve payment");
+      const err = await r.json().catch(() => ({}));
+      toast.error(err.error || "Failed to approve payment");
     }
   }
 

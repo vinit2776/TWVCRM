@@ -28,7 +28,7 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
 
   const { data, error } = await supabase
     .from("landlords")
-    .select("*, bank_accounts:landlord_bank_accounts(*), leases:property_leases(id, lease_number, status, location_id, locations(name))")
+    .select("*, bank_accounts:landlord_bank_accounts(*), leases:property_leases(id, lease_number, status, base_rent_amount, lease_start_date, lease_end_date, location_id, location:locations(id, name))")
     .eq("id", id)
     .single();
 
