@@ -29,6 +29,7 @@ import {
 } from "@/lib/constants";
 import { toast } from "sonner";
 import type { PropertyLease, LeasePayment, LeaseEscalation, LeaseAsset, LeaseDocument, LeaseServiceOffering } from "@/types";
+import { AssetManager } from "@/components/rent-management/AssetManager";
 
 interface LeaseHandover {
   id: string;
@@ -89,6 +90,15 @@ export default function LeaseDetailPage() {
 
   useEffect(() => { fetchLease(); }, [fetchLease]);
 
+  const refreshAssets = useCallback(async () => {
+    const [ar, hr] = await Promise.all([
+      fetch(`/api/rent-management/leases/${id}/assets`),
+      fetch(`/api/rent-management/leases/${id}/handovers`),
+    ]);
+    if (ar.ok) setAssets((await ar.json()).data || []);
+    if (hr.ok) setHandovers((await hr.json()).data || []);
+  }, [id]);
+
   const fetchTab = useCallback(async (tab: string) => {
     if (tab === "payments" && payments.length === 0) {
       const r = await fetch(`/api/rent-management/leases/${id}/payments`);
@@ -99,12 +109,7 @@ export default function LeaseDetailPage() {
       if (r.ok) setEscalations((await r.json()).data || []);
     }
     if (tab === "assets") {
-      const [ar, hr] = await Promise.all([
-        fetch(`/api/rent-management/leases/${id}/assets`),
-        fetch(`/api/rent-management/leases/${id}/handovers`),
-      ]);
-      if (ar.ok) setAssets((await ar.json()).data || []);
-      if (hr.ok) setHandovers((await hr.json()).data || []);
+      await refreshAssets();
     }
     if (tab === "documents") {
       const r = await fetch(`/api/rent-management/leases/${id}/documents`);
@@ -489,39 +494,13 @@ export default function LeaseDetailPage() {
 
         {/* ─── Assets ─── */}
         <TabsContent value="assets" className="space-y-4">
-          {assets.length === 0 && handovers.length === 0 ? (
-            <Card><CardContent className="py-10 text-center text-sm text-muted-foreground">No assets or handover records</CardContent></Card>
-          ) : (
-            <>
-              {assets.length > 0 && (
-                <Card>
-                  <CardHeader><CardTitle className="text-base flex items-center gap-2"><Package className="h-4 w-4" />Asset Registry</CardTitle></CardHeader>
-                  <CardContent className="p-0">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b bg-muted/40">
-                          <th className="text-left px-4 py-3 font-medium">Asset</th>
-                          <th className="text-left px-4 py-3 font-medium">Category</th>
-                          <th className="text-right px-4 py-3 font-medium">Qty</th>
-                          <th className="text-right px-4 py-3 font-medium">Value</th>
-                          <th className="text-left px-4 py-3 font-medium">CapEx</th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {assets.map((a) => (
-                          <tr key={a.id} className="border-b hover:bg-muted/20">
-                            <td className="px-4 py-3 font-medium">{a.asset_name}</td>
-                            <td className="px-4 py-3 text-muted-foreground">{a.asset_category ? (ASSET_CATEGORY_LABELS[a.asset_category] ?? a.asset_category) : "—"}</td>
-                            <td className="px-4 py-3 text-right">{a.quantity}</td>
-                            <td className="px-4 py-3 text-right">{a.unit_value ? formatCurrency(a.unit_value) : "—"}</td>
-                            <td className="px-4 py-3">{a.is_capex ? <Badge variant="outline" className="text-xs">CapEx</Badge> : "—"}</td>
-                          </tr>
-                        ))}
-                      </tbody>
-                    </table>
-                  </CardContent>
-                </Card>
-              )}
+          <>
+              <AssetManager
+                leaseId={id}
+                assets={assets}
+                canEdit={userRole === "admin" || userRole === "accounts"}
+                onRefresh={refreshAssets}
+              />
 
               {handovers.length > 0 && (
                 <Card>
@@ -547,7 +526,6 @@ export default function LeaseDetailPage() {
                 </Card>
               )}
             </>
-          )}
         </TabsContent>
 
         {/* ─── Documents ─── */}
