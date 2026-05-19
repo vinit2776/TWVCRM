@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Plus, CheckCircle, Star, Pencil } from "lucide-react";
+import { ArrowLeft, Plus, CheckCircle, Star, Pencil, Upload, FileText, Trash2, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -22,6 +22,14 @@ import {
 } from "@/lib/constants";
 import { toast } from "sonner";
 import type { Landlord, LandlordBankAccount, PropertyLease } from "@/types";
+
+const DOC_TYPE_LABELS: Record<string, string> = {
+  pan_card: "PAN Card",
+  gstin_certificate: "GSTIN Certificate",
+  aadhaar: "Aadhaar",
+  cancelled_cheque: "Cancelled Cheque",
+  other: "Other",
+};
 
 const KYC_COLORS: Record<string, string> = {
   verified: "bg-green-100 text-green-800",
@@ -50,6 +58,15 @@ export default function LandlordDetailPage() {
     name: "", contact_person: "", pan_number: "", gstin: "",
     email: "", phone: "", registered_address: "", kyc_status: "pending", notes: "",
   });
+
+  type KycDoc = { name: string; doc_type: string; path: string; uploaded_at: string; signed_url?: string | null };
+  const [kycDocs, setKycDocs] = useState<KycDoc[]>([]);
+  const [docsLoading, setDocsLoading] = useState(false);
+  const [uploadDialog, setUploadDialog] = useState(false);
+  const [uploadFile, setUploadFile] = useState<File | null>(null);
+  const [uploadDocType, setUploadDocType] = useState("pan_card");
+  const [uploading, setUploading] = useState(false);
+  const [deletingPath, setDeletingPath] = useState<string | null>(null);
 
   useEffect(() => {
     fetch("/api/me").then((r) => r.json()).then((d) => setUserRole(d.role));
@@ -82,6 +99,57 @@ export default function LandlordDetailPage() {
   }, [id]);
 
   useEffect(() => { fetchLandlord(); }, [fetchLandlord]);
+
+  const fetchKycDocs = useCallback(async () => {
+    setDocsLoading(true);
+    const res = await fetch(`/api/rent-management/landlords/${id}/kyc-documents`);
+    if (res.ok) {
+      const json = await res.json();
+      setKycDocs(json.data || []);
+    }
+    setDocsLoading(false);
+  }, [id]);
+
+  useEffect(() => { fetchKycDocs(); }, [fetchKycDocs]);
+
+  async function handleUploadDoc() {
+    if (!uploadFile) return;
+    setUploading(true);
+    const fd = new FormData();
+    fd.append("file", uploadFile);
+    fd.append("doc_type", uploadDocType);
+    const r = await fetch(`/api/rent-management/landlords/${id}/kyc-documents`, {
+      method: "POST",
+      body: fd,
+    });
+    setUploading(false);
+    if (r.ok) {
+      toast.success("Document uploaded");
+      setUploadDialog(false);
+      setUploadFile(null);
+      setUploadDocType("pan_card");
+      fetchKycDocs();
+    } else {
+      const err = await r.json();
+      toast.error(err.error || "Upload failed");
+    }
+  }
+
+  async function handleDeleteDoc(path: string) {
+    setDeletingPath(path);
+    const r = await fetch(`/api/rent-management/landlords/${id}/kyc-documents`, {
+      method: "DELETE",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ path }),
+    });
+    setDeletingPath(null);
+    if (r.ok) {
+      toast.success("Document removed");
+      fetchKycDocs();
+    } else {
+      toast.error("Failed to remove document");
+    }
+  }
 
   async function handleSaveKyc() {
     setKycSaving(true);
@@ -235,6 +303,61 @@ export default function LandlordDetailPage() {
         </Card>
       </div>
 
+      {/* KYC Documents */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between">
+          <CardTitle className="text-base">KYC Documents</CardTitle>
+          {(isAdmin || userRole === "accounts") && (
+            <Button size="sm" variant="outline" onClick={() => setUploadDialog(true)}>
+              <Upload className="h-3.5 w-3.5 mr-1" />Upload
+            </Button>
+          )}
+        </CardHeader>
+        <CardContent>
+          {docsLoading ? (
+            <div className="space-y-2">
+              {[1, 2].map((i) => <div key={i} className="h-10 bg-muted animate-pulse rounded" />)}
+            </div>
+          ) : kycDocs.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No documents uploaded yet</p>
+          ) : (
+            <div className="space-y-2">
+              {kycDocs.map((doc) => (
+                <div key={doc.path} className="flex items-center justify-between border rounded-lg px-3 py-2">
+                  <div className="flex items-center gap-2 min-w-0">
+                    <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{doc.name}</p>
+                      <p className="text-xs text-muted-foreground">{DOC_TYPE_LABELS[doc.doc_type] ?? doc.doc_type}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1 shrink-0 ml-2">
+                    {doc.signed_url && (
+                      <Button size="sm" variant="ghost" asChild>
+                        <a href={doc.signed_url} target="_blank" rel="noopener noreferrer">
+                          <Download className="h-3.5 w-3.5" />
+                        </a>
+                      </Button>
+                    )}
+                    {(isAdmin || userRole === "accounts") && (
+                      <Button
+                        size="sm"
+                        variant="ghost"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => handleDeleteDoc(doc.path)}
+                        disabled={deletingPath === doc.path}
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </Button>
+                    )}
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Active Leases */}
       {leases.length > 0 && (
         <Card>
@@ -273,6 +396,44 @@ export default function LandlordDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Upload KYC Document Dialog */}
+      <Dialog open={uploadDialog} onOpenChange={(o) => { setUploadDialog(o); if (!o) { setUploadFile(null); setUploadDocType("pan_card"); } }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader><DialogTitle>Upload KYC Document</DialogTitle></DialogHeader>
+          <div className="space-y-4">
+            <div className="space-y-2">
+              <Label>Document Type</Label>
+              <Select value={uploadDocType} onValueChange={setUploadDocType}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  {Object.entries(DOC_TYPE_LABELS).map(([v, label]) => (
+                    <SelectItem key={v} value={v}>{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>File <span className="text-muted-foreground text-xs">(PDF, JPG, PNG — max 50 MB)</span></Label>
+              <Input
+                type="file"
+                accept=".pdf,.jpg,.jpeg,.png,.webp"
+                onChange={(e) => setUploadFile(e.target.files?.[0] ?? null)}
+                className="cursor-pointer"
+              />
+              {uploadFile && (
+                <p className="text-xs text-muted-foreground">{uploadFile.name} · {(uploadFile.size / 1024).toFixed(0)} KB</p>
+              )}
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setUploadDialog(false)}>Cancel</Button>
+            <Button onClick={handleUploadDoc} disabled={!uploadFile || uploading}>
+              {uploading ? "Uploading..." : "Upload"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Edit KYC Details Dialog */}
       <Dialog open={kycDialog} onOpenChange={setKycDialog}>
