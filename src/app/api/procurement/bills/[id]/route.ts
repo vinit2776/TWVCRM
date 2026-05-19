@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
-import { sendPushToAll } from "@/lib/push";
+import { sendPushToProcurementRoles } from "@/lib/push";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 import { computeBatchDate, toISODateString } from "@/lib/payment-batch";
 import { z } from "zod";
@@ -348,7 +348,7 @@ export async function PATCH(
         ? `${bill.bill_number} partially approved for ₹${approvedAmt?.toLocaleString("en-IN")} by ${dbUser.full_name ?? "manager"}`
         : `${bill.bill_number} approved by ${dbUser.full_name ?? "manager"}`;
 
-      sendPushToAll({
+      sendPushToProcurementRoles({
         title: isPartialApproval ? "Invoice Partially Approved" : "Invoice Approved",
         body: approvalNote,
         url: `/procurement/bills/${id}`,
@@ -411,7 +411,7 @@ export async function PATCH(
         approved_amount_note: null,
       };
 
-      sendPushToAll({
+      sendPushToProcurementRoles({
         title: "Invoice Balance Approved",
         body: `Remaining balance on ${bill.bill_number} approved for full payment`,
         url: `/procurement/bills/${id}`,
@@ -457,7 +457,7 @@ export async function PATCH(
             },
           });
 
-          sendPushToAll({
+          sendPushToProcurementRoles({
             title: "Service Invoice Rejected",
             body: `${bill.bill_number} voided — a new invoice can be uploaded for this cycle`,
             url: bill.po_id ? `/procurement/orders/${bill.po_id}` : `/procurement/bills`,
@@ -480,7 +480,7 @@ export async function PATCH(
         rejection_outcome: null,
       };
 
-      sendPushToAll({
+      sendPushToProcurementRoles({
         title: "Invoice Rejected",
         body: `${bill.bill_number} rejected — ${parsed.data.rejection_reason}`,
         url: `/procurement/bills/${id}`,
@@ -538,7 +538,7 @@ export async function PATCH(
         );
       }
 
-      sendPushToAll({
+      sendPushToProcurementRoles({
         title: "Payment On Hold",
         body: `${bill.bill_number} — ${holdReasonLabel}. Approver action required.`,
         url: `/accounting/vendor-payments/${id}`,

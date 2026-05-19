@@ -153,6 +153,58 @@ export async function sendPushToAll(payload: PushPayload): Promise<void> {
 }
 
 /**
+ * Roles that have access to the Procurement module (mirrors sidebar role arrays).
+ * Used to scope procurement push notifications to relevant staff only.
+ */
+export const PROCUREMENT_ROLES = [
+  "admin",
+  "manager",
+  "office_admin",
+  "accounts",
+  "viewer",
+] as const;
+
+/**
+ * Sends a Web Push notification only to users whose role grants them
+ * access to the Procurement module. Prevents IT, facility, and sales
+ * staff from receiving procurement noise.
+ */
+export async function sendPushToProcurementRoles(payload: PushPayload): Promise<void> {
+  ensureVapid();
+  if (!vapidConfigured) return;
+
+  const supabase = createAdminClient();
+
+  // Fetch user IDs for procurement-eligible roles
+  const { data: users } = await supabase
+    .from("users")
+    .select("id")
+    .in("role", PROCUREMENT_ROLES as unknown as string[])
+    .eq("is_active", true);
+
+  if (!users?.length) return;
+
+  const userIds = users.map((u) => u.id);
+
+  const { data: subs } = await supabase
+    .from("push_subscriptions")
+    .select("endpoint, p256dh, auth")
+    .in("user_id", userIds);
+
+  if (!subs?.length) return;
+
+  const payloadStr = JSON.stringify(payload);
+  await Promise.allSettled(
+    subs.map((sub) =>
+      webPush.sendNotification(
+        { endpoint: sub.endpoint, keys: { p256dh: sub.p256dh, auth: sub.auth } },
+        payloadStr
+      )
+    )
+  );
+}
+
+/**
  * Sends a Web Push notification to a specific set of users (matched by
  * push_subscriptions.user_id). One user can have multiple subscriptions
  * across browsers/devices — we deliver to all of them.

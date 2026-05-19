@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
-import { sendPushToAll } from "@/lib/push";
+import { sendPushToProcurementRoles } from "@/lib/push";
 import { z } from "zod";
 import { applyBillFilters, resolveFreeTextIds } from "@/lib/bills-query";
 
@@ -303,7 +303,7 @@ export async function POST(request: NextRequest) {
   });
 
   // Notify admins/managers that a new invoice needs approval
-  sendPushToAll({
+  sendPushToProcurementRoles({
     title: "Invoice Pending Approval",
     body: `${bill.bill_number} — ₹${parsed.data.total_amount.toLocaleString("en-IN")} requires approval`,
     url: `/procurement/bills/${bill.id}`,
