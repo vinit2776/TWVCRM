@@ -3,12 +3,16 @@
 import { useState, useEffect, useCallback } from "react";
 import { useParams } from "next/navigation";
 import Link from "next/link";
-import { ArrowLeft, Plus, CheckCircle, Star } from "lucide-react";
+import { ArrowLeft, Plus, CheckCircle, Star, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
@@ -40,6 +44,13 @@ export default function LandlordDetailPage() {
     account_holder_name: "", account_type: "savings", is_primary: false,
   });
 
+  const [kycDialog, setKycDialog] = useState(false);
+  const [kycSaving, setKycSaving] = useState(false);
+  const [kycForm, setKycForm] = useState({
+    name: "", contact_person: "", pan_number: "", gstin: "",
+    email: "", phone: "", registered_address: "", kyc_status: "pending", notes: "",
+  });
+
   useEffect(() => {
     fetch("/api/me").then((r) => r.json()).then((d) => setUserRole(d.role));
   }, []);
@@ -49,14 +60,57 @@ export default function LandlordDetailPage() {
     const res = await fetch(`/api/rent-management/landlords/${id}`);
     if (res.ok) {
       const json = await res.json();
-      setLandlord(json.data);
-      setBankAccounts(json.data?.bank_accounts || []);
-      setLeases(json.data?.leases || []);
+      const d = json.data;
+      setLandlord(d);
+      setBankAccounts(d?.bank_accounts || []);
+      setLeases(d?.leases || []);
+      if (d) {
+        setKycForm({
+          name: d.name ?? "",
+          contact_person: d.contact_person ?? "",
+          pan_number: d.pan_number ?? "",
+          gstin: d.gstin ?? "",
+          email: d.email ?? "",
+          phone: d.phone ?? "",
+          registered_address: d.registered_address ?? "",
+          kyc_status: d.kyc_status ?? "pending",
+          notes: d.notes ?? "",
+        });
+      }
     }
     setLoading(false);
   }, [id]);
 
   useEffect(() => { fetchLandlord(); }, [fetchLandlord]);
+
+  async function handleSaveKyc() {
+    setKycSaving(true);
+    const body = {
+      name: kycForm.name,
+      contact_person: kycForm.contact_person || null,
+      pan_number: kycForm.pan_number || null,
+      gstin: kycForm.gstin || null,
+      email: kycForm.email || null,
+      phone: kycForm.phone || null,
+      registered_address: kycForm.registered_address || null,
+      kyc_status: kycForm.kyc_status,
+      notes: kycForm.notes || null,
+    };
+    const r = await fetch(`/api/rent-management/landlords/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    setKycSaving(false);
+    if (r.ok) {
+      toast.success("KYC details updated");
+      setKycDialog(false);
+      fetchLandlord();
+    } else {
+      const err = await r.json();
+      toast.error(err.error || "Failed to save KYC details");
+    }
+  }
 
   async function handleAddBankAccount() {
     setSubmitting(true);
@@ -74,20 +128,6 @@ export default function LandlordDetailPage() {
     } else {
       const err = await r.json();
       toast.error(err.error || "Failed to add bank account");
-    }
-  }
-
-  async function updateKycStatus(status: string) {
-    const r = await fetch(`/api/rent-management/landlords/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ kyc_status: status }),
-    });
-    if (r.ok) {
-      toast.success("KYC status updated");
-      fetchLandlord();
-    } else {
-      toast.error("Failed to update KYC status");
     }
   }
 
@@ -118,35 +158,40 @@ export default function LandlordDetailPage() {
             </p>
           </div>
         </div>
-        {isAdmin && (
-          <div className="flex gap-2">
-            {landlord.kyc_status !== "verified" && (
-              <Button size="sm" variant="outline" onClick={() => updateKycStatus("verified")}>
-                <CheckCircle className="h-4 w-4 mr-2" />Mark KYC Verified
-              </Button>
-            )}
-            {landlord.kyc_status === "verified" && (
-              <Button size="sm" variant="outline" onClick={() => updateKycStatus("pending")}>
-                Reset to Pending
-              </Button>
-            )}
-          </div>
+        {(isAdmin || userRole === "accounts") && (
+          <Button size="sm" variant="outline" onClick={() => setKycDialog(true)}>
+            <Pencil className="h-4 w-4 mr-2" />Edit Details
+          </Button>
         )}
       </div>
 
       <div className="grid gap-6 lg:grid-cols-2">
         {/* KYC Details */}
         <Card>
-          <CardHeader><CardTitle className="text-base">KYC Details</CardTitle></CardHeader>
+          <CardHeader className="flex flex-row items-center justify-between">
+            <CardTitle className="text-base">KYC Details</CardTitle>
+            {(isAdmin || userRole === "accounts") && (
+              <Button size="sm" variant="outline" onClick={() => setKycDialog(true)}>
+                <Pencil className="h-3.5 w-3.5 mr-1" />Edit
+              </Button>
+            )}
+          </CardHeader>
           <CardContent className="space-y-3 text-sm">
+            <Row label="Contact Person" value={landlord.contact_person} />
             <Row label="PAN" value={landlord.pan_number} mono />
             <Row label="GSTIN" value={landlord.gstin} mono />
             <Row label="Email" value={landlord.email} />
             <Row label="Phone" value={landlord.phone} />
             {landlord.registered_address && (
               <div className="pt-2 border-t">
-                <p className="text-muted-foreground mb-1">Address</p>
+                <p className="text-muted-foreground mb-1">Registered Address</p>
                 <p className="whitespace-pre-wrap">{landlord.registered_address}</p>
+              </div>
+            )}
+            {landlord.notes && (
+              <div className="pt-2 border-t">
+                <p className="text-muted-foreground mb-1">Notes</p>
+                <p className="text-sm whitespace-pre-wrap">{landlord.notes}</p>
               </div>
             )}
           </CardContent>
@@ -228,6 +273,64 @@ export default function LandlordDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Edit KYC Details Dialog */}
+      <Dialog open={kycDialog} onOpenChange={setKycDialog}>
+        <DialogContent className="max-w-lg max-h-[90vh] overflow-y-auto">
+          <DialogHeader><DialogTitle>Edit KYC Details</DialogTitle></DialogHeader>
+          <div className="grid grid-cols-2 gap-3">
+            <div className="space-y-2 col-span-2">
+              <Label>Full Name / Entity Name *</Label>
+              <Input value={kycForm.name} onChange={(e) => setKycForm((f) => ({ ...f, name: e.target.value }))} required />
+            </div>
+            <div className="space-y-2 col-span-2">
+              <Label>Contact Person</Label>
+              <Input value={kycForm.contact_person} onChange={(e) => setKycForm((f) => ({ ...f, contact_person: e.target.value }))} placeholder="Name of the point of contact" />
+            </div>
+            <div className="space-y-2">
+              <Label>PAN Number</Label>
+              <Input value={kycForm.pan_number} onChange={(e) => setKycForm((f) => ({ ...f, pan_number: e.target.value.toUpperCase() }))} placeholder="ABCDE1234F" maxLength={10} className="font-mono" />
+            </div>
+            <div className="space-y-2">
+              <Label>GSTIN</Label>
+              <Input value={kycForm.gstin} onChange={(e) => setKycForm((f) => ({ ...f, gstin: e.target.value.toUpperCase() }))} placeholder="22ABCDE1234F1Z5" maxLength={15} className="font-mono" />
+            </div>
+            <div className="space-y-2">
+              <Label>Email</Label>
+              <Input type="email" value={kycForm.email} onChange={(e) => setKycForm((f) => ({ ...f, email: e.target.value }))} placeholder="landlord@example.com" />
+            </div>
+            <div className="space-y-2">
+              <Label>Phone</Label>
+              <Input type="tel" value={kycForm.phone} onChange={(e) => setKycForm((f) => ({ ...f, phone: e.target.value }))} placeholder="+91 9876543210" />
+            </div>
+            <div className="space-y-2 col-span-2">
+              <Label>KYC Status</Label>
+              <Select value={kycForm.kyc_status} onValueChange={(v) => setKycForm((f) => ({ ...f, kyc_status: v }))}>
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="pending">Pending</SelectItem>
+                  <SelectItem value="incomplete">Incomplete</SelectItem>
+                  <SelectItem value="verified">Verified</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2 col-span-2">
+              <Label>Registered Address</Label>
+              <Textarea value={kycForm.registered_address} onChange={(e) => setKycForm((f) => ({ ...f, registered_address: e.target.value }))} rows={3} placeholder="Full address including city, state, pincode" />
+            </div>
+            <div className="space-y-2 col-span-2">
+              <Label>Notes</Label>
+              <Textarea value={kycForm.notes} onChange={(e) => setKycForm((f) => ({ ...f, notes: e.target.value }))} rows={2} placeholder="Any additional notes about this landlord..." />
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setKycDialog(false)}>Cancel</Button>
+            <Button onClick={handleSaveKyc} disabled={kycSaving || !kycForm.name}>
+              {kycSaving ? "Saving..." : "Save Changes"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Add Bank Account Dialog */}
       <Dialog open={bankDialog} onOpenChange={setBankDialog}>
