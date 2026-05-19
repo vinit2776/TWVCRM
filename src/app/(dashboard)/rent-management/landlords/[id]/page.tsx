@@ -180,6 +180,20 @@ export default function LandlordDetailPage() {
     }
   }
 
+  async function markBankAccountVerified(accountId: string) {
+    const r = await fetch(`/api/rent-management/landlords/${id}/bank-accounts/${accountId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ is_verified: true }),
+    });
+    if (r.ok) {
+      toast.success("Bank account marked as verified");
+      fetchLandlord();
+    } else {
+      toast.error("Failed to update");
+    }
+  }
+
   async function handleAddBankAccount() {
     setSubmitting(true);
     const r = await fetch(`/api/rent-management/landlords/${id}/bank-accounts`, {
@@ -288,13 +302,19 @@ export default function LandlordDetailPage() {
                   </div>
                   <p className="text-xs text-muted-foreground font-mono">{ba.account_number}</p>
                   <p className="text-xs text-muted-foreground">IFSC: {ba.ifsc_code} · {ba.account_holder_name}</p>
-                  <div className="flex gap-2 mt-1">
+                  <div className="flex items-center gap-2 mt-1 flex-wrap">
                     {ba.is_primary && <Badge variant="outline" className="text-xs">Primary</Badge>}
-                    {ba.is_verified ? (
-                      <Badge className="text-xs bg-green-100 text-green-800">Verified</Badge>
-                    ) : (
-                      <Badge variant="outline" className="text-xs text-yellow-700">Unverified</Badge>
-                    )}
+                    {ba.is_verified
+                      ? <Badge className="text-xs bg-green-100 text-green-800">Verified</Badge>
+                      : (isAdmin || userRole === "accounts") && (
+                          <button
+                            onClick={() => markBankAccountVerified(ba.id)}
+                            className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                          >
+                            Mark verified
+                          </button>
+                        )
+                    }
                   </div>
                 </div>
               ))
