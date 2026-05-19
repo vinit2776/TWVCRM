@@ -655,6 +655,7 @@ export default function AccountingPage() {
                               <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground hidden sm:table-cell">Invoice Date</th>
                               <th className="px-4 py-2.5 text-right font-medium text-xs text-muted-foreground">Amount</th>
                               <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground hidden sm:table-cell">Payment Date</th>
+                              <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground hidden lg:table-cell">Payment Ref</th>
                               <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground">Status</th>
                             </tr>
                           </thead>
@@ -727,6 +728,11 @@ export default function AccountingPage() {
                                 <td className="px-4 py-2.5 hidden sm:table-cell text-xs text-muted-foreground">
                                   {bill.payment_date
                                     ? new Date(bill.payment_date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "2-digit" })
+                                    : "—"}
+                                </td>
+                                <td className="px-4 py-2.5 hidden lg:table-cell text-xs font-mono text-muted-foreground max-w-[160px]">
+                                  {bill.vendor_bill_payments && bill.vendor_bill_payments.length > 0
+                                    ? [...new Set(bill.vendor_bill_payments.map((p) => p.payment_reference).filter(Boolean))].join(", ") || "—"
                                     : "—"}
                                 </td>
                                 <td className="px-4 py-2.5">

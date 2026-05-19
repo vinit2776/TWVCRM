@@ -63,7 +63,8 @@ export async function GET(request: NextRequest) {
     .from("vendor_bills")
     .select(
       `*, procurement_vendors(id, name, contact_email, gstin), purchase_orders(id, po_number, po_type),
-       approver:users!vendor_bills_approved_by_fkey(id, full_name)`,
+       approver:users!vendor_bills_approved_by_fkey(id, full_name),
+       vendor_bill_payments(id, payment_reference)`,
       { count: "exact" }
     )
     .order("created_at", { ascending: false })
