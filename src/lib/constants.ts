@@ -1690,3 +1690,154 @@ export const EXPENDITURE_TYPE_COLORS: Record<string, string> = {
   operational: "bg-blue-100 text-blue-800",
   amc: "bg-purple-100 text-purple-800",
 };
+
+// ── Rent Management ───────────────────────────────────────────────────────────
+
+export const RENT_MANAGEMENT_ROLES = ["admin", "accounts", "viewer"] as const;
+
+export const LEASE_STATUSES = ["active", "expired", "terminated", "on_hold"] as const;
+
+export const LEASE_STATUS_LABELS: Record<string, string> = {
+  active: "Active",
+  expired: "Expired",
+  terminated: "Terminated",
+  on_hold: "On Hold",
+};
+
+export const LEASE_STATUS_COLORS: Record<string, string> = {
+  active: "bg-green-100 text-green-800",
+  expired: "bg-gray-100 text-gray-800",
+  terminated: "bg-red-100 text-red-800",
+  on_hold: "bg-yellow-100 text-yellow-800",
+};
+
+export const LEASE_PAYMENT_STATUSES = ["pending", "paid", "overdue", "on_hold", "disputed"] as const;
+
+export const LEASE_PAYMENT_STATUS_LABELS: Record<string, string> = {
+  pending: "Pending",
+  paid: "Paid",
+  overdue: "Overdue",
+  on_hold: "On Hold",
+  disputed: "Disputed",
+};
+
+export const LEASE_PAYMENT_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-yellow-100 text-yellow-800",
+  paid: "bg-green-100 text-green-800",
+  overdue: "bg-red-100 text-red-800",
+  on_hold: "bg-orange-100 text-orange-800",
+  disputed: "bg-purple-100 text-purple-800",
+};
+
+export const ESCALATION_TYPES = ["none", "percentage", "flat", "step_up"] as const;
+
+export const ESCALATION_TYPE_LABELS: Record<string, string> = {
+  none: "No Escalation",
+  percentage: "Percentage (%)",
+  flat: "Flat Amount (₹)",
+  step_up: "Step-Up (₹/period)",
+};
+
+export const ESCALATION_STATUS_LABELS: Record<string, string> = {
+  scheduled: "Scheduled",
+  applied: "Applied",
+  disputed: "Disputed",
+  waived: "Waived",
+};
+
+export const ESCALATION_STATUS_COLORS: Record<string, string> = {
+  scheduled: "bg-blue-100 text-blue-800",
+  applied: "bg-green-100 text-green-800",
+  disputed: "bg-red-100 text-red-800",
+  waived: "bg-gray-100 text-gray-800",
+};
+
+export const ASSET_CATEGORIES = ["civil", "electrical", "furniture", "equipment", "it", "fitting", "other"] as const;
+
+export const ASSET_CATEGORY_LABELS: Record<string, string> = {
+  civil: "Civil / Structural",
+  electrical: "Electrical",
+  furniture: "Furniture",
+  equipment: "Equipment",
+  it: "IT / Technology",
+  fitting: "Fixtures & Fittings",
+  other: "Other",
+};
+
+export const ASSET_CONDITION_LABELS: Record<string, string> = {
+  excellent: "Excellent",
+  good: "Good",
+  fair: "Fair",
+  poor: "Poor",
+};
+
+export const HANDOVER_TYPE_LABELS: Record<string, string> = {
+  takeover: "Takeover",
+  return: "Return",
+  mid_term_addition: "Mid-Term Addition",
+};
+
+export const HANDOVER_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-yellow-100 text-yellow-800",
+  completed: "bg-green-100 text-green-800",
+  disputed: "bg-red-100 text-red-800",
+};
+
+export const LEASE_DOCUMENT_TYPES = ["lease_deed", "floor_plan", "electrical_drawing", "noc", "amendment", "correspondence", "other"] as const;
+
+export const LEASE_DOCUMENT_TYPE_LABELS: Record<string, string> = {
+  lease_deed: "Lease Deed",
+  floor_plan: "Floor Plan",
+  electrical_drawing: "Electrical Drawing",
+  noc: "NOC",
+  amendment: "Amendment",
+  correspondence: "Correspondence",
+  other: "Other",
+};
+
+export const LEASE_SERVICE_NAMES = ["electricity", "water", "cam", "security", "parking", "wifi", "generator", "hvac", "housekeeping", "other"] as const;
+
+export const LEASE_SERVICE_NAME_LABELS: Record<string, string> = {
+  electricity: "Electricity",
+  water: "Water",
+  cam: "Common Area Maintenance (CAM)",
+  security: "Security",
+  parking: "Parking",
+  wifi: "WiFi / Internet",
+  generator: "Generator / DG Set",
+  hvac: "HVAC / Air Conditioning",
+  housekeeping: "Housekeeping",
+  other: "Other",
+};
+
+export const LANDLORD_KYC_STATUS_LABELS: Record<string, string> = {
+  pending: "Pending",
+  verified: "Verified",
+  incomplete: "Incomplete",
+};
+
+export const LANDLORD_KYC_STATUS_COLORS: Record<string, string> = {
+  pending: "bg-yellow-100 text-yellow-800",
+  verified: "bg-green-100 text-green-800",
+  incomplete: "bg-red-100 text-red-800",
+};
+
+export const LEASE_PAYMENT_MODE_LABELS: Record<string, string> = {
+  bank_transfer: "Bank Transfer",
+  cheque: "Cheque",
+  neft: "NEFT",
+  rtgs: "RTGS",
+  upi: "UPI",
+};
+
+export const TDS_SECTIONS = ["194I", "194IB"] as const;
+
+export const TDS_SECTION_LABELS: Record<string, string> = {
+  "194I": "194I — Commercial Property (≥₹2.4L/yr)",
+  "194IB": "194IB — Residential / Small Landlord",
+};
+
+export const TDS_DEFAULT_RATES: Record<string, number> = {
+  "194I": 10,
+  "194IB": 5,
+};

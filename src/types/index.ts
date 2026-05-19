@@ -738,7 +738,15 @@ export type AuditEntityType =
   | "service_usage_record"
   | "service_usage_import"
   | "location_print_template"
-  | "approval_request";
+  | "approval_request"
+  | "landlord"
+  | "property_lease"
+  | "lease_payment"
+  | "lease_escalation"
+  | "lease_asset"
+  | "lease_handover"
+  | "lease_document"
+  | "lease_service_offering";
 
 export interface AuditLog {
   id: string;
@@ -2924,6 +2932,189 @@ export interface LocationPrintTemplate {
   notes?: string | null;
   created_by?: string | null;
   updated_by?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ==========================================
+// Rent Management Module
+// ==========================================
+
+export type LandlordKycStatus = "pending" | "verified" | "incomplete";
+export type LeaseStatus = "active" | "expired" | "terminated" | "on_hold";
+export type LeaseEscalationType = "none" | "percentage" | "flat" | "step_up";
+export type LeaseEscalationFrequency = "annual" | "bi_annual" | "custom";
+export type LeaseEscalationStatus = "scheduled" | "applied" | "disputed" | "waived";
+export type LeasePaymentStatus = "pending" | "paid" | "overdue" | "on_hold" | "disputed";
+export type LeasePaymentMode = "bank_transfer" | "cheque" | "neft" | "rtgs" | "upi";
+export type LeaseHandoverType = "takeover" | "return" | "mid_term_addition";
+export type LeaseHandoverStatus = "pending" | "completed" | "disputed";
+export type LeaseDocumentType = "lease_deed" | "floor_plan" | "electrical_drawing" | "noc" | "amendment" | "correspondence" | "other";
+export type AssetCategory = "civil" | "electrical" | "furniture" | "equipment" | "it" | "fitting" | "other";
+export type AssetCondition = "excellent" | "good" | "fair" | "poor";
+export type LeaseServiceName = "electricity" | "water" | "cam" | "security" | "parking" | "wifi" | "generator" | "hvac" | "housekeeping" | "other";
+export type TdsSection = "194I" | "194IB";
+
+export interface Landlord {
+  id: string;
+  name: string;
+  contact_person?: string | null;
+  email?: string | null;
+  phone?: string | null;
+  pan_number?: string | null;
+  gstin?: string | null;
+  registered_address?: string | null;
+  kyc_status: LandlordKycStatus;
+  notes?: string | null;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+  bank_accounts?: LandlordBankAccount[];
+  active_lease_count?: number;
+}
+
+export interface LandlordBankAccount {
+  id: string;
+  landlord_id: string;
+  bank_name: string;
+  account_number: string;
+  ifsc_code: string;
+  account_holder_name?: string | null;
+  is_primary: boolean;
+  is_verified: boolean;
+  created_at: string;
+}
+
+export interface PropertyLease {
+  id: string;
+  location_id: string;
+  landlord_id?: string | null;
+  lease_number?: string | null;
+  registered_deed_number?: string | null;
+  lease_start_date: string;
+  lease_end_date: string;
+  lock_in_end_date?: string | null;
+  base_rent_amount: number;
+  security_deposit_amount: number;
+  rent_due_day: number;
+  advance_months: number;
+  escalation_type: LeaseEscalationType;
+  escalation_value?: number | null;
+  escalation_frequency: LeaseEscalationFrequency;
+  next_escalation_date?: string | null;
+  tds_applicable: boolean;
+  tds_section: TdsSection;
+  tds_rate: number;
+  status: LeaseStatus;
+  notes?: string | null;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+  location?: { id: string; name: string; city?: string | null } | null;
+  landlord?: Landlord | null;
+}
+
+export interface LeaseEscalation {
+  id: string;
+  lease_id: string;
+  effective_date: string;
+  previous_amount: number;
+  new_amount: number;
+  escalation_type: string;
+  escalation_value?: number | null;
+  status: LeaseEscalationStatus;
+  applied_by?: string | null;
+  applied_at?: string | null;
+  notes?: string | null;
+  created_at: string;
+  applied_by_name?: string | null;
+}
+
+export interface LeasePayment {
+  id: string;
+  lease_id: string;
+  payment_month: string;
+  due_date: string;
+  paid_date?: string | null;
+  gross_rent_amount: number;
+  tds_amount: number;
+  net_amount_paid?: number | null;
+  payment_mode?: LeasePaymentMode | null;
+  payment_reference?: string | null;
+  bank_account_id?: string | null;
+  status: LeasePaymentStatus;
+  auto_approved: boolean;
+  approved_by?: string | null;
+  approved_at?: string | null;
+  on_hold_reason?: string | null;
+  attachment_url?: string | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+  approved_by_name?: string | null;
+  bank_account?: LandlordBankAccount | null;
+}
+
+export interface LeaseAsset {
+  id: string;
+  lease_id: string;
+  asset_name: string;
+  asset_category?: AssetCategory | null;
+  serial_number?: string | null;
+  make_model?: string | null;
+  quantity: number;
+  unit_value: number;
+  is_capex: boolean;
+  condition_at_takeover?: AssetCondition | null;
+  notes?: string | null;
+  created_at: string;
+}
+
+export interface LeaseAssetHandover {
+  id: string;
+  lease_id: string;
+  handover_type: LeaseHandoverType;
+  handover_date: string;
+  completed_by?: string | null;
+  landlord_representative?: string | null;
+  witness_name?: string | null;
+  status: LeaseHandoverStatus;
+  notes?: string | null;
+  before_photos: string[];
+  after_photos: string[];
+  asset_conditions: { asset_id: string; condition: string; notes?: string }[];
+  created_at: string;
+  updated_at: string;
+  completed_by_name?: string | null;
+}
+
+export interface LeaseDocument {
+  id: string;
+  lease_id: string;
+  document_type: LeaseDocumentType;
+  document_name: string;
+  file_url: string;
+  file_size?: number | null;
+  mime_type?: string | null;
+  version: number;
+  description?: string | null;
+  uploaded_by?: string | null;
+  created_at: string;
+  uploaded_by_name?: string | null;
+}
+
+export interface LeaseServiceOffering {
+  id: string;
+  lease_id: string;
+  service_name: LeaseServiceName;
+  custom_service_name?: string | null;
+  landlord_provided: boolean;
+  responsible?: string | null;
+  accountable?: string | null;
+  consulted?: string | null;
+  informed?: string | null;
+  frequency?: string | null;
+  sla_notes?: string | null;
   created_at: string;
   updated_at: string;
 }

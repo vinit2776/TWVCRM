@@ -110,6 +110,16 @@ const navSections: NavSection[] = [
     ],
   },
   {
+    key: "rent-management",
+    label: "Rent Management",
+    icon: Building2,
+    items: [
+      { href: "/rent-management",           label: "Dashboard",   icon: BarChart3Icon, roles: ["admin", "accounts", "viewer"] },
+      { href: "/rent-management/leases",    label: "Leases",      icon: ScrollText,    roles: ["admin", "accounts", "viewer"] },
+      { href: "/rent-management/landlords", label: "Landlords",   icon: Building2,     roles: ["admin", "accounts", "viewer"] },
+    ],
+  },
+  {
     key: "operations",
     label: "Operations",
     icon: CalendarClock,

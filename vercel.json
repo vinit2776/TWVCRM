@@ -55,6 +55,18 @@
     {
       "path": "/api/cron/invoice-gap-audit",
       "schedule": "30 4 * * 1"
+    },
+    {
+      "path": "/api/cron/lease-payment-generator",
+      "schedule": "30 2 1 * *"
+    },
+    {
+      "path": "/api/cron/lease-payment-reminders",
+      "schedule": "30 3 * * *"
+    },
+    {
+      "path": "/api/cron/lease-escalation-check",
+      "schedule": "30 4 28 * *"
     }
   ],
   "headers": [
