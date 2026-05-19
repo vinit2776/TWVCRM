@@ -1,8 +1,9 @@
 import type { NextConfig } from "next";
+import path from "path";
 
 const nextConfig: NextConfig = {
   turbopack: {
-    root: process.cwd(),
+    root: path.resolve(__dirname),
   },
   env: {
     // Baked at compile time — always reflects the actual build date.
