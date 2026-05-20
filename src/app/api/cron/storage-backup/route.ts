@@ -17,24 +17,41 @@ function getS3Client() {
   });
 }
 
-async function listBucketFiles(bucket: string, prefix = "", limit = 1000): Promise<string[]> {
+/**
+ * Paginate through all files in a Supabase Storage bucket.
+ * The API returns max 1000 items per page — this loops until exhausted.
+ */
+async function listBucketFiles(bucket: string, prefix = ""): Promise<string[]> {
   const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL!;
   const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY!;
+  const PAGE_SIZE = 1000;
+  const allFiles: string[] = [];
+  let offset = 0;
 
-  const res = await fetch(`${supabaseUrl}/storage/v1/object/list/${bucket}`, {
-    method: "POST",
-    headers: {
-      Authorization: `Bearer ${serviceKey}`,
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify({ prefix, limit, offset: 0 }),
-  });
+  while (true) {
+    const res = await fetch(`${supabaseUrl}/storage/v1/object/list/${bucket}`, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${serviceKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ prefix, limit: PAGE_SIZE, offset }),
+    });
 
-  if (!res.ok) return [];
-  const items = await res.json() as Array<{ name: string; id?: string }>;
-  return items
-    .filter((i) => i.name && !i.name.endsWith("/") && i.id) // files only, not folders
-    .map((i) => i.name);
+    if (!res.ok) break;
+    const items = await res.json() as Array<{ name: string; id?: string }>;
+    const files = items
+      .filter((i) => i.name && !i.name.endsWith("/") && i.id) // files only, not folders
+      .map((i) => i.name);
+
+    allFiles.push(...files);
+
+    // If we got fewer than a full page, we've reached the end
+    if (items.length < PAGE_SIZE) break;
+    offset += PAGE_SIZE;
+  }
+
+  return allFiles;
 }
 
 async function downloadFile(bucket: string, path: string): Promise<Buffer | null> {

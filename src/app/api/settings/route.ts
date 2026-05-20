@@ -77,7 +77,18 @@ export async function PATCH(request: NextRequest) {
     return NextResponse.json({ error: "No valid settings to update" }, { status: 400 });
   }
 
+  const SECRET_KEYS_WRITE = ["razorpay_key_secret", "razorpay_webhook_secret"];
+
   const adminSupabase = await createAdminClient();
+
+  // Fetch current values before overwriting so the audit trail can record
+  // which keys changed (secrets are stored as "[REDACTED]" — never logged).
+  const { data: existingRows } = await adminSupabase
+    .from("app_settings")
+    .select("key, value")
+    .in("key", updates.map((u) => u.key));
+  const existingMap = Object.fromEntries((existingRows || []).map((r) => [r.key, r.value]));
+
   for (const { key, value } of updates) {
     // Use upsert to handle both existing and missing rows
     const { error } = await adminSupabase
@@ -89,13 +100,25 @@ export async function PATCH(request: NextRequest) {
     }
   }
 
-  logAudit(adminSupabase, {
-    entityType: "app_setting",
-    entityId: "batch",
-    action: "update",
-    performedBy: dbUser.id,
-    changes: Object.fromEntries(updates.map(u => [u.key, { old: "***", new: "***" }])),
-  });
+  // Audit each key individually so the trail is searchable per setting.
+  // Secret values are never stored in the audit log — only whether they changed.
+  for (const { key, value } of updates) {
+    const isSecret = SECRET_KEYS_WRITE.includes(key);
+    const oldVal = existingMap[key];
+    const changed = oldVal !== value;
+
+    logAudit(adminSupabase, {
+      entityType: "app_setting",
+      entityId: key,
+      action: "update",
+      performedBy: dbUser.id,
+      changes: {
+        [key]: isSecret
+          ? { old: "[REDACTED]", new: changed ? "[REDACTED — NEW VALUE]" : "[REDACTED — UNCHANGED]" }
+          : { old: oldVal ?? null, new: value },
+      },
+    });
+  }
 
   return NextResponse.json({ message: "Settings updated" });
 }
