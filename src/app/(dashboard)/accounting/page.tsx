@@ -35,7 +35,7 @@ import {
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
 import { toast } from "sonner";
-import { formatSmartDate, formatCurrency, cn } from "@/lib/utils";
+import { formatSmartDate, formatDate, formatCurrency, cn } from "@/lib/utils";
 import { VendorEmailChip } from "@/components/finance-intelligence/vendor-email-chip";
 import {
   BillSearchBar, filtersToParams, EMPTY_FILTERS, type BillFilters,
