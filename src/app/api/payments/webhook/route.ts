@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import crypto from "crypto";
 
 export const dynamic = "force-dynamic";
@@ -9,6 +9,25 @@ function createServiceClient() {
   return createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
+  );
+}
+
+// Fire-and-forget receipt log — never blocks or throws.
+function logWebhookReceipt(
+  supabase: SupabaseClient,
+  data: {
+    event: string;
+    razorpay_payment_id?: string | null;
+    razorpay_order_id?: string | null;
+    razorpay_payment_link_id?: string | null;
+    entity?: string | null;
+    outcome: "processed" | "ignored" | "error";
+    outcome_detail?: string | null;
+  }
+) {
+  supabase.from("razorpay_webhook_log").insert(data).then(
+    () => {},
+    (err) => console.error("[webhook-log] insert failed:", err)
   );
 }
 
@@ -53,7 +72,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
 
-  const event = payload.event;
+  const event = payload.event as string;
 
   // Handle payment.captured event
   if (event === "payment.captured") {
@@ -62,10 +81,11 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: "Invalid payload" }, { status: 400 });
     }
 
-    const orderId = paymentEntity.order_id;
-    const paymentId = paymentEntity.id;
+    const orderId = paymentEntity.order_id as string | undefined;
+    const paymentId = paymentEntity.id as string;
 
     if (!orderId) {
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: paymentId, outcome: "ignored", outcome_detail: "No order_id in payment" });
       return NextResponse.json({ status: "ignored", reason: "No order_id in payment" });
     }
 
@@ -77,6 +97,7 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (!bookingPayment) {
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: paymentId, razorpay_order_id: orderId, outcome: "ignored", outcome_detail: "No matching payment record" });
       return NextResponse.json({ status: "ignored", reason: "No matching payment record" });
     }
 
@@ -116,6 +137,7 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    logWebhookReceipt(supabase, { event, razorpay_payment_id: paymentId, razorpay_order_id: orderId, entity: "booking", outcome: "processed" });
     return NextResponse.json({ status: "ok" });
   }
 
@@ -148,6 +170,7 @@ export async function POST(request: NextRequest) {
         .from("prepaid_purchases")
         .update({ payment_status: "paid", updated_at: new Date().toISOString() })
         .eq("id", purchase.id);
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "prepaid_purchase", outcome: "processed" });
       return NextResponse.json({ status: "ok", entity: "prepaid_purchase" });
     }
 
@@ -172,6 +195,7 @@ export async function POST(request: NextRequest) {
         })
         .eq("id", proposal.id);
 
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "proposal", outcome: "processed" });
       return NextResponse.json({ status: "ok", entity: "proposal" });
     }
 
@@ -197,6 +221,7 @@ export async function POST(request: NextRequest) {
         })
         .eq("id", depositProposal.id);
 
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "proposal_deposit", outcome: "processed" });
       return NextResponse.json({ status: "ok", entity: "proposal_deposit" });
     }
 
@@ -251,6 +276,7 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "billing_statement", outcome: "processed", outcome_detail: newStatus });
       return NextResponse.json({ status: "ok", entity: "billing_statement" });
     }
 
@@ -262,6 +288,7 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (!booking) {
+      logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, outcome: "ignored", outcome_detail: "No matching entity for payment link" });
       return NextResponse.json({ status: "ignored", reason: "No matching entity for payment link" });
     }
 
@@ -306,9 +333,11 @@ export async function POST(request: NextRequest) {
         .eq("id", booking.id);
     }
 
+    logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "booking", outcome: "processed" });
     return NextResponse.json({ status: "ok" });
   }
 
   // Other events — acknowledge but don't process
+  logWebhookReceipt(supabase, { event, outcome: "ignored", outcome_detail: "Unhandled event type" });
   return NextResponse.json({ status: "ok", event });
 }
