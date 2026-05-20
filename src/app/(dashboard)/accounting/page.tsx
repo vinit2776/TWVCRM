@@ -39,6 +39,15 @@ import {
   BillSearchBar, filtersToParams, EMPTY_FILTERS, type BillFilters,
 } from "@/components/procurement/bill-search-bar";
 import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
+import {
+  classifyExpense,
+  EXPENSE_CLASS_LABELS,
+  EXPENSE_CLASS_COLORS,
+  PROCUREMENT_DEPARTMENT_LABELS,
+  PROCUREMENT_DEPARTMENT_COLORS,
+  EXPENDITURE_TYPE_LABELS,
+  PROCUREMENT_DEPARTMENTS,
+} from "@/lib/constants";
 
 type VendorBillItem = {
   id: string;
@@ -65,7 +74,13 @@ type VendorBillItem = {
   vendor_id: string;
   po_id: string | null;
   procurement_vendors: { id: string; name: string; contact_email?: string | null } | null;
-  purchase_orders: { id: string; po_number: string } | null;
+  purchase_orders: {
+    id: string;
+    po_number: string;
+    purchase_requests?: { department: string; expenditure_type: string } | null;
+  } | null;
+  manual_department: string | null;
+  manual_expenditure_type: string | null;
   vendor_bill_payments?: Array<{
     id: string;
     amount: number;
@@ -125,6 +140,38 @@ export default function AccountingPage() {
   const [batchNotes, setBatchNotes] = useState("");
   const [batchGst, setBatchGst] = useState<Record<string, string>>({});
   const [batchSubmitting, setBatchSubmitting] = useState(false);
+
+  // Accounting-head tagging dialog (for direct-expense bills with no PO)
+  const [tagDialogBillId, setTagDialogBillId] = useState<string | null>(null);
+  const [tagDept, setTagDept] = useState<string>("");
+  const [tagExpType, setTagExpType] = useState<string>("");
+  const [tagSubmitting, setTagSubmitting] = useState(false);
+
+  async function handleTagSubmit() {
+    if (!tagDialogBillId) return;
+    setTagSubmitting(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${tagDialogBillId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "tag_accounting",
+          manual_department: tagDept || null,
+          manual_expenditure_type: tagExpType || null,
+        }),
+      });
+      if (res.ok) {
+        toast.success("Accounting classification saved");
+        setTagDialogBillId(null);
+        await fetchVendorBills();
+      } else {
+        const j = await res.json();
+        toast.error(j.error ?? "Failed to save classification");
+      }
+    } finally {
+      setTagSubmitting(false);
+    }
+  }
 
   // Bill search (replaces the old simple textbox)
   const [filters, setFilters] = useState<BillFilters>({
@@ -383,6 +430,43 @@ export default function AccountingPage() {
                 </Link>
               )}
 
+              {/* OpEx / CapEx / Unclassified summary strip */}
+              {(() => {
+                const pb = vendorBills.filter((b) => b.payment_status !== "paid");
+                const opexTotal = pb
+                  .filter((b) => classifyExpense(
+                    b.manual_department ?? b.purchase_orders?.purchase_requests?.department,
+                    b.manual_expenditure_type ?? b.purchase_orders?.purchase_requests?.expenditure_type
+                  ) === "opex")
+                  .reduce((s, b) => s + Math.max(0, Number(b.total_amount) + Number(b.gst_amount ?? 0) - Number(b.amount_paid ?? 0)), 0);
+                const capexTotal = pb
+                  .filter((b) => classifyExpense(
+                    b.manual_department ?? b.purchase_orders?.purchase_requests?.department,
+                    b.manual_expenditure_type ?? b.purchase_orders?.purchase_requests?.expenditure_type
+                  ) === "capex")
+                  .reduce((s, b) => s + Math.max(0, Number(b.total_amount) + Number(b.gst_amount ?? 0) - Number(b.amount_paid ?? 0)), 0);
+                const unclassifiedCount = pb.filter((b) => classifyExpense(
+                  b.manual_department ?? b.purchase_orders?.purchase_requests?.department,
+                  b.manual_expenditure_type ?? b.purchase_orders?.purchase_requests?.expenditure_type
+                ) === "unclassified").length;
+                if (pb.length === 0) return null;
+                return (
+                  <div className="flex flex-wrap gap-2 text-xs">
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border bg-blue-50 text-blue-700 border-blue-200 font-medium">
+                      OpEx pending: {formatCurrency(opexTotal)}
+                    </span>
+                    <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border bg-amber-50 text-amber-700 border-amber-200 font-medium">
+                      CapEx pending: {formatCurrency(capexTotal)}
+                    </span>
+                    {unclassifiedCount > 0 && (
+                      <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border bg-red-50 text-red-700 border-red-200 font-medium">
+                        {unclassifiedCount} unclassified — tag to post correctly
+                      </span>
+                    )}
+                  </div>
+                );
+              })()}
+
               {/* Summary tiles */}
               <div className="grid grid-cols-3 gap-3 text-sm">
                 <div className="rounded-lg border bg-red-50/50 p-3 text-center">
@@ -442,6 +526,7 @@ export default function AccountingPage() {
                           <th className="px-4 py-3 text-left font-medium">Bill #</th>
                           <th className="px-4 py-3 text-left font-medium">Vendor</th>
                           <th className="px-4 py-3 text-left font-medium hidden md:table-cell">PO</th>
+                          <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Dept / Class</th>
                           <th className="px-4 py-3 text-left font-medium hidden sm:table-cell">Due</th>
                           <th className="px-4 py-3 text-right font-medium">Invoice</th>
                           <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">Paid</th>
@@ -531,7 +616,40 @@ export default function AccountingPage() {
                                 </div>
                               </td>
                               <td className="px-4 py-3 hidden md:table-cell text-muted-foreground text-xs">
-                                {(bill.purchase_orders as { po_number: string } | null)?.po_number ?? "—"}
+                                {bill.purchase_orders?.po_number ?? "—"}
+                              </td>
+                              <td className="px-4 py-3 hidden lg:table-cell" onClick={(e) => e.stopPropagation()}>
+                                {(() => {
+                                  const effectiveDept = bill.manual_department ?? bill.purchase_orders?.purchase_requests?.department ?? null;
+                                  const effectiveExpType = bill.manual_expenditure_type ?? bill.purchase_orders?.purchase_requests?.expenditure_type ?? null;
+                                  const expClass = classifyExpense(effectiveDept, effectiveExpType);
+                                  const isDirectExpense = !bill.po_id;
+                                  return (
+                                    <div className="flex flex-col gap-1">
+                                      {effectiveDept ? (
+                                        <span className={`inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded-full w-fit border ${PROCUREMENT_DEPARTMENT_COLORS[effectiveDept as keyof typeof PROCUREMENT_DEPARTMENT_COLORS] ?? "bg-gray-100 text-gray-700 border-gray-200"}`}>
+                                          {PROCUREMENT_DEPARTMENT_LABELS[effectiveDept] ?? effectiveDept}
+                                        </span>
+                                      ) : null}
+                                      <span className={`inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded-full w-fit border ${EXPENSE_CLASS_COLORS[expClass]}`}>
+                                        {EXPENSE_CLASS_LABELS[expClass]}
+                                      </span>
+                                      {isDirectExpense && expClass === "unclassified" && (
+                                        <button
+                                          onClick={(e) => {
+                                            e.stopPropagation();
+                                            setTagDialogBillId(bill.id);
+                                            setTagDept(bill.manual_department ?? "");
+                                            setTagExpType(bill.manual_expenditure_type ?? "");
+                                          }}
+                                          className="text-[10px] text-blue-600 hover:text-blue-800 underline w-fit"
+                                        >
+                                          Tag now
+                                        </button>
+                                      )}
+                                    </div>
+                                  );
+                                })()}
                               </td>
                               <td className="px-4 py-3 hidden sm:table-cell text-xs">
                                 {bill.due_date ? (
@@ -586,7 +704,7 @@ export default function AccountingPage() {
                       </tbody>
                       <tfoot>
                         <tr className="bg-muted/20 border-t">
-                          <td colSpan={canRecordPayment ? 5 : 4} className="px-4 py-2.5 text-xs text-muted-foreground font-medium">
+                          <td colSpan={canRecordPayment ? 6 : 5} className="px-4 py-2.5 text-xs text-muted-foreground font-medium">
                             {pendingBills.length} bill{pendingBills.length !== 1 ? "s" : ""} pending payment
                             {pendingTotalPages > 1 && ` · page ${pendingPage} of ${pendingTotalPages}`}
                           </td>
@@ -652,6 +770,7 @@ export default function AccountingPage() {
                               <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground">Bill #</th>
                               <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground">Vendor</th>
                               <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground hidden md:table-cell">PO</th>
+                              <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground hidden xl:table-cell">Class</th>
                               <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground hidden sm:table-cell">Invoice Date</th>
                               <th className="px-4 py-2.5 text-right font-medium text-xs text-muted-foreground">Amount</th>
                               <th className="px-4 py-2.5 text-left font-medium text-xs text-muted-foreground hidden sm:table-cell">Payment Date</th>
@@ -710,7 +829,19 @@ export default function AccountingPage() {
                                   </div>
                                 </td>
                                 <td className="px-4 py-2.5 hidden md:table-cell text-muted-foreground text-xs">
-                                  {(bill.purchase_orders as { po_number: string } | null)?.po_number ?? "—"}
+                                  {bill.purchase_orders?.po_number ?? "—"}
+                                </td>
+                                <td className="px-4 py-2.5 hidden xl:table-cell">
+                                  {(() => {
+                                    const effectiveDept = bill.manual_department ?? bill.purchase_orders?.purchase_requests?.department ?? null;
+                                    const effectiveExpType = bill.manual_expenditure_type ?? bill.purchase_orders?.purchase_requests?.expenditure_type ?? null;
+                                    const expClass = classifyExpense(effectiveDept, effectiveExpType);
+                                    return (
+                                      <span className={`inline-flex items-center text-[10px] font-medium px-1.5 py-0.5 rounded-full border ${EXPENSE_CLASS_COLORS[expClass]}`}>
+                                        {EXPENSE_CLASS_LABELS[expClass]}
+                                      </span>
+                                    );
+                                  })()}
                                 </td>
                                 <td className="px-4 py-2.5 hidden sm:table-cell text-xs text-muted-foreground">
                                   {bill.invoice_date
@@ -950,6 +1081,71 @@ export default function AccountingPage() {
                 Confirm Payment
               </button>
             )}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Accounting Classification Dialog ─────────────────────────────── */}
+      <Dialog open={!!tagDialogBillId} onOpenChange={(open) => { if (!tagSubmitting && !open) setTagDialogBillId(null); }}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle>Tag Accounting Classification</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-1">
+            <p className="text-xs text-muted-foreground bg-muted/50 rounded px-3 py-2">
+              Set the department and expenditure type so accounts can post this bill to the correct cost centre.
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="tag_dept">Department</Label>
+              <Select value={tagDept} onValueChange={setTagDept}>
+                <SelectTrigger id="tag_dept">
+                  <SelectValue placeholder="Select department…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {PROCUREMENT_DEPARTMENTS.map((d) => (
+                    <SelectItem key={d} value={d}>
+                      {PROCUREMENT_DEPARTMENT_LABELS[d]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="tag_exptype">Expenditure Type</Label>
+              <Select value={tagExpType} onValueChange={setTagExpType}>
+                <SelectTrigger id="tag_exptype">
+                  <SelectValue placeholder="Select type…" />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(EXPENDITURE_TYPE_LABELS).map(([v, label]) => (
+                    <SelectItem key={v} value={v}>{label}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            {tagDept && tagExpType && (
+              <div className={`rounded-lg px-3 py-2 text-xs font-medium border ${EXPENSE_CLASS_COLORS[classifyExpense(tagDept, tagExpType)]}`}>
+                This bill will be classified as <strong>{EXPENSE_CLASS_LABELS[classifyExpense(tagDept, tagExpType)]}</strong>
+                {" "}({PROCUREMENT_DEPARTMENT_LABELS[tagDept as keyof typeof PROCUREMENT_DEPARTMENT_LABELS]} · {EXPENDITURE_TYPE_LABELS[tagExpType] ?? tagExpType})
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <button
+              onClick={() => setTagDialogBillId(null)}
+              disabled={tagSubmitting}
+              className="rounded-md border px-3 py-2 text-sm hover:bg-muted/50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleTagSubmit}
+              disabled={tagSubmitting || !tagDept || !tagExpType}
+              className="rounded-md bg-primary text-primary-foreground px-3 py-2 text-sm hover:bg-primary/90 disabled:opacity-50 inline-flex items-center gap-1"
+            >
+              {tagSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
+              Save Classification
+            </button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

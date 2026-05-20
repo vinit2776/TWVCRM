@@ -1679,6 +1679,7 @@ export type ExpenditureType = (typeof EXPENDITURE_TYPES)[number];
 export const EXPENDITURE_TYPE_LABELS: Record<string, string> = {
   operational: "Operational",
   amc: "AMC / Annual Contract",
+  capital: "Capital",
 };
 
 export const EXPENDITURE_TYPE_DESCRIPTIONS: Record<string, string> = {
@@ -1841,3 +1842,85 @@ export const TDS_DEFAULT_RATES: Record<string, number> = {
   "194I": 10,
   "194IB": 5,
 };
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Accounting Heads — Receivables
+// ─────────────────────────────────────────────────────────────────────────────
+
+export const ACCOUNTING_HEADS = [
+  "security_deposit",
+  "membership_fee",
+  "usage_charge",
+  "setup_fee",
+  "late_fee",
+  "other_income",
+] as const;
+
+export type AccountingHead = (typeof ACCOUNTING_HEADS)[number];
+
+export const ACCOUNTING_HEAD_LABELS: Record<AccountingHead, string> = {
+  security_deposit: "Security Deposit",
+  membership_fee: "Membership Fee",
+  usage_charge: "Usage Charges",
+  setup_fee: "Setup Fee",
+  late_fee: "Late Fee",
+  other_income: "Other Income",
+};
+
+export const ACCOUNTING_HEAD_COLORS: Record<AccountingHead, string> = {
+  security_deposit: "bg-purple-100 text-purple-800 border-purple-200",
+  membership_fee: "bg-green-100 text-green-800 border-green-200",
+  usage_charge: "bg-blue-100 text-blue-800 border-blue-200",
+  setup_fee: "bg-indigo-100 text-indigo-800 border-indigo-200",
+  late_fee: "bg-red-100 text-red-800 border-red-200",
+  other_income: "bg-gray-100 text-gray-800 border-gray-200",
+};
+
+export const ACCOUNTING_HEAD_GST: Record<
+  AccountingHead,
+  { taxable: boolean; defaultRate: number }
+> = {
+  security_deposit: { taxable: false, defaultRate: 0 },
+  membership_fee: { taxable: true, defaultRate: 18 },
+  usage_charge: { taxable: true, defaultRate: 18 },
+  setup_fee: { taxable: true, defaultRate: 18 },
+  late_fee: { taxable: true, defaultRate: 18 },
+  other_income: { taxable: true, defaultRate: 18 },
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Expense Classification — Payables (OpEx vs CapEx)
+// ─────────────────────────────────────────────────────────────────────────────
+
+export type ExpenseClass = "opex" | "capex" | "unclassified";
+
+/**
+ * Derive OpEx / CapEx classification from department + expenditure type.
+ * Rules:
+ *   - asset department → always CapEx
+ *   - expenditure_type = 'capital' → CapEx
+ *   - everything else (operational, amc) → OpEx
+ *   - no department at all → unclassified
+ */
+export function classifyExpense(
+  dept: string | null | undefined,
+  expType: string | null | undefined
+): ExpenseClass {
+  if (!dept) return "unclassified";
+  if (dept === "asset") return "capex";
+  if (expType === "capital") return "capex";
+  return "opex";
+}
+
+export const EXPENSE_CLASS_LABELS: Record<ExpenseClass, string> = {
+  opex: "OpEx",
+  capex: "CapEx",
+  unclassified: "Unclassified",
+};
+
+export const EXPENSE_CLASS_COLORS: Record<ExpenseClass, string> = {
+  opex: "bg-blue-50 text-blue-700 border-blue-200",
+  capex: "bg-amber-50 text-amber-700 border-amber-200",
+  unclassified: "bg-gray-50 text-gray-500 border-gray-200",
+};
+

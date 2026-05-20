@@ -77,6 +77,12 @@ const patchBillSchema = z.discriminatedUnion("action", [
     /** Required when gst_amount === 0 — user must explicitly confirm no-GST */
     gst_zero_confirmed: z.boolean().optional(),
   }),
+  z.object({
+    action: z.literal("tag_accounting"),
+    /** Department and expenditure type for direct-expense bills (no PO). */
+    manual_department: z.enum(["pantry", "maintenance", "administration", "asset"]).nullish(),
+    manual_expenditure_type: z.enum(["operational", "amc", "capital"]).nullish(),
+  }),
 ]);
 
 export async function GET(
@@ -603,6 +609,19 @@ export async function PATCH(
         gst_set_at: gstNow,
         gst_zero_confirmed: newGstAmount === 0,
         gst_zero_confirmed_by: newGstAmount === 0 ? dbUser.id : null,
+      };
+      break;
+    }
+
+    case "tag_accounting": {
+      // Admin, manager, and accounts can tag direct-expense bills with dept + exp-type
+      const canTag = ["admin", "manager", "accounts", "office_admin"].includes(dbUser.role);
+      if (!canTag) {
+        return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      }
+      updatePayload = {
+        manual_department: parsed.data.manual_department ?? null,
+        manual_expenditure_type: parsed.data.manual_expenditure_type ?? null,
       };
       break;
     }

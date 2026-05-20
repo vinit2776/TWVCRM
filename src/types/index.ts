@@ -359,6 +359,8 @@ export interface ProformaInvoice {
   gst_invoice_number?: string;
   gst_invoice_sent_at?: string;
   gst_invoice_sent_to?: string;
+  // Accounting head (receivables classification)
+  primary_head?: string | null;
   // Accounting
   accounted?: boolean;
   accounted_at?: string;
@@ -676,6 +678,8 @@ export interface BillingStatement {
   emailed_to?: string;
   payment_status?: string; // "unpaid" | "partially_paid" | "paid"
   billing_payments?: BillingPayment[];
+  // Accounting head (receivables classification)
+  primary_head?: string | null;
 }
 
 // ==========================================
@@ -1247,6 +1251,8 @@ export interface ContractPayment {
   handover_confirmed_at?: string;
   handover_notes?: string;
   notes?: string;
+  // Accounting head — which revenue category this payment settled
+  allocated_head?: string | null;
   created_by?: string;
   creator?: User;
   created_at: string;
@@ -2025,12 +2031,17 @@ export interface VendorBill {
   payment_batch_assigned_at?: string | null;
   // Replacement lineage — when this bill replaces a previously rejected one
   replaces_bill_id?: string | null;
+  // Manual accounting classification (used when po_id is null — direct expense)
+  manual_department?: string | null;
+  manual_expenditure_type?: string | null;
   created_by: string;
   created_at: string;
   updated_at: string;
   // Joined fields
   procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
-  purchase_orders?: Pick<PurchaseOrder, "id" | "po_number" | "po_type"> | null;
+  purchase_orders?: (Pick<PurchaseOrder, "id" | "po_number" | "po_type"> & {
+    purchase_requests?: { department: string; expenditure_type: string } | null;
+  }) | null;
   approver?: { id: string; full_name?: string } | null;
   vendor_bill_batch_changes?: VendorBillBatchChange[];
   vendor_bill_payments?: Array<{
