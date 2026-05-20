@@ -217,6 +217,11 @@ export default function VendorBillDetailPage() {
   const [gstZeroConfirm, setGstZeroConfirm] = useState(false);
   const [gstLoading, setGstLoading] = useState(false);
 
+  // Fix Due Date (shown when approver hits due_date_in_past error)
+  const [showFixDueDate, setShowFixDueDate] = useState(false);
+  const [fixDueDateValue, setFixDueDateValue] = useState("");
+  const [fixDueDateLoading, setFixDueDateLoading] = useState(false);
+
   const today = new Date().toISOString().split("T")[0];
 
   // Fetch current user role
@@ -311,7 +316,16 @@ export default function VendorBillDetailPage() {
         body: JSON.stringify(body),
       });
       const json = await res.json();
-      if (!res.ok) { toast.error(json.error || "Failed to approve invoice"); return; }
+      if (!res.ok) {
+        if (json.code === "due_date_in_past") {
+          // Show inline "Fix Due Date" dialog so approver can correct without rejecting
+          setFixDueDateValue(today);
+          setShowFixDueDate(true);
+          return;
+        }
+        toast.error(json.error || "Failed to approve invoice");
+        return;
+      }
       toast.success(approveType === "partial" ? "Invoice partially approved" : "Invoice approved");
       setApproveDialog(false);
       setBatchType("");
@@ -320,6 +334,30 @@ export default function VendorBillDetailPage() {
       await fetchAll();
     } finally {
       setApproveLoading(false);
+    }
+  };
+
+  const handleFixDueDate = async () => {
+    if (!fixDueDateValue || fixDueDateValue < today) {
+      toast.error("Please select today or a future date");
+      return;
+    }
+    setFixDueDateLoading(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "update_due_date", due_date: fixDueDateValue }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Failed to update due date"); return; }
+      toast.success(`Due date updated to ${fixDueDateValue} — retrying approval…`);
+      setShowFixDueDate(false);
+      await fetchAll();
+      // Reopen approve dialog so approver can confirm
+      setApproveDialog(true);
+    } finally {
+      setFixDueDateLoading(false);
     }
   };
 
@@ -1611,6 +1649,41 @@ export default function VendorBillDetailPage() {
             >
               {gstLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Save GST Amount
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Fix Due Date dialog (opened when approve hits due_date_in_past) ─── */}
+      <Dialog open={showFixDueDate} onOpenChange={setShowFixDueDate}>
+        <DialogContent className="max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-700">
+              <AlertTriangle className="h-4 w-4" />
+              Due Date Has Passed
+            </DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground">
+            The payment due date on this invoice has already passed. Update it to today
+            or a future date before approving.
+          </p>
+          <div className="space-y-2">
+            <Label htmlFor="fix-due-date">New Due Date</Label>
+            <Input
+              id="fix-due-date"
+              type="date"
+              min={today}
+              value={fixDueDateValue}
+              onChange={(e) => setFixDueDateValue(e.target.value)}
+            />
+          </div>
+          <DialogFooter className="gap-2">
+            <Button variant="outline" onClick={() => setShowFixDueDate(false)} disabled={fixDueDateLoading}>
+              Cancel
+            </Button>
+            <Button onClick={handleFixDueDate} disabled={fixDueDateLoading || !fixDueDateValue || fixDueDateValue < today}>
+              {fixDueDateLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
+              Update &amp; Retry Approval
             </Button>
           </DialogFooter>
         </DialogContent>
