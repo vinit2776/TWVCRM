@@ -12,6 +12,9 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import {
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { ITEM_UNITS, PO_ADVANCE_PAYMENT_MODE_LABELS, GST_RATES, GST_RATE_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
@@ -211,6 +214,10 @@ function NewPurchaseOrderFormWithPr({
   const [advanceReference, setAdvanceReference] = useState("");
   const [advanceNotes, setAdvanceNotes] = useState("");
 
+  // Blank-price warning dialog
+  const [showPriceWarning, setShowPriceWarning] = useState(false);
+  const [missingPriceItems, setMissingPriceItems] = useState<string[]>([]);
+
   const handleVendorChange = async (newVendorId: string) => {
     const actualId = newVendorId === "__none__" ? "" : newVendorId;
     setVendorId(actualId);
@@ -329,10 +336,8 @@ function NewPurchaseOrderFormWithPr({
     return null;
   };
 
-  const handleSubmit = async () => {
-    const err = validate();
-    if (err) { toast.error(err); return; }
-
+  // Separated so the warning dialog's "Proceed anyway" button can call it directly.
+  const doSubmit = async () => {
     setSubmitting(true);
     try {
       // Only send items that have a positive quantity and are not fully ordered
@@ -376,6 +381,26 @@ function NewPurchaseOrderFormWithPr({
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleSubmit = () => {
+    const err = validate();
+    if (err) { toast.error(err); return; }
+
+    // Soft check: warn if any orderable item is missing a unit price.
+    // Accounts may not be able to reconcile a PO with ₹0 line items later.
+    const orderable = activeItems.filter(li => parseFloat(li.quantity_ordered) > 0);
+    const noPriceItems = orderable
+      .filter(li => !li.unit_price || parseFloat(li.unit_price) <= 0)
+      .map(li => li.item_name);
+
+    if (noPriceItems.length > 0) {
+      setMissingPriceItems(noPriceItems);
+      setShowPriceWarning(true);
+      return;
+    }
+
+    doSubmit();
   };
 
   if (loadingPr) {
@@ -800,6 +825,51 @@ function NewPurchaseOrderFormWithPr({
           </Button>
         </CardContent>
       </Card>
+
+      {/* ── Blank-price warning dialog ───────────────────────────────────── */}
+      <Dialog open={showPriceWarning} onOpenChange={setShowPriceWarning}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-700">
+              <AlertTriangle className="h-5 w-5 flex-shrink-0" />
+              Items without a price
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p className="text-muted-foreground">
+              The following item{missingPriceItems.length !== 1 ? "s have" : " has"} no unit price entered.
+              The PO will be created with ₹0 for {missingPriceItems.length !== 1 ? "these lines" : "this line"},
+              which means the PO total will be incorrect and accounts won&apos;t be able to match it to a bill.
+            </p>
+            <ul className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 space-y-1">
+              {missingPriceItems.map((name) => (
+                <li key={name} className="text-amber-800 font-medium text-xs">• {name}</li>
+              ))}
+            </ul>
+            <p className="text-muted-foreground text-xs">
+              Go back and enter prices, or proceed if you&apos;ll update them later (not recommended).
+            </p>
+          </div>
+          <DialogFooter className="flex-col-reverse sm:flex-row gap-2">
+            <Button
+              variant="outline"
+              onClick={() => setShowPriceWarning(false)}
+            >
+              Go back and fill prices
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={submitting}
+              onClick={() => {
+                setShowPriceWarning(false);
+                doSubmit();
+              }}
+            >
+              {submitting ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Creating…</> : "Proceed without prices"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
