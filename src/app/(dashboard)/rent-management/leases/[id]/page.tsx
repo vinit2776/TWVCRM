@@ -102,7 +102,6 @@ export default function LeaseDetailPage() {
     if (hr.ok) setHandovers((await hr.json()).data || []);
   }, [id]);
 
-  // eslint-disable-next-line react-compiler/react-compiler
   const fetchTab = useCallback(async (tab: string) => {
     if (tab === "payments" && payments.length === 0) {
       const r = await fetch(`/api/rent-management/leases/${id}/payments`);
@@ -123,7 +122,9 @@ export default function LeaseDetailPage() {
       const r = await fetch(`/api/rent-management/leases/${id}/services`);
       if (r.ok) setServices((await r.json()).data || []);
     }
-  }, [id, payments.length]);
+  // refreshAssets is stable (depends only on id which is also here)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [id, payments.length, refreshAssets]);
 
   const handleTabChange = (tab: string) => {
     setActiveTab(tab);
