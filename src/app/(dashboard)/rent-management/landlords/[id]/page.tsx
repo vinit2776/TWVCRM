@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { useParams } from "next/navigation";
+import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import { ArrowLeft, Plus, CheckCircle, Star, Pencil, Upload, FileText, Trash2, Download } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -39,6 +39,7 @@ const KYC_COLORS: Record<string, string> = {
 
 export default function LandlordDetailPage() {
   const { id } = useParams<{ id: string }>();
+  const router = useRouter();
   const [landlord, setLandlord] = useState<Landlord | null>(null);
   const [bankAccounts, setBankAccounts] = useState<LandlordBankAccount[]>([]);
   const [leases, setLeases] = useState<PropertyLease[]>([]);
@@ -69,8 +70,11 @@ export default function LandlordDetailPage() {
   const [deletingPath, setDeletingPath] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((d) => setUserRole(d.role));
-  }, []);
+    fetch("/api/me").then((r) => r.json()).then((d) => {
+      setUserRole(d.role);
+      if (d.role && d.role !== "admin") router.replace("/dashboard");
+    });
+  }, [router]);
 
   const fetchLandlord = useCallback(async () => {
     setLoading(true);

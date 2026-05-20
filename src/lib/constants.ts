@@ -1694,7 +1694,10 @@ export const EXPENDITURE_TYPE_COLORS: Record<string, string> = {
 
 // ── Rent Management ───────────────────────────────────────────────────────────
 
-export const RENT_MANAGEMENT_ROLES = ["admin", "accounts", "viewer"] as const;
+// Full rent-management module (landlords, leases, escalations, assets): admin only
+export const RENT_MANAGEMENT_ROLES = ["admin"] as const;
+// Finance › Rent Payable tab (view + process approved payments): admin + accounts + viewer
+export const RENT_PAYABLE_ROLES = ["admin", "accounts", "viewer"] as const;
 
 export const LEASE_STATUSES = ["active", "expired", "terminated", "on_hold"] as const;
 
@@ -1712,10 +1715,11 @@ export const LEASE_STATUS_COLORS: Record<string, string> = {
   on_hold: "bg-yellow-100 text-yellow-800",
 };
 
-export const LEASE_PAYMENT_STATUSES = ["pending", "paid", "overdue", "on_hold", "disputed"] as const;
+export const LEASE_PAYMENT_STATUSES = ["pending", "approved", "paid", "overdue", "on_hold", "disputed"] as const;
 
 export const LEASE_PAYMENT_STATUS_LABELS: Record<string, string> = {
   pending: "Pending",
+  approved: "Approved",
   paid: "Paid",
   overdue: "Overdue",
   on_hold: "On Hold",
@@ -1724,6 +1728,7 @@ export const LEASE_PAYMENT_STATUS_LABELS: Record<string, string> = {
 
 export const LEASE_PAYMENT_STATUS_COLORS: Record<string, string> = {
   pending: "bg-yellow-100 text-yellow-800",
+  approved: "bg-blue-100 text-blue-800",
   paid: "bg-green-100 text-green-800",
   overdue: "bg-red-100 text-red-800",
   on_hold: "bg-orange-100 text-orange-800",

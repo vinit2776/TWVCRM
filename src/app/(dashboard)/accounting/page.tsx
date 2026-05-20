@@ -21,6 +21,8 @@ import {
   Layers,
   FileText,
   Loader2,
+  Home,
+  PauseCircle,
 } from "lucide-react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
@@ -92,6 +94,40 @@ type VendorBillItem = {
   }>;
 };
 
+type RentPaymentItem = {
+  id: string;
+  payment_month: string;
+  due_date: string;
+  gross_rent_amount: number;
+  tds_amount: number;
+  net_amount_paid: number;
+  net_payable: number;
+  status: string;
+  on_hold_reason?: string | null;
+  admin_approved_at?: string | null;
+  paid_date?: string | null;
+  payment_mode?: string | null;
+  payment_reference?: string | null;
+  primary_bank?: {
+    id: string; bank_name: string; account_number: string;
+    ifsc_code: string; account_holder_name: string;
+  } | null;
+  lease?: {
+    id: string;
+    lease_number?: string | null;
+    approval_mode: string;
+    location?: { id: string; name: string } | null;
+    landlord?: {
+      id: string; name: string; pan_number?: string | null;
+      bank_accounts?: Array<{
+        id: string; bank_name: string; account_number: string;
+        ifsc_code: string; account_holder_name: string;
+        is_primary: boolean; is_verified: boolean;
+      }>;
+    } | null;
+  } | null;
+};
+
 export default function AccountingPage() {
   const router = useRouter();
 
@@ -119,6 +155,55 @@ export default function AccountingPage() {
   }, []);
   const canRecordPayment = ["admin", "accounts", "office_admin"].includes(currentUserRole ?? "");
   const canRecordCash = currentUserRole === "admin" || currentUserRole === "office_admin";
+  // Rent payments tab
+  const [rentView, setRentView] = useState<"pending" | "paid">("pending");
+  const [rentPayments, setRentPayments] = useState<RentPaymentItem[]>([]);
+  const [rentLoading, setRentLoading] = useState(false);
+  const [markPaidDialog, setMarkPaidDialog] = useState<{ open: boolean; payment: RentPaymentItem | null }>({ open: false, payment: null });
+  const [markPaidForm, setMarkPaidForm] = useState({ paid_date: "", payment_mode: "neft", payment_reference: "", bank_account_id: "" });
+  const [markPaidSubmitting, setMarkPaidSubmitting] = useState(false);
+
+  const fetchRentPayments = useCallback(async (view: "pending" | "paid" = "pending") => {
+    setRentLoading(true);
+    const res = await fetch(`/api/accounting/rent-payments?view=${view}`);
+    if (res.ok) setRentPayments((await res.json()).data ?? []);
+    setRentLoading(false);
+  }, []);
+
+  useEffect(() => {
+    if (activeTab === "rent") fetchRentPayments(rentView);
+  }, [activeTab, rentView, fetchRentPayments]);
+
+  async function handleMarkPaid() {
+    if (!markPaidDialog.payment) return;
+    if (!markPaidForm.paid_date || !markPaidForm.payment_reference) {
+      toast.error("Paid date and reference number are required");
+      return;
+    }
+    setMarkPaidSubmitting(true);
+    const body: Record<string, unknown> = {
+      paid_date: markPaidForm.paid_date,
+      payment_mode: markPaidForm.payment_mode,
+      payment_reference: markPaidForm.payment_reference,
+    };
+    if (markPaidForm.bank_account_id) body.bank_account_id = markPaidForm.bank_account_id;
+    const res = await fetch(`/api/accounting/rent-payments/${markPaidDialog.payment.id}/mark-paid`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    setMarkPaidSubmitting(false);
+    if (res.ok) {
+      toast.success("Payment marked as paid");
+      setMarkPaidDialog({ open: false, payment: null });
+      setMarkPaidForm({ paid_date: "", payment_mode: "neft", payment_reference: "", bank_account_id: "" });
+      fetchRentPayments(rentView);
+    } else {
+      const err = await res.json().catch(() => ({}));
+      toast.error(err.error || "Failed to mark payment as paid");
+    }
+  }
+
   const bankPayModes = [
     { value: "neft", label: "NEFT" },
     { value: "rtgs", label: "RTGS" },
@@ -360,6 +445,16 @@ export default function AccountingPage() {
           <TabsTrigger value="tds">
             <FileText className="h-3.5 w-3.5 mr-1" />TDS Payable
           </TabsTrigger>
+          {["admin", "accounts", "viewer"].includes(currentUserRole ?? "") && (
+            <TabsTrigger value="rent" onClick={() => fetchRentPayments(rentView)}>
+              <Home className="h-3.5 w-3.5 mr-1" />Rent
+              {rentPayments.filter((p) => p.status === "approved").length > 0 && activeTab !== "rent" && (
+                <span className="ml-1.5 bg-blue-600 text-white text-[10px] font-semibold px-1.5 py-0.5 rounded-full leading-none">
+                  {rentPayments.filter((p) => p.status === "approved").length}
+                </span>
+              )}
+            </TabsTrigger>
+          )}
         </TabsList>
 
         {/* ── Vendor Payments ──────────────────────────────────────────── */}
@@ -901,7 +996,200 @@ export default function AccountingPage() {
         <TabsContent value="tds" className="mt-0">
           <TdsPayablePage />
         </TabsContent>
+
+        {/* ── Rent Payments ────────────────────────────────────────────── */}
+        <TabsContent value="rent" className="mt-4 space-y-4">
+          {/* View toggle */}
+          <div className="flex items-center justify-between">
+            <div className="flex gap-2">
+              <button
+                className={cn("text-sm px-3 py-1.5 rounded-md border transition-colors", rentView === "pending" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted")}
+                onClick={() => setRentView("pending")}
+              >
+                Approved — Ready to Pay
+              </button>
+              <button
+                className={cn("text-sm px-3 py-1.5 rounded-md border transition-colors", rentView === "paid" ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted")}
+                onClick={() => setRentView("paid")}
+              >
+                Recently Paid (90 days)
+              </button>
+            </div>
+            <p className="text-xs text-muted-foreground">{rentPayments.length} record(s)</p>
+          </div>
+
+          {rentLoading ? (
+            <div className="space-y-2">
+              {[1,2,3].map((i) => <div key={i} className="h-16 animate-pulse bg-muted rounded-lg" />)}
+            </div>
+          ) : rentPayments.length === 0 ? (
+            <div className="py-12 text-center text-sm text-muted-foreground border rounded-lg bg-muted/20">
+              {rentView === "pending" ? "No approved rent payments awaiting payment" : "No paid rent entries in the last 90 days"}
+            </div>
+          ) : (
+            <div className="border rounded-lg overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/40">
+                    <th className="text-left px-4 py-3 font-medium">Location</th>
+                    <th className="text-left px-4 py-3 font-medium">Landlord</th>
+                    <th className="text-left px-4 py-3 font-medium">Month</th>
+                    <th className="text-left px-4 py-3 font-medium">Due</th>
+                    <th className="text-right px-4 py-3 font-medium">Gross Rent</th>
+                    <th className="text-right px-4 py-3 font-medium">TDS</th>
+                    <th className="text-right px-4 py-3 font-medium">Net Payable</th>
+                    <th className="text-left px-4 py-3 font-medium">Bank (Primary)</th>
+                    {rentView === "paid" && <th className="text-left px-4 py-3 font-medium">Paid On</th>}
+                    {rentView === "pending" && <th className="text-left px-4 py-3 font-medium">Status</th>}
+                    <th className="text-left px-4 py-3 font-medium">Action</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rentPayments.map((p) => (
+                    <tr key={p.id} className="border-b hover:bg-muted/20">
+                      <td className="px-4 py-3 font-medium">{p.lease?.location?.name ?? "—"}</td>
+                      <td className="px-4 py-3">
+                        <div>
+                          <p>{p.lease?.landlord?.name ?? "—"}</p>
+                          {p.lease?.landlord?.pan_number && (
+                            <p className="text-xs text-muted-foreground font-mono">{p.lease.landlord.pan_number}</p>
+                          )}
+                        </div>
+                      </td>
+                      <td className="px-4 py-3">{p.payment_month}</td>
+                      <td className="px-4 py-3 text-muted-foreground">{formatDate(p.due_date)}</td>
+                      <td className="px-4 py-3 text-right">{formatCurrency(p.gross_rent_amount)}</td>
+                      <td className="px-4 py-3 text-right text-muted-foreground">{formatCurrency(p.tds_amount)}</td>
+                      <td className="px-4 py-3 text-right font-semibold">{formatCurrency(p.net_payable)}</td>
+                      <td className="px-4 py-3">
+                        {p.primary_bank ? (
+                          <div className="text-xs">
+                            <p className="font-medium">{p.primary_bank.bank_name}</p>
+                            <p className="text-muted-foreground font-mono">{p.primary_bank.account_number}</p>
+                            <p className="text-muted-foreground">{p.primary_bank.ifsc_code}</p>
+                          </div>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">No bank set</span>
+                        )}
+                      </td>
+                      {rentView === "paid" && (
+                        <td className="px-4 py-3 text-sm">
+                          <div>
+                            <p>{p.paid_date ? formatDate(p.paid_date) : "—"}</p>
+                            {p.payment_mode && <p className="text-xs text-muted-foreground uppercase">{p.payment_mode}</p>}
+                            {p.payment_reference && <p className="text-xs font-mono text-muted-foreground">{p.payment_reference}</p>}
+                          </div>
+                        </td>
+                      )}
+                      {rentView === "pending" && (
+                        <td className="px-4 py-3">
+                          {p.status === "on_hold" ? (
+                            <div className="flex items-center gap-1">
+                              <PauseCircle className="h-3.5 w-3.5 text-orange-500" />
+                              <span className="text-xs text-orange-700 max-w-28 truncate" title={p.on_hold_reason ?? undefined}>{p.on_hold_reason ?? "On Hold"}</span>
+                            </div>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 text-xs bg-blue-50 text-blue-700 border border-blue-200 rounded px-1.5 py-0.5">
+                              <CheckCircle2 className="h-3 w-3" />Approved
+                            </span>
+                          )}
+                        </td>
+                      )}
+                      <td className="px-4 py-3">
+                        {rentView === "pending" && p.status === "approved" && canRecordPayment && (
+                          <button
+                            className="text-xs bg-green-600 hover:bg-green-700 text-white px-2.5 py-1 rounded transition-colors"
+                            onClick={() => {
+                              setMarkPaidDialog({ open: true, payment: p });
+                              setMarkPaidForm({
+                                paid_date: new Date().toISOString().split("T")[0],
+                                payment_mode: "neft",
+                                payment_reference: "",
+                                bank_account_id: p.primary_bank?.id ?? "",
+                              });
+                            }}
+                          >
+                            Mark Paid
+                          </button>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </TabsContent>
       </Tabs>
+
+      {/* ── Mark Rent Payment Paid Dialog ─────────────────────────────────── */}
+      <Dialog open={markPaidDialog.open} onOpenChange={(o) => { if (!markPaidSubmitting) setMarkPaidDialog({ open: o, payment: markPaidDialog.payment }); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Mark Rent Payment as Paid</DialogTitle>
+            {markPaidDialog.payment && (
+              <p className="text-sm text-muted-foreground pt-1">
+                {markPaidDialog.payment.lease?.location?.name} · {markPaidDialog.payment.payment_month} · {formatCurrency(markPaidDialog.payment.net_payable)} net
+              </p>
+            )}
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-2">
+                <Label>Paid Date *</Label>
+                <Input type="date" value={markPaidForm.paid_date} onChange={(e) => setMarkPaidForm((f) => ({ ...f, paid_date: e.target.value }))} />
+              </div>
+              <div className="space-y-2">
+                <Label>Payment Mode</Label>
+                <Select value={markPaidForm.payment_mode} onValueChange={(v) => setMarkPaidForm((f) => ({ ...f, payment_mode: v }))}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="neft">NEFT</SelectItem>
+                    <SelectItem value="rtgs">RTGS</SelectItem>
+                    <SelectItem value="imps">IMPS</SelectItem>
+                    <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                    <SelectItem value="cheque">Cheque</SelectItem>
+                    <SelectItem value="upi">UPI</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+            </div>
+            <div className="space-y-2">
+              <Label>UTR / Reference Number *</Label>
+              <Input
+                placeholder="e.g. HDFC123456789012"
+                value={markPaidForm.payment_reference}
+                onChange={(e) => setMarkPaidForm((f) => ({ ...f, payment_reference: e.target.value }))}
+              />
+            </div>
+            {markPaidDialog.payment?.lease?.landlord?.bank_accounts && markPaidDialog.payment.lease.landlord.bank_accounts.length > 1 && (
+              <div className="space-y-2">
+                <Label>Bank Account (optional)</Label>
+                <Select value={markPaidForm.bank_account_id} onValueChange={(v) => setMarkPaidForm((f) => ({ ...f, bank_account_id: v }))}>
+                  <SelectTrigger><SelectValue placeholder="Select account" /></SelectTrigger>
+                  <SelectContent>
+                    {markPaidDialog.payment.lease.landlord.bank_accounts.map((ba) => (
+                      <SelectItem key={ba.id} value={ba.id}>
+                        {ba.bank_name} — {ba.account_number} {ba.is_primary ? "(Primary)" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+          <DialogFooter>
+            <button className="text-sm px-4 py-2 border rounded hover:bg-muted" onClick={() => setMarkPaidDialog({ open: false, payment: null })}>Cancel</button>
+            <button
+              className="text-sm px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+              disabled={markPaidSubmitting || !markPaidForm.paid_date || !markPaidForm.payment_reference}
+              onClick={handleMarkPaid}
+            >
+              {markPaidSubmitting ? "Saving..." : "Confirm Payment"}
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* ── Batch Payment Wizard ─────────────────────────────────────────── */}
       <Dialog open={batchWizardOpen} onOpenChange={(open) => { if (!batchSubmitting) setBatchWizardOpen(open); }}>

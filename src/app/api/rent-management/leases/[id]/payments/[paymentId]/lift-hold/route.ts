@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
-// Admin-only: moves payment from pending/on_hold → approved.
-// Approved payments surface in Acc Payables > Rent tab for accounts to process the transfer.
+// Admin-only: lifts a hold, returning the payment to pending for re-approval.
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string; paymentId: string }> }
@@ -15,9 +14,9 @@ export async function POST(
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser || dbUser.role !== "admin")
-    return NextResponse.json({ error: "Only admin can approve payments" }, { status: 403 });
+    return NextResponse.json({ error: "Only admin can lift a hold" }, { status: 403 });
 
-  await request.json().catch(() => ({})); // consume body safely
+  await request.json().catch(() => ({}));
 
   const { data: payment } = await supabase
     .from("lease_payments")
@@ -25,18 +24,12 @@ export async function POST(
     .eq("id", paymentId)
     .single();
 
-  if (!payment) return NextResponse.json({ error: "Payment not found" }, { status: 404 });
-  if (payment.status === "paid")     return NextResponse.json({ error: "Payment already paid" },     { status: 409 });
-  if (payment.status === "approved") return NextResponse.json({ error: "Payment already approved" }, { status: 409 });
+  if (!payment)                      return NextResponse.json({ error: "Payment not found" },          { status: 404 });
+  if (payment.status !== "on_hold")  return NextResponse.json({ error: "Payment is not on hold" },     { status: 409 });
 
   const { data, error } = await supabase
     .from("lease_payments")
-    .update({
-      status: "approved",
-      admin_approved_by: dbUser.id,
-      admin_approved_at: new Date().toISOString(),
-      on_hold_reason: null,
-    })
+    .update({ status: "pending", on_hold_reason: null })
     .eq("id", paymentId)
     .select()
     .single();
@@ -47,7 +40,7 @@ export async function POST(
     entityId: paymentId,
     action: "update",
     performedBy: dbUser.id,
-    changes: { status: { old: payment.status, new: "approved" } },
+    changes: { status: { old: "on_hold", new: "pending" } },
   });
   return NextResponse.json({ data });
 }

@@ -5,7 +5,7 @@ import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
   ArrowLeft, Edit, Plus, CheckCircle, PauseCircle, TrendingUp,
-  FileText, Package, Wrench, ExternalLink,
+  FileText, Wrench, ExternalLink, PlayCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -73,8 +73,11 @@ export default function LeaseDetailPage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((d) => setUserRole(d.role));
-  }, []);
+    fetch("/api/me").then((r) => r.json()).then((d) => {
+      setUserRole(d.role);
+      if (d.role && d.role !== "admin") router.replace("/dashboard");
+    });
+  }, [router]);
 
   const fetchLease = useCallback(async () => {
     setLoading(true);
@@ -127,6 +130,7 @@ export default function LeaseDetailPage() {
   };
 
   const isAdmin = userRole === "admin";
+  const isViewer = userRole === "viewer";
   const canWrite = userRole === "admin" || userRole === "accounts";
 
   // Payment actions
@@ -188,6 +192,22 @@ export default function LeaseDetailPage() {
     } else {
       const err = await r.json();
       toast.error(err.error || "Failed to record payment");
+    }
+  }
+
+  async function liftHold(paymentId: string) {
+    const r = await fetch(`/api/rent-management/leases/${id}/payments/${paymentId}/lift-hold`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({}),
+    });
+    if (r.ok) {
+      toast.success("Hold lifted — payment returned to pending");
+      const updated = await fetch(`/api/rent-management/leases/${id}/payments`);
+      if (updated.ok) setPayments((await updated.json()).data || []);
+    } else {
+      const err = await r.json().catch(() => ({}));
+      toast.error(err.error || "Failed to lift hold");
     }
   }
 
@@ -284,7 +304,7 @@ export default function LeaseDetailPage() {
       <Tabs value={activeTab} onValueChange={handleTabChange}>
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
-          <TabsTrigger value="payments">Payments</TabsTrigger>
+          {!isViewer && <TabsTrigger value="payments">Payments</TabsTrigger>}
           <TabsTrigger value="escalations">Escalations</TabsTrigger>
           <TabsTrigger value="assets">Assets</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
@@ -293,26 +313,28 @@ export default function LeaseDetailPage() {
 
         {/* ─── Overview ─── */}
         <TabsContent value="overview" className="space-y-4">
-          <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Base Rent</CardTitle></CardHeader>
-              <CardContent><p className="text-xl font-bold">{formatCurrency(lease.base_rent_amount)}/mo</p></CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Security Deposit</CardTitle></CardHeader>
-              <CardContent>
-                <p className="text-xl font-bold">{formatCurrency(lease.security_deposit_amount)}</p>
-                <p className="text-xs text-muted-foreground">{lease.advance_months} months advance</p>
-              </CardContent>
-            </Card>
-            <Card>
-              <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">TDS Rate</CardTitle></CardHeader>
-              <CardContent>
-                <p className="text-xl font-bold">{lease.tds_rate}%</p>
-                <p className="text-xs text-muted-foreground">Section {lease.tds_section}</p>
-              </CardContent>
-            </Card>
-          </div>
+          {!isViewer && (
+            <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              <Card>
+                <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Base Rent</CardTitle></CardHeader>
+                <CardContent><p className="text-xl font-bold">{formatCurrency(lease.base_rent_amount)}/mo</p></CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">Security Deposit</CardTitle></CardHeader>
+                <CardContent>
+                  <p className="text-xl font-bold">{formatCurrency(lease.security_deposit_amount)}</p>
+                  <p className="text-xs text-muted-foreground">{lease.advance_months} months advance</p>
+                </CardContent>
+              </Card>
+              <Card>
+                <CardHeader className="pb-2"><CardTitle className="text-sm font-medium text-muted-foreground">TDS Rate</CardTitle></CardHeader>
+                <CardContent>
+                  <p className="text-xl font-bold">{lease.tds_rate}%</p>
+                  <p className="text-xs text-muted-foreground">Section {lease.tds_section}</p>
+                </CardContent>
+              </Card>
+            </div>
+          )}
 
           <div className="grid gap-4 sm:grid-cols-2">
             <Card>
@@ -332,15 +354,105 @@ export default function LeaseDetailPage() {
             <Card>
               <CardHeader><CardTitle className="text-base">TDS & Escalation</CardTitle></CardHeader>
               <CardContent className="space-y-3 text-sm">
-                <Row label="TDS Section" value={lease.tds_section} />
-                <Row label="TDS Rate" value={`${lease.tds_rate}%`} />
+                {!isViewer && (
+                  <>
+                    <Row label="TDS Section" value={lease.tds_section} />
+                    <Row label="TDS Rate" value={`${lease.tds_rate}%`} />
+                  </>
+                )}
                 <Row label="Escalation" value={ESCALATION_TYPE_LABELS[lease.escalation_type] ?? "None"} />
-                {lease.escalation_type !== "none" && lease.escalation_value && (
+                {lease.escalation_type !== "none" && lease.escalation_value && !isViewer && (
                   <Row label="Escalation Value" value={lease.escalation_type === "percentage" ? `${lease.escalation_value}%` : formatCurrency(lease.escalation_value)} />
                 )}
                 {lease.next_escalation_date && (
                   <Row label="Next Escalation" value={formatDate(lease.next_escalation_date)} />
                 )}
+                <div className="pt-2 border-t space-y-3">
+                  <div className="flex items-center justify-between">
+                    <span className="text-muted-foreground">Approval Mode</span>
+                    <div className="flex items-center gap-2">
+                      <Badge variant="outline" className={lease.approval_mode === "blanket" ? "border-green-500 text-green-700" : "border-orange-400 text-orange-700"}>
+                        {lease.approval_mode === "blanket" ? "Blanket" : "Manual"}
+                      </Badge>
+                      {isAdmin && (
+                        <button
+                          className="text-xs text-primary hover:underline"
+                          onClick={async () => {
+                            const newMode = lease.approval_mode === "blanket" ? "manual" : "blanket";
+                            const r = await fetch(`/api/rent-management/leases/${id}`, {
+                              method: "PATCH",
+                              headers: { "Content-Type": "application/json" },
+                              body: JSON.stringify({ approval_mode: newMode }),
+                            });
+                            if (r.ok) { toast.success(`Approval mode set to ${newMode}`); fetchLease(); }
+                            else toast.error("Failed to update approval mode");
+                          }}
+                        >
+                          Switch to {lease.approval_mode === "blanket" ? "manual" : "blanket"}
+                        </button>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Blanket sub-options — only visible when mode is blanket */}
+                  {lease.approval_mode === "blanket" && (
+                    <div className="ml-2 pl-3 border-l-2 border-green-200 space-y-2">
+                      {/* Expiry */}
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">Auto-approve until</span>
+                        <div className="flex items-center gap-2">
+                          <span className="font-medium">
+                            {lease.blanket_expires_on ? formatDate(lease.blanket_expires_on) : "End of lease tenure"}
+                          </span>
+                          {isAdmin && (
+                            <BlanketExpiryPicker
+                              current={lease.blanket_expires_on ?? null}
+                              leaseEnd={lease.lease_end_date}
+                              onSave={async (val) => {
+                                const r = await fetch(`/api/rent-management/leases/${id}`, {
+                                  method: "PATCH",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ blanket_expires_on: val }),
+                                });
+                                if (r.ok) { toast.success("Expiry updated"); fetchLease(); }
+                                else toast.error("Failed to update");
+                              }}
+                            />
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Hold */}
+                      <div className="flex items-center justify-between text-xs">
+                        <span className="text-muted-foreground">Auto-approval paused?</span>
+                        <div className="flex items-center gap-2">
+                          {lease.blanket_on_hold ? (
+                            <span className="text-orange-600 font-medium">
+                              Paused {lease.blanket_hold_until ? `until ${formatDate(lease.blanket_hold_until)}` : "(indefinite)"}
+                            </span>
+                          ) : (
+                            <span className="text-green-600 font-medium">Active</span>
+                          )}
+                          {isAdmin && (
+                            <BlanketHoldToggle
+                              isOnHold={lease.blanket_on_hold}
+                              holdUntil={lease.blanket_hold_until ?? null}
+                              onSave={async (onHold, holdUntil) => {
+                                const r = await fetch(`/api/rent-management/leases/${id}`, {
+                                  method: "PATCH",
+                                  headers: { "Content-Type": "application/json" },
+                                  body: JSON.stringify({ blanket_on_hold: onHold, blanket_hold_until: holdUntil }),
+                                });
+                                if (r.ok) { toast.success(onHold ? "Blanket approval paused" : "Blanket approval resumed"); fetchLease(); }
+                                else toast.error("Failed to update");
+                              }}
+                            />
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
                 {lease.notes && (
                   <div className="pt-2 border-t">
                     <p className="text-muted-foreground text-xs mb-1">Notes</p>
@@ -367,7 +479,7 @@ export default function LeaseDetailPage() {
                 });
                 setPaymentDialog(true);
               }}>
-                <Plus className="h-4 w-4 mr-2" />Record Payment
+                <Plus className="h-4 w-4 mr-2" />Add Payment Entry
               </Button>
             )}
           </div>
@@ -388,7 +500,7 @@ export default function LeaseDetailPage() {
                         <th className="text-left px-4 py-3 font-medium">Due</th>
                         <th className="text-left px-4 py-3 font-medium">Paid</th>
                         <th className="text-left px-4 py-3 font-medium">Status</th>
-                        {canWrite && <th className="text-left px-4 py-3 font-medium">Actions</th>}
+                        <th className="text-left px-4 py-3 font-medium">Actions</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -401,36 +513,62 @@ export default function LeaseDetailPage() {
                           <td className="px-4 py-3 text-muted-foreground">{formatDate(p.due_date)}</td>
                           <td className="px-4 py-3 text-muted-foreground">{p.paid_date ? formatDate(p.paid_date) : "—"}</td>
                           <td className="px-4 py-3">
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1 flex-wrap">
                               <Badge className={LEASE_PAYMENT_STATUS_COLORS[p.status]}>
                                 {LEASE_PAYMENT_STATUS_LABELS[p.status]}
                               </Badge>
                               {p.auto_approved && (
                                 <span className="text-xs text-muted-foreground">auto</span>
                               )}
+                              {p.status === "on_hold" && p.on_hold_reason && (
+                                <span className="text-xs text-muted-foreground truncate max-w-32" title={p.on_hold_reason}>
+                                  {p.on_hold_reason}
+                                </span>
+                              )}
+                              {p.status === "approved" && (
+                                <span className="text-xs text-blue-600">→ Acc Payables</span>
+                              )}
                             </div>
                           </td>
-                          {canWrite && (
-                            <td className="px-4 py-3">
-                              <div className="flex gap-1">
-                                {(p.status === "pending" || p.status === "overdue") && (
-                                  <>
-                                    <Button size="sm" variant="ghost" className="h-7 px-2 text-green-600" onClick={() => approvePayment(p.id)}>
-                                      <CheckCircle className="h-3.5 w-3.5" />
-                                    </Button>
-                                    <Button size="sm" variant="ghost" className="h-7 px-2 text-yellow-600" onClick={() => setHoldDialog({ open: true, paymentId: p.id })}>
-                                      <PauseCircle className="h-3.5 w-3.5" />
-                                    </Button>
-                                  </>
-                                )}
-                                {p.attachment_url && (
-                                  <a href={p.attachment_url} target="_blank" rel="noopener noreferrer">
-                                    <Button size="sm" variant="ghost" className="h-7 px-2"><ExternalLink className="h-3.5 w-3.5" /></Button>
-                                  </a>
-                                )}
-                              </div>
-                            </td>
-                          )}
+                          <td className="px-4 py-3">
+                            <div className="flex gap-1 items-center">
+                              {/* Approve: admin only, on pending/overdue */}
+                              {isAdmin && (p.status === "pending" || p.status === "overdue") && (
+                                <Button
+                                  size="sm" variant="ghost" className="h-7 px-2 text-green-600"
+                                  title="Approve payment"
+                                  onClick={() => approvePayment(p.id)}
+                                >
+                                  <CheckCircle className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                              {/* Hold: admin + accounts, on pending/overdue */}
+                              {canWrite && (p.status === "pending" || p.status === "overdue") && (
+                                <Button
+                                  size="sm" variant="ghost" className="h-7 px-2 text-yellow-600"
+                                  title="Put on hold"
+                                  onClick={() => setHoldDialog({ open: true, paymentId: p.id })}
+                                >
+                                  <PauseCircle className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                              {/* Lift hold: admin only, on on_hold */}
+                              {isAdmin && p.status === "on_hold" && (
+                                <Button
+                                  size="sm" variant="ghost" className="h-7 px-2 text-blue-600"
+                                  title="Lift hold"
+                                  onClick={() => liftHold(p.id)}
+                                >
+                                  <PlayCircle className="h-3.5 w-3.5" />
+                                </Button>
+                              )}
+                              {p.attachment_url && (
+                                <a href={p.attachment_url} target="_blank" rel="noopener noreferrer">
+                                  <Button size="sm" variant="ghost" className="h-7 px-2"><ExternalLink className="h-3.5 w-3.5" /></Button>
+                                </a>
+                              )}
+                            </div>
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -608,10 +746,13 @@ export default function LeaseDetailPage() {
         </TabsContent>
       </Tabs>
 
-      {/* Record Payment Dialog */}
+      {/* Add Payment Entry Dialog */}
       <Dialog open={paymentDialog} onOpenChange={setPaymentDialog}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Record Payment</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Add Payment Entry</DialogTitle>
+            <p className="text-xs text-muted-foreground pt-1">Creates a pending payment entry. Admin must approve before accounts can process it.</p>
+          </DialogHeader>
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
@@ -639,7 +780,7 @@ export default function LeaseDetailPage() {
           <DialogFooter>
             <Button variant="outline" onClick={() => setPaymentDialog(false)}>Cancel</Button>
             <Button onClick={handleAddPayment} disabled={submitting}>
-              {submitting ? "Recording..." : "Record Payment"}
+              {submitting ? "Adding..." : "Add Entry"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -713,5 +854,120 @@ function Row({ label, value, mono }: { label: string; value?: string | null; mon
       <span className="text-muted-foreground">{label}</span>
       <span className={mono ? "font-mono text-xs" : ""}>{value ?? "—"}</span>
     </div>
+  );
+}
+
+// ── Blanket approval inline pickers ──────────────────────────────────────────
+
+function BlanketExpiryPicker({
+  current, leaseEnd, onSave,
+}: { current: string | null; leaseEnd: string; onSave: (val: string | null) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"tenure" | "date">(current ? "date" : "tenure");
+  const [date, setDate] = useState(current ?? leaseEnd);
+  const [saving, setSaving] = useState(false);
+  return (
+    <>
+      <button className="text-primary hover:underline text-xs" onClick={() => setOpen(true)}>Change</button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setOpen(false)}>
+          <div className="bg-background rounded-lg p-5 w-80 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+            <h3 className="font-semibold text-sm">Auto-approve until…</h3>
+            <div className="space-y-2">
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="radio" checked={mode === "tenure"} onChange={() => setMode("tenure")} />
+                End of lease tenure ({leaseEnd})
+              </label>
+              <label className="flex items-center gap-2 text-sm cursor-pointer">
+                <input type="radio" checked={mode === "date"} onChange={() => setMode("date")} />
+                Specific date
+              </label>
+              {mode === "date" && (
+                <Input type="date" value={date} max={leaseEnd} onChange={(e) => setDate(e.target.value)} className="text-xs" />
+              )}
+            </div>
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" size="sm" onClick={() => setOpen(false)}>Cancel</Button>
+              <Button size="sm" disabled={saving} onClick={async () => {
+                setSaving(true);
+                await onSave(mode === "tenure" ? null : date);
+                setSaving(false);
+                setOpen(false);
+              }}>
+                {saving ? "Saving…" : "Save"}
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function BlanketHoldToggle({
+  isOnHold, holdUntil, onSave,
+}: { isOnHold: boolean; holdUntil: string | null; onSave: (onHold: boolean, holdUntil: string | null) => Promise<void> }) {
+  const [open, setOpen] = useState(false);
+  const [mode, setMode] = useState<"indefinite" | "date">("indefinite");
+  const [date, setDate] = useState(holdUntil ?? "");
+  const [saving, setSaving] = useState(false);
+  return (
+    <>
+      <button className="text-primary hover:underline text-xs" onClick={() => setOpen(true)}>
+        {isOnHold ? "Resume" : "Pause"}
+      </button>
+      {open && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40" onClick={() => setOpen(false)}>
+          <div className="bg-background rounded-lg p-5 w-80 shadow-xl space-y-4" onClick={(e) => e.stopPropagation()}>
+            {isOnHold ? (
+              <>
+                <h3 className="font-semibold text-sm">Resume blanket approval?</h3>
+                <p className="text-xs text-muted-foreground">Future payments will be auto-approved again.</p>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setOpen(false)}>Cancel</Button>
+                  <Button size="sm" disabled={saving} onClick={async () => {
+                    setSaving(true);
+                    await onSave(false, null);
+                    setSaving(false);
+                    setOpen(false);
+                  }}>
+                    {saving ? "Saving…" : "Resume"}
+                  </Button>
+                </div>
+              </>
+            ) : (
+              <>
+                <h3 className="font-semibold text-sm">Pause blanket approval</h3>
+                <p className="text-xs text-muted-foreground">Payments generated while paused will require manual approval.</p>
+                <div className="space-y-2">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input type="radio" checked={mode === "indefinite"} onChange={() => setMode("indefinite")} />
+                    Indefinitely (resume manually)
+                  </label>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input type="radio" checked={mode === "date"} onChange={() => setMode("date")} />
+                    Until a specific date
+                  </label>
+                  {mode === "date" && (
+                    <Input type="date" value={date} onChange={(e) => setDate(e.target.value)} className="text-xs" />
+                  )}
+                </div>
+                <div className="flex justify-end gap-2">
+                  <Button variant="outline" size="sm" onClick={() => setOpen(false)}>Cancel</Button>
+                  <Button size="sm" disabled={saving || (mode === "date" && !date)} onClick={async () => {
+                    setSaving(true);
+                    await onSave(true, mode === "date" ? date : null);
+                    setSaving(false);
+                    setOpen(false);
+                  }}>
+                    {saving ? "Saving…" : "Pause"}
+                  </Button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </>
   );
 }

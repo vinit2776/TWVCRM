@@ -3,6 +3,41 @@ import { createAdminClient } from "@/lib/supabase/server";
 
 // Runs 1st of month at 08:00 IST (02:30 UTC)
 // Idempotent — ON CONFLICT (lease_id, payment_month) DO NOTHING
+//
+// Blanket auto-approval rules (checked at generation time):
+//   1. approval_mode must be "blanket"
+//   2. blanket_on_hold must be false  (OR blanket_hold_until has passed today)
+//   3. blanket_expires_on must be null (whole tenure) OR >= paymentMonth
+//
+// If all 3 pass → status = "approved", auto_approved = true
+// Otherwise     → status = "pending"
+
+function isBlanketActive(
+  lease: {
+    approval_mode: string;
+    blanket_on_hold: boolean;
+    blanket_hold_until: string | null;
+    blanket_expires_on: string | null;
+    lease_end_date: string;
+  },
+  paymentMonth: string,
+  todayDate: string
+): boolean {
+  if (lease.approval_mode !== "blanket") return false;
+
+  // Hold check: skip auto-approval if hold is active
+  if (lease.blanket_on_hold) {
+    if (!lease.blanket_hold_until) return false;       // indefinite hold
+    if (lease.blanket_hold_until >= todayDate) return false; // hold period still active
+    // hold_until < today → hold has expired, treat as not on hold
+  }
+
+  // Expiry check: blanket_expires_on = null means whole lease tenure
+  if (lease.blanket_expires_on && lease.blanket_expires_on < paymentMonth) return false;
+
+  return true;
+}
+
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -12,83 +47,71 @@ export async function GET(request: NextRequest) {
   const admin = createAdminClient();
 
   const today = new Date();
-  const paymentMonth = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}`;
-  // Due on the 5th of the month
-  const dueDay = 5;
-  const dueDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-0${dueDay}`;
+  const todayDate = today.toISOString().slice(0, 10);
+  const year  = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const paymentMonth = `${year}-${month}`;
+  const dueDate = `${year}-${month}-05`;
 
   const { data: leases, error: leaseErr } = await admin
     .from("property_leases")
-    .select("id, base_rent_amount, tds_rate, tds_section, maintenance_charges")
+    .select("id, base_rent_amount, tds_rate, maintenance_charges, approval_mode, blanket_on_hold, blanket_hold_until, blanket_expires_on, lease_end_date")
     .eq("status", "active");
 
-  if (leaseErr) {
-    return NextResponse.json({ error: leaseErr.message }, { status: 500 });
-  }
-
-  if (!leases || leases.length === 0) {
-    return NextResponse.json({ generated: 0 });
-  }
-
-  // Read auto-approve threshold from app_settings
-  const { data: setting } = await admin
-    .from("app_settings")
-    .select("value")
-    .eq("key", "lease_auto_approve_threshold")
-    .single();
-  const threshold = setting ? parseInt(setting.value) : 50000;
+  if (leaseErr) return NextResponse.json({ error: leaseErr.message }, { status: 500 });
+  if (!leases?.length) return NextResponse.json({ generated: 0 });
 
   let generated = 0;
   let skipped = 0;
+  let holdLifts = 0;
+
+  // Auto-lift expired holds before generating payments
+  for (const lease of leases) {
+    if (
+      lease.blanket_on_hold &&
+      lease.blanket_hold_until &&
+      lease.blanket_hold_until < todayDate
+    ) {
+      await admin
+        .from("property_leases")
+        .update({ blanket_on_hold: false, blanket_hold_until: null })
+        .eq("id", lease.id);
+      lease.blanket_on_hold = false;
+      lease.blanket_hold_until = null;
+      holdLifts++;
+    }
+  }
 
   for (const lease of leases) {
-    const tdsRate = lease.tds_rate ?? 10;
+    const tdsRate   = lease.tds_rate ?? 10;
     const grossRent = lease.base_rent_amount + (lease.maintenance_charges ?? 0);
     const tdsAmount = Math.round(grossRent * tdsRate / 100);
-    const netAmount = grossRent - tdsAmount;
 
-    // Check if a verified primary bank account exists for auto-approval
-    const { data: bankAcct } = await admin
-      .from("landlord_bank_accounts")
-      .select("id, is_verified")
-      .eq("is_primary", true)
-      .eq("is_verified", true)
-      .in("landlord_id", (
-        admin.from("property_leases").select("landlord_id").eq("id", lease.id)
-      ) as never)
-      .maybeSingle();
-
-    const canAutoApprove = netAmount <= threshold && !!bankAcct;
-    const status = canAutoApprove ? "paid" : "pending";
-    const paidDate = canAutoApprove ? today.toISOString().split("T")[0] : null;
+    const autoApprove  = isBlanketActive(lease, paymentMonth, todayDate);
+    const status       = autoApprove ? "approved" : "pending";
+    const approvedAt   = autoApprove ? today.toISOString() : null;
 
     const { error: insertErr } = await admin
       .from("lease_payments")
       .insert({
-        lease_id: lease.id,
-        payment_month: paymentMonth,
-        due_date: dueDate,
-        gross_rent_amount: grossRent,
-        tds_amount: tdsAmount,
-        net_amount_paid: netAmount,
+        lease_id:           lease.id,
+        payment_month:      paymentMonth,
+        due_date:           dueDate,
+        gross_rent_amount:  grossRent,
+        tds_amount:         tdsAmount,
+        net_amount_paid:    grossRent - tdsAmount,
         status,
-        paid_date: paidDate,
-        auto_approved: canAutoApprove,
-        payment_mode: canAutoApprove ? "bank_transfer" : null,
-      })
-      .select("id")
-      .single();
+        admin_approved_at:  approvedAt,
+        auto_approved:      autoApprove,
+      });
 
     if (insertErr) {
-      if (insertErr.code === "23505") {
-        skipped++;
-      } else {
-        console.error(`lease-payment-generator: lease ${lease.id} error:`, insertErr.message);
-      }
+      if (insertErr.code === "23505") skipped++;
+      else console.error(`lease-payment-generator: lease ${lease.id}:`, insertErr.message);
     } else {
       generated++;
     }
   }
 
-  return NextResponse.json({ generated, skipped, paymentMonth });
+  return NextResponse.json({ generated, skipped, holdLifts, paymentMonth });
 }

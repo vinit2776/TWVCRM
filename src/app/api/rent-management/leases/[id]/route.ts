@@ -23,6 +23,10 @@ const updateLeaseSchema = z.object({
   tds_section: z.enum(["194I", "194IB"]).optional(),
   tds_rate: z.number().min(0).max(100).optional(),
   status: z.enum(["active", "expired", "terminated", "on_hold"]).optional(),
+  approval_mode: z.enum(["manual", "blanket"]).optional(),
+  blanket_expires_on: z.string().nullish(),
+  blanket_on_hold: z.boolean().optional(),
+  blanket_hold_until: z.string().nullish(),
   notes: z.string().nullish(),
 });
 
@@ -47,6 +51,21 @@ export async function GET(_req: NextRequest, { params }: { params: Promise<{ id:
     .single();
 
   if (error) return NextResponse.json({ error: "Lease not found" }, { status: 404 });
+
+  // Viewers get a summary — no financial amounts, no bank details
+  if (dbUser.role === "viewer") {
+    const { base_rent_amount, security_deposit_amount, tds_rate, tds_section,
+            escalation_value, advance_months, ...summary } = data as Record<string, unknown>;
+    void base_rent_amount; void security_deposit_amount; void tds_rate;
+    void tds_section; void escalation_value; void advance_months;
+    if (summary.landlord && typeof summary.landlord === "object") {
+      const l = summary.landlord as Record<string, unknown>;
+      delete l.bank_accounts;
+      delete l.pan_number;
+    }
+    return NextResponse.json({ data: summary, viewer_restricted: true });
+  }
+
   return NextResponse.json({ data });
 }
 
@@ -57,10 +76,17 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
-  if (!dbUser || !["admin", "accounts"].includes(dbUser.role))
+  // PATCH is admin-only (accounts no longer have module access)
+  if (!dbUser || dbUser.role !== "admin")
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const body = await request.json();
+
+  // All approval/blanket fields are admin-only (already enforced by role check above)
+  const approvalFields = ["approval_mode", "blanket_expires_on", "blanket_on_hold", "blanket_hold_until"];
+  if (approvalFields.some((f) => body[f] !== undefined) && dbUser.role !== "admin")
+    return NextResponse.json({ error: "Only admin can change approval settings" }, { status: 403 });
+
   const parsed = updateLeaseSchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
 
