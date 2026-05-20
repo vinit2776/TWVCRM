@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, Trash2, ChevronLeft, Search, Package, PenLine } from "lucide-react";
+import { Plus, Trash2, ChevronLeft, Search, Package, PenLine, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -14,7 +14,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import {
-  Dialog, DialogContent, DialogHeader, DialogTitle,
+  Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter, DialogDescription,
 } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog";
@@ -71,6 +71,8 @@ export default function NewPurchaseRequestPage() {
   const [items, setItems] = useState<LineItem[]>([emptyItem()]);
   const [submitting, setSubmitting] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
+  const [showPriceWarning, setShowPriceWarning] = useState(false);
+  const [missingPriceItems, setMissingPriceItems] = useState<string[]>([]);
   const [userRole, setUserRole] = useState<string>("");
 
   const canSeePrices = ["admin", "manager"].includes(userRole);
@@ -235,9 +237,7 @@ export default function NewPurchaseRequestPage() {
     }
   };
 
-  const handleSubmit = async () => {
-    const err = validate();
-    if (err) { toast.error(err); return; }
+  const doSubmit = async () => {
     setSubmitting(true);
     try {
       const res = await fetch("/api/procurement/requests", {
@@ -253,6 +253,22 @@ export default function NewPurchaseRequestPage() {
     } finally {
       setSubmitting(false);
     }
+  };
+
+  const handleSubmit = () => {
+    const err = validate();
+    if (err) { toast.error(err); return; }
+    // Warn if any item is missing an estimated price — the omission cascades
+    // silently through approval → PO → vendor bill with no price on record.
+    const noPriceItems = items
+      .filter((li) => !li.estimated_price || parseFloat(li.estimated_price) <= 0)
+      .map((li) => li.item_name || "Unnamed item");
+    if (noPriceItems.length > 0) {
+      setMissingPriceItems(noPriceItems);
+      setShowPriceWarning(true);
+      return;
+    }
+    doSubmit();
   };
 
   return (
@@ -659,6 +675,44 @@ export default function NewPurchaseRequestPage() {
               ))
             )}
           </div>
+        </DialogContent>
+      </Dialog>
+
+      {/* Price warning dialog — shown when items are submitted without an estimated price */}
+      <Dialog open={showPriceWarning} onOpenChange={setShowPriceWarning}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-700">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              Items missing estimated price
+            </DialogTitle>
+            <DialogDescription>
+              The following items have no estimated price. Without a price the MR total will be
+              understated and the linked PO will have ₹0 line items — making it impossible to
+              track spend accurately.
+            </DialogDescription>
+          </DialogHeader>
+          <ul className="text-sm rounded-md bg-amber-50 border border-amber-200 px-4 py-3 space-y-1 max-h-40 overflow-y-auto">
+            {missingPriceItems.map((name) => (
+              <li key={name} className="text-amber-800">• {name}</li>
+            ))}
+          </ul>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button
+              variant="outline"
+              className="w-full sm:w-auto"
+              onClick={() => setShowPriceWarning(false)}
+            >
+              Go back and fill prices
+            </Button>
+            <Button
+              variant="destructive"
+              className="w-full sm:w-auto"
+              onClick={() => { setShowPriceWarning(false); doSubmit(); }}
+            >
+              Submit without prices
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
     </div>
