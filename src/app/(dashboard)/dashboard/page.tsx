@@ -31,6 +31,7 @@ import { ProcurementSpendWidget } from "@/components/dashboard/widgets/procureme
 import { QuotaOveruseWidget } from "@/components/dashboard/widgets/quota-overuse-widget";
 import { MtdBookingsWidget } from "@/components/dashboard/widgets/mtd-bookings-widget";
 import { PendingActionsWidget } from "@/components/dashboard/widgets/pending-actions-widget";
+import { RentRevenueWidget } from "@/components/dashboard/widgets/rent-revenue-widget";
 
 import Link from "next/link";
 import { Bell, RefreshCw, Zap } from "lucide-react";
@@ -307,6 +308,8 @@ export default function DashboardPage() {
         return <QuotaOveruseWidget key="quota_overuse" />;
       case "mtd_bookings":
         return <MtdBookingsWidget key="mtd_bookings" locationFilter={locationFilter} />;
+      case "rent_revenue":
+        return <RentRevenueWidget key="rent_revenue" />;
       default:
         return null;
     }

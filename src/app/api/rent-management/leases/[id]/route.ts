@@ -24,6 +24,9 @@ const updateLeaseSchema = z.object({
   tds_rate: z.number().min(0).max(100).optional(),
   status: z.enum(["active", "expired", "terminated", "on_hold"]).optional(),
   approval_mode: z.enum(["manual", "blanket"]).optional(),
+  blanket_expires_on: z.string().nullish(),
+  blanket_on_hold: z.boolean().optional(),
+  blanket_hold_until: z.string().nullish(),
   notes: z.string().nullish(),
 });
 
@@ -73,14 +76,16 @@ export async function PATCH(request: NextRequest, { params }: { params: Promise<
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { data: dbUser } = await supabase.from("users").select("id, role").eq("auth_id", user.id).single();
-  if (!dbUser || !["admin", "accounts"].includes(dbUser.role))
+  // PATCH is admin-only (accounts no longer have module access)
+  if (!dbUser || dbUser.role !== "admin")
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const body = await request.json();
 
-  // Only admin may change the approval_mode
-  if (body.approval_mode !== undefined && dbUser.role !== "admin")
-    return NextResponse.json({ error: "Only admin can change approval mode" }, { status: 403 });
+  // All approval/blanket fields are admin-only (already enforced by role check above)
+  const approvalFields = ["approval_mode", "blanket_expires_on", "blanket_on_hold", "blanket_hold_until"];
+  if (approvalFields.some((f) => body[f] !== undefined) && dbUser.role !== "admin")
+    return NextResponse.json({ error: "Only admin can change approval settings" }, { status: 403 });
 
   const parsed = updateLeaseSchema.safeParse(body);
   if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });

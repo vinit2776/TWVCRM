@@ -1,15 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { RENT_PAYABLE_ROLES } from "@/lib/constants";
 
 // GET — all approved (ready-to-pay) and recently paid rent payments
-// Used by Acc Payables > Rent tab. Admin + accounts only.
+// Used by Finance > Rent Payable tab. Admin + accounts + viewer.
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const { data: dbUser } = await supabase.from("users").select("role").eq("auth_id", user.id).single();
-  if (!dbUser || !["admin", "accounts"].includes(dbUser.role))
+  if (!dbUser || !RENT_PAYABLE_ROLES.includes(dbUser.role as never))
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
 
   const url = new URL(request.url);

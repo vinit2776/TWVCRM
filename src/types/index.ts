@@ -3018,6 +3018,9 @@ export interface PropertyLease {
   tds_rate: number;
   status: LeaseStatus;
   approval_mode: "manual" | "blanket";
+  blanket_expires_on?: string | null;   // null = full tenure, date = until that date
+  blanket_on_hold: boolean;             // true = blanket paused
+  blanket_hold_until?: string | null;   // null = indefinite, date = auto-lifts on that date
   notes?: string | null;
   created_by?: string | null;
   created_at: string;

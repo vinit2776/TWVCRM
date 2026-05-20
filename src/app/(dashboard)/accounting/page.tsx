@@ -445,7 +445,7 @@ export default function AccountingPage() {
           <TabsTrigger value="tds">
             <FileText className="h-3.5 w-3.5 mr-1" />TDS Payable
           </TabsTrigger>
-          {["admin", "accounts"].includes(currentUserRole ?? "") && (
+          {["admin", "accounts", "viewer"].includes(currentUserRole ?? "") && (
             <TabsTrigger value="rent" onClick={() => fetchRentPayments(rentView)}>
               <Home className="h-3.5 w-3.5 mr-1" />Rent
               {rentPayments.filter((p) => p.status === "approved").length > 0 && activeTab !== "rent" && (

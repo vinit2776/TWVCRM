@@ -1694,7 +1694,10 @@ export const EXPENDITURE_TYPE_COLORS: Record<string, string> = {
 
 // ── Rent Management ───────────────────────────────────────────────────────────
 
-export const RENT_MANAGEMENT_ROLES = ["admin", "accounts", "viewer"] as const;
+// Full rent-management module (landlords, leases, escalations, assets): admin only
+export const RENT_MANAGEMENT_ROLES = ["admin"] as const;
+// Finance › Rent Payable tab (view + process approved payments): admin + accounts + viewer
+export const RENT_PAYABLE_ROLES = ["admin", "accounts", "viewer"] as const;
 
 export const LEASE_STATUSES = ["active", "expired", "terminated", "on_hold"] as const;
 

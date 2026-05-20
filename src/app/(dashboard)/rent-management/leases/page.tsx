@@ -29,8 +29,11 @@ export default function LeasesListPage() {
   const [userRole, setUserRole] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((d) => setUserRole(d.role));
-  }, []);
+    fetch("/api/me").then((r) => r.json()).then((d) => {
+      setUserRole(d.role);
+      if (d.role && d.role !== "admin") router.replace("/dashboard");
+    });
+  }, [router]);
 
   const fetchLeases = useCallback(async () => {
     setLoading(true);

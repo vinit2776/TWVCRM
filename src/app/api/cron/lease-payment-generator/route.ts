@@ -4,9 +4,40 @@ import { createAdminClient } from "@/lib/supabase/server";
 // Runs 1st of month at 08:00 IST (02:30 UTC)
 // Idempotent — ON CONFLICT (lease_id, payment_month) DO NOTHING
 //
-// Approval modes:
-//   blanket → payment generated as "approved" (admin pre-approved all future payments)
-//   manual  → payment generated as "pending" (admin must approve individually)
+// Blanket auto-approval rules (checked at generation time):
+//   1. approval_mode must be "blanket"
+//   2. blanket_on_hold must be false  (OR blanket_hold_until has passed today)
+//   3. blanket_expires_on must be null (whole tenure) OR >= paymentMonth
+//
+// If all 3 pass → status = "approved", auto_approved = true
+// Otherwise     → status = "pending"
+
+function isBlanketActive(
+  lease: {
+    approval_mode: string;
+    blanket_on_hold: boolean;
+    blanket_hold_until: string | null;
+    blanket_expires_on: string | null;
+    lease_end_date: string;
+  },
+  paymentMonth: string,
+  todayDate: string
+): boolean {
+  if (lease.approval_mode !== "blanket") return false;
+
+  // Hold check: skip auto-approval if hold is active
+  if (lease.blanket_on_hold) {
+    if (!lease.blanket_hold_until) return false;       // indefinite hold
+    if (lease.blanket_hold_until >= todayDate) return false; // hold period still active
+    // hold_until < today → hold has expired, treat as not on hold
+  }
+
+  // Expiry check: blanket_expires_on = null means whole lease tenure
+  if (lease.blanket_expires_on && lease.blanket_expires_on < paymentMonth) return false;
+
+  return true;
+}
+
 export async function GET(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -16,6 +47,7 @@ export async function GET(request: NextRequest) {
   const admin = createAdminClient();
 
   const today = new Date();
+  const todayDate = today.toISOString().slice(0, 10);
   const year  = today.getFullYear();
   const month = String(today.getMonth() + 1).padStart(2, "0");
   const paymentMonth = `${year}-${month}`;
@@ -23,7 +55,7 @@ export async function GET(request: NextRequest) {
 
   const { data: leases, error: leaseErr } = await admin
     .from("property_leases")
-    .select("id, base_rent_amount, tds_rate, maintenance_charges, approval_mode")
+    .select("id, base_rent_amount, tds_rate, maintenance_charges, approval_mode, blanket_on_hold, blanket_hold_until, blanket_expires_on, lease_end_date")
     .eq("status", "active");
 
   if (leaseErr) return NextResponse.json({ error: leaseErr.message }, { status: 500 });
@@ -31,15 +63,33 @@ export async function GET(request: NextRequest) {
 
   let generated = 0;
   let skipped = 0;
+  let holdLifts = 0;
+
+  // Auto-lift expired holds before generating payments
+  for (const lease of leases) {
+    if (
+      lease.blanket_on_hold &&
+      lease.blanket_hold_until &&
+      lease.blanket_hold_until < todayDate
+    ) {
+      await admin
+        .from("property_leases")
+        .update({ blanket_on_hold: false, blanket_hold_until: null })
+        .eq("id", lease.id);
+      lease.blanket_on_hold = false;
+      lease.blanket_hold_until = null;
+      holdLifts++;
+    }
+  }
 
   for (const lease of leases) {
     const tdsRate   = lease.tds_rate ?? 10;
     const grossRent = lease.base_rent_amount + (lease.maintenance_charges ?? 0);
     const tdsAmount = Math.round(grossRent * tdsRate / 100);
 
-    const isBlanket    = lease.approval_mode === "blanket";
-    const status       = isBlanket ? "approved" : "pending";
-    const approvedAt   = isBlanket ? today.toISOString() : null;
+    const autoApprove  = isBlanketActive(lease, paymentMonth, todayDate);
+    const status       = autoApprove ? "approved" : "pending";
+    const approvedAt   = autoApprove ? today.toISOString() : null;
 
     const { error: insertErr } = await admin
       .from("lease_payments")
@@ -52,7 +102,7 @@ export async function GET(request: NextRequest) {
         net_amount_paid:    grossRent - tdsAmount,
         status,
         admin_approved_at:  approvedAt,
-        auto_approved:      isBlanket,
+        auto_approved:      autoApprove,
       });
 
     if (insertErr) {
@@ -63,5 +113,5 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  return NextResponse.json({ generated, skipped, paymentMonth });
+  return NextResponse.json({ generated, skipped, holdLifts, paymentMonth });
 }
