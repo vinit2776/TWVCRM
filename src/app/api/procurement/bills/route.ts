@@ -231,6 +231,25 @@ export async function POST(request: NextRequest) {
     }
   }
 
+  // ── Hard-block exact duplicate invoices ───────────────────────────────────
+  // Same vendor + same invoice number on any non-rejected bill = duplicate.
+  // Rejected bills are excluded so a re-submission after rejection is allowed.
+  if (parsed.data.invoice_number?.trim()) {
+    const { count: dupCount } = await supabase
+      .from("vendor_bills")
+      .select("*", { count: "exact", head: true })
+      .eq("vendor_id", parsed.data.vendor_id)
+      .eq("invoice_number", parsed.data.invoice_number.trim())
+      .neq("approval_status", "rejected");
+
+    if (dupCount && dupCount > 0) {
+      return NextResponse.json(
+        { error: `Invoice number "${parsed.data.invoice_number.trim()}" already exists for this vendor. Check Vendor Payments to avoid duplicate processing.` },
+        { status: 409 }
+      );
+    }
+  }
+
   // ── Generate bill number ───────────────────────────────────────────────────
   const { count: existingCount } = await supabase
     .from("vendor_bills")

@@ -65,6 +65,10 @@ function NewVendorBillForm() {
   const [checkingDuplicates, setCheckingDuplicates] = useState(false);
   const [duplicateDismissed, setDuplicateDismissed] = useState(false);
 
+  // Exact match = same invoice number for the same vendor (not just fuzzy similarity).
+  // Cannot be dismissed — submission is blocked until the user navigates away or changes the invoice number.
+  const hasExactDuplicate = duplicates.some((d) => d.match_reason.includes("Same invoice #"));
+
   // Bill hints (Finance Intelligence — Day 3-5)
   const [hints, setHints] = useState<BillHintsResponse | null>(null);
   const [dueDateHintDismissed, setDueDateHintDismissed] = useState(false);
@@ -443,28 +447,36 @@ function NewVendorBillForm() {
           </div>
 
           {/* Duplicate-invoice warning (Finance Intelligence) */}
-          {!duplicateDismissed && duplicates.length > 0 && (
-            <div className="rounded-lg border border-amber-300 bg-amber-50 p-3 space-y-2">
+          {(hasExactDuplicate || (!duplicateDismissed && duplicates.length > 0)) && (
+            <div className={`rounded-lg border p-3 space-y-2 ${
+              hasExactDuplicate
+                ? "border-red-400 bg-red-50"
+                : "border-amber-300 bg-amber-50"
+            }`}>
               <div className="flex items-start justify-between gap-2">
                 <div className="flex items-start gap-2 min-w-0">
-                  <AlertCircle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+                  <AlertCircle className={`h-4 w-4 shrink-0 mt-0.5 ${hasExactDuplicate ? "text-red-600" : "text-amber-600"}`} />
                   <div className="min-w-0">
-                    <p className="text-sm font-semibold text-amber-900">
-                      Possible duplicate{duplicates.length > 1 ? "s" : ""} found
+                    <p className={`text-sm font-semibold ${hasExactDuplicate ? "text-red-900" : "text-amber-900"}`}>
+                      {hasExactDuplicate ? "Duplicate invoice — submission blocked" : `Possible duplicate${duplicates.length > 1 ? "s" : ""} found`}
                     </p>
-                    <p className="text-xs text-amber-700 mt-0.5">
-                      A bill matching these details already exists for this vendor. Review before saving.
+                    <p className={`text-xs mt-0.5 ${hasExactDuplicate ? "text-red-700" : "text-amber-700"}`}>
+                      {hasExactDuplicate
+                        ? "This invoice number already exists for this vendor. Open the existing bill below to check before creating another."
+                        : "A bill matching these details already exists for this vendor. Review before saving."}
                     </p>
                   </div>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => setDuplicateDismissed(true)}
-                  className="text-xs text-amber-700 hover:text-amber-900 shrink-0"
-                  aria-label="Dismiss"
-                >
-                  Dismiss
-                </button>
+                {!hasExactDuplicate && (
+                  <button
+                    type="button"
+                    onClick={() => setDuplicateDismissed(true)}
+                    className="text-xs text-amber-700 hover:text-amber-900 shrink-0"
+                    aria-label="Dismiss"
+                  >
+                    Dismiss
+                  </button>
+                )}
               </div>
               <div className="space-y-1 mt-2">
                 {duplicates.map((d) => (
@@ -763,7 +775,7 @@ function NewVendorBillForm() {
       </Card>
 
       <div className="flex justify-end">
-        <Button onClick={handleSubmit} disabled={submitting || !!amountError} size="lg">
+        <Button onClick={handleSubmit} disabled={submitting || !!amountError || hasExactDuplicate} size="lg">
           {submitting ? (
             <><Loader2 className="h-4 w-4 animate-spin mr-2" /> Saving…</>
           ) : (

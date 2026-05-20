@@ -83,6 +83,10 @@ const patchBillSchema = z.discriminatedUnion("action", [
     manual_department: z.enum(["pantry", "maintenance", "administration", "asset"]).nullish(),
     manual_expenditure_type: z.enum(["operational", "amc", "capital"]).nullish(),
   }),
+  z.object({
+    action: z.literal("update_due_date"),
+    due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Due date must be YYYY-MM-DD"),
+  }),
 ]);
 
 export async function GET(
@@ -267,6 +271,22 @@ export async function PATCH(
           { error: "Only pending bills can be approved" },
           { status: 422 }
         );
+      }
+
+      // Due date must be on or after today (the approval date).
+      // An overdue due date means accounts would inherit a bill that was
+      // already past its payment deadline the moment it was approved.
+      if (bill.due_date) {
+        const todayStr = new Date().toISOString().split("T")[0];
+        if (bill.due_date < todayStr) {
+          return NextResponse.json(
+            {
+              error: `Due date (${bill.due_date}) has already passed. Update the due date to today or later before approving.`,
+              code: "due_date_in_past",
+            },
+            { status: 422 }
+          );
+        }
       }
 
       // Validate partial amount if provided
@@ -623,6 +643,28 @@ export async function PATCH(
         manual_department: parsed.data.manual_department ?? null,
         manual_expenditure_type: parsed.data.manual_expenditure_type ?? null,
       };
+      break;
+    }
+
+    case "update_due_date": {
+      // Any approver or accounts role can update the due date on a pending bill.
+      // This exists so they can fix a stale due date before approving, without
+      // having to reject and re-upload the bill.
+      const canUpdateDueDate = ["admin", "manager", "accounts", "office_admin"].includes(dbUser.role);
+      if (!canUpdateDueDate) {
+        return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      }
+      if (bill.approval_status === "paid") {
+        return NextResponse.json({ error: "Cannot change the due date on a fully paid bill" }, { status: 422 });
+      }
+      const todayStr = new Date().toISOString().split("T")[0];
+      if (parsed.data.due_date < todayStr) {
+        return NextResponse.json(
+          { error: "Due date must be today or a future date" },
+          { status: 422 }
+        );
+      }
+      updatePayload = { due_date: parsed.data.due_date };
       break;
     }
   }
