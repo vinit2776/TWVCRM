@@ -5,6 +5,20 @@ const nextConfig: NextConfig = {
   turbopack: {
     root: path.resolve(__dirname),
   },
+
+  // Block all search engine indexing at the HTTP header level.
+  // This is an internal tool — no public discovery should occur.
+  async headers() {
+    return [
+      {
+        source: "/(.*)",
+        headers: [
+          { key: "X-Robots-Tag", value: "noindex, nofollow, nosnippet, noarchive, noimageindex" },
+        ],
+      },
+    ];
+  },
+
   env: {
     // Baked at compile time — always reflects the actual build date.
     // Vercel also injects NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA automatically.

@@ -1,0 +1,3 @@
+# Internal application — no public indexing
+User-agent: *
+Disallow: /

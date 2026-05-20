@@ -5,9 +5,13 @@ import { Analytics } from "@vercel/analytics/next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 
 export const metadata: Metadata = {
-  title: "The WorkVilla CRM",
-  description:
-    "Coworking Space CRM for The WorkVilla - Empower your business with flexible workspaces",
+  title: "TWV CRM",
+  // Internal tool — no public description exposed
+  robots: {
+    index: false,
+    follow: false,
+    googleBot: { index: false, follow: false },
+  },
   manifest: "/manifest.json",
   appleWebApp: {
     capable: true,
