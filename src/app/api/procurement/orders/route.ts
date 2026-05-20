@@ -75,6 +75,47 @@ function generatePoNumber(count: number): string {
   return `PO-${yy}${mm}-${seq}`;
 }
 
+// Helper: apply shared filters to any purchase_orders query
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function applyPoFilters(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  query: any,
+  opts: {
+    status?: string | null;
+    vendorId?: string | null;
+    locationId?: string | null;
+    prId?: string | null;
+    advanceStatus?: string | null;
+    search?: string;
+    prIdsFromDept?: string[] | null;
+    monthStart?: string | null;
+    monthEnd?: string | null;
+  }
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+): any {
+  const { status, vendorId, locationId, prId, advanceStatus, search, prIdsFromDept, monthStart, monthEnd } = opts;
+  if (status) query = query.eq("status", status);
+  if (vendorId) query = query.eq("vendor_id", vendorId);
+  if (locationId) query = query.eq("location_id", locationId);
+  if (prId) query = query.eq("pr_id", prId);
+  if (advanceStatus) query = query.eq("advance_status", advanceStatus);
+  // Department filter: pre-resolved to a list of PR IDs
+  if (prIdsFromDept) {
+    if (prIdsFromDept.length === 0) {
+      // No PRs found for this dept — force no results
+      query = query.eq("id", "00000000-0000-0000-0000-000000000000");
+    } else {
+      query = query.in("pr_id", prIdsFromDept);
+    }
+  }
+  if (monthStart) query = query.gte("created_at", monthStart);
+  if (monthEnd) query = query.lt("created_at", monthEnd);
+  if (search && search.length >= 3) {
+    // vendorIds are resolved before calling this helper
+  }
+  return query;
+}
+
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -89,11 +130,48 @@ export async function GET(request: NextRequest) {
   const locationId = searchParams.get("location_id");
   const prId = searchParams.get("pr_id");
   const advanceStatus = searchParams.get("advance_status");
+  const department = searchParams.get("department");
+  const month = searchParams.get("month"); // YYYY-MM
+  const includeTotals = searchParams.get("include_totals") === "true";
   const search = searchParams.get("search")?.trim() ?? "";
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
   const offset = (page - 1) * limit;
 
+  // ── Resolve department → PR IDs (goods POs only; service POs have no PR) ──
+  let prIdsFromDept: string[] | null = null;
+  if (department) {
+    const { data: matchingPrs } = await supabase
+      .from("purchase_requests")
+      .select("id")
+      .eq("department", department);
+    prIdsFromDept = (matchingPrs ?? []).map((r: { id: string }) => r.id);
+  }
+
+  // ── Resolve month → UTC date range ─────────────────────────────────────────
+  let monthStart: string | null = null;
+  let monthEnd: string | null = null;
+  if (month && /^\d{4}-\d{2}$/.test(month)) {
+    const [yr, mo] = month.split("-").map(Number);
+    monthStart = `${month}-01T00:00:00.000Z`;
+    const nextMo = mo === 12 ? 1 : mo + 1;
+    const nextYr = mo === 12 ? yr + 1 : yr;
+    monthEnd = `${String(nextYr).padStart(4, "0")}-${String(nextMo).padStart(2, "0")}-01T00:00:00.000Z`;
+  }
+
+  // ── Resolve search → vendor IDs ────────────────────────────────────────────
+  let vendorIdsFromSearch: string[] | null = null;
+  if (search.length >= 3) {
+    const { data: matchingVendors } = await supabase
+      .from("procurement_vendors")
+      .select("id")
+      .ilike("name", `%${search}%`);
+    vendorIdsFromSearch = (matchingVendors ?? []).map((v: { id: string }) => v.id);
+  }
+
+  const filterOpts = { status, vendorId, locationId, prId, advanceStatus, prIdsFromDept, monthStart, monthEnd };
+
+  // ── Main paginated query ────────────────────────────────────────────────────
   let query = supabase
     .from("purchase_orders")
     .select(
@@ -103,22 +181,12 @@ export async function GET(request: NextRequest) {
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
-  if (status) query = query.eq("status", status);
-  if (vendorId) query = query.eq("vendor_id", vendorId);
-  if (locationId) query = query.eq("location_id", locationId);
-  if (prId) query = query.eq("pr_id", prId);
-  if (advanceStatus) query = query.eq("advance_status", advanceStatus);
+  query = applyPoFilters(query, filterOpts);
 
-  // Search: require ≥3 chars to prevent full-table scans on short terms
+  // Apply search (vendor IDs already resolved above)
   if (search.length >= 3) {
-    // Search by PO number OR vendor name (vendor lookup is acceptable at ≥3 chars)
-    const { data: matchingVendors } = await supabase
-      .from("procurement_vendors")
-      .select("id")
-      .ilike("name", `%${search}%`);
-    const vendorIds = (matchingVendors ?? []).map((v: { id: string }) => v.id);
-    if (vendorIds.length > 0) {
-      query = query.or(`po_number.ilike.%${search}%,vendor_id.in.(${vendorIds.join(",")})`);
+    if (vendorIdsFromSearch && vendorIdsFromSearch.length > 0) {
+      query = query.or(`po_number.ilike.%${search}%,vendor_id.in.(${vendorIdsFromSearch.join(",")})`);
     } else {
       query = query.ilike("po_number", `%${search}%`);
     }
@@ -126,6 +194,59 @@ export async function GET(request: NextRequest) {
 
   const { data, error, count } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // ── Totals query (all matching rows, no pagination) ─────────────────────────
+  let totals: {
+    totalExGst: number;
+    totalInclGst: number;
+    poCount: number;
+    budget: number | null;
+    budgetBalance: number | null;
+  } | null = null;
+
+  if (includeTotals) {
+    let totalsQuery = supabase
+      .from("purchase_orders")
+      .select("total_ordered_amount, total_amount_with_gst");
+
+    totalsQuery = applyPoFilters(totalsQuery, filterOpts);
+
+    if (search.length >= 3) {
+      if (vendorIdsFromSearch && vendorIdsFromSearch.length > 0) {
+        totalsQuery = totalsQuery.or(`po_number.ilike.%${search}%,vendor_id.in.(${vendorIdsFromSearch.join(",")})`);
+      } else {
+        totalsQuery = totalsQuery.ilike("po_number", `%${search}%`);
+      }
+    }
+
+    // Run PO totals + optional budget fetch in parallel
+    const [{ data: allPos }, budgetRow] = await Promise.all([
+      totalsQuery,
+      // Only fetch budget when department + month are both selected
+      (department && month)
+        ? supabase
+            .from("department_budgets")
+            .select("monthly_budget, is_active")
+            .eq("department", department)
+            .is("location_id", null)
+            .single()
+        : Promise.resolve({ data: null }),
+    ]);
+
+    const totalExGst = allPos?.reduce((s, p) => s + Number(p.total_ordered_amount ?? 0), 0) ?? 0;
+    const totalInclGst = allPos?.reduce((s, p) => s + Number(p.total_amount_with_gst ?? 0), 0) ?? 0;
+    const budget = budgetRow.data?.monthly_budget != null
+      ? Number(budgetRow.data.monthly_budget)
+      : null;
+
+    totals = {
+      totalExGst,
+      totalInclGst,
+      poCount: allPos?.length ?? 0,
+      budget,
+      budgetBalance: budget !== null ? budget - totalExGst : null,
+    };
+  }
 
   return NextResponse.json({
     data,
@@ -135,6 +256,7 @@ export async function GET(request: NextRequest) {
       total: count ?? 0,
       totalPages: Math.ceil((count ?? 0) / limit),
     },
+    totals,
   });
 }
 
