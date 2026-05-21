@@ -37,7 +37,8 @@ interface ContractOption {
 
 interface Device {
   id: string; label: string; device_ip: string; device_port: number;
-  is_enabled: boolean; last_ping_at: string | null; last_ping_success: boolean | null;
+  is_enabled: boolean; is_entry_point: boolean;
+  last_ping_at: string | null; last_ping_success: boolean | null;
   last_polled_at: string | null; last_seq_number: number;
   location: { name: string };
 }
@@ -302,6 +303,17 @@ export default function CosecDeviceDetailPage() {
     } finally { setPinging(false); }
   }
 
+  async function handleToggleEntryPoint() {
+    if (!device) return;
+    const next = !device.is_entry_point;
+    const { error } = await supabase.from("cosec_devices").update({ is_entry_point: next }).eq("id", id);
+    if (error) { toast.error("Failed to update device type"); return; }
+    setDevice(d => d ? { ...d, is_entry_point: next } : d);
+    toast.success(next
+      ? "Device set to Entry Point — members will enroll here"
+      : "Device set to Booking Only — members won't enroll here");
+  }
+
   async function handleOpenDoor() {
     setOpeningDoor(true);
     try {
@@ -409,6 +421,14 @@ export default function CosecDeviceDetailPage() {
               {isOnline === true ? <Wifi size={20} className="text-green-500" /> : isOnline === false ? <WifiOff size={20} className="text-red-500" /> : <Wifi size={20} className="text-muted-foreground opacity-40" />}
               {device.label}
               <Badge variant={device.is_enabled ? "default" : "secondary"} className="text-xs">{device.is_enabled ? "Enabled" : "Disabled"}</Badge>
+              <Badge
+                variant="outline"
+                className={`text-xs cursor-pointer select-none transition-colors ${device.is_entry_point ? "border-blue-400 text-blue-700 bg-blue-50 hover:bg-blue-100" : "border-amber-400 text-amber-700 bg-amber-50 hover:bg-amber-100"}`}
+                onClick={handleToggleEntryPoint}
+                title="Click to toggle: Entry Point = members enroll here permanently. Booking Only = temporary PIN access per booking."
+              >
+                {device.is_entry_point ? "Entry Point" : "Booking Only"}
+              </Badge>
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
               {(device.location as { name: string })?.name} · {device.device_ip}:{device.device_port}
