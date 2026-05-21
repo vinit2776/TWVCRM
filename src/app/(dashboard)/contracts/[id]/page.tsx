@@ -35,6 +35,7 @@ import { ContractMembersAccessSection } from "@/components/contracts/contract-me
 import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
+import { ContractAccessLogsSection } from "@/components/contracts/contract-access-logs-section";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import {
   Dialog,
@@ -894,6 +895,9 @@ export default function ContractDetailPage({
           {["active", "completed"].includes(contract.status) && (
             <ContractBillingSection contractId={id} />
           )}
+
+          {/* Door Access Logs */}
+          <ContractAccessLogsSection contractId={id} />
 
           {/* Notes */}
           {contract.notes && (
