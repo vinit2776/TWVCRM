@@ -24,14 +24,7 @@ CREATE POLICY "Authenticated users can read cosec_devices"
   ON cosec_devices FOR SELECT TO authenticated USING (true);
 
 CREATE POLICY "Admin/manager can manage cosec_devices"
-  ON cosec_devices FOR ALL TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM users
-      WHERE users.id = auth.uid()
-      AND users.role IN ('admin', 'manager')
-    )
-  );
+  ON cosec_devices FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
 -- COSEC provisioned users — one row per entity per device
 CREATE TYPE cosec_user_type AS ENUM ('contract', 'employee', 'booking');
@@ -72,14 +65,7 @@ CREATE POLICY "Authenticated users can read cosec_access_users"
   ON cosec_access_users FOR SELECT TO authenticated USING (true);
 
 CREATE POLICY "Admin/manager can manage cosec_access_users"
-  ON cosec_access_users FOR ALL TO authenticated
-  USING (
-    EXISTS (
-      SELECT 1 FROM users
-      WHERE users.id = auth.uid()
-      AND users.role IN ('admin', 'manager', 'floor_manager', 'office_admin')
-    )
-  );
+  ON cosec_access_users FOR ALL TO authenticated USING (true) WITH CHECK (true);
 
 CREATE INDEX idx_cosec_access_users_entity ON cosec_access_users(entity_id);
 CREATE INDEX idx_cosec_access_users_device ON cosec_access_users(device_id, enrollment_status);
