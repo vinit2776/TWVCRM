@@ -43,7 +43,7 @@ export function ReorderSettings() {
     fetch("/api/locations")
       .then((r) => r.json())
       .then((data) => {
-        const locs = data.locations || data || [];
+        const locs = data.data || data.locations || [];
         setLocations(locs);
         if (locs.length > 0) setSelectedLocation(locs[0].id);
       })
