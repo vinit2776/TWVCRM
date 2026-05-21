@@ -27,18 +27,26 @@ export interface CosecEvent {
   eventTime: Date; // parsed UTC date
 }
 
-// COSEC event IDs relevant to TWV
+// COSEC event IDs (verified against live Matrix COSEC device firmware)
+// Device reports: 101 = access granted, 201 = access denied, 405 = enrollment complete
 export const COSEC_EVENT = {
-  ACCESS_GRANTED: 0,
-  ACCESS_DENIED_INVALID_CREDENTIAL: 1,
-  ACCESS_DENIED_INACTIVE: 2,
-  ACCESS_DENIED_VALIDITY_EXPIRED: 3,
-  ACCESS_DENIED_TIMEZONE: 6,
+  ACCESS_GRANTED: 101,
+  ACCESS_DENIED: 201,
   ENROLLMENT_COMPLETE: 405,
 } as const;
 
-// detail-3 in access events encodes IN/OUT direction
-// bit 4 = 0 → Entry, bit 4 = 1 → Exit (from appendix)
+// For event 201 (ACCESS_DENIED), detail-1 encodes the denial reason
+export const COSEC_DENIAL_REASON: Record<number, string> = {
+  1: "Credential not recognized",
+  2: "Invalid credential",
+  3: "User inactive or not enrolled",
+  4: "Validity expired",
+  5: "Anti-passback violation",
+  6: "Outside access window",
+};
+
+// detail-3 in access granted events (101) encodes IN/OUT direction
+// 10 (decimal) → IN (bit 4 = 0), 20 (decimal) → OUT (bit 4 = 1)
 export function parseDirection(detail3: number): "IN" | "OUT" {
   return (detail3 & 0x10) === 0 ? "IN" : "OUT";
 }

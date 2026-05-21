@@ -1,13 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
-import { pollEvents, COSEC_EVENT, parseDirection } from "@/lib/cosec";
-
-const DENIAL_REASON: Record<number, string> = {
-  1: "Invalid credential",
-  2: "User inactive (not yet enrolled)",
-  3: "Validity expired",
-  6: "Outside access window",
-};
+import { pollEvents, COSEC_EVENT, COSEC_DENIAL_REASON, parseDirection } from "@/lib/cosec";
 
 /**
  * GET /api/cron/cosec-events
@@ -141,22 +134,20 @@ export async function GET(request: NextRequest) {
         }
 
         // ── Access granted / denied ───────────────────────────────────────────
+        // Device emits: 101 = access granted, 201 = access denied
         const isGranted = event.eventId === COSEC_EVENT.ACCESS_GRANTED;
-        const isDenied = [
-          COSEC_EVENT.ACCESS_DENIED_INVALID_CREDENTIAL,
-          COSEC_EVENT.ACCESS_DENIED_INACTIVE,
-          COSEC_EVENT.ACCESS_DENIED_VALIDITY_EXPIRED,
-          COSEC_EVENT.ACCESS_DENIED_TIMEZONE,
-        ].includes(event.eventId as 1 | 2 | 3 | 6);
+        const isDenied  = event.eventId === COSEC_EVENT.ACCESS_DENIED;
 
         if (!isGranted && !isDenied) continue;
 
         const direction = isGranted ? parseDirection(event.detail3) : "DENIED";
-        const denialReason = isDenied ? (DENIAL_REASON[event.eventId] ?? "Denied") : null;
+        // For denied events (201), detail1 = denial reason code (not a user ref ID)
+        const denialReason = isDenied ? (COSEC_DENIAL_REASON[event.detail1] ?? "Access denied") : null;
 
         accessLogsToInsert.push({
           device_id: dev.id,
-          cosec_ref_id: event.refUserId,
+          // For denied events (201), detail1 = denial reason code, not a user ref
+          cosec_ref_id: isGranted ? event.refUserId : null,
           user_type: accessUser?.user_type ?? null,
           entity_id: accessUser?.entity_id ?? null,
           entity_name: entityName,
