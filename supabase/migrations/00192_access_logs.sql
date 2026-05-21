@@ -20,7 +20,7 @@ CREATE POLICY "Authenticated users can read access_logs"
 
 -- Only service role writes (via cron)
 CREATE POLICY "Service role can insert access_logs"
-  ON access_logs FOR INSERT TO authenticated USING (true);
+  ON access_logs FOR INSERT TO authenticated WITH CHECK (true);
 
 CREATE INDEX idx_access_logs_entity    ON access_logs(entity_id, event_time DESC);
 CREATE INDEX idx_access_logs_device    ON access_logs(device_id, roll_over_count, device_seq_number);
