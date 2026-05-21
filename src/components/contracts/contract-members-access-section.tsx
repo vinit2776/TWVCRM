@@ -253,7 +253,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                     {status === "provisioned" && pin && (
                       <p className="text-xs text-amber-600 mt-1.5 flex items-center gap-1">
                         <ShieldCheck size={11} />
-                        PIN: <span className="font-mono font-medium">{pin}</span> · Member must tap this at the device to enroll fingerprint
+                        Enrollment PIN: <span className="font-mono font-medium">{pin}</span> · Member types this on the keypad once to start fingerprint registration — not for daily access
                       </p>
                     )}
 

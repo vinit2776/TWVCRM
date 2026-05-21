@@ -266,8 +266,11 @@ function StepPanel({
             </p>
             <p className="text-sm text-blue-700 mt-1 leading-relaxed">
               Ask <strong>{displayName}</strong> to walk up to the{" "}
-              <strong>{device}</strong> reader and place their finger on the
-              sensor. They&apos;ll be prompted to enter a PIN first.
+              <strong>{device}</strong> device and{" "}
+              <strong>type the PIN on the keypad</strong>. The device will
+              then prompt them to scan their finger several times to register
+              their fingerprint. The PIN is used only this once — after
+              enrollment they just place their finger to enter.
             </p>
 
             {group.access_pin && (
