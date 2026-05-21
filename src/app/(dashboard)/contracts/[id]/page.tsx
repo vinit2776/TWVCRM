@@ -31,6 +31,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
+import { ContractMembersAccessSection } from "@/components/contracts/contract-members-access-section";
 import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
@@ -862,6 +863,13 @@ export default function ContractDetailPage({
             locationId={contract.location_id}
             printerDepartmentId={contract.department_id ?? undefined}
             onDepartmentIdUpdate={fetchContract}
+          />
+
+          {/* Members & Access Control */}
+          <ContractMembersAccessSection
+            contractId={id}
+            seats={contract.seats}
+            contractStatus={contract.status}
           />
 
           {/* ── Quota sections ──────────────────────────────────────────────

@@ -9,7 +9,7 @@ import {
   Phone, AlertTriangle, ShieldCheck, Star,
   Banknote, CheckCircle, Calendar, Timer, Copy, Coins, Gift,
   Download, MessageCircle, Repeat,
-  StickyNote, Pencil, Check, X, Plus, Share2,
+  StickyNote, Pencil, Check, X, Plus, Share2, KeyRound, Send,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -1372,6 +1372,42 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
             )}
           </CardContent>
         </Card>
+
+        {/* Access PIN (COSEC) */}
+        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+        {(booking as any).access_pin && (
+          <Card>
+            <CardHeader><CardTitle className="text-sm flex items-center gap-2"><KeyRound size={14} />Room Access PIN</CardTitle></CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="flex items-center justify-between">
+                <div>
+                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
+                  <p className="text-3xl font-mono font-bold tracking-widest">{(booking as any).access_pin}</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">Valid {formatTime12(booking.start_time)} – {formatTime12(booking.end_time)} (±5 min)</p>
+                </div>
+                <Button
+                  variant="outline" size="sm"
+                  onClick={async () => {
+                    const phone = booking.booker_phone || booking.guest_phone || booking.lead?.phone;
+                    if (!phone) { toast.error("No phone number on file"); return; }
+                    const res = await fetch("/api/cosec/booking-access", {
+                      method: "POST",
+                      headers: { "Content-Type": "application/json" },
+                      body: JSON.stringify({ booking_id: id }),
+                    });
+                    if (res.ok) toast.success("Access PIN resent");
+                    else toast.error("Failed to resend PIN");
+                  }}
+                >
+                  <Send size={13} className="mr-1.5" />Resend PIN
+                </Button>
+              </div>
+              <p className="text-xs text-muted-foreground">
+                Enter this PIN at the entrance device and conference room device to unlock the door.
+              </p>
+            </CardContent>
+          </Card>
+        )}
 
         {/* Financials */}
         <Card>

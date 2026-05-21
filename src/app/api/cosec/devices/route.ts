@@ -1,0 +1,24 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+
+/** GET /api/cosec/devices?location_id=... — list enabled COSEC devices for a location */
+export async function GET(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const locationId = request.nextUrl.searchParams.get("location_id");
+
+  let query = supabase
+    .from("cosec_devices")
+    .select("id, label, device_ip")
+    .eq("is_enabled", true)
+    .order("label");
+
+  if (locationId) query = query.eq("location_id", locationId);
+
+  const { data, error } = await query;
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  return NextResponse.json({ data: data ?? [] });
+}

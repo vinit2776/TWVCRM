@@ -335,10 +335,31 @@ export function contractCosecId(contractId: string): string {
   return `C${contractId.replace(/-/g, "").slice(0, 14)}`;
 }
 
+/** Contract member (named seat holder) — range 1-49999 for ref-user-id */
+export function memberCosecId(memberId: string): string {
+  return `M${memberId.replace(/-/g, "").slice(0, 14)}`;
+}
+
 export function employeeCosecId(employeeId: string): string {
   return `E${employeeId.replace(/-/g, "").slice(0, 14)}`;
 }
 
 export function bookingCosecId(bookingId: string): string {
   return `B${bookingId.replace(/-/g, "").slice(0, 14)}`;
+}
+
+/**
+ * Deterministic numeric ref-user-id from a UUID.
+ * Maps into a range (min..max inclusive) using a simple hash so the
+ * same UUID always produces the same number and different ranges don't overlap.
+ */
+export function uuidToRefId(uuid: string, min: number, max: number): number {
+  const hex = uuid.replace(/-/g, "").slice(0, 8);
+  const n = parseInt(hex, 16) >>> 0; // unsigned 32-bit
+  return min + (n % (max - min + 1));
+}
+
+/** Generate a random 6-digit enrollment PIN */
+export function generatePin(): string {
+  return String(Math.floor(100000 + Math.random() * 900000));
 }

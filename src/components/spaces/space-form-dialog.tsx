@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle,
 } from "@/components/ui/dialog";
@@ -16,6 +16,8 @@ import { toast } from "sonner";
 import { useLocations } from "@/hooks/use-locations";
 import { DEFAULT_FACILITIES } from "@/lib/constants";
 import type { Space, SpaceOperatingHours, SpacePricingModel } from "@/types";
+
+interface CosecDevice { id: string; label: string; device_ip: string; }
 
 interface SpaceFormDialogProps {
   open: boolean;
@@ -64,7 +66,23 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
   const [cancellationPolicy, setCancellationPolicy] = useState("");
   const [facilities, setFacilities] = useState<FacilityRow[]>([]);
   const [newFacility, setNewFacility] = useState("");
+  const [cosecDeviceId, setCosecDeviceId] = useState<string>("__none");
+  const [cosecDevices, setCosecDevices] = useState<CosecDevice[]>([]);
   const [saving, setSaving] = useState(false);
+
+  const loadCosecDevices = useCallback(async (locId: string) => {
+    if (!locId) { setCosecDevices([]); return; }
+    const res = await fetch(`/api/cosec/devices?location_id=${locId}`);
+    if (res.ok) {
+      const json = await res.json();
+      setCosecDevices(json.data ?? []);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (locationId) loadCosecDevices(locationId);
+    else setCosecDevices([]);
+  }, [locationId, loadCosecDevices]);
 
   useEffect(() => {
     if (space) {
@@ -87,6 +105,8 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
           charge_per_use: f.charge_per_use,
         }))
       );
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      setCosecDeviceId((space as any).cosec_device_id ?? "__none");
     } else {
       setName("");
       setLocationId("");
@@ -101,6 +121,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
       setMinBookingMinutes(60);
       setCancellationPolicy("");
       setFacilities(DEFAULT_FACILITIES.map(f => ({ name: f, is_complimentary: true, charge_per_use: 0 })));
+      setCosecDeviceId("__none");
     }
   }, [space, open]);
 
@@ -165,6 +186,7 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
         min_booking_minutes: pricingModel === "daily" ? 0 : minBookingMinutes,
         cancellation_policy: cancellationPolicy.trim() || undefined,
         facilities,
+        cosec_device_id: (cosecDeviceId && cosecDeviceId !== "__none") ? cosecDeviceId : null,
       };
 
       const res = isEdit
@@ -296,6 +318,22 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
                 </SelectContent>
               </Select>
             </div>
+
+            {cosecDevices.length > 0 && (
+              <div className="space-y-2">
+                <Label htmlFor="space-cosec">COSEC Access Device <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                <Select value={cosecDeviceId} onValueChange={setCosecDeviceId}>
+                  <SelectTrigger id="space-cosec"><SelectValue placeholder="No device linked" /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="__none">None</SelectItem>
+                    {cosecDevices.map(d => (
+                      <SelectItem key={d.id} value={d.id}>{d.label} — {d.device_ip}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">Link a COSEC device to this room so booking guests receive an access PIN automatically.</p>
+              </div>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="space-desc">Description</Label>

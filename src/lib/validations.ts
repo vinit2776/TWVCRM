@@ -330,6 +330,8 @@ export const createSpaceSchema = z.object({
     is_complimentary: z.boolean().default(true),
     charge_per_use: z.number().min(0).default(0),
   })).optional(),
+  cosec_device_id: z.string().uuid().nullable().optional(),
+  workspace_type: z.string().optional(),
 });
 
 export const updateSpaceSchema = createSpaceSchema.partial();
