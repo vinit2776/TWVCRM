@@ -5,366 +5,390 @@ import { useParams, useRouter } from "next/navigation";
 import { createClient } from "@/lib/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
+import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { toast } from "sonner";
 import {
-  Wifi,
-  WifiOff,
-  Loader2,
-  ArrowLeft,
-  ShieldCheck,
-  ShieldOff,
-  Fingerprint,
-  CreditCard,
-  Clock,
-  DoorOpen,
-  RefreshCw,
-  LogIn,
-  LogOut,
-  Ban,
+  Wifi, WifiOff, Loader2, ArrowLeft, ShieldCheck, ShieldOff,
+  Fingerprint, CreditCard, Clock, DoorOpen, RefreshCw,
+  LogIn, LogOut, Ban, BarChart3, Users, AlertTriangle, TrendingUp,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
+import {
+  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
+} from "recharts";
+
+// ── Types ─────────────────────────────────────────────────────────────────────
 
 interface Device {
-  id: string;
-  label: string;
-  device_ip: string;
-  device_port: number;
-  is_enabled: boolean;
-  last_ping_at: string | null;
-  last_ping_success: boolean | null;
-  last_polled_at: string | null;
-  last_seq_number: number;
+  id: string; label: string; device_ip: string; device_port: number;
+  is_enabled: boolean; last_ping_at: string | null; last_ping_success: boolean | null;
+  last_polled_at: string | null; last_seq_number: number;
   location: { name: string };
 }
 
 interface AccessUser {
-  id: string;
-  cosec_user_id: string;
-  cosec_ref_id: number;
-  user_type: "contract" | "employee" | "booking";
-  entity_id: string;
-  enrollment_status: string;
-  nfc_card_number: string | null;
-  access_pin: string | null;
-  valid_until: string | null;
-  provisioned_at: string | null;
-  biometric_enrolled_at: string | null;
-  card_enrolled_at: string | null;
-  blocked_at: string | null;
-  deleted_at: string | null;
+  id: string; cosec_user_id: string; cosec_ref_id: number;
+  user_type: "contract" | "employee" | "booking" | "member";
+  entity_id: string; enrollment_status: string;
+  nfc_card_number: string | null; access_pin: string | null;
+  valid_until: string | null; provisioned_at: string | null;
+  biometric_enrolled_at: string | null; card_enrolled_at: string | null;
+  blocked_at: string | null; deleted_at: string | null;
   entity_name?: string;
 }
 
 interface AccessLog {
-  id: string;
-  cosec_ref_id: number;
-  user_type: string;
-  direction: "IN" | "OUT" | "DENIED";
-  raw_event_id: number;
-  event_time: string;
-  device_seq_number: number;
-  entity_name?: string;
+  id: string; cosec_ref_id: number; user_type: string;
+  direction: "IN" | "OUT" | "DENIED"; raw_event_id: number;
+  event_time: string; device_seq_number: number;
+  entity_name?: string; denial_reason?: string;
 }
 
-const STATUS_CONFIG: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline"; icon: React.ReactNode }> = {
-  pending:            { label: "Pending",           variant: "secondary",    icon: <Clock size={12} /> },
-  provisioned:        { label: "Provisioned",       variant: "outline",      icon: <ShieldCheck size={12} /> },
-  biometric_enrolled: { label: "Biometric Enrolled",variant: "default",      icon: <Fingerprint size={12} /> },
-  card_enrolled:      { label: "Card Enrolled",     variant: "default",      icon: <CreditCard size={12} /> },
-  fully_enrolled:     { label: "Fully Enrolled",    variant: "default",      icon: <ShieldCheck size={12} /> },
-  blocked:            { label: "Blocked",           variant: "destructive",  icon: <ShieldOff size={12} /> },
-  deleted:            { label: "Deleted",           variant: "secondary",    icon: <Ban size={12} /> },
+interface PresenceRow {
+  entity_id: string; entity_name: string; user_type: string;
+  is_inside: boolean; last_entry_at: string | null; last_exit_at: string | null;
+}
+
+interface HeatmapRow { day: number; hour: number; count: number; }
+interface AttendanceRow {
+  entity_id: string; entity_name: string; user_type: string;
+  unique_days: number; total_entries: number; last_seen: string;
+}
+interface DenialSummary {
+  entity_id: string | null; entity_name: string; count: number;
+  reasons: Record<string, number>; last_denied_at: string;
+}
+
+// ── Constants ─────────────────────────────────────────────────────────────────
+
+const STATUS_CONFIG: Record<string, { label: string; variant: "default" | "secondary" | "destructive" | "outline" }> = {
+  pending:            { label: "Pending",            variant: "secondary" },
+  provisioned:        { label: "Provisioned",        variant: "outline" },
+  biometric_enrolled: { label: "Biometric Enrolled", variant: "default" },
+  card_enrolled:      { label: "Card Enrolled",      variant: "default" },
+  fully_enrolled:     { label: "Fully Enrolled",     variant: "default" },
+  blocked:            { label: "Blocked",            variant: "destructive" },
+  deleted:            { label: "Deleted",            variant: "secondary" },
 };
 
 const TYPE_LABELS: Record<string, string> = {
-  contract: "Contract",
-  employee: "Employee",
-  booking:  "Walk-in Booking",
+  contract: "Contract", employee: "Employee", booking: "Walk-in Booking", member: "Member",
 };
+
+const DAY_NAMES = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+const HEATMAP_COLORS = ["#f0f9ff", "#bae6fd", "#38bdf8", "#0284c7", "#075985"];
+
+// ── Main page ─────────────────────────────────────────────────────────────────
 
 export default function CosecDeviceDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
   const supabase = createClient();
 
-  const [device, setDevice] = useState<Device | null>(null);
-  const [users, setUsers] = useState<AccessUser[]>([]);
-  const [logs, setLogs] = useState<AccessLog[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [pinging, setPinging] = useState(false);
-  const [pingResult, setPingResult] = useState<{ ok: boolean; deviceName?: string; latencyMs?: number; error?: string } | null>(null);
-  const [openingDoor, setOpeningDoor] = useState(false);
+  const [device, setDevice]               = useState<Device | null>(null);
+  const [users, setUsers]                 = useState<AccessUser[]>([]);
+  const [logs, setLogs]                   = useState<AccessLog[]>([]);
+  const [loading, setLoading]             = useState(true);
+  const [pinging, setPinging]             = useState(false);
+  const [pingResult, setPingResult]       = useState<{ ok: boolean; deviceName?: string; latencyMs?: number; error?: string } | null>(null);
+  const [openingDoor, setOpeningDoor]     = useState(false);
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
+
+  // Analytics state
+  const [analyticsLoading, setAnalyticsLoading]   = useState(false);
+  const [presence, setPresence]                     = useState<PresenceRow[]>([]);
+  const [heatmap, setHeatmap]                       = useState<HeatmapRow[]>([]);
+  const [attendance, setAttendance]                 = useState<AttendanceRow[]>([]);
+  const [denialSummary, setDenialSummary]           = useState<DenialSummary[]>([]);
+  const [analyticsDays, setAnalyticsDays]           = useState(30);
+
+  // Card assign state
+  const [cardAssigning, setCardAssigning]           = useState<string | null>(null); // access_user_id being assigned
 
   const load = useCallback(async () => {
     setLoading(true);
     const [{ data: dev }, { data: accessUsers }, { data: accessLogs }] = await Promise.all([
-      supabase
-        .from("cosec_devices")
-        .select("*, location:locations(name)")
-        .eq("id", id)
-        .single(),
-      supabase
-        .from("cosec_access_users")
-        .select("*")
-        .eq("device_id", id)
-        .neq("enrollment_status", "deleted")
-        .order("provisioned_at", { ascending: false }),
-      supabase
-        .from("access_logs")
-        .select("*")
-        .eq("device_id", id)
-        .order("event_time", { ascending: false })
-        .limit(100),
+      supabase.from("cosec_devices").select("*, location:locations(name)").eq("id", id).single(),
+      supabase.from("cosec_access_users").select("*").eq("device_id", id)
+        .neq("enrollment_status", "deleted").order("provisioned_at", { ascending: false }),
+      supabase.from("access_logs").select("*").eq("device_id", id)
+        .order("event_time", { ascending: false }).limit(200),
     ]);
 
     if (!dev) { router.push("/admin/cosec-devices"); return; }
     setDevice(dev as Device);
 
-    // Enrich access users with entity names
     if (accessUsers) {
       const enriched = await enrichUsers(accessUsers as AccessUser[]);
       setUsers(enriched);
-
-      // Enrich logs with names from enriched users
       if (accessLogs) {
         const refMap: Record<number, string> = {};
         enriched.forEach(u => { refMap[u.cosec_ref_id] = u.entity_name || u.cosec_user_id; });
-        setLogs((accessLogs as AccessLog[]).map(l => ({ ...l, entity_name: refMap[l.cosec_ref_id] })));
+        setLogs((accessLogs as AccessLog[]).map(l => ({
+          ...l,
+          entity_name: l.entity_name || refMap[l.cosec_ref_id] || `Ref #${l.cosec_ref_id}`,
+        })));
       }
     }
-
     setLoading(false);
-  }, [id, supabase, router]);
+  }, [id, router]); // eslint-disable-line react-hooks/exhaustive-deps
 
   async function enrichUsers(rawUsers: AccessUser[]): Promise<AccessUser[]> {
-    const contractIds = rawUsers.filter(u => u.user_type === "contract").map(u => u.entity_id);
-    const employeeIds = rawUsers.filter(u => u.user_type === "employee").map(u => u.entity_id);
-    const bookingIds  = rawUsers.filter(u => u.user_type === "booking").map(u => u.entity_id);
-
-    const [contracts, employees, bookings] = await Promise.all([
-      contractIds.length
-        ? supabase.from("contracts").select("id, contract_number, lead:leads!contracts_lead_id_fkey(company, first_name, last_name)").in("id", contractIds)
-        : { data: [] },
-      employeeIds.length
-        ? supabase.from("employees").select("id, full_name").in("id", employeeIds)
-        : { data: [] },
-      bookingIds.length
-        ? supabase.from("bookings").select("id, booking_number").in("id", bookingIds)
-        : { data: [] },
+    const byType: Record<string, string[]> = { contract: [], employee: [], booking: [], member: [] };
+    for (const u of rawUsers) {
+      if (u.user_type in byType) byType[u.user_type].push(u.entity_id);
+    }
+    const [contracts, employees, bookings, members] = await Promise.all([
+      byType.contract.length ? supabase.from("contracts").select("id, contract_number, lead:leads!contracts_lead_id_fkey(company, first_name, last_name)").in("id", byType.contract) : { data: [] },
+      byType.employee.length ? supabase.from("employees").select("id, full_name").in("id", byType.employee) : { data: [] },
+      byType.booking.length  ? supabase.from("bookings").select("id, booking_number, guest_name").in("id", byType.booking) : { data: [] },
+      byType.member.length   ? supabase.from("contract_members").select("id, name").in("id", byType.member) : { data: [] },
     ]);
-
     const nameMap: Record<string, string> = {};
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (contracts.data || []).forEach((c: any) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lead = Array.isArray(c.lead) ? c.lead[0] : c.lead as any;
-      nameMap[c.id] = (lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || c.contract_number);
+      nameMap[c.id] = lead?.company || `${lead?.first_name ?? ""} ${lead?.last_name ?? ""}`.trim() || c.contract_number;
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (employees.data || []).forEach((e: any) => { nameMap[e.id] = e.full_name; });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (bookings.data || []).forEach((b: any) => { nameMap[b.id] = `Booking #${b.booking_number}`; });
-
+    (bookings.data || []).forEach((b: any) => { nameMap[b.id] = b.guest_name || `Booking #${b.booking_number}`; });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    (members.data || []).forEach((m: any) => { nameMap[m.id] = m.name; });
     return rawUsers.map(u => ({ ...u, entity_name: nameMap[u.entity_id] || u.cosec_user_id }));
   }
 
+  const loadAnalytics = useCallback(async () => {
+    setAnalyticsLoading(true);
+    const base = `/api/cosec/analytics?device_id=${id}&days=${analyticsDays}`;
+    const [presRes, heatRes, attRes, denRes] = await Promise.all([
+      fetch(`${base}&type=presence`),
+      fetch(`${base}&type=heatmap`),
+      fetch(`${base}&type=attendance`),
+      fetch(`${base}&type=denials`),
+    ]);
+    const [presJson, heatJson, attJson, denJson] = await Promise.all([
+      presRes.json(), heatRes.json(), attRes.json(), denRes.json(),
+    ]);
+    setPresence(presJson.data ?? []);
+    setHeatmap(heatJson.data ?? []);
+    setAttendance(attJson.data ?? []);
+    setDenialSummary(denJson.summary ?? []);
+    setAnalyticsLoading(false);
+  }, [id, analyticsDays]);
+
   useEffect(() => { load(); }, [load]);
 
+  // ── Action handlers ────────────────────────────────────────────────────────
+
   async function handlePing() {
-    setPinging(true);
-    setPingResult(null);
+    setPinging(true); setPingResult(null);
     try {
-      const res = await fetch("/api/cosec/test-connection", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ device_id: id }),
-      });
+      const res = await fetch("/api/cosec/test-connection", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ device_id: id }) });
       const result = await res.json();
       setPingResult(result);
-      if (result.ok) {
-        toast.success(`Connected — ${result.deviceName} (${result.latencyMs}ms)`);
-      } else {
-        toast.error(`Unreachable: ${result.error}`);
-      }
+      if (result.ok) toast.success(`Connected — ${result.deviceName} (${result.latencyMs}ms)`);
+      else toast.error(`Unreachable: ${result.error}`);
       await load();
-    } finally {
-      setPinging(false);
-    }
+    } finally { setPinging(false); }
   }
 
   async function handleOpenDoor() {
     setOpeningDoor(true);
     try {
-      const res = await fetch("/api/cosec/open-door", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ device_id: id }),
-      });
+      const res = await fetch("/api/cosec/open-door", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ device_id: id }) });
       const result = await res.json();
-      if (result.ok) toast.success("Door opened");
-      else toast.error(result.error || "Failed to open door");
-    } finally {
-      setOpeningDoor(false);
-    }
+      if (result.ok) toast.success("Door opened"); else toast.error(result.error || "Failed to open door");
+    } finally { setOpeningDoor(false); }
   }
 
   async function handleBlock(user: AccessUser) {
     setActionLoading(a => ({ ...a, [user.id]: true }));
     try {
-      const res = await fetch("/api/cosec/block-user", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ access_user_id: user.id }),
-      });
+      const res = await fetch("/api/cosec/block-user", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ access_user_id: user.id }) });
       const result = await res.json();
-      if (result.ok) { toast.success("Access blocked"); await load(); }
-      else toast.error(result.error || "Failed");
-    } finally {
-      setActionLoading(a => ({ ...a, [user.id]: false }));
-    }
+      if (result.ok) { toast.success("Access blocked"); await load(); } else toast.error(result.error || "Failed");
+    } finally { setActionLoading(a => ({ ...a, [user.id]: false })); }
   }
 
   async function handleRestore(user: AccessUser) {
     setActionLoading(a => ({ ...a, [user.id]: true }));
     try {
-      const res = await fetch("/api/cosec/restore-user", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ access_user_id: user.id }),
-      });
+      const res = await fetch("/api/cosec/restore-user", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ access_user_id: user.id }) });
       const result = await res.json();
-      if (result.ok) { toast.success("Access restored"); await load(); }
-      else toast.error(result.error || "Failed");
-    } finally {
-      setActionLoading(a => ({ ...a, [user.id]: false }));
-    }
+      if (result.ok) { toast.success("Access restored"); await load(); } else toast.error(result.error || "Failed");
+    } finally { setActionLoading(a => ({ ...a, [user.id]: false })); }
   }
 
   async function handleReprovision(user: AccessUser) {
     setActionLoading(a => ({ ...a, [`reprov_${user.id}`]: true }));
     try {
-      const res = await fetch("/api/cosec/provision-user", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
+      const res = await fetch("/api/cosec/provision-user", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ access_user_id: user.id }) });
+      const result = await res.json();
+      if (result.ok) { toast.success("Re-provisioned on device"); await load(); } else toast.error(result.error || "Failed");
+    } finally { setActionLoading(a => ({ ...a, [`reprov_${user.id}`]: false })); }
+  }
+
+  async function handleAssignCard(user: AccessUser) {
+    setCardAssigning(user.id);
+    toast.info("Tap the NFC card on the device reader now...", { duration: 22000, id: `card-${user.id}` });
+    try {
+      const res = await fetch("/api/cosec/assign-card", {
+        method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ access_user_id: user.id }),
       });
       const result = await res.json();
-      if (result.ok) { toast.success("Re-provisioned on device"); await load(); }
-      else toast.error(result.error || "Failed");
+      toast.dismiss(`card-${user.id}`);
+      if (result.ok) {
+        toast.success(`Card assigned: ${result.cardNumber}`);
+        await load();
+      } else {
+        toast.error(result.error || "Card read failed. Try again.");
+      }
+    } catch {
+      toast.dismiss(`card-${user.id}`);
+      toast.error("Card assignment failed.");
     } finally {
-      setActionLoading(a => ({ ...a, [`reprov_${user.id}`]: false }));
+      setCardAssigning(null);
     }
   }
 
-  if (loading) {
-    return (
-      <div className="flex items-center justify-center h-64">
-        <Loader2 className="animate-spin text-muted-foreground" size={28} />
-      </div>
-    );
-  }
+  // ── Render ─────────────────────────────────────────────────────────────────
 
+  if (loading) {
+    return <div className="flex items-center justify-center h-64"><Loader2 className="animate-spin text-muted-foreground" size={28} /></div>;
+  }
   if (!device) return null;
 
   const isOnline = pingResult ? pingResult.ok : device.last_ping_success;
+  const presentCount = presence.filter(p => p.is_inside).length;
+  const deniedCount  = logs.filter(l => l.direction === "DENIED").length;
+
+  // Build 7-day bar chart data from logs
+  const sevenDayData: { label: string; IN: number; OUT: number; DENIED: number }[] = [];
+  for (let i = 6; i >= 0; i--) {
+    const d = new Date(); d.setDate(d.getDate() - i);
+    const label = DAY_NAMES[d.getDay()];
+    const dayStr = d.toISOString().split("T")[0];
+    const dayLogs = logs.filter(l => l.event_time.startsWith(dayStr));
+    sevenDayData.push({
+      label,
+      IN:     dayLogs.filter(l => l.direction === "IN").length,
+      OUT:    dayLogs.filter(l => l.direction === "OUT").length,
+      DENIED: dayLogs.filter(l => l.direction === "DENIED").length,
+    });
+  }
+
+  // Heatmap max for colour scaling
+  const heatmapMax = Math.max(...heatmap.map(h => h.count), 1);
+
+  function heatColor(count: number): string {
+    const idx = Math.min(Math.floor((count / heatmapMax) * (HEATMAP_COLORS.length - 1)), HEATMAP_COLORS.length - 1);
+    return HEATMAP_COLORS[idx];
+  }
 
   return (
     <div className="max-w-5xl mx-auto p-6 space-y-6">
-      {/* Header */}
-      <div className="flex items-start justify-between gap-4">
+      {/* ── Header ─────────────────────────────────────────────────────────── */}
+      <div className="flex items-start justify-between gap-4 flex-wrap">
         <div className="flex items-start gap-3">
           <Button variant="ghost" size="icon" onClick={() => router.push("/admin/cosec-devices")} className="mt-0.5">
             <ArrowLeft size={18} />
           </Button>
           <div>
-            <h1 className="text-2xl font-semibold flex items-center gap-2">
-              {isOnline === true ? (
-                <Wifi size={20} className="text-green-500" />
-              ) : isOnline === false ? (
-                <WifiOff size={20} className="text-red-500" />
-              ) : (
-                <Wifi size={20} className="text-muted-foreground opacity-40" />
-              )}
+            <h1 className="text-2xl font-semibold flex items-center gap-2 flex-wrap">
+              {isOnline === true ? <Wifi size={20} className="text-green-500" /> : isOnline === false ? <WifiOff size={20} className="text-red-500" /> : <Wifi size={20} className="text-muted-foreground opacity-40" />}
               {device.label}
-              <Badge variant={device.is_enabled ? "default" : "secondary"} className="text-xs">
-                {device.is_enabled ? "Enabled" : "Disabled"}
-              </Badge>
+              <Badge variant={device.is_enabled ? "default" : "secondary"} className="text-xs">{device.is_enabled ? "Enabled" : "Disabled"}</Badge>
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
               {(device.location as { name: string })?.name} · {device.device_ip}:{device.device_port}
             </p>
-            <div className="flex gap-4 mt-1 text-xs text-muted-foreground">
-              {device.last_ping_at && (
-                <span>Last ping: {formatDate(device.last_ping_at)}</span>
-              )}
-              {device.last_polled_at && (
-                <span>Last event poll: {formatDate(device.last_polled_at)}</span>
-              )}
+            <div className="flex flex-wrap gap-4 mt-1 text-xs text-muted-foreground">
+              {device.last_ping_at    && <span>Ping: {formatDate(device.last_ping_at)}</span>}
+              {device.last_polled_at  && <span>Last sync: {formatDate(device.last_polled_at)}</span>}
               <span>Seq #{device.last_seq_number}</span>
             </div>
             {pingResult && (
               <p className={`text-xs font-medium mt-1 ${pingResult.ok ? "text-green-600" : "text-red-500"}`}>
-                {pingResult.ok
-                  ? `✓ ${pingResult.deviceName} · ${pingResult.latencyMs}ms`
-                  : `✗ ${pingResult.error}`}
+                {pingResult.ok ? `✓ ${pingResult.deviceName} · ${pingResult.latencyMs}ms` : `✗ ${pingResult.error}`}
               </p>
             )}
           </div>
         </div>
-        <div className="flex gap-2 shrink-0">
+        <div className="flex gap-2">
           <Button size="sm" variant="outline" onClick={handlePing} disabled={pinging}>
-            {pinging ? <Loader2 size={14} className="animate-spin mr-1" /> : <Wifi size={14} className="mr-1" />}
-            Ping
+            {pinging ? <Loader2 size={14} className="animate-spin mr-1" /> : <Wifi size={14} className="mr-1" />}Ping
           </Button>
           <Button size="sm" variant="outline" onClick={handleOpenDoor} disabled={openingDoor}>
-            {openingDoor ? <Loader2 size={14} className="animate-spin mr-1" /> : <DoorOpen size={14} className="mr-1" />}
-            Open Door
+            {openingDoor ? <Loader2 size={14} className="animate-spin mr-1" /> : <DoorOpen size={14} className="mr-1" />}Open Door
           </Button>
         </div>
       </div>
 
-      {/* Summary stats */}
+      {/* ── Summary stats ──────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
         {(["provisioned", "biometric_enrolled", "card_enrolled", "fully_enrolled"] as const).map(status => {
           const count = users.filter(u => u.enrollment_status === status).length;
-          const cfg = STATUS_CONFIG[status];
           return (
             <Card key={status} className="py-3">
               <CardContent className="px-4 py-0">
-                <div className="flex items-center gap-2 text-muted-foreground text-xs">{cfg.icon}{cfg.label}</div>
-                <div className="text-2xl font-semibold mt-1">{count}</div>
+                <p className="text-xs text-muted-foreground">{STATUS_CONFIG[status].label}</p>
+                <p className="text-2xl font-semibold mt-1">{count}</p>
               </CardContent>
             </Card>
           );
         })}
       </div>
 
-      {/* Tabs */}
+      {/* 7-day quick chart */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center gap-2"><BarChart3 size={14} />Last 7 Days — Access Activity</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <ResponsiveContainer width="100%" height={140}>
+            <BarChart data={sevenDayData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
+              <Tooltip />
+              <Bar dataKey="IN" fill="#00AE6C" radius={[2, 2, 0, 0]} name="Entry" />
+              <Bar dataKey="OUT" fill="#0284c7" radius={[2, 2, 0, 0]} name="Exit" />
+              <Bar dataKey="DENIED" fill="#ef4444" radius={[2, 2, 0, 0]} name="Denied" />
+            </BarChart>
+          </ResponsiveContainer>
+        </CardContent>
+      </Card>
+
+      {/* ── Tabs ───────────────────────────────────────────────────────────── */}
       <Tabs defaultValue="users">
         <TabsList>
-          <TabsTrigger value="users">Enrolled Users ({users.length})</TabsTrigger>
-          <TabsTrigger value="logs">Access Log ({logs.length})</TabsTrigger>
+          <TabsTrigger value="users" className="flex items-center gap-1.5">
+            <Users size={13} />Enrolled ({users.length})
+          </TabsTrigger>
+          <TabsTrigger value="logs" className="flex items-center gap-1.5">
+            <LogIn size={13} />Log ({logs.length})
+            {deniedCount > 0 && (
+              <span className="ml-1 bg-red-500 text-white text-[10px] rounded-full px-1.5 py-0.5 leading-none">{deniedCount}</span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="analytics" className="flex items-center gap-1.5" onClick={loadAnalytics}>
+            <TrendingUp size={13} />Analytics
+          </TabsTrigger>
         </TabsList>
 
-        {/* Enrolled users */}
+        {/* ── Enrolled Users ─────────────────────────────────────────────── */}
         <TabsContent value="users" className="mt-4">
           {users.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 text-center text-muted-foreground">
-                <Fingerprint size={36} className="mx-auto mb-3 opacity-30" />
-                <p className="font-medium">No users enrolled</p>
-                <p className="text-sm mt-1">Users are provisioned automatically on contract activation.</p>
-              </CardContent>
-            </Card>
+            <Card><CardContent className="py-12 text-center text-muted-foreground">
+              <Fingerprint size={36} className="mx-auto mb-3 opacity-30" />
+              <p className="font-medium">No users enrolled</p>
+              <p className="text-sm mt-1">Users are provisioned automatically on contract activation.</p>
+            </CardContent></Card>
           ) : (
             <div className="space-y-2">
               {users.map(user => {
@@ -372,6 +396,11 @@ export default function CosecDeviceDetailPage() {
                 const isBlocked = user.enrollment_status === "blocked";
                 const isLoading = actionLoading[user.id];
                 const isReprovLoading = actionLoading[`reprov_${user.id}`];
+                const isAssigningCard = cardAssigning === user.id;
+                const canAssignCard = !isBlocked && (user.enrollment_status === "biometric_enrolled" || user.enrollment_status === "provisioned" || user.enrollment_status === "card_enrolled" || user.enrollment_status === "fully_enrolled");
+
+                // Denial count from logs for this entity
+                const denials = logs.filter(l => l.direction === "DENIED" && l.entity_name === user.entity_name).length;
 
                 return (
                   <Card key={user.id} className={isBlocked ? "opacity-60" : ""}>
@@ -380,54 +409,46 @@ export default function CosecDeviceDetailPage() {
                         <div className="min-w-0">
                           <div className="flex items-center gap-2 flex-wrap">
                             <span className="font-medium text-sm truncate">{user.entity_name}</span>
-                            <Badge variant="outline" className="text-xs shrink-0">
-                              {TYPE_LABELS[user.user_type]}
-                            </Badge>
-                            <Badge variant={cfg.variant} className="text-xs flex items-center gap-1 shrink-0">
-                              {cfg.icon}{cfg.label}
-                            </Badge>
+                            <Badge variant="outline" className="text-xs shrink-0">{TYPE_LABELS[user.user_type] ?? user.user_type}</Badge>
+                            <Badge variant={cfg.variant} className="text-xs shrink-0">{cfg.label}</Badge>
+                            {denials > 0 && (
+                              <Badge variant="destructive" className="text-xs shrink-0 flex items-center gap-0.5">
+                                <AlertTriangle size={10} />{denials} denied
+                              </Badge>
+                            )}
                           </div>
                           <div className="flex flex-wrap gap-3 mt-1 text-xs text-muted-foreground">
                             <span>ID: {user.cosec_user_id}</span>
                             {user.valid_until && <span>Valid until: {formatDate(user.valid_until)}</span>}
                             {user.nfc_card_number && <span className="flex items-center gap-1"><CreditCard size={11} />{user.nfc_card_number}</span>}
                             {user.provisioned_at && <span>Provisioned: {formatDate(user.provisioned_at)}</span>}
-                            {user.biometric_enrolled_at && <span>Biometric: {formatDate(user.biometric_enrolled_at)}</span>}
+                            {user.biometric_enrolled_at && <span className="flex items-center gap-1"><Fingerprint size={10} />Enrolled: {formatDate(user.biometric_enrolled_at)}</span>}
+                            {user.card_enrolled_at && <span>Card: {formatDate(user.card_enrolled_at)}</span>}
                             {user.blocked_at && <span className="text-red-500">Blocked: {formatDate(user.blocked_at)}</span>}
                           </div>
                         </div>
-                        <div className="flex gap-1.5 shrink-0">
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            className="text-xs"
-                            onClick={() => handleReprovision(user)}
-                            disabled={isReprovLoading}
-                            title="Re-provision on device"
-                          >
+                        <div className="flex gap-1.5 shrink-0 flex-wrap justify-end">
+                          {/* Assign Card */}
+                          {canAssignCard && (
+                            <Button size="sm" variant="outline" className="text-xs h-7"
+                              onClick={() => handleAssignCard(user)} disabled={isAssigningCard || cardAssigning !== null}>
+                              {isAssigningCard
+                                ? <><Loader2 size={12} className="animate-spin mr-1" />Waiting…</>
+                                : <><CreditCard size={12} className="mr-1" />Assign Card</>}
+                            </Button>
+                          )}
+                          {/* Re-provision */}
+                          <Button size="sm" variant="ghost" className="text-xs h-7 w-7 p-0" onClick={() => handleReprovision(user)} disabled={isReprovLoading} title="Re-provision on device">
                             {isReprovLoading ? <Loader2 size={13} className="animate-spin" /> : <RefreshCw size={13} />}
                           </Button>
+                          {/* Block / Restore */}
                           {isBlocked ? (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="text-xs"
-                              onClick={() => handleRestore(user)}
-                              disabled={isLoading}
-                            >
-                              {isLoading ? <Loader2 size={13} className="animate-spin mr-1" /> : <ShieldCheck size={13} className="mr-1" />}
-                              Restore
+                            <Button size="sm" variant="outline" className="text-xs h-7" onClick={() => handleRestore(user)} disabled={isLoading}>
+                              {isLoading ? <Loader2 size={12} className="animate-spin mr-1" /> : <ShieldCheck size={12} className="mr-1" />}Restore
                             </Button>
                           ) : (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              className="text-xs text-red-600 hover:text-red-700"
-                              onClick={() => handleBlock(user)}
-                              disabled={isLoading}
-                            >
-                              {isLoading ? <Loader2 size={13} className="animate-spin mr-1" /> : <ShieldOff size={13} className="mr-1" />}
-                              Block
+                            <Button size="sm" variant="outline" className="text-xs h-7 text-red-600 hover:text-red-700" onClick={() => handleBlock(user)} disabled={isLoading}>
+                              {isLoading ? <Loader2 size={12} className="animate-spin mr-1" /> : <ShieldOff size={12} className="mr-1" />}Block
                             </Button>
                           )}
                         </div>
@@ -440,49 +461,221 @@ export default function CosecDeviceDetailPage() {
           )}
         </TabsContent>
 
-        {/* Access log */}
+        {/* ── Access Log ─────────────────────────────────────────────────── */}
         <TabsContent value="logs" className="mt-4">
           {logs.length === 0 ? (
-            <Card>
-              <CardContent className="py-12 text-center text-muted-foreground">
-                <Clock size={36} className="mx-auto mb-3 opacity-30" />
-                <p className="font-medium">No access events yet</p>
-                <p className="text-sm mt-1">Events will appear here once the cron starts polling the device.</p>
-              </CardContent>
-            </Card>
+            <Card><CardContent className="py-12 text-center text-muted-foreground">
+              <Clock size={36} className="mx-auto mb-3 opacity-30" />
+              <p className="font-medium">No access events yet</p>
+              <p className="text-sm mt-1">Events appear once the 5-minute cron polls the device.</p>
+            </CardContent></Card>
           ) : (
-            <Card>
-              <CardContent className="p-0">
-                <div className="divide-y">
-                  {logs.map(log => (
-                    <div key={log.id} className="flex items-center gap-3 px-4 py-3">
-                      <div className="shrink-0">
-                        {log.direction === "IN" ? (
-                          <LogIn size={16} className="text-green-500" />
-                        ) : log.direction === "OUT" ? (
-                          <LogOut size={16} className="text-blue-500" />
-                        ) : (
-                          <Ban size={16} className="text-red-400" />
+            <Card><CardContent className="p-0">
+              <div className="divide-y">
+                {logs.map(log => (
+                  <div key={log.id} className={`flex items-center gap-3 px-4 py-2.5 ${log.direction === "DENIED" ? "bg-red-50/40" : ""}`}>
+                    <div className="shrink-0">
+                      {log.direction === "IN"     ? <LogIn  size={15} className="text-green-500" />
+                       : log.direction === "OUT"  ? <LogOut size={15} className="text-blue-500" />
+                                                  : <Ban    size={15} className="text-red-400" />}
+                    </div>
+                    <div className="flex-1 min-w-0">
+                      <span className="font-medium text-sm">{log.entity_name || `Ref #${log.cosec_ref_id}`}</span>
+                      <span className="text-xs text-muted-foreground ml-2">{TYPE_LABELS[log.user_type] ?? log.user_type}</span>
+                      {log.denial_reason && (
+                        <span className="ml-2 text-xs text-red-500">· {log.denial_reason}</span>
+                      )}
+                    </div>
+                    <div className="text-right shrink-0">
+                      <Badge variant={log.direction === "DENIED" ? "destructive" : "outline"} className="text-xs">{log.direction}</Badge>
+                      <div className="text-xs text-muted-foreground mt-0.5">{formatDate(log.event_time)}</div>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </CardContent></Card>
+          )}
+        </TabsContent>
+
+        {/* ── Analytics ──────────────────────────────────────────────────── */}
+        <TabsContent value="analytics" className="mt-4 space-y-6">
+          <div className="flex items-center justify-between">
+            <p className="text-sm text-muted-foreground">Analytics window</p>
+            <div className="flex gap-1.5">
+              {[7, 14, 30, 90].map(d => (
+                <Button key={d} size="sm" variant={analyticsDays === d ? "default" : "outline"}
+                  className="text-xs h-7" onClick={() => { setAnalyticsDays(d); loadAnalytics(); }}>
+                  {d}d
+                </Button>
+              ))}
+            </div>
+          </div>
+
+          {analyticsLoading ? (
+            <div className="flex items-center justify-center py-16"><Loader2 className="animate-spin text-muted-foreground" size={28} /></div>
+          ) : (
+            <>
+              {/* Live Presence */}
+              <div className="grid grid-cols-2 gap-3">
+                <Card>
+                  <CardContent className="py-4 px-5">
+                    <div className="flex items-center gap-2 text-muted-foreground text-xs mb-2"><Users size={12} />Inside right now</div>
+                    <p className="text-3xl font-bold text-green-600">{presentCount}</p>
+                    <p className="text-xs text-muted-foreground mt-1">of {presence.length} tracked</p>
+                    {presence.filter(p => p.is_inside).length > 0 && (
+                      <div className="mt-2 space-y-0.5">
+                        {presence.filter(p => p.is_inside).slice(0, 5).map(p => (
+                          <p key={p.entity_id} className="text-xs text-muted-foreground flex items-center gap-1">
+                            <span className="w-1.5 h-1.5 rounded-full bg-green-500 shrink-0" />
+                            {p.entity_name}
+                          </p>
+                        ))}
+                        {presence.filter(p => p.is_inside).length > 5 && (
+                          <p className="text-xs text-muted-foreground">+{presence.filter(p => p.is_inside).length - 5} more</p>
                         )}
                       </div>
-                      <div className="flex-1 min-w-0">
-                        <span className="font-medium text-sm">{log.entity_name || `Ref #${log.cosec_ref_id}`}</span>
-                        <span className="text-xs text-muted-foreground ml-2">{TYPE_LABELS[log.user_type] || log.user_type}</span>
-                      </div>
-                      <div className="text-right shrink-0">
-                        <Badge
-                          variant={log.direction === "DENIED" ? "destructive" : "outline"}
-                          className="text-xs"
-                        >
-                          {log.direction}
-                        </Badge>
-                        <div className="text-xs text-muted-foreground mt-0.5">{formatDate(log.event_time)}</div>
-                      </div>
+                    )}
+                  </CardContent>
+                </Card>
+                <Card>
+                  <CardContent className="py-4 px-5">
+                    <div className="flex items-center gap-2 text-muted-foreground text-xs mb-2"><AlertTriangle size={12} />Denial flags ({analyticsDays}d)</div>
+                    <p className="text-3xl font-bold text-red-600">{denialSummary.reduce((s, d) => s + d.count, 0)}</p>
+                    <p className="text-xs text-muted-foreground mt-1">{denialSummary.length} unique entities</p>
+                    {denialSummary.slice(0, 3).map((d, i) => (
+                      <p key={i} className="text-xs text-muted-foreground mt-1 truncate">
+                        {d.entity_name}: {d.count}× — {Object.keys(d.reasons)[0] ?? ""}
+                      </p>
+                    ))}
+                  </CardContent>
+                </Card>
+              </div>
+
+              {/* Heatmap — hour × day of week */}
+              {heatmap.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Peak Hours Heatmap</CardTitle>
+                    <p className="text-xs text-muted-foreground">Entry frequency by hour and day of week (IST) · last {analyticsDays} days</p>
+                  </CardHeader>
+                  <CardContent>
+                    <div className="overflow-x-auto">
+                      <table className="text-[10px] border-collapse w-full">
+                        <thead>
+                          <tr>
+                            <th className="pr-2 text-right text-muted-foreground font-normal w-8" />
+                            {Array.from({ length: 24 }, (_, h) => (
+                              <th key={h} className="text-center text-muted-foreground font-normal pb-1 px-px"
+                                style={{ minWidth: 18 }}>
+                                {h === 0 ? "12a" : h < 12 ? h : h === 12 ? "12p" : h - 12}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {DAY_NAMES.map((day, dow) => (
+                            <tr key={dow}>
+                              <td className="pr-2 text-right text-muted-foreground py-px">{day}</td>
+                              {Array.from({ length: 24 }, (_, hour) => {
+                                const cell = heatmap.find(h => h.day === dow && h.hour === hour);
+                                const count = cell?.count ?? 0;
+                                return (
+                                  <td key={hour} className="rounded-sm p-px" title={`${day} ${hour}:00 — ${count} entries`}>
+                                    <div className="w-4 h-4 rounded-sm flex items-center justify-center"
+                                      style={{ backgroundColor: heatColor(count) }}>
+                                      {count > 0 && (
+                                        <span className="text-[8px] font-medium" style={{ color: count / heatmapMax > 0.5 ? "#fff" : "#374151" }}>
+                                          {count}
+                                        </span>
+                                      )}
+                                    </div>
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
                     </div>
-                  ))}
-                </div>
-              </CardContent>
-            </Card>
+                    <div className="flex items-center gap-2 mt-2 text-xs text-muted-foreground">
+                      <span>Low</span>
+                      {HEATMAP_COLORS.map((c, i) => <span key={i} className="w-4 h-3 rounded-sm inline-block" style={{ backgroundColor: c }} />)}
+                      <span>High</span>
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Attendance table */}
+              {attendance.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm">Attendance Summary</CardTitle>
+                    <p className="text-xs text-muted-foreground">Unique days visited · last {analyticsDays} days · sorted by frequency</p>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <div className="divide-y">
+                      {attendance.map((a, i) => (
+                        <div key={a.entity_id} className="flex items-center gap-4 px-4 py-2.5">
+                          <span className="text-muted-foreground text-xs w-5 shrink-0">{i + 1}</span>
+                          <div className="flex-1 min-w-0">
+                            <span className="font-medium text-sm truncate block">{a.entity_name}</span>
+                            <span className="text-xs text-muted-foreground">{TYPE_LABELS[a.user_type] ?? a.user_type}</span>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="font-semibold text-sm">{a.unique_days} <span className="font-normal text-muted-foreground text-xs">days</span></p>
+                            <p className="text-xs text-muted-foreground">{a.total_entries} entries · last {formatDate(a.last_seen)}</p>
+                          </div>
+                          <div className="w-20 bg-muted/40 rounded-full h-1.5 shrink-0">
+                            <div className="bg-primary h-1.5 rounded-full" style={{ width: `${Math.min((a.unique_days / analyticsDays) * 100, 100)}%` }} />
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {/* Denial detail */}
+              {denialSummary.length > 0 && (
+                <Card>
+                  <CardHeader className="pb-2">
+                    <CardTitle className="text-sm flex items-center gap-2"><AlertTriangle size={13} className="text-red-500" />Denial Flags</CardTitle>
+                    <p className="text-xs text-muted-foreground">Entities with failed access attempts — investigate if repeated</p>
+                  </CardHeader>
+                  <CardContent className="p-0">
+                    <div className="divide-y">
+                      {denialSummary.map((d, i) => (
+                        <div key={i} className="flex items-center gap-4 px-4 py-2.5">
+                          <div className="flex-1 min-w-0">
+                            <span className="font-medium text-sm">{d.entity_name}</span>
+                            <div className="flex flex-wrap gap-1.5 mt-0.5">
+                              {Object.entries(d.reasons).map(([reason, count]) => (
+                                <span key={reason} className="text-xs bg-red-50 text-red-700 rounded px-1.5 py-0.5">
+                                  {reason}: {count}×
+                                </span>
+                              ))}
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0">
+                            <p className="font-bold text-red-600 text-lg">{d.count}</p>
+                            <p className="text-xs text-muted-foreground">last {formatDate(d.last_denied_at)}</p>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </CardContent>
+                </Card>
+              )}
+
+              {attendance.length === 0 && heatmap.every(h => h.count === 0) && (
+                <Card><CardContent className="py-12 text-center text-muted-foreground">
+                  <BarChart3 size={36} className="mx-auto mb-3 opacity-30" />
+                  <p className="font-medium">No analytics data yet</p>
+                  <p className="text-sm mt-1">Analytics populate once the device starts logging access events.</p>
+                </CardContent></Card>
+              )}
+            </>
           )}
         </TabsContent>
       </Tabs>
