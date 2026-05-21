@@ -243,6 +243,9 @@ export const createContractSchema = z.object({
   billing_cycle: z.enum(["monthly", "quarterly", "half_yearly", "yearly"]),
   tenure_months: z.number().int().positive("Tenure must be positive"),
   start_date: z.string().min(1, "Start date is required"),
+  // Explicit occupancy end date. When provided it is authoritative; otherwise
+  // end date is derived from start_date + tenure_months.
+  end_date: z.string().optional(),
   seats: z.number().int().positive("Seats must be positive"),
   monthly_membership_fee: z.number().positive("Monthly fee must be positive"),
   // Membership agreement fields
@@ -262,7 +265,10 @@ export const createContractSchema = z.object({
   notes: z.string().optional(),
   // Lead data to save back
   pan_number: z.string().optional(),
-});
+}).refine(
+  (d) => !d.end_date || d.end_date >= d.start_date,
+  { message: "End date must be on or after the start date", path: ["end_date"] }
+);
 
 export type CreateContractInput = z.input<typeof createContractSchema>;
 
