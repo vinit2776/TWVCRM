@@ -16,6 +16,7 @@ interface UseLeadsOptions {
   location_id?: string;
   sort_by?: string;
   sort_order?: "asc" | "desc";
+  include_archived?: boolean;
 }
 
 export function useLeads(options: UseLeadsOptions = {}) {
@@ -31,6 +32,7 @@ export function useLeads(options: UseLeadsOptions = {}) {
       location_id: options.location_id,
       sort_by: options.sort_by,
       sort_order: options.sort_order,
+      include_archived: options.include_archived || undefined,
     },
   });
 }
