@@ -5,6 +5,7 @@ import { logAudit, diffChanges } from "@/lib/audit";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { CONTRACT_STATUS_TRANSITIONS } from "@/lib/constants";
 import { generateMonthlyStatements } from "@/lib/billing";
+import { provisionUser, setUserActive, deleteUserFromDevice, contractCosecId } from "@/lib/cosec";
 
 export async function GET(
   _request: NextRequest,
@@ -369,6 +370,116 @@ export async function PATCH(
         }
       })();
     }
+  }
+
+  // ── COSEC: provision access on activation ─────────────────────────────────
+  if (body.status === "active" && oldContract.status !== "active") {
+    (async () => {
+      try {
+        const admin = createAdminClient();
+        // Find the COSEC device for this contract's location
+        const { data: device } = await admin
+          .from("cosec_devices")
+          .select("id, device_ip, device_port, device_password")
+          .eq("location_id", oldContract.location_id)
+          .eq("is_enabled", true)
+          .maybeSingle();
+
+        if (!device) return; // No device configured for this location — skip silently
+
+        // Fetch contract name for display on device
+        const { data: contractRow } = await admin
+          .from("contracts")
+          .select("contract_number, end_date, lead:leads!contracts_lead_id_fkey(company, first_name, last_name)")
+          .eq("id", id)
+          .single();
+
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const lead = contractRow?.lead as any;
+        const displayName = (
+          lead?.company ||
+          `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() ||
+          contractRow?.contract_number ||
+          id
+        ).slice(0, 15);
+
+        const cosecUserId = contractCosecId(id);
+        // Assign a unique numeric ref_id in the contract range (1-49999)
+        // Use the last 5 digits of the contract's UUID numeric hash
+        const cosecRefId = Math.abs(
+          id.replace(/-/g, "").slice(0, 8).split("").reduce((a, c) => a * 31 + c.charCodeAt(0), 0)
+        ) % 49999 + 1;
+
+        const validUntil = contractRow?.end_date ? new Date(contractRow.end_date) : undefined;
+
+        // Push stub user to device — inactive until biometric enrolled
+        await provisionUser(
+          { ip: device.device_ip, port: device.device_port, password: device.device_password },
+          {
+            cosecUserId,
+            cosecRefId,
+            name: displayName,
+            userActive: false,
+            validUntil,
+            selfEnrollmentEnable: true,
+          }
+        );
+
+        // Record in DB
+        await admin.from("cosec_access_users").upsert({
+          device_id: device.id,
+          cosec_user_id: cosecUserId,
+          cosec_ref_id: cosecRefId,
+          user_type: "contract",
+          entity_id: id,
+          enrollment_status: "provisioned",
+          valid_until: contractRow?.end_date ?? null,
+          provisioned_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }, { onConflict: "device_id,cosec_user_id" });
+
+      } catch (err) {
+        // Non-fatal — COSEC failure must not block contract activation
+        console.error("[contract-activate] COSEC provision failed:", err);
+      }
+    })();
+  }
+
+  // ── COSEC: block access on termination/expiry ─────────────────────────────
+  if (
+    (body.status === "terminated" || body.status === "expired") &&
+    oldContract.status === "active"
+  ) {
+    (async () => {
+      try {
+        const admin = createAdminClient();
+        const { data: accessUser } = await admin
+          .from("cosec_access_users")
+          .select("id, cosec_user_id, device:cosec_devices(device_ip, device_port, device_password)")
+          .eq("entity_id", id)
+          .eq("user_type", "contract")
+          .not("enrollment_status", "eq", "deleted")
+          .maybeSingle();
+
+        if (!accessUser) return;
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const dev = accessUser.device as any;
+        if (!dev) return;
+
+        await setUserActive(
+          { ip: dev.device_ip, port: dev.device_port, password: dev.device_password },
+          accessUser.cosec_user_id,
+          false
+        );
+
+        await admin
+          .from("cosec_access_users")
+          .update({ enrollment_status: "blocked", blocked_at: new Date().toISOString(), updated_at: new Date().toISOString() })
+          .eq("id", accessUser.id);
+      } catch (err) {
+        console.error("[contract-terminate] COSEC block failed:", err);
+      }
+    })();
   }
 
   // On termination: revoke active vouchers and notify IT
