@@ -110,6 +110,21 @@ export async function DELETE(
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
+  // Hard delete cascades to proposals/contracts/billing — admin only.
+  // Everyone else disables the lead via POST /api/leads/[id]/archive.
+  const { data: dbUser } = await supabase
+    .from("users")
+    .select("id, role")
+    .eq("auth_id", user.id)
+    .single();
+
+  if (!dbUser || dbUser.role !== "admin") {
+    return NextResponse.json(
+      { error: "Only admin can permanently delete a lead. Use Disable instead." },
+      { status: 403 }
+    );
+  }
+
   // Capture before delete for audit
   const { data: oldLead } = await supabase.from("leads").select("*").eq("id", id).single();
 
@@ -119,7 +134,6 @@ export async function DELETE(
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
   if (dbUser?.id) {
     logAudit(supabase, {
       entityType: "lead",

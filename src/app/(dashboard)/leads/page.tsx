@@ -50,6 +50,7 @@ export default function LeadsPage() {
   const [locationFilter, setLocationFilter] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState("");
   const [importOpen, setImportOpen] = useState(false);
+  const [showDisabled, setShowDisabled] = useState(false);
 
   // Live enquiry data from shared context (real-time)
   const {
@@ -70,6 +71,7 @@ export default function LeadsPage() {
     status: statusFilter || undefined,
     source: sourceFilter || undefined,
     location_id: locationFilter || undefined,
+    include_archived: showDisabled,
   });
 
   // Client-side: sort leads so new form leads appear first within the current page
@@ -275,6 +277,15 @@ export default function LeadsPage() {
               placeholder="All Locations"
             />
           </div>
+          <Button
+            variant={showDisabled ? "default" : "outline"}
+            onClick={() => {
+              setShowDisabled((v) => !v);
+              setPage(1);
+            }}
+          >
+            {showDisabled ? "Hide disabled" : "Show disabled"}
+          </Button>
         </div>
       </div>
 
@@ -329,7 +340,7 @@ export default function LeadsPage() {
                       ${isFormLead
                         ? "bg-emerald-50/40 hover:bg-emerald-50 dark:bg-emerald-950/10"
                         : "hover:bg-muted/30"
-                      }`}
+                      }${lead.archived_at ? " opacity-60" : ""}`}
                     onClick={() => router.push(`/leads/${lead.id}`)}
                   >
                     <td className="px-4 py-3">
@@ -361,6 +372,11 @@ export default function LeadsPage() {
                         {!lead._followup?.overdue && !lead._followup?.due_today && lead._followup?.upcoming && (
                           <span title="Upcoming follow-up" className="shrink-0">
                             <Clock className="h-3.5 w-3.5 text-blue-500" />
+                          </span>
+                        )}
+                        {lead.archived_at && (
+                          <span className="shrink-0 text-[10px] font-bold text-muted-foreground bg-muted px-1.5 py-0.5 rounded uppercase">
+                            Disabled
                           </span>
                         )}
                       </div>

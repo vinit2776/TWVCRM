@@ -109,13 +109,19 @@ export async function POST(request: NextRequest) {
 
   const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
 
-  // Calculate end_date from start_date + tenure_months, minus 1 day.
-  // A contract starting Nov 1 for 11 months ends Sep 30 (last day of month 11),
-  // not Oct 1 (which is the start of month 12).
+  // End date: use the explicit end_date when the form supplies one (the
+  // start/end-date picker). Otherwise derive it from start_date + tenure_months
+  // minus 1 day — a contract starting Nov 1 for 11 months ends Sep 30.
   const startDate = new Date(d.start_date);
-  const endDate = new Date(startDate);
-  endDate.setMonth(endDate.getMonth() + d.tenure_months);
-  endDate.setDate(endDate.getDate() - 1);
+  let endDateStr: string;
+  if (d.end_date) {
+    endDateStr = d.end_date;
+  } else {
+    const endDate = new Date(startDate);
+    endDate.setMonth(endDate.getMonth() + d.tenure_months);
+    endDate.setDate(endDate.getDate() - 1);
+    endDateStr = endDate.toISOString().split("T")[0];
+  }
 
   // Calculate next_billing_date based on billing_cycle
   const nextBillingDate = new Date(startDate);
@@ -143,7 +149,7 @@ export async function POST(request: NextRequest) {
       billing_cycle: d.billing_cycle,
       tenure_months: d.tenure_months,
       start_date: d.start_date,
-      end_date: endDate.toISOString().split("T")[0],
+      end_date: endDateStr,
       next_billing_date: nextBillingDate.toISOString().split("T")[0],
       seats: d.seats,
       terms_and_conditions: d.terms_and_conditions,

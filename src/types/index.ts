@@ -137,6 +137,10 @@ export interface Lead {
   converted_at?: string;
   lost_at?: string;
   lost_reason?: string;
+  // Soft-disable
+  archived_at?: string | null;
+  archived_by?: string | null;
+  archive_reason?: string | null;
 }
 
 // ==========================================
@@ -685,7 +689,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "cheque_signed";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed";
 export type AuditEntityType =
   | "lead"
   | "activity"

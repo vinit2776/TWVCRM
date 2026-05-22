@@ -26,6 +26,7 @@ export async function GET(request: NextRequest) {
   const sort_by = searchParams.get("sort_by") || "created_at";
   const sort_order = searchParams.get("sort_order") || "desc";
   const phone_exact = searchParams.get("phone_exact");
+  const include_archived = searchParams.get("include_archived") === "true";
 
   // Quick phone lookup — returns just id, id_proof_path fields
   if (phone_exact) {
@@ -48,6 +49,8 @@ export async function GET(request: NextRequest) {
       { count: "exact" }
     );
 
+  // Hide disabled (archived) leads unless explicitly requested.
+  if (!include_archived) query = query.is("archived_at", null);
   if (status) query = query.eq("status", status);
   if (source) query = query.eq("source", source);
   if (assigned_to) query = query.eq("assigned_to", assigned_to);

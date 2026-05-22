@@ -75,6 +75,7 @@ export function CreateContractDialog({
   const [billingCycle, setBillingCycle] = useState("");
   const [seats, setSeats] = useState<number>(1);
   const [startDate, setStartDate] = useState("");
+  const [endDate, setEndDate] = useState("");
   const [tenureMonths, setTenureMonths] = useState<number>(12);
   const [lockInMonths, setLockInMonths] = useState<number>(10);
   const [noticePeriodMonths, setNoticePeriodMonths] = useState<number>(2);
@@ -190,31 +191,77 @@ export function CreateContractDialog({
     }
   }, [selectedProposal]);
 
-  // Calculated fields
-  const calculatedEndDate = useMemo(() => {
-    if (!startDate || !tenureMonths) return "";
-    const start = new Date(startDate);
-    start.setMonth(start.getMonth() + tenureMonths);
-    start.setDate(start.getDate() - 1); // end = last day of final month
-    return start.toISOString().split("T")[0];
-  }, [startDate, tenureMonths]);
+  // Actual contract length, derived from the start + end dates. The end date
+  // is authoritative; tenure (months) is computed for the agreement / display.
+  const derivedTenureMonths = useMemo(() => {
+    if (!startDate || !endDate || endDate < startDate) return 0;
+    const s = new Date(startDate + "T00:00:00Z");
+    const e = new Date(endDate + "T00:00:00Z");
+    e.setUTCDate(e.getUTCDate() + 1); // make end exclusive
+    let months =
+      (e.getUTCFullYear() - s.getUTCFullYear()) * 12 +
+      (e.getUTCMonth() - s.getUTCMonth());
+    if (e.getUTCDate() < s.getUTCDate()) months -= 1;
+    return Math.max(1, months);
+  }, [startDate, endDate]);
+
+  // Human-readable span, e.g. "3 months, 13 days".
+  const durationLabel = useMemo(() => {
+    if (!startDate || !endDate || endDate < startDate) return "";
+    const s = new Date(startDate + "T00:00:00Z");
+    const e = new Date(endDate + "T00:00:00Z");
+    e.setUTCDate(e.getUTCDate() + 1); // end is inclusive — make it exclusive
+    let months =
+      (e.getUTCFullYear() - s.getUTCFullYear()) * 12 +
+      (e.getUTCMonth() - s.getUTCMonth());
+    let days = e.getUTCDate() - s.getUTCDate();
+    if (days < 0) {
+      months -= 1;
+      days += new Date(Date.UTC(e.getUTCFullYear(), e.getUTCMonth(), 0)).getUTCDate();
+    }
+    const parts: string[] = [];
+    if (months > 0) parts.push(`${months} month${months !== 1 ? "s" : ""}`);
+    if (days > 0) parts.push(`${days} day${days !== 1 ? "s" : ""}`);
+    return parts.join(", ") || "0 days";
+  }, [startDate, endDate]);
 
   const ifrsdAmount = monthlyFee * securityDepositMonths;
-  const maxNoticePeriod = Math.max(3, tenureMonths - lockInMonths);
+  const maxNoticePeriod = Math.max(3, derivedTenureMonths - lockInMonths);
 
+  // Auto-fill the end date when a start date is set but no end date yet.
+  useEffect(() => {
+    if (startDate && !endDate && tenureMonths) {
+      const s = new Date(startDate);
+      s.setMonth(s.getMonth() + tenureMonths);
+      s.setDate(s.getDate() - 1);
+      setEndDate(s.toISOString().split("T")[0]);
+    }
+  }, [startDate, endDate, tenureMonths]);
+
+  // Keep lock-in / notice period within the actual contract length.
+  useEffect(() => {
+    if (derivedTenureMonths > 0) {
+      setLockInMonths((prev) => Math.min(prev, derivedTenureMonths));
+      setNoticePeriodMonths((prev) => Math.min(prev, Math.max(3, derivedTenureMonths)));
+    }
+  }, [derivedTenureMonths]);
+
+  // Quick-fill dropdown: picking a whole-month tenure sets the end date.
   const handleTenureChange = (val: string) => {
     const t = parseInt(val);
-    const newLockIn = Math.min(lockInMonths, t);
     setTenureMonths(t);
-    setLockInMonths(newLockIn);
-    const newMax = Math.max(3, t - newLockIn);
-    if (noticePeriodMonths > newMax) setNoticePeriodMonths(newMax);
+    if (startDate) {
+      const s = new Date(startDate);
+      s.setMonth(s.getMonth() + t);
+      s.setDate(s.getDate() - 1);
+      setEndDate(s.toISOString().split("T")[0]);
+    }
   };
 
   const handleLockInChange = (val: string) => {
     const l = parseInt(val);
     setLockInMonths(l);
-    const newMax = Math.max(3, tenureMonths - l);
+    const newMax = Math.max(3, derivedTenureMonths - l);
     if (noticePeriodMonths > newMax) setNoticePeriodMonths(newMax);
   };
 
@@ -240,6 +287,7 @@ export function CreateContractDialog({
     setBillingCycle("");
     setSeats(1);
     setStartDate("");
+    setEndDate("");
     setTenureMonths(12);
     setLockInMonths(10);
     setNoticePeriodMonths(2);
@@ -290,8 +338,12 @@ export function CreateContractDialog({
       );
       if (!proceed) return;
     }
-    if (!tenureMonths) {
-      toast.error("Please select a tenure");
+    if (!endDate) {
+      toast.error("Please select an end date");
+      return;
+    }
+    if (endDate < startDate) {
+      toast.error("End date must be on or after the start date");
       return;
     }
     if (seats <= 0) {
@@ -333,8 +385,9 @@ export function CreateContractDialog({
       proposal_id: source === "proposal" ? selectedProposalId : undefined,
       location_id: locationId || undefined,
       billing_cycle: billingCycle,
-      tenure_months: tenureMonths,
+      tenure_months: derivedTenureMonths,
       start_date: startDate,
+      end_date: endDate,
       seats,
       monthly_membership_fee: monthlyFee,
       workspace_description: workspaceDescription.trim(),
@@ -669,8 +722,22 @@ export function CreateContractDialog({
               </div>
               <div className="space-y-2">
                 <Label>
-                  Tenure <span className="text-destructive">*</span>
+                  End Date <span className="text-destructive">*</span>
                 </Label>
+                <Input
+                  type="date"
+                  value={endDate}
+                  min={startDate || undefined}
+                  onChange={(e) => setEndDate(e.target.value)}
+                />
+                {durationLabel && (
+                  <p className="text-xs text-muted-foreground">
+                    Duration: {durationLabel}
+                  </p>
+                )}
+              </div>
+              <div className="space-y-2">
+                <Label>Tenure (quick-fill)</Label>
                 <Select value={String(tenureMonths)} onValueChange={handleTenureChange}>
                   <SelectTrigger>
                     <SelectValue />
@@ -683,6 +750,9 @@ export function CreateContractDialog({
                     ))}
                   </SelectContent>
                 </Select>
+                <p className="text-xs text-muted-foreground">
+                  Sets the end date. Edit the end date for an exact period.
+                </p>
               </div>
               <div className="space-y-2">
                 <Label>
@@ -693,7 +763,7 @@ export function CreateContractDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: tenureMonths }, (_, i) => i + 1).map((m) => (
+                    {Array.from({ length: Math.max(derivedTenureMonths, 1) }, (_, i) => i + 1).map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m} month{m !== 1 ? "s" : ""}
                       </SelectItem>
@@ -743,15 +813,20 @@ export function CreateContractDialog({
             {/* Calculated summary */}
             {monthlyFee > 0 && startDate && (
               <div className="rounded-md border bg-muted/30 p-4 text-sm space-y-1">
-                {calculatedEndDate && (
+                {endDate && (
                   <p>
-                    <span className="text-muted-foreground">End Date:</span>{" "}
+                    <span className="text-muted-foreground">Term:</span>{" "}
                     <span className="font-medium">
-                      {new Date(calculatedEndDate).toLocaleDateString("en-IN", {
+                      {new Date(endDate).toLocaleDateString("en-IN", {
                         timeZone: "Asia/Kolkata",
                         year: "numeric", month: "short", day: "numeric",
                       })}
                     </span>
+                    {durationLabel && (
+                      <span className="text-muted-foreground text-xs ml-1">
+                        ({durationLabel})
+                      </span>
+                    )}
                   </p>
                 )}
                 <p>
