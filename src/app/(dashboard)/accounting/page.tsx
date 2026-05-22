@@ -71,6 +71,7 @@ type VendorBillItem = {
   approval_code: string | null;
   approver: { id: string; full_name: string } | null;
   payment_mode: string | null;
+  cheque_signed_at: string | null;
   payment_reference: string | null;
   payment_date: string | null;
   vendor_id: string;
@@ -962,7 +963,15 @@ export default function AccountingPage() {
                                     : "—"}
                                 </td>
                                 <td className="px-4 py-2.5">
-                                  <span className="text-[10px] font-medium bg-green-100 text-green-800 px-1.5 py-0.5 rounded-full">Paid</span>
+                                  <div className="flex flex-col gap-1 items-start">
+                                    <span className="text-[10px] font-medium bg-green-100 text-green-800 px-1.5 py-0.5 rounded-full">Paid</span>
+                                    {bill.payment_mode === "cheque" && !bill.cheque_signed_at && (
+                                      <span className="text-[10px] font-medium bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded-full whitespace-nowrap">⚠ Sign cheque</span>
+                                    )}
+                                    {bill.payment_mode === "cheque" && bill.cheque_signed_at && (
+                                      <span className="text-[10px] font-medium bg-emerald-100 text-emerald-800 px-1.5 py-0.5 rounded-full whitespace-nowrap">✓ Cheque signed</span>
+                                    )}
+                                  </div>
                                 </td>
                               </tr>
                             ))}

@@ -371,3 +371,33 @@ export function uuidToRefId(uuid: string, min: number, max: number): number {
 export function generatePin(): string {
   return String(Math.floor(100000 + Math.random() * 900000));
 }
+
+// ─── Manual contract linking ───────────────────────────────────────────────────
+
+export interface CosecUserInfo {
+  userId: string;   // e.g. "C1a2b3c4d5e6f7a8" or "M..."
+  refUserId: number;
+  name: string;
+  isActive: boolean;
+}
+
+/** Query a COSEC device to get user info by numeric ref-user-id */
+export async function getUserByRefId(device: CosecDevice, refUserId: number): Promise<CosecUserInfo | null> {
+  try {
+    const xml = await cosecGet(device, "users", {
+      action: "get",
+      "ref-user-id": refUserId,
+      format: "xml",
+    });
+    const userId = xmlValue(xml, "user-id");
+    if (!userId) return null;
+    return {
+      userId,
+      refUserId,
+      name: xmlValue(xml, "name"),
+      isActive: xmlValue(xml, "user-active") === "1",
+    };
+  } catch {
+    return null;
+  }
+}

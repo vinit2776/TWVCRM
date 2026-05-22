@@ -20,9 +20,25 @@ import {
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+interface UnlinkedRef {
+  cosec_ref_id: number;
+  entry_count: number;
+  last_seen: string;
+  directions: { IN: number; OUT: number; DENIED: number };
+}
+
+interface ContractOption {
+  id: string;
+  contract_number: string;
+  entity_name: string;
+  valid_until: string | null;
+  status: string;
+}
+
 interface Device {
   id: string; label: string; device_ip: string; device_port: number;
-  is_enabled: boolean; last_ping_at: string | null; last_ping_success: boolean | null;
+  is_enabled: boolean; device_category: "entry_point" | "business_centre";
+  last_ping_at: string | null; last_ping_success: boolean | null;
   last_polled_at: string | null; last_seq_number: number;
   location: { name: string };
 }
@@ -106,6 +122,15 @@ export default function CosecDeviceDetailPage() {
   // Card assign state
   const [cardAssigning, setCardAssigning]           = useState<string | null>(null); // access_user_id being assigned
 
+  // Unlinked tab state
+  const [unlinked, setUnlinked]               = useState<UnlinkedRef[]>([]);
+  const [unlinkedLoading, setUnlinkedLoading] = useState(false);
+  const [linkDialog, setLinkDialog]           = useState<{ open: boolean; ref: UnlinkedRef | null }>({ open: false, ref: null });
+  const [contracts, setContracts]             = useState<ContractOption[]>([]);
+  const [contractSearch, setContractSearch]   = useState("");
+  const [selectedContract, setSelectedContract] = useState<string>("");
+  const [linking, setLinking]                 = useState(false);
+
   const load = useCallback(async () => {
     setLoading(true);
     const [{ data: dev }, { data: accessUsers }, { data: accessLogs }] = await Promise.all([
@@ -180,6 +205,88 @@ export default function CosecDeviceDetailPage() {
     setAnalyticsLoading(false);
   }, [id, analyticsDays]);
 
+  const loadUnlinked = useCallback(async () => {
+    setUnlinkedLoading(true);
+    // Fetch all ref IDs that have logs for this device
+    const { data: logRefs } = await supabase
+      .from("access_logs")
+      .select("cosec_ref_id, direction, event_time")
+      .eq("device_id", id)
+      .not("cosec_ref_id", "is", null);
+
+    // Fetch all linked ref IDs for this device
+    const { data: linked } = await supabase
+      .from("cosec_access_users")
+      .select("cosec_ref_id")
+      .eq("device_id", id);
+
+    const linkedSet = new Set((linked ?? []).map(u => u.cosec_ref_id));
+
+    // Group unlinked
+    const refMap = new Map<number, UnlinkedRef>();
+    for (const row of logRefs ?? []) {
+      if (row.cosec_ref_id === null || linkedSet.has(row.cosec_ref_id)) continue;
+      const ref = row.cosec_ref_id as number;
+      if (!refMap.has(ref)) {
+        refMap.set(ref, { cosec_ref_id: ref, entry_count: 0, last_seen: row.event_time, directions: { IN: 0, OUT: 0, DENIED: 0 } });
+      }
+      const entry = refMap.get(ref)!;
+      entry.entry_count++;
+      if (row.event_time > entry.last_seen) entry.last_seen = row.event_time;
+      if (row.direction === "IN") entry.directions.IN++;
+      else if (row.direction === "OUT") entry.directions.OUT++;
+      else entry.directions.DENIED++;
+    }
+
+    setUnlinked([...refMap.values()].sort((a, b) => b.entry_count - a.entry_count));
+    setUnlinkedLoading(false);
+  }, [id]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadContracts = useCallback(async () => {
+    const { data } = await supabase
+      .from("contracts")
+      .select("id, contract_number, valid_until, status, lead:leads!contracts_lead_id_fkey(company, first_name, last_name)")
+      .in("status", ["active", "pending"])
+      .order("contract_number");
+    setContracts((data ?? []).map((c: any) => { // eslint-disable-line @typescript-eslint/no-explicit-any
+      const lead = Array.isArray(c.lead) ? c.lead[0] : c.lead as any; // eslint-disable-line @typescript-eslint/no-explicit-any
+      return {
+        id: c.id,
+        contract_number: c.contract_number,
+        entity_name: lead?.company || `${lead?.first_name ?? ""} ${lead?.last_name ?? ""}`.trim() || c.contract_number,
+        valid_until: c.valid_until,
+        status: c.status,
+      };
+    }));
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  async function handleLink() {
+    if (!linkDialog.ref || !selectedContract) return;
+    setLinking(true);
+    try {
+      const res = await fetch("/api/cosec/link-contract-user", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          device_id: id,
+          cosec_ref_id: linkDialog.ref.cosec_ref_id,
+          contract_id: selectedContract,
+        }),
+      });
+      const result = await res.json();
+      if (result.ok) {
+        toast.success(`Linked to ${result.entity_name}`);
+        setLinkDialog({ open: false, ref: null });
+        setSelectedContract("");
+        await Promise.all([load(), loadUnlinked()]);
+      } else {
+        toast.error(result.error || "Failed to link");
+      }
+    } finally {
+      setLinking(false);
+    }
+  }
+
   useEffect(() => { load(); }, [load]);
 
   // ── Action handlers ────────────────────────────────────────────────────────
@@ -194,6 +301,16 @@ export default function CosecDeviceDetailPage() {
       else toast.error(`Unreachable: ${result.error}`);
       await load();
     } finally { setPinging(false); }
+  }
+
+  async function handleSetDeviceCategory(category: "entry_point" | "business_centre") {
+    if (!device || device.device_category === category) return;
+    const { error } = await supabase.from("cosec_devices").update({ device_category: category }).eq("id", id);
+    if (error) { toast.error("Failed to update device category"); return; }
+    setDevice(d => d ? { ...d, device_category: category } : d);
+    toast.success(category === "entry_point"
+      ? "Device set to Entry Point — members will enroll here permanently"
+      : "Device set to Business Centre — temporary booking-based PIN access only");
   }
 
   async function handleOpenDoor() {
@@ -303,6 +420,21 @@ export default function CosecDeviceDetailPage() {
               {isOnline === true ? <Wifi size={20} className="text-green-500" /> : isOnline === false ? <WifiOff size={20} className="text-red-500" /> : <Wifi size={20} className="text-muted-foreground opacity-40" />}
               {device.label}
               <Badge variant={device.is_enabled ? "default" : "secondary"} className="text-xs">{device.is_enabled ? "Enabled" : "Disabled"}</Badge>
+              {/* Device category segmented control */}
+              <span className="inline-flex rounded-md border text-xs overflow-hidden select-none" title="Entry Point: permanent member enrollment (biometric/card). Business Centre: temporary booking-based PIN access only.">
+                <button
+                  onClick={() => handleSetDeviceCategory("entry_point")}
+                  className={`px-2.5 py-1 transition-colors ${device.device_category === "entry_point" ? "bg-blue-600 text-white font-medium" : "bg-white text-muted-foreground hover:bg-blue-50 hover:text-blue-700"}`}
+                >
+                  Entry Point
+                </button>
+                <button
+                  onClick={() => handleSetDeviceCategory("business_centre")}
+                  className={`px-2.5 py-1 border-l transition-colors ${device.device_category === "business_centre" ? "bg-amber-500 text-white font-medium" : "bg-white text-muted-foreground hover:bg-amber-50 hover:text-amber-700"}`}
+                >
+                  Business Centre
+                </button>
+              </span>
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
               {(device.location as { name: string })?.name} · {device.device_ip}:{device.device_port}
@@ -374,6 +506,12 @@ export default function CosecDeviceDetailPage() {
             <LogIn size={13} />Log ({logs.length})
             {deniedCount > 0 && (
               <span className="ml-1 bg-red-500 text-white text-[10px] rounded-full px-1.5 py-0.5 leading-none">{deniedCount}</span>
+            )}
+          </TabsTrigger>
+          <TabsTrigger value="unlinked" className="flex items-center gap-1.5" onClick={() => { loadUnlinked(); loadContracts(); }}>
+            <AlertTriangle size={13} />Unlinked
+            {unlinked.length > 0 && (
+              <span className="ml-1 bg-amber-500 text-white text-[10px] rounded-full px-1.5 py-0.5 leading-none">{unlinked.length}</span>
             )}
           </TabsTrigger>
           <TabsTrigger value="analytics" className="flex items-center gap-1.5" onClick={loadAnalytics}>
@@ -494,6 +632,100 @@ export default function CosecDeviceDetailPage() {
                 ))}
               </div>
             </CardContent></Card>
+          )}
+        </TabsContent>
+
+        {/* ── Unlinked ───────────────────────────────────────────────────── */}
+        <TabsContent value="unlinked" className="mt-4">
+          {unlinkedLoading ? (
+            <div className="flex items-center justify-center py-16"><Loader2 className="animate-spin text-muted-foreground" size={24} /></div>
+          ) : unlinked.length === 0 ? (
+            <Card><CardContent className="py-12 text-center text-muted-foreground">
+              <ShieldCheck size={36} className="mx-auto mb-3 opacity-30" />
+              <p className="font-medium">No unlinked enrollments</p>
+              <p className="text-sm mt-1">All ref IDs with access logs are linked to a contract, employee or booking.</p>
+            </CardContent></Card>
+          ) : (
+            <>
+              <p className="text-sm text-muted-foreground mb-3">
+                {unlinked.length} ref ID{unlinked.length !== 1 ? "s" : ""} with access events are not yet linked to any contract or user. Link them so their logs are attributed correctly.
+              </p>
+              <div className="space-y-2">
+                {unlinked.map(ref => (
+                  <Card key={ref.cosec_ref_id}>
+                    <CardContent className="py-3 px-4">
+                      <div className="flex items-center justify-between gap-4">
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-mono font-medium text-sm">Ref #{ref.cosec_ref_id}</span>
+                            <Badge variant="outline" className="text-xs">{ref.entry_count} events</Badge>
+                          </div>
+                          <div className="flex flex-wrap gap-3 mt-1 text-xs text-muted-foreground">
+                            <span>Last seen: {formatDate(ref.last_seen)}</span>
+                            {ref.directions.IN > 0 && <span className="text-green-600">↑ {ref.directions.IN} in</span>}
+                            {ref.directions.OUT > 0 && <span className="text-blue-600">↓ {ref.directions.OUT} out</span>}
+                            {ref.directions.DENIED > 0 && <span className="text-red-500">✗ {ref.directions.DENIED} denied</span>}
+                          </div>
+                        </div>
+                        <Button size="sm" variant="outline" className="text-xs h-7 shrink-0"
+                          onClick={() => { setLinkDialog({ open: true, ref }); setSelectedContract(""); setContractSearch(""); }}>
+                          Link to Contract
+                        </Button>
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
+
+              {/* Link dialog */}
+              {linkDialog.open && linkDialog.ref && (
+                <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4">
+                  <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-6 space-y-4">
+                    <div>
+                      <h2 className="text-lg font-semibold">Link Ref #{linkDialog.ref.cosec_ref_id}</h2>
+                      <p className="text-sm text-muted-foreground mt-1">
+                        Select the contract this enrolled user belongs to. The device will be queried automatically to discover their COSEC user ID.
+                      </p>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground mb-1.5 block">Search contract</label>
+                      <input
+                        className="w-full border rounded-md px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30"
+                        placeholder="Company name or contract #..."
+                        value={contractSearch}
+                        onChange={e => setContractSearch(e.target.value)}
+                      />
+                    </div>
+                    <div className="max-h-52 overflow-y-auto border rounded-md divide-y">
+                      {contracts
+                        .filter(c => !contractSearch || c.entity_name.toLowerCase().includes(contractSearch.toLowerCase()) || c.contract_number.toLowerCase().includes(contractSearch.toLowerCase()))
+                        .map(c => (
+                          <div key={c.id}
+                            className={`px-3 py-2.5 cursor-pointer text-sm hover:bg-muted/40 ${selectedContract === c.id ? "bg-primary/5 font-medium" : ""}`}
+                            onClick={() => setSelectedContract(c.id)}>
+                            <div className="flex items-center justify-between">
+                              <span>{c.entity_name}</span>
+                              <Badge variant="outline" className="text-xs ml-2 shrink-0">{c.contract_number}</Badge>
+                            </div>
+                            {c.valid_until && <p className="text-xs text-muted-foreground mt-0.5">Valid until {formatDate(c.valid_until)}</p>}
+                          </div>
+                        ))}
+                      {contracts.filter(c => !contractSearch || c.entity_name.toLowerCase().includes(contractSearch.toLowerCase()) || c.contract_number.toLowerCase().includes(contractSearch.toLowerCase())).length === 0 && (
+                        <p className="text-sm text-muted-foreground text-center py-4">No contracts found</p>
+                      )}
+                    </div>
+                    <div className="flex gap-2 justify-end pt-2">
+                      <Button variant="outline" size="sm" onClick={() => setLinkDialog({ open: false, ref: null })} disabled={linking}>
+                        Cancel
+                      </Button>
+                      <Button size="sm" onClick={handleLink} disabled={!selectedContract || linking}>
+                        {linking ? <><Loader2 size={13} className="animate-spin mr-1" />Linking…</> : "Link"}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              )}
+            </>
           )}
         </TabsContent>
 

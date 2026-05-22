@@ -178,8 +178,9 @@ const navSections: NavSection[] = [
     icon: Settings,
     items: [
       { href: "/locations",           label: "Locations",      icon: MapPin,        roles: ["admin", "manager", "fms", "floor_manager"] },
-      { href: "/admin/cosec-devices",    label: "COSEC Devices",    icon: Fingerprint,  roles: ["admin", "manager"] },
-      { href: "/admin/access-analytics", label: "Access Analytics", icon: BarChart3Icon, roles: ["admin", "manager"] },
+      { href: "/admin/cosec-devices",    label: "COSEC Devices",       icon: Fingerprint,   roles: ["admin", "manager"] },
+      { href: "/admin/cosec-access",     label: "Access Enrollments",  icon: ShieldCheck,   roles: ["admin", "manager"] },
+      { href: "/admin/access-analytics", label: "Access Analytics",    icon: BarChart3Icon, roles: ["admin", "manager"] },
       { href: "/audit-logs",          label: "Audit Logs",     icon: ClipboardList, roles: ["admin", "manager"] },
       { href: "/infrastructure",      label: "Infrastructure", icon: Server,        roles: ["admin"] },
       { href: "/support",             label: "Support",        icon: LifeBuoy,      roles: ["admin"] },

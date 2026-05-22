@@ -44,6 +44,7 @@ interface CosecDevice {
   device_ip: string;
   device_port: number;
   is_enabled: boolean;
+  device_category: "entry_point" | "business_centre";
   last_ping_at: string | null;
   last_ping_success: boolean | null;
   last_polled_at: string | null;
@@ -65,6 +66,7 @@ const EMPTY_FORM = {
   device_ip: "",
   device_port: 80,
   device_password: "",
+  device_category: "entry_point" as "entry_point" | "business_centre",
 };
 
 export default function CosecDevicesPage() {
@@ -113,6 +115,7 @@ export default function CosecDevicesPage() {
       device_ip: device.device_ip,
       device_port: device.device_port,
       device_password: "", // never prefill password
+      device_category: device.device_category ?? "entry_point",
     });
     setLiveTestResult(null);
     setDialogOpen(true);
@@ -150,7 +153,7 @@ export default function CosecDevicesPage() {
   }
 
   async function handleSave() {
-    if (!form.location_id || !form.device_ip || !form.device_password) {
+    if (!form.location_id || !form.device_ip || (!editing && !form.device_password)) {
       toast.error("Location, IP, and password are required");
       return;
     }
@@ -162,6 +165,7 @@ export default function CosecDevicesPage() {
           label: form.label,
           device_ip: form.device_ip,
           device_port: form.device_port,
+          device_category: form.device_category,
           updated_at: new Date().toISOString(),
         };
         if (form.device_password) payload.device_password = form.device_password;
@@ -178,6 +182,7 @@ export default function CosecDevicesPage() {
           device_ip: form.device_ip,
           device_port: form.device_port,
           device_password: form.device_password,
+          device_category: form.device_category,
         });
         if (error) throw error;
         toast.success("Device added");
@@ -275,6 +280,15 @@ export default function CosecDevicesPage() {
                         <Badge variant={device.is_enabled ? "default" : "secondary"} className="text-xs">
                           {device.is_enabled ? "Enabled" : "Disabled"}
                         </Badge>
+                        {device.device_category === "business_centre" ? (
+                          <Badge variant="outline" className="text-xs border-amber-400 text-amber-700 bg-amber-50">
+                            Business Centre
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs border-blue-400 text-blue-700 bg-blue-50">
+                            Entry Point
+                          </Badge>
+                        )}
                       </CardTitle>
                       <CardDescription className="mt-1">
                         {device.location?.name} · {device.device_ip}:{device.device_port}
@@ -363,6 +377,40 @@ export default function CosecDevicesPage() {
                 onChange={e => setForm(f => ({ ...f, label: e.target.value }))}
                 placeholder="Main Entrance"
               />
+            </div>
+
+            <div className="space-y-2">
+              <Label>Device Category</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, device_category: "entry_point" }))}
+                  className={`rounded-lg border p-3 text-left transition-colors ${
+                    form.device_category === "entry_point"
+                      ? "border-blue-500 bg-blue-50 ring-1 ring-blue-400"
+                      : "border-border hover:border-blue-300 hover:bg-blue-50/40"
+                  }`}
+                >
+                  <p className="text-sm font-medium text-blue-800">Entry Point</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Front/back door. Members get permanent biometric + card enrollment.
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, device_category: "business_centre" }))}
+                  className={`rounded-lg border p-3 text-left transition-colors ${
+                    form.device_category === "business_centre"
+                      ? "border-amber-500 bg-amber-50 ring-1 ring-amber-400"
+                      : "border-border hover:border-amber-300 hover:bg-amber-50/40"
+                  }`}
+                >
+                  <p className="text-sm font-medium text-amber-800">Business Centre</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Conference/meeting room. Temporary PIN access per booking only.
+                  </p>
+                </button>
+              </div>
             </div>
 
             <div className="grid grid-cols-3 gap-3">
