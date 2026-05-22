@@ -17,8 +17,10 @@ import {
   ShieldAlert,
   TrendingUp,
   RefreshCw,
-  Building2,
   Clock,
+  CalendarDays,
+  AlertTriangle,
+  Repeat2,
 } from "lucide-react";
 import {
   BarChart,
@@ -28,21 +30,20 @@ import {
   CartesianGrid,
   Tooltip,
   ResponsiveContainer,
-  Legend,
 } from "recharts";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type Location = { id: string; name: string };
-type PresenceRow = {
-  entity_id: string;
+
+type TodayVisitor = {
+  entity_id: string | null;
   entity_name: string;
   user_type: string;
-  is_inside: boolean;
-  last_entry_at: string | null;
-  last_exit_at: string | null;
-  device: { label: string; location: { name: string } | null } | null;
+  first_entry_at: string;
+  entries_today: number;
 };
+
 type AttendanceRow = {
   entity_id: string;
   entity_name: string;
@@ -52,6 +53,7 @@ type AttendanceRow = {
   first_seen: string;
   last_seen: string;
 };
+
 type DenialSummaryRow = {
   entity_id: string | null;
   entity_name: string;
@@ -60,10 +62,23 @@ type DenialSummaryRow = {
   reasons: Record<string, number>;
   last_denied_at: string;
 };
+
 type HeatmapCell = { day: number; hour: number; count: number };
+type FootfallPoint = { date: string; label: string; count: number };
+
+// ── Constants ─────────────────────────────────────────────────────────────────
 
 const DAYS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
 const HEATMAP_COLORS = ["#f0f9ff", "#bae6fd", "#7dd3fc", "#0ea5e9", "#0369a1"];
+
+const USER_TYPE_COLORS: Record<string, string> = {
+  contract: "bg-blue-100 text-blue-700",
+  member:   "bg-purple-100 text-purple-700",
+  employee: "bg-green-100 text-green-700",
+  booking:  "bg-amber-100 text-amber-700",
+};
+
+// ── Helpers ───────────────────────────────────────────────────────────────────
 
 function heatColor(count: number, max: number): string {
   if (count === 0) return HEATMAP_COLORS[0];
@@ -75,6 +90,15 @@ function fmtTime(iso: string | null) {
   if (!iso) return "—";
   return new Date(iso).toLocaleString("en-IN", {
     timeZone: "Asia/Kolkata",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
+function fmtDateTime(iso: string | null) {
+  if (!iso) return "—";
+  return new Date(iso).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
     day: "2-digit",
     month: "short",
     hour: "2-digit",
@@ -82,30 +106,29 @@ function fmtTime(iso: string | null) {
   });
 }
 
-const USER_TYPE_COLORS: Record<string, string> = {
-  contract: "bg-blue-100 text-blue-700",
-  member:   "bg-purple-100 text-purple-700",
-  employee: "bg-green-100 text-green-700",
-  booking:  "bg-amber-100 text-amber-700",
-};
+function utilizationLabel(pct: number): { label: string; color: string } {
+  if (pct >= 50) return { label: "Active",    color: "text-green-600" };
+  if (pct >= 20) return { label: "Moderate",  color: "text-amber-600" };
+  return              { label: "Low — at risk", color: "text-red-600" };
+}
 
 // ── Page ──────────────────────────────────────────────────────────────────────
 
 export default function AccessAnalyticsPage() {
-  const [locations, setLocations] = useState<Location[]>([]);
+  const [locations, setLocations]   = useState<Location[]>([]);
   const [locationId, setLocationId] = useState<string>("__all");
-  const [days, setDays] = useState(30);
-  const [loading, setLoading] = useState(false);
+  const [days, setDays]             = useState(30);
+  const [loading, setLoading]       = useState(false);
 
-  // Analytics state
-  const [presence, setPresence] = useState<PresenceRow[]>([]);
-  const [presenceSummary, setPresenceSummary] = useState<{ total: number; inside: number; outside: number } | null>(null);
-  const [attendance, setAttendance] = useState<AttendanceRow[]>([]);
+  // Data state
+  const [todayData, setTodayData]         = useState<{ data: TodayVisitor[]; total_entries: number; unique_visitors: number } | null>(null);
+  const [attendance, setAttendance]       = useState<AttendanceRow[]>([]);
   const [denialSummary, setDenialSummary] = useState<DenialSummaryRow[]>([]);
-  const [heatmap, setHeatmap] = useState<HeatmapCell[]>([]);
-  const [heatmapMax, setHeatmapMax] = useState(1);
+  const [heatmap, setHeatmap]             = useState<HeatmapCell[]>([]);
+  const [heatmapMax, setHeatmapMax]       = useState(1);
+  const [footfall, setFootfall]           = useState<FootfallPoint[]>([]);
 
-  // Load locations
+  // Locations
   useEffect(() => {
     fetch("/api/locations?minimal=true")
       .then(r => r.json())
@@ -115,27 +138,28 @@ export default function AccessAnalyticsPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const locParam = locationId !== "__all" ? `&location_id=${locationId}` : "";
-    const daysParam = `&days=${days}`;
+    const loc  = locationId !== "__all" ? `&location_id=${locationId}` : "";
+    const dp   = `&days=${days}`;
 
     try {
-      const [presRes, attRes, denRes, hmRes] = await Promise.all([
-        fetch(`/api/cosec/analytics?type=presence${locParam}`),
-        fetch(`/api/cosec/analytics?type=attendance${locParam}${daysParam}`),
-        fetch(`/api/cosec/analytics?type=denials${locParam}${daysParam}`),
-        fetch(`/api/cosec/analytics?type=heatmap${locParam}${daysParam}`),
+      const [todayRes, attRes, denRes, hmRes, ffRes] = await Promise.all([
+        fetch(`/api/cosec/analytics?type=today${loc}`),
+        fetch(`/api/cosec/analytics?type=attendance${loc}${dp}`),
+        fetch(`/api/cosec/analytics?type=denials${loc}${dp}`),
+        fetch(`/api/cosec/analytics?type=heatmap${loc}${dp}`),
+        fetch(`/api/cosec/analytics?type=footfall${loc}${dp}`),
       ]);
 
-      const [presData, attData, denData, hmData] = await Promise.all([
-        presRes.json(), attRes.json(), denRes.json(), hmRes.json(),
+      const [todayJson, attJson, denJson, hmJson, ffJson] = await Promise.all([
+        todayRes.json(), attRes.json(), denRes.json(), hmRes.json(), ffRes.json(),
       ]);
 
-      setPresence(presData.data ?? []);
-      setPresenceSummary(presData.summary ?? null);
-      setAttendance(attData.data ?? []);
-      setDenialSummary(denData.summary ?? []);
-      setHeatmap(hmData.data ?? []);
-      setHeatmapMax(hmData.maxCount ?? 1);
+      setTodayData(todayJson);
+      setAttendance(attJson.data ?? []);
+      setDenialSummary(denJson.summary ?? []);
+      setHeatmap(hmJson.data ?? []);
+      setHeatmapMax(hmJson.maxCount ?? 1);
+      setFootfall(ffJson.data ?? []);
     } finally {
       setLoading(false);
     }
@@ -143,24 +167,57 @@ export default function AccessAnalyticsPage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Build daily bar chart from heatmap data (collapse hours → day totals)
-  const dailyData = DAYS.map((label, dayIdx) => {
-    const count = heatmap.filter(c => c.day === dayIdx).reduce((s, c) => s + c.count, 0);
-    return { day: label, entries: count };
-  });
+  // Day-of-week bar from heatmap
+  const dowData = DAYS.map((label, i) => ({
+    day: label,
+    entries: heatmap.filter(c => c.day === i).reduce((s, c) => s + c.count, 0),
+  }));
 
-  const insideNow = presence.filter(p => p.is_inside);
+  // Peak hour (single value for KPI)
+  const peakHour = (() => {
+    if (heatmap.length === 0) return null;
+    const byHour = Array.from({ length: 24 }, (_, h) => ({
+      hour: h,
+      count: heatmap.filter(c => c.hour === h).reduce((s, c) => s + c.count, 0),
+    }));
+    const peak = byHour.reduce((best, cur) => cur.count > best.count ? cur : best, byHour[0]);
+    if (peak.count === 0) return null;
+    const h = peak.hour;
+    const suffix = h >= 12 ? "PM" : "AM";
+    const h12 = h % 12 || 12;
+    return `${h12}–${(h12 % 12) + 1} ${suffix}`;
+  })();
+
+  // Tick interval for footfall chart (avoid crowding)
+  const ffInterval = footfall.length <= 10 ? 0
+    : footfall.length <= 21 ? 2
+    : footfall.length <= 45 ? 6
+    : 13;
+
+  // Members with re-entries today
+  const reEntryToday = (todayData?.data ?? []).filter(v => v.entries_today > 1);
+
+  // Attendance enriched with utilisation %
+  const attendanceWithUtil = attendance.map(a => ({
+    ...a,
+    util_pct: Math.min(Math.round((a.unique_days / days) * 100), 100),
+    re_entries: a.total_entries - a.unique_days,
+  })).sort((a, b) => a.util_pct - b.util_pct); // at-risk first
+
+  const totalDenials = denialSummary.reduce((s, r) => s + r.count, 0);
 
   return (
     <div className="p-6 space-y-6">
-      {/* Header */}
+
+      {/* ── Header ───────────────────────────────────────────────────────── */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
         <div>
           <h1 className="text-xl font-semibold">Access Analytics</h1>
-          <p className="text-sm text-muted-foreground">Live presence & historical access insights across all locations</p>
+          <p className="text-sm text-muted-foreground">
+            Entry-based insights — sensor on entry side only, exit button has no reader
+          </p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
-          {/* Location filter */}
           <Select value={locationId} onValueChange={setLocationId}>
             <SelectTrigger className="w-44 h-8 text-sm">
               <SelectValue placeholder="All Locations" />
@@ -172,44 +229,40 @@ export default function AccessAnalyticsPage() {
               ))}
             </SelectContent>
           </Select>
-
-          {/* Days filter */}
           <div className="flex gap-1">
             {[7, 14, 30, 90].map(d => (
-              <Button
-                key={d}
-                size="sm"
-                variant={days === d ? "default" : "outline"}
-                className="h-8 px-2.5 text-xs"
-                onClick={() => setDays(d)}
-              >
+              <Button key={d} size="sm" variant={days === d ? "default" : "outline"}
+                className="h-8 px-2.5 text-xs" onClick={() => setDays(d)}>
                 {d}d
               </Button>
             ))}
           </div>
-
           <Button size="sm" variant="outline" className="h-8" onClick={load} disabled={loading}>
             <RefreshCw size={13} className={loading ? "animate-spin" : ""} />
           </Button>
         </div>
       </div>
 
-      {/* KPI Cards */}
+      {/* ── KPIs ─────────────────────────────────────────────────────────── */}
       <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
-              <Users size={13} /> Total Tracked
+              <DoorOpen size={13} /> Entries Today
             </div>
-            <p className="text-2xl font-bold">{presenceSummary?.total ?? "—"}</p>
+            <p className="text-2xl font-bold">{todayData?.total_entries ?? "—"}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {todayData ? `${todayData.unique_visitors} unique visitor${todayData.unique_visitors !== 1 ? "s" : ""}` : ""}
+            </p>
           </CardContent>
         </Card>
         <Card>
           <CardContent className="p-4">
             <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
-              <DoorOpen size={13} /> Inside Now
+              <Clock size={13} /> Peak Hour ({days}d)
             </div>
-            <p className="text-2xl font-bold text-green-600">{presenceSummary?.inside ?? "—"}</p>
+            <p className="text-2xl font-bold">{peakHour ?? "—"}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">most entries IST</p>
           </CardContent>
         </Card>
         <Card>
@@ -218,6 +271,7 @@ export default function AccessAnalyticsPage() {
               <TrendingUp size={13} /> Active ({days}d)
             </div>
             <p className="text-2xl font-bold">{attendance.length}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">unique entities</p>
           </CardContent>
         </Card>
         <Card>
@@ -225,37 +279,48 @@ export default function AccessAnalyticsPage() {
             <div className="flex items-center gap-2 text-muted-foreground text-xs mb-1">
               <ShieldAlert size={13} /> Denials ({days}d)
             </div>
-            <p className="text-2xl font-bold text-red-600">
-              {denialSummary.reduce((s, r) => s + r.count, 0)}
+            <p className="text-2xl font-bold text-red-600">{totalDenials}</p>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {denialSummary.length} entity{denialSummary.length !== 1 ? "ies" : ""}
             </p>
           </CardContent>
         </Card>
       </div>
 
+      {/* ── Today's Visitors + Footfall Trend ────────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Live Presence */}
+
+        {/* Today's Visitors */}
         <Card className="lg:col-span-1">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
-              Inside Right Now ({insideNow.length})
+              <Users size={14} />
+              Today&apos;s Visitors ({todayData?.unique_visitors ?? 0})
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            {insideNow.length === 0 ? (
-              <p className="text-xs text-muted-foreground px-4 pb-4">No one tracked inside currently.</p>
+            {(todayData?.data ?? []).length === 0 ? (
+              <p className="text-xs text-muted-foreground px-4 pb-4">No entries recorded yet today.</p>
             ) : (
               <div className="divide-y max-h-80 overflow-y-auto">
-                {insideNow.map(p => (
-                  <div key={`${p.entity_id}-${p.device?.label}`} className="px-4 py-2.5 flex items-center justify-between gap-2">
+                {(todayData?.data ?? []).map((v, i) => (
+                  <div key={v.entity_id ?? i} className="px-4 py-2.5 flex items-center justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="text-sm font-medium truncate">{p.entity_name}</p>
+                      <p className="text-sm font-medium truncate">{v.entity_name}</p>
                       <p className="text-xs text-muted-foreground">
-                        {p.device?.location?.name ?? p.device?.label ?? "Unknown"} · {fmtTime(p.last_entry_at)}
+                        First in {fmtTime(v.first_entry_at)}
+                        {v.entries_today > 1 && (
+                          <span className="ml-1.5 inline-flex items-center gap-0.5 text-amber-600">
+                            <Repeat2 size={10} /> {v.entries_today}×
+                          </span>
+                        )}
                       </p>
                     </div>
-                    <Badge className={`text-xs shrink-0 ${USER_TYPE_COLORS[p.user_type] ?? ""}`} variant="outline">
-                      {p.user_type}
+                    <Badge
+                      className={`text-xs shrink-0 ${USER_TYPE_COLORS[v.user_type] ?? "bg-gray-100 text-gray-600"}`}
+                      variant="outline"
+                    >
+                      {v.user_type}
                     </Badge>
                   </div>
                 ))}
@@ -264,28 +329,39 @@ export default function AccessAnalyticsPage() {
           </CardContent>
         </Card>
 
-        {/* Daily Entry Chart */}
+        {/* Daily Footfall Trend */}
         <Card className="lg:col-span-2">
           <CardHeader className="pb-3">
             <CardTitle className="text-sm flex items-center gap-2">
-              <Building2 size={14} /> Entries by Day of Week (last {days}d)
+              <CalendarDays size={14} /> Daily Footfall (last {days}d)
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={200}>
-              <BarChart data={dailyData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-                <XAxis dataKey="day" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip />
-                <Bar dataKey="entries" fill="#0ea5e9" radius={[3, 3, 0, 0]} name="Entries" />
-              </BarChart>
-            </ResponsiveContainer>
+            {footfall.length === 0 ? (
+              <p className="text-xs text-muted-foreground">No entry data in this period.</p>
+            ) : (
+              <ResponsiveContainer width="100%" height={200}>
+                <BarChart data={footfall} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                  <XAxis
+                    dataKey="label"
+                    tick={{ fontSize: 10 }}
+                    interval={ffInterval}
+                    angle={footfall.length > 14 ? -35 : 0}
+                    textAnchor={footfall.length > 14 ? "end" : "middle"}
+                    height={footfall.length > 14 ? 40 : 20}
+                  />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip formatter={(v) => [`${v} entries`, "Footfall"]} />
+                  <Bar dataKey="count" fill="#0ea5e9" radius={[3, 3, 0, 0]} name="Entries" />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Peak Hours Heatmap */}
+      {/* ── Peak Hours Heatmap ────────────────────────────────────────────── */}
       <Card>
         <CardHeader className="pb-3">
           <CardTitle className="text-sm flex items-center gap-2">
@@ -299,7 +375,7 @@ export default function AccessAnalyticsPage() {
                 <tr>
                   <th className="w-10 text-left text-muted-foreground font-normal pr-2" />
                   {Array.from({ length: 24 }, (_, h) => (
-                    <th key={h} className="text-center text-muted-foreground font-normal" style={{ minWidth: 28 }}>
+                    <th key={h} className="text-center text-muted-foreground font-normal" style={{ minWidth: 26 }}>
                       {h === 0 ? "12a" : h < 12 ? `${h}a` : h === 12 ? "12p" : `${h - 12}p`}
                     </th>
                   ))}
@@ -317,11 +393,7 @@ export default function AccessAnalyticsPage() {
                           key={hi}
                           title={`${day} ${hi}:00 — ${count} entries`}
                           className="rounded"
-                          style={{
-                            backgroundColor: heatColor(count, heatmapMax),
-                            height: 20,
-                            minWidth: 28,
-                          }}
+                          style={{ backgroundColor: heatColor(count, heatmapMax), height: 20, minWidth: 26 }}
                         />
                       );
                     })}
@@ -340,47 +412,126 @@ export default function AccessAnalyticsPage() {
         </CardContent>
       </Card>
 
+      {/* ── Day-of-Week Pattern + Re-entries Today ────────────────────────── */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-        {/* Attendance Table */}
+
+        {/* DOW Pattern */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm flex items-center gap-2">
-              <TrendingUp size={14} /> Top Attendees (last {days}d)
+              <CalendarDays size={14} /> Day-of-Week Pattern (last {days}d)
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <ResponsiveContainer width="100%" height={180}>
+              <BarChart data={dowData} margin={{ top: 4, right: 8, left: -20, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
+                <XAxis dataKey="day" tick={{ fontSize: 11 }} />
+                <YAxis tick={{ fontSize: 11 }} />
+                <Tooltip formatter={(v) => [`${v} entries`, "Total"]} />
+                <Bar dataKey="entries" fill="#8b5cf6" radius={[3, 3, 0, 0]} />
+              </BarChart>
+            </ResponsiveContainer>
+          </CardContent>
+        </Card>
+
+        {/* Re-entries today */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <Repeat2 size={14} /> Re-entries Today
+              <span className="text-xs font-normal text-muted-foreground ml-1">
+                — entered more than once
+              </span>
             </CardTitle>
           </CardHeader>
           <CardContent className="p-0">
-            {attendance.length === 0 ? (
-              <p className="text-xs text-muted-foreground px-4 pb-4">No attendance data for this period.</p>
+            {reEntryToday.length === 0 ? (
+              <p className="text-xs text-muted-foreground px-4 pb-4">
+                No re-entries today — everyone came in once.
+              </p>
             ) : (
-              <div className="divide-y max-h-96 overflow-y-auto">
-                {attendance.slice(0, 20).map(a => (
-                  <div key={a.entity_id} className="px-4 py-2.5">
-                    <div className="flex items-center justify-between gap-2 mb-1">
-                      <p className="text-sm font-medium truncate">{a.entity_name}</p>
-                      <div className="flex items-center gap-1.5 shrink-0">
-                        <Badge className={`text-xs ${USER_TYPE_COLORS[a.user_type] ?? ""}`} variant="outline">
-                          {a.user_type}
-                        </Badge>
-                        <span className="text-xs font-semibold">{a.unique_days}d</span>
-                      </div>
+              <div className="divide-y max-h-64 overflow-y-auto">
+                {reEntryToday.map((v, i) => (
+                  <div key={v.entity_id ?? i} className="px-4 py-2.5 flex items-center justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium truncate">{v.entity_name}</p>
+                      <p className="text-xs text-muted-foreground">First in {fmtTime(v.first_entry_at)}</p>
                     </div>
-                    <div className="w-full bg-muted rounded-full h-1.5">
-                      <div
-                        className="bg-blue-500 h-1.5 rounded-full"
-                        style={{ width: `${Math.round((a.unique_days / days) * 100)}%` }}
-                      />
+                    <div className="flex items-center gap-1.5 shrink-0">
+                      <Badge className={`text-xs ${USER_TYPE_COLORS[v.user_type] ?? ""}`} variant="outline">
+                        {v.user_type}
+                      </Badge>
+                      <span className="text-xs font-semibold text-amber-600 flex items-center gap-0.5">
+                        <Repeat2 size={11} /> {v.entries_today}× today
+                      </span>
                     </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">
-                      {a.total_entries} entries · Last: {fmtTime(a.last_seen)}
-                    </p>
                   </div>
                 ))}
               </div>
             )}
           </CardContent>
         </Card>
+      </div>
 
-        {/* Denial Flags */}
+      {/* ── Member Utilisation + Access Denials ───────────────────────────── */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+        {/* Member Utilisation */}
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-sm flex items-center gap-2">
+              <TrendingUp size={14} /> Member Utilisation (last {days}d)
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="p-0">
+            {attendanceWithUtil.length === 0 ? (
+              <p className="text-xs text-muted-foreground px-4 pb-4">No attendance data in this period.</p>
+            ) : (
+              <div className="divide-y max-h-96 overflow-y-auto">
+                {attendanceWithUtil.map(a => {
+                  const { label, color } = utilizationLabel(a.util_pct);
+                  return (
+                    <div key={a.entity_id} className="px-4 py-2.5">
+                      <div className="flex items-center justify-between gap-2 mb-1">
+                        <p className="text-sm font-medium truncate">{a.entity_name}</p>
+                        <div className="flex items-center gap-1.5 shrink-0">
+                          {a.util_pct < 20 && (
+                            <AlertTriangle size={12} className="text-red-500" />
+                          )}
+                          <Badge
+                            className={`text-xs ${USER_TYPE_COLORS[a.user_type] ?? "bg-gray-100 text-gray-600"}`}
+                            variant="outline"
+                          >
+                            {a.user_type}
+                          </Badge>
+                          <span className="text-xs font-semibold">{a.util_pct}%</span>
+                        </div>
+                      </div>
+                      <div className="w-full bg-muted rounded-full h-1.5 mb-1">
+                        <div
+                          className={`h-1.5 rounded-full ${
+                            a.util_pct >= 50 ? "bg-green-500"
+                            : a.util_pct >= 20 ? "bg-amber-400"
+                            : "bg-red-400"
+                          }`}
+                          style={{ width: `${a.util_pct}%` }}
+                        />
+                      </div>
+                      <p className={`text-xs ${color}`}>
+                        {label} · {a.unique_days}d of {days} · {a.total_entries} entries
+                        {a.re_entries > 0 && ` · ${a.re_entries} re-entries`}
+                        {" · "} Last: {fmtDateTime(a.last_seen)}
+                      </p>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+
+        {/* Access Denials */}
         <Card>
           <CardHeader className="pb-3">
             <CardTitle className="text-sm flex items-center gap-2">
@@ -405,7 +556,9 @@ export default function AccessAnalyticsPage() {
                         </span>
                       ))}
                     </div>
-                    <p className="text-xs text-muted-foreground mt-0.5">Last: {fmtTime(d.last_denied_at)}</p>
+                    <p className="text-xs text-muted-foreground mt-0.5">
+                      Last: {fmtDateTime(d.last_denied_at)}
+                    </p>
                   </div>
                 ))}
               </div>
