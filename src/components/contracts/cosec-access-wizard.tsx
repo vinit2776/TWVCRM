@@ -37,6 +37,7 @@ interface WizardEntry {
   device_id: string;
   device_label: string;
   device_category: "entry_point" | "business_centre";
+  supports_biometric: boolean;
   entity_name: string | null;
   phone: string | null;
   first_access_at: string | null;
@@ -61,6 +62,8 @@ interface PersonGroup {
   // primary entry (first device) — used for card scan
   primaryEntry: WizardEntry;
   allEntries: WizardEntry[];
+  // true if the primary entry-point device has a fingerprint scanner
+  supports_biometric: boolean;
 }
 
 // ── Step helpers ──────────────────────────────────────────────────────────────
@@ -85,14 +88,17 @@ function bestEnrollmentStatus(entries: WizardEntry[]): string {
 
 /**
  * Returns the wizard step number the person is currently on.
- * 1 = Provisioned (always done if record exists)
- * 2 = Fingerprint enrollment
- * 3 = NFC card assignment (optional — can be skipped)
- * 4 = First access verified
- * 5 = All complete
+ * Step space is always 1–5 internally:
+ *   1 = Provisioned (always done if record exists)
+ *   2 = Fingerprint enrollment  (skipped for NFC-only devices)
+ *   3 = NFC card assignment     (primary for NFC-only; optional for biometric)
+ *   4 = First access verified
+ *   5 = All complete
  */
 function currentStep(group: PersonGroup, cardSkipped: boolean): number {
+  // NFC-only devices have no fingerprint scanner — treat biometric as always done.
   const biometricDone =
+    !group.supports_biometric ||
     !!group.biometric_enrolled_at ||
     ["biometric_enrolled", "fully_enrolled", "card_enrolled"].includes(
       group.bestStatus
@@ -108,27 +114,47 @@ function currentStep(group: PersonGroup, cardSkipped: boolean): number {
 
 // ── Step indicator ────────────────────────────────────────────────────────────
 
-const STEPS = [
-  { label: "Provisioned", short: "Created" },
-  { label: "Fingerprint", short: "Biometric" },
-  { label: "Card", short: "NFC Card" },
-  { label: "Verified", short: "Active" },
+const STEPS_BIOMETRIC = [
+  { short: "Created" },
+  { short: "Biometric" },
+  { short: "NFC Card" },
+  { short: "Active" },
 ];
+
+const STEPS_NFC_ONLY = [
+  { short: "Created" },
+  { short: "NFC Card" },
+  { short: "Active" },
+];
+
+// Map internal 4-step numbering to display step for NFC-only (3 steps)
+function toDisplayStep(step: number, supportsBiometric: boolean): number {
+  if (supportsBiometric) return step;
+  if (step <= 1) return 1;
+  if (step === 3) return 2;
+  if (step === 4) return 3;
+  return 4; // done
+}
 
 function StepBar({
   active,
   skipped,
+  supportsBiometric,
 }: {
   active: number; // 1-based current step (5 = all done)
   skipped: boolean; // card step skipped
+  supportsBiometric: boolean;
 }) {
+  const steps = supportsBiometric ? STEPS_BIOMETRIC : STEPS_NFC_ONLY;
+  const displayActive = toDisplayStep(active, supportsBiometric);
+
   return (
     <div className="flex items-center gap-0 mt-3">
-      {STEPS.map((step, i) => {
+      {steps.map((step, i) => {
         const stepNum = i + 1;
-        const done = stepNum < active || active > 4;
-        const current = stepNum === active && active <= 4;
-        const isCardStep = stepNum === 3;
+        const done = stepNum < displayActive || displayActive > steps.length;
+        const current = stepNum === displayActive && displayActive <= steps.length;
+        const isCardStep = stepNum === steps.length - 1;
         const skippedStep = isCardStep && skipped && !done;
 
         return (
@@ -171,11 +197,11 @@ function StepBar({
               </span>
             </div>
             {/* Connector line */}
-            {i < STEPS.length - 1 && (
+            {i < steps.length - 1 && (
               <div
                 className={cn(
                   "h-0.5 w-8 mb-4 transition-colors",
-                  stepNum < active ? "bg-green-400" : "bg-border"
+                  stepNum < displayActive ? "bg-green-400" : "bg-border"
                 )}
               />
             )}
@@ -314,20 +340,22 @@ function StepPanel({
   }
 
   if (step === 3) {
+    const nfcOnly = !group.supports_biometric;
     return (
       <div className="mt-4 rounded-lg border border-violet-100 bg-violet-50/50 p-4 space-y-3">
         <div className="flex items-start gap-2.5">
           <CreditCard size={18} className="text-violet-600 mt-0.5 shrink-0" />
           <div>
             <p className="text-sm font-semibold text-violet-900">
-              Step 3 — Issue NFC Access Card{" "}
-              <span className="text-violet-400 font-normal">(optional)</span>
+              {nfcOnly ? "Step 2 — Issue NFC Access Card" : (
+                <>Step 3 — Issue NFC Access Card{" "}<span className="text-violet-400 font-normal">(optional)</span></>
+              )}
             </p>
             <p className="text-sm text-violet-700 mt-1 leading-relaxed">
-              Give <strong>{displayName}</strong> an NFC card as a backup to
-              their fingerprint. Have a blank card ready, then tap{" "}
-              <strong>Scan Card Now</strong> and immediately tap the card on
-              the <strong>{device}</strong> reader.
+              {nfcOnly
+                ? <>Give <strong>{displayName}</strong> an NFC card — this is their <strong>primary access method</strong> for the <strong>{device}</strong> reader. Have a blank card ready, tap <strong>Scan Card Now</strong>, then immediately tap the card on the reader.</>
+                : <>Give <strong>{displayName}</strong> an NFC card as a backup to their fingerprint. Have a blank card ready, then tap <strong>Scan Card Now</strong> and immediately tap the card on the <strong>{device}</strong> reader.</>
+              }
             </p>
           </div>
         </div>
@@ -480,7 +508,7 @@ function PersonCard({
       </div>
 
       {/* Step bar */}
-      <StepBar active={step} skipped={cardSkipped && !group.nfc_card_number} />
+      <StepBar active={step} skipped={cardSkipped && !group.nfc_card_number} supportsBiometric={group.supports_biometric} />
 
       {/* Active step panel */}
       {!allDone && (
@@ -579,6 +607,7 @@ export function CosecAccessWizard({ contractId }: { contractId: string }) {
         last_seen_at: primary.last_seen_at,
         primaryEntry: primary,
         allEntries: entryList,
+        supports_biometric: primary.supports_biometric ?? true,
       });
     }
 
@@ -588,12 +617,8 @@ export function CosecAccessWizard({ contractId }: { contractId: string }) {
 
   useEffect(() => { load(); }, [load]);
 
-  // Count how many are complete
-  // (skip card is unknown here, so we use a static check)
-  const completeCount = groups.filter(
-    (g) =>
-      !!g.biometric_enrolled_at && !!g.first_access_at
-  ).length;
+  // Count how many are complete (card skip is unknown globally; use static check)
+  const completeCount = groups.filter((g) => currentStep(g, false) === 5).length;
 
   if (loading) {
     return (

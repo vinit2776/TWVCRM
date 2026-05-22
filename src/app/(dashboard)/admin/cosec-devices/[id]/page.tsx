@@ -12,6 +12,7 @@ import {
   Wifi, WifiOff, Loader2, ArrowLeft, ShieldCheck, ShieldOff,
   Fingerprint, CreditCard, Clock, DoorOpen, RefreshCw,
   LogIn, LogOut, Ban, BarChart3, Users, AlertTriangle, TrendingUp,
+  MonitorSmartphone, CheckCircle2, XCircle,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import {
@@ -38,6 +39,7 @@ interface ContractOption {
 interface Device {
   id: string; label: string; device_ip: string; device_port: number;
   is_enabled: boolean; device_category: "entry_point" | "business_centre";
+  supports_biometric: boolean;
   last_ping_at: string | null; last_ping_success: boolean | null;
   last_polled_at: string | null; last_seq_number: number;
   location: { name: string };
@@ -64,6 +66,20 @@ interface AccessLog {
 interface PresenceRow {
   entity_id: string; entity_name: string; user_type: string;
   is_inside: boolean; last_entry_at: string | null; last_exit_at: string | null;
+}
+
+interface LiveDeviceUser {
+  user_id: string;
+  ref_user_id: number;
+  name: string;
+  is_active: boolean;
+  finger_count: number;
+  card_number: string | null;
+  is_linked: boolean;
+  entity_name: string | null;
+  entity_type: string | null;
+  enrollment_status: string | null;
+  db_id: string | null;
 }
 
 interface HeatmapRow { day: number; hour: number; count: number; }
@@ -122,6 +138,12 @@ export default function CosecDeviceDetailPage() {
   // Card assign state
   const [cardAssigning, setCardAssigning]           = useState<string | null>(null); // access_user_id being assigned
 
+  // Live device tab
+  const [liveUsers, setLiveUsers]                   = useState<LiveDeviceUser[]>([]);
+  const [liveLoading, setLiveLoading]               = useState(false);
+  const [liveError, setLiveError]                   = useState<string | null>(null);
+  const [liveFilter, setLiveFilter]                 = useState<"all" | "unlinked">("all");
+
   // Unlinked tab state
   const [unlinked, setUnlinked]               = useState<UnlinkedRef[]>([]);
   const [unlinkedLoading, setUnlinkedLoading] = useState(false);
@@ -133,12 +155,17 @@ export default function CosecDeviceDetailPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
+    // Logs: only last 12 months — old events (2023/2024) are noise for daily ops
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
+
     const [{ data: dev }, { data: accessUsers }, { data: accessLogs }] = await Promise.all([
       supabase.from("cosec_devices").select("*, location:locations(name)").eq("id", id).single(),
       supabase.from("cosec_access_users").select("*").eq("device_id", id)
         .neq("enrollment_status", "deleted").order("provisioned_at", { ascending: false }),
       supabase.from("access_logs").select("*").eq("device_id", id)
-        .order("event_time", { ascending: false }).limit(200),
+        .gte("event_time", twelveMonthsAgo.toISOString())
+        .order("event_time", { ascending: false }).limit(500),
     ]);
 
     if (!dev) { router.push("/admin/cosec-devices"); return; }
@@ -207,11 +234,14 @@ export default function CosecDeviceDetailPage() {
 
   const loadUnlinked = useCallback(async () => {
     setUnlinkedLoading(true);
-    // Fetch all ref IDs that have logs for this device
+    // Fetch all ref IDs that have logs for this device in the last 12 months
+    const twelveMonthsAgo = new Date();
+    twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
     const { data: logRefs } = await supabase
       .from("access_logs")
       .select("cosec_ref_id, direction, event_time")
       .eq("device_id", id)
+      .gte("event_time", twelveMonthsAgo.toISOString())
       .not("cosec_ref_id", "is", null);
 
     // Fetch all linked ref IDs for this device
@@ -259,6 +289,24 @@ export default function CosecDeviceDetailPage() {
       };
     }));
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const loadLiveUsers = useCallback(async () => {
+    setLiveLoading(true);
+    setLiveError(null);
+    try {
+      const res = await fetch(`/api/cosec/device-live-users?device_id=${id}`);
+      const json = await res.json();
+      if (!res.ok) {
+        setLiveError(json.error ?? "Failed to fetch live users from device");
+      } else {
+        setLiveUsers(json.data ?? []);
+      }
+    } catch {
+      setLiveError("Network error — could not reach device");
+    } finally {
+      setLiveLoading(false);
+    }
+  }, [id]);
 
   async function handleLink() {
     if (!linkDialog.ref || !selectedContract) return;
@@ -311,6 +359,16 @@ export default function CosecDeviceDetailPage() {
     toast.success(category === "entry_point"
       ? "Device set to Entry Point — members will enroll here permanently"
       : "Device set to Business Centre — temporary booking-based PIN access only");
+  }
+
+  async function handleSetBiometricCapability(supports: boolean) {
+    if (!device || device.supports_biometric === supports) return;
+    const { error } = await supabase.from("cosec_devices").update({ supports_biometric: supports }).eq("id", id);
+    if (error) { toast.error("Failed to update reader capability"); return; }
+    setDevice(d => d ? { ...d, supports_biometric: supports } : d);
+    toast.success(supports
+      ? "Reader capability set to Biometric + NFC"
+      : "Reader capability set to NFC Card Only — biometric step will be skipped in onboarding");
   }
 
   async function handleOpenDoor() {
@@ -435,6 +493,21 @@ export default function CosecDeviceDetailPage() {
                   Business Centre
                 </button>
               </span>
+              {/* Reader capability segmented control */}
+              <span className="inline-flex rounded-md border text-xs overflow-hidden select-none" title="Biometric + NFC: fingerprint scanner present. NFC Card Only: no fingerprint scanner.">
+                <button
+                  onClick={() => handleSetBiometricCapability(true)}
+                  className={`px-2.5 py-1 transition-colors ${device.supports_biometric ? "bg-green-600 text-white font-medium" : "bg-white text-muted-foreground hover:bg-green-50 hover:text-green-700"}`}
+                >
+                  Biometric + NFC
+                </button>
+                <button
+                  onClick={() => handleSetBiometricCapability(false)}
+                  className={`px-2.5 py-1 border-l transition-colors ${!device.supports_biometric ? "bg-slate-600 text-white font-medium" : "bg-white text-muted-foreground hover:bg-slate-50 hover:text-slate-700"}`}
+                >
+                  NFC Card Only
+                </button>
+              </span>
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
               {(device.location as { name: string })?.name} · {device.device_ip}:{device.device_port}
@@ -513,6 +586,9 @@ export default function CosecDeviceDetailPage() {
             {unlinked.length > 0 && (
               <span className="ml-1 bg-amber-500 text-white text-[10px] rounded-full px-1.5 py-0.5 leading-none">{unlinked.length}</span>
             )}
+          </TabsTrigger>
+          <TabsTrigger value="live" className="flex items-center gap-1.5" onClick={loadLiveUsers}>
+            <MonitorSmartphone size={13} />Live Device
           </TabsTrigger>
           <TabsTrigger value="analytics" className="flex items-center gap-1.5" onClick={loadAnalytics}>
             <TrendingUp size={13} />Analytics
@@ -726,6 +802,126 @@ export default function CosecDeviceDetailPage() {
                 </div>
               )}
             </>
+          )}
+        </TabsContent>
+
+        {/* ── Live Device ────────────────────────────────────────────────── */}
+        <TabsContent value="live" className="mt-4 space-y-4">
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <div>
+              <p className="text-sm font-medium">Enrolled on Device</p>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Live data fetched directly from the COSEC reader — includes legacy users enrolled before this app was connected.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <div className="flex rounded-md border text-xs overflow-hidden">
+                <button
+                  onClick={() => setLiveFilter("all")}
+                  className={`px-3 py-1.5 transition-colors ${liveFilter === "all" ? "bg-primary text-primary-foreground font-medium" : "bg-white text-muted-foreground hover:bg-muted/40"}`}
+                >
+                  All ({liveUsers.length})
+                </button>
+                <button
+                  onClick={() => setLiveFilter("unlinked")}
+                  className={`px-3 py-1.5 border-l transition-colors ${liveFilter === "unlinked" ? "bg-amber-500 text-white font-medium" : "bg-white text-muted-foreground hover:bg-amber-50"}`}
+                >
+                  Unlinked ({liveUsers.filter(u => !u.is_linked).length})
+                </button>
+              </div>
+              <Button size="sm" variant="outline" onClick={loadLiveUsers} disabled={liveLoading} className="h-8 gap-1.5">
+                {liveLoading ? <Loader2 size={12} className="animate-spin" /> : <RefreshCw size={12} />}
+                Refresh
+              </Button>
+            </div>
+          </div>
+
+          {liveLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <Loader2 className="animate-spin text-muted-foreground" size={24} />
+              <span className="ml-2 text-sm text-muted-foreground">Querying device…</span>
+            </div>
+          ) : liveError ? (
+            <Card><CardContent className="py-10 text-center">
+              <WifiOff size={32} className="mx-auto mb-2 text-red-400" />
+              <p className="font-medium text-sm text-red-600">{liveError}</p>
+              <p className="text-xs text-muted-foreground mt-1">Check device connectivity, then try again.</p>
+              <Button size="sm" variant="outline" className="mt-3" onClick={loadLiveUsers}>Retry</Button>
+            </CardContent></Card>
+          ) : liveUsers.length === 0 ? (
+            <Card><CardContent className="py-12 text-center text-muted-foreground">
+              <MonitorSmartphone size={36} className="mx-auto mb-3 opacity-30" />
+              <p className="font-medium">No enrolled users found on device</p>
+              <p className="text-sm mt-1">Click Refresh to query the device.</p>
+            </CardContent></Card>
+          ) : (
+            <div className="space-y-2">
+              {liveUsers
+                .filter(u => liveFilter === "all" || !u.is_linked)
+                .map((u) => (
+                  <Card key={u.user_id} className={!u.is_active ? "opacity-60" : ""}>
+                    <CardContent className="py-3 px-4">
+                      <div className="flex items-start justify-between gap-4">
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <span className="font-medium text-sm">{u.name || u.user_id}</span>
+                            <span className="font-mono text-xs text-muted-foreground">Ref #{u.ref_user_id}</span>
+                            {u.is_linked ? (
+                              <Badge variant="outline" className="text-xs border-green-400 text-green-700 bg-green-50 gap-1">
+                                <CheckCircle2 size={10} />Linked{u.entity_name ? ` · ${u.entity_name}` : ""}
+                              </Badge>
+                            ) : (
+                              <Badge variant="outline" className="text-xs border-amber-400 text-amber-700 bg-amber-50 gap-1">
+                                <AlertTriangle size={10} />Not in system
+                              </Badge>
+                            )}
+                            {!u.is_active && <Badge variant="secondary" className="text-xs">Inactive</Badge>}
+                            {u.enrollment_status && (
+                              <Badge variant="outline" className="text-xs">
+                                {STATUS_CONFIG[u.enrollment_status]?.label ?? u.enrollment_status}
+                              </Badge>
+                            )}
+                          </div>
+                          <div className="flex flex-wrap gap-3 mt-1 text-xs text-muted-foreground">
+                            <span className="font-mono">{u.user_id}</span>
+                            {u.finger_count > 0 ? (
+                              <span className="flex items-center gap-1 text-green-600">
+                                <Fingerprint size={11} />{u.finger_count} fingerprint{u.finger_count !== 1 ? "s" : ""}
+                              </span>
+                            ) : (
+                              <span className="flex items-center gap-1 text-muted-foreground">
+                                <XCircle size={11} />No biometric
+                              </span>
+                            )}
+                            {u.card_number ? (
+                              <span className="flex items-center gap-1 text-violet-600">
+                                <CreditCard size={11} />{u.card_number}
+                              </span>
+                            ) : (
+                              <span className="text-muted-foreground">No card</span>
+                            )}
+                          </div>
+                        </div>
+                        {!u.is_linked && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-xs h-7 shrink-0"
+                            onClick={() => {
+                              // Pre-populate the link dialog with this ref ID
+                              setLinkDialog({ open: true, ref: { cosec_ref_id: u.ref_user_id, entry_count: 0, last_seen: "", directions: { IN: 0, OUT: 0, DENIED: 0 } } });
+                              setSelectedContract("");
+                              setContractSearch("");
+                            }}
+                          >
+                            Link to Contract
+                          </Button>
+                        )}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+            </div>
           )}
         </TabsContent>
 

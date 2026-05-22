@@ -381,6 +381,49 @@ export interface CosecUserInfo {
   isActive: boolean;
 }
 
+export interface CosecLiveUser {
+  userId: string;       // alphanumeric user-id stored on device
+  refUserId: number;    // numeric ref-user-id
+  name: string;
+  isActive: boolean;
+  fingerCount: number;  // number of enrolled fingerprints (0 = no biometric)
+  cardNumber: string;   // NFC card CSN, empty if none
+}
+
+/**
+ * Fetch ALL enrolled users directly from the COSEC device.
+ * Uses action=list with format=xml. Returns up to 5000 users.
+ * Each <UserInfo> block in the response contains one user's data.
+ */
+export async function listAllUsersFromDevice(device: CosecDevice): Promise<CosecLiveUser[]> {
+  const xml = await cosecGet(device, "users", {
+    action: "list",
+    format: "xml",
+    "start-ref-user-id": 0,
+    count: 5000,
+  });
+
+  const blocks = xmlBlocks(xml, "UserInfo");
+  const users: CosecLiveUser[] = [];
+
+  for (const block of blocks) {
+    const userId = xmlValue(block, "user-id");
+    const refId  = parseInt(xmlValue(block, "ref-user-id") || "0", 10);
+    if (!userId || !refId) continue;
+
+    users.push({
+      userId,
+      refUserId: refId,
+      name: xmlValue(block, "name"),
+      isActive: xmlValue(block, "user-active") === "1",
+      fingerCount: parseInt(xmlValue(block, "no-of-finger") || "0", 10),
+      cardNumber: xmlValue(block, "card1") || "",
+    });
+  }
+
+  return users;
+}
+
 /** Query a COSEC device to get user info by numeric ref-user-id */
 export async function getUserByRefId(device: CosecDevice, refUserId: number): Promise<CosecUserInfo | null> {
   try {

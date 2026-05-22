@@ -38,7 +38,7 @@ export async function GET(
   const { data: accessUsers } = await admin
     .from("cosec_access_users")
     .select(
-      "id, entity_id, user_type, cosec_ref_id, enrollment_status, access_pin, nfc_card_number, provisioned_at, biometric_enrolled_at, card_enrolled_at, device_id, cosec_user_id, device:cosec_devices(id, label, device_category)"
+      "id, entity_id, user_type, cosec_ref_id, enrollment_status, access_pin, nfc_card_number, provisioned_at, biometric_enrolled_at, card_enrolled_at, device_id, cosec_user_id, device:cosec_devices(id, label, device_category, supports_biometric)"
     )
     .in("entity_id", entityIds)
     .not("enrollment_status", "in", "(blocked,deleted)")
@@ -101,6 +101,7 @@ export async function GET(
       device_id: au.device_id,
       device_label: au.device?.label ?? "Device",
       device_category: au.device?.device_category ?? "entry_point",
+      supports_biometric: au.device?.supports_biometric ?? true,
       entity_name: member?.name ?? null,
       phone: member?.phone ?? null,
       first_access_at: firstLogMap.get(au.entity_id) ?? null,

@@ -45,6 +45,7 @@ interface CosecDevice {
   device_port: number;
   is_enabled: boolean;
   device_category: "entry_point" | "business_centre";
+  supports_biometric: boolean;
   last_ping_at: string | null;
   last_ping_success: boolean | null;
   last_polled_at: string | null;
@@ -67,6 +68,7 @@ const EMPTY_FORM = {
   device_port: 80,
   device_password: "",
   device_category: "entry_point" as "entry_point" | "business_centre",
+  supports_biometric: true,
 };
 
 export default function CosecDevicesPage() {
@@ -116,6 +118,7 @@ export default function CosecDevicesPage() {
       device_port: device.device_port,
       device_password: "", // never prefill password
       device_category: device.device_category ?? "entry_point",
+      supports_biometric: device.supports_biometric ?? true,
     });
     setLiveTestResult(null);
     setDialogOpen(true);
@@ -166,6 +169,7 @@ export default function CosecDevicesPage() {
           device_ip: form.device_ip,
           device_port: form.device_port,
           device_category: form.device_category,
+          supports_biometric: form.supports_biometric,
           updated_at: new Date().toISOString(),
         };
         if (form.device_password) payload.device_password = form.device_password;
@@ -183,6 +187,7 @@ export default function CosecDevicesPage() {
           device_port: form.device_port,
           device_password: form.device_password,
           device_category: form.device_category,
+          supports_biometric: form.supports_biometric,
         });
         if (error) throw error;
         toast.success("Device added");
@@ -257,95 +262,126 @@ export default function CosecDevicesPage() {
           </CardContent>
         </Card>
       ) : (
-        <div className="grid gap-4">
-          {devices.map((device) => {
-            const result = pingResults[device.id];
-            const isPinging = pinging[device.id];
-            const lastSuccess = result ? result.ok : device.last_ping_success;
+        // Group devices by location
+        (() => {
+          const byLocation = new Map<string, CosecDevice[]>();
+          for (const d of devices) {
+            const loc = d.location?.name ?? "Unknown Location";
+            if (!byLocation.has(loc)) byLocation.set(loc, []);
+            byLocation.get(loc)!.push(d);
+          }
+          return (
+            <div className="space-y-8">
+              {[...byLocation.entries()].map(([locName, locDevices]) => (
+                <div key={locName}>
+                  {/* Location heading */}
+                  <div className="flex items-center gap-3 mb-3">
+                    <h2 className="text-sm font-semibold text-muted-foreground uppercase tracking-wide">
+                      {locName}
+                    </h2>
+                    <div className="flex-1 h-px bg-border" />
+                    <span className="text-xs text-muted-foreground">{locDevices.length} device{locDevices.length !== 1 ? "s" : ""}</span>
+                  </div>
 
-            return (
-              <Card key={device.id} className={`${!device.is_enabled ? "opacity-60" : ""} cursor-pointer hover:shadow-md transition-shadow`} onClick={() => router.push(`/admin/cosec-devices/${device.id}`)}>
-                <CardHeader className="pb-3">
-                  <div className="flex items-start justify-between gap-4">
-                    <div>
-                      <CardTitle className="text-base flex items-center gap-2">
-                        {lastSuccess === true ? (
-                          <Wifi size={16} className="text-green-500" />
-                        ) : lastSuccess === false ? (
-                          <WifiOff size={16} className="text-red-500" />
-                        ) : (
-                          <Wifi size={16} className="text-muted-foreground opacity-40" />
-                        )}
-                        {device.label}
-                        <Badge variant={device.is_enabled ? "default" : "secondary"} className="text-xs">
-                          {device.is_enabled ? "Enabled" : "Disabled"}
-                        </Badge>
-                        {device.device_category === "business_centre" ? (
-                          <Badge variant="outline" className="text-xs border-amber-400 text-amber-700 bg-amber-50">
-                            Business Centre
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-xs border-blue-400 text-blue-700 bg-blue-50">
-                            Entry Point
-                          </Badge>
-                        )}
-                      </CardTitle>
-                      <CardDescription className="mt-1">
-                        {device.location?.name} · {device.device_ip}:{device.device_port}
-                      </CardDescription>
-                    </div>
-                    <div className="flex gap-2 shrink-0" onClick={e => e.stopPropagation()}>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        onClick={() => pingExisting(device.id)}
-                        disabled={isPinging}
-                      >
-                        {isPinging ? (
-                          <Loader2 size={14} className="animate-spin mr-1" />
-                        ) : (
-                          <Wifi size={14} className="mr-1" />
-                        )}
-                        Test Connection
-                      </Button>
-                      <Button size="sm" variant="ghost" onClick={() => openEdit(device)}>
-                        <Pencil size={14} />
-                      </Button>
-                    </div>
+                  <div className="grid gap-3">
+                    {locDevices.map((device) => {
+                      const result = pingResults[device.id];
+                      const isPinging = pinging[device.id];
+                      const lastSuccess = result ? result.ok : device.last_ping_success;
+
+                      return (
+                        <Card key={device.id} className={`${!device.is_enabled ? "opacity-60" : ""} cursor-pointer hover:shadow-md transition-shadow`} onClick={() => router.push(`/admin/cosec-devices/${device.id}`)}>
+                          <CardHeader className="pb-3">
+                            <div className="flex items-start justify-between gap-4">
+                              <div>
+                                <CardTitle className="text-base flex items-center gap-2 flex-wrap">
+                                  {lastSuccess === true ? (
+                                    <Wifi size={16} className="text-green-500" />
+                                  ) : lastSuccess === false ? (
+                                    <WifiOff size={16} className="text-red-500" />
+                                  ) : (
+                                    <Wifi size={16} className="text-muted-foreground opacity-40" />
+                                  )}
+                                  {device.label}
+                                  <Badge variant={device.is_enabled ? "default" : "secondary"} className="text-xs">
+                                    {device.is_enabled ? "Enabled" : "Disabled"}
+                                  </Badge>
+                                  {device.device_category === "business_centre" ? (
+                                    <Badge variant="outline" className="text-xs border-amber-400 text-amber-700 bg-amber-50">
+                                      Business Centre
+                                    </Badge>
+                                  ) : (
+                                    <Badge variant="outline" className="text-xs border-blue-400 text-blue-700 bg-blue-50">
+                                      Entry Point
+                                    </Badge>
+                                  )}
+                                  {!device.supports_biometric && (
+                                    <Badge variant="outline" className="text-xs border-slate-400 text-slate-600 bg-slate-50">
+                                      NFC Card Only
+                                    </Badge>
+                                  )}
+                                </CardTitle>
+                                <CardDescription className="mt-1">
+                                  {device.device_ip}:{device.device_port}
+                                </CardDescription>
+                              </div>
+                              <div className="flex gap-2 shrink-0" onClick={e => e.stopPropagation()}>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  onClick={() => pingExisting(device.id)}
+                                  disabled={isPinging}
+                                >
+                                  {isPinging ? (
+                                    <Loader2 size={14} className="animate-spin mr-1" />
+                                  ) : (
+                                    <Wifi size={14} className="mr-1" />
+                                  )}
+                                  Test Connection
+                                </Button>
+                                <Button size="sm" variant="ghost" onClick={() => openEdit(device)}>
+                                  <Pencil size={14} />
+                                </Button>
+                              </div>
+                            </div>
+                          </CardHeader>
+                          <CardContent className="pt-0">
+                            <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
+                              {result && (
+                                <span className={result.ok ? "text-green-600 font-medium" : "text-red-500 font-medium"}>
+                                  {result.ok
+                                    ? `✓ ${result.deviceName} · ${result.latencyMs}ms`
+                                    : `✗ ${result.error}`}
+                                </span>
+                              )}
+                              {device.last_ping_at && !result && (
+                                <span>Last ping: {formatDate(device.last_ping_at)}</span>
+                              )}
+                              {device.last_polled_at && (
+                                <span>Last event poll: {formatDate(device.last_polled_at)}</span>
+                              )}
+                              <span>Events synced up to seq #{device.last_seq_number}</span>
+                            </div>
+                            <div className="mt-3 flex gap-2" onClick={e => e.stopPropagation()}>
+                              <Button
+                                size="sm"
+                                variant="ghost"
+                                className="text-xs"
+                                onClick={() => toggleEnabled(device)}
+                              >
+                                {device.is_enabled ? "Disable" : "Enable"}
+                              </Button>
+                            </div>
+                          </CardContent>
+                        </Card>
+                      );
+                    })}
                   </div>
-                </CardHeader>
-                <CardContent className="pt-0">
-                  <div className="flex flex-wrap gap-4 text-xs text-muted-foreground">
-                    {result && (
-                      <span className={result.ok ? "text-green-600 font-medium" : "text-red-500 font-medium"}>
-                        {result.ok
-                          ? `✓ ${result.deviceName} · ${result.latencyMs}ms`
-                          : `✗ ${result.error}`}
-                      </span>
-                    )}
-                    {device.last_ping_at && !result && (
-                      <span>Last ping: {formatDate(device.last_ping_at)}</span>
-                    )}
-                    {device.last_polled_at && (
-                      <span>Last event poll: {formatDate(device.last_polled_at)}</span>
-                    )}
-                    <span>Events synced up to seq #{device.last_seq_number}</span>
-                  </div>
-                  <div className="mt-3 flex gap-2" onClick={e => e.stopPropagation()}>
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      className="text-xs"
-                      onClick={() => toggleEnabled(device)}
-                    >
-                      {device.is_enabled ? "Disable" : "Enable"}
-                    </Button>
-                  </div>
-                </CardContent>
-              </Card>
-            );
-          })}
-        </div>
+                </div>
+              ))}
+            </div>
+          );
+        })()
       )}
 
       {/* Add / Edit dialog */}
@@ -408,6 +444,40 @@ export default function CosecDevicesPage() {
                   <p className="text-sm font-medium text-amber-800">Business Centre</p>
                   <p className="text-xs text-muted-foreground mt-0.5">
                     Conference/meeting room. Temporary PIN access per booking only.
+                  </p>
+                </button>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <Label>Reader Capability</Label>
+              <div className="grid grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, supports_biometric: true }))}
+                  className={`rounded-lg border p-3 text-left transition-colors ${
+                    form.supports_biometric
+                      ? "border-green-500 bg-green-50 ring-1 ring-green-400"
+                      : "border-border hover:border-green-300 hover:bg-green-50/40"
+                  }`}
+                >
+                  <p className="text-sm font-medium text-green-800">Biometric + NFC</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    Has a fingerprint scanner. Members enroll biometric first, then optionally get a card.
+                  </p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setForm(f => ({ ...f, supports_biometric: false }))}
+                  className={`rounded-lg border p-3 text-left transition-colors ${
+                    !form.supports_biometric
+                      ? "border-slate-500 bg-slate-50 ring-1 ring-slate-400"
+                      : "border-border hover:border-slate-300 hover:bg-slate-50/40"
+                  }`}
+                >
+                  <p className="text-sm font-medium text-slate-700">NFC Card Only</p>
+                  <p className="text-xs text-muted-foreground mt-0.5">
+                    No fingerprint scanner. Members get access via NFC card tap only.
                   </p>
                 </button>
               </div>
