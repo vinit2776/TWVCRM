@@ -18,6 +18,7 @@ import {
   RefreshCcw,
   Send,
   FileCheck,
+  Printer,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
@@ -42,6 +43,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
+import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
 import { GenerateStatementDialog } from "@/components/billing/generate-statement-dialog";
 import { ViewStatementDialog } from "@/components/billing/view-statement-dialog";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
@@ -376,6 +378,7 @@ export default function BillingPage() {
   const [chargesDateFrom, setChargesDateFrom]         = useState("");
   const [chargesDateTo, setChargesDateTo]             = useState("");
   const [addChargeOpen, setAddChargeOpen]             = useState(false);
+  const [printEntryOpen, setPrintEntryOpen]           = useState(false);
 
   // ── Billing Statements (booking-only, non-contract) ──────────────────────
   const [statements, setStatements]                       = useState<BillingStatement[]>([]);
@@ -1033,6 +1036,11 @@ export default function BillingPage() {
                 </Button>
               )}
             </div>
+            {["admin", "accounts", "manager"].includes(userRole ?? "") && (
+              <Button variant="outline" onClick={() => setPrintEntryOpen(true)}>
+                <Printer className="mr-2 h-4 w-4" />Log Print Usage
+              </Button>
+            )}
             <Button onClick={() => setAddChargeOpen(true)}>
               <Plus className="mr-2 h-4 w-4" />Add Charge
             </Button>
@@ -1327,6 +1335,7 @@ export default function BillingPage() {
       {/* ── Dialogs ─────────────────────────────────────────────────────── */}
       <ExportSummaryDialog open={showExport} onOpenChange={setShowExport} year={year} month={month} />
       <AddUsageChargeDialog open={addChargeOpen} onOpenChange={setAddChargeOpen} onSuccess={fetchCharges} />
+      <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={fetchCharges} />
       <GenerateStatementDialog open={generateStatementOpen} onOpenChange={setGenerateStatementOpen} onSuccess={fetchStatements} />
       <ViewStatementDialog
         statementId={viewStatementId}

@@ -1,13 +1,11 @@
 "use client";
 
-import { use, useState, useEffect, useCallback } from "react";
+import { use, useState, useCallback, useEffect } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
   Edit2,
   Trash2,
-  Ban,
-  Undo2,
   Phone,
   Mail,
   Globe,
@@ -16,9 +14,9 @@ import {
   Briefcase,
   Star,
   Plus,
+  Printer,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Separator } from "@/components/ui/separator";
@@ -59,6 +57,7 @@ import { LeadTasksTab } from "@/components/leads/lead-tasks-tab";
 import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
 import { LeadLifecycle } from "@/components/leads/lead-lifecycle";
 import { LeadContactsPanel } from "@/components/leads/lead-contacts-panel";
+import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
 
 export default function LeadDetailPage({
   params,
@@ -70,65 +69,38 @@ export default function LeadDetailPage({
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") ?? "overview";
   const highlightActivityId = searchParams.get("highlight") ?? undefined;
-  const { data: lead, loading, refetch } = useLead(id);
+  const { data: lead, loading } = useLead(id);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const [disableOpen, setDisableOpen] = useState(false);
-  const [disabling, setDisabling] = useState(false);
-  const [disableReason, setDisableReason] = useState("");
-  const [role, setRole] = useState<string | null>(null);
   const [activityFormOpen, setActivityFormOpen] = useState(false);
   const [activityRefreshKey, setActivityRefreshKey] = useState(0);
-  const handleActivitySuccess = useCallback(() => {
-    setActivityRefreshKey((k) => k + 1);
-  }, []);
+  const [printEntryOpen, setPrintEntryOpen] = useState(false);
+  const [userRole, setUserRole] = useState<string | null>(null);
 
+  // Fetch current user role for conditional rendering
   useEffect(() => {
     fetch("/api/me")
-      .then((r) => r.json())
-      .then((json) => setRole(json.role || null))
-      .catch(() => setRole(null));
+      .then(r => r.json())
+      .then(j => setUserRole(j.role ?? null))
+      .catch(() => null);
+  }, []);
+
+  const handleActivitySuccess = useCallback(() => {
+    setActivityRefreshKey((k) => k + 1);
   }, []);
 
   const handleDelete = async () => {
     setDeleting(true);
     const res = await fetch(`/api/leads/${id}`, { method: "DELETE" });
     if (res.ok) {
-      toast.success("Lead deleted permanently");
+      toast.success("Lead deleted successfully");
       router.push("/leads");
     } else {
-      const err = await res.json().catch(() => ({}));
-      toast.error(err.error || "Failed to delete lead");
+      toast.error("Failed to delete lead");
     }
     setDeleting(false);
     setDeleteOpen(false);
   };
-
-  const isArchived = !!lead?.archived_at;
-
-  const handleToggleDisable = async () => {
-    setDisabling(true);
-    const res = await fetch(`/api/leads/${id}/archive`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        archived: !isArchived,
-        reason: isArchived ? undefined : disableReason.trim() || undefined,
-      }),
-    });
-    if (res.ok) {
-      toast.success(isArchived ? "Lead enabled" : "Lead disabled");
-      setDisableReason("");
-      refetch();
-    } else {
-      const err = await res.json().catch(() => ({}));
-      toast.error(err.error || "Failed to update lead");
-    }
-    setDisabling(false);
-    setDisableOpen(false);
-  };
-
-  const canManage = role === "admin" || role === "manager";
 
   if (loading) {
     return (
@@ -176,7 +148,14 @@ export default function LeadDetailPage({
             )}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
+          {/* Log Print Usage — only for roles that can record print usage */}
+          {["admin", "accounts", "manager"].includes(userRole ?? "") && (
+            <Button variant="outline" onClick={() => setPrintEntryOpen(true)}>
+              <Printer className="mr-2 h-4 w-4" />
+              Log Print Usage
+            </Button>
+          )}
           <Button
             variant="outline"
             onClick={() => router.push(`/leads/${id}/edit`)}
@@ -184,44 +163,12 @@ export default function LeadDetailPage({
             <Edit2 className="mr-2 h-4 w-4" />
             Edit
           </Button>
-          {canManage && (
-            <Button
-              variant={isArchived ? "default" : "outline"}
-              onClick={() => setDisableOpen(true)}
-            >
-              {isArchived ? (
-                <>
-                  <Undo2 className="mr-2 h-4 w-4" />
-                  Enable
-                </>
-              ) : (
-                <>
-                  <Ban className="mr-2 h-4 w-4" />
-                  Disable
-                </>
-              )}
-            </Button>
-          )}
-          {role === "admin" && (
-            <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
-              <Trash2 className="mr-2 h-4 w-4" />
-              Delete
-            </Button>
-          )}
+          <Button variant="destructive" onClick={() => setDeleteOpen(true)}>
+            <Trash2 className="mr-2 h-4 w-4" />
+            Delete
+          </Button>
         </div>
       </div>
-
-      {isArchived && (
-        <div className="rounded-md border border-amber-300 bg-amber-50 dark:bg-amber-950/20 px-4 py-3 text-sm">
-          <span className="font-semibold text-amber-800 dark:text-amber-200">
-            This lead is disabled.
-          </span>{" "}
-          <span className="text-amber-700 dark:text-amber-300">
-            It is hidden from the leads list.
-            {lead.archive_reason ? ` Reason: ${lead.archive_reason}` : ""}
-          </span>
-        </div>
-      )}
 
       <Tabs defaultValue={initialTab}>
         <TabsList>
@@ -598,54 +545,24 @@ export default function LeadDetailPage({
         </TabsContent>
       </Tabs>
 
-      {/* Disable / Enable Dialog */}
-      <Dialog open={disableOpen} onOpenChange={setDisableOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>
-              {isArchived ? "Enable Lead" : "Disable Lead"}
-            </DialogTitle>
-            <DialogDescription>
-              {isArchived
-                ? `Re-enable ${lead.first_name} ${lead.last_name}? The lead will show in the leads list again.`
-                : `Disable ${lead.first_name} ${lead.last_name}? The lead will be hidden from the leads list but all its data — proposals, contracts, billing — is kept and can be re-enabled anytime.`}
-            </DialogDescription>
-          </DialogHeader>
-          {!isArchived && (
-            <div className="space-y-1.5">
-              <label className="text-sm font-medium">Reason (optional)</label>
-              <Input
-                value={disableReason}
-                onChange={(e) => setDisableReason(e.target.value)}
-                placeholder="e.g. duplicate, no longer interested"
-              />
-            </div>
-          )}
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setDisableOpen(false)}>
-              Cancel
-            </Button>
-            <Button onClick={handleToggleDisable} disabled={disabling}>
-              {disabling
-                ? "Saving..."
-                : isArchived
-                  ? "Enable Lead"
-                  : "Disable Lead"}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
+      {/* Print Usage Dialog — scoped to this lead's active contracts.
+          If the lead has one active contract the dropdown is pre-filtered
+          to it; if they have multiple locations the user selects from that
+          shorter list rather than every contract in the system. */}
+      <ManualPrintEntryDialog
+        open={printEntryOpen}
+        onOpenChange={setPrintEntryOpen}
+        filterLeadId={id}
+      />
 
-      {/* Permanent Delete Dialog (admin only) */}
+      {/* Delete Dialog */}
       <Dialog open={deleteOpen} onOpenChange={setDeleteOpen}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Permanently Delete Lead</DialogTitle>
+            <DialogTitle>Delete Lead</DialogTitle>
             <DialogDescription>
-              This permanently deletes {lead.first_name} {lead.last_name} and
-              cascades to delete all linked proposals, contracts and billing
-              records. This cannot be undone. To simply hide the lead, use
-              Disable instead.
+              Are you sure you want to delete {lead.first_name} {lead.last_name}?
+              This action cannot be undone.
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
@@ -657,7 +574,7 @@ export default function LeadDetailPage({
               onClick={handleDelete}
               disabled={deleting}
             >
-              {deleting ? "Deleting..." : "Delete Permanently"}
+              {deleting ? "Deleting..." : "Delete"}
             </Button>
           </DialogFooter>
         </DialogContent>
