@@ -35,7 +35,7 @@ export async function POST(request: NextRequest) {
       id, booking_number, booking_date, start_time, end_time,
       space_id, location_id, guest_name, guest_email, guest_phone, booker_phone,
       lead:leads!bookings_lead_id_fkey(first_name, last_name, email, phone),
-      space:spaces!bookings_space_id_fkey(id, name, cosec_device_id, location_id)
+      space:spaces!bookings_space_id_fkey(id, name, workspace_type, cosec_device_id, location_id)
     `)
     .eq("id", booking_id)
     .single();
@@ -44,26 +44,43 @@ export async function POST(request: NextRequest) {
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const space = booking.space as any;
-  if (!space?.cosec_device_id) {
-    return NextResponse.json({ ok: true, skipped: true, reason: "Space has no COSEC device" });
+  const locationId: string = space?.location_id ?? booking.location_id;
+
+  // ── Always provision entry_point devices for building access ─────────────────
+  // Every confirmed booking gets entry door access for the duration ±5 min,
+  // regardless of whether the space is a conference room or a hot desk.
+  const { data: entryDevices } = await admin
+    .from("cosec_devices")
+    .select("id, label, device_ip, device_port, device_password")
+    .eq("location_id", locationId)
+    .eq("is_enabled", true)
+    .eq("device_category", "entry_point");
+
+  // ── Optionally add the specific room device for conference/meeting rooms ──────
+  // Only conference_room and meeting_room spaces have a linked business_centre
+  // device. Other space types (hot desk, private office, etc.) get entry access only.
+  const ROOM_TYPES_WITH_DEVICE = ["conference_room", "meeting_room"];
+  const isRoomBooking = ROOM_TYPES_WITH_DEVICE.includes(space?.workspace_type ?? "");
+  const roomDeviceId: string | null = (isRoomBooking && space?.cosec_device_id) ? space.cosec_device_id : null;
+
+  let roomDevice: { id: string; label: string; device_ip: string; device_port: number; device_password: string } | null = null;
+  if (roomDeviceId) {
+    const { data: rd } = await admin
+      .from("cosec_devices")
+      .select("id, label, device_ip, device_port, device_password")
+      .eq("id", roomDeviceId)
+      .eq("is_enabled", true)
+      .single();
+    roomDevice = rd ?? null;
   }
 
-  const locationId = space.location_id ?? booking.location_id;
-
-  // Load entrance devices (all enabled devices at location except the room device)
-  const { data: allDevices } = await admin
-    .from("cosec_devices")
-    .select("id, device_ip, device_port, device_password")
-    .eq("location_id", locationId)
-    .eq("is_enabled", true);
-
-  const roomDeviceId: string = space.cosec_device_id;
-  const roomDevice = (allDevices ?? []).find(d => d.id === roomDeviceId);
-  const entranceDevices = (allDevices ?? []).filter(d => d.id !== roomDeviceId);
-  const devicesToProvision = [...entranceDevices, ...(roomDevice ? [roomDevice] : [])];
+  const devicesToProvision = [
+    ...(entryDevices ?? []),
+    ...(roomDevice ? [roomDevice] : []),
+  ];
 
   if (devicesToProvision.length === 0) {
-    return NextResponse.json({ ok: true, skipped: true, reason: "No enabled devices at location" });
+    return NextResponse.json({ ok: true, skipped: true, reason: "No enabled COSEC devices at location" });
   }
 
   // Build valid window (start - 5min, end + 5min)
@@ -119,15 +136,16 @@ export async function POST(request: NextRequest) {
   // Store PIN in booking
   await admin.from("bookings").update({ access_pin: pin }).eq("id", booking_id);
 
-  // Audit trail — system-provisioned COSEC PIN for a confirmed booking
+  // Audit trail — system-provisioned COSEC PIN for a confirmed booking.
+  // Logs the event and which devices were activated; PIN digits are not stored.
   logAudit(admin, {
     entityType: "booking",
     entityId: booking_id,
     action: "update",
     performedBy: "system",
     changes: {
-      access_pin: { old: null, new: "[provisioned]" },
-      cosec_devices_provisioned: { old: 0, new: devicesToProvision.length },
+      access_pin:        { old: null, new: "[provisioned]" },
+      devices_activated: { old: [], new: devicesToProvision.map(d => d.label) },
     },
   });
 

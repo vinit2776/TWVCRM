@@ -9,7 +9,7 @@ import {
   Phone, AlertTriangle, ShieldCheck, Star,
   Banknote, CheckCircle, Calendar, Timer, Copy, Coins, Gift,
   Download, MessageCircle, Repeat,
-  StickyNote, Pencil, Check, X, Plus, Share2, KeyRound, Send,
+  StickyNote, Pencil, Check, X, Plus, Share2, KeyRound, Send, DoorOpen, Building2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -117,6 +117,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [bookingCharges, setBookingCharges] = useState<any[]>([]);
   const [userRole, setUserRole] = useState<string | null>(null);
+  const [bookingDevices, setBookingDevices] = useState<Array<{ id: string; device: { id: string; label: string; device_category: string } | null }>>([]);
 
   // GST inline-edit state
   const [editingGst, setEditingGst] = useState(false);
@@ -141,14 +142,15 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const fetchBooking = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
 
-    // Wave 1: booking (needed for leadId) + payments + booking charges + settings — parallel
-    const [bookingRes, paymentsRes, bcRes, settingsRes] = await Promise.all([
+    // Wave 1: booking (needed for leadId) + payments + booking charges + settings + devices — parallel
+    const [bookingRes, paymentsRes, bcRes, settingsRes, devicesRes] = await Promise.all([
       fetch(`/api/bookings/${id}`, { signal }),
       fetch(`/api/booking-payments?booking_id=${id}`, { signal }),
       fetch(`/api/usage-charges?booking_id=${id}`, { signal }),
       fetch("/api/settings/public", { signal }),
+      fetch(`/api/cosec/booking-devices?booking_id=${id}`, { signal }),
     ]).catch((e) => {
-      if ((e as Error).name === "AbortError") return [null, null, null, null] as const;
+      if ((e as Error).name === "AbortError") return [null, null, null, null, null] as const;
       throw e;
     });
     if (signal?.aborted) return;
@@ -172,6 +174,10 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
       const settings = sJson.data || {};
       setUpiId(settings.upi_id || "");
       setUpiQrCodePath(settings.upi_qr_code_path || "");
+    }
+    if (devicesRes?.ok) {
+      const dJson = await devicesRes.json();
+      setBookingDevices(dJson.data || []);
     }
 
     // Wave 2: outstanding charges (needs leadId from Wave 1)
@@ -1377,7 +1383,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
         {(booking as any).access_pin && (
           <Card>
-            <CardHeader><CardTitle className="text-sm flex items-center gap-2"><KeyRound size={14} />Room Access PIN</CardTitle></CardHeader>
+            <CardHeader><CardTitle className="text-sm flex items-center gap-2"><KeyRound size={14} />Access PIN</CardTitle></CardHeader>
             <CardContent className="space-y-3 text-sm">
               <div className="flex items-center justify-between">
                 <div>
@@ -1395,16 +1401,45 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                       headers: { "Content-Type": "application/json" },
                       body: JSON.stringify({ booking_id: id }),
                     });
-                    if (res.ok) toast.success("Access PIN resent");
+                    if (res.ok) {
+                      toast.success("Access PIN resent");
+                      // Refresh device list in case it changed
+                      fetch(`/api/cosec/booking-devices?booking_id=${id}`)
+                        .then(r => r.json())
+                        .then(j => setBookingDevices(j.data || []))
+                        .catch(() => {});
+                    }
                     else toast.error("Failed to resend PIN");
                   }}
                 >
                   <Send size={13} className="mr-1.5" />Resend PIN
                 </Button>
               </div>
-              <p className="text-xs text-muted-foreground">
-                Enter this PIN at the entrance device and conference room device to unlock the door.
-              </p>
+
+              {/* Active access points for this booking */}
+              {bookingDevices.length > 0 && (
+                <div className="space-y-1.5">
+                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Access points activated</p>
+                  <div className="flex flex-wrap gap-2">
+                    {bookingDevices.map((bd) => {
+                      const isRoom = bd.device?.device_category === "business_centre";
+                      return (
+                        <div key={bd.id} className={`flex items-center gap-1.5 text-xs rounded px-2 py-1 ${
+                          isRoom
+                            ? "bg-violet-50 border border-violet-200 text-violet-700"
+                            : "bg-green-50 border border-green-200 text-green-700"
+                        }`}>
+                          {isRoom
+                            ? <Building2 size={11} />
+                            : <DoorOpen size={11} />
+                          }
+                          <span>{bd.device?.label ?? "Device"}</span>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              )}
             </CardContent>
           </Card>
         )}

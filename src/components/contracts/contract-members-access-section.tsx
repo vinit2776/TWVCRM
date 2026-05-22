@@ -483,8 +483,8 @@ function MemberLifecycle({
           )}
           {group.nfc_card_number && (
             <span className="flex items-center gap-1">
-              <CreditCard size={11} className="text-green-500" />
-              Card {group.nfc_card_number.slice(-8)}
+              <CreditCard size={11} className="text-violet-500" />
+              <span className="font-mono font-medium text-foreground tracking-wide">{group.nfc_card_number}</span>
             </span>
           )}
           {group.first_access_at && (
@@ -742,6 +742,12 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                     <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-xs text-muted-foreground">
                       <span>{member.phone}</span>
                       {member.email && <span>{member.email}</span>}
+                      {wizardGroup?.nfc_card_number && (
+                        <span className="flex items-center gap-1 text-violet-600">
+                          <CreditCard size={10} />
+                          <span className="font-mono font-medium tracking-wide">{wizardGroup.nfc_card_number}</span>
+                        </span>
+                      )}
                     </div>
 
                     {/* Per-device chips */}

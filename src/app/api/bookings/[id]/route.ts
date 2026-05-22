@@ -7,7 +7,7 @@ import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 
 export const maxDuration = 30;
 
-const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile), facilities:booking_facilities(*)";
+const BOOKING_SELECT = "*, space:spaces!bookings_space_id_fkey(id, name, capacity, hourly_rate, location_id, workspace_type, cosec_device_id), location:locations!bookings_location_id_fkey(id, name, code, address, city, state), contract:contracts!bookings_contract_id_fkey(id, contract_number, lead_id), lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile), facilities:booking_facilities(*)";
 
 /**
  * Recompute the booking's GST + grand-total fields from a new ex-GST

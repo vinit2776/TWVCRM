@@ -72,7 +72,8 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
 
   const loadCosecDevices = useCallback(async (locId: string) => {
     if (!locId) { setCosecDevices([]); return; }
-    const res = await fetch(`/api/cosec/devices?location_id=${locId}`);
+    // Only fetch business_centre devices — entry_point readers are not linkable to spaces
+    const res = await fetch(`/api/cosec/devices?location_id=${locId}&category=business_centre`);
     if (res.ok) {
       const json = await res.json();
       setCosecDevices(json.data ?? []);
@@ -83,6 +84,10 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
     if (locationId) loadCosecDevices(locationId);
     else setCosecDevices([]);
   }, [locationId, loadCosecDevices]);
+
+  // Clear device link when workspace type changes away from conference/meeting room
+  const ROOM_TYPES_WITH_ACCESS = ["conference_room", "meeting_room"];
+  const showCosecSelector = ROOM_TYPES_WITH_ACCESS.includes(workspaceType);
 
   useEffect(() => {
     if (space) {
@@ -305,7 +310,10 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
 
             <div className="space-y-2">
               <Label htmlFor="space-workspace-type">Space Type</Label>
-              <Select value={workspaceType} onValueChange={setWorkspaceType}>
+              <Select value={workspaceType} onValueChange={(v) => {
+                setWorkspaceType(v);
+                if (!ROOM_TYPES_WITH_ACCESS.includes(v)) setCosecDeviceId("__none");
+              }}>
                 <SelectTrigger id="space-workspace-type"><SelectValue placeholder="Select type (optional)" /></SelectTrigger>
                 <SelectContent>
                   <SelectItem value="__none">None</SelectItem>
@@ -319,19 +327,25 @@ export function SpaceFormDialog({ open, onOpenChange, space, onSuccess }: SpaceF
               </Select>
             </div>
 
-            {cosecDevices.length > 0 && (
+            {showCosecSelector && (
               <div className="space-y-2">
-                <Label htmlFor="space-cosec">COSEC Access Device <span className="text-muted-foreground text-xs">(optional)</span></Label>
-                <Select value={cosecDeviceId} onValueChange={setCosecDeviceId}>
-                  <SelectTrigger id="space-cosec"><SelectValue placeholder="No device linked" /></SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="__none">None</SelectItem>
-                    {cosecDevices.map(d => (
-                      <SelectItem key={d.id} value={d.id}>{d.label} — {d.device_ip}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <p className="text-xs text-muted-foreground">Link a COSEC device to this room so booking guests receive an access PIN automatically.</p>
+                <Label htmlFor="space-cosec">Business Centre Access Device <span className="text-muted-foreground text-xs">(optional)</span></Label>
+                {cosecDevices.length === 0 ? (
+                  <p className="text-xs text-muted-foreground">No business centre COSEC devices configured at this location. Set them up under Admin → COSEC Devices.</p>
+                ) : (
+                  <>
+                    <Select value={cosecDeviceId} onValueChange={setCosecDeviceId}>
+                      <SelectTrigger id="space-cosec"><SelectValue placeholder="No device linked" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="__none">None</SelectItem>
+                        {cosecDevices.map(d => (
+                          <SelectItem key={d.id} value={d.id}>{d.label} — {d.device_ip}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">Link a business centre device to this room. Booking guests will receive a PIN valid for this room and the entry doors for the duration of their booking.</p>
+                  </>
+                )}
               </div>
             )}
 
