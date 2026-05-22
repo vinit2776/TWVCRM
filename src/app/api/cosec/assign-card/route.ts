@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
 
   const { data: au } = await admin
     .from("cosec_access_users")
-    .select("*, device:cosec_devices(device_ip, device_port, device_password)")
+    .select("*, device:cosec_devices(device_ip, device_port, device_password, location_id)")
     .eq("id", parsed.data.access_user_id)
     .single();
 
@@ -40,6 +40,9 @@ export async function POST(request: NextRequest) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const dev = au.device as any;
   if (!dev) return NextResponse.json({ error: "Device not found" }, { status: 404 });
+
+  // location_id of the device being enrolled — propagation is scoped to this location only
+  const enrolledLocationId: string | null = dev.location_id ?? null;
 
   const deviceConn = { ip: dev.device_ip, port: dev.device_port, password: dev.device_password };
 
@@ -88,14 +91,27 @@ export async function POST(request: NextRequest) {
     // bookings have their own valid window — don't touch validity during card enroll
   } catch { /* non-fatal — use null (no expiry) as safe fallback */ }
 
-  // ── Fetch ALL cosec_access_users for this entity ───────────────────────────
-  // Card number and validity must be pushed to every device the person is
-  // provisioned on (entrance + room devices) — not just the one being enrolled.
+  // ── Fetch access users for this entity — same location only ───────────────
+  // Propagation is intentionally scoped to the location of the device being
+  // enrolled. A member may have access at multiple branches; we must not push
+  // this location's card enrollment to another branch's devices.
+  let locationDeviceIds: string[] = [au.device_id as string];
+  if (enrolledLocationId) {
+    const { data: locationDevices } = await admin
+      .from("cosec_devices")
+      .select("id")
+      .eq("location_id", enrolledLocationId);
+    if (locationDevices && locationDevices.length > 0) {
+      locationDeviceIds = locationDevices.map(d => d.id);
+    }
+  }
+
   const { data: allAccessUsers } = await admin
     .from("cosec_access_users")
     .select("id, cosec_user_id, enrollment_status, nfc_card_number, device:cosec_devices(device_ip, device_port, device_password)")
     .eq("entity_id", au.entity_id)
-    .eq("user_type", au.user_type);
+    .eq("user_type", au.user_type)
+    .in("device_id", locationDeviceIds);
 
   const allUsers = allAccessUsers ?? [au];
   const now = new Date().toISOString();
