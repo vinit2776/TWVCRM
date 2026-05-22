@@ -36,7 +36,6 @@ import { ContractFacilitiesSection } from "@/components/contracts/contract-facil
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
 import { ContractAccessLogsSection } from "@/components/contracts/contract-access-logs-section";
-import { CosecAccessWizard } from "@/components/contracts/cosec-access-wizard";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import {
   Dialog,
@@ -867,10 +866,7 @@ export default function ContractDetailPage({
             onDepartmentIdUpdate={fetchContract}
           />
 
-          {/* COSEC Access Onboarding Wizard */}
-          <CosecAccessWizard contractId={id} />
-
-          {/* Members & Access Control */}
+          {/* Members & Access Control (lifecycle steps shown inline per member) */}
           <ContractMembersAccessSection
             contractId={id}
             seats={contract.seats}
