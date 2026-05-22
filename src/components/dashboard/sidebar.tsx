@@ -170,6 +170,7 @@ const navSections: NavSection[] = [
       { href: "/facility/my-issues",     label: "My Issues",           icon: Ticket,        roles: null },
       { href: "/facility/assets",        label: "Assets",              icon: Server,        roles: ["admin", "manager", "it_manager", "it_technician", "fms", "viewer"] },
       { href: "/facility/team-kpi",      label: "Team KPI",            icon: TrendingUp,    roles: ["admin", "manager", "it_manager", "fms", "viewer"] },
+      { href: "/admin/employees",        label: "Employees",           icon: UsersRound,    roles: ["admin", "manager", "office_admin", "floor_manager", "fms"] },
       { href: "/admin/cosec-devices",    label: "COSEC Devices",       icon: Fingerprint,   roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },
       { href: "/admin/cosec-access",     label: "Access Enrollments",  icon: ShieldCheck,   roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },
       { href: "/admin/access-analytics", label: "Access Analytics",    icon: BarChart3Icon, roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },

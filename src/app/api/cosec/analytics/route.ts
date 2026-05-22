@@ -44,14 +44,15 @@ export async function GET(request: NextRequest) {
   }
 
   switch (type) {
-    case "presence":      return handlePresence(supabase, deviceIds, locationId);
-    case "heatmap":       return handleHeatmap(supabase, deviceIds, from, to);
-    case "attendance":    return handleAttendance(supabase, deviceIds, from, to);
-    case "denials":       return handleDenials(supabase, deviceIds, from, to);
-    case "footfall":      return handleFootfall(supabase, deviceIds, from, to);
-    case "today":         return handleToday(supabase, deviceIds);
+    case "presence":           return handlePresence(supabase, deviceIds, locationId);
+    case "heatmap":            return handleHeatmap(supabase, deviceIds, from, to);
+    case "attendance":         return handleAttendance(supabase, deviceIds, from, to);
+    case "denials":            return handleDenials(supabase, deviceIds, from, to);
+    case "footfall":           return handleFootfall(supabase, deviceIds, from, to);
+    case "today":              return handleToday(supabase, deviceIds);
+    case "employee_register":  return handleEmployeeRegister(supabase, from, to, locationId, p.get("department"));
     default:
-      return NextResponse.json({ error: "type must be one of: presence, heatmap, attendance, denials, footfall, today" }, { status: 400 });
+      return NextResponse.json({ error: "type must be one of: presence, heatmap, attendance, denials, footfall, today, employee_register" }, { status: 400 });
   }
 }
 
@@ -334,4 +335,105 @@ async function handleToday(supabase: any, deviceIds: string[]) {
     total_entries: (data ?? []).length,
     unique_visitors: visitors.length,
   });
+}
+
+// ── Employee Register ─────────────────────────────────────────────────────────
+// Per-employee per-day attendance with first-IN, last-OUT, and location.
+// Scope: user_type = 'employee' only, across all locations (or one if locationId given).
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function handleEmployeeRegister(supabase: any, from: string, to: string, locationId: string | null, department: string | null) {
+  // Resolve device ids for location filter (entry_point only)
+  let deviceFilter: string[] = [];
+  if (locationId) {
+    const { data: devs } = await supabase
+      .from("cosec_devices")
+      .select("id")
+      .eq("location_id", locationId)
+      .eq("is_enabled", true)
+      .eq("device_category", "entry_point");
+    deviceFilter = (devs ?? []).map((d: { id: string }) => d.id);
+    if (deviceFilter.length === 0) return NextResponse.json({ employees: [], from, to });
+  }
+
+  // Fetch all events (IN + OUT) for employees in the window
+  let query = supabase
+    .from("access_logs")
+    .select("entity_id, entity_name, direction, event_time, device_id, device:cosec_devices(label, location_id, location:locations(id, name))")
+    .eq("user_type", "employee")
+    .in("direction", ["IN", "OUT"])
+    .gte("event_time", `${from}T00:00:00+05:30`)
+    .lte("event_time", `${to}T23:59:59+05:30`)
+    .order("event_time", { ascending: true });
+
+  if (deviceFilter.length > 0) query = query.in("device_id", deviceFilter);
+
+  const { data: events, error } = await query;
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Fetch all active employees (optionally filtered by department)
+  let empQuery = supabase
+    .from("employees")
+    .select("id, full_name, department, designation, location_id, location:locations(name)")
+    .eq("is_active", true)
+    .order("full_name", { ascending: true });
+
+  if (department) empQuery = empQuery.eq("department", department);
+  const { data: employees } = await empQuery;
+
+  // Build per-employee per-day map from events
+  type DayEntry = {
+    date: string;
+    first_in: string | null;
+    last_out: string | null;
+    entries: number;
+    location_name: string;
+  };
+
+  const empDays = new Map<string, Map<string, DayEntry>>();
+
+  for (const row of events ?? []) {
+    if (!row.entity_id) continue;
+    const ist = new Date(new Date(row.event_time).toLocaleString("en-US", { timeZone: "Asia/Kolkata" }));
+    const dateStr = `${ist.getFullYear()}-${String(ist.getMonth() + 1).padStart(2, "0")}-${String(ist.getDate()).padStart(2, "0")}`;
+
+    if (!empDays.has(row.entity_id)) empDays.set(row.entity_id, new Map());
+    const dayMap = empDays.get(row.entity_id)!;
+
+    if (!dayMap.has(dateStr)) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const loc = row.device as any;
+      dayMap.set(dateStr, {
+        date: dateStr,
+        first_in: null,
+        last_out: null,
+        entries: 0,
+        location_name: loc?.location?.name ?? loc?.label ?? "Unknown",
+      });
+    }
+
+    const day = dayMap.get(dateStr)!;
+    if (row.direction === "IN") {
+      if (!day.first_in) day.first_in = row.event_time;
+      day.entries++;
+    } else if (row.direction === "OUT") {
+      day.last_out = row.event_time;
+    }
+  }
+
+  // Build result array — include employees with zero attendance too
+  const result = (employees ?? []).map((emp: { id: string; full_name: string; department: string | null; designation: string | null; location: { name: string } | null }) => {
+    const dayMap = empDays.get(emp.id);
+    const days = dayMap ? Array.from(dayMap.values()).sort((a, b) => a.date.localeCompare(b.date)) : [];
+    return {
+      entity_id: emp.id,
+      entity_name: emp.full_name,
+      department: emp.department,
+      designation: emp.designation,
+      home_location: (emp.location as { name: string } | null)?.name ?? null,
+      days_present: days.filter(d => d.first_in).length,
+      days: days,
+    };
+  });
+
+  return NextResponse.json({ employees: result, from, to });
 }
