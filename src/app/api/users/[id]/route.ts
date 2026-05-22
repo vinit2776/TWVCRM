@@ -1,5 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { logAudit } from "@/lib/audit";
+
+const VALID_ROLES = [
+  "admin", "manager", "sales_rep", "floor_manager", "accounts",
+  "fms", "office_admin", "it_manager", "it_technician", "viewer",
+];
 
 export async function PATCH(
   request: NextRequest,
@@ -24,7 +30,7 @@ export async function PATCH(
   const body = await request.json();
   const allowedFields: Record<string, unknown> = {};
 
-  if (body.role && ["admin", "manager", "sales_rep"].includes(body.role)) {
+  if (body.role && VALID_ROLES.includes(body.role)) {
     allowedFields.role = body.role;
   }
   if (typeof body.is_active === "boolean") {
@@ -35,7 +41,16 @@ export async function PATCH(
     return NextResponse.json({ error: "No valid fields to update" }, { status: 400 });
   }
 
-  const { data, error } = await supabase
+  const admin = createAdminClient();
+
+  // Fetch current values for audit diff
+  const { data: before } = await admin
+    .from("users")
+    .select("role, is_active")
+    .eq("id", id)
+    .single();
+
+  const { data, error } = await admin
     .from("users")
     .update(allowedFields)
     .eq("id", id)
@@ -43,5 +58,19 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Audit trail — role/status changes are security-critical
+  const changes: Record<string, { old: unknown; new: unknown }> = {};
+  if (allowedFields.role !== undefined) changes.role = { old: before?.role ?? null, new: allowedFields.role };
+  if (allowedFields.is_active !== undefined) changes.is_active = { old: before?.is_active ?? null, new: allowedFields.is_active };
+
+  logAudit(admin, {
+    entityType: "user",
+    entityId: id,
+    action: "update",
+    performedBy: user.id,
+    changes,
+  });
+
   return NextResponse.json({ data });
 }

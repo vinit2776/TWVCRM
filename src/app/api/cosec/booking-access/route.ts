@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { provisionUser, bookingCosecId, uuidToRefId, generatePin } from "@/lib/cosec";
+import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 
 const schema = z.object({
@@ -117,6 +118,18 @@ export async function POST(request: NextRequest) {
 
   // Store PIN in booking
   await admin.from("bookings").update({ access_pin: pin }).eq("id", booking_id);
+
+  // Audit trail — system-provisioned COSEC PIN for a confirmed booking
+  logAudit(admin, {
+    entityType: "booking",
+    entityId: booking_id,
+    action: "update",
+    performedBy: "system",
+    changes: {
+      access_pin: { old: null, new: "[provisioned]" },
+      cosec_devices_provisioned: { old: 0, new: devicesToProvision.length },
+    },
+  });
 
   // Format times for message
   const fmtTime = (t: string) => {

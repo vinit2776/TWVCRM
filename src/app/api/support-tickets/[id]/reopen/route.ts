@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { logAudit } from "@/lib/audit";
 
 // POST — reopen a resolved or closed ticket (ticket owner only)
 export async function POST(
@@ -64,6 +65,14 @@ export async function POST(
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
+
+  logAudit(adminSupabase, {
+    entityType: "support_ticket",
+    entityId: id,
+    action: "update",
+    performedBy: user.id,
+    changes: { status: { old: ticket.status, new: "open" } },
+  });
 
   return NextResponse.json({ data: updated });
 }
