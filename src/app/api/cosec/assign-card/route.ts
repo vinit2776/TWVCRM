@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { readCardFromDevice, setCardNumber } from "@/lib/cosec";
+import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 
 const schema = z.object({
@@ -71,6 +72,18 @@ export async function POST(request: NextRequest) {
       updated_at: now,
     })
     .eq("id", au.id);
+
+  // Audit trail
+  logAudit(admin, {
+    entityType: "cosec_access_user",
+    entityId: au.id,
+    action: "update",
+    performedBy: user.id,
+    changes: {
+      nfc_card_number: { old: au.nfc_card_number ?? null, new: cardNumber },
+      enrollment_status: { old: currentStatus, new: newStatus },
+    },
+  });
 
   return NextResponse.json({ ok: true, cardNumber, cardType: cardResult.cardType, enrollment_status: newStatus });
 }

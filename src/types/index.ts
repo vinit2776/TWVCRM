@@ -754,7 +754,9 @@ export type AuditEntityType =
   | "lease_asset"
   | "lease_handover"
   | "lease_document"
-  | "lease_service_offering";
+  | "lease_service_offering"
+  | "cosec_access_user"
+  | "cosec_device";
 
 export interface AuditLog {
   id: string;

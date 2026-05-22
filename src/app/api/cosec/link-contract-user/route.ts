@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { getUserByRefId, setUserActive } from "@/lib/cosec";
+import { logAudit } from "@/lib/audit";
 
 export async function POST(request: NextRequest) {
   const authHeader = request.headers.get("authorization");
@@ -94,7 +95,29 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: insertErr?.message || "Failed to create access user" }, { status: 500 });
   }
 
-  // 7. Backfill access_logs — update entity_id and entity_name for this ref_id on this device
+  // 7. Audit trail — linking a device user to a contract
+  // Note: this endpoint accepts both cookie-auth and cron token. Only log when it's a human session.
+  const sessionUser = await (async () => {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    return user;
+  })().catch(() => null);
+  if (sessionUser) {
+    logAudit(admin, {
+      entityType: "cosec_access_user",
+      entityId: newUser.id,
+      action: "create",
+      performedBy: sessionUser.id,
+      changes: {
+        device_id: { old: null, new: device_id },
+        contract_id: { old: null, new: contract_id },
+        cosec_ref_id: { old: null, new: cosec_ref_id },
+        cosec_user_id: { old: null, new: userInfo.userId },
+      },
+    });
+  }
+
+  // 8. Backfill access_logs — update entity_id and entity_name for this ref_id on this device
   await admin
     .from("access_logs")
     .update({ entity_id: contract_id, entity_name: entityName, user_type: "contract" })
@@ -102,7 +125,7 @@ export async function POST(request: NextRequest) {
     .eq("cosec_ref_id", cosec_ref_id)
     .is("entity_id", null);
 
-  // 8. If device user is inactive, activate it (set valid_until on device)
+  // 9. If device user is inactive, activate it (set valid_until on device)
   try {
     await setUserActive(deviceCreds, userInfo.userId, true);
   } catch { /* non-fatal — device may already be active */ }

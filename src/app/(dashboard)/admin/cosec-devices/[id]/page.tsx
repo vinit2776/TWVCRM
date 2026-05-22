@@ -137,6 +137,9 @@ export default function CosecDeviceDetailPage() {
   const [denialSummary, setDenialSummary]           = useState<DenialSummary[]>([]);
   const [analyticsDays, setAnalyticsDays]           = useState(30);
 
+  // Active tab
+  const [activeTab, setActiveTab]                   = useState("users");
+
   // Card assign state
   const [cardAssigning, setCardAssigning]           = useState<string | null>(null); // access_user_id being assigned
 
@@ -374,7 +377,12 @@ export default function CosecDeviceDetailPage() {
     }
   }
 
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => {
+    load();
+    // Auto-load live device users in background so the Live Device tab is ready
+    // and we can show a banner on the Enrolled tab for unlinked legacy users.
+    loadLiveUsers();
+  }, [load, loadLiveUsers]);
 
   // ── Action handlers ────────────────────────────────────────────────────────
 
@@ -609,7 +617,7 @@ export default function CosecDeviceDetailPage() {
       </Card>
 
       {/* ── Tabs ───────────────────────────────────────────────────────────── */}
-      <Tabs defaultValue="users">
+      <Tabs value={activeTab} onValueChange={(v) => { setActiveTab(v); if (v === "analytics") loadAnalytics(); if (v === "unlinked") { loadUnlinked(); loadContracts(); } }}>
         <TabsList>
           <TabsTrigger value="users" className="flex items-center gap-1.5">
             <Users size={13} />Enrolled ({users.length})
@@ -620,22 +628,46 @@ export default function CosecDeviceDetailPage() {
               <span className="ml-1 bg-red-500 text-white text-[10px] rounded-full px-1.5 py-0.5 leading-none">{deniedCount}</span>
             )}
           </TabsTrigger>
-          <TabsTrigger value="unlinked" className="flex items-center gap-1.5" onClick={() => { loadUnlinked(); loadContracts(); }}>
+          <TabsTrigger value="unlinked" className="flex items-center gap-1.5">
             <AlertTriangle size={13} />Unlinked
             {unlinked.length > 0 && (
               <span className="ml-1 bg-amber-500 text-white text-[10px] rounded-full px-1.5 py-0.5 leading-none">{unlinked.length}</span>
             )}
           </TabsTrigger>
-          <TabsTrigger value="live" className="flex items-center gap-1.5" onClick={loadLiveUsers}>
+          <TabsTrigger value="live" className="flex items-center gap-1.5">
             <MonitorSmartphone size={13} />Live Device
+            {liveUsers.length > 0 && (
+              <span className="ml-1 bg-violet-500 text-white text-[10px] rounded-full px-1.5 py-0.5 leading-none">{liveUsers.length}</span>
+            )}
           </TabsTrigger>
-          <TabsTrigger value="analytics" className="flex items-center gap-1.5" onClick={loadAnalytics}>
+          <TabsTrigger value="analytics" className="flex items-center gap-1.5">
             <TrendingUp size={13} />Analytics
           </TabsTrigger>
         </TabsList>
 
         {/* ── Enrolled Users ─────────────────────────────────────────────── */}
         <TabsContent value="users" className="mt-4">
+          {/* Banner: legacy device users not yet in the system */}
+          {(() => {
+            const unlinkedCount = liveUsers.filter(u => !u.is_linked).length;
+            if (unlinkedCount === 0) return null;
+            return (
+              <div className="mb-3 flex items-start gap-2.5 rounded-md border border-violet-200 bg-violet-50/60 px-4 py-3 text-sm text-violet-800">
+                <MonitorSmartphone size={15} className="mt-0.5 shrink-0 text-violet-600" />
+                <span>
+                  <strong>{unlinkedCount} user{unlinkedCount !== 1 ? "s" : ""}</strong> enrolled on the device
+                  {liveLoading ? " (loading…)" : ""} are not linked to any contract or employee record in the system.
+                  {" "}
+                  <button
+                    className="font-semibold underline underline-offset-2 hover:text-violet-900"
+                    onClick={() => setActiveTab("live")}
+                  >
+                    View on Live Device tab →
+                  </button>
+                </span>
+              </div>
+            );
+          })()}
           {users.length === 0 ? (
             <Card><CardContent className="py-12 text-center text-muted-foreground">
               <Fingerprint size={36} className="mx-auto mb-3 opacity-30" />

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { setUserActive } from "@/lib/cosec";
+import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 
 const schema = z.object({
@@ -19,7 +20,7 @@ export async function POST(request: NextRequest) {
 
   const { data: row } = await admin
     .from("cosec_access_users")
-    .select("cosec_user_id, device:cosec_devices(device_ip, device_port, device_password)")
+    .select("cosec_user_id, enrollment_status, device:cosec_devices(device_ip, device_port, device_password)")
     .eq("id", parsed.data.access_user_id)
     .single();
 
@@ -40,6 +41,15 @@ export async function POST(request: NextRequest) {
     .from("cosec_access_users")
     .update({ enrollment_status: "biometric_enrolled", blocked_at: null, updated_at: now })
     .eq("id", parsed.data.access_user_id);
+
+  // Audit trail — security-critical action
+  logAudit(admin, {
+    entityType: "cosec_access_user",
+    entityId: parsed.data.access_user_id,
+    action: "enable",
+    performedBy: user.id,
+    changes: { enrollment_status: { old: row.enrollment_status, new: "biometric_enrolled" } },
+  });
 
   return NextResponse.json({ ok: true });
 }

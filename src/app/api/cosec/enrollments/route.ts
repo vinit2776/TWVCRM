@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { listAllUsersFromDevice } from "@/lib/cosec";
 
 /**
  * GET /api/cosec/enrollments
@@ -194,8 +195,74 @@ export async function GET() {
     byTypeCount[e.user_type] = (byTypeCount[e.user_type] ?? 0) + 1;
   }
 
+  // ── 6. Fetch live device users — find unlinked (enrolled on device but not in DB) ─
+  type UnlinkedDeviceUser = {
+    device_id: string;
+    device_label: string;
+    device_category: string;
+    location_name: string;
+    cosec_user_id: string;
+    cosec_ref_id: number;
+    name: string;
+    is_active: boolean;
+    finger_count: number;
+    card_number: string | null;
+  };
+
+  const unlinked: UnlinkedDeviceUser[] = [];
+  const knownCosecIds = new Set(allRows.map(r => r.cosec_user_id));
+
+  const { data: devices } = await admin
+    .from("cosec_devices")
+    .select("id, label, device_ip, device_port, device_password, device_category, location:locations(name)");
+
+  if (devices && devices.length > 0) {
+    await Promise.allSettled(
+      devices.map(async (device) => {
+        try {
+          const liveUsers = await listAllUsersFromDevice({
+            ip: device.device_ip,
+            port: device.device_port,
+            password: device.device_password,
+          });
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const loc = Array.isArray(device.location) ? device.location[0] : (device.location as any);
+          for (const lu of liveUsers) {
+            if (!knownCosecIds.has(lu.userId)) {
+              unlinked.push({
+                device_id: device.id,
+                device_label: device.label,
+                device_category: device.device_category ?? "entry_point",
+                location_name: loc?.name ?? "",
+                cosec_user_id: lu.userId,
+                cosec_ref_id: lu.refUserId,
+                name: lu.name,
+                is_active: lu.isActive,
+                finger_count: lu.fingerCount,
+                card_number: lu.cardNumber || null,
+              });
+            }
+          }
+        } catch {
+          // Device offline or unreachable — skip silently, don't fail the whole request
+        }
+      })
+    );
+  }
+
+  // Sort unlinked by device label then name
+  unlinked.sort((a, b) =>
+    a.device_label.localeCompare(b.device_label) || a.name.localeCompare(b.name)
+  );
+
   return NextResponse.json({
     data: enriched,
-    meta: { total: enriched.length, legacy: legacyCount, byType: byTypeCount },
+    unlinked,
+    meta: {
+      total: enriched.length,
+      legacy: legacyCount,
+      byType: byTypeCount,
+      unlinked_count: unlinked.length,
+    },
   });
 }

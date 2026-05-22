@@ -10,6 +10,7 @@ import { toast } from "sonner";
 import {
   AlertTriangle, Fingerprint, CreditCard, Loader2,
   ShieldOff, ShieldCheck, RefreshCw, Search, Filter,
+  MonitorSmartphone, ExternalLink,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 
@@ -46,6 +47,20 @@ interface Meta {
   total: number;
   legacy: number;
   byType: Record<string, number>;
+  unlinked_count: number;
+}
+
+interface UnlinkedDeviceUser {
+  device_id: string;
+  device_label: string;
+  device_category: string;
+  location_name: string;
+  cosec_user_id: string;
+  cosec_ref_id: number;
+  name: string;
+  is_active: boolean;
+  finger_count: number;
+  card_number: string | null;
 }
 
 // ── Constants ──────────────────────────────────────────────────────────────────
@@ -75,11 +90,12 @@ const CONTRACT_STATUS_COLORS: Record<string, string> = {
 
 export default function CosecAccessPage() {
   const [enrollments, setEnrollments] = useState<Enrollment[]>([]);
+  const [unlinked, setUnlinked] = useState<UnlinkedDeviceUser[]>([]);
   const [meta, setMeta] = useState<Meta | null>(null);
   const [loading, setLoading] = useState(true);
 
   // Filter state
-  const [tab, setTab]             = useState<"all" | "legacy" | "blocked">("all");
+  const [tab, setTab]             = useState<"all" | "legacy" | "blocked" | "unlinked">("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [deviceFilter, setDeviceFilter] = useState<string>("all");
   const [search, setSearch]       = useState("");
@@ -93,6 +109,7 @@ export default function CosecAccessPage() {
       const res = await fetch("/api/cosec/enrollments");
       const json = await res.json();
       setEnrollments(json.data ?? []);
+      setUnlinked(json.unlinked ?? []);
       setMeta(json.meta ?? null);
     } catch {
       toast.error("Failed to load enrollments");
@@ -112,8 +129,9 @@ export default function CosecAccessPage() {
     return [...seen.entries()];
   }, [enrollments]);
 
-  // Filtered list
+  // Filtered list (DB enrollments)
   const filtered = useMemo(() => {
+    if (tab === "unlinked") return [];
     return enrollments.filter(e => {
       if (tab === "legacy"  && !e.is_legacy) return false;
       if (tab === "blocked" && e.enrollment_status !== "blocked") return false;
@@ -131,6 +149,18 @@ export default function CosecAccessPage() {
       return true;
     });
   }, [enrollments, tab, typeFilter, deviceFilter, search]);
+
+  // Filtered unlinked device users
+  const filteredUnlinked = useMemo(() => {
+    if (tab !== "unlinked") return [];
+    if (!search) return unlinked;
+    const q = search.toLowerCase();
+    return unlinked.filter(u =>
+      u.name.toLowerCase().includes(q) ||
+      u.cosec_user_id.toLowerCase().includes(q) ||
+      u.device_label.toLowerCase().includes(q)
+    );
+  }, [unlinked, tab, search]);
 
   // ── Actions ────────────────────────────────────────────────────────────────
 
@@ -217,6 +247,17 @@ export default function CosecAccessPage() {
               <p className="text-2xl font-semibold mt-1">{meta.byType.booking ?? 0}</p>
             </CardContent>
           </Card>
+          {meta.unlinked_count > 0 && (
+            <Card className="py-3 border-violet-300 bg-violet-50/30 col-span-2 sm:col-span-1">
+              <CardContent className="px-4 py-0">
+                <p className="text-xs text-muted-foreground flex items-center gap-1">
+                  <MonitorSmartphone size={11} className="text-violet-500" />
+                  Unlinked on device
+                </p>
+                <p className="text-2xl font-semibold mt-1 text-violet-700">{meta.unlinked_count}</p>
+              </CardContent>
+            </Card>
+          )}
         </div>
       )}
 
@@ -224,10 +265,14 @@ export default function CosecAccessPage() {
       <div className="flex flex-wrap gap-2 items-center">
         {/* Tab filter */}
         <div className="inline-flex rounded-md border text-xs overflow-hidden">
-          {(["all", "legacy", "blocked"] as const).map(t => (
+          {(["all", "legacy", "blocked", "unlinked"] as const).map(t => (
             <button key={t} onClick={() => setTab(t)}
-              className={`px-3 py-1.5 capitalize transition-colors ${tab === t ? "bg-primary text-primary-foreground font-medium" : "bg-white text-muted-foreground hover:bg-muted/40"} ${t !== "all" ? "border-l" : ""}`}>
-              {t === "legacy" && meta?.legacy ? `Legacy (${meta.legacy})` : t === "blocked" ? "Blocked" : "All"}
+              className={`px-3 py-1.5 transition-colors ${tab === t ? "bg-primary text-primary-foreground font-medium" : "bg-white text-muted-foreground hover:bg-muted/40"} ${t !== "all" ? "border-l" : ""}`}>
+              {t === "legacy" && meta?.legacy ? `Legacy (${meta.legacy})`
+                : t === "unlinked" && meta?.unlinked_count ? `Unlinked (${meta.unlinked_count})`
+                : t === "blocked" ? "Blocked"
+                : t === "unlinked" ? "Unlinked"
+                : "All"}
             </button>
           ))}
         </div>
@@ -274,7 +319,9 @@ export default function CosecAccessPage() {
       {/* Results count */}
       <p className="text-xs text-muted-foreground flex items-center gap-1.5">
         <Filter size={11} />
-        {filtered.length} of {enrollments.length} enrollments
+        {tab === "unlinked"
+          ? `${filteredUnlinked.length} of ${unlinked.length} unlinked device users`
+          : `${filtered.length} of ${enrollments.length} enrollments`}
       </p>
 
       {/* Enrollment list */}
@@ -282,6 +329,93 @@ export default function CosecAccessPage() {
         <div className="flex items-center justify-center py-20">
           <Loader2 className="animate-spin text-muted-foreground" size={28} />
         </div>
+      ) : tab === "unlinked" ? (
+        /* ── Unlinked device users ─────────────────────────────────────── */
+        filteredUnlinked.length === 0 ? (
+          <Card>
+            <CardContent className="py-14 text-center text-muted-foreground">
+              <MonitorSmartphone size={36} className="mx-auto mb-3 opacity-30" />
+              <p className="font-medium">
+                {unlinked.length === 0 ? "No unlinked users found" : "No results match your search"}
+              </p>
+              <p className="text-sm mt-1">
+                {unlinked.length === 0
+                  ? "All users enrolled on your devices are linked to a contract or employee record."
+                  : "Clear the search to see all unlinked users."}
+              </p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            <div className="rounded-md border border-violet-200 bg-violet-50/40 px-4 py-2.5 text-xs text-violet-800 flex items-start gap-2">
+              <MonitorSmartphone size={13} className="mt-0.5 shrink-0 text-violet-600" />
+              <span>
+                These users are enrolled directly on the device but are not linked to any contract,
+                booking, or employee record in the system. Use <strong>View on device</strong> to link them.
+              </span>
+            </div>
+            {filteredUnlinked.map(u => (
+              <Card key={`${u.device_id}-${u.cosec_user_id}`}
+                className="border-violet-200 bg-violet-50/10">
+                <CardContent className="py-3 px-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-violet-700 bg-violet-100 border border-violet-300 rounded px-1.5 py-0.5">
+                          <MonitorSmartphone size={10} />NOT IN SYSTEM
+                        </span>
+                        <span className="font-medium text-sm">
+                          {u.name || <span className="text-muted-foreground italic">Unnamed</span>}
+                        </span>
+                        {!u.is_active && (
+                          <span className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50 text-gray-500">
+                            Inactive
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap items-center gap-2 mt-1">
+                        <span className="text-xs text-muted-foreground">
+                          {u.device_label}
+                          {u.location_name && <> · {u.location_name}</>}
+                        </span>
+                        {u.device_category === "business_centre" && (
+                          <span className="text-[11px] px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-700">
+                            Business Centre
+                          </span>
+                        )}
+                      </div>
+
+                      <div className="flex flex-wrap gap-3 mt-1 text-xs text-muted-foreground">
+                        {u.finger_count > 0 && (
+                          <span className="flex items-center gap-1">
+                            <Fingerprint size={10} />{u.finger_count} fingerprint{u.finger_count !== 1 ? "s" : ""}
+                          </span>
+                        )}
+                        {u.card_number && (
+                          <span className="flex items-center gap-1">
+                            <CreditCard size={11} />{u.card_number}
+                          </span>
+                        )}
+                        <span className="font-mono text-[10px]">{u.cosec_user_id}</span>
+                        <span className="text-[10px]">ref #{u.cosec_ref_id}</span>
+                      </div>
+                    </div>
+
+                    <div className="shrink-0">
+                      <Link href={`/admin/cosec-devices/${u.device_id}`}>
+                        <Button size="sm" variant="outline" className="text-xs h-7 text-violet-700 border-violet-300 hover:bg-violet-50">
+                          <ExternalLink size={12} className="mr-1" />
+                          View on device
+                        </Button>
+                      </Link>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )
       ) : filtered.length === 0 ? (
         <Card>
           <CardContent className="py-14 text-center text-muted-foreground">
