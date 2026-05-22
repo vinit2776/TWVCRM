@@ -36,6 +36,7 @@ interface WizardEntry {
   card_enrolled_at: string | null;
   device_id: string;
   device_label: string;
+  device_category: "entry_point" | "business_centre";
   entity_name: string | null;
   phone: string | null;
   first_access_at: string | null;
@@ -550,7 +551,11 @@ export function CosecAccessWizard({ contractId }: { contractId: string }) {
 
     const grouped: PersonGroup[] = [];
     for (const [, entryList] of byEntity) {
-      const primary = entryList[0];
+      // Prefer an entry_point device as the primary — it's where biometric
+      // enrollment and card scanning happen. Fall back to first if none.
+      const primary =
+        entryList.find((e) => e.device_category === "entry_point") ??
+        entryList[0];
       const best = bestEnrollmentStatus(entryList);
       // Biometric enrolled at — pick the earliest non-null
       const bioAt = entryList

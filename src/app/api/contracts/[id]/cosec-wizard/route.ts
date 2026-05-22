@@ -32,11 +32,13 @@ export async function GET(
   // All entity IDs: the contract itself + its members
   const entityIds = [contractId, ...memberIds];
 
-  // Fetch all cosec_access_users for these entities
+  // Fetch all cosec_access_users for these entities.
+  // Only entry_point devices belong in the onboarding wizard —
+  // business_centre devices are booking-driven and excluded here.
   const { data: accessUsers } = await admin
     .from("cosec_access_users")
     .select(
-      "id, entity_id, user_type, cosec_ref_id, enrollment_status, access_pin, nfc_card_number, provisioned_at, biometric_enrolled_at, card_enrolled_at, device_id, cosec_user_id, device:cosec_devices(id, label)"
+      "id, entity_id, user_type, cosec_ref_id, enrollment_status, access_pin, nfc_card_number, provisioned_at, biometric_enrolled_at, card_enrolled_at, device_id, cosec_user_id, device:cosec_devices(id, label, device_category)"
     )
     .in("entity_id", entityIds)
     .not("enrollment_status", "in", "(blocked,deleted)")
@@ -45,6 +47,13 @@ export async function GET(
   if (!accessUsers || accessUsers.length === 0) {
     return NextResponse.json({ data: [] });
   }
+
+  // Exclude business_centre devices — those are booking-only and not part of
+  // the permanent member onboarding flow.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const entryPointUsers = (accessUsers as any[]).filter(
+    (au) => (au.device as any)?.device_category !== "business_centre"
+  );
 
   // First access (IN event) per entity — used for "Verified" step
   const { data: firstLogs } = await admin
@@ -73,7 +82,7 @@ export async function GET(
   );
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const enriched = (accessUsers as any[]).map((au) => {
+  const enriched = (entryPointUsers as any[]).map((au) => {
     const member =
       au.user_type === "member" ? memberMap.get(au.entity_id) : null;
     const p = presenceMap.get(au.entity_id);
@@ -90,6 +99,7 @@ export async function GET(
       card_enrolled_at: au.card_enrolled_at,
       device_id: au.device_id,
       device_label: au.device?.label ?? "Device",
+      device_category: au.device?.device_category ?? "entry_point",
       entity_name: member?.name ?? null,
       phone: member?.phone ?? null,
       first_access_at: firstLogMap.get(au.entity_id) ?? null,
