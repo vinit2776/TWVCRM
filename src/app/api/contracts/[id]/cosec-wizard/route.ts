@@ -51,9 +51,10 @@ export async function GET(
   // Exclude business_centre devices — those are booking-only and not part of
   // the permanent member onboarding flow.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const entryPointUsers = (accessUsers as any[]).filter(
-    (au) => (au.device as any)?.device_category !== "business_centre"
-  );
+  const entryPointUsers = (accessUsers as any[]).filter((au) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    return (au.device as any)?.device_category !== "business_centre";
+  });
 
   // First access (IN event) per entity — used for "Verified" step
   const { data: firstLogs } = await admin
