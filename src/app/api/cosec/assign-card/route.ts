@@ -4,6 +4,9 @@ import { readCardFromDevice, setCardNumber } from "@/lib/cosec";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 
+// Allow up to 30 seconds — the card read polls the device for 20s
+export const maxDuration = 30;
+
 const schema = z.object({
   access_user_id: z.string().uuid(),
 });

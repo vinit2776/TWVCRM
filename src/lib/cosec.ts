@@ -231,35 +231,67 @@ export interface ReadCardResult {
 }
 
 /**
- * Initiate a card read on the device.
- * The device waits for the next card tap (up to ~15s) and returns the CSN.
- * This API call blocks until the card is tapped or times out.
+ * Poll the device for a card tap.
+ *
+ * card-read-write?action=read returns IMMEDIATELY with the most recently
+ * tapped card CSN (or card-no=0 if no card has been tapped since the last
+ * read). It does NOT block waiting for a tap — so we poll every second
+ * until a card CSN is returned or the timeout expires.
+ *
+ * fp-index is a fingerprint-slot parameter and must NOT be sent here;
+ * it was previously included by mistake and caused the device to look
+ * at biometric reader context instead of the card reader.
  */
-export async function readCardFromDevice(device: CosecDevice): Promise<ReadCardResult> {
-  // Use longer timeout since we're waiting for physical card tap
-  const url = deviceUrl(device, "card-read-write", {
-    action: "read",
-    "fp-index": 1,
-    format: "xml",
-  });
-  const res = await fetch(url, {
-    method: "GET",
-    headers: { Authorization: basicAuth(device.password) },
-    signal: AbortSignal.timeout(20000), // 20s for card tap
-  });
-  if (!res.ok) throw new Error(`COSEC HTTP ${res.status} reading card`);
-  const xml = await res.text();
+export async function readCardFromDevice(
+  device: CosecDevice,
+  timeoutMs = 20000
+): Promise<ReadCardResult> {
+  const deadline = Date.now() + timeoutMs;
 
-  const code = xmlValue(xml, "response-code");
-  if (code && code !== "0") {
-    throw new Error(`COSEC card read error ${code}. Is a card present on the reader?`);
+  while (Date.now() < deadline) {
+    const remaining = deadline - Date.now();
+    if (remaining <= 0) break;
+
+    try {
+      const url = deviceUrl(device, "card-read-write", {
+        action: "read",
+        format: "xml",
+        // Note: fp-index intentionally omitted — it is for fingerprint slots,
+        // not card reading, and caused the device to return card-no=0.
+      });
+
+      const res = await fetch(url, {
+        method: "GET",
+        headers: { Authorization: basicAuth(device.password) },
+        signal: AbortSignal.timeout(Math.min(3000, remaining)),
+      });
+
+      if (res.ok) {
+        const xml = await res.text();
+        const code = xmlValue(xml, "response-code");
+        // response-code=0 (or empty) means success — check for card-no
+        if (!code || code === "0") {
+          const cardNo  = xmlValue(xml, "card-no");
+          const cardType = xmlValue(xml, "Card-type");
+          if (cardNo && cardNo !== "0") {
+            return { cardNumber: cardNo, cardType };
+          }
+          // card-no=0 → no tap yet, fall through to next poll
+        }
+        // non-zero response code → device not ready, fall through
+      }
+    } catch {
+      // Network error or per-attempt abort — keep polling until deadline
+    }
+
+    // Wait 1 second before the next poll (skip if almost out of time)
+    const wait = Math.min(1000, deadline - Date.now());
+    if (wait > 50) await new Promise(r => setTimeout(r, wait));
   }
 
-  const cardNo = xmlValue(xml, "card-no");
-  const cardType = xmlValue(xml, "Card-type");
-  if (!cardNo || cardNo === "0") throw new Error("No card detected. Please tap the card on the reader.");
-
-  return { cardNumber: cardNo, cardType };
+  throw new Error(
+    "No card detected within 20 seconds. Tap the card on the reader and try again."
+  );
 }
 
 // ─── Commands ─────────────────────────────────────────────────────────────────
