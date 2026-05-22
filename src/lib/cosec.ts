@@ -206,6 +206,33 @@ export async function setUserActive(device: CosecDevice, cosecUserId: string, ac
   assertResponseCode(text, `setUserActive(${cosecUserId}, ${active})`);
 }
 
+/**
+ * Re-activate a user and push a fresh valid_until date to the device.
+ * Only touches user-active and validity fields — leaves PIN, card, biometric untouched.
+ * Pass validUntil=null to remove the validity limit (access never expires).
+ */
+export async function refreshUserValidity(
+  device: CosecDevice,
+  cosecUserId: string,
+  validUntil: Date | null
+): Promise<void> {
+  const p: Record<string, string | number> = {
+    action: "set",
+    "user-id": cosecUserId,
+    "user-active": 1,
+  };
+  if (validUntil) {
+    p["validity-enable"] = 1;
+    p["validity-date-dd"]   = validUntil.getDate();
+    p["validity-date-mm"]   = validUntil.getMonth() + 1;
+    p["validity-date-yyyy"] = validUntil.getFullYear();
+  } else {
+    p["validity-enable"] = 0;
+  }
+  const text = await cosecGet(device, "users", p);
+  assertResponseCode(text, `refreshUserValidity(${cosecUserId})`);
+}
+
 export async function setCardNumber(device: CosecDevice, cosecUserId: string, cardNumber: string): Promise<void> {
   const text = await cosecGet(device, "users", {
     action: "set",
