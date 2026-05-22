@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback, useMemo } from "react";
+import Link from "next/link";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
@@ -25,6 +26,7 @@ interface Enrollment {
   user_type: "contract" | "employee" | "booking" | "member";
   entity_id: string;
   entity_name: string;
+  contract_id?: string;
   contract_number?: string;
   contract_status?: string;
   end_date?: string | null;
@@ -315,9 +317,18 @@ export default function CosecAccessPage() {
                           {TYPE_LABELS[e.user_type] ?? e.user_type}
                         </Badge>
                         {e.contract_number && (
-                          <span className="text-xs text-muted-foreground font-mono shrink-0">
-                            #{e.contract_number}
-                          </span>
+                          e.contract_id ? (
+                            <Link
+                              href={`/contracts/${e.contract_id}`}
+                              className="text-xs font-mono shrink-0 text-blue-600 hover:underline"
+                            >
+                              #{e.contract_number}
+                            </Link>
+                          ) : (
+                            <span className="text-xs text-muted-foreground font-mono shrink-0">
+                              #{e.contract_number}
+                            </span>
+                          )
                         )}
                         {e.contract_status && (
                           <span className={`text-xs font-medium shrink-0 ${CONTRACT_STATUS_COLORS[e.contract_status] ?? "text-muted-foreground"}`}>

@@ -66,6 +66,7 @@ export async function GET() {
   // ── 4. Build lookup maps ──────────────────────────────────────────────────
   type EntityMeta = {
     name: string;
+    contractId?: string;          // UUID — used for direct /contracts/:id links
     contractNumber?: string;
     contractStatus?: string;
     endDate?: string | null;      // ISO date string
@@ -84,6 +85,7 @@ export async function GET() {
       || c.contract_number;
     entityMap.set(c.id, {
       name,
+      contractId: c.id,
       contractNumber: c.contract_number,
       contractStatus: c.status,
       endDate: c.end_date,
@@ -110,6 +112,7 @@ export async function GET() {
     const contract = Array.isArray(m.contract) ? m.contract[0] : (m.contract as any);
     entityMap.set(m.id, {
       name: m.name,
+      contractId: contract?.id,
       contractNumber: contract?.contract_number,
       contractStatus: contract?.status,
       endDate: contract?.end_date,
@@ -159,6 +162,7 @@ export async function GET() {
       user_type: r.user_type,
       entity_id: r.entity_id,
       entity_name: meta?.name ?? r.cosec_user_id,
+      contract_id: meta?.contractId,
       contract_number: meta?.contractNumber,
       contract_status: meta?.contractStatus,
       end_date: meta?.endDate ?? meta?.endTime,
