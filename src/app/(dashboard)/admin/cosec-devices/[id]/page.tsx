@@ -54,6 +54,8 @@ interface AccessUser {
   biometric_enrolled_at: string | null; card_enrolled_at: string | null;
   blocked_at: string | null; deleted_at: string | null;
   entity_name?: string;
+  contract_number?: string;  // for contracts: their own; for members: parent contract
+  phone?: string;
 }
 
 interface AccessLog {
@@ -192,25 +194,62 @@ export default function CosecDeviceDetailPage() {
       if (u.user_type in byType) byType[u.user_type].push(u.entity_id);
     }
     const [contracts, employees, bookings, members] = await Promise.all([
-      byType.contract.length ? supabase.from("contracts").select("id, contract_number, lead:leads!contracts_lead_id_fkey(company, first_name, last_name)").in("id", byType.contract) : { data: [] },
-      byType.employee.length ? supabase.from("employees").select("id, full_name").in("id", byType.employee) : { data: [] },
-      byType.booking.length  ? supabase.from("bookings").select("id, booking_number, guest_name").in("id", byType.booking) : { data: [] },
-      byType.member.length   ? supabase.from("contract_members").select("id, name").in("id", byType.member) : { data: [] },
+      byType.contract.length
+        ? supabase.from("contracts")
+            .select("id, contract_number, lead:leads!contracts_lead_id_fkey(company, first_name, last_name, phone)")
+            .in("id", byType.contract)
+        : { data: [] },
+      byType.employee.length
+        ? supabase.from("employees").select("id, full_name, phone").in("id", byType.employee)
+        : { data: [] },
+      byType.booking.length
+        ? supabase.from("bookings").select("id, booking_number, guest_name, guest_phone").in("id", byType.booking)
+        : { data: [] },
+      byType.member.length
+        // fetch parent contract_number via join so we can display it
+        ? supabase.from("contract_members")
+            .select("id, name, phone, contract:contracts(contract_number)")
+            .in("id", byType.member)
+        : { data: [] },
     ]);
+
     const nameMap: Record<string, string> = {};
+    const contractNumberMap: Record<string, string> = {};
+    const phoneMap: Record<string, string> = {};
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     (contracts.data || []).forEach((c: any) => {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lead = Array.isArray(c.lead) ? c.lead[0] : c.lead as any;
       nameMap[c.id] = lead?.company || `${lead?.first_name ?? ""} ${lead?.last_name ?? ""}`.trim() || c.contract_number;
+      contractNumberMap[c.id] = c.contract_number;
+      if (lead?.phone) phoneMap[c.id] = lead.phone;
     });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (employees.data || []).forEach((e: any) => { nameMap[e.id] = e.full_name; });
+    (employees.data || []).forEach((e: any) => {
+      nameMap[e.id] = e.full_name;
+      if (e.phone) phoneMap[e.id] = e.phone;
+    });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (bookings.data || []).forEach((b: any) => { nameMap[b.id] = b.guest_name || `Booking #${b.booking_number}`; });
+    (bookings.data || []).forEach((b: any) => {
+      nameMap[b.id] = b.guest_name || `Booking #${b.booking_number}`;
+      if (b.guest_phone) phoneMap[b.id] = b.guest_phone;
+    });
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    (members.data || []).forEach((m: any) => { nameMap[m.id] = m.name; });
-    return rawUsers.map(u => ({ ...u, entity_name: nameMap[u.entity_id] || u.cosec_user_id }));
+    (members.data || []).forEach((m: any) => {
+      nameMap[m.id] = m.name;
+      if (m.phone) phoneMap[m.id] = m.phone;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const contract = Array.isArray(m.contract) ? m.contract[0] : m.contract as any;
+      if (contract?.contract_number) contractNumberMap[m.id] = contract.contract_number;
+    });
+
+    return rawUsers.map(u => ({
+      ...u,
+      entity_name: nameMap[u.entity_id] || u.cosec_user_id,
+      contract_number: contractNumberMap[u.entity_id] ?? undefined,
+      phone: phoneMap[u.entity_id] ?? undefined,
+    }));
   }
 
   const loadAnalytics = useCallback(async () => {
@@ -620,9 +659,12 @@ export default function CosecDeviceDetailPage() {
                   <Card key={user.id} className={isBlocked ? "opacity-60" : ""}>
                     <CardContent className="py-3 px-4">
                       <div className="flex items-center justify-between gap-4">
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-2 flex-wrap">
-                            <span className="font-medium text-sm truncate">{user.entity_name}</span>
+                            <span className="font-medium text-sm">{user.entity_name}</span>
+                            {user.contract_number && (
+                              <span className="font-mono text-xs text-muted-foreground shrink-0">#{user.contract_number}</span>
+                            )}
                             <Badge variant="outline" className="text-xs shrink-0">{TYPE_LABELS[user.user_type] ?? user.user_type}</Badge>
                             <Badge variant={cfg.variant} className="text-xs shrink-0">{cfg.label}</Badge>
                             {denials > 0 && (
@@ -632,13 +674,18 @@ export default function CosecDeviceDetailPage() {
                             )}
                           </div>
                           <div className="flex flex-wrap gap-3 mt-1 text-xs text-muted-foreground">
-                            <span>ID: {user.cosec_user_id}</span>
-                            {user.valid_until && <span>Valid until: {formatDate(user.valid_until)}</span>}
-                            {user.nfc_card_number && <span className="flex items-center gap-1"><CreditCard size={11} />{user.nfc_card_number}</span>}
-                            {user.provisioned_at && <span>Provisioned: {formatDate(user.provisioned_at)}</span>}
-                            {user.biometric_enrolled_at && <span className="flex items-center gap-1"><Fingerprint size={10} />Enrolled: {formatDate(user.biometric_enrolled_at)}</span>}
-                            {user.card_enrolled_at && <span>Card: {formatDate(user.card_enrolled_at)}</span>}
-                            {user.blocked_at && <span className="text-red-500">Blocked: {formatDate(user.blocked_at)}</span>}
+                            {user.phone && (
+                              <span className="font-medium text-foreground">{user.phone}</span>
+                            )}
+                            {user.nfc_card_number
+                              ? <span className="flex items-center gap-1 text-violet-600"><CreditCard size={11} />{user.nfc_card_number}</span>
+                              : canAssignCard && <span className="flex items-center gap-1 text-amber-600"><CreditCard size={11} />No card assigned</span>
+                            }
+                            {user.biometric_enrolled_at && <span className="flex items-center gap-1"><Fingerprint size={10} />Enrolled {formatDate(user.biometric_enrolled_at)}</span>}
+                            {user.card_enrolled_at && <span>Card issued {formatDate(user.card_enrolled_at)}</span>}
+                            {user.valid_until && <span>Valid until {formatDate(user.valid_until)}</span>}
+                            {user.provisioned_at && !user.biometric_enrolled_at && <span>Provisioned {formatDate(user.provisioned_at)}</span>}
+                            {user.blocked_at && <span className="text-red-500">Blocked {formatDate(user.blocked_at)}</span>}
                           </div>
                         </div>
                         <div className="flex gap-1.5 shrink-0 flex-wrap justify-end">
