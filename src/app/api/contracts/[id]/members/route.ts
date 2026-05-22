@@ -108,7 +108,7 @@ export async function POST(
           .select("id, device_ip, device_port, device_password")
           .eq("location_id", contract.location_id)
           .eq("is_enabled", true)
-          .eq("is_entry_point", true); // booking-only devices (conference rooms) are excluded
+          .eq("device_category", "entry_point"); // business_centre devices (conference/meeting rooms) are excluded
 
         if (!devices || devices.length === 0) return;
 
