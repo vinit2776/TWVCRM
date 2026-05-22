@@ -87,6 +87,9 @@ const patchBillSchema = z.discriminatedUnion("action", [
     action: z.literal("update_due_date"),
     due_date: z.string().regex(/^\d{4}-\d{2}-\d{2}$/, "Due date must be YYYY-MM-DD"),
   }),
+  z.object({
+    action: z.literal("sign_cheque"),
+  }),
 ]);
 
 export async function GET(
@@ -666,6 +669,38 @@ export async function PATCH(
       }
       updatePayload = { due_date: parsed.data.due_date };
       break;
+    }
+
+    case "sign_cheque": {
+      if (!["admin", "accounts", "office_admin"].includes(dbUser.role)) {
+        return NextResponse.json({ error: "Access denied" }, { status: 403 });
+      }
+      if (bill.payment_mode !== "cheque") {
+        return NextResponse.json({ error: "This bill was not paid by cheque" }, { status: 422 });
+      }
+      if (bill.cheque_signed_at) {
+        return NextResponse.json({ error: "Cheque has already been signed" }, { status: 422 });
+      }
+      if (bill.payment_status === "unpaid") {
+        return NextResponse.json({ error: "No payment has been recorded yet" }, { status: 422 });
+      }
+      const signedAt = new Date().toISOString();
+      const { error: signErr } = await supabase
+        .from("vendor_bills")
+        .update({ cheque_signed_at: signedAt, cheque_signed_by: dbUser.id })
+        .eq("id", id);
+      if (signErr) return NextResponse.json({ error: signErr.message }, { status: 500 });
+      await logAudit(supabase, {
+        entityType: "vendor_bill",
+        entityId: id,
+        action: "cheque_signed",
+        performedBy: dbUser.id,
+        changes: {
+          cheque_signed_at: { old: null, new: signedAt },
+          cheque_signed_by: { old: null, new: dbUser.id },
+        },
+      });
+      return NextResponse.json({ message: "Cheque marked as signed" });
     }
   }
 

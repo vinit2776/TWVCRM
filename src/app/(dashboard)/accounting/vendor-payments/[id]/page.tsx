@@ -69,6 +69,8 @@ type ChainData = {
     payment_held_at: string | null;
     payment_hold_resolved_at: string | null;
     payment_hold_resolution_notes: string | null;
+    cheque_signed_at: string | null;
+    cheque_signed_by: string | null;
     holder: { id: string; full_name: string } | null;
     hold_resolver: { id: string; full_name: string } | null;
     creator: { id: string; full_name: string } | null;
@@ -251,6 +253,11 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   // Payment dialog + send confirmation toggle + resend dialog
   const [paymentDialog, setPaymentDialog] = useState(false);
   const [sendConfirmation, setSendConfirmation] = useState(true);
+  // Auto-disable email confirmation when cheque is selected (requires signature first)
+  useEffect(() => {
+    if (payMode === "cheque") setSendConfirmation(false);
+    else setSendConfirmation(true);
+  }, [payMode]);
 
   // Inline GST setter (for accounts role when GST wasn't set at approval)
   const [inlineGstAmount, setInlineGstAmount] = useState<string>("");
@@ -277,6 +284,9 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const [auditExpanded, setAuditExpanded] = useState(false);
   const AUDIT_PREVIEW_COUNT = 5;
   const [resendLoading, setResendLoading] = useState(false);
+
+  // Cheque signature flow
+  const [signChequeLoading, setSignChequeLoading] = useState(false);
 
   // Payment confirmation dialog (shown after validation, before submitting)
   const [showPayConfirm, setShowPayConfirm] = useState(false);
@@ -529,6 +539,38 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       }
     } finally {
       setResendLoading(false);
+    }
+  }
+
+  async function handleSignChequeAndSend() {
+    setSignChequeLoading(true);
+    try {
+      // Step 1: mark cheque as signed
+      const signRes = await fetch(`/api/procurement/bills/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "sign_cheque" }),
+      });
+      const signData = await signRes.json();
+      if (!signRes.ok) { toast.error(signData.error || "Failed to mark cheque as signed"); return; }
+
+      // Step 2: send payment confirmation email
+      const emailRes = await fetch(`/api/procurement/bills/${id}/payment-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const emailData = await emailRes.json();
+      if (!emailRes.ok) {
+        toast.error(emailData.error || "Cheque signed, but email failed to send");
+      } else {
+        toast.success("Cheque signed — payment confirmation sent to vendor");
+      }
+      await fetchChain();
+    } catch {
+      toast.error("Network error. Please try again.");
+    } finally {
+      setSignChequeLoading(false);
     }
   }
 
@@ -1513,26 +1555,38 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
 
             {/* Send confirmation toggle */}
             <div className="space-y-2">
-              <label className="flex items-center gap-2.5 rounded-lg border p-3 cursor-pointer hover:bg-muted/30 transition-colors">
-                <input
-                  type="checkbox"
-                  checked={sendConfirmation}
-                  onChange={(e) => setSendConfirmation(e.target.checked)}
-                  className="h-4 w-4 rounded border-gray-300 accent-green-600"
-                />
-                <div className="min-w-0 flex-1">
-                  <span className="text-sm font-medium">Send payment confirmation to vendor</span>
-                  {vendor?.contact_email?.trim() ? (
-                    <p className="text-xs text-muted-foreground">
-                      To: {vendor.contact_email.trim()} · CC: admin@stonecolour.com, admin@theworkvilla.com
+              {payMode === "cheque" ? (
+                <div className="flex items-start gap-2.5 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                  <span className="mt-0.5 text-amber-500">✍</span>
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm font-medium text-amber-800">Cheque — email held until signed</span>
+                    <p className="text-xs text-amber-700 mt-0.5">
+                      The payment confirmation will only be sent to the vendor after you mark the cheque as signed.
                     </p>
-                  ) : (
-                    <p className="text-xs text-muted-foreground">
-                      No vendor email — confirmation sent to admin@stonecolour.com, admin@theworkvilla.com
-                    </p>
-                  )}
+                  </div>
                 </div>
-              </label>
+              ) : (
+                <label className="flex items-center gap-2.5 rounded-lg border p-3 cursor-pointer hover:bg-muted/30 transition-colors">
+                  <input
+                    type="checkbox"
+                    checked={sendConfirmation}
+                    onChange={(e) => setSendConfirmation(e.target.checked)}
+                    className="h-4 w-4 rounded border-gray-300 accent-green-600"
+                  />
+                  <div className="min-w-0 flex-1">
+                    <span className="text-sm font-medium">Send payment confirmation to vendor</span>
+                    {vendor?.contact_email?.trim() ? (
+                      <p className="text-xs text-muted-foreground">
+                        To: {vendor.contact_email.trim()} · CC: admin@stonecolour.com, admin@theworkvilla.com
+                      </p>
+                    ) : (
+                      <p className="text-xs text-muted-foreground">
+                        No vendor email — confirmation sent to admin@stonecolour.com, admin@theworkvilla.com
+                      </p>
+                    )}
+                  </div>
+                </label>
+              )}
             </div>
           </div>
 
@@ -1687,13 +1741,35 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                   </p>
                 </div>
               </div>
-              {(userRole === "accounts" || userRole === "admin") && (
-                <button
-                  className="text-xs text-primary hover:underline shrink-0"
-                  onClick={() => setResendDialog(true)}
-                >
-                  Resend confirmation
-                </button>
+              {(userRole === "accounts" || userRole === "admin" || userRole === "office_admin") && (
+                <div className="flex items-center gap-2 shrink-0">
+                  {bill.payment_mode === "cheque" && !bill.cheque_signed_at ? (
+                    <button
+                      disabled={signChequeLoading}
+                      onClick={handleSignChequeAndSend}
+                      className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 hover:bg-amber-600 text-white text-xs px-3 py-1.5 font-medium disabled:opacity-50 transition-colors"
+                    >
+                      ✍ {signChequeLoading ? "Sending…" : "Mark Signed & Send"}
+                    </button>
+                  ) : bill.payment_mode === "cheque" && bill.cheque_signed_at ? (
+                    <>
+                      <span className="text-xs text-emerald-700 font-medium">✓ Cheque signed {formatDate(bill.cheque_signed_at)}</span>
+                      <button
+                        className="text-xs text-primary hover:underline"
+                        onClick={() => setResendDialog(true)}
+                      >
+                        Resend
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      className="text-xs text-primary hover:underline"
+                      onClick={() => setResendDialog(true)}
+                    >
+                      Resend confirmation
+                    </button>
+                  )}
+                </div>
               )}
             </div>
           </CardContent>
@@ -1709,13 +1785,25 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
             {bill.payment_reference && ` (Ref: ${bill.payment_reference})`}.
             Balance of {formatCurrency(outstanding)} remaining.
           </p>
-          {(userRole === "accounts" || userRole === "admin") && (
-            <button
-              className="ml-auto text-xs text-primary hover:underline shrink-0"
-              onClick={() => setResendDialog(true)}
-            >
-              Resend confirmation
-            </button>
+          {(userRole === "accounts" || userRole === "admin" || userRole === "office_admin") && (
+            <div className="ml-auto shrink-0">
+              {bill.payment_mode === "cheque" && !bill.cheque_signed_at ? (
+                <button
+                  disabled={signChequeLoading}
+                  onClick={handleSignChequeAndSend}
+                  className="inline-flex items-center gap-1.5 rounded-md bg-amber-500 hover:bg-amber-600 text-white text-xs px-3 py-1.5 font-medium disabled:opacity-50 transition-colors"
+                >
+                  ✍ {signChequeLoading ? "Sending…" : "Mark Signed & Send"}
+                </button>
+              ) : (
+                <button
+                  className="text-xs text-primary hover:underline"
+                  onClick={() => setResendDialog(true)}
+                >
+                  Resend confirmation
+                </button>
+              )}
+            </div>
           )}
         </div>
       )}

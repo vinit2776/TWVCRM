@@ -38,6 +38,14 @@ export async function POST(
     return NextResponse.json({ error: "No payment has been recorded yet for this bill" }, { status: 422 });
   }
 
+  // Cheque payments require physical signature before confirmation is sent
+  if (bill.payment_mode === "cheque" && !bill.cheque_signed_at) {
+    return NextResponse.json(
+      { error: "Cheque has not been signed yet. Mark the cheque as signed before sending the confirmation." },
+      { status: 422 }
+    );
+  }
+
   const vendor = bill.procurement_vendors as { id: string; name: string; contact_name?: string; contact_email?: string } | null;
 
   if (!vendor) {
