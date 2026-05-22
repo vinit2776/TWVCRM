@@ -12,6 +12,7 @@ import Link from "next/link";
 import {
   Plus, Search, Filter, X, Wifi, AlertTriangle, ChevronRight, RefreshCw,
 } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -55,10 +56,17 @@ export default function FacilityIssuesPage() {
       params.set("only_open", "true");
     }
 
-    const res = await fetch(`/api/facility/issues?${params.toString()}`);
-    const json = await res.json();
-    setIssues(json.data || []);
-    setLoading(false);
+    try {
+      const res = await fetch(`/api/facility/issues?${params.toString()}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to load issues");
+      setIssues(json.data || []);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load issues");
+      setIssues([]);
+    } finally {
+      setLoading(false);
+    }
   };
 
   useEffect(() => {

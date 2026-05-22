@@ -9,6 +9,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { Plus, Wrench, AlertTriangle, ChevronRight } from "lucide-react";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import {
@@ -31,6 +32,9 @@ export default function MyFacilityIssuesPage() {
   const [loading, setLoading] = useState(true);
   const [wizardOpen, setWizardOpen] = useState(false);
 
+  // Counts for tabs (co-located with fetchData so both update on tab change)
+  const [counts, setCounts] = useState({ open: 0, in_progress: 0, resolved_today: 0 });
+
   const fetchData = async () => {
     setLoading(true);
     const params = new URLSearchParams({ assigned_to: "me" });
@@ -45,29 +49,38 @@ export default function MyFacilityIssuesPage() {
       params.append("status", "closed");
       params.set("date_from", since.toISOString());
     }
-    const res = await fetch(`/api/facility/issues?${params.toString()}`);
-    const json = await res.json();
-    setIssues(json.data || []);
-    setLoading(false);
+    try {
+      const res = await fetch(`/api/facility/issues?${params.toString()}`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to load issues");
+      setIssues(json.data || []);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load issues");
+      setIssues([]);
+    } finally {
+      setLoading(false);
+    }
+
+    // Refresh counts every time tab changes
+    try {
+      const since = new Date();
+      since.setHours(0, 0, 0, 0);
+      const [o, p, t] = await Promise.all([
+        fetch("/api/facility/issues?assigned_to=me&only_open=true").then((r) => r.json()),
+        fetch("/api/facility/issues?assigned_to=me&status=in_progress").then((r) => r.json()),
+        fetch(`/api/facility/issues?assigned_to=me&status=resolved&status=closed&date_from=${since.toISOString()}`).then((r) => r.json()),
+      ]);
+      setCounts({
+        open: (o.data ?? []).length,
+        in_progress: (p.data ?? []).length,
+        resolved_today: (t.data ?? []).length,
+      });
+    } catch {
+      // counts are best-effort — don't toast on count failures
+    }
   };
 
   useEffect(() => { fetchData(); /* eslint-disable-next-line */ }, [tab]);
-
-  // Counts for tabs
-  const [counts, setCounts] = useState({ open: 0, in_progress: 0, resolved_today: 0 });
-  useEffect(() => {
-    const since = new Date();
-    since.setHours(0, 0, 0, 0);
-    Promise.all([
-      fetch("/api/facility/issues?assigned_to=me&only_open=true").then((r) => r.json()),
-      fetch("/api/facility/issues?assigned_to=me&status=in_progress").then((r) => r.json()),
-      fetch(`/api/facility/issues?assigned_to=me&status=resolved&status=closed&date_from=${since.toISOString()}`).then((r) => r.json()),
-    ]).then(([o, p, t]) => setCounts({
-      open: (o.data ?? []).length,
-      in_progress: (p.data ?? []).length,
-      resolved_today: (t.data ?? []).length,
-    }));
-  }, [issues.length]);
 
   return (
     <div className="p-4 md:p-6 max-w-3xl mx-auto pb-24 md:pb-6 space-y-4">

@@ -126,15 +126,22 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
 
   const submitAttachment = async (p: FacilityUploadedPhoto) => {
     if (!issue) return;
+    setBusy(true);
     try {
-      await fetch(`/api/facility/issues/${issue.id}/attachments`, {
+      const res = await fetch(`/api/facility/issues/${issue.id}/attachments`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ ...p, phase: open ? "progress" : "report" }),
       });
+      if (!res.ok) {
+        const json = await res.json();
+        throw new Error(json.error || "Failed to attach photo");
+      }
       await fetchIssue();
-    } catch {
-      toast.error("Failed to attach photo");
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to attach photo");
+    } finally {
+      setBusy(false);
     }
   };
 
@@ -147,7 +154,8 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ assignee_id: assigneeId }),
       });
-      if (!res.ok) throw new Error("Assign failed");
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Assign failed");
       setAssignOpen(false);
       await fetchIssue();
     } catch (e) {
@@ -263,7 +271,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
             Close
           </Button>
         )}
-        <Button size="sm" variant="outline" onClick={() => setAssignOpen(true)}>
+        <Button size="sm" variant="outline" onClick={() => setAssignOpen(true)} disabled={busy}>
           <User className="h-4 w-4 mr-1" /> {issue.assignee?.full_name ? "Reassign" : "Assign"}
         </Button>
       </div>
@@ -408,7 +416,8 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                     <button
                       type="button"
                       onClick={() => removeCollaborator(c.user_id)}
-                      className="text-xs text-red-500 hover:underline"
+                      disabled={busy}
+                      className="text-xs text-red-500 hover:underline disabled:opacity-50"
                     >remove</button>
                   </div>
                 ))}
@@ -417,7 +426,8 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
             <button
               type="button"
               onClick={() => setCollabOpen(true)}
-              className="text-xs text-primary hover:underline mt-1"
+              disabled={busy}
+              className="text-xs text-primary hover:underline mt-1 disabled:opacity-50"
             >+ Add people</button>
           </section>
 
@@ -483,7 +493,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                 onClick={() => assignTo(u.id)}
                 className={cn(
                   "w-full text-left p-2 rounded-md border hover:bg-muted/40 text-sm flex items-center justify-between",
-                  issue.assigned_to === u.id && "ring-1 ring-[#015E65]",
+                  issue.assignee?.id === u.id && "ring-1 ring-[#015E65]",
                 )}
               >
                 <span>{u.full_name}</span>
