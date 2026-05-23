@@ -51,6 +51,9 @@ import {
   MailX,
   Landmark,
   Wallet,
+  CalendarCheck,
+  FileSpreadsheet,
+  BadgeIndianRupee,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -174,6 +177,17 @@ const navSections: NavSection[] = [
       { href: "/admin/cosec-devices",    label: "COSEC Devices",       icon: Fingerprint,   roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },
       { href: "/admin/cosec-access",     label: "Access Enrollments",  icon: ShieldCheck,   roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },
       { href: "/admin/access-analytics", label: "Access Analytics",    icon: BarChart3Icon, roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },
+    ],
+  },
+  {
+    key: "payroll",
+    label: "HR & Payroll",
+    icon: BadgeIndianRupee,
+    items: [
+      { href: "/payroll/employees",  label: "Salary Setup",    icon: UsersRound,       roles: ["admin", "manager", "accounts", "office_admin"] },
+      { href: "/payroll/leaves",     label: "Leave Management", icon: CalendarCheck,   roles: ["admin", "manager", "office_admin"] },
+      { href: "/payroll/runs",       label: "Payroll Runs",    icon: FileSpreadsheet,  roles: ["admin", "accounts"] },
+      { href: "/payroll/reports",    label: "Reports",         icon: BarChart3Icon,    roles: ["admin", "manager", "accounts"] },
     ],
   },
   {

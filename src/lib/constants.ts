@@ -1929,3 +1929,69 @@ export const EXPENSE_CLASS_COLORS: Record<ExpenseClass, string> = {
   unclassified: "bg-gray-50 text-gray-500 border-gray-200",
 };
 
+// ── Payroll ───────────────────────────────────────────────────────────────────
+
+export const PAYROLL_RUN_STATUSES = ["draft", "finalized"] as const;
+export type PayrollRunStatus = (typeof PAYROLL_RUN_STATUSES)[number];
+
+export const PAYROLL_RUN_STATUS_LABELS: Record<PayrollRunStatus, string> = {
+  draft: "Draft",
+  finalized: "Finalized",
+};
+
+export const PAYROLL_RUN_STATUS_COLORS: Record<PayrollRunStatus, string> = {
+  draft: "bg-yellow-50 text-yellow-700 border-yellow-200",
+  finalized: "bg-green-50 text-green-700 border-green-200",
+};
+
+export const LEAVE_TYPES = ["cl", "sl", "lop"] as const;
+export type LeaveType = (typeof LEAVE_TYPES)[number];
+
+export const LEAVE_TYPE_LABELS: Record<LeaveType, string> = {
+  cl: "Casual Leave",
+  sl: "Sick Leave",
+  lop: "Loss of Pay",
+};
+
+export const LEAVE_TYPE_COLORS: Record<LeaveType, string> = {
+  cl: "bg-blue-50 text-blue-700 border-blue-200",
+  sl: "bg-purple-50 text-purple-700 border-purple-200",
+  lop: "bg-red-50 text-red-700 border-red-200",
+};
+
+export const LEAVE_STATUSES = ["pending", "approved", "rejected", "cancelled"] as const;
+export type LeaveStatus = (typeof LEAVE_STATUSES)[number];
+
+export const LEAVE_STATUS_LABELS: Record<LeaveStatus, string> = {
+  pending: "Pending",
+  approved: "Approved",
+  rejected: "Rejected",
+  cancelled: "Cancelled",
+};
+
+export const LEAVE_STATUS_COLORS: Record<LeaveStatus, string> = {
+  pending: "bg-yellow-50 text-yellow-700 border-yellow-200",
+  approved: "bg-green-50 text-green-700 border-green-200",
+  rejected: "bg-red-50 text-red-700 border-red-200",
+  cancelled: "bg-gray-50 text-gray-500 border-gray-200",
+};
+
+export const EMPLOYMENT_TYPES = ["full_time", "part_time", "intern"] as const;
+export type EmploymentType = (typeof EMPLOYMENT_TYPES)[number];
+
+export const EMPLOYMENT_TYPE_LABELS: Record<EmploymentType, string> = {
+  full_time: "Full-time",
+  part_time: "Part-time",
+  intern: "Intern",
+};
+
+/** Tamil Nadu PT slabs — max ₹1,250/month. For display in UI. */
+export const TN_PT_SLABS = [
+  { maxGross: 21000, pt: 0, label: "Up to ₹21,000" },
+  { maxGross: 30000, pt: 135, label: "₹21,001 – ₹30,000" },
+  { maxGross: 45000, pt: 315, label: "₹30,001 – ₹45,000" },
+  { maxGross: 60000, pt: 690, label: "₹45,001 – ₹60,000" },
+  { maxGross: 75000, pt: 1025, label: "₹60,001 – ₹75,000" },
+  { maxGross: Infinity, pt: 1250, label: "Above ₹75,000" },
+] as const;
+

@@ -757,7 +757,12 @@ export type AuditEntityType =
   | "lease_service_offering"
   | "cosec_access_user"
   | "cosec_device"
-  | "employee";
+  | "employee"
+  | "salary_definition"
+  | "leave_request"
+  | "leave_policy"
+  | "payroll_run"
+  | "payroll_slip";
 
 export interface AuditLog {
   id: string;
@@ -3137,6 +3142,140 @@ export interface LeaseServiceOffering {
   informed?: string | null;
   frequency?: string | null;
   sla_notes?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+// ── Payroll ───────────────────────────────────────────────────────────────────
+
+export interface Employee {
+  id: string;
+  location_id: string | null;
+  full_name: string;
+  phone: string | null;
+  email: string | null;
+  department: string | null;
+  designation: string | null;
+  cosec_ref_id: number | null;
+  nfc_card_number: string | null;
+  is_active: boolean;
+  notes: string | null;
+  date_of_joining: string | null;
+  employment_type: "full_time" | "part_time" | "intern";
+  pan_number: string | null;
+  created_at: string;
+  updated_at: string;
+  location?: { id: string; name: string } | null;
+}
+
+export interface SalaryDefinition {
+  id: string;
+  employee_id: string;
+  effective_from: string;
+  basic: number;
+  hra: number;
+  da: number;
+  special_allowance: number;
+  lta_annual: number;
+  mobile_reimbursement: number;
+  other_reimbursements: number;
+  tds_applicable: boolean;
+  tds_monthly_amount: number;
+  pan_number: string | null;
+  pf_applicable: boolean;
+  esi_applicable: boolean;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface LeavePolicy {
+  id: string;
+  policy_year: number;
+  cl_days_per_year: number;
+  sl_days_per_year: number;
+  lop_tracked: boolean;
+  created_at: string;
+}
+
+export interface LeaveBalance {
+  id: string;
+  employee_id: string;
+  policy_year: number;
+  cl_total: number;
+  cl_used: number;
+  sl_total: number;
+  sl_used: number;
+  lop_days: number;
+  updated_at: string;
+  // Computed in application
+  cl_balance?: number;
+  sl_balance?: number;
+}
+
+export interface LeaveRequest {
+  id: string;
+  employee_id: string;
+  leave_type: "cl" | "sl" | "lop";
+  from_date: string;
+  to_date: string;
+  days_count: number;
+  reason: string | null;
+  status: "pending" | "approved" | "rejected" | "cancelled";
+  reviewed_by: string | null;
+  reviewed_at: string | null;
+  review_note: string | null;
+  created_at: string;
+  updated_at: string;
+  employee?: Pick<Employee, "id" | "full_name" | "department" | "designation">;
+  reviewer?: { id: string; full_name: string } | null;
+}
+
+export interface PayrollRun {
+  id: string;
+  run_month: string;           // YYYY-MM-DD (1st of month)
+  status: "draft" | "finalized";
+  total_gross: number;
+  total_deductions: number;
+  total_net: number;
+  employee_count: number;
+  finalized_by: string | null;
+  finalized_at: string | null;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+  finalizer?: { id: string; full_name: string } | null;
+}
+
+export interface PayrollSlip {
+  id: string;
+  payroll_run_id: string;
+  employee_id: string;
+  employee_name: string;
+  department: string | null;
+  designation: string | null;
+  working_days: number;
+  days_present: number;
+  cl_days: number;
+  sl_days: number;
+  lop_days: number;
+  basic: number;
+  hra: number;
+  da: number;
+  special_allowance: number;
+  mobile_reimbursement: number;
+  other_reimbursements: number;
+  lta_this_month: number;
+  gross_payable: number;
+  lop_deduction: number;
+  pt_deduction: number;
+  tds_deduction: number;
+  pf_employee: number;
+  esi_employee: number;
+  other_deductions: number;
+  total_deductions: number;
+  net_payable: number;
+  is_locked: boolean;
+  override_note: string | null;
   created_at: string;
   updated_at: string;
 }
