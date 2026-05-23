@@ -76,12 +76,11 @@ const DLT_TEMPLATES = {
    * Body (exact): "Dear {#var#}, your door access PIN for booking {#var#} at The Work Villa is {#var#}. Valid for your booking slot only. -Sree Design Infrastructure"
    * Variables: 3 (guest name, booking ref, PIN)
    *
-   * Steps after TRAI approves:
-   * 1. Create a MSG91 Flow pointing to this template
-   * 2. Add env var: MSG91_SMS_DLT_FLOW_ACCESS_PIN=<flow_id>
-   * 3. The code below will automatically pick it up.
+   * Status: MSG91 flow ID set (6a117c270836a9277c0968a2). Awaiting TRAI DLT
+   * template approval — once approved, MSG91 activates the flow automatically.
+   * No code change needed when it's approved.
    */
-  access_pin:       { id: "", vars: 3 }, // DLT template ID to be filled once approved
+  access_pin:       { id: "", vars: 3 }, // TRAI DLT template ID — to be filled once TRAI approves
 } as const;
 
 type DltTemplateKey = keyof typeof DLT_TEMPLATES;
@@ -882,13 +881,11 @@ export const dltSms = {
   },
 
   /**
-   * TWV_Access_PIN — pending TRAI DLT approval.
-   * Registered template body (exact match required):
-   *   "Dear {#var#}, your door access PIN for booking {#var#} at The Work Villa is {#var#}. Valid for your booking slot only. -Sree Design Infrastructure"
+   * TWV_Access_PIN — MSG91 flow wired (6a117c270836a9277c0968a2), TRAI DLT approval pending.
+   * Template body: "Dear {#var#}, your door access PIN for booking {#var#} at The Work Villa is {#var#}. Valid for your booking slot only. -Sree Design Infrastructure"
    * Variables: [guestName, bookingRef, pin]
    *
-   * To activate: set MSG91_SMS_DLT_FLOW_ACCESS_PIN=<flow_id> in Vercel env vars.
-   * Until then, sendDltSms will log a warning and skip gracefully.
+   * Will attempt to send now; MSG91 will activate when TRAI approves the DLT template.
    */
   accessPin(to: string, guestName: string, bookingRef: string, pin: string, bookingId: string) {
     return sendDltSms("access_pin", to, [guestName, bookingRef, pin], { entityType: "booking", entityId: bookingId });
