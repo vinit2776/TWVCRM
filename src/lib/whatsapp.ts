@@ -70,6 +70,18 @@ const DLT_TEMPLATES = {
   contract_renewal: { id: "1207177381386366257", vars: 2 },
   payment_reminder: { id: "1207177381025319964", vars: 2 },
   payment_followup: { id: "1207177381424325525", vars: 2 },
+  /**
+   * Template to register in MSG91 (TRAI DLT approval required):
+   * Name: TWV_Access_PIN
+   * Body (exact): "Dear {#var#}, your door access PIN for booking {#var#} at The Work Villa is {#var#}. Valid for your booking slot only. -Sree Design Infrastructure"
+   * Variables: 3 (guest name, booking ref, PIN)
+   *
+   * Steps after TRAI approves:
+   * 1. Create a MSG91 Flow pointing to this template
+   * 2. Add env var: MSG91_SMS_DLT_FLOW_ACCESS_PIN=<flow_id>
+   * 3. The code below will automatically pick it up.
+   */
+  access_pin:       { id: "", vars: 3 }, // DLT template ID to be filled once approved
 } as const;
 
 type DltTemplateKey = keyof typeof DLT_TEMPLATES;
@@ -497,6 +509,8 @@ const SMS_DLT_FLOWS: Record<DltTemplateKey, string | undefined> = {
   contract_renewal: process.env.MSG91_SMS_DLT_FLOW_CONTRACT_RENEWAL,
   payment_reminder: process.env.MSG91_SMS_DLT_FLOW_PAYMENT_REMINDER || SMS_FLOWS.reminder,
   payment_followup: process.env.MSG91_SMS_DLT_FLOW_PAYMENT_FOLLOWUP,
+  // Set MSG91_SMS_DLT_FLOW_ACCESS_PIN once the DLT template is TRAI-approved
+  access_pin:       process.env.MSG91_SMS_DLT_FLOW_ACCESS_PIN,
 };
 
 // ---------------------------------------------------------------------------
@@ -841,6 +855,19 @@ export const dltSms = {
    */
   paymentFollowup(to: string, customerName: string, amount: string, paymentId: string) {
     return sendDltSms("payment_followup", to, [customerName, amount], { entityType: "contract_payment", entityId: paymentId });
+  },
+
+  /**
+   * TWV_Access_PIN — pending TRAI DLT approval.
+   * Registered template body (exact match required):
+   *   "Dear {#var#}, your door access PIN for booking {#var#} at The Work Villa is {#var#}. Valid for your booking slot only. -Sree Design Infrastructure"
+   * Variables: [guestName, bookingRef, pin]
+   *
+   * To activate: set MSG91_SMS_DLT_FLOW_ACCESS_PIN=<flow_id> in Vercel env vars.
+   * Until then, sendDltSms will log a warning and skip gracefully.
+   */
+  accessPin(to: string, guestName: string, bookingRef: string, pin: string, bookingId: string) {
+    return sendDltSms("access_pin", to, [guestName, bookingRef, pin], { entityType: "booking", entityId: bookingId });
   },
 };
 

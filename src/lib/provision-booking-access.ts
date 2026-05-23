@@ -194,8 +194,9 @@ export async function provisionBookingAccess(booking_id: string): Promise<Provis
     // messaging.bookingAccessPin(contactPhone, contactName, bookingRef, startFmt, endFmt, pin, booking_id)
     delivery.whatsapp = "skipped";
 
-    // DLT SMS OTP — MSG91_SMS_ENABLED=true, flow ID MSG91_SMS_DLT_FLOW_OTP must be set
-    const smsResult = await dltSms.otp(contactPhone, pin, booking_id)
+    // DLT SMS access_pin — requires MSG91_SMS_DLT_FLOW_ACCESS_PIN env var (set after TRAI approval).
+    // Skips gracefully with a log warning if the flow ID is not yet configured.
+    const smsResult = await dltSms.accessPin(contactPhone, contactName, bookingRef, pin, booking_id)
       .catch((err) => { console.error("[provision-booking-access] SMS error:", err); return null; });
     if (!smsResult) {
       delivery.sms = "failed";

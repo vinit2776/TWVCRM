@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { provisionBookingAccess } from "@/lib/provision-booking-access";
 
+export const maxDuration = 30; // allow SMTP + COSEC device calls to complete
+
 const schema = z.object({
   booking_id: z.string().uuid(),
 });

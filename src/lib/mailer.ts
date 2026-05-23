@@ -14,7 +14,7 @@ import { createAdminClient } from "@/lib/supabase/server";
  */
 
 const smtpHost = (process.env.SMTP_HOST || "smtp.gmail.com").trim();
-const smtpPort = parseInt((process.env.SMTP_PORT || "465").trim(), 10);
+const smtpPort = parseInt((process.env.SMTP_PORT || "587").trim(), 10);
 const smtpUser = (process.env.SMTP_USER || "").trim();
 const smtpPass = (process.env.SMTP_PASS || "").trim();
 
@@ -22,10 +22,14 @@ if (!smtpUser || !smtpPass) {
   console.warn("SMTP_USER or SMTP_PASS is not set — email sending will fall back to Resend.");
 }
 
+// Port 587 uses STARTTLS (requireTLS=true, secure=false).
+// Port 465 uses implicit TLS (secure=true). 465 is often blocked from cloud IPs.
+// We default to 587 which works reliably from Vercel/AWS.
 export const transporter = nodemailer.createTransport({
   host: smtpHost,
   port: smtpPort,
   secure: smtpPort === 465,
+  requireTLS: smtpPort === 587,
   auth: {
     user: smtpUser,
     pass: smtpPass,
