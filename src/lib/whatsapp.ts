@@ -761,6 +761,33 @@ export const messaging = {
       entityId: proposalId,
     });
   },
+
+  /**
+   * Booking access PIN → guest / booker phone via WhatsApp.
+   *
+   * Template to create in MSG91 → WhatsApp → Templates (Utility category):
+   *   Name: booking_access_pin
+   *   Body: "Hi {{1}}, your door access PIN for booking {{2}} ({{3}} – {{4}}) at The Work Villa is: *{{5}}*. Use this PIN at the entry and room devices. Valid with a 5-minute buffer. – The Work Villa"
+   *
+   * Params: [guestName, bookingRef, startTime, endTime, pin]
+   */
+  bookingAccessPin(
+    to: string,
+    guestName: string,
+    bookingRef: string,
+    startTime: string,
+    endTime: string,
+    pin: string,
+    bookingId: string
+  ) {
+    return sendWhatsApp({
+      to,
+      template: "booking_access_pin",
+      params: [guestName, bookingRef, startTime, endTime, pin],
+      entityType: "booking",
+      entityId: bookingId,
+    });
+  },
 };
 
 // ---------------------------------------------------------------------------

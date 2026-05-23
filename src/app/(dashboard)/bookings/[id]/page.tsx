@@ -1379,70 +1379,94 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           </CardContent>
         </Card>
 
-        {/* Access PIN (COSEC) */}
-        {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-        {(booking as any).access_pin && (
-          <Card>
-            <CardHeader><CardTitle className="text-sm flex items-center gap-2"><KeyRound size={14} />Access PIN</CardTitle></CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <div className="flex items-center justify-between">
-                <div>
-                  {/* eslint-disable-next-line @typescript-eslint/no-explicit-any */}
-                  <p className="text-3xl font-mono font-bold tracking-widest">{(booking as any).access_pin}</p>
-                  <p className="text-xs text-muted-foreground mt-0.5">Valid {formatTime12(booking.start_time)} – {formatTime12(booking.end_time)} (±5 min)</p>
-                </div>
-                <Button
-                  variant="outline" size="sm"
-                  onClick={async () => {
-                    const phone = booking.booker_phone || booking.guest_phone || booking.lead?.phone;
-                    if (!phone) { toast.error("No phone number on file"); return; }
-                    const res = await fetch("/api/cosec/booking-access", {
-                      method: "POST",
-                      headers: { "Content-Type": "application/json" },
-                      body: JSON.stringify({ booking_id: id }),
-                    });
-                    if (res.ok) {
-                      toast.success("Access PIN resent");
-                      // Refresh device list in case it changed
-                      fetch(`/api/cosec/booking-devices?booking_id=${id}`)
-                        .then(r => r.json())
-                        .then(j => setBookingDevices(j.data || []))
-                        .catch(() => {});
-                    }
-                    else toast.error("Failed to resend PIN");
-                  }}
-                >
-                  <Send size={13} className="mr-1.5" />Resend PIN
-                </Button>
-              </div>
+        {/* Access PIN (COSEC) — shown for active bookings regardless of whether PIN is provisioned yet */}
+        {(booking.status === "confirmed" || booking.status === "checked_in") && (() => {
+          // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          const existingPin = (booking as any).access_pin as string | null;
 
-              {/* Active access points for this booking */}
-              {bookingDevices.length > 0 && (
-                <div className="space-y-1.5">
-                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Access points activated</p>
-                  <div className="flex flex-wrap gap-2">
-                    {bookingDevices.map((bd) => {
-                      const isRoom = bd.device?.device_category === "business_centre";
-                      return (
-                        <div key={bd.id} className={`flex items-center gap-1.5 text-xs rounded px-2 py-1 ${
-                          isRoom
-                            ? "bg-violet-50 border border-violet-200 text-violet-700"
-                            : "bg-green-50 border border-green-200 text-green-700"
-                        }`}>
-                          {isRoom
-                            ? <Building2 size={11} />
-                            : <DoorOpen size={11} />
-                          }
-                          <span>{bd.device?.label ?? "Device"}</span>
-                        </div>
-                      );
-                    })}
+          async function provisionPin() {
+            const res = await fetch("/api/cosec/booking-access", {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ booking_id: id }),
+            });
+            if (res.ok) {
+              // Refresh booking to pick up new access_pin value
+              const bRes = await fetch(`/api/bookings/${id}`);
+              if (bRes.ok) { const j = await bRes.json(); setBooking(j.data); }
+              // Refresh provisioned device list
+              fetch(`/api/cosec/booking-devices?booking_id=${id}`)
+                .then(r => r.json()).then(j => setBookingDevices(j.data || [])).catch(() => {});
+            }
+            return res.ok;
+          }
+
+          return (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <KeyRound size={14} />Access PIN
+                </CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-3 text-sm">
+                {existingPin ? (
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-3xl font-mono font-bold tracking-widest">{existingPin}</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Valid {formatTime12(booking.start_time)} – {formatTime12(booking.end_time)} (±5 min)</p>
+                    </div>
+                    <Button
+                      variant="outline" size="sm"
+                      onClick={async () => {
+                        const ok = await provisionPin();
+                        if (ok) toast.success("Access PIN resent via WhatsApp, SMS & email");
+                        else toast.error("Failed to resend PIN");
+                      }}
+                    >
+                      <Send size={13} className="mr-1.5" />Resend PIN
+                    </Button>
                   </div>
-                </div>
-              )}
-            </CardContent>
-          </Card>
-        )}
+                ) : (
+                  <div className="flex items-center justify-between">
+                    <p className="text-xs text-muted-foreground">No PIN provisioned yet for this booking.</p>
+                    <Button
+                      size="sm"
+                      onClick={async () => {
+                        const ok = await provisionPin();
+                        if (ok) toast.success("Access PIN generated and sent via WhatsApp, SMS & email");
+                        else toast.error("Failed to generate PIN — check COSEC device config");
+                      }}
+                    >
+                      <KeyRound size={13} className="mr-1.5" />Generate &amp; Send PIN
+                    </Button>
+                  </div>
+                )}
+
+                {/* Active access points */}
+                {bookingDevices.length > 0 && (
+                  <div className="space-y-1.5">
+                    <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">Access points activated</p>
+                    <div className="flex flex-wrap gap-2">
+                      {bookingDevices.map((bd) => {
+                        const isRoom = bd.device?.device_category === "business_centre";
+                        return (
+                          <div key={bd.id} className={`flex items-center gap-1.5 text-xs rounded px-2 py-1 ${
+                            isRoom
+                              ? "bg-violet-50 border border-violet-200 text-violet-700"
+                              : "bg-green-50 border border-green-200 text-green-700"
+                          }`}>
+                            {isRoom ? <Building2 size={11} /> : <DoorOpen size={11} />}
+                            <span>{bd.device?.label ?? "Device"}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })()}
 
         {/* Financials */}
         <Card>

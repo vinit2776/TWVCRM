@@ -159,7 +159,6 @@ export async function POST(request: NextRequest) {
   const bookingRef = booking.booking_number as string;
   const startFmt   = fmtTime(booking.start_time as string);
   const endFmt     = fmtTime(booking.end_time as string);
-  const pinMessage = `Your WorkVilla access PIN is ${pin}. for booking ${bookingRef} from ${startFmt} to ${endFmt}`;
 
   // Determine recipient contact details
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -169,13 +168,18 @@ export async function POST(request: NextRequest) {
   const leadFullName = `${lead?.first_name ?? ""} ${lead?.last_name ?? ""}`.trim();
   const contactName  = (booking.guest_name as string | null) ?? (leadFullName || "Guest");
 
-  // Send PIN via SMS (fire-and-forget)
   if (contactPhone) {
-    const { dltSms } = await import("@/lib/whatsapp");
+    const { dltSms, messaging } = await import("@/lib/whatsapp");
+
+    // WhatsApp — booking_access_pin template (primary channel)
+    messaging.bookingAccessPin(contactPhone, contactName, bookingRef, startFmt, endFmt, pin, booking_id)
+      .catch(() => null);
+
+    // SMS — DLT OTP template (fallback / redundancy)
     dltSms.otp(contactPhone, pin, booking_id).catch(() => null);
   }
 
-  // Send via email (fire-and-forget)
+  // Email (fire-and-forget)
   if (contactEmail) {
     const { resend, EMAIL_FROM } = await import("@/lib/mailer");
     resend.emails.send({
