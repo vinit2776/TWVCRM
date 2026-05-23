@@ -315,7 +315,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       const totalAmtPrefill = Number(data.bill.total_amount ?? 0);
       const approvedCeiling = Number(data.bill.approved_amount ?? totalAmtPrefill) + gstAmtPrefill;
       const approvedOutstandingPrefill = Math.max(0, approvedCeiling - Number(data.bill.amount_paid ?? 0));
-      if (approvedOutstandingPrefill > 0) setPayAmount(approvedOutstandingPrefill.toFixed(2));
+      if (approvedOutstandingPrefill > 0) setPayAmount(String(Math.round(approvedOutstandingPrefill)));
     } else {
       toast.error("Failed to load bill details");
       router.push("/accounting?tab=vendor-payments");
@@ -411,6 +411,11 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
     ? Number(payAmount) - tdsAmount
     : Number(payAmount);
 
+  // Round-off helpers (display only — amount saved is whatever the user enters)
+  const roundedPayableDisplay = Math.round(approvedOutstanding);
+  const roundOffDisplay = roundedPayableDisplay - approvedOutstanding;
+  const hasRoundOff = Math.abs(roundOffDisplay) >= 0.005;
+
   async function handleSaveInlineGst() {
     if (!bill) return;
     const gstVal = parseFloat(inlineGstAmount) || 0;
@@ -446,7 +451,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
         const gstAmtNew = Number(data.bill.gst_amount ?? 0);
         const newCeiling = Number(data.bill.approved_amount ?? data.bill.base_amount ?? data.bill.total_amount) + gstAmtNew;
         const newOutstanding = Math.max(0, newCeiling - Number(data.bill.amount_paid ?? 0));
-        if (newOutstanding > 0) setPayAmount(newOutstanding.toFixed(2));
+        if (newOutstanding > 0) setPayAmount(String(Math.round(newOutstanding)));
       }
     } finally {
       setSavingGst(false);
@@ -1388,6 +1393,26 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                   placeholder="0.00"
                 />
               </div>
+              {/* Round-off breakup — shown when outstanding has paise */}
+              {hasRoundOff && (
+                <div className="col-span-2 rounded-lg bg-slate-50 border px-3 py-2.5 space-y-1.5">
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Payable (incl. GST)</span>
+                    <span>{formatCurrency(approvedOutstanding)}</span>
+                  </div>
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Round off</span>
+                    <span className={roundOffDisplay > 0 ? "text-emerald-700 font-medium" : "text-orange-600 font-medium"}>
+                      {roundOffDisplay > 0 ? "+" : "−"}{formatCurrency(Math.abs(roundOffDisplay))}
+                    </span>
+                  </div>
+                  <div className="flex justify-between text-sm font-semibold border-t pt-1.5">
+                    <span>Issue cheque / NEFT for</span>
+                    <span>{formatCurrency(roundedPayableDisplay)}</span>
+                  </div>
+                </div>
+              )}
+
               <div className="space-y-1">
                 <Label>Payment Mode *</Label>
                 <Select value={payMode} onValueChange={setPayMode}>

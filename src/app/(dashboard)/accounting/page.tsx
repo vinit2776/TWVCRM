@@ -1278,6 +1278,30 @@ export default function AccountingPage() {
                   <span className="text-sm text-emerald-800">Amount to pay</span>
                   <span className="text-lg font-bold text-emerald-700">{formatCurrency(outstanding)}</span>
                 </div>
+                {/* Per-bill round-off */}
+                {(() => {
+                  const rounded = Math.round(outstanding);
+                  const diff = rounded - outstanding;
+                  if (Math.abs(diff) < 0.005) return null;
+                  return (
+                    <div className="rounded-lg bg-slate-50 border px-3 py-2 text-xs space-y-1">
+                      <div className="flex justify-between text-muted-foreground">
+                        <span>Payable (incl. GST)</span>
+                        <span>{formatCurrency(outstanding)}</span>
+                      </div>
+                      <div className="flex justify-between text-muted-foreground">
+                        <span>Round off</span>
+                        <span className={cn("font-medium", diff > 0 ? "text-emerald-700" : "text-orange-600")}>
+                          {diff > 0 ? "+" : "−"}{formatCurrency(Math.abs(diff))}
+                        </span>
+                      </div>
+                      <div className="flex justify-between font-semibold text-foreground border-t pt-1">
+                        <span>Issue for</span>
+                        <span>{formatCurrency(rounded)}</span>
+                      </div>
+                    </div>
+                  );
+                })()}
               </div>
             );
           })()}
@@ -1313,6 +1337,26 @@ export default function AccountingPage() {
                     <span className="col-span-3">Grand total</span>
                     <span className="text-right text-emerald-700">{formatCurrency(totalWithGst)}</span>
                   </div>
+                  {/* Round-off rows — only when grand total has paise */}
+                  {(() => {
+                    const rounded = Math.round(totalWithGst);
+                    const diff = rounded - totalWithGst;
+                    if (Math.abs(diff) < 0.005) return null;
+                    return (
+                      <>
+                        <div className="grid grid-cols-4 px-3 py-2 text-xs text-muted-foreground bg-muted/20">
+                          <span className="col-span-3">Round off</span>
+                          <span className={cn("text-right font-medium", diff > 0 ? "text-emerald-700" : "text-orange-600")}>
+                            {diff > 0 ? "+" : "−"}{formatCurrency(Math.abs(diff))}
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-4 px-3 py-2.5 bg-emerald-100 font-bold text-emerald-900 border-t border-emerald-300">
+                          <span className="col-span-3">Issue cheque / NEFT for</span>
+                          <span className="text-right">{formatCurrency(rounded)}</span>
+                        </div>
+                      </>
+                    );
+                  })()}
                 </div>
                 {/* Payment fields */}
                 <div className="grid grid-cols-2 gap-3">
