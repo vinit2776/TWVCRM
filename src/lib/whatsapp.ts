@@ -170,8 +170,14 @@ export interface SendDocumentOptions {
   documentUrl: string;
   /** Filename shown to the recipient (e.g. "TWV-2025-001.pdf") */
   documentFilename: string;
-  /** Body variable values in order */
+  /** Body variable values in order — maps to body_1, body_2, ... */
   params?: string[];
+  /**
+   * Named body params for templates that use named variables (e.g. {{customer_name}}).
+   * Key must match the MSG91 component key exactly (e.g. "body_customer_name").
+   * Takes precedence over `params` when provided.
+   */
+  namedParams?: Record<string, string>;
   entityType?: string;
   entityId?: string;
 }
@@ -270,7 +276,7 @@ export async function sendWhatsApp(options: SendTemplateOptions): Promise<SendRe
  *   "body_N" → { type: "text", value }
  */
 export async function sendWhatsAppDocument(options: SendDocumentOptions): Promise<SendResult> {
-  const { to, template, documentUrl, documentFilename, params = [], entityType, entityId } = options;
+  const { to, template, documentUrl, documentFilename, params = [], namedParams, entityType, entityId } = options;
 
   if (!AUTH_KEY || !WA_SENDER) {
     console.warn("[messaging] MSG91_AUTH_KEY or MSG91_WHATSAPP_SENDER not set — WhatsApp disabled.");
@@ -279,16 +285,29 @@ export async function sendWhatsAppDocument(options: SendDocumentOptions): Promis
 
   const toNumber = normalisePhone(to);
 
-  // Build component map: document header + body variables
+  // MSG91 expects "header_1" as the document header component key,
+  // with "value" for the URL and "filename" as a sibling field.
+  // Body variables use either named keys (e.g. "body_customer_name") or
+  // positional keys (e.g. "body_1") depending on how the template was created.
   const components: Record<string, unknown> = {
-    header: {
+    header_1: {
       type: "document",
-      document: { link: documentUrl, filename: documentFilename },
+      value: documentUrl,
+      filename: documentFilename,
     },
   };
-  params.forEach((value, i) => {
-    components[`body_${i + 1}`] = { type: "text", value };
-  });
+
+  if (namedParams) {
+    // Named variables — keys must match exactly what MSG91 shows in Template Code panel
+    Object.entries(namedParams).forEach(([key, value]) => {
+      components[key] = { type: "text", value };
+    });
+  } else {
+    // Positional variables — body_1, body_2, ...
+    params.forEach((value, i) => {
+      components[`body_${i + 1}`] = { type: "text", value };
+    });
+  }
 
   const payload = {
     integrated_number: WA_SENDER,
@@ -715,12 +734,17 @@ export const messaging = {
     pdfUrl: string,
     proposalId: string
   ) {
+    // proposal_send_doc uses named variables {{customer_name}} / {{proposal_number}}
+    // so MSG91 component keys are "body_customer_name" / "body_proposal_number"
     return sendWhatsAppDocument({
       to,
       template: "proposal_send_doc",
       documentUrl: pdfUrl,
       documentFilename: `${proposalNumber}.pdf`,
-      params: [customerName, proposalNumber],
+      namedParams: {
+        body_customer_name: customerName,
+        body_proposal_number: proposalNumber,
+      },
       entityType: "proposal",
       entityId: proposalId,
     });
