@@ -133,6 +133,16 @@ export async function POST(request: NextRequest) {
             .from("bookings")
             .update({ payment_status: "paid", payment_mode: "razorpay" })
             .eq("id", bookingPayment.booking_id);
+
+          // Provision COSEC access PIN now that booking is confirmed paid
+          const appUrl = process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL;
+          if (appUrl) {
+            fetch(`${appUrl}/api/cosec/booking-access`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ booking_id: bookingPayment.booking_id }),
+            }).catch((err) => console.error("[webhook] COSEC access trigger failed:", err));
+          }
         }
       }
     }
