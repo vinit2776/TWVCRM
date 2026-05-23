@@ -10,6 +10,7 @@ import {
   Banknote, CheckCircle, Calendar, Timer, Copy, Coins, Gift,
   Download, MessageCircle, Repeat,
   StickyNote, Pencil, Check, X, Plus, Share2, KeyRound, Send, DoorOpen, Building2,
+  Activity, ShieldAlert,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -120,6 +121,12 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [bookingDevices, setBookingDevices] = useState<Array<{ id: string; device: { id: string; label: string; device_category: string } | null }>>([]);
   const [pinDelivery, setPinDelivery] = useState<{ whatsapp: string; sms: string; email: string } | null>(null);
   const [pinCopied, setPinCopied] = useState(false);
+  const [accessLogs, setAccessLogs] = useState<Array<{
+    id: string;
+    direction: string;
+    event_time: string;
+    device: { id: string; label: string; device_category: string } | null;
+  }>>([]);
 
   // GST inline-edit state
   const [editingGst, setEditingGst] = useState(false);
@@ -144,15 +151,16 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const fetchBooking = useCallback(async (signal?: AbortSignal) => {
     setLoading(true);
 
-    // Wave 1: booking (needed for leadId) + payments + booking charges + settings + devices — parallel
-    const [bookingRes, paymentsRes, bcRes, settingsRes, devicesRes] = await Promise.all([
+    // Wave 1: booking (needed for leadId) + payments + booking charges + settings + devices + access logs — parallel
+    const [bookingRes, paymentsRes, bcRes, settingsRes, devicesRes, logsRes] = await Promise.all([
       fetch(`/api/bookings/${id}`, { signal }),
       fetch(`/api/booking-payments?booking_id=${id}`, { signal }),
       fetch(`/api/usage-charges?booking_id=${id}`, { signal }),
       fetch("/api/settings/public", { signal }),
       fetch(`/api/cosec/booking-devices?booking_id=${id}`, { signal }),
+      fetch(`/api/cosec/access-logs?booking_id=${id}`, { signal }),
     ]).catch((e) => {
-      if ((e as Error).name === "AbortError") return [null, null, null, null, null] as const;
+      if ((e as Error).name === "AbortError") return [null, null, null, null, null, null] as const;
       throw e;
     });
     if (signal?.aborted) return;
@@ -180,6 +188,10 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     if (devicesRes?.ok) {
       const dJson = await devicesRes.json();
       setBookingDevices(dJson.data || []);
+    }
+    if (logsRes?.ok) {
+      const lJson = await logsRes.json();
+      setAccessLogs(lJson.data || []);
     }
 
     // Wave 2: outstanding charges (needs leadId from Wave 1)
@@ -1515,6 +1527,80 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                       })}
                     </div>
                   </div>
+                )}
+              </CardContent>
+            </Card>
+          );
+        })()}
+
+        {/* Access Log — entry/exit events from COSEC devices for this booking */}
+        {(booking.status === "confirmed" || booking.status === "checked_in" || booking.status === "completed") && (() => {
+          function fmtEventTime(iso: string) {
+            const d = new Date(iso);
+            return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
+          }
+
+          function DirectionBadge({ direction }: { direction: string }) {
+            if (direction === "IN") return (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-green-50 border border-green-200 text-green-700">
+                <LogIn size={10} />Entry
+              </span>
+            );
+            if (direction === "OUT") return (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-amber-50 border border-amber-200 text-amber-700">
+                <LogOut size={10} />Exit
+              </span>
+            );
+            return (
+              <span className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-red-50 border border-red-200 text-red-600">
+                <ShieldAlert size={10} />Denied
+              </span>
+            );
+          }
+
+          return (
+            <Card>
+              <CardHeader className="pb-2">
+                <CardTitle className="text-sm flex items-center gap-2">
+                  <Activity size={14} />Entry Activity
+                  {accessLogs.length > 0 && (
+                    <span className="ml-auto text-[11px] font-normal text-muted-foreground">
+                      {accessLogs.filter(l => l.direction === "IN").length} entries · {accessLogs.filter(l => l.direction === "OUT").length} exits
+                    </span>
+                  )}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                {accessLogs.length === 0 ? (
+                  <p className="text-xs text-muted-foreground py-1">
+                    No swipes recorded yet. Events appear once the guest uses the PIN at a COSEC device.
+                  </p>
+                ) : (
+                  <ol className="relative border-l border-border ml-2 space-y-0">
+                    {accessLogs.map((log, i) => {
+                      const isFirst = i === 0;
+                      const isLast = i === accessLogs.length - 1;
+                      return (
+                        <li key={log.id} className={`pl-4 ${isFirst ? "pb-3" : isLast ? "pt-3" : "py-3"}`}>
+                          {/* Timeline dot */}
+                          <span className={`absolute -left-[5px] mt-0.5 h-2.5 w-2.5 rounded-full border-2 border-background ${
+                            log.direction === "IN"     ? "bg-green-500" :
+                            log.direction === "OUT"    ? "bg-amber-400" :
+                                                        "bg-red-400"
+                          }`} />
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <DirectionBadge direction={log.direction} />
+                            <span className="text-xs text-muted-foreground font-mono">{fmtEventTime(log.event_time)}</span>
+                            {log.device && (
+                              <span className="text-xs text-muted-foreground">
+                                via <span className="text-foreground">{log.device.label}</span>
+                              </span>
+                            )}
+                          </div>
+                        </li>
+                      );
+                    })}
+                  </ol>
                 )}
               </CardContent>
             </Card>
