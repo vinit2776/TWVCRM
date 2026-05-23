@@ -1534,7 +1534,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         })()}
 
         {/* Access Log — entry/exit events from COSEC devices for this booking */}
-        {(booking.status === "confirmed" || booking.status === "checked_in" || booking.status === "completed") && (() => {
+        {(booking.status === "confirmed" || booking.status === "checked_in" || booking.status === "checked_out") && (() => {
           function fmtEventTime(iso: string) {
             const d = new Date(iso);
             return d.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true });
