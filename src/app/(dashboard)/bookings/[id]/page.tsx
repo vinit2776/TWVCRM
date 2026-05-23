@@ -118,6 +118,8 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [bookingCharges, setBookingCharges] = useState<any[]>([]);
   const [userRole, setUserRole] = useState<string | null>(null);
   const [bookingDevices, setBookingDevices] = useState<Array<{ id: string; device: { id: string; label: string; device_category: string } | null }>>([]);
+  const [pinDelivery, setPinDelivery] = useState<{ whatsapp: string; sms: string; email: string } | null>(null);
+  const [pinCopied, setPinCopied] = useState(false);
 
   // GST inline-edit state
   const [editingGst, setEditingGst] = useState(false);
@@ -1390,7 +1392,10 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               headers: { "Content-Type": "application/json" },
               body: JSON.stringify({ booking_id: id }),
             });
-            if (res.ok) {
+            const json = res.ok ? await res.json() : null;
+            if (res.ok && json) {
+              // Surface per-channel delivery result
+              if (json.delivery) setPinDelivery(json.delivery);
               // Refresh booking to pick up new access_pin value
               const bRes = await fetch(`/api/bookings/${id}`);
               if (bRes.ok) { const j = await bRes.json(); setBooking(j.data); }
@@ -1399,6 +1404,23 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                 .then(r => r.json()).then(j => setBookingDevices(j.data || [])).catch(() => {});
             }
             return res.ok;
+          }
+
+          // Build the shareable PIN message the staff member can copy and send manually
+          function buildShareMessage(pin: string) {
+            // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
+            const b = booking!;
+            const startStr = formatTime12(b.start_time);
+            const endStr   = formatTime12(b.end_time);
+            const dateStr  = formatDate(b.booking_date);
+            return `Hi, your door access PIN for The WorkVilla is: *${pin}*\n\nBooking: ${b.booking_number}\nDate: ${dateStr}\nTime: ${startStr} – ${endStr}\n\nEnter this PIN at the entrance device to unlock the door. PIN expires 5 minutes after your booking ends.\n– The WorkVilla`;
+          }
+
+          function DeliveryBadge({ label, status }: { label: string; status: string }) {
+            if (status === "sent")     return <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-green-50 border border-green-200 text-green-700"><Check size={10} />{label}</span>;
+            if (status === "failed")   return <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-red-50 border border-red-200 text-red-600"><X size={10} />{label} failed</span>;
+            if (status === "disabled") return <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-amber-50 border border-amber-200 text-amber-700">{label} off</span>;
+            return null; // skipped — no badge
           }
 
           return (
@@ -1410,30 +1432,61 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
               </CardHeader>
               <CardContent className="space-y-3 text-sm">
                 {existingPin ? (
-                  <div className="flex items-center justify-between">
-                    <div>
-                      <p className="text-3xl font-mono font-bold tracking-widest">{existingPin}</p>
-                      <p className="text-xs text-muted-foreground mt-0.5">Valid {formatTime12(booking.start_time)} – {formatTime12(booking.end_time)} (±5 min)</p>
+                  <>
+                    {/* PIN display row */}
+                    <div className="flex items-start justify-between gap-3">
+                      <div>
+                        <p className="text-3xl font-mono font-bold tracking-widest">{existingPin}</p>
+                        <p className="text-xs text-muted-foreground mt-0.5">Valid {formatTime12(booking.start_time)} – {formatTime12(booking.end_time)} (±5 min)</p>
+                      </div>
+                      <div className="flex flex-col gap-1.5 items-end">
+                        <Button
+                          variant="outline" size="sm"
+                          onClick={async () => {
+                            setPinDelivery(null);
+                            const ok = await provisionPin();
+                            if (ok) toast.success("Access PIN resent");
+                            else toast.error("Failed to resend PIN");
+                          }}
+                        >
+                          <Send size={13} className="mr-1.5" />Resend PIN
+                        </Button>
+                        {/* Copy to share */}
+                        <Button
+                          variant="ghost" size="sm"
+                          className="text-muted-foreground h-7 text-xs"
+                          onClick={() => {
+                            navigator.clipboard.writeText(buildShareMessage(existingPin)).then(() => {
+                              setPinCopied(true);
+                              setTimeout(() => setPinCopied(false), 2500);
+                            });
+                          }}
+                        >
+                          {pinCopied ? <Check size={12} className="mr-1.5 text-green-600" /> : <Copy size={12} className="mr-1.5" />}
+                          {pinCopied ? "Copied!" : "Copy to share"}
+                        </Button>
+                      </div>
                     </div>
-                    <Button
-                      variant="outline" size="sm"
-                      onClick={async () => {
-                        const ok = await provisionPin();
-                        if (ok) toast.success("Access PIN resent via WhatsApp, SMS & email");
-                        else toast.error("Failed to resend PIN");
-                      }}
-                    >
-                      <Send size={13} className="mr-1.5" />Resend PIN
-                    </Button>
-                  </div>
+
+                    {/* Delivery status — shown after Resend or Generate */}
+                    {pinDelivery && (
+                      <div className="flex items-center gap-1.5 flex-wrap pt-0.5">
+                        <span className="text-[11px] text-muted-foreground mr-0.5">Sent via:</span>
+                        <DeliveryBadge label="WhatsApp" status={pinDelivery.whatsapp} />
+                        <DeliveryBadge label="SMS" status={pinDelivery.sms} />
+                        <DeliveryBadge label="Email" status={pinDelivery.email} />
+                      </div>
+                    )}
+                  </>
                 ) : (
                   <div className="flex items-center justify-between">
                     <p className="text-xs text-muted-foreground">No PIN provisioned yet for this booking.</p>
                     <Button
                       size="sm"
                       onClick={async () => {
+                        setPinDelivery(null);
                         const ok = await provisionPin();
-                        if (ok) toast.success("Access PIN generated and sent via WhatsApp, SMS & email");
+                        if (ok) toast.success("Access PIN generated and sent");
                         else toast.error("Failed to generate PIN — check COSEC device config");
                       }}
                     >

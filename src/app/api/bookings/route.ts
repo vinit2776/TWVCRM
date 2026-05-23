@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { createBookingSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 import { messaging, dltSms } from "@/lib/whatsapp";
+import { provisionBookingAccess } from "@/lib/provision-booking-access";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export const maxDuration = 30;
@@ -863,12 +864,10 @@ export async function POST(request: NextRequest) {
 
   // 10a. COSEC access PIN — always fire for every booking so the guest gets
   // entry-door access even when the space has no room device linked.
-  // booking-access handles the conditional room device internally.
-  fetch(`${process.env.APP_URL ?? process.env.NEXT_PUBLIC_APP_URL}/api/cosec/booking-access`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ booking_id: booking.id }),
-  }).catch((err) => console.error("[booking] COSEC access trigger failed:", err));
+  // Called directly (no HTTP self-fetch) to avoid serverless network fragility.
+  provisionBookingAccess(booking.id as string).catch((err) =>
+    console.error("[booking] COSEC provision failed:", err)
+  );
 
   // 10. WhatsApp/SMS confirmation — fire-and-forget (no await)
   const phones = [booking.guest_phone as string | null, booking.booker_phone as string | null]
