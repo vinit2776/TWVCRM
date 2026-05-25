@@ -542,11 +542,24 @@ export async function POST(
       </div>
     </div>`;
 
+  // Fetch internal team once — used for BCC on customer email + grouped notification.
+  const { data: managers } = await supabase
+    .from("users")
+    .select("email, full_name")
+    .in("role", ["admin", "manager", "floor_manager"])
+    .eq("is_active", true);
+
+  const internalBcc = (managers ?? [])
+    .map((m) => m.email)
+    .filter((e): e is string => !!e && e !== customerEmail);
+
+  // ── Customer confirmation (To: customer, BCC: internal team) ──────────────
   try {
     await resend.emails.send({
       from: EMAIL_FROM,
       replyTo: EMAIL_REPLY_TO,
       to: customerEmail,
+      bcc: internalBcc.length > 0 ? internalBcc : undefined,
       subject: `Booking Confirmation - ${booking.booking_number} - The WorkVilla`,
       html: confirmationHtml,
       attachments: [
@@ -575,14 +588,12 @@ export async function POST(
     });
   }
 
-  // Also notify floor managers
-  const { data: managers } = await supabase
-    .from("users")
-    .select("email, full_name")
-    .in("role", ["admin", "manager", "floor_manager"])
-    .eq("is_active", true);
-
+  // ── Internal team notification (single grouped email To: all staff) ───────
+  // Separate from the customer email so staff see the internal context
+  // (notes, phone, payment status, prep reminder) that the customer doesn't.
   if (managers && managers.length > 0) {
+    const managerEmails = managers.map((m) => m.email).filter((e): e is string => !!e);
+
     const managerHtml = `
       <div style="font-family:sans-serif;max-width:600px;margin:0 auto;">
         <div style="background:#015E65;padding:20px;text-align:center;">
@@ -606,18 +617,12 @@ export async function POST(
         </div>
       </div>`;
 
-    await Promise.all(
-      managers.map((mgr) =>
-        resend.emails.send({
-          from: EMAIL_FROM,
-          to: mgr.email,
-          // Subject leads with location so a manager can sort their inbox
-          // by centre at a glance.
-          subject: `New Booking${locationName ? ` [${locationName}]` : ""}: ${spaceName} - ${formatDate(booking.booking_date)} ${startTime} - ${booking.booking_number}`,
-          html: managerHtml,
-        }).catch((e) => console.error(`Failed to send manager notification to ${mgr.email}:`, e))
-      )
-    );
+    resend.emails.send({
+      from: EMAIL_FROM,
+      to: managerEmails,
+      subject: `New Booking${locationName ? ` [${locationName}]` : ""}: ${spaceName} - ${formatDate(booking.booking_date)} ${startTime} - ${booking.booking_number}`,
+      html: managerHtml,
+    }).catch((e) => console.error("Failed to send internal booking notification:", e));
   }
 
   return NextResponse.json({ message: "Confirmation email sent" });
