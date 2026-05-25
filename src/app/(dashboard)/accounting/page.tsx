@@ -95,6 +95,23 @@ type VendorBillItem = {
   }>;
 };
 
+type TdsSection = {
+  code: string; description: string;
+  rate_individual: number; rate_company: number;
+  rate_min: number; rate_max: number;
+};
+
+type BatchTdsState = {
+  enabled: boolean;
+  sectionCode: string;
+  vendorType: "individual" | "huf" | "company";
+  rate: number;
+  rateMin: number;
+  rateMax: number;
+  baseAmount: string;
+  panAvailable: boolean;
+};
+
 type RentPaymentItem = {
   id: string;
   payment_month: string;
@@ -225,6 +242,8 @@ export default function AccountingPage() {
   const [batchRef, setBatchRef] = useState("");
   const [batchNotes, setBatchNotes] = useState("");
   const [batchGst, setBatchGst] = useState<Record<string, string>>({});
+  const [batchTds, setBatchTds] = useState<Record<string, BatchTdsState>>({});
+  const [batchTdsSections, setBatchTdsSections] = useState<TdsSection[]>([]);
   const [batchSubmitting, setBatchSubmitting] = useState(false);
 
   // Accounting-head tagging dialog (for direct-expense bills with no PO)
@@ -320,10 +339,13 @@ export default function AccountingPage() {
 
   function openBatchWizard() {
     const gstInit: Record<string, string> = {};
+    const tdsInit: Record<string, BatchTdsState> = {};
     for (const b of selectedBills) {
       gstInit[b.id] = b.gst_amount ? String(b.gst_amount) : "";
+      tdsInit[b.id] = { enabled: false, sectionCode: "", vendorType: "company", rate: 0, rateMin: 0, rateMax: 20, baseAmount: "", panAvailable: true };
     }
     setBatchGst(gstInit);
+    setBatchTds(tdsInit);
     setBatchDate(today);
     const saved = typeof window !== "undefined" ? localStorage.getItem("batch_pay_last_mode") : "";
     setBatchMode(saved || "");
@@ -331,6 +353,12 @@ export default function AccountingPage() {
     setBatchNotes("");
     setBatchStep(0);
     setBatchWizardOpen(true);
+    // Fetch TDS sections once (cached in state)
+    if (batchTdsSections.length === 0) {
+      fetch("/api/tds/sections").then((r) => r.json()).then((d) => {
+        if (d.data) setBatchTdsSections(d.data);
+      });
+    }
   }
 
   async function handleBatchSubmit() {
@@ -345,7 +373,19 @@ export default function AccountingPage() {
         const gst = parseFloat(batchGst[b.id] || "0") || 0;
         const base = Number(b.approved_amount ?? b.total_amount);
         const outstanding = Math.max(0, base + gst - Number(b.amount_paid ?? 0));
-        return { bill_id: b.id, amount: Math.round(outstanding * 100) / 100, gst_amount: gst };
+        const tds = batchTds[b.id];
+        const tdsAmount = tds?.enabled && tds.baseAmount && tds.rate > 0
+          ? Math.round(Number(tds.baseAmount) * tds.rate) / 100
+          : 0;
+        const tdsPayload = tds?.enabled && tds.sectionCode && tdsAmount > 0 ? {
+          section_code: tds.sectionCode,
+          vendor_type: tds.vendorType,
+          base_amount: Number(tds.baseAmount),
+          tds_rate: tds.rate,
+          tds_amount: tdsAmount,
+          pan_available: tds.panAvailable,
+        } : undefined;
+        return { bill_id: b.id, amount: Math.round(outstanding * 100) / 100, gst_amount: gst, tds: tdsPayload };
       });
       const res = await fetch("/api/accounting/batch-payment", {
         method: "POST",
@@ -1280,14 +1320,18 @@ export default function AccountingPage() {
                 </div>
                 {/* Per-bill round-off */}
                 {(() => {
-                  const rounded = Math.round(outstanding);
-                  const diff = rounded - outstanding;
+                  const tds = batchTds[bill.id];
+                  const tdsAmt = tds?.enabled && tds.baseAmount && tds.rate > 0
+                    ? Math.round(Number(tds.baseAmount) * tds.rate) / 100 : 0;
+                  const roundTarget = tds?.enabled && tdsAmt > 0 ? outstanding - tdsAmt : outstanding;
+                  const rounded = Math.round(roundTarget);
+                  const diff = rounded - roundTarget;
                   if (Math.abs(diff) < 0.005) return null;
                   return (
                     <div className="rounded-lg bg-slate-50 border px-3 py-2 text-xs space-y-1">
                       <div className="flex justify-between text-muted-foreground">
-                        <span>Payable (incl. GST)</span>
-                        <span>{formatCurrency(outstanding)}</span>
+                        <span>{tds?.enabled && tdsAmt > 0 ? "Net to vendor (after TDS)" : "Payable (incl. GST)"}</span>
+                        <span>{formatCurrency(roundTarget)}</span>
                       </div>
                       <div className="flex justify-between text-muted-foreground">
                         <span>Round off</span>
@@ -1299,6 +1343,80 @@ export default function AccountingPage() {
                         <span>Issue for</span>
                         <span>{formatCurrency(rounded)}</span>
                       </div>
+                    </div>
+                  );
+                })()}
+                {/* Per-bill TDS deduction (optional) */}
+                {(() => {
+                  const tds = batchTds[bill.id] ?? { enabled: false, sectionCode: "", vendorType: "company" as const, rate: 0, rateMin: 0, rateMax: 20, baseAmount: "", panAvailable: true };
+                  const tdsAmt = tds.enabled && tds.baseAmount && tds.rate > 0
+                    ? Math.round(Number(tds.baseAmount) * tds.rate) / 100 : 0;
+                  const netToVendor = outstanding - tdsAmt;
+                  return (
+                    <div className="rounded-lg border border-dashed border-blue-300 bg-blue-50/40 p-3 space-y-2.5">
+                      <div className="flex items-center justify-between">
+                        <span className="text-xs font-medium text-blue-900">TDS Deduction</span>
+                        <label className="flex items-center gap-1.5 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={tds.enabled}
+                            onChange={(e) => setBatchTds((prev) => ({ ...prev, [bill.id]: { ...tds, enabled: e.target.checked } }))}
+                            className="h-3.5 w-3.5 rounded accent-blue-600"
+                          />
+                          <span className="text-xs text-blue-800">{tds.enabled ? "Enabled" : "Enable"}</span>
+                        </label>
+                      </div>
+                      {tds.enabled && (
+                        <div className="grid grid-cols-2 gap-2">
+                          <div className="col-span-2 space-y-1">
+                            <Label className="text-xs">TDS Section</Label>
+                            <select
+                              className="w-full h-8 rounded-md border border-input bg-background px-2 text-xs"
+                              value={tds.sectionCode}
+                              onChange={(e) => {
+                                const sec = batchTdsSections.find((s) => s.code === e.target.value);
+                                const rate = sec ? (tds.panAvailable ? sec.rate_company : 20) : 0;
+                                setBatchTds((prev) => ({ ...prev, [bill.id]: { ...tds, sectionCode: e.target.value, rate, rateMin: sec ? sec.rate_min : 0, rateMax: sec ? sec.rate_max : 20 } }));
+                              }}
+                            >
+                              <option value="">Select section</option>
+                              {batchTdsSections.map((s) => (
+                                <option key={s.code} value={s.code}>{s.code.replace("_", "(")} — {s.description}{s.code.includes("_") ? ")" : ""}</option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Rate (%)</Label>
+                            <Input
+                              type="number" step="0.5" min={tds.rateMin} max={tds.rateMax}
+                              value={tds.rate}
+                              onChange={(e) => setBatchTds((prev) => ({ ...prev, [bill.id]: { ...tds, rate: Number(e.target.value) } }))}
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                          <div className="space-y-1">
+                            <Label className="text-xs">Base amount (pre-GST)</Label>
+                            <Input
+                              type="number" step="0.01" min="0.01" placeholder="Amt excl. GST"
+                              value={tds.baseAmount}
+                              onChange={(e) => setBatchTds((prev) => ({ ...prev, [bill.id]: { ...tds, baseAmount: e.target.value } }))}
+                              className="h-8 text-xs"
+                            />
+                          </div>
+                          {tdsAmt > 0 && (
+                            <div className="col-span-2 rounded bg-blue-100/60 px-2.5 py-1.5 text-xs space-y-0.5">
+                              <div className="flex justify-between">
+                                <span className="text-blue-700">TDS deducted ({tds.rate}%):</span>
+                                <span className="font-semibold text-blue-900">– {formatCurrency(tdsAmt)}</span>
+                              </div>
+                              <div className="flex justify-between border-t border-blue-200 pt-0.5 mt-0.5">
+                                <span className="text-blue-700">Net to vendor:</span>
+                                <span className="font-bold text-blue-900">{formatCurrency(netToVendor)}</span>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })()}

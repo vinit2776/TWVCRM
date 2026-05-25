@@ -5,6 +5,15 @@ import { z } from "zod";
 
 const BANK_MODES = ["neft", "rtgs", "imps", "bank_transfer", "cheque"] as const;
 
+const tdsBillSchema = z.object({
+  section_code: z.string(),
+  vendor_type: z.enum(["individual", "huf", "company"]),
+  base_amount: z.number().positive(),
+  tds_rate: z.number().positive(),
+  tds_amount: z.number().positive(),
+  pan_available: z.boolean(),
+});
+
 const billItemSchema = z.object({
   bill_id: z.string().uuid(),
   /**
@@ -17,6 +26,8 @@ const billItemSchema = z.object({
    * If omitted or null, the bill's existing gst_amount is used as-is.
    */
   gst_amount: z.number().min(0).nullable().optional(),
+  /** Optional TDS deduction for this bill. */
+  tds: tdsBillSchema.optional(),
 });
 
 const batchPaymentSchema = z.object({
@@ -163,7 +174,7 @@ export async function POST(request: NextRequest) {
       const paymentStatus = newAmountPaid >= finalCeiling - 0.01 ? "paid" : "partially_paid";
 
       // 3. Insert vendor_bill_payments row
-      const { error: payErr } = await adminSupabase
+      const { data: paymentRow, error: payErr } = await adminSupabase
         .from("vendor_bill_payments")
         .insert({
           bill_id: bill.id,
@@ -174,11 +185,31 @@ export async function POST(request: NextRequest) {
           notes: notes ?? null,
           recorded_by: dbUser.id,
           batch_ref,
-        });
+        })
+        .select("id")
+        .single();
 
       if (payErr) {
         failed.push({ bill_id: bill.id, bill_number: bill.bill_number, error: payErr.message });
         continue;
+      }
+
+      // 3b. Insert TDS deduction if provided for this bill
+      if (item.tds && paymentRow?.id) {
+        const pd = new Date(payment_date);
+        await adminSupabase.from("vendor_bill_tds").insert({
+          bill_id: bill.id,
+          payment_id: paymentRow.id,
+          section_code: item.tds.section_code,
+          vendor_type: item.tds.vendor_type,
+          base_amount: item.tds.base_amount,
+          tds_rate: item.tds.tds_rate,
+          tds_amount: item.tds.tds_amount,
+          pan_available: item.tds.pan_available,
+          period_month: pd.getMonth() + 1,
+          period_year: pd.getFullYear(),
+          created_by: dbUser.id,
+        });
       }
 
       // 4. Update vendor_bills totals

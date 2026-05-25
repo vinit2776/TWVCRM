@@ -412,8 +412,10 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
     : Number(payAmount);
 
   // Round-off helpers (display only — amount saved is whatever the user enters)
-  const roundedPayableDisplay = Math.round(approvedOutstanding);
-  const roundOffDisplay = roundedPayableDisplay - approvedOutstanding;
+  // When TDS is active, the cheque/NEFT goes to the vendor for the NET amount — round that.
+  const roundOffTarget = tdsEnabled && tdsAmount > 0 ? netToVendor : approvedOutstanding;
+  const roundedPayableDisplay = Math.round(roundOffTarget);
+  const roundOffDisplay = roundedPayableDisplay - roundOffTarget;
   const hasRoundOff = Math.abs(roundOffDisplay) >= 0.005;
 
   async function handleSaveInlineGst() {
@@ -1393,12 +1395,12 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                   placeholder="0.00"
                 />
               </div>
-              {/* Round-off breakup — shown when outstanding has paise */}
+              {/* Round-off breakup — shown when outstanding (or net-to-vendor with TDS) has paise */}
               {hasRoundOff && (
                 <div className="col-span-2 rounded-lg bg-slate-50 border px-3 py-2.5 space-y-1.5">
                   <div className="flex justify-between text-xs text-muted-foreground">
-                    <span>Payable (incl. GST)</span>
-                    <span>{formatCurrency(approvedOutstanding)}</span>
+                    <span>{tdsEnabled && tdsAmount > 0 ? "Net to vendor (after TDS)" : "Payable (incl. GST)"}</span>
+                    <span>{formatCurrency(roundOffTarget)}</span>
                   </div>
                   <div className="flex justify-between text-xs text-muted-foreground">
                     <span>Round off</span>
