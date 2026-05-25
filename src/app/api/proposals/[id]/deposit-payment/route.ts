@@ -39,6 +39,7 @@ export async function POST(
   const reference = (formData.get("reference") as string | null)?.trim() || null;
   const notes = (formData.get("notes") as string | null)?.trim() || null;
   const proofFile = formData.get("payment_proof") as File | null;
+  const shortfallApproved = formData.get("shortfall_approved") === "true";
 
   const amount = parseFloat(amountRaw || "");
   if (!amountRaw || isNaN(amount) || amount <= 0) {
@@ -60,6 +61,41 @@ export async function POST(
 
   if (proposal.deposit_payment_status === "not_required") {
     return NextResponse.json({ error: "No deposit required for this proposal" }, { status: 400 });
+  }
+
+  // Shortfall tolerance check — expected deposit amount (pre-GST)
+  const expectedAmount = Number(proposal.security_deposit_amount || 0);
+  let shortfallApprovedById: string | null = null;
+
+  if (expectedAmount > 0 && amount < expectedAmount) {
+    const shortfallPct = (expectedAmount - amount) / expectedAmount; // e.g. 0.048 for 4.8%
+
+    if (shortfallPct > 0.10) {
+      // More than 10% short — hard block
+      const shortfallAmt = (expectedAmount - amount).toLocaleString("en-IN");
+      return NextResponse.json(
+        { error: `Amount is more than 10% below the expected deposit of ₹${expectedAmount.toLocaleString("en-IN")} (shortfall ₹${shortfallAmt}). Cannot record.` },
+        { status: 400 }
+      );
+    }
+
+    // Within 10% shortfall — requires explicit approval from admin or manager only
+    const SHORTFALL_APPROVER_ROLES = ["admin", "manager"];
+    if (!SHORTFALL_APPROVER_ROLES.includes(actor.role)) {
+      return NextResponse.json(
+        { error: "Only an admin or manager can approve a deposit shortfall. Please record the exact expected amount or ask a manager." },
+        { status: 403 }
+      );
+    }
+
+    if (!shortfallApproved) {
+      return NextResponse.json(
+        { error: "Shortfall approval is required. Check the approval box before submitting." },
+        { status: 400 }
+      );
+    }
+
+    shortfallApprovedById = actor.id;
   }
 
   // Upload proof to Supabase Storage if provided
@@ -104,6 +140,7 @@ export async function POST(
       deposit_payment_reference: reference,
       deposit_payment_received_at: receivedAt,
       deposit_payment_screenshot_url: screenshotUrl,
+      ...(shortfallApprovedById ? { deposit_shortfall_approved_by: shortfallApprovedById } : {}),
     })
     .eq("id", id);
 

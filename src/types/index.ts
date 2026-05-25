@@ -317,6 +317,7 @@ export interface Proposal {
   deposit_payment_amount?: number;
   deposit_payment_reference?: string;
   deposit_payment_screenshot_url?: string;
+  deposit_shortfall_approved_by?: string; // user id of admin/manager who approved partial payment
   // Accounting
   deposit_accounted?: boolean;
   deposit_accounted_at?: string;

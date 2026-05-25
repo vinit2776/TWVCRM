@@ -69,7 +69,7 @@ export default function ProposalDetailPage({
   const [loading, setLoading] = useState(true);
 
   // Current user (rep) profile for PDF/email attribution
-  const [currentUser, setCurrentUser] = useState<{ full_name: string; email: string; phone: string } | null>(null);
+  const [currentUser, setCurrentUser] = useState<{ full_name: string; email: string; phone: string; role?: string } | null>(null);
 
   // Service quotas for PDF rendering
   const [serviceQuotas, setServiceQuotas] = useState<{ name: string; unit_label: string; monthly_quota: number; overage_rate: number }[]>([]);
@@ -84,6 +84,7 @@ export default function ProposalDetailPage({
   const [manualPayNotes, setManualPayNotes] = useState("");
   const [manualPayFile, setManualPayFile] = useState<File | null>(null);
   const [manualPaySubmitting, setManualPaySubmitting] = useState(false);
+  const [manualPayShortfallApproved, setManualPayShortfallApproved] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Deposit email preview dialog
@@ -142,7 +143,7 @@ export default function ProposalDetailPage({
     fetch("/api/me")
       .then((r) => r.ok ? r.json() : null)
       .then((data) => {
-        if (data?.full_name) setCurrentUser({ full_name: data.full_name, email: data.email || "", phone: data.phone || "" });
+        if (data?.full_name) setCurrentUser({ full_name: data.full_name, email: data.email || "", phone: data.phone || "", role: data.role || "" });
       })
       .catch(() => {});
 
@@ -210,6 +211,7 @@ export default function ProposalDetailPage({
     setManualPayRef("");
     setManualPayNotes("");
     setManualPayFile(null);
+    setManualPayShortfallApproved(false);
     setManualPayDialogOpen(true);
   };
 
@@ -331,6 +333,18 @@ export default function ProposalDetailPage({
       toast.error("Please enter a valid payment amount");
       return;
     }
+    const expectedAmt = Number(proposal.security_deposit_amount || 0);
+    if (expectedAmt > 0 && amt < expectedAmt) {
+      const shortfallPct = (expectedAmt - amt) / expectedAmt;
+      if (shortfallPct > 0.10) {
+        toast.error(`Amount is more than 10% below the expected deposit. Minimum acceptable: ₹${Math.ceil(expectedAmt * 0.9).toLocaleString("en-IN")}`);
+        return;
+      }
+      if (!manualPayShortfallApproved) {
+        toast.error("Please check the shortfall approval box before submitting.");
+        return;
+      }
+    }
     setManualPaySubmitting(true);
     try {
       const fd = new FormData();
@@ -338,6 +352,7 @@ export default function ProposalDetailPage({
       if (manualPayRef.trim()) fd.append("reference", manualPayRef.trim());
       if (manualPayNotes.trim()) fd.append("notes", manualPayNotes.trim());
       if (manualPayFile) fd.append("payment_proof", manualPayFile);
+      if (manualPayShortfallApproved) fd.append("shortfall_approved", "true");
 
       const res = await fetch(`/api/proposals/${id}/deposit-payment`, {
         method: "POST",
@@ -1381,21 +1396,60 @@ export default function ProposalDetailPage({
           </DialogHeader>
 
           <div className="space-y-4">
-            <div className="space-y-1.5">
-              <Label htmlFor="mp-amount">Amount Received (₹) <span className="text-destructive">*</span></Label>
-              <Input
-                id="mp-amount"
-                type="number"
-                min={0}
-                step={0.01}
-                value={manualPayAmount}
-                onChange={(e) => setManualPayAmount(e.target.value)}
-                placeholder="e.g. 22000"
-              />
-              <p className="text-xs text-muted-foreground">
-                Expected deposit: ₹{Number(proposal.security_deposit_amount || 0).toLocaleString("en-IN")}
-              </p>
-            </div>
+            {(() => {
+              const expectedAmt = Number(proposal.security_deposit_amount || 0);
+              const enteredAmt = parseFloat(manualPayAmount) || 0;
+              const shortfall = expectedAmt > 0 && enteredAmt > 0 && enteredAmt < expectedAmt
+                ? (expectedAmt - enteredAmt) / expectedAmt
+                : 0;
+              const canApproveShortfall = ["admin", "manager"].includes(currentUser?.role || "");
+              return (
+                <>
+                  <div className="space-y-1.5">
+                    <Label htmlFor="mp-amount">Amount Received (₹) <span className="text-destructive">*</span></Label>
+                    <Input
+                      id="mp-amount"
+                      type="number"
+                      min={0}
+                      step={0.01}
+                      value={manualPayAmount}
+                      onChange={(e) => { setManualPayAmount(e.target.value); setManualPayShortfallApproved(false); }}
+                      placeholder="e.g. 22000"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      Expected deposit: ₹{expectedAmt.toLocaleString("en-IN")}
+                    </p>
+                  </div>
+
+                  {shortfall > 0.10 && (
+                    <div className="rounded-md border border-red-200 bg-red-50 px-3 py-2 text-xs text-red-800">
+                      ⚠️ Amount is <strong>{(shortfall * 100).toFixed(1)}%</strong> below the expected deposit (shortfall ₹{(expectedAmt - enteredAmt).toLocaleString("en-IN")}). Minimum acceptable is ₹{Math.ceil(expectedAmt * 0.9).toLocaleString("en-IN")}. Cannot record.
+                    </div>
+                  )}
+
+                  {shortfall > 0 && shortfall <= 0.10 && (
+                    <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 space-y-2">
+                      <p className="text-xs text-amber-800">
+                        ⚠️ Amount is <strong>{(shortfall * 100).toFixed(1)}%</strong> less than expected (shortfall ₹{(expectedAmt - enteredAmt).toLocaleString("en-IN")}). {canApproveShortfall ? "Check the box below to approve this shortfall." : "Only a manager or admin can approve a shortfall."}
+                      </p>
+                      {canApproveShortfall && (
+                        <label className="flex items-center gap-2 cursor-pointer">
+                          <input
+                            type="checkbox"
+                            checked={manualPayShortfallApproved}
+                            onChange={(e) => setManualPayShortfallApproved(e.target.checked)}
+                            className="h-4 w-4 rounded border-amber-400 accent-amber-600"
+                          />
+                          <span className="text-xs font-medium text-amber-900">
+                            I approve accepting ₹{enteredAmt.toLocaleString("en-IN")} as full settlement of the security deposit
+                          </span>
+                        </label>
+                      )}
+                    </div>
+                  )}
+                </>
+              );
+            })()}
 
             <div className="space-y-1.5">
               <Label htmlFor="mp-ref">Payment Reference / UTR</Label>
@@ -1467,7 +1521,16 @@ export default function ProposalDetailPage({
               </Button>
               <Button
                 onClick={handleManualPaySubmit}
-                disabled={manualPaySubmitting}
+                disabled={manualPaySubmitting || (() => {
+                  const expectedAmt = Number(proposal.security_deposit_amount || 0);
+                  const enteredAmt = parseFloat(manualPayAmount) || 0;
+                  if (expectedAmt > 0 && enteredAmt > 0 && enteredAmt < expectedAmt) {
+                    const shortfall = (expectedAmt - enteredAmt) / expectedAmt;
+                    if (shortfall > 0.10) return true;
+                    if (shortfall > 0 && !manualPayShortfallApproved) return true;
+                  }
+                  return false;
+                })()}
                 className="bg-amber-600 hover:bg-amber-700 text-white"
               >
                 {manualPaySubmitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
