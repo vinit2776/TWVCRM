@@ -685,6 +685,7 @@ export async function PATCH(
         return NextResponse.json({ error: "No payment has been recorded yet" }, { status: 422 });
       }
       const signedAt = new Date().toISOString();
+      // Sign this bill
       const { error: signErr } = await supabase
         .from("vendor_bills")
         .update({ cheque_signed_at: signedAt, cheque_signed_by: dbUser.id })
@@ -700,7 +701,49 @@ export async function PATCH(
           cheque_signed_by: { old: null, new: dbUser.id },
         },
       });
-      return NextResponse.json({ message: "Cheque marked as signed" });
+
+      // Also sign all other unsigned bills from the same vendor with the same cheque number.
+      // One physical cheque = one signing action — no need to visit each bill individually.
+      let siblingsUpdated = 0;
+      if (bill.payment_reference && bill.vendor_id) {
+        const { data: siblings } = await supabase
+          .from("vendor_bills")
+          .select("id")
+          .eq("vendor_id", bill.vendor_id)
+          .eq("payment_reference", bill.payment_reference)
+          .eq("payment_mode", "cheque")
+          .is("cheque_signed_at", null)
+          .neq("id", id);
+
+        if (siblings && siblings.length > 0) {
+          const siblingIds = siblings.map((s: { id: string }) => s.id);
+          await supabase
+            .from("vendor_bills")
+            .update({ cheque_signed_at: signedAt, cheque_signed_by: dbUser.id })
+            .in("id", siblingIds);
+          // Audit each sibling (fire-and-forget)
+          for (const siblingId of siblingIds) {
+            logAudit(supabase, {
+              entityType: "vendor_bill",
+              entityId: siblingId,
+              action: "cheque_signed",
+              performedBy: dbUser.id,
+              changes: {
+                cheque_signed_at: { old: null, new: signedAt },
+                cheque_signed_by: { old: null, new: dbUser.id },
+                note: { old: null, new: `Auto-signed with bill ${id} (same cheque)` },
+              },
+            });
+          }
+          siblingsUpdated = siblingIds.length;
+        }
+      }
+
+      return NextResponse.json({
+        message: siblingsUpdated > 0
+          ? `Cheque marked as signed (${siblingsUpdated + 1} bills on this cheque updated)`
+          : "Cheque marked as signed",
+      });
     }
   }
 
