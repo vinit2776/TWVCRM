@@ -113,7 +113,7 @@ export default function PayrollRunsPage() {
         <div className="border rounded-lg p-10 text-center text-muted-foreground">
           <FileSpreadsheet className="h-8 w-8 mx-auto mb-3 opacity-40" />
           <p className="font-medium">No payroll runs yet</p>
-          <p className="text-sm mt-1">Click "Generate Payroll" to create the first run</p>
+          <p className="text-sm mt-1">Click &quot;Generate Payroll&quot; to create the first run</p>
         </div>
       ) : (
         <div className="border rounded-lg overflow-hidden">
