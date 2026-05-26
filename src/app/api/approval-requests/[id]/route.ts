@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
-import { createUnifiVoucher } from "@/lib/unifi";
+import { createUnifiVoucher, getUnifiHotspotSsid } from "@/lib/unifi";
 
 /**
  * PATCH /api/approval-requests/[id]
@@ -23,9 +23,9 @@ export async function PATCH(
     .from("users").select("id, role, full_name").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
 
-  // Only admins can act on approval requests
-  if (dbUser.role !== "admin") {
-    return NextResponse.json({ error: "Only admins can approve or reject requests" }, { status: 403 });
+  // Admins and managers can act on approval requests
+  if (!["admin", "manager"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Only admins and managers can approve or reject requests" }, { status: 403 });
   }
 
   const body = await request.json();
@@ -78,18 +78,32 @@ export async function PATCH(
   // Handle type-specific side effects
 
   // ── UniFi ad-hoc voucher ──────────────────────────────────────────────────
+  let unifiIssuanceResult: { code: string; unifiId: string; ssid: string | null; durationMinutes: number; quota: number; locationName: string } | null = null;
+
   if (approvalReq.entity_type === "unifi_adhoc_voucher" && action === "approve") {
     const meta = approvalReq.metadata || {};
     try {
-      const { id: unifiId, code } = await createUnifiVoucher({
-        durationMinutes: Number(meta.duration_minutes),
-        note:            String(meta.note || `adhoc_${approvalReq.id}`),
-        quota:           Number(meta.quota ?? 1),
-      });
-      // Store the issued code back onto the approval request metadata
+      const [voucherResult, ssid] = await Promise.all([
+        createUnifiVoucher({
+          durationMinutes: Number(meta.duration_minutes),
+          note:            String(meta.note || `adhoc_${approvalReq.id}`),
+          quota:           Number(meta.quota ?? 1),
+        }),
+        getUnifiHotspotSsid(),
+      ]);
+      const { id: unifiId, code } = voucherResult;
+
+      // Persist code + SSID back onto the request for future reference
       await admin
         .from("approval_requests")
-        .update({ metadata: { ...meta, issued_code: code, issued_voucher_id: unifiId } })
+        .update({
+          metadata: {
+            ...meta,
+            issued_code:       code,
+            issued_voucher_id: unifiId,
+            ssid:              ssid ?? null,
+          },
+        })
         .eq("id", id);
 
       logAudit(admin, {
@@ -101,15 +115,25 @@ export async function PATCH(
           type:                { old: null, new: "unifi_adhoc_voucher_issued" },
           code:                { old: null, new: code },
           unifi_voucher_id:    { old: null, new: unifiId },
+          ssid:                { old: null, new: ssid },
+          approved_by:         { old: null, new: dbUser.full_name },
           approval_request_id: { old: null, new: id },
         },
       });
+
+      unifiIssuanceResult = {
+        code,
+        unifiId,
+        ssid,
+        durationMinutes: Number(meta.duration_minutes),
+        quota:           Number(meta.quota ?? 1),
+        locationName:    String(meta.location_name ?? ""),
+      };
     } catch (err) {
       console.error("[approval-requests] UniFi voucher issuance failed after approval:", err);
-      // Don't roll back the approval — log the failure so it can be retried manually
       await admin
         .from("approval_requests")
-        .update({ metadata: { ...meta, issuance_error: err instanceof Error ? err.message : String(err) } })
+        .update({ metadata: { ...(approvalReq.metadata || {}), issuance_error: err instanceof Error ? err.message : String(err) } })
         .eq("id", id);
     }
   }
@@ -234,15 +258,26 @@ export async function PATCH(
     performedBy: dbUser.id,
     changes: {
       status: { old: "pending", new: newStatus },
-      ...(action === "reject" ? { rejection_reason: body.rejection_reason.trim() } : {}),
+      ...(action === "reject" ? { rejection_reason: { old: null, new: body.rejection_reason.trim() } } : {}),
     },
   });
+
+  // Build response — include voucher details for UniFi ad-hoc so the UI can show the code
+  const baseMessage = approvalReq.entity_type === "unifi_adhoc_voucher"
+    ? action === "approve"
+      ? unifiIssuanceResult
+        ? "Voucher issued successfully."
+        : "Approved, but voucher issuance encountered an error — check server logs."
+      : "Request rejected."
+    : action === "approve"
+      ? "Approval granted — the negotiated rate is confirmed."
+      : "Request rejected — escalation has been reverted to the default rate.";
 
   return NextResponse.json({
     success: true,
     status: newStatus,
-    message: action === "approve"
-      ? "Approval granted — the negotiated rate is confirmed."
-      : "Request rejected — escalation has been reverted to the default rate.",
+    message: baseMessage,
+    // Only present for unifi_adhoc_voucher approvals
+    ...(unifiIssuanceResult ? { voucher: unifiIssuanceResult } : {}),
   });
 }

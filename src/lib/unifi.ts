@@ -153,6 +153,23 @@ export async function getUnifiVoucher(voucherId: string): Promise<UnifiVoucher |
 }
 
 /**
+ * Fetch the SSID of the hotspot/captive-portal network (open security).
+ * Returns the name of the first WLAN with security = "open", or null if not found.
+ */
+export async function getUnifiHotspotSsid(): Promise<string | null> {
+  try {
+    const wlans = await unifiRequest<Array<{ name: string; security: string; enabled: boolean }>>(
+      "/list/wlanconf"
+    );
+    // The hotspot network is "open" — clients hit the captive portal login
+    const hotspot = wlans.find((w) => w.security === "open" && w.enabled !== false);
+    return hotspot?.name ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Returns true if the given location should use the UniFi API.
  * Pass the location row from the DB; if unifi_site_id is set, this returns true.
  */

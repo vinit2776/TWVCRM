@@ -115,6 +115,7 @@ export async function POST(request: NextRequest) {
       approval_type: "unifi_adhoc_voucher",
       status:        "pending",
       requested_by:  dbUser.id,
+      requested_at:  new Date().toISOString(),
       reason:        body.reason!.trim(),
       metadata: {
         location_id:      body.location_id,
