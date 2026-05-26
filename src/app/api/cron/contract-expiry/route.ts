@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
+import { revokeUnifiVoucher } from "@/lib/unifi";
 
 /**
  * GET /api/cron/contract-expiry
@@ -35,7 +36,7 @@ export async function GET(request: NextRequest) {
   // Find active contracts whose end_date has passed
   const { data: expiring, error: fetchErr } = await admin
     .from("contracts")
-    .select("id, contract_number, end_date, lead_id, location_id, lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email), location:locations!contracts_location_id_fkey(name)")
+    .select("id, contract_number, end_date, lead_id, location_id, unifi_voucher_id, lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email), location:locations!contracts_location_id_fkey(name)")
     .eq("status", "active")
     .lt("end_date", todayIST);
 
@@ -79,6 +80,48 @@ export async function GET(request: NextRequest) {
   if (updateErr) {
     console.error("[contract-expiry] update error:", updateErr);
     return NextResponse.json({ error: updateErr.message }, { status: 500 });
+  }
+
+  // ── Voucher revocation for expired contracts ──────────────────────────────
+  // Non-fatal: runs after status update so expiry always succeeds even if
+  // revocation has a transient failure.
+  const revokeNow = new Date().toISOString();
+  for (const contract of toExpire) {
+    // 1. UniFi API voucher (Nungambakkam LGF — direct device revocation)
+    if (contract.unifi_voucher_id) {
+      revokeUnifiVoucher(contract.unifi_voucher_id)
+        .catch((err) => console.error(`[contract-expiry] UniFi revoke failed for ${contract.contract_number}:`, err));
+    }
+
+    // 2. Import-based vouchers — mark as revoked in CRM DB
+    try {
+      const { data: issuances } = await admin
+        .from("voucher_issuances")
+        .select("id, voucher_id")
+        .eq("contract_id", contract.id)
+        .eq("is_active", true);
+
+      if (issuances && issuances.length > 0) {
+        const issuanceIds = issuances.map((i: { id: string }) => i.id);
+        await admin
+          .from("voucher_issuances")
+          .update({ is_active: false, revoked_at: revokeNow, revoke_reason: "Contract expired" })
+          .in("id", issuanceIds);
+
+        const voucherIds = issuances
+          .map((i: { voucher_id: string | null }) => i.voucher_id)
+          .filter(Boolean);
+        if (voucherIds.length > 0) {
+          await admin
+            .from("voucher_repository")
+            .update({ status: "revoked" })
+            .in("id", voucherIds as string[]);
+        }
+        console.log(`[contract-expiry] Revoked ${issuances.length} import voucher(s) for ${contract.contract_number}`);
+      }
+    } catch (err) {
+      console.error(`[contract-expiry] import voucher revoke failed for ${contract.contract_number}:`, err);
+    }
   }
 
   // Notify staff via email

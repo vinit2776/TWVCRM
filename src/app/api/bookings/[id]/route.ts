@@ -520,6 +520,20 @@ export async function PATCH(
             };
           }
         }
+
+        // Revoke any active WiFi vouchers on checkout (fire-and-forget, non-fatal).
+        // Only revokes vouchers — does not waive usage charge or touch waitlist.
+        executeBookingCancellationSideEffects(supabase, {
+          bookingId: id,
+          customerType: booking.customer_type,
+          usageChargeId: null,
+          spaceId: booking.space_id,
+          bookingDate: booking.booking_date,
+          startTime: booking.start_time,
+          endTime: booking.end_time,
+        }, { skipWaitlistOffer: true, revokeReason: "Booking checked out" })
+          .catch((err: unknown) => console.error("[checkout] voucher revocation failed:", err));
+
         break;
       }
 

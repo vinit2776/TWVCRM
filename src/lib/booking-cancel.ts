@@ -5,7 +5,7 @@
  * POST cancel endpoint (`/api/bookings/[id]/cancel`) need the same
  * three side-effects when a booking is cancelled or marked no-show:
  *
- *   1. Revoke walk-in / guest WiFi vouchers
+ *   1. Revoke any active WiFi vouchers for the booking (all customer types)
  *   2. Waive the linked usage_charge
  *   3. Auto-offer the freed slot to the first waitlisted customer
  *
@@ -29,6 +29,10 @@ export interface BookingCancelContext {
 export interface CancelSideEffectOptions {
   /** Skip the waitlist auto-offer (e.g. for no-show where the slot is past). */
   skipWaitlistOffer?: boolean;
+  /** Skip waiving the usage charge (e.g. on checkout where charge should stand). */
+  skipUsageChargeWaiver?: boolean;
+  /** Override the revoke_reason stored on the issuance row. */
+  revokeReason?: string;
 }
 
 export interface CancelSideEffectResult {
@@ -55,40 +59,43 @@ export async function executeBookingCancellationSideEffects(
     waitlistOffered: false,
   };
 
-  // ── 1. Revoke walk-in / guest WiFi vouchers ────────────────────
-  if (booking.customerType === "walk_in" || booking.customerType === "guest") {
-    try {
-      const { data: issuances } = await supabase
+  const revokeReason = options.revokeReason ?? "Booking cancelled";
+
+  // ── 1. Revoke any active WiFi vouchers for this booking ────────
+  // Applies to all customer types (walk_in, guest, member, etc.).
+  // Idempotent — only touches rows with is_active = true.
+  try {
+    const { data: issuances } = await supabase
+      .from("voucher_issuances")
+      .select("id, voucher_id")
+      .eq("booking_id", booking.bookingId)
+      .eq("is_active", true);
+
+    if (issuances && issuances.length > 0) {
+      const revokeNow = new Date().toISOString();
+      const issuanceIds = issuances.map((i: { id: string }) => i.id);
+      await supabase
         .from("voucher_issuances")
-        .select("id, voucher_id")
-        .eq("booking_id", booking.bookingId)
-        .eq("is_active", true);
+        .update({ is_active: false, revoked_at: revokeNow, revoke_reason: revokeReason })
+        .in("id", issuanceIds);
 
-      if (issuances && issuances.length > 0) {
-        for (const iss of issuances) {
-          await supabase
-            .from("voucher_issuances")
-            .update({
-              is_active: false,
-              revoked_at: new Date().toISOString(),
-              revoke_reason: "Booking cancelled",
-            })
-            .eq("id", iss.id);
-
-          await supabase
-            .from("voucher_repository")
-            .update({ status: "revoked" })
-            .eq("id", iss.voucher_id);
-        }
-        result.vouchersRevoked = issuances.length;
+      const voucherIds = issuances
+        .map((i: { voucher_id: string | null }) => i.voucher_id)
+        .filter(Boolean);
+      if (voucherIds.length > 0) {
+        await supabase
+          .from("voucher_repository")
+          .update({ status: "revoked" })
+          .in("id", voucherIds);
       }
-    } catch (err) {
-      console.error("[booking-cancel] voucher revocation failed:", err);
+      result.vouchersRevoked = issuances.length;
     }
+  } catch (err) {
+    console.error("[booking-cancel] voucher revocation failed:", err);
   }
 
   // ── 2. Waive linked usage charge ───────────────────────────────
-  if (booking.usageChargeId) {
+  if (booking.usageChargeId && !options.skipUsageChargeWaiver) {
     try {
       await supabase
         .from("usage_charges")

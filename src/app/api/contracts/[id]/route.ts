@@ -307,7 +307,18 @@ export async function PATCH(
         try {
           const admin = createAdminClient();
 
-          // 1. Revoke parent contract's active vouchers
+          // 1a. Revoke parent contract's UniFi API voucher (Nungambakkam LGF)
+          const { data: parentContract } = await admin
+            .from("contracts")
+            .select("unifi_voucher_id")
+            .eq("id", oldContract.parent_contract_id)
+            .single();
+          if (parentContract?.unifi_voucher_id) {
+            revokeUnifiVoucher(parentContract.unifi_voucher_id)
+              .catch((err: unknown) => console.error("[renewal-activate] UniFi voucher revocation failed:", err));
+          }
+
+          // 1b. Revoke parent contract's active import-based vouchers
           const { data: parentIssuances } = await admin
             .from("voucher_issuances")
             .select("id, voucher_id, seat_number, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(voucher_code)")
