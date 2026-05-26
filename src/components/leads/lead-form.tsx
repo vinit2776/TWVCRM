@@ -27,10 +27,12 @@ import {
   LEAD_SCORE_LABELS,
   ENTITY_TYPES,
   ENTITY_TYPE_LABELS,
+  LOST_REASONS,
+  LOST_REASON_LABELS,
 } from "@/lib/constants";
 import type { Lead } from "@/types";
 import { useState } from "react";
-import { Loader2 } from "lucide-react";
+import { Loader2, AlertTriangle } from "lucide-react";
 import { LocationSelector } from "@/components/shared/location-selector";
 
 interface LeadFormProps {
@@ -85,6 +87,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
       entity_type: (lead?.entity_type as CreateLeadInput["entity_type"]) || undefined,
       description: lead?.description || "",
       tags: lead?.tags || [],
+      lost_reason: lead?.lost_reason || "",
     },
   });
 
@@ -233,6 +236,50 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
               </SelectContent>
             </Select>
           </div>
+
+          {/* Lost reason — shown only when status = lost */}
+          {status === "lost" && (
+            <div className="md:col-span-2 rounded-lg border border-destructive/30 bg-destructive/5 p-4 space-y-3">
+              <div className="flex items-center gap-2 text-destructive text-sm font-medium">
+                <AlertTriangle className="h-4 w-4" />
+                Why was this lead lost?
+              </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label>Lost Reason <span className="text-destructive">*</span></Label>
+                  <Select
+                    value={watch("lost_reason") || ""}
+                    onValueChange={(val) => setValue("lost_reason", val)}
+                  >
+                    <SelectTrigger>
+                      <SelectValue placeholder="Select a reason…" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {LOST_REASONS.map((r) => (
+                        <SelectItem key={r} value={r}>
+                          {LOST_REASON_LABELS[r]}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5 md:col-span-2">
+                  <Label className="flex items-center gap-1">
+                    Additional notes
+                    <span className="text-xs text-muted-foreground font-normal">(logged as an activity automatically)</span>
+                  </Label>
+                  <Textarea
+                    {...register("description")}
+                    placeholder="What happened? Budget issue, went with competitor, wrong timing…"
+                    rows={2}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    This will be saved as a &quot;Note&quot; in the activity log so the full conversation history stays intact.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
           <div className="space-y-2">
             <Label>Lead Source</Label>
             <Select
@@ -420,17 +467,23 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
 
       {/* Links — hidden for now */}
 
-      {/* Description */}
-      <section>
-        <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-4">
-          Description
-        </h3>
-        <Textarea
-          {...register("description")}
-          placeholder="Add notes about this lead..."
-          rows={4}
-        />
-      </section>
+      {/* Lead Brief — only shown when not lost (lost path captures notes in the inline panel above) */}
+      {status !== "lost" && (
+        <section>
+          <h3 className="text-sm font-semibold text-muted-foreground uppercase tracking-wider mb-1">
+            Lead Brief
+          </h3>
+          <p className="text-xs text-muted-foreground mb-3">
+            Company context, workspace requirements, background info.{" "}
+            <span className="font-medium">💡 For call notes, follow-ups, and status updates — use the Activities tab on the lead page.</span>
+          </p>
+          <Textarea
+            {...register("description")}
+            placeholder="Company context, requirements overview, workspace type needed…"
+            rows={4}
+          />
+        </section>
+      )}
     </form>
   );
 }

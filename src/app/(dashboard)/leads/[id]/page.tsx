@@ -73,6 +73,7 @@ export default function LeadDetailPage({
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [activityFormOpen, setActivityFormOpen] = useState(false);
+  const [activityDefaultType, setActivityDefaultType] = useState<"call" | "meeting" | "note" | "tour">("call");
   const [activityRefreshKey, setActivityRefreshKey] = useState(0);
   const [printEntryOpen, setPrintEntryOpen] = useState(false);
   const [userRole, setUserRole] = useState<string | null>(null);
@@ -87,6 +88,11 @@ export default function LeadDetailPage({
 
   const handleActivitySuccess = useCallback(() => {
     setActivityRefreshKey((k) => k + 1);
+  }, []);
+
+  const openActivityForm = useCallback((type: "call" | "meeting" | "note" | "tour") => {
+    setActivityDefaultType(type);
+    setActivityFormOpen(true);
   }, []);
 
   const handleDelete = async () => {
@@ -384,11 +390,11 @@ export default function LeadDetailPage({
                 </Card>
               )}
 
-              {/* Description */}
+              {/* Lead Brief */}
               {lead.description && (
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-base">Description</CardTitle>
+                    <CardTitle className="text-base">Lead Brief</CardTitle>
                   </CardHeader>
                   <CardContent>
                     <p className="text-sm whitespace-pre-wrap">
@@ -415,6 +421,37 @@ export default function LeadDetailPage({
                       <span>{formatDate(lead.updated_at)}</span>
                     </div>
                   </div>
+                </CardContent>
+              </Card>
+
+              {/* Quick-log actions — lets users log calls, meetings, and notes
+                  directly from the Overview tab without switching to Activities */}
+              <Card>
+                <CardHeader>
+                  <CardTitle className="text-base">Quick Log</CardTitle>
+                </CardHeader>
+                <CardContent className="flex flex-col gap-2">
+                  <Button
+                    variant="outline"
+                    className="justify-start w-full"
+                    onClick={() => openActivityForm("call")}
+                  >
+                    📞 <span className="ml-2">Log Call</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="justify-start w-full"
+                    onClick={() => openActivityForm("meeting")}
+                  >
+                    🤝 <span className="ml-2">Log Meeting</span>
+                  </Button>
+                  <Button
+                    variant="outline"
+                    className="justify-start w-full"
+                    onClick={() => openActivityForm("note")}
+                  >
+                    📝 <span className="ml-2">Add Note</span>
+                  </Button>
                 </CardContent>
               </Card>
 
@@ -518,6 +555,7 @@ export default function LeadDetailPage({
             open={activityFormOpen}
             onOpenChange={setActivityFormOpen}
             onSuccess={handleActivitySuccess}
+            defaultType={activityDefaultType}
           />
         </TabsContent>
 

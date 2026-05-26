@@ -33,6 +33,7 @@ interface ActivityFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSuccess: () => void;
+  defaultType?: ActivityType;
 }
 
 export function ActivityForm({
@@ -40,8 +41,9 @@ export function ActivityForm({
   open,
   onOpenChange,
   onSuccess,
+  defaultType = "call",
 }: ActivityFormProps) {
-  const [type, setType] = useState<ActivityType>("call");
+  const [type, setType] = useState<ActivityType>(defaultType);
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
   const [callOutcome, setCallOutcome] = useState("");
@@ -54,7 +56,7 @@ export function ActivityForm({
   const [submitting, setSubmitting] = useState(false);
 
   const resetForm = () => {
-    setType("call");
+    setType(defaultType);
     setSubject("");
     setDescription("");
     setCallOutcome("");

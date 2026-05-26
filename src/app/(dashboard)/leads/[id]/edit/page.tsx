@@ -30,6 +30,23 @@ export default function EditLeadPage({
       throw new Error(err.error || "Failed to update lead");
     }
 
+    // Auto-log a "note" activity when marking a lead as lost with additional notes.
+    // This preserves the context in the activity timeline instead of burying it in the brief.
+    const wasAlreadyLost = lead?.status === "lost";
+    if (data.status === "lost" && !wasAlreadyLost && data.description?.trim()) {
+      await fetch(`/api/leads/${id}/activities`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "note",
+          subject: "Lead marked as lost",
+          description: data.description.trim(),
+        }),
+      }).catch(() => {
+        // Non-fatal — lead was saved successfully; activity log failure is silent
+      });
+    }
+
     toast.success("Lead updated successfully");
     router.push(`/leads/${id}`);
   };

@@ -1,5 +1,25 @@
 export const APP_NAME = "TWV CRM";
 
+export const LOST_REASONS = [
+  "budget",
+  "timing",
+  "competitor",
+  "no_response",
+  "requirements_not_met",
+  "location",
+  "other",
+] as const;
+
+export const LOST_REASON_LABELS: Record<string, string> = {
+  budget: "Budget constraints",
+  timing: "Not ready / timing",
+  competitor: "Went with a competitor",
+  no_response: "No response / ghosted",
+  requirements_not_met: "Requirements not met",
+  location: "Location not suitable",
+  other: "Other",
+};
+
 export const LEAD_STATUSES = [
   "new",
   "contacted",
