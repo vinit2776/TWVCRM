@@ -45,6 +45,8 @@ interface UnifiVoucher {
 
 interface Stats { total: number; valid: number; used: number; expired: number; }
 
+interface Pagination { page: number; per_page: number; total: number; total_pages: number; }
+
 interface PendingRequest {
   id: string;
   reason: string | null;
@@ -100,11 +102,14 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
   // Voucher list state
   const [vouchers, setVouchers] = useState<UnifiVoucher[]>([]);
   const [stats, setStats] = useState<Stats | null>(null);
+  const [pagination, setPagination] = useState<Pagination | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [statusFilter, setStatusFilter] = useState("");
   const [page, setPage] = useState(1);
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [revealedCodes, setRevealedCodes] = useState<Record<string, string>>({});
+  const [revealingId, setRevealingId] = useState<string | null>(null);
 
   // Pending requests queue state (admin/manager only)
   const [pendingRequests, setPendingRequests] = useState<PendingRequest[]>([]);
@@ -139,17 +144,22 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
       .catch(() => {});
   }, []);
 
-  const fetchVouchers = useCallback(async () => {
+  const fetchVouchers = useCallback(async (targetPage = 1) => {
     setLoading(true); setError(null);
     try {
-      const params = new URLSearchParams({ location_id: locationId });
+      const params = new URLSearchParams({
+        location_id: locationId,
+        page: String(targetPage),
+        per_page: String(PAGE_SIZE),
+      });
       if (statusFilter) params.set("status", statusFilter);
       const res = await fetch(`/api/unifi/vouchers?${params}`);
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to load vouchers");
       setVouchers(json.data || []);
       setStats(json.stats || null);
-      setPage(1);
+      setPagination(json.pagination || null);
+      setPage(targetPage);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Unknown error");
     } finally {
@@ -169,15 +179,16 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
   }, [locationId, canApprove]);
 
   useEffect(() => {
-    fetchVouchers();
+    fetchVouchers(1);
     fetchPendingRequests();
     // Poll pending queue every 30 s
     const interval = setInterval(fetchPendingRequests, 30_000);
     return () => clearInterval(interval);
   }, [fetchVouchers, fetchPendingRequests]);
 
-  const paginated = vouchers.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
-  const totalPages = Math.ceil(vouchers.length / PAGE_SIZE);
+  // Vouchers are already paginated server-side; render them directly
+  const paginated = vouchers;
+  const totalPages = pagination?.total_pages ?? 1;
 
   // ── Approve / Reject queue actions ────────────────────────────────────────
 
@@ -202,7 +213,7 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
         setIssuedVouchers(prev => ({ ...prev, [id]: json.voucher as ShareableVoucher }));
         // Keep in list to show the code; remove from pending count
         setPendingRequests(prev => prev.filter(r => r.id !== id));
-        fetchVouchers(); // refresh live table
+        fetchVouchers(1); // refresh live table
       } else {
         setPendingRequests(prev => prev.filter(r => r.id !== id));
       }
@@ -247,7 +258,7 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
           quota: parseInt(issueQuota) || 1, locationName,
         };
         setDirectIssued(voucher);
-        fetchVouchers();
+        fetchVouchers(1);
       } else {
         toast.success("Request submitted for approval");
         setIssueOpen(false);
@@ -264,6 +275,25 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
   function resetIssueForm() {
     setDurationPreset("480"); setCustomMinutes(""); setIssueNote("");
     setIssueQuota("1"); setIssueReason(""); setDirectIssued(null);
+  }
+
+  async function handleReveal(voucherId: string) {
+    if (revealedCodes[voucherId]) return;
+    setRevealingId(voucherId);
+    try {
+      const res = await fetch("/api/unifi/vouchers/reveal", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ voucher_id: voucherId }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to reveal code");
+      setRevealedCodes((prev) => ({ ...prev, [voucherId]: json.code }));
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to reveal code");
+    } finally {
+      setRevealingId(null);
+    }
   }
 
   function copyVoucherCode(code: string, id: string) {
@@ -422,7 +452,7 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
               <SelectItem value="EXPIRED">Expired</SelectItem>
             </SelectContent>
           </Select>
-          <Button variant="outline" size="sm" onClick={fetchVouchers} disabled={loading}>
+          <Button variant="outline" size="sm" onClick={() => fetchVouchers(1)} disabled={loading}>
             <RefreshCw className={`h-4 w-4 mr-1 ${loading ? "animate-spin" : ""}`} />Refresh
           </Button>
           <Button size="sm" onClick={() => { resetIssueForm(); setIssueOpen(true); }}>
@@ -477,7 +507,9 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
               <tbody>
                 {paginated.map((v) => (
                   <tr key={v._id} className="border-b hover:bg-muted/30 transition-colors">
-                    <td className="px-3 py-2.5 font-mono text-xs font-semibold tracking-wider">{v.code}</td>
+                    <td className="px-3 py-2.5 font-mono text-xs font-semibold tracking-wider">
+                      {revealedCodes[v._id] ?? v.code}
+                    </td>
                     <td className="px-3 py-2.5">
                       <Badge variant="secondary" className={`text-xs ${STATUS_COLOR[v.status] || "bg-muted text-muted-foreground"}`}>
                         {STATUS_LABEL[v.status] || v.status}
@@ -491,15 +523,32 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
                     <td className="px-3 py-2.5 text-muted-foreground hidden lg:table-cell text-xs">{fmtUnixDate(v.create_time)}</td>
                     <td className="px-3 py-2.5 text-muted-foreground hidden lg:table-cell text-xs">{fmtUnixDate(v.end_time)}</td>
                     <td className="px-3 py-2.5 text-right">
-                      <Button
-                        variant="ghost" size="sm" className="h-7 w-7 p-0"
-                        onClick={() => copyVoucherCode(v.code, v._id)}
-                        title="Copy voucher code"
-                      >
-                        {copiedId === v._id
-                          ? <Check className="h-3.5 w-3.5 text-green-600" />
-                          : <Copy className="h-3.5 w-3.5" />}
-                      </Button>
+                      <div className="flex items-center justify-end gap-1">
+                        {!revealedCodes[v._id] && (
+                          <Button
+                            variant="ghost" size="sm" className="h-7 px-2 text-xs"
+                            onClick={() => handleReveal(v._id)}
+                            disabled={revealingId === v._id}
+                            title="Reveal full code"
+                          >
+                            {revealingId === v._id
+                              ? <Loader2 className="h-3 w-3 animate-spin" />
+                              : "Reveal"}
+                          </Button>
+                        )}
+                        {revealedCodes[v._id] && (
+                          <span className="text-[10px] text-green-600 font-medium mr-1">Revealed</span>
+                        )}
+                        <Button
+                          variant="ghost" size="sm" className="h-7 w-7 p-0"
+                          onClick={() => copyVoucherCode(revealedCodes[v._id] ?? v.code, v._id)}
+                          title="Copy voucher code"
+                        >
+                          {copiedId === v._id
+                            ? <Check className="h-3.5 w-3.5 text-green-600" />
+                            : <Copy className="h-3.5 w-3.5" />}
+                        </Button>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -507,16 +556,16 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
             </table>
           </div>
 
-          {totalPages > 1 && (
+          {pagination && pagination.total_pages > 1 && (
             <div className="flex items-center justify-between">
               <p className="text-xs text-muted-foreground">
-                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, vouchers.length)} of {vouchers.length}
+                Showing {(page - 1) * PAGE_SIZE + 1}–{Math.min(page * PAGE_SIZE, pagination.total)} of {pagination.total}
               </p>
               <div className="flex gap-2">
-                <Button variant="outline" size="sm" disabled={page <= 1} onClick={() => setPage(p => p - 1)}>
+                <Button variant="outline" size="sm" disabled={page <= 1 || loading} onClick={() => fetchVouchers(page - 1)}>
                   <ChevronLeft className="h-4 w-4" />
                 </Button>
-                <Button variant="outline" size="sm" disabled={page >= totalPages} onClick={() => setPage(p => p + 1)}>
+                <Button variant="outline" size="sm" disabled={page >= totalPages || loading} onClick={() => fetchVouchers(page + 1)}>
                   <ChevronRight className="h-4 w-4" />
                 </Button>
               </div>

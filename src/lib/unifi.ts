@@ -6,6 +6,7 @@
  *
  * Other locations continue using the import-based voucher stack.
  */
+import { unstable_cache } from "next/cache";
 
 const UNIFI_API_BASE_URL = process.env.UNIFI_API_BASE_URL || "";
 const UNIFI_API_KEY      = process.env.UNIFI_API_KEY      || "";
@@ -45,6 +46,25 @@ export async function unifiRequest<T>(
   }
 
   return data.data;
+}
+
+/**
+ * Cached wrapper around unifiRequest.
+ * Uses Next.js Data Cache (unstable_cache) — persists across requests on the same server instance.
+ * Cache key incorporates path + body so POST endpoints with different params get separate entries.
+ * Do NOT use for mutations (cmd/hotspot, DELETE).
+ */
+export function cachedUnifiRequest<T>(
+  path: string,
+  options: RequestInit = {},
+  ttl = 60
+): Promise<T> {
+  const cacheKey = `unifi:${path}:${JSON.stringify(options.body ?? "")}`;
+  return unstable_cache(
+    () => unifiRequest<T>(path, options),
+    [cacheKey],
+    { revalidate: ttl }
+  )();
 }
 
 // ─── Types ───────────────────────────────────────────────────────────────────

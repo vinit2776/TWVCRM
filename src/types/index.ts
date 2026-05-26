@@ -693,7 +693,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view";
 export type AuditEntityType =
   | "lead"
   | "activity"
@@ -766,7 +766,8 @@ export type AuditEntityType =
   | "leave_request"
   | "leave_policy"
   | "payroll_run"
-  | "payroll_slip";
+  | "payroll_slip"
+  | "unifi_voucher";
 
 export interface AuditLog {
   id: string;

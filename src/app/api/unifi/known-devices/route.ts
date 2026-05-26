@@ -1,0 +1,77 @@
+/**
+ * GET /api/unifi/known-devices?limit=50&search=<string>
+ *
+ * Returns all known/seen Wi-Fi devices. MAC anonymized for non-admin roles.
+ * Auth required: admin, manager, it_manager.
+ */
+import { NextRequest, NextResponse } from "next/server";
+import { createClient } from "@/lib/supabase/server";
+import { cachedUnifiRequest } from "@/lib/unifi";
+
+interface UnifiKnownDevice {
+  mac: string;
+  hostname?: string;
+  name?: string;
+  last_seen?: number;
+  oui?: string;
+  noted?: boolean;
+}
+
+function anonymizeMac(mac: string): string {
+  const parts = mac.split(":");
+  if (parts.length !== 6) return mac;
+  return `••:••:••:••:${parts[4]}:${parts[5]}`;
+}
+
+export async function GET(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data: dbUser } = await supabase
+    .from("users").select("id, role").eq("auth_id", user.id).single();
+  if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
+
+  const allowed = ["admin", "manager", "it_manager"];
+  if (!allowed.includes(dbUser.role)) {
+    return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
+  }
+
+  const { searchParams } = new URL(request.url);
+  const limitParam = parseInt(searchParams.get("limit") ?? "50", 10);
+  const limit = Math.min(Math.max(isNaN(limitParam) ? 50 : limitParam, 1), 200);
+  const search = searchParams.get("search")?.toLowerCase() ?? null;
+
+  const isAdmin = dbUser.role === "admin";
+
+  try {
+    const devices = await cachedUnifiRequest<UnifiKnownDevice[]>("/stat/alluser", {}, 120);
+
+    let filtered = devices;
+    if (search) {
+      filtered = devices.filter(
+        (d) =>
+          (d.hostname?.toLowerCase().includes(search)) ||
+          (d.name?.toLowerCase().includes(search))
+      );
+    }
+
+    const total = filtered.length;
+    const data = filtered.slice(0, limit).map((d) => ({
+      mac: isAdmin ? d.mac : anonymizeMac(d.mac),
+      hostname: d.hostname ?? null,
+      name: d.name ?? null,
+      last_seen: d.last_seen ?? null,
+      oui: d.oui ?? null,
+      noted: d.noted ?? false,
+    }));
+
+    return NextResponse.json({ data, total });
+  } catch (err) {
+    console.error("[api/unifi/known-devices] fetch failed:", err);
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to reach UniFi device" },
+      { status: 502 }
+    );
+  }
+}

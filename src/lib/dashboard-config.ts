@@ -32,7 +32,8 @@ export type WidgetId =
   | "procurement_spend"
   | "quota_overuse"
   | "mtd_bookings"
-  | "rent_revenue";
+  | "rent_revenue"
+  | "network";
 
 // ─── Widget metadata registry ──────────────────────────────────────────────
 
@@ -68,6 +69,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   quota_overuse:          { id: "quota_overuse",          title: "Quota Overuse" },
   mtd_bookings:           { id: "mtd_bookings",           title: "Bookings Value (MTD)" },
   rent_revenue:           { id: "rent_revenue",           title: "Rent vs Revenue" },
+  network:                { id: "network",                title: "Network Status" },
 };
 
 // ─── Role → widget order ───────────────────────────────────────────────────
@@ -164,11 +166,13 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
 
   // IT Manager
   it_manager: [
+    "network",
     "sla_risk",
   ],
 
   // IT Technician
   it_technician: [
+    "network",
     "sla_risk",
   ],
 
