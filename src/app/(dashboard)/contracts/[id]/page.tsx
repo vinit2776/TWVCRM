@@ -37,6 +37,7 @@ import { ContractDocumentsTab } from "@/components/contracts/contract-documents-
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
 import { ContractAccessLogsSection } from "@/components/contracts/contract-access-logs-section";
 import { ContractBookingsSection } from "@/components/contracts/contract-bookings-section";
+import { ContractServiceUsageSection } from "@/components/contracts/contract-service-usage-section";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import {
   Dialog,
@@ -899,6 +900,9 @@ export default function ContractDetailPage({
 
           {/* Meeting Room Bookings History */}
           <ContractBookingsSection contractId={id} />
+
+          {/* Service Usage History (print, etc.) — hidden if no records */}
+          <ContractServiceUsageSection contractId={id} />
 
           {/* Door Access Logs */}
           <ContractAccessLogsSection contractId={id} />
