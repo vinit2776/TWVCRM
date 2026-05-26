@@ -121,7 +121,9 @@ export default function ContractsPage() {
         <div>
           <h1 className="text-2xl font-bold">Contracts</h1>
           <p className="text-sm text-muted-foreground">
-            {noQuotasFilter
+            {loading
+              ? "Loading…"
+              : noQuotasFilter
               ? `${contracts.length} active contracts without quotas`
               : `${pagination.total} total contracts`}
           </p>

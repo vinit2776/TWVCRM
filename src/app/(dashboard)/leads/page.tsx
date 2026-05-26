@@ -16,7 +16,7 @@ import {
 import { StatusBadge, RatingBadge } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
-import { useLeads } from "@/hooks/use-leads";
+import { useLeads, useUsers } from "@/hooks/use-leads";
 import { LocationSelector } from "@/components/shared/location-selector";
 import {
   LEAD_STATUSES,
@@ -49,8 +49,11 @@ export default function LeadsPage() {
   const [sourceFilter, setSourceFilter] = useState<string>("");
   const [locationFilter, setLocationFilter] = useState<string | null>(null);
   const [searchInput, setSearchInput] = useState("");
+  const [assignedToFilter, setAssignedToFilter] = useState<string>("");
   const [importOpen, setImportOpen] = useState(false);
   const [showDisabled, setShowDisabled] = useState(false);
+
+  const { users } = useUsers();
 
   // Live enquiry data from shared context (real-time)
   const {
@@ -71,6 +74,7 @@ export default function LeadsPage() {
     status: statusFilter || undefined,
     source: sourceFilter || undefined,
     location_id: locationFilter || undefined,
+    assigned_to: assignedToFilter || undefined,
     include_archived: showDisabled,
   });
 
@@ -277,6 +281,25 @@ export default function LeadsPage() {
               placeholder="All Locations"
             />
           </div>
+          <Select
+            value={assignedToFilter}
+            onValueChange={(val) => {
+              setAssignedToFilter(val === "all" ? "" : val);
+              setPage(1);
+            }}
+          >
+            <SelectTrigger className="w-[160px]">
+              <SelectValue placeholder="All Owners" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All Owners</SelectItem>
+              {users.map((u) => (
+                <SelectItem key={u.id} value={u.id}>
+                  {u.full_name || u.email}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
           <Button
             variant={showDisabled ? "default" : "outline"}
             onClick={() => {

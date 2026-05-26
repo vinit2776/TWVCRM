@@ -136,7 +136,14 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             <Label htmlFor="first_name">
               First Name <span className="text-destructive">*</span>
             </Label>
-            <Input id="first_name" {...register("first_name")} />
+            <Input
+              id="first_name"
+              {...register("first_name")}
+              onBlur={(e) => {
+                const val = e.target.value.trim().replace(/\b\w/g, (c) => c.toUpperCase());
+                if (val !== e.target.value) setValue("first_name", val);
+              }}
+            />
             {errors.first_name && (
               <p className="text-xs text-destructive">
                 {errors.first_name.message}
@@ -147,7 +154,14 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             <Label htmlFor="last_name">
               Last Name <span className="text-destructive">*</span>
             </Label>
-            <Input id="last_name" {...register("last_name")} />
+            <Input
+              id="last_name"
+              {...register("last_name")}
+              onBlur={(e) => {
+                const val = e.target.value.trim().replace(/\b\w/g, (c) => c.toUpperCase());
+                if (val !== e.target.value) setValue("last_name", val);
+              }}
+            />
             {errors.last_name && (
               <p className="text-xs text-destructive">
                 {errors.last_name.message}

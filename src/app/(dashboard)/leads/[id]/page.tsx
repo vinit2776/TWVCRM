@@ -31,6 +31,7 @@ import {
   ENTITY_TYPE_LABELS,
   DOCUMENT_CHECKLISTS,
   VO_PURPOSE_LABELS,
+  LOST_REASON_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import {
@@ -196,6 +197,22 @@ export default function LeadDetailPage({
               interacts with this customer. Auto-hides if no active
               cautions exist. */}
           <LeadCautionsBanner leadId={lead.id} mode="profile" />
+
+          {/* Lost reason banner — shown prominently when a lead is lost */}
+          {lead.status === "lost" && (lead.lost_reason || lead.description) && (
+            <div className="rounded-lg border border-red-200 bg-red-50 dark:bg-red-950/20 dark:border-red-900 px-4 py-3 flex items-start gap-3">
+              <span className="text-red-500 mt-0.5 shrink-0">✗</span>
+              <div className="space-y-1 text-sm">
+                <p className="font-semibold text-red-800 dark:text-red-300">
+                  Lead marked as lost
+                  {lead.lost_reason ? ` — ${LOST_REASON_LABELS[lead.lost_reason] ?? lead.lost_reason}` : ""}
+                </p>
+                {lead.description && (
+                  <p className="text-red-700 dark:text-red-400 whitespace-pre-wrap">{lead.description}</p>
+                )}
+              </div>
+            </div>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Main info */}

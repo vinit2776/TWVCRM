@@ -90,14 +90,15 @@ export function Header() {
       </button>
 
       <div className="flex items-center gap-3 ml-auto">
-        {/* Pending approvals (admin only) */}
-        <ApprovalBell />
-
-        {/* In-app notification center (facility tickets, etc.) */}
-        <InAppNotificationBell />
-
-        {/* Enquiry notifications (leads, re-enquiries, WhatsApp) */}
-        <NotificationBell />
+        {/* Notification group — three distinct alert streams, grouped visually */}
+        <div className="flex items-center rounded-md border border-border/60 bg-muted/40 px-1 gap-0.5" title="Notifications">
+          {/* Pending approvals (admin/manager only) */}
+          <ApprovalBell />
+          {/* In-app notifications (facility tickets, comments, reassignments) */}
+          <InAppNotificationBell />
+          {/* Enquiry notifications (new leads, re-enquiries, WhatsApp) */}
+          <NotificationBell />
+        </div>
 
         {/* Help */}
         <Button variant="ghost" size="icon" asChild title="Help & User Manual">
