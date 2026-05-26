@@ -207,7 +207,7 @@ export default function NetworkPage() {
           ) : !selectedHasUnifi ? (
             <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-2">
               <Wifi className="h-10 w-10 opacity-30" />
-              <p className="text-sm">This location doesn't have a UniFi site configured yet.</p>
+              <p className="text-sm">This location does not have a UniFi site configured yet.</p>
               {isAdmin && (
                 <button
                   onClick={() => setTab("configuration")}
