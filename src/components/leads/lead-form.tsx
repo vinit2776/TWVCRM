@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/select";
 import { createLeadSchema, type CreateLeadInput } from "@/lib/validations";
 import {
-  LEAD_STATUSES,
   LEAD_STATUS_LABELS,
   LEAD_SOURCES,
   LEAD_SOURCE_LABELS,
@@ -29,6 +28,8 @@ import {
   ENTITY_TYPE_LABELS,
   LOST_REASONS,
   LOST_REASON_LABELS,
+  MANUAL_LEAD_STATUSES,
+  SYSTEM_LEAD_STATUSES,
 } from "@/lib/constants";
 import type { Lead } from "@/types";
 import { useState } from "react";
@@ -218,23 +219,37 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
           </div>
           <div className="space-y-2">
             <Label>Lead Status</Label>
-            <Select
-              value={status}
-              onValueChange={(val) =>
-                setValue("status", val as CreateLeadInput["status"])
-              }
-            >
-              <SelectTrigger>
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {LEAD_STATUSES.map((s) => (
-                  <SelectItem key={s} value={s}>
-                    {LEAD_STATUS_LABELS[s]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            {(SYSTEM_LEAD_STATUSES as readonly string[]).includes(status) ? (
+              /* System-driven status — read-only, can only be changed by
+                 logging a tour, creating a proposal, or activating a contract */
+              <div className="rounded-md border bg-muted/40 px-3 py-2 text-sm flex items-center justify-between">
+                <span className="font-medium">{LEAD_STATUS_LABELS[status]}</span>
+                <span className="text-xs text-muted-foreground ml-2">
+                  🔒 Set automatically
+                </span>
+              </div>
+            ) : (
+              <Select
+                value={status}
+                onValueChange={(val) =>
+                  setValue("status", val as CreateLeadInput["status"])
+                }
+              >
+                <SelectTrigger>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {MANUAL_LEAD_STATUSES.map((s) => (
+                    <SelectItem key={s} value={s}>
+                      {LEAD_STATUS_LABELS[s]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            <p className="text-xs text-muted-foreground">
+              Tour Scheduled/Completed, Proposal Sent, and Won are set automatically by system actions.
+            </p>
           </div>
 
           {/* Lost reason — shown only when status = lost */}

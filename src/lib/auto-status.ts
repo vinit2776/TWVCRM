@@ -24,7 +24,9 @@ function statusIndex(status: LeadStatus): number {
  * Auto-advance lead status based on CRM events.
  *
  * Rules:
- *  - activity (call/meeting/note/email/tour) → "contacted" (if currently "new")
+ *  - activity (call/meeting/note/email) → "contacted" (if currently "new")
+ *  - tour activity logged, future or no date → "tour_scheduled" (if before that)
+ *  - tour activity logged, meeting_end_at in the past → "tour_completed" (if before that)
  *  - proposal created → "proposal_sent" (if currently before "proposal_sent")
  *  - contract activated → "won" + set converted_at (unless already "won" or "lost")
  *
@@ -33,7 +35,8 @@ function statusIndex(status: LeadStatus): number {
 export async function autoUpdateLeadStatus(
   supabase: SupabaseClient,
   leadId: string,
-  trigger: "activity" | "proposal" | "contract"
+  trigger: "activity" | "proposal" | "contract" | "tour",
+  options?: { meetingEndAt?: string | null }
 ): Promise<void> {
   // Fetch current lead status
   const { data: lead } = await supabase
@@ -48,9 +51,22 @@ export async function autoUpdateLeadStatus(
   let targetStatus: LeadStatus | null = null;
 
   if (trigger === "activity") {
-    // Only upgrade from "new" to "contacted"
+    // Only upgrade from "new" to "contacted" for non-tour activities
     if (currentStatus === "new") {
       targetStatus = "contacted";
+    }
+  } else if (trigger === "tour") {
+    // Tour completed if meeting_end_at is in the past; otherwise just scheduled
+    const isCompleted =
+      options?.meetingEndAt && new Date(options.meetingEndAt) <= new Date();
+    if (isCompleted) {
+      if (statusIndex(currentStatus) < statusIndex("tour_completed")) {
+        targetStatus = "tour_completed";
+      }
+    } else {
+      if (statusIndex(currentStatus) < statusIndex("tour_scheduled")) {
+        targetStatus = "tour_scheduled";
+      }
     }
   } else if (trigger === "proposal") {
     // Upgrade to "proposal_sent" if not already there or beyond

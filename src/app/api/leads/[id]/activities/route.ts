@@ -74,8 +74,16 @@ export async function POST(
     return NextResponse.json({ error: error.message }, { status: 500 });
   }
 
-  // Auto-advance lead status: new → contacted
-  await autoUpdateLeadStatus(supabase, id, "activity");
+  // Auto-advance lead status based on activity type:
+  // - tour activities drive tour_scheduled / tour_completed
+  // - all others drive new → contacted
+  if (result.data.type === "tour") {
+    await autoUpdateLeadStatus(supabase, id, "tour", {
+      meetingEndAt: result.data.meeting_end_at ?? null,
+    });
+  } else {
+    await autoUpdateLeadStatus(supabase, id, "activity");
+  }
 
   return NextResponse.json({ data }, { status: 201 });
 }

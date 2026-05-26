@@ -31,6 +31,28 @@ export const LEAD_STATUSES = [
   "lost",
 ] as const;
 
+/**
+ * Statuses that can only be set by system actions (logging a tour,
+ * creating a proposal, activating a contract). These are removed from
+ * the manual edit form so the CRM stays honest.
+ */
+export const SYSTEM_LEAD_STATUSES = [
+  "tour_scheduled",
+  "tour_completed",
+  "proposal_sent",
+  "won",
+] as const;
+
+/**
+ * Statuses a sales rep can set manually in the lead edit form.
+ */
+export const MANUAL_LEAD_STATUSES = [
+  "new",
+  "contacted",
+  "negotiating",
+  "lost",
+] as const;
+
 export const LEAD_STATUS_LABELS: Record<string, string> = {
   new: "New",
   contacted: "Contacted",
