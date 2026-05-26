@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { ChevronLeft, ChevronRight, Ticket, Upload, Search, X, LayoutGrid, List } from "lucide-react";
+import { ChevronLeft, ChevronRight, Ticket, Upload, Search, X, LayoutGrid, List, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -16,7 +16,9 @@ import { VoucherInventoryCard } from "@/components/vouchers/voucher-inventory-ca
 import { LowStockAlert } from "@/components/vouchers/low-stock-alert";
 import { ReclassifyVouchersDialog } from "@/components/vouchers/reclassify-vouchers-dialog";
 import { VoucherIssuanceDialog } from "@/components/vouchers/voucher-issuance-dialog";
+import { UnifiPanel } from "@/components/vouchers/unifi-panel";
 import { LocationSelector } from "@/components/shared/location-selector";
+import { useLocations } from "@/hooks/use-locations";
 import {
   VOUCHER_STATUSES,
   VOUCHER_STATUS_LABELS,
@@ -39,7 +41,7 @@ interface Voucher {
   location?: { id: string; name: string; code: string } | null;
 }
 
-type TabType = "inventory" | "all";
+type TabType = "inventory" | "all" | "unifi_live";
 
 export default function VouchersPage() {
   const [activeTab, setActiveTab] = useState<TabType>("inventory");
@@ -58,8 +60,7 @@ export default function VouchersPage() {
   const [validityFilter, setValidityFilter] = useState("");
   const [search, setSearch] = useState("");
 
-  // Issuance side-panel: opens when admin clicks an "Issued" voucher row.
-  // Available rows are intentionally NOT clickable — there's nothing to show.
+  // Issuance side-panel
   const [issuanceVoucherId, setIssuanceVoucherId] = useState<string | null>(null);
 
   // Location filter (shared across tabs)
@@ -71,6 +72,29 @@ export default function VouchersPage() {
 
   // Reclassify dialog
   const [reclassifyOpen, setReclassifyOpen] = useState(false);
+
+  // Resolve current user role
+  const [userRole, setUserRole] = useState<string>("sales_rep");
+  useEffect(() => {
+    fetch("/api/me").then(r => r.json()).then(d => { if (d.role) setUserRole(d.role); }).catch(() => {});
+  }, []);
+
+  // Resolve selected location details (to check unifi_site_id)
+  const { locations } = useLocations();
+  const selectedLocation = locationFilter
+    ? locations.find((l) => l.id === locationFilter) ?? null
+    : null;
+  const isUnifiLocation = Boolean(selectedLocation?.unifi_site_id);
+
+  // When a UniFi location is selected, auto-switch to the live tab
+  useEffect(() => {
+    if (isUnifiLocation) {
+      setActiveTab("unifi_live");
+    } else if (activeTab === "unifi_live") {
+      setActiveTab("inventory");
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isUnifiLocation]);
 
   // Fetch inventory
   const fetchInventory = useCallback(async () => {
@@ -91,9 +115,7 @@ export default function VouchersPage() {
     setLoading(true);
     const params = new URLSearchParams({ page: String(page), limit: "25" });
     if (statusFilter) params.set("status", statusFilter);
-    if (validityFilter) {
-      params.set("validity_days", validityFilter);
-    }
+    if (validityFilter) params.set("validity_days", validityFilter);
     if (locationFilter) params.set("location_id", locationFilter);
     if (search.trim()) params.set("search", search.trim());
     const res = await fetch(`/api/vouchers?${params}`);
@@ -106,21 +128,14 @@ export default function VouchersPage() {
   }, [page, statusFilter, validityFilter, locationFilter, search]);
 
   useEffect(() => {
-    if (activeTab === "inventory") {
-      fetchInventory();
-    } else {
-      fetchVouchers();
-    }
+    if (activeTab === "inventory") fetchInventory();
+    else if (activeTab === "all") fetchVouchers();
+    // unifi_live fetches its own data inside UnifiPanel
   }, [activeTab, fetchInventory, fetchVouchers]);
 
   const clearFilters = () => {
-    setSearch("");
-    setStatusFilter("");
-    setValidityFilter("");
-    setLocationFilter(null);
-    setPage(1);
+    setSearch(""); setStatusFilter(""); setValidityFilter(""); setLocationFilter(null); setPage(1);
   };
-
   const hasFilters = search || statusFilter || validityFilter || locationFilter;
 
   const handleRefill = (validityDays: number | null) => {
@@ -150,50 +165,72 @@ export default function VouchersPage() {
             includeAllOption
             placeholder="All Locations"
           />
-          <Button onClick={() => { setUploadPreselectedValidity(undefined); setUploadOpen(true); }}>
-            <Upload className="mr-2 h-4 w-4" />
-            Upload Vouchers
-          </Button>
+          {/* Hide upload for UniFi-managed locations — they use the API, not batch imports */}
+          {!isUnifiLocation && (
+            <Button onClick={() => { setUploadPreselectedValidity(undefined); setUploadOpen(true); }}>
+              <Upload className="mr-2 h-4 w-4" />
+              Upload Vouchers
+            </Button>
+          )}
         </div>
       </div>
 
+      {/* UniFi location badge */}
+      {isUnifiLocation && selectedLocation && (
+        <div className="flex items-center gap-2 px-3 py-2 rounded-md bg-primary/5 border border-primary/20 text-sm">
+          <Wifi className="h-4 w-4 text-primary" />
+          <span>
+            <strong>{selectedLocation.name}</strong> is managed via the UniFi API.
+            Vouchers are issued and revoked in real-time — no batch imports needed.
+          </span>
+        </div>
+      )}
+
       {/* Tabs */}
       <div className="flex gap-1 border-b">
-        <button
-          onClick={() => setActiveTab("inventory")}
-          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === "inventory"
-              ? "border-primary text-primary"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          <LayoutGrid className="h-4 w-4" />
-          Inventory
-        </button>
-        <button
-          onClick={() => setActiveTab("all")}
-          className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
-            activeTab === "all"
-              ? "border-primary text-primary"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          }`}
-        >
-          <List className="h-4 w-4" />
-          All Vouchers
-        </button>
+        {/* Hide Inventory + All Vouchers tabs for UniFi locations — they're not applicable */}
+        {!isUnifiLocation && (
+          <>
+            <TabButton
+              active={activeTab === "inventory"}
+              onClick={() => setActiveTab("inventory")}
+              icon={<LayoutGrid className="h-4 w-4" />}
+              label="Inventory"
+            />
+            <TabButton
+              active={activeTab === "all"}
+              onClick={() => setActiveTab("all")}
+              icon={<List className="h-4 w-4" />}
+              label="All Vouchers"
+            />
+          </>
+        )}
+        {isUnifiLocation && (
+          <TabButton
+            active={activeTab === "unifi_live"}
+            onClick={() => setActiveTab("unifi_live")}
+            icon={<Wifi className="h-4 w-4" />}
+            label="Live (API)"
+          />
+        )}
       </div>
+
+      {/* ===== UniFi Live Tab ===== */}
+      {activeTab === "unifi_live" && isUnifiLocation && selectedLocation && (
+        <UnifiPanel
+          locationId={selectedLocation.id}
+          locationName={selectedLocation.name}
+          userRole={userRole}
+        />
+      )}
 
       {/* ===== Inventory Tab ===== */}
       {activeTab === "inventory" && (
         <div className="space-y-4">
-          {/* Low Stock Alert */}
           <LowStockAlert alerts={lowStockAlerts} />
-
           {inventoryLoading ? (
             <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-              {Array.from({ length: 6 }).map((_, i) => (
-                <Skeleton key={i} className="h-[180px]" />
-              ))}
+              {Array.from({ length: 6 }).map((_, i) => <Skeleton key={i} className="h-[180px]" />)}
             </div>
           ) : inventory.length === 0 ? (
             <EmptyState
@@ -221,7 +258,6 @@ export default function VouchersPage() {
       {/* ===== All Vouchers Tab ===== */}
       {activeTab === "all" && (
         <div className="space-y-4">
-          {/* Filters */}
           <div className="flex flex-wrap items-center gap-2">
             <div className="relative">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
@@ -246,22 +282,18 @@ export default function VouchersPage() {
               <SelectContent>
                 <SelectItem value="all">All Validity</SelectItem>
                 {VOUCHER_VALIDITY_OPTIONS.map((days) => (
-                  <SelectItem key={days} value={String(days)}>
-                    {VOUCHER_VALIDITY_LABELS[days]}
-                  </SelectItem>
+                  <SelectItem key={days} value={String(days)}>{VOUCHER_VALIDITY_LABELS[days]}</SelectItem>
                 ))}
                 <SelectItem value="unclassified">Unclassified</SelectItem>
               </SelectContent>
             </Select>
             {hasFilters && (
               <Button variant="ghost" size="sm" onClick={clearFilters}>
-                <X className="mr-1 h-4 w-4" />
-                Clear
+                <X className="mr-1 h-4 w-4" />Clear
               </Button>
             )}
           </div>
 
-          {/* Table */}
           {loading ? <TableSkeleton rows={6} /> : vouchers.length === 0 ? (
             <EmptyState
               icon={Ticket}
@@ -285,17 +317,11 @@ export default function VouchersPage() {
                 </thead>
                 <tbody>
                   {vouchers.map((v) => {
-                    // Only "Issued" / "Revoked" rows have something to show
-                    // in the side panel. Available vouchers stay un-clickable.
                     const clickable = v.status !== "available";
                     return (
                       <tr
                         key={v.id}
-                        className={`border-b transition-colors ${
-                          clickable
-                            ? "cursor-pointer hover:bg-muted/40"
-                            : "hover:bg-muted/30"
-                        }`}
+                        className={`border-b transition-colors ${clickable ? "cursor-pointer hover:bg-muted/40" : "hover:bg-muted/30"}`}
                         onClick={clickable ? () => setIssuanceVoucherId(v.id) : undefined}
                         title={clickable ? "View issuance details" : undefined}
                       >
@@ -306,19 +332,11 @@ export default function VouchersPage() {
                           </Badge>
                         </td>
                         <td className="px-4 py-3">
-                          <Badge variant="outline" className="text-xs">
-                            {getValidityLabel(v.validity_days)}
-                          </Badge>
+                          <Badge variant="outline" className="text-xs">{getValidityLabel(v.validity_days)}</Badge>
                         </td>
-                        <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
-                          {v.location?.name || "—"}
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
-                          {formatDate(v.uploaded_at || v.created_at)}
-                        </td>
-                        <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">
-                          {v.issued_at ? formatDate(v.issued_at) : "-"}
-                        </td>
+                        <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">{v.location?.name || "—"}</td>
+                        <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{formatDate(v.uploaded_at || v.created_at)}</td>
+                        <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{v.issued_at ? formatDate(v.issued_at) : "-"}</td>
                       </tr>
                     );
                   })}
@@ -327,7 +345,6 @@ export default function VouchersPage() {
             </div>
           )}
 
-          {/* Pagination */}
           {pagination.totalPages > 1 && (
             <div className="flex items-center justify-between">
               <p className="text-sm text-muted-foreground">Page {pagination.page} of {pagination.totalPages}</p>
@@ -344,14 +361,12 @@ export default function VouchersPage() {
         </div>
       )}
 
-      {/* Voucher Issuance side panel — opens when an Issued / Revoked row is clicked */}
+      {/* Dialogs */}
       <VoucherIssuanceDialog
         open={!!issuanceVoucherId}
         onOpenChange={(v) => { if (!v) setIssuanceVoucherId(null); }}
         voucherId={issuanceVoucherId}
       />
-
-      {/* Upload Dialog */}
       <UploadVouchersDialog
         open={uploadOpen}
         onOpenChange={setUploadOpen}
@@ -359,18 +374,38 @@ export default function VouchersPage() {
         preselectedValidity={uploadPreselectedValidity}
         preselectedLocationId={locationFilter || undefined}
       />
-
-      {/* Reclassify Unclassified Vouchers Dialog */}
       <ReclassifyVouchersDialog
         open={reclassifyOpen}
         onOpenChange={setReclassifyOpen}
         count={inventory.find((g) => g.validity_days === null)?.available ?? 0}
         locationId={locationFilter}
-        onSuccess={() => {
-          setReclassifyOpen(false);
-          fetchInventory();
-        }}
+        onSuccess={() => { setReclassifyOpen(false); fetchInventory(); }}
       />
     </div>
+  );
+}
+
+// ─── TabButton helper ─────────────────────────────────────────────────────────
+
+function TabButton({
+  active, onClick, icon, label,
+}: {
+  active: boolean;
+  onClick: () => void;
+  icon: React.ReactNode;
+  label: string;
+}) {
+  return (
+    <button
+      onClick={onClick}
+      className={`flex items-center gap-2 px-4 py-2 text-sm font-medium border-b-2 transition-colors ${
+        active
+          ? "border-primary text-primary"
+          : "border-transparent text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {icon}
+      {label}
+    </button>
   );
 }

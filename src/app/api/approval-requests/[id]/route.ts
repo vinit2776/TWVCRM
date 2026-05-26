@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { createUnifiVoucher } from "@/lib/unifi";
 
 /**
  * PATCH /api/approval-requests/[id]
@@ -75,6 +76,44 @@ export async function PATCH(
   }
 
   // Handle type-specific side effects
+
+  // ── UniFi ad-hoc voucher ──────────────────────────────────────────────────
+  if (approvalReq.entity_type === "unifi_adhoc_voucher" && action === "approve") {
+    const meta = approvalReq.metadata || {};
+    try {
+      const { id: unifiId, code } = await createUnifiVoucher({
+        durationMinutes: Number(meta.duration_minutes),
+        note:            String(meta.note || `adhoc_${approvalReq.id}`),
+        quota:           Number(meta.quota ?? 1),
+      });
+      // Store the issued code back onto the approval request metadata
+      await admin
+        .from("approval_requests")
+        .update({ metadata: { ...meta, issued_code: code, issued_voucher_id: unifiId } })
+        .eq("id", id);
+
+      logAudit(admin, {
+        entityType: "location",
+        entityId:   String(meta.location_id || approvalReq.entity_id),
+        action:     "create",
+        performedBy: dbUser.id,
+        changes: {
+          type:                { old: null, new: "unifi_adhoc_voucher_issued" },
+          code:                { old: null, new: code },
+          unifi_voucher_id:    { old: null, new: unifiId },
+          approval_request_id: { old: null, new: id },
+        },
+      });
+    } catch (err) {
+      console.error("[approval-requests] UniFi voucher issuance failed after approval:", err);
+      // Don't roll back the approval — log the failure so it can be retried manually
+      await admin
+        .from("approval_requests")
+        .update({ metadata: { ...meta, issuance_error: err instanceof Error ? err.message : String(err) } })
+        .eq("id", id);
+    }
+  }
+
   if (approvalReq.entity_type === "contract") {
     const contractId = approvalReq.entity_id;
 

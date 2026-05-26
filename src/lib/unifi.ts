@@ -19,7 +19,7 @@ function ensureConfig() {
   }
 }
 
-async function unifiRequest<T>(
+export async function unifiRequest<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {

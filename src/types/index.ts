@@ -27,6 +27,8 @@ export interface Location {
   incharge_user_id_2?: string | null;
   incharge_1?: Pick<User, "id" | "full_name" | "email" | "role"> | null;
   incharge_2?: Pick<User, "id" | "full_name" | "email" | "role"> | null;
+  /** Set only for locations managed via the UniFi API (e.g. Nungambakkam LGF). */
+  unifi_site_id?: string | null;
   created_at: string;
   updated_at: string;
 }
