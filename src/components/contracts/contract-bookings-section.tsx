@@ -93,7 +93,7 @@ export function ContractBookingsSection({ contractId }: { contractId: string }) 
         setLoading(false);
         // Auto-open the most recent month
         if (data && data.length > 0) {
-          const first = (data[0] as BookingRow).booking_date.substring(0, 7);
+          const first = (data[0] as unknown as BookingRow).booking_date.substring(0, 7);
           setOpenMonths(new Set([first]));
         }
       }
