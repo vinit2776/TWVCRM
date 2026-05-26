@@ -26,6 +26,7 @@
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { logAudit } from "@/lib/audit";
 import {
   createUnifiVoucher,
   siteConfigFromLocation,
@@ -152,6 +153,20 @@ export async function POST(
       codes.push(unifiCode);
     }
 
+    logAudit(supabase, {
+      entityType: "voucher",
+      entityId: id,
+      action: "create",
+      performedBy: dbUser.id,
+      changes: {
+        booking_id: { old: null, new: id },
+        mode: { old: null, new: "unifi_api" },
+        count: { old: null, new: issuances.length },
+        duration_minutes: { old: null, new: durationMinutes },
+        unifi_codes: { old: null, new: codes },
+      },
+    });
+
     return NextResponse.json({
       issued: issuances.length,
       needed: requestedCount,
@@ -230,6 +245,18 @@ export async function POST(
   ];
 
   await Promise.all(ops);
+
+  logAudit(supabase, {
+    entityType: "voucher",
+    entityId: id,
+    action: "create",
+    performedBy: dbUser.id,
+    changes: {
+      booking_id: { old: null, new: id },
+      mode: { old: null, new: "repository" },
+      count: { old: null, new: vouchers.length },
+    },
+  });
 
   return NextResponse.json({
     issued: vouchers.length,
