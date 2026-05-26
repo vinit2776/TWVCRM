@@ -1,6 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import {
+  createUnifiVoucher,
+  siteConfigFromLocation,
+  isUnifiLocation,
+  calcVoucherMinutes,
+} from "@/lib/unifi";
 
 export async function GET(
   request: NextRequest,
@@ -87,6 +93,227 @@ export async function POST(
 
   const issuedCount = alreadyIssued || 0;
 
+  // ── Fetch location to determine voucher mode ──────────────────────
+  const locationId: string | null = contract.location_id || null;
+  let useUnifi = false;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  let location: any = null;
+
+  if (locationId) {
+    const { data: loc } = await supabase
+      .from("locations")
+      .select("unifi_site_id, unifi_console_id, wifi_voucher_mode, name")
+      .eq("id", locationId)
+      .single();
+    location = loc;
+    useUnifi = loc ? isUnifiLocation(loc) : false;
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // UNIFI PATH
+  // ──────────────────────────────────────────────────────────────────
+  if (useUnifi) {
+    const siteConfig = siteConfigFromLocation(location);
+    const durationMinutes = calcVoucherMinutes(contract.end_date);
+
+    const { data: dbUser } = await supabase
+      .from("users")
+      .select("id")
+      .eq("auth_id", user.id)
+      .single();
+
+    if (isPerSeatMode) {
+      const seatNumber = body.seat_number!;
+
+      if (seatNumber < 1 || seatNumber > totalSeats) {
+        return NextResponse.json(
+          { error: `Seat number must be between 1 and ${totalSeats}` },
+          { status: 400 }
+        );
+      }
+
+      // Check if seat already has an active voucher
+      const { data: existingSeat } = await supabase
+        .from("voucher_issuances")
+        .select("id")
+        .eq("contract_id", id)
+        .eq("seat_number", seatNumber)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (existingSeat) {
+        return NextResponse.json(
+          { error: `Seat ${seatNumber} already has an active voucher` },
+          { status: 400 }
+        );
+      }
+
+      let unifiId: string;
+      let unifiCode: string;
+      try {
+        const result = await createUnifiVoucher(
+          {
+            durationMinutes,
+            note: `${contract.contract_number}_seat${seatNumber}`,
+            quota: 2,
+          },
+          siteConfig
+        );
+        unifiId = result.id;
+        unifiCode = result.code;
+      } catch (err) {
+        console.error("[unifi] per-seat voucher creation failed:", err);
+        return NextResponse.json(
+          { error: "Failed to create Unifi voucher. Check API credentials and try again." },
+          { status: 502 }
+        );
+      }
+
+      const { data: issuance, error: insertError } = await supabase
+        .from("voucher_issuances")
+        .insert({
+          contract_id: id,
+          voucher_id: null,
+          lead_id: contract.lead_id || null,
+          seat_number: seatNumber,
+          issued_by: dbUser?.id,
+          valid_from: contract.start_date,
+          valid_until: contract.end_date,
+          seat_occupant_email: body.seat_occupant_email || null,
+          is_active: true,
+          unifi_voucher_id: unifiId,
+        })
+        .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
+        .single();
+
+      if (insertError) {
+        return NextResponse.json({ error: insertError.message }, { status: 500 });
+      }
+
+      if (dbUser?.id) {
+        logAudit(supabase, {
+          entityType: "voucher",
+          entityId: id,
+          action: "create",
+          performedBy: dbUser.id,
+          changes: {
+            seat_number: { old: null, new: seatNumber },
+            unifi_voucher_id: { old: null, new: unifiId },
+            unifi_code: { old: null, new: unifiCode },
+          },
+        });
+      }
+
+      return NextResponse.json(
+        {
+          data: [issuance],
+          message: "1 Unifi voucher issued",
+          unifi_code: unifiCode,
+        },
+        { status: 201 }
+      );
+    }
+
+    // Bulk Unifi mode: issue for all remaining seats
+    const remaining = totalSeats - issuedCount;
+
+    if (remaining <= 0) {
+      return NextResponse.json(
+        { error: "All seats already have vouchers issued" },
+        { status: 400 }
+      );
+    }
+
+    // Find which seat numbers are already active
+    const { data: activeIssuances } = await supabase
+      .from("voucher_issuances")
+      .select("seat_number")
+      .eq("contract_id", id)
+      .eq("is_active", true);
+
+    const activeSeatNumbers = new Set((activeIssuances || []).map((i) => i.seat_number));
+    const unfilledSeats: number[] = [];
+    for (let s = 1; s <= totalSeats; s++) {
+      if (!activeSeatNumbers.has(s)) unfilledSeats.push(s);
+    }
+
+    const issuedVouchers = [];
+    const issuedCodes: string[] = [];
+
+    for (const seatNumber of unfilledSeats) {
+      let unifiId: string;
+      let unifiCode: string;
+      try {
+        const result = await createUnifiVoucher(
+          {
+            durationMinutes,
+            note: `${contract.contract_number}_seat${seatNumber}`,
+            quota: 2,
+          },
+          siteConfig
+        );
+        unifiId = result.id;
+        unifiCode = result.code;
+      } catch (err) {
+        console.error(`[unifi] seat ${seatNumber} voucher creation failed:`, err);
+        return NextResponse.json(
+          { error: `Failed to create Unifi voucher for seat ${seatNumber}. ${issuedVouchers.length} vouchers issued before failure.` },
+          { status: 502 }
+        );
+      }
+
+      const { data: issuance, error: insertError } = await supabase
+        .from("voucher_issuances")
+        .insert({
+          contract_id: id,
+          voucher_id: null,
+          lead_id: contract.lead_id || null,
+          seat_number: seatNumber,
+          issued_by: dbUser?.id,
+          valid_from: contract.start_date,
+          valid_until: contract.end_date,
+          is_active: true,
+          unifi_voucher_id: unifiId,
+        })
+        .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
+        .single();
+
+      if (insertError) {
+        return NextResponse.json({ error: insertError.message }, { status: 500 });
+      }
+
+      issuedVouchers.push(issuance);
+      issuedCodes.push(unifiCode);
+    }
+
+    if (dbUser?.id) {
+      logAudit(supabase, {
+        entityType: "voucher",
+        entityId: id,
+        action: "create",
+        performedBy: dbUser.id,
+        changes: {
+          count: { old: null, new: issuedVouchers.length },
+          contract_id: { old: null, new: id },
+          mode: { old: null, new: "unifi_api" },
+        },
+      });
+    }
+
+    return NextResponse.json(
+      {
+        data: issuedVouchers,
+        message: `${issuedVouchers.length} Unifi vouchers issued`,
+        unifi_codes: issuedCodes,
+      },
+      { status: 201 }
+    );
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // REPOSITORY PATH (existing logic)
+  // ──────────────────────────────────────────────────────────────────
+
   // Per-seat mode: issue 1 voucher for a specific seat
   if (isPerSeatMode) {
     const seatNumber = body.seat_number!;
@@ -115,7 +342,7 @@ export async function POST(
     }
 
     // Issue 1 voucher using smart validity matching
-    const voucher = await findAndIssueOneVoucher(supabase, contract, id, seatNumber, body.seat_occupant_email, user.id, contract.location_id || null);
+    const voucher = await findAndIssueOneVoucher(supabase, contract, id, seatNumber, body.seat_occupant_email, user.id, locationId);
 
     if ("error" in voucher) {
       return NextResponse.json({ error: voucher.error }, { status: voucher.status || 400 });
@@ -148,7 +375,6 @@ export async function POST(
   const TOLERANCE = 0.20;
   const minAcceptable = Math.floor(targetDays * (1 - TOLERANCE));
   const maxAcceptable = Math.ceil(targetDays * (1 + TOLERANCE));
-  const locationId: string | null = contract.location_id || null;
 
   let availQuery = supabase
     .from("voucher_repository")
@@ -233,7 +459,7 @@ export async function POST(
 
   if (!availableVouchers || availableVouchers.length < remaining) {
     return NextResponse.json(
-      { error: `Not enough vouchers available. Need ${remaining}, but only ${availableVouchers?.length || 0} available in the ${formatDays(matchedValidity)} group.` },
+      { error: `Not enough vouchers available. Need ${remaining}, but only ${availableVouchers?.length || 0} available in the ${formatDays(matchedValidity!)} group.` },
       { status: 400 }
     );
   }
@@ -322,7 +548,7 @@ export async function POST(
   );
 }
 
-// ===== Helper: Issue 1 voucher for a specific seat =====
+// ===== Helper: Issue 1 repository voucher for a specific seat =====
 /* eslint-disable @typescript-eslint/no-explicit-any */
 async function findAndIssueOneVoucher(
   supabase: any,

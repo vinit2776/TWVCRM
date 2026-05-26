@@ -16,10 +16,21 @@
  *   - Already-issued vouchers are additive — calling again issues MORE,
  *     it doesn't re-issue. This lets staff top-up if more guests arrive.
  *   - DB calls are batched: parallel repo updates + single bulk insert.
+ *
+ * For Unifi locations (wifi_voucher_mode = 'unifi_api'):
+ *   - Vouchers are generated on-demand via the Unifi cloud API.
+ *   - Duration = booking duration in minutes + 60-minute buffer.
+ *   - Each voucher has quota=2 (2 devices).
+ *   - unifi_voucher_id is stored on the issuance row for revocation.
  */
 
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import {
+  createUnifiVoucher,
+  siteConfigFromLocation,
+  isUnifiLocation,
+} from "@/lib/unifi";
 
 export async function POST(
   request: NextRequest,
@@ -64,11 +75,6 @@ export async function POST(
   const defaultCount = Math.ceil(numAttendeesInt / 2);
   const requestedCount = body.count != null ? Math.max(1, Math.min(20, Math.floor(Number(body.count)))) : defaultCount;
 
-  const durationHours = Number(bk.duration_hours || 1);
-  const isShortBooking = durationHours <= 3;
-  const preferredValidity = isShortBooking ? 0.125 : 1;
-  const fallbackValidity  = isShortBooking ? 1     : null;
-
   // Count already-issued vouchers to set correct seat numbers
   const { data: existing } = await supabase
     .from("voucher_issuances")
@@ -76,6 +82,93 @@ export async function POST(
     .eq("booking_id", id)
     .eq("is_active", true);
   const alreadyIssued = existing?.length ?? 0;
+
+  // Fetch location to determine voucher mode
+  const { data: location } = bk.location_id
+    ? await supabase
+        .from("locations")
+        .select("unifi_site_id, unifi_console_id, wifi_voucher_mode")
+        .eq("id", bk.location_id)
+        .single()
+    : { data: null };
+
+  // ──────────────────────────────────────────────────────────────────
+  // UNIFI PATH
+  // ──────────────────────────────────────────────────────────────────
+  if (location && isUnifiLocation(location)) {
+    const siteConfig = siteConfigFromLocation(location);
+    const durationHours = Number(bk.duration_hours || 1);
+    // Duration = booking window in minutes + 60-minute buffer
+    const durationMinutes = Math.ceil(durationHours * 60) + 60;
+
+    const now = new Date();
+    const issuances = [];
+    const codes: string[] = [];
+
+    for (let i = 0; i < requestedCount; i++) {
+      const seatNumber = alreadyIssued + i + 1;
+      let unifiId: string;
+      let unifiCode: string;
+
+      try {
+        const result = await createUnifiVoucher(
+          {
+            durationMinutes,
+            note: `booking_${id}_seat${seatNumber}`,
+            quota: 2,
+          },
+          siteConfig
+        );
+        unifiId = result.id;
+        unifiCode = result.code;
+      } catch (err) {
+        console.error(`[unifi] booking voucher seat ${seatNumber} failed:`, err);
+        return NextResponse.json(
+          { error: `Failed to create Unifi voucher. ${i} vouchers issued before failure.` },
+          { status: 502 }
+        );
+      }
+
+      const { error: insertError } = await supabase.from("voucher_issuances").insert({
+        contract_id: bk.contract_id || null,
+        voucher_id: null,
+        lead_id: bk.lead_id || null,
+        booking_id: id,
+        seat_number: seatNumber,
+        issued_by: dbUser.id,
+        issued_at: now.toISOString(),
+        valid_from: bk.booking_date,
+        valid_until: bk.booking_date,
+        is_active: true,
+        seat_occupant_email: i === 0 && alreadyIssued === 0 ? (bk.guest_email || null) : null,
+        unifi_voucher_id: unifiId,
+      });
+
+      if (insertError) {
+        return NextResponse.json({ error: insertError.message }, { status: 500 });
+      }
+
+      issuances.push({ seat_number: seatNumber, unifi_voucher_id: unifiId, code: unifiCode });
+      codes.push(unifiCode);
+    }
+
+    return NextResponse.json({
+      issued: issuances.length,
+      needed: requestedCount,
+      shortfall: 0,
+      codes,
+      total_issued: alreadyIssued + issuances.length,
+    });
+  }
+
+  // ──────────────────────────────────────────────────────────────────
+  // REPOSITORY PATH (existing logic)
+  // ──────────────────────────────────────────────────────────────────
+
+  const durationHours = Number(bk.duration_hours || 1);
+  const isShortBooking = durationHours <= 3;
+  const preferredValidity = isShortBooking ? 0.125 : 1;
+  const fallbackValidity  = isShortBooking ? 1     : null;
 
   async function fetchVouchers(validity: number, limit: number) {
     const { data } = await supabase

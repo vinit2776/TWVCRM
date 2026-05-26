@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback } from "react";
 import {
   Wifi, RefreshCw, Server, Users, Activity, MonitorSmartphone,
-  Signal, Globe, ChevronLeft, ChevronRight,
+  Signal, Globe, ChevronLeft, ChevronRight, Settings2, Save,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -41,7 +41,13 @@ const PAGE_SIZE = 20;
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-interface Location { id: string; name: string; unifi_site_id?: string | null; }
+interface Location {
+  id: string;
+  name: string;
+  unifi_site_id?: string | null;
+  unifi_console_id?: string | null;
+  wifi_voucher_mode?: string | null;
+}
 
 interface DashboardData {
   internet: {
@@ -89,15 +95,16 @@ interface NetworkConfig {
 
 // ─── Tab definitions ──────────────────────────────────────────────────────────
 
-type Tab = "overview" | "visitors" | "bandwidth" | "sessions" | "devices" | "infrastructure";
+type Tab = "overview" | "visitors" | "bandwidth" | "sessions" | "devices" | "infrastructure" | "configuration";
 
-const TABS: { id: Tab; label: string; icon: React.ElementType }[] = [
+const TABS: { id: Tab; label: string; icon: React.ElementType; adminOnly?: boolean }[] = [
   { id: "overview",        label: "Overview",        icon: Activity },
   { id: "visitors",        label: "Visitors",        icon: Users },
   { id: "bandwidth",       label: "Bandwidth",       icon: Globe },
   { id: "sessions",        label: "Sessions",        icon: Wifi },
   { id: "devices",         label: "Devices",         icon: MonitorSmartphone },
   { id: "infrastructure",  label: "Infrastructure",  icon: Server },
+  { id: "configuration",   label: "Configuration",   icon: Settings2, adminOnly: true },
 ];
 
 // ─── Main Page ────────────────────────────────────────────────────────────────
@@ -114,11 +121,15 @@ export default function NetworkPage() {
       fetch("/api/locations").then((r) => r.json()),
       fetch("/api/me").then((r) => r.json()),
     ]).then(([locJson, meJson]) => {
-      const locs: Location[] = (locJson.data ?? locJson ?? []).filter(
-        (l: Location) => l.unifi_site_id
-      );
-      setLocations(locs);
-      if (locs.length > 0) setLocationId(locs[0].id);
+      // For Configuration tab: include ALL active locations.
+      // For live-data tabs: only locations with unifi_site_id are usable,
+      // but we still show all in the selector so admins can configure them.
+      const allLocs: Location[] = locJson.data ?? locJson ?? [];
+      setLocations(allLocs);
+      // Default selection: prefer first Unifi-enabled location, fall back to first
+      const firstUnifi = allLocs.find((l) => l.unifi_site_id);
+      if (firstUnifi) setLocationId(firstUnifi.id);
+      else if (allLocs.length > 0) setLocationId(allLocs[0].id);
       setUserRole(meJson.role ?? null);
     }).catch(() => {});
   }, []);
@@ -127,13 +138,18 @@ export default function NetworkPage() {
     ? ["admin", "it_manager", "it_technician"].includes(userRole)
     : false;
 
+  const isAdmin = userRole === "admin";
+
+  const selectedLocation = locations.find((l) => l.id === locationId) ?? null;
+  const selectedHasUnifi = Boolean(selectedLocation?.unifi_site_id);
+
   if (locations.length === 0 && locationId === "") {
     return (
       <div className="space-y-4">
         <h1 className="text-2xl font-bold flex items-center gap-2">
           <Wifi className="h-6 w-6" /> Network
         </h1>
-        <p className="text-muted-foreground">No UniFi-enabled locations configured.</p>
+        <p className="text-muted-foreground">No locations configured.</p>
       </div>
     );
   }
@@ -161,7 +177,7 @@ export default function NetworkPage() {
 
       {/* Tab bar */}
       <div className="flex gap-1 overflow-x-auto border-b pb-0">
-        {TABS.map((t) => (
+        {TABS.filter((t) => !t.adminOnly || isAdmin).map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
@@ -180,12 +196,37 @@ export default function NetworkPage() {
       {/* Tab content */}
       {locationId && (
         <div className="min-h-[400px]">
-          {tab === "overview"       && <OverviewTab locationId={locationId} />}
-          {tab === "visitors"       && <VisitorsTab locationId={locationId} />}
-          {tab === "bandwidth"      && <BandwidthTab locationId={locationId} />}
-          {tab === "sessions"       && <SessionsTab locationId={locationId} />}
-          {tab === "devices"        && <DevicesTab locationId={locationId} />}
-          {tab === "infrastructure" && <InfrastructureTab locationId={locationId} isInfraRole={isInfraRole} />}
+          {tab === "configuration" ? (
+            <ConfigurationTab
+              locationId={locationId}
+              location={selectedLocation}
+              onSaved={(updated) =>
+                setLocations((prev) => prev.map((l) => (l.id === updated.id ? { ...l, ...updated } : l)))
+              }
+            />
+          ) : !selectedHasUnifi ? (
+            <div className="flex flex-col items-center justify-center py-20 text-muted-foreground gap-2">
+              <Wifi className="h-10 w-10 opacity-30" />
+              <p className="text-sm">This location doesn't have a UniFi site configured yet.</p>
+              {isAdmin && (
+                <button
+                  onClick={() => setTab("configuration")}
+                  className="text-sm text-primary underline underline-offset-2 mt-1"
+                >
+                  Go to Configuration to set it up
+                </button>
+              )}
+            </div>
+          ) : (
+            <>
+              {tab === "overview"       && <OverviewTab locationId={locationId} />}
+              {tab === "visitors"       && <VisitorsTab locationId={locationId} />}
+              {tab === "bandwidth"      && <BandwidthTab locationId={locationId} />}
+              {tab === "sessions"       && <SessionsTab locationId={locationId} />}
+              {tab === "devices"        && <DevicesTab locationId={locationId} />}
+              {tab === "infrastructure" && <InfrastructureTab locationId={locationId} isInfraRole={isInfraRole} />}
+            </>
+          )}
         </div>
       )}
     </div>
@@ -838,6 +879,168 @@ function InfrastructureTab({ locationId, isInfraRole }: { locationId: string; is
           )}
         </>
       )}
+    </div>
+  );
+}
+
+// ─── Configuration Tab (admin-only) ──────────────────────────────────────────
+
+function ConfigurationTab({
+  locationId,
+  location,
+  onSaved,
+}: {
+  locationId: string;
+  location: Location | null;
+  onSaved: (updated: Partial<Location> & { id: string }) => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [form, setForm] = useState({
+    wifi_voucher_mode: location?.wifi_voucher_mode ?? "repository",
+    unifi_site_id: location?.unifi_site_id ?? "",
+    unifi_console_id: location?.unifi_console_id ?? "",
+  });
+
+  // Sync form when location changes (selector switch)
+  useEffect(() => {
+    setForm({
+      wifi_voucher_mode: location?.wifi_voucher_mode ?? "repository",
+      unifi_site_id: location?.unifi_site_id ?? "",
+      unifi_console_id: location?.unifi_console_id ?? "",
+    });
+  }, [locationId, location]);
+
+  async function handleSave() {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/locations/${locationId}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          wifi_voucher_mode: form.wifi_voucher_mode || null,
+          unifi_site_id: form.unifi_site_id.trim() || null,
+          unifi_console_id: form.unifi_console_id.trim() || null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Save failed");
+      toast.success("Location configuration saved");
+      onSaved({
+        id: locationId,
+        wifi_voucher_mode: form.wifi_voucher_mode || null,
+        unifi_site_id: form.unifi_site_id.trim() || null,
+        unifi_console_id: form.unifi_console_id.trim() || null,
+      });
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const isUnifi = form.wifi_voucher_mode === "unifi_api";
+
+  return (
+    <div className="max-w-lg space-y-6">
+      <div className="flex items-center gap-2">
+        <Settings2 className="h-5 w-5 text-muted-foreground" />
+        <h2 className="text-base font-semibold">WiFi Voucher Configuration</h2>
+      </div>
+
+      <Card>
+        <CardContent className="pt-6 space-y-5">
+          {/* Voucher mode */}
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">Voucher Mode</label>
+            <Select
+              value={form.wifi_voucher_mode ?? "repository"}
+              onValueChange={(v) => setForm((f) => ({ ...f, wifi_voucher_mode: v }))}
+            >
+              <SelectTrigger>
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="repository">Repository (pre-uploaded pool)</SelectItem>
+                <SelectItem value="unifi_api">UniFi Live API (on-demand generation)</SelectItem>
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              {isUnifi
+                ? "Vouchers are generated in real-time via the UniFi controller API. Each seat gets its own code valid for the contract duration."
+                : "Vouchers are issued from a pre-uploaded pool. Upload codes in advance via the Vouchers section."}
+            </p>
+          </div>
+
+          {/* UniFi Site ID */}
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">
+              UniFi Site ID
+              {isUnifi && <span className="text-red-500 ml-1">*</span>}
+            </label>
+            <Input
+              value={form.unifi_site_id}
+              onChange={(e) => setForm((f) => ({ ...f, unifi_site_id: e.target.value }))}
+              placeholder="e.g. default"
+              className="font-mono"
+            />
+            <p className="text-xs text-muted-foreground">
+              The site slug used in the UniFi API path:{" "}
+              <code className="bg-muted px-1 rounded text-[11px]">
+                /api/s/&#123;site_id&#125;
+              </code>
+            </p>
+          </div>
+
+          {/* UniFi Console ID */}
+          <div className="space-y-1.5">
+            <label className="text-sm font-medium">UniFi Console ID (UUID)</label>
+            <Input
+              value={form.unifi_console_id}
+              onChange={(e) => setForm((f) => ({ ...f, unifi_console_id: e.target.value }))}
+              placeholder="e.g. xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
+              className="font-mono text-xs"
+            />
+            <p className="text-xs text-muted-foreground">
+              Cloud console UUID from the UniFi API URL. Leave blank to use the{" "}
+              <code className="bg-muted px-1 rounded text-[11px]">UNIFI_CONSOLE_ID</code> env var.
+            </p>
+          </div>
+
+          {isUnifi && !form.unifi_site_id.trim() && (
+            <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+              UniFi Site ID is required when using the Live API mode. Voucher issuance will fail without it.
+            </div>
+          )}
+
+          <div className="pt-2">
+            <Button onClick={handleSave} disabled={saving} className="gap-2">
+              <Save className="h-4 w-4" />
+              {saving ? "Saving…" : "Save Configuration"}
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Status summary */}
+      <div className="rounded-md border px-4 py-3 text-sm space-y-1">
+        <p className="font-medium text-muted-foreground text-xs uppercase tracking-wide">Current Status</p>
+        <div className="flex items-center gap-2 pt-1">
+          <span className={`inline-flex h-2 w-2 rounded-full ${isUnifi ? "bg-green-500" : "bg-slate-300"}`} />
+          <span>
+            {isUnifi ? "Live API mode active" : "Repository mode active"}
+          </span>
+        </div>
+        {form.unifi_site_id && (
+          <p className="text-xs text-muted-foreground">
+            Site: <code className="bg-muted px-1 rounded">{form.unifi_site_id}</code>
+          </p>
+        )}
+        {form.unifi_console_id && (
+          <p className="text-xs text-muted-foreground">
+            Console: <code className="bg-muted px-1 rounded text-[10px]">{form.unifi_console_id}</code>
+          </p>
+        )}
+      </div>
     </div>
   );
 }

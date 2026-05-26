@@ -45,6 +45,7 @@ export async function PUT(
   const {
     name, code, address, city, state, is_active, capacity_config, requires_headcount,
     latitude, longitude, incharge_user_id_1, incharge_user_id_2,
+    unifi_site_id, unifi_console_id, wifi_voucher_mode,
   } = body as {
     name?: string;
     code?: string;
@@ -58,6 +59,9 @@ export async function PUT(
     longitude?: number | null;
     incharge_user_id_1?: string | null;
     incharge_user_id_2?: string | null;
+    unifi_site_id?: string | null;
+    unifi_console_id?: string | null;
+    wifi_voucher_mode?: string | null;
   };
 
   // Same-user-twice guard mirrors the POST route + DB constraint so we
@@ -86,6 +90,9 @@ export async function PUT(
   if (longitude !== undefined) updates.longitude = longitude;
   if (incharge_user_id_1 !== undefined) updates.incharge_user_id_1 = incharge_user_id_1 || null;
   if (incharge_user_id_2 !== undefined) updates.incharge_user_id_2 = incharge_user_id_2 || null;
+  if (unifi_site_id !== undefined) updates.unifi_site_id = unifi_site_id || null;
+  if (unifi_console_id !== undefined) updates.unifi_console_id = unifi_console_id || null;
+  if (wifi_voucher_mode !== undefined) updates.wifi_voucher_mode = wifi_voucher_mode || null;
 
   const { data, error } = await supabase
     .from("locations")

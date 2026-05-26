@@ -13,6 +13,8 @@
  * and every cancel path (including no-show) gets all three.
  */
 
+import { revokeUnifiVoucher } from "@/lib/unifi";
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 type SupabaseAny = any;
 
@@ -67,7 +69,7 @@ export async function executeBookingCancellationSideEffects(
   try {
     const { data: issuances } = await supabase
       .from("voucher_issuances")
-      .select("id, voucher_id")
+      .select("id, voucher_id, unifi_voucher_id")
       .eq("booking_id", booking.bookingId)
       .eq("is_active", true);
 
@@ -79,6 +81,7 @@ export async function executeBookingCancellationSideEffects(
         .update({ is_active: false, revoked_at: revokeNow, revoke_reason: revokeReason })
         .in("id", issuanceIds);
 
+      // Revoke repository-based vouchers
       const voucherIds = issuances
         .map((i: { voucher_id: string | null }) => i.voucher_id)
         .filter(Boolean);
@@ -88,6 +91,17 @@ export async function executeBookingCancellationSideEffects(
           .update({ status: "revoked" })
           .in("id", voucherIds);
       }
+
+      // Revoke Unifi live-API vouchers (fire-and-forget, non-fatal)
+      for (const issuance of issuances) {
+        const uid = (issuance as { unifi_voucher_id?: string | null }).unifi_voucher_id;
+        if (uid) {
+          revokeUnifiVoucher(uid).catch((err: unknown) =>
+            console.error(`[booking-cancel] Unifi revoke ${uid} failed:`, err)
+          );
+        }
+      }
+
       result.vouchersRevoked = issuances.length;
     }
   } catch (err) {

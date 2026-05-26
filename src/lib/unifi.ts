@@ -1,37 +1,77 @@
 /**
- * UniFi Network API client — Nungambakkam LGF only.
+ * UniFi Network API client — multi-location support.
  *
- * Uses the legacy UniFi Network REST API via the UniFi cloud connector:
- *   https://api.ui.com/v1/connector/consoles/{consoleId}/proxy/network/api/s/default
+ * Uses the UniFi cloud connector REST API:
+ *   https://api.ui.com/v1/connector/consoles/{consoleId}/proxy/network/api/s/{siteName}
  *
- * Other locations continue using the import-based voucher stack.
+ * Each exported function accepts an optional `SiteConfig` that identifies which
+ * console + site to target. When omitted, env-var defaults are used (backward compat).
+ *
+ * Locations store their own `unifi_console_id` and `unifi_site_id` in the DB.
+ * Pass those values here via `siteConfigFromLocation()`.
  */
 import { unstable_cache } from "next/cache";
 
-const UNIFI_API_BASE_URL = process.env.UNIFI_API_BASE_URL || "";
-const UNIFI_API_KEY      = process.env.UNIFI_API_KEY      || "";
+// ─── Env-var defaults (Nungambakkam LGF / single-controller setup) ────────────
 
-function ensureConfig() {
-  if (!UNIFI_API_BASE_URL || !UNIFI_API_KEY) {
+const DEFAULT_CONSOLE_ID = process.env.UNIFI_CONSOLE_ID || "";
+const DEFAULT_SITE_NAME  = process.env.UNIFI_SITE_NAME  || "default";
+const UNIFI_API_KEY      = process.env.UNIFI_API_KEY    || "";
+const UNIFI_API_ROOT     = "https://api.ui.com/v1/connector/consoles";
+
+// ─── Per-location site config ─────────────────────────────────────────────────
+
+export interface SiteConfig {
+  /** UniFi cloud console UUID. Defaults to UNIFI_CONSOLE_ID env var. */
+  consoleId?: string | null;
+  /** UniFi site name (slug), e.g. "default". Defaults to UNIFI_SITE_NAME env var. */
+  siteName?: string | null;
+}
+
+/**
+ * Build a SiteConfig from a location row.
+ * Falls back to env-var defaults for unset fields — so existing code
+ * with no location row still works without changes.
+ */
+export function siteConfigFromLocation(location: {
+  unifi_console_id?: string | null;
+  unifi_site_id?: string | null;
+}): SiteConfig {
+  return {
+    consoleId: location.unifi_console_id || DEFAULT_CONSOLE_ID || undefined,
+    siteName:  location.unifi_site_id    || DEFAULT_SITE_NAME  || undefined,
+  };
+}
+
+function resolveBaseUrl(cfg?: SiteConfig): string {
+  const consoleId = cfg?.consoleId || DEFAULT_CONSOLE_ID;
+  const siteName  = cfg?.siteName  || DEFAULT_SITE_NAME;
+  if (!consoleId) {
     throw new Error(
-      "[unifi] UNIFI_API_BASE_URL and UNIFI_API_KEY must be set. " +
-      "Run: npx vercel env pull"
+      "[unifi] No console ID configured. Set UNIFI_CONSOLE_ID env var or location.unifi_console_id."
     );
   }
+  if (!UNIFI_API_KEY) {
+    throw new Error("[unifi] UNIFI_API_KEY env var is not set.");
+  }
+  return `${UNIFI_API_ROOT}/${consoleId}/proxy/network/api/s/${siteName}`;
 }
+
+// ─── Core request helpers ─────────────────────────────────────────────────────
 
 export async function unifiRequest<T>(
   path: string,
-  options: RequestInit = {}
+  options: RequestInit = {},
+  cfg?: SiteConfig
 ): Promise<T> {
-  ensureConfig();
-  const url = `${UNIFI_API_BASE_URL}${path}`;
+  const baseUrl = resolveBaseUrl(cfg);
+  const url = `${baseUrl}${path}`;
   const res = await fetch(url, {
     ...options,
     headers: {
-      "X-API-KEY": UNIFI_API_KEY,
-      "Accept": "application/json",
-      "Content-Type": "application/json",
+      "X-API-KEY":     UNIFI_API_KEY,
+      "Accept":        "application/json",
+      "Content-Type":  "application/json",
       ...(options.headers || {}),
     },
   });
@@ -49,25 +89,25 @@ export async function unifiRequest<T>(
 }
 
 /**
- * Cached wrapper around unifiRequest.
- * Uses Next.js Data Cache (unstable_cache) — persists across requests on the same server instance.
- * Cache key incorporates path + body so POST endpoints with different params get separate entries.
- * Do NOT use for mutations (cmd/hotspot, DELETE).
+ * Cached wrapper — do NOT use for mutations (cmd/hotspot, DELETE).
  */
 export function cachedUnifiRequest<T>(
   path: string,
   options: RequestInit = {},
-  ttl = 60
+  ttl = 60,
+  cfg?: SiteConfig
 ): Promise<T> {
-  const cacheKey = `unifi:${path}:${JSON.stringify(options.body ?? "")}`;
+  const consoleId = cfg?.consoleId || DEFAULT_CONSOLE_ID;
+  const siteName  = cfg?.siteName  || DEFAULT_SITE_NAME;
+  const cacheKey  = `unifi:${consoleId}:${siteName}:${path}:${JSON.stringify(options.body ?? "")}`;
   return unstable_cache(
-    () => unifiRequest<T>(path, options),
+    () => unifiRequest<T>(path, options, cfg),
     [cacheKey],
     { revalidate: ttl }
   )();
 }
 
-// ─── Types ───────────────────────────────────────────────────────────────────
+// ─── Types ────────────────────────────────────────────────────────────────────
 
 export interface UnifiVoucher {
   _id: string;
@@ -92,7 +132,7 @@ export interface CreateVoucherOptions {
   durationMinutes: number;
   /** Label stored on the voucher for identification */
   note: string;
-  /** Max simultaneous devices (default 1) */
+  /** Max simultaneous devices (default 2) */
   quota?: number;
   /** Download speed cap in Kbps (optional) */
   rxRateLimitKbps?: number;
@@ -107,27 +147,32 @@ export interface CreateVoucherOptions {
 /**
  * Create a single voucher with an exact duration.
  * Returns the UniFi internal _id and code.
+ *
+ * @param opts   Voucher parameters
+ * @param cfg    Site config (console + site). Omit to use env-var defaults.
  */
 export async function createUnifiVoucher(
-  opts: CreateVoucherOptions
+  opts: CreateVoucherOptions,
+  cfg?: SiteConfig
 ): Promise<{ id: string; code: string }> {
   const body: Record<string, unknown> = {
-    cmd: "create-voucher",
-    expire: opts.durationMinutes,
+    cmd:          "create-voucher",
+    expire:       opts.durationMinutes,
     expire_number: opts.durationMinutes,
-    expire_unit: 1,        // 1 = minutes
-    n: 1,
-    note: opts.note,
-    quota: opts.quota ?? 1,
+    expire_unit:  1,        // 1 = minutes
+    n:            1,
+    note:         opts.note,
+    quota:        opts.quota ?? 2,  // default 2 devices per voucher
   };
 
-  if (opts.rxRateLimitKbps)        body.qos_rate_max_down  = opts.rxRateLimitKbps;
-  if (opts.txRateLimitKbps)        body.qos_rate_max_up    = opts.txRateLimitKbps;
-  if (opts.dataUsageLimitMBytes)   body.qos_usage_quota    = opts.dataUsageLimitMBytes;
+  if (opts.rxRateLimitKbps)      body.qos_rate_max_down = opts.rxRateLimitKbps;
+  if (opts.txRateLimitKbps)      body.qos_rate_max_up   = opts.txRateLimitKbps;
+  if (opts.dataUsageLimitMBytes) body.qos_usage_quota   = opts.dataUsageLimitMBytes;
 
   const result = await unifiRequest<Array<{ create_time: number }>>(
     "/cmd/hotspot",
-    { method: "POST", body: JSON.stringify(body) }
+    { method: "POST", body: JSON.stringify(body) },
+    cfg
   );
 
   const createTime = result[0]?.create_time;
@@ -135,7 +180,9 @@ export async function createUnifiVoucher(
 
   // Fetch the created voucher to get its _id and code
   const vouchers = await unifiRequest<UnifiVoucher[]>(
-    `/stat/voucher?create_time=${createTime}`
+    `/stat/voucher?create_time=${createTime}`,
+    {},
+    cfg
   );
 
   const voucher = vouchers.find(v => v.note === opts.note && v.create_time === createTime)
@@ -148,14 +195,15 @@ export async function createUnifiVoucher(
 
 /**
  * Revoke (delete) a voucher by its UniFi internal _id.
- * Call this on contract cancellation / booking cancellation.
  * Safe to call if the voucher is already expired or deleted — errors are logged, not thrown.
+ *
+ * @param voucherId  UniFi internal _id
+ * @param cfg        Site config. Omit to use env-var defaults.
  */
-export async function revokeUnifiVoucher(voucherId: string): Promise<void> {
+export async function revokeUnifiVoucher(voucherId: string, cfg?: SiteConfig): Promise<void> {
   try {
-    await unifiRequest(`/stat/voucher/${voucherId}`, { method: "DELETE" });
+    await unifiRequest(`/stat/voucher/${voucherId}`, { method: "DELETE" }, cfg);
   } catch (err) {
-    // If the voucher is already gone that's fine — log and continue
     console.warn(`[unifi] revokeVoucher ${voucherId} failed (may already be deleted):`, err);
   }
 }
@@ -163,9 +211,9 @@ export async function revokeUnifiVoucher(voucherId: string): Promise<void> {
 /**
  * Fetch details of a specific voucher by _id.
  */
-export async function getUnifiVoucher(voucherId: string): Promise<UnifiVoucher | null> {
+export async function getUnifiVoucher(voucherId: string, cfg?: SiteConfig): Promise<UnifiVoucher | null> {
   try {
-    const vouchers = await unifiRequest<UnifiVoucher[]>(`/stat/voucher/${voucherId}`);
+    const vouchers = await unifiRequest<UnifiVoucher[]>(`/stat/voucher/${voucherId}`, {}, cfg);
     return vouchers[0] ?? null;
   } catch {
     return null;
@@ -174,14 +222,14 @@ export async function getUnifiVoucher(voucherId: string): Promise<UnifiVoucher |
 
 /**
  * Fetch the SSID of the hotspot/captive-portal network (open security).
- * Returns the name of the first WLAN with security = "open", or null if not found.
  */
-export async function getUnifiHotspotSsid(): Promise<string | null> {
+export async function getUnifiHotspotSsid(cfg?: SiteConfig): Promise<string | null> {
   try {
     const wlans = await unifiRequest<Array<{ name: string; security: string; enabled: boolean }>>(
-      "/list/wlanconf"
+      "/list/wlanconf",
+      {},
+      cfg
     );
-    // The hotspot network is "open" — clients hit the captive portal login
     const hotspot = wlans.find((w) => w.security === "open" && w.enabled !== false);
     return hotspot?.name ?? null;
   } catch {
@@ -190,16 +238,20 @@ export async function getUnifiHotspotSsid(): Promise<string | null> {
 }
 
 /**
- * Returns true if the given location should use the UniFi API.
- * Pass the location row from the DB; if unifi_site_id is set, this returns true.
+ * Returns true if this location is configured to use the UniFi live API.
+ * Use wifi_voucher_mode for the definitive check; unifi_site_id is a fallback signal.
  */
-export function isUnifiLocation(location: { unifi_site_id?: string | null }): boolean {
-  return Boolean(location?.unifi_site_id);
+export function isUnifiLocation(location: {
+  wifi_voucher_mode?: string | null;
+  unifi_site_id?: string | null;
+}): boolean {
+  if (location.wifi_voucher_mode) return location.wifi_voucher_mode === "unifi_api";
+  return Boolean(location.unifi_site_id);
 }
 
 /**
  * Calculate exact voucher duration in minutes from now until a contract/booking end date.
- * Adds a small buffer (default 60 min) so sessions don't cut out at the stroke of midnight.
+ * Adds a buffer (default 60 min) so sessions don't cut out at the stroke of midnight.
  */
 export function calcVoucherMinutes(endDate: string | Date, bufferMinutes = 60): number {
   const end = new Date(endDate);

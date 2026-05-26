@@ -6,7 +6,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { CONTRACT_STATUS_TRANSITIONS } from "@/lib/constants";
 import { generateMonthlyStatements } from "@/lib/billing";
 import { setUserActive } from "@/lib/cosec";
-import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes } from "@/lib/unifi";
+import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
 
 export async function GET(
   _request: NextRequest,
@@ -257,18 +257,19 @@ export async function PATCH(
           const admin = createAdminClient();
           const { data: location } = await admin
             .from("locations")
-            .select("unifi_site_id, name")
+            .select("unifi_site_id, unifi_console_id, wifi_voucher_mode, name")
             .eq("id", oldContract.location_id)
             .single();
 
-          if (location?.unifi_site_id) {
+          if (location && isUnifiLocation(location)) {
+            const siteConfig = siteConfigFromLocation(location);
             const durationMinutes = calcVoucherMinutes(oldContract.end_date);
             const seatedCount = oldContract.no_of_seats || 1;
             const { id: unifiVoucherId, code: unifiCode } = await createUnifiVoucher({
               durationMinutes,
               note: `contract_${data.contract_number}`,
               quota: seatedCount,
-            });
+            }, siteConfig);
             // Store the UniFi voucher _id on the contract for revocation on cancellation
             await admin
               .from("contracts")
@@ -476,7 +477,7 @@ export async function PATCH(
         // Fetch active voucher issuances with voucher codes
         const { data: issuances } = await supabase
           .from("voucher_issuances")
-          .select("id, voucher_id, seat_number, seat_occupant_email, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code)")
+          .select("id, voucher_id, unifi_voucher_id, seat_number, seat_occupant_email, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code)")
           .eq("contract_id", id)
           .eq("is_active", true);
 
@@ -490,13 +491,24 @@ export async function PATCH(
             .update({ is_active: false, revoked_at: revokeNow, revoke_reason: "Contract terminated" })
             .in("id", issuanceIds);
 
-          // Revoke vouchers in repository
+          // Revoke repository-based vouchers
           const voucherIds = issuances.map((i) => i.voucher_id).filter(Boolean);
           if (voucherIds.length > 0) {
             await supabase
               .from("voucher_repository")
               .update({ status: "revoked" })
               .in("id", voucherIds);
+          }
+
+          // Revoke Unifi live-API per-seat vouchers (fire-and-forget)
+          for (const issuance of issuances) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const uid = (issuance as any).unifi_voucher_id as string | null;
+            if (uid) {
+              revokeUnifiVoucher(uid).catch((err: unknown) =>
+                console.error(`[unifi] per-seat revoke ${uid} on termination failed:`, err)
+              );
+            }
           }
 
           // Email IT and Tech Support
