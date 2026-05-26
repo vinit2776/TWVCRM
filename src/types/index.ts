@@ -88,6 +88,7 @@ export type Rating = "none" | "hot" | "warm" | "cold";
 
 export interface Lead {
   id: string;
+  lead_number: number;
   first_name: string;
   last_name: string;
   company?: string;

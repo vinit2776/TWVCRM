@@ -142,10 +142,13 @@ export default function LeadDetailPage({
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-2xl font-bold">
                 {lead.first_name} {lead.last_name}
               </h1>
+              <span className="text-sm font-mono text-muted-foreground bg-muted px-2 py-0.5 rounded">
+                #{lead.lead_number}
+              </span>
               <StatusBadge type="lead_status" value={lead.status} />
               <RatingBadge rating={lead.rating} />
             </div>

@@ -358,6 +358,9 @@ export default function LeadsPage() {
                         >
                           {lead.first_name} {lead.last_name}
                         </Link>
+                        <span className="text-xs font-mono text-muted-foreground">
+                          #{lead.lead_number}
+                        </span>
                         {/* Followup flag */}
                         {lead._followup?.overdue && (
                           <span title="Overdue follow-up" className="shrink-0">
