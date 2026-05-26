@@ -492,6 +492,74 @@ export async function POST(
       </div>`
     : "";
 
+  // ── Contract quota section (contract_holder only) ────────────────────────
+  let quotaSection = "";
+  if (booking.customer_type === "contract_holder" && booking.contract_id) {
+    const { data: facility } = await supabase
+      .from("contract_facilities")
+      .select("name, free_quota, unit")
+      .eq("contract_id", booking.contract_id)
+      .in("unit", ["hr", "hrs", "hour", "hours", "h"])
+      .eq("is_active", true)
+      .limit(1)
+      .maybeSingle();
+
+    if (facility && Number(facility.free_quota) > 0) {
+      const now = new Date();
+      const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString().split("T")[0];
+      const monthEnd   = new Date(now.getFullYear(), now.getMonth() + 1, 0).toISOString().split("T")[0];
+      const monthLabel = now.toLocaleString("en-IN", { month: "long", year: "numeric", timeZone: "Asia/Kolkata" });
+
+      // Sum hours used by this contract this calendar month, excluding the current booking
+      const { data: monthBookings } = await supabase
+        .from("bookings")
+        .select("duration_hours")
+        .eq("contract_id", booking.contract_id)
+        .neq("id", id)
+        .in("status", ["confirmed", "checked_in", "checked_out"])
+        .gte("booking_date", monthStart)
+        .lte("booking_date", monthEnd);
+
+      const usedBefore      = (monthBookings ?? []).reduce((s, b) => s + Number(b.duration_hours), 0);
+      const usedThisBooking = Number(booking.duration_hours);
+      const usedAfter       = usedBefore + usedThisBooking;
+      const monthlyQuota    = Number(facility.free_quota);
+      const balanceAfter    = Math.max(0, monthlyQuota - usedAfter);
+      const overage         = Math.max(0, usedAfter - monthlyQuota);
+
+      const balanceColor  = balanceAfter === 0 ? "#b45309" : "#15803d";
+      const balanceBg     = balanceAfter === 0 ? "#fffbeb" : "#f0fdf4";
+      const balanceBorder = balanceAfter === 0 ? "#f59e0b" : "#22c55e";
+      const overageNote   = overage > 0
+        ? `<p style="margin:8px 0 0;color:#b45309;font-size:12px;">⚠️ ${overage} hr${overage !== 1 ? "s" : ""} exceed${overage === 1 ? "s" : ""} your free quota and will be billed at your contract rate.</p>`
+        : "";
+
+      quotaSection = `
+        <div style="background:${balanceBg};border:1px solid ${balanceBorder};border-radius:8px;padding:16px;margin:16px 0;">
+          <p style="margin:0 0 10px;color:${balanceColor};font-size:14px;font-weight:700;">Meeting Room Hours — ${monthLabel}</p>
+          <table style="width:100%;border-collapse:collapse;font-size:13px;">
+            <tr>
+              <td style="padding:6px 0;color:#6b7280;">Monthly quota</td>
+              <td style="padding:6px 0;text-align:right;font-weight:600;">${monthlyQuota} hr${monthlyQuota !== 1 ? "s" : ""}</td>
+            </tr>
+            <tr>
+              <td style="padding:6px 0;color:#6b7280;border-top:1px solid #e5e7eb;">Used this month (before this booking)</td>
+              <td style="padding:6px 0;text-align:right;border-top:1px solid #e5e7eb;">${usedBefore} hr${usedBefore !== 1 ? "s" : ""}</td>
+            </tr>
+            <tr>
+              <td style="padding:6px 0;color:#6b7280;">This booking</td>
+              <td style="padding:6px 0;text-align:right;">${usedThisBooking} hr${usedThisBooking !== 1 ? "s" : ""}</td>
+            </tr>
+            <tr style="border-top:2px solid ${balanceBorder};">
+              <td style="padding:8px 0 4px;font-weight:700;color:${balanceColor};">Balance remaining</td>
+              <td style="padding:8px 0 4px;text-align:right;font-weight:700;color:${balanceColor};">${balanceAfter} hr${balanceAfter !== 1 ? "s" : ""}</td>
+            </tr>
+          </table>
+          ${overageNote}
+        </div>`;
+    }
+  }
+
   const confirmSenderName = sender?.full_name || "TWV Team";
   const confirmationHtml = `
     <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
@@ -515,22 +583,8 @@ export async function POST(
         </table>
         ${paymentSection}
         ${voucherSection}
+        ${quotaSection}
         <p style="color:#333;font-size:14px;">Please arrive 5 minutes before your scheduled time. A calendar invite (.ics) is attached for your convenience.</p>
-
-        <!-- Booking policy footer — added when the partial-checkout
-             carry-forward feature shipped. Tells the customer up-front
-             how unused time is handled, so the moment-of-checkout
-             conversation is consistent with what they signed up for. -->
-        <div style="background:#f9fafb;border-left:3px solid #015E65;padding:14px 18px;margin:20px 0 8px;border-radius:0 6px 6px 0;">
-          <p style="color:#015E65;font-size:12px;font-weight:600;margin:0 0 6px;">About your booking</p>
-          <ul style="color:#374151;font-size:11.5px;margin:0;padding-left:18px;line-height:1.6;">
-            <li>Your booking is ${booking.duration_hours} hour${booking.duration_hours !== 1 ? "s" : ""} at <strong>${locationName || "—"}</strong>, scheduled ${startTime}–${endTime}.</li>
-            <li>If you check in but leave before your end time, unused full hours can be carried forward as credit valid for 30 days at <strong>${locationName || "—"}</strong>. Fractional time (under 1 hour) is forfeited.</li>
-            <li>No refunds once you've checked in.</li>
-            <li>Mention your phone number when redeeming credit on a future booking.</li>
-          </ul>
-        </div>
-
         <p style="color:#333;font-size:14px;">We look forward to hosting you!</p>
         <p style="color:#333;font-size:14px;">Warm regards,<br/><strong>${confirmSenderName}</strong><br/>The WorkVilla</p>
         <p style="color:#666;font-size:12px;margin-top:16px;">For any queries, write to us at <a href="mailto:contact@theworkvilla.com" style="color:#015E65;">contact@theworkvilla.com</a> or call <strong>+91 97910 97900</strong>.</p>
