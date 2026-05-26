@@ -54,7 +54,7 @@ export async function GET(
 
     supabase
       .from("vendor_bills")
-      .select("id, bill_number, total_amount, amount_paid, due_date, invoice_date, payment_status, approval_status, created_at")
+      .select("id, bill_number, invoice_number, total_amount, amount_paid, due_date, invoice_date, payment_status, approval_status, created_at")
       .eq("vendor_id", id)
       .order("created_at", { ascending: false }),
 

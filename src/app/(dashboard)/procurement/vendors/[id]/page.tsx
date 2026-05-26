@@ -42,12 +42,12 @@ const DOC_LABELS: Record<DocField, string> = {
   msme_cert_path: "MSME Certificate",
 };
 
-function InfoRow({ label, value }: { label: string; value?: string | null }) {
-  if (!value) return null;
+function InfoRow({ label, value, emptyText }: { label: string; value?: string | null; emptyText?: string }) {
+  if (!value && !emptyText) return null;
   return (
     <div className="flex flex-col sm:flex-row sm:items-start gap-1 sm:gap-4 py-2.5 border-b last:border-0">
       <span className="text-sm text-muted-foreground w-44 shrink-0">{label}</span>
-      <span className="text-sm">{value}</span>
+      <span className={`text-sm ${!value ? "text-muted-foreground italic" : ""}`}>{value || emptyText}</span>
     </div>
   );
 }
@@ -168,6 +168,9 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   const [docPaths, setDocPaths] = useState<Partial<Record<DocField, string>>>({});
   const [kycToggling, setKycToggling] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  // Email recovered from audit trail when contact_email is missing
+  const [lastEmailUsed, setLastEmailUsed] = useState<string | null>(null);
+  const [restoringEmail, setRestoringEmail] = useState(false);
 
   // Price history
   const [prices, setPrices] = useState<Array<{
@@ -215,7 +218,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
     overdueCount: number;
     overdueAmount: number;
     avgPaymentTermDays: number | null;
-    recentBills: Array<{ id: string; bill_number: string; total_amount: number | null; amount_paid: number | null; due_date: string | null; payment_status: string; approval_status: string; created_at: string }>;
+    recentBills: Array<{ id: string; bill_number: string; invoice_number: string | null; total_amount: number | null; amount_paid: number | null; due_date: string | null; payment_status: string; approval_status: string; created_at: string }>;
   };
   const [insights, setInsights] = useState<InsightsData | null>(null);
   const [insightsLoading, setInsightsLoading] = useState(false);
@@ -239,6 +242,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
     if (res.ok) {
       const { data } = await res.json();
       setVendor(data);
+      setLastEmailUsed(data.lastPaymentEmailTo ?? null);
       setDocPaths({
         pan_doc_path: data.pan_doc_path,
         gst_cert_path: data.gst_cert_path,
@@ -470,12 +474,44 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
             <CardContent>
               <InfoRow label="Contact Person" value={vendor.contact_name} />
               <InfoRow label="Phone" value={vendor.contact_phone} />
-              <InfoRow label="Email" value={vendor.contact_email} />
+              <InfoRow label="Email" value={vendor.contact_email} emptyText="Not set" />
               <InfoRow label="Address" value={vendor.address} />
               <InfoRow label="GSTIN" value={vendor.gstin} />
               <InfoRow label="Payment Terms" value={vendor.payment_terms} />
               {!vendor.contact_name && !vendor.contact_phone && !vendor.contact_email && !vendor.address && (
                 <p className="text-sm text-muted-foreground py-2">No contact details on file.</p>
+              )}
+              {/* Recovery banner: email is missing but was used in a past payment confirmation */}
+              {!vendor.contact_email && lastEmailUsed && (
+                <div className="mt-3 flex items-center justify-between gap-3 rounded-md border border-amber-200 bg-amber-50 px-3 py-2.5">
+                  <p className="text-xs text-amber-800">
+                    Last payment confirmation used <span className="font-semibold">{lastEmailUsed}</span> — restore it to the vendor profile?
+                  </p>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="shrink-0 h-7 text-xs border-amber-300 text-amber-800 hover:bg-amber-100"
+                    disabled={restoringEmail}
+                    onClick={async () => {
+                      setRestoringEmail(true);
+                      const res = await fetch(`/api/procurement/vendors/${id}`, {
+                        method: "PATCH",
+                        headers: { "Content-Type": "application/json" },
+                        body: JSON.stringify({ contact_email: lastEmailUsed }),
+                      });
+                      if (res.ok) {
+                        toast.success("Email restored");
+                        fetchVendor();
+                      } else {
+                        const err = await res.json().catch(() => null);
+                        toast.error(err?.error || "Failed to restore email");
+                      }
+                      setRestoringEmail(false);
+                    }}
+                  >
+                    {restoringEmail ? "Saving…" : "Restore"}
+                  </Button>
+                </div>
               )}
             </CardContent>
           </Card>
@@ -1229,6 +1265,7 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                       <thead>
                         <tr className="border-b bg-muted/30">
                           <th className="px-4 py-2.5 text-left font-medium">Bill #</th>
+                          <th className="px-4 py-2.5 text-left font-medium hidden md:table-cell">Invoice #</th>
                           <th className="px-4 py-2.5 text-left font-medium hidden sm:table-cell">Due Date</th>
                           <th className="px-4 py-2.5 text-left font-medium">Payment</th>
                           <th className="px-4 py-2.5 text-right font-medium hidden md:table-cell">Amount</th>
@@ -1237,7 +1274,17 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                       <tbody>
                         {insights.recentBills.map((bill) => (
                           <tr key={bill.id} className="border-b last:border-0">
-                            <td className="px-4 py-2.5 font-mono text-xs">{bill.bill_number}</td>
+                            <td className="px-4 py-2.5 font-mono text-xs">
+                              <Link
+                                href={`/accounting/vendor-payments/${bill.id}`}
+                                className="text-primary hover:underline"
+                              >
+                                {bill.bill_number}
+                              </Link>
+                            </td>
+                            <td className="px-4 py-2.5 text-xs text-muted-foreground hidden md:table-cell">
+                              {bill.invoice_number || "—"}
+                            </td>
                             <td className="px-4 py-2.5 text-muted-foreground hidden sm:table-cell">
                               {bill.due_date ? formatDate(bill.due_date) : "—"}
                             </td>

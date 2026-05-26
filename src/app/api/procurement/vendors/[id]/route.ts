@@ -44,7 +44,41 @@ export async function GET(
     .single();
 
   if (error || !data) return NextResponse.json({ error: "Vendor not found" }, { status: 404 });
-  return NextResponse.json({ data });
+
+  // When email is missing, surface the last email used in a payment confirmation
+  // so the user can easily restore it on the vendor profile.
+  let lastPaymentEmailTo: string | null = null;
+  if (!data.contact_email) {
+    const FIXED_CC = ["admin@stonecolour.com", "admin@theworkvilla.com"];
+    const { data: billIds } = await supabase
+      .from("vendor_bills")
+      .select("id")
+      .eq("vendor_id", id)
+      .limit(100);
+    if (billIds && billIds.length > 0) {
+      const ids = billIds.map((b: { id: string }) => b.id);
+      const { data: lastLog } = await supabase
+        .from("audit_logs")
+        .select("changes")
+        .eq("entity_type", "vendor_bill")
+        .eq("action", "email_sent")
+        .in("entity_id", ids)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (lastLog?.changes) {
+        const changes = lastLog.changes as Record<string, { old: unknown; new: unknown }>;
+        const toRaw = changes.to?.new;
+        if (typeof toRaw === "string") {
+          const vendorEmail = toRaw.split(",").map((e: string) => e.trim())
+            .find((e: string) => e && !FIXED_CC.includes(e));
+          if (vendorEmail) lastPaymentEmailTo = vendorEmail;
+        }
+      }
+    }
+  }
+
+  return NextResponse.json({ data: { ...data, lastPaymentEmailTo } });
 }
 
 export async function PATCH(
