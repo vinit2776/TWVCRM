@@ -36,6 +36,7 @@ import { ContractFacilitiesSection } from "@/components/contracts/contract-facil
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
 import { ContractAccessLogsSection } from "@/components/contracts/contract-access-logs-section";
+import { ContractBookingsSection } from "@/components/contracts/contract-bookings-section";
 import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import {
   Dialog,
@@ -895,6 +896,9 @@ export default function ContractDetailPage({
           {["active", "completed"].includes(contract.status) && (
             <ContractBillingSection contractId={id} />
           )}
+
+          {/* Meeting Room Bookings History */}
+          <ContractBookingsSection contractId={id} />
 
           {/* Door Access Logs */}
           <ContractAccessLogsSection contractId={id} />
