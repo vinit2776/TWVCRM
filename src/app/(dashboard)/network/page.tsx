@@ -21,7 +21,8 @@ import {
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
-function fmtBytes(n: number): string {
+function fmtBytes(n: number | null | undefined): string {
+  if (n == null || isNaN(n)) return "—";
   if (n >= 1_073_741_824) return `${(n / 1_073_741_824).toFixed(1)} GB`;
   if (n >= 1_048_576) return `${(n / 1_048_576).toFixed(1)} MB`;
   if (n >= 1024) return `${(n / 1024).toFixed(1)} KB`;
@@ -43,7 +44,14 @@ const PAGE_SIZE = 20;
 interface Location { id: string; name: string; unifi_site_id?: string | null; }
 
 interface DashboardData {
-  internet: { status: string; latency_ms: number | null; uptime_pct: number };
+  internet: {
+    status: string;
+    latency: number | null;       // ms, from API
+    uptime: number | null;        // seconds, from API
+    isp_name: string | null;
+    xput_up: number | null;
+    xput_down: number | null;
+  };
   live_clients: { total: number; guest: number; staff: number };
   today: { unique_devices: number; wlan_bytes: number; wan_tx: number; wan_rx: number };
 }
@@ -232,8 +240,10 @@ function OverviewTab({ locationId }: { locationId: string }) {
               </span>
             </div>
             <p className="text-xs text-muted-foreground mt-1">
-              Uptime {data.internet.uptime_pct.toFixed(1)}%
-              {data.internet.latency_ms != null && ` · ${data.internet.latency_ms}ms`}
+              {data.internet.uptime != null
+                ? `Up ${Math.floor(data.internet.uptime / 86400)}d ${Math.floor((data.internet.uptime % 86400) / 3600)}h`
+                : "Uptime unknown"}
+              {data.internet.latency != null && data.internet.latency > 0 && ` · ${data.internet.latency}ms`}
             </p>
           </CardContent>
         </Card>
@@ -748,7 +758,7 @@ function InfrastructureTab({ locationId, isInfraRole }: { locationId: string; is
                       <p>IP: <span className="font-mono">{ap.ip}</span></p>
                       <p>Uptime: {ap.uptime_human}</p>
                       <p>Clients: <strong className="text-foreground">{ap.clients}</strong></p>
-                      <p>Satisfaction: <strong className={`${ap.satisfaction >= 75 ? "text-green-600" : ap.satisfaction >= 50 ? "text-amber-600" : "text-red-600"}`}>{ap.satisfaction}%</strong></p>
+                      <p>Satisfaction: <strong className={`${(ap.satisfaction ?? 0) >= 75 ? "text-green-600" : (ap.satisfaction ?? 0) >= 50 ? "text-amber-600" : "text-red-600"}`}>{ap.satisfaction ?? "—"}{ap.satisfaction != null ? "%" : ""}</strong></p>
                     </div>
                     <div className="flex gap-2 text-xs text-muted-foreground">
                       <span>↑ {fmtBytes(ap.tx_bytes)}</span>
