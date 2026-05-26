@@ -18,6 +18,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Check for duplicate migration numbers
+        run: |
+          DUPES=$(ls supabase/migrations/*.sql | xargs -I{} basename {} | sed 's/_.*//' | sort | uniq -d)
+          if [ -n "$DUPES" ]; then
+            echo "❌ Duplicate migration numbers found: $DUPES"
+            echo "Two files with the same prefix cause supabase db push to silently skip one,"
+            echo "leaving production with missing columns. Rename before merging."
+            exit 1
+          fi
+          echo "✅ No duplicate migration numbers"
+
       - name: Setup Node.js
         uses: actions/setup-node@v4
         with:
