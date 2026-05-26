@@ -6,6 +6,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { CONTRACT_STATUS_TRANSITIONS } from "@/lib/constants";
 import { generateMonthlyStatements } from "@/lib/billing";
 import { setUserActive } from "@/lib/cosec";
+import { createUnifiVoucher, revokeUnifiVoucher, calcVoucherMinutes } from "@/lib/unifi";
 
 export async function GET(
   _request: NextRequest,
@@ -246,6 +247,42 @@ export async function PATCH(
       // "Generate Missing Bills" button in /billing to retry.
     }
 
+    // ── UniFi API voucher issuance (Nungambakkam LGF only) ───────────
+    // For UniFi-managed locations, issue a precision-duration voucher matching
+    // the exact contract end date instead of the nearest fixed-period import.
+    // Non-fatal: falls back to the existing import stack if anything fails.
+    if (oldContract.location_id && oldContract.end_date) {
+      (async () => {
+        try {
+          const admin = createAdminClient();
+          const { data: location } = await admin
+            .from("locations")
+            .select("unifi_site_id, name")
+            .eq("id", oldContract.location_id)
+            .single();
+
+          if (location?.unifi_site_id) {
+            const durationMinutes = calcVoucherMinutes(oldContract.end_date);
+            const seatedCount = oldContract.no_of_seats || 1;
+            const { id: unifiVoucherId, code: unifiCode } = await createUnifiVoucher({
+              durationMinutes,
+              note: `contract_${data.contract_number}`,
+              quota: seatedCount,
+            });
+            // Store the UniFi voucher _id on the contract for revocation on cancellation
+            await admin
+              .from("contracts")
+              .update({ unifi_voucher_id: unifiVoucherId })
+              .eq("id", id);
+            console.log(`[unifi] Issued voucher ${unifiCode} (${durationMinutes} min, ${seatedCount} seats) for ${data.contract_number}`);
+          }
+        } catch (err) {
+          // Non-fatal — log and continue. Staff can still use import-based vouchers.
+          console.error("[unifi] voucher issuance on activation failed:", err);
+        }
+      })();
+    }
+
     // ── Mark parent contract as "renewed" ────────────────────────────
     // Only transitions the parent now (not at draft creation), so deleting
     // a renewal draft doesn't leave the parent stuck in "renewed".
@@ -413,6 +450,12 @@ export async function PATCH(
         console.error("[contract-terminate] COSEC member block failed:", err);
       }
     })();
+  }
+
+  // On termination: revoke UniFi voucher instantly (Nungambakkam LGF only)
+  if (body.status === "terminated" && oldContract.status !== "terminated" && oldContract.unifi_voucher_id) {
+    revokeUnifiVoucher(oldContract.unifi_voucher_id)
+      .catch(err => console.error("[unifi] voucher revocation on termination failed:", err));
   }
 
   // On termination: revoke active vouchers and notify IT
