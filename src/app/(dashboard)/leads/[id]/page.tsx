@@ -214,6 +214,31 @@ export default function LeadDetailPage({
             </div>
           )}
 
+          {/* Quick Log — mobile only (appears above content so users don't have to scroll to sidebar) */}
+          <div className="flex gap-2 lg:hidden">
+            <Button
+              variant="outline"
+              className="flex-1 justify-center"
+              onClick={() => openActivityForm("call")}
+            >
+              📞 <span className="ml-1.5 hidden sm:inline">Log Call</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="flex-1 justify-center"
+              onClick={() => openActivityForm("meeting")}
+            >
+              🤝 <span className="ml-1.5 hidden sm:inline">Log Meeting</span>
+            </Button>
+            <Button
+              variant="outline"
+              className="flex-1 justify-center"
+              onClick={() => openActivityForm("note")}
+            >
+              📝 <span className="ml-1.5 hidden sm:inline">Add Note</span>
+            </Button>
+          </div>
+
           <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* Main info */}
             <div className="lg:col-span-2 space-y-6">
@@ -444,9 +469,8 @@ export default function LeadDetailPage({
                 </CardContent>
               </Card>
 
-              {/* Quick-log actions — lets users log calls, meetings, and notes
-                  directly from the Overview tab without switching to Activities */}
-              <Card>
+              {/* Quick-log actions — desktop sidebar only; mobile gets the row above the grid */}
+              <Card className="hidden lg:block">
                 <CardHeader>
                   <CardTitle className="text-base">Quick Log</CardTitle>
                 </CardHeader>
