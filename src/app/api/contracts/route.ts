@@ -21,6 +21,34 @@ export async function GET(request: NextRequest) {
 
   const offset = (page - 1) * limit;
 
+  // ── Search path: use RPC for cross-table full-text search ────────────────────
+  // Supabase's .or() cannot filter on embedded relation columns (leads, locations).
+  // The search_contracts RPC does a proper JOIN with ILIKE across contract_number,
+  // title, lead first/last name, company, email, and location name/code.
+  // Non-search queries (lead_id, parent_contract_id, is_renewal) still use the
+  // direct query path because the RPC doesn't support those filters.
+  const useRpc = !!(search || expiringSoon || status) && !leadId && !parentContractId && !isRenewal;
+
+  if (useRpc) {
+    const expiringDays = expiringSoon ? (parseInt(expiringSoon) || 60) : null;
+    const { data: rpcRows, error: rpcErr } = await supabase.rpc("search_contracts", {
+      p_search:        search   || null,
+      p_status:        status   || null,
+      p_expiring_days: expiringDays,
+      p_limit:         limit,
+      p_offset:        offset,
+    });
+    if (rpcErr) return NextResponse.json({ error: rpcErr.message }, { status: 500 });
+
+    const rows = (rpcRows ?? []) as { data: Record<string, unknown>; total_count: number }[];
+    const total = rows[0]?.total_count ?? 0;
+    return NextResponse.json({
+      data: rows.map(r => r.data),
+      pagination: { page, limit, total: Number(total), totalPages: Math.ceil(Number(total) / limit) },
+    });
+  }
+
+  // ── Direct query path (lead_id, parent_contract_id, is_renewal filters) ──────
   let query = supabase
     .from("contracts")
     .select(`
@@ -34,7 +62,6 @@ export async function GET(request: NextRequest) {
   if (leadId) query = query.eq("lead_id", leadId);
   if (parentContractId) query = query.eq("parent_contract_id", parentContractId);
   if (isRenewal === "true") query = query.eq("is_renewal", true);
-  if (search) query = query.or(`contract_number.ilike.%${search}%,title.ilike.%${search}%`);
 
   // "Expiring soon" filter: active contracts ending within N days
   if (expiringSoon) {
