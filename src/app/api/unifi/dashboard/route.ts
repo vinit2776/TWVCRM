@@ -4,9 +4,9 @@
  * Returns a summary of UniFi network health: internet status, live clients, and today's stats.
  * Auth required (any authenticated role).
  */
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { cachedUnifiRequest } from "@/lib/unifi";
+import { cachedUnifiRequest, siteConfigFromLocation } from "@/lib/unifi";
 
 interface UnifiHealthSubsystem {
   subsystem: string;
@@ -35,7 +35,7 @@ interface UnifiDailyStat {
   "wan-rx_bytes"?: number;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -43,6 +43,18 @@ export async function GET() {
   const { data: dbUser } = await supabase
     .from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 401 });
+
+  // Resolve site config from location row (falls back to env-var defaults)
+  const locationId = request.nextUrl.searchParams.get("location_id");
+  let siteCfg = undefined;
+  if (locationId) {
+    const { data: loc } = await supabase
+      .from("locations")
+      .select("unifi_console_id, unifi_site_id")
+      .eq("id", locationId)
+      .single();
+    if (loc) siteCfg = siteConfigFromLocation(loc);
+  }
 
   try {
     const now = Date.now();
@@ -55,12 +67,12 @@ export async function GET() {
     });
 
     const [healthData, clients, dailyStats] = await Promise.all([
-      cachedUnifiRequest<UnifiHealthSubsystem[]>("/stat/health", {}, 30),
-      cachedUnifiRequest<UnifiClient[]>("/stat/sta", {}, 30),
+      cachedUnifiRequest<UnifiHealthSubsystem[]>("/stat/health", {}, 30, siteCfg),
+      cachedUnifiRequest<UnifiClient[]>("/stat/sta", {}, 30, siteCfg),
       cachedUnifiRequest<UnifiDailyStat[]>("/stat/report/daily.site", {
         method: "POST",
         body: reportBody,
-      }, 30),
+      }, 30, siteCfg),
     ]);
 
     const wan = healthData.find((s) => s.subsystem === "wan");

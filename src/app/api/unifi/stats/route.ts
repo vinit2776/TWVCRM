@@ -6,7 +6,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { cachedUnifiRequest } from "@/lib/unifi";
+import { cachedUnifiRequest, siteConfigFromLocation } from "@/lib/unifi";
 
 interface UnifiStatBucket {
   time: number;
@@ -42,6 +42,14 @@ export async function GET(request: NextRequest) {
   const daysParam = parseInt(searchParams.get("days") ?? "7", 10);
   const days = Math.min(Math.max(isNaN(daysParam) ? 7 : daysParam, 1), 90);
 
+  const locationId = searchParams.get("location_id");
+  let siteCfg = undefined;
+  if (locationId) {
+    const { data: loc } = await supabase
+      .from("locations").select("unifi_console_id, unifi_site_id").eq("id", locationId).single();
+    if (loc) siteCfg = siteConfigFromLocation(loc);
+  }
+
   const now = Date.now();
   const start = range === "hourly" ? now - 24 * 60 * 60 * 1000 : now - days * 86400 * 1000;
 
@@ -57,7 +65,7 @@ export async function GET(request: NextRequest) {
     const buckets = await cachedUnifiRequest<UnifiStatBucket[]>(endpoint, {
       method: "POST",
       body: statsBody,
-    }, 300);
+    }, 300, siteCfg);
 
     const data = buckets.map((b) => ({
       time: b.time,

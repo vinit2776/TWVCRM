@@ -5,9 +5,9 @@
  * MAC addresses are anonymized for non-admin roles (last 4 chars only).
  * Auth required: admin, manager, sales_rep, floor_manager, office_admin, it_manager, it_technician.
  */
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { cachedUnifiRequest } from "@/lib/unifi";
+import { cachedUnifiRequest, siteConfigFromLocation } from "@/lib/unifi";
 
 interface UnifiSta {
   mac: string;
@@ -30,7 +30,7 @@ function anonymizeMac(mac: string): string {
   return `••:••:••:••:${parts[4]}:${parts[5]}`;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -46,8 +46,16 @@ export async function GET() {
 
   const isAdmin = dbUser.role === "admin";
 
+  const locationId = request.nextUrl.searchParams.get("location_id");
+  let siteCfg = undefined;
+  if (locationId) {
+    const { data: loc } = await supabase
+      .from("locations").select("unifi_console_id, unifi_site_id").eq("id", locationId).single();
+    if (loc) siteCfg = siteConfigFromLocation(loc);
+  }
+
   try {
-    const clients = await cachedUnifiRequest<UnifiSta[]>("/stat/sta", {}, 30);
+    const clients = await cachedUnifiRequest<UnifiSta[]>("/stat/sta", {}, 30, siteCfg);
 
     const data = clients.map((c) => ({
       mac: isAdmin ? c.mac : anonymizeMac(c.mac),

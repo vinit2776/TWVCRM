@@ -6,7 +6,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { cachedUnifiRequest } from "@/lib/unifi";
+import { cachedUnifiRequest, siteConfigFromLocation } from "@/lib/unifi";
 
 interface UnifiKnownDevice {
   mac: string;
@@ -44,8 +44,16 @@ export async function GET(request: NextRequest) {
 
   const isAdmin = dbUser.role === "admin";
 
+  const locationId = searchParams.get("location_id");
+  let siteCfg = undefined;
+  if (locationId) {
+    const { data: loc } = await supabase
+      .from("locations").select("unifi_console_id, unifi_site_id").eq("id", locationId).single();
+    if (loc) siteCfg = siteConfigFromLocation(loc);
+  }
+
   try {
-    const devices = await cachedUnifiRequest<UnifiKnownDevice[]>("/stat/alluser", {}, 120);
+    const devices = await cachedUnifiRequest<UnifiKnownDevice[]>("/stat/alluser", {}, 120, siteCfg);
 
     let filtered = devices;
     if (search) {

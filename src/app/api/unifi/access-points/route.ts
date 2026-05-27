@@ -4,9 +4,9 @@
  * Returns all UniFi network devices (APs, switches, etc.) with status and health data.
  * Auth required: admin, manager, it_manager, it_technician, floor_manager.
  */
-import { NextResponse } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { cachedUnifiRequest } from "@/lib/unifi";
+import { cachedUnifiRequest, siteConfigFromLocation } from "@/lib/unifi";
 
 interface UnifiDevice {
   _id: string;
@@ -36,7 +36,7 @@ function formatUptimeHuman(seconds: number): string {
   return `${hours}h ${minutes}m`;
 }
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -50,8 +50,16 @@ export async function GET() {
     return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
   }
 
+  const locationId = request.nextUrl.searchParams.get("location_id");
+  let siteCfg = undefined;
+  if (locationId) {
+    const { data: loc } = await supabase
+      .from("locations").select("unifi_console_id, unifi_site_id").eq("id", locationId).single();
+    if (loc) siteCfg = siteConfigFromLocation(loc);
+  }
+
   try {
-    const devices = await cachedUnifiRequest<UnifiDevice[]>("/stat/device", {}, 60);
+    const devices = await cachedUnifiRequest<UnifiDevice[]>("/stat/device", {}, 60, siteCfg);
 
     const data = devices.map((d) => ({
       _id: d._id,

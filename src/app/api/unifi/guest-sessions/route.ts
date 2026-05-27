@@ -6,7 +6,7 @@
  */
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { cachedUnifiRequest } from "@/lib/unifi";
+import { cachedUnifiRequest, siteConfigFromLocation } from "@/lib/unifi";
 
 interface UnifiGuestSession {
   mac: string;
@@ -55,13 +55,22 @@ export async function GET(request: NextRequest) {
 
   const isAdmin = dbUser.role === "admin";
 
+  const locationId = searchParams.get("location_id");
+  let siteCfg = undefined;
+  if (locationId) {
+    const { data: loc } = await supabase
+      .from("locations").select("unifi_console_id, unifi_site_id").eq("id", locationId).single();
+    if (loc) siteCfg = siteConfigFromLocation(loc);
+  }
+
   try {
     // 7-day window: pass _start epoch to limit response size
     const sevenDaysAgo = Math.floor((Date.now() - 7 * 24 * 60 * 60 * 1000) / 1000);
     const sessions = await cachedUnifiRequest<UnifiGuestSession[]>(
       `/stat/guest?_start=${sevenDaysAgo}`,
       {},
-      60
+      60,
+      siteCfg
     );
 
     const total = sessions.length;
