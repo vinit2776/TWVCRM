@@ -323,6 +323,7 @@ export interface Proposal {
   deposit_payment_received_at?: string;
   deposit_payment_amount?: number;
   deposit_payment_reference?: string;
+  deposit_payment_medium?: string; // neft | rtgs | upi | cheque | razorpay | cash
   deposit_payment_screenshot_url?: string;
   deposit_shortfall_approved_by?: string; // user id of admin/manager who approved partial payment
   // Accounting

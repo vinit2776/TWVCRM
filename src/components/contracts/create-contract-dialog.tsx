@@ -18,7 +18,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
-import { Loader2, AlertTriangle } from "lucide-react";
+import { Loader2, AlertTriangle, CheckCircle2 } from "lucide-react";
 import { toast } from "sonner";
 import { BILLING_CYCLES, BILLING_CYCLE_LABELS, KYC_DOCUMENTS, ENTITY_TYPE_LABELS } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
@@ -50,8 +50,6 @@ export function CreateContractDialog({
   const [proposals, setProposals] = useState<Proposal[]>([]);
   const [loadingData, setLoadingData] = useState(false);
 
-  // Source
-  const [source, setSource] = useState<"direct" | "proposal">("direct");
   const [selectedProposalId, setSelectedProposalId] = useState("");
 
   // Member details (auto-filled from lead, editable)
@@ -129,7 +127,6 @@ export function CreateContractDialog({
           if (defaultProposalId) {
             const match = loaded.find((p) => p.id === defaultProposalId);
             if (match) {
-              setSource("proposal");
               setSelectedProposalId(defaultProposalId);
             }
           }
@@ -269,7 +266,6 @@ export function CreateContractDialog({
   const missingAddress = !street.trim() && !city.trim();
 
   const resetForm = () => {
-    setSource("direct");
     setSelectedProposalId("");
     setCompany("");
     setPanNumber("");
@@ -307,6 +303,10 @@ export function CreateContractDialog({
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
+    if (!selectedProposalId) {
+      toast.error("Please select an accepted proposal to link to this contract");
+      return;
+    }
     if (!company.trim()) {
       toast.error("Company/Member name is required for the agreement");
       return;
@@ -319,10 +319,6 @@ export function CreateContractDialog({
       toast.error("Please select a location");
       return;
     }
-    if (monthlyFee <= 0) {
-      toast.error("Monthly membership fee must be positive");
-      return;
-    }
     if (!billingCycle) {
       toast.error("Please select a billing cycle");
       return;
@@ -330,13 +326,6 @@ export function CreateContractDialog({
     if (!startDate) {
       toast.error("Please select a start date");
       return;
-    }
-    // Warn if direct contract with future start date (likely should be linked to a proposal)
-    if (source === "direct" && startDate > new Date().toISOString().slice(0, 10)) {
-      const proceed = window.confirm(
-        "This direct contract has a future start date. Direct contracts are intended for onboarding legacy customers with past start dates.\n\nFor new customers, consider creating a proposal first and linking the contract to it for proper payment tracking.\n\nDo you want to proceed anyway?"
-      );
-      if (!proceed) return;
     }
     if (!endDate) {
       toast.error("Please select an end date");
@@ -382,7 +371,7 @@ export function CreateContractDialog({
 
     const body = {
       lead_id: leadId,
-      proposal_id: source === "proposal" ? selectedProposalId : undefined,
+      proposal_id: selectedProposalId,
       location_id: locationId || undefined,
       billing_cycle: billingCycle,
       tenure_months: derivedTenureMonths,
@@ -469,32 +458,23 @@ export function CreateContractDialog({
           <DialogTitle>Create Membership Agreement</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-6">
-          {/* Section 1: Source */}
+          {/* Section 1: Linked Proposal (mandatory) */}
           <div className="space-y-3">
             <Label className="text-sm font-semibold uppercase tracking-wide text-muted-foreground">
-              Source
+              Linked Proposal <span className="text-destructive">*</span>
             </Label>
-            <div className="flex gap-2">
-              <Button
-                type="button"
-                variant={source === "direct" ? "default" : "outline"}
-                size="sm"
-                onClick={() => { setSource("direct"); setSelectedProposalId(""); }}
-              >
-                Direct Agreement
-              </Button>
-              <Button
-                type="button"
-                variant={source === "proposal" ? "default" : "outline"}
-                size="sm"
-                onClick={() => setSource("proposal")}
-                disabled={proposals.length === 0}
-              >
-                From Proposal {proposals.length === 0 && "(None accepted)"}
-              </Button>
-            </div>
 
-            {source === "proposal" && (
+            {proposals.length === 0 ? (
+              <div className="rounded-md border border-amber-300 bg-amber-50 p-4 space-y-1">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0" />
+                  <p className="text-sm font-medium text-amber-800">No accepted proposals found</p>
+                </div>
+                <p className="text-xs text-amber-700 ml-6">
+                  A contract can only be created from an accepted proposal. Go to the Proposals tab, accept a proposal and ensure the deposit and pro-rata payment are collected, then return here to create the contract.
+                </p>
+              </div>
+            ) : (
               <div className="space-y-3">
                 <Select value={selectedProposalId} onValueChange={setSelectedProposalId}>
                   <SelectTrigger>
@@ -503,41 +483,53 @@ export function CreateContractDialog({
                   <SelectContent>
                     {proposals.map((p) => (
                       <SelectItem key={p.id} value={p.id}>
-                        {p.proposal_number} - {p.title} - {formatCurrency(p.total_amount)}
+                        {p.proposal_number} — {p.title} — {formatCurrency(p.total_amount)}
                       </SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
 
-                {/* Complimentary services auto-seed preview */}
-                {selectedProposalId && proposalComplimentaryItems.length > 0 && (
+                {selectedProposal && (
                   <div className="rounded-md border border-[#015E65]/20 bg-[#015E65]/5 p-3 space-y-2">
                     <p className="text-xs font-semibold text-[#015E65] flex items-center gap-1.5">
-                      <span>✓</span> {proposalComplimentaryItems.length} complimentary service{proposalComplimentaryItems.length !== 1 ? "s" : ""} will be auto-configured on this contract
+                      <CheckCircle2 className="h-3.5 w-3.5" />
+                      Commercials carried forward from {selectedProposal.proposal_number}
                     </p>
-                    <div className="space-y-1">
-                      {proposalComplimentaryItems.map((item, idx) => (
-                        <div key={idx} className="flex items-center justify-between text-xs">
-                          <span className="font-medium text-foreground">{item.name}</span>
-                          <span className="text-muted-foreground tabular-nums">
-                            {item.quantity} {item.unit}/mo free
-                            {item.price_per_unit > 0
-                              ? ` · ₹${Number(item.price_per_unit).toLocaleString("en-IN")}/${item.unit} beyond`
-                              : " · no overage charge"}
-                          </span>
-                        </div>
-                      ))}
+                    <div className="grid grid-cols-2 gap-x-6 gap-y-1 text-xs">
+                      <span className="text-muted-foreground">Monthly fee</span>
+                      <span className="font-medium tabular-nums">{formatCurrency(selectedProposal.total_amount)}</span>
+                      {selectedProposal.tax_percentage > 0 && (
+                        <>
+                          <span className="text-muted-foreground">GST ({selectedProposal.tax_percentage}%)</span>
+                          <span className="font-medium tabular-nums">{formatCurrency(selectedProposal.tax_amount)}</span>
+                        </>
+                      )}
+                      {selectedProposal.discount_percentage > 0 && (
+                        <>
+                          <span className="text-muted-foreground">Discount ({selectedProposal.discount_percentage}%)</span>
+                          <span className="font-medium tabular-nums text-green-700">−{formatCurrency(selectedProposal.discount_amount)}</span>
+                        </>
+                      )}
                     </div>
-                    <p className="text-[10px] text-muted-foreground">
-                      These will appear on the contract&apos;s Facilities tab and be tracked automatically in monthly billing.
-                    </p>
+                    {proposalComplimentaryItems.length > 0 && (
+                      <div className="pt-1 border-t border-[#015E65]/10 space-y-1">
+                        <p className="text-[10px] font-semibold text-[#015E65] uppercase tracking-wide">
+                          {proposalComplimentaryItems.length} complimentary service{proposalComplimentaryItems.length !== 1 ? "s" : ""} auto-configured
+                        </p>
+                        {proposalComplimentaryItems.map((item, idx) => (
+                          <div key={idx} className="flex items-center justify-between text-xs">
+                            <span className="font-medium text-foreground">{item.name}</span>
+                            <span className="text-muted-foreground tabular-nums">
+                              {item.quantity} {item.unit}/mo free
+                              {item.price_per_unit > 0
+                                ? ` · ₹${Number(item.price_per_unit).toLocaleString("en-IN")}/${item.unit} beyond`
+                                : " · no overage charge"}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
                   </div>
-                )}
-
-                {selectedProposalId && proposalComplimentaryItems.length === 0 && (
-                  <p className="text-xs text-muted-foreground">
-                    This proposal has no complimentary services configured. You can add them manually on the contract&apos;s Facilities tab after creation.
-                  </p>
                 )}
               </div>
             )}
@@ -1012,7 +1004,7 @@ export function CreateContractDialog({
             >
               Cancel
             </Button>
-            <Button type="submit" disabled={submitting}>
+            <Button type="submit" disabled={submitting || proposals.length === 0}>
               {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Create Agreement
             </Button>

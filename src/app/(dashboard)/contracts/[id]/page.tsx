@@ -35,6 +35,8 @@ import { ContractMembersAccessSection } from "@/components/contracts/contract-me
 import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
+import { ContractDepositSection } from "@/components/contracts/contract-deposit-section";
+import { ContractInvoicesSection } from "@/components/contracts/contract-invoices-section";
 import { ContractAccessLogsSection } from "@/components/contracts/contract-access-logs-section";
 import { ContractBookingsSection } from "@/components/contracts/contract-bookings-section";
 import { ContractServiceUsageSection } from "@/components/contracts/contract-service-usage-section";
@@ -724,6 +726,17 @@ export default function ContractDetailPage({
               </div>
             </CardContent>
           </Card>
+
+          {/* Security Deposit Snapshot */}
+          {linkedProposal && (
+            <ContractDepositSection
+              proposal={linkedProposal}
+              depositCarriedFrom={contract.deposit_carried_from}
+            />
+          )}
+
+          {/* Monthly Invoices (proforma + GST invoice) */}
+          <ContractInvoicesSection contractId={id} />
 
           {/* Agreement Details Card */}
           <Card>

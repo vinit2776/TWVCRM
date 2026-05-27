@@ -98,41 +98,33 @@ export async function POST(request: NextRequest) {
   }
 
   const d = result.data;
-  let title = d.workspace_description;
-  let items = [{ description: d.workspace_description, quantity: d.seats, unit_price: d.monthly_membership_fee / d.seats, total: d.monthly_membership_fee }];
-  let subtotal = d.monthly_membership_fee;
-  let taxPercentage = 18;
-  let taxAmount = subtotal * (taxPercentage / 100);
-  let discountPercentage = 0;
-  let discountAmount = 0;
-  let totalAmount = d.monthly_membership_fee;
-  let proposalLocationId: string | null = null;
 
-  // If proposal provided, inherit financials from it
-  if (d.proposal_id) {
-    const { data: proposal, error: proposalError } = await supabase
-      .from("proposals")
-      .select("*")
-      .eq("id", d.proposal_id)
-      .single();
+  // Proposal is mandatory — all financials come from it.
+  const { data: proposal, error: proposalError } = await supabase
+    .from("proposals")
+    .select("*")
+    .eq("id", d.proposal_id)
+    .single();
 
-    if (proposalError || !proposal) {
-      return NextResponse.json({ error: "Proposal not found" }, { status: 404 });
-    }
-    if (proposal.status !== "accepted") {
-      return NextResponse.json({ error: "Proposal must be accepted before creating a contract" }, { status: 400 });
-    }
-
-    title = proposal.title;
-    items = proposal.items;
-    subtotal = proposal.subtotal;
-    taxPercentage = proposal.tax_percentage;
-    taxAmount = proposal.tax_amount;
-    discountPercentage = proposal.discount_percentage;
-    discountAmount = proposal.discount_amount;
-    totalAmount = proposal.total_amount;
-    proposalLocationId = proposal.location_id;
+  if (proposalError || !proposal) {
+    return NextResponse.json({ error: "Proposal not found" }, { status: 404 });
   }
+  if (proposal.status !== "accepted") {
+    return NextResponse.json(
+      { error: "Proposal must be accepted (and deposit + pro-rata collected) before creating a contract" },
+      { status: 400 }
+    );
+  }
+
+  const title = proposal.title;
+  const items = proposal.items;
+  const subtotal = proposal.subtotal;
+  const taxPercentage = proposal.tax_percentage;
+  const taxAmount = proposal.tax_amount;
+  const discountPercentage = proposal.discount_percentage;
+  const discountAmount = proposal.discount_amount;
+  const totalAmount = proposal.total_amount;
+  const proposalLocationId: string | null = proposal.location_id;
 
   const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
 
@@ -163,7 +155,7 @@ export async function POST(request: NextRequest) {
     .from("contracts")
     .insert({
       lead_id: d.lead_id,
-      proposal_id: d.proposal_id || null,
+      proposal_id: d.proposal_id,
       title,
       status: "draft",
       items,
@@ -210,31 +202,10 @@ export async function POST(request: NextRequest) {
       changes: { record: { old: null, new: data } },
     });
 
-    // Direct (no proposal) contract with a future start date — flag for review.
-    // The UI warns the user, but we also log server-side so there is an
-    // immutable audit trail regardless of how the request was made.
-    const today = new Date().toISOString().slice(0, 10);
-    if (!d.proposal_id && d.start_date > today) {
-      logAudit(supabase, {
-        entityType: "contract",
-        entityId: data.id,
-        action: "direct_future_contract",
-        performedBy: dbUser.id,
-        changes: {
-          note: {
-            old: null,
-            new: `Direct contract created without a proposal and with a future start date (${d.start_date}). No deposit or pro-rata was collected through the CRM.`,
-          },
-        },
-      });
-    }
   }
 
   // ── Copy proposal_service_quotas → contract_service_quotas ────────────────
-  // This is the primary path: quotas negotiated on the proposal carry over to
-  // the contract so the Service Quotas section is pre-populated without any
-  // manual re-entry. Billing uses contract_service_quotas for overage charges.
-  if (data && d.proposal_id) {
+  if (data) {
     try {
       const { data: psqRows } = await supabase
         .from("proposal_service_quotas")
@@ -259,7 +230,7 @@ export async function POST(request: NextRequest) {
   // ── Legacy: seed contract_facilities from proposal complimentary_items ─────
   // Kept for backward compatibility with proposals created before service quotas
   // were wired up. New proposals write to proposal_service_quotas instead.
-  if (data && d.proposal_id) {
+  if (data) {
     try {
       const { data: proposalData } = await supabase
         .from("proposals")

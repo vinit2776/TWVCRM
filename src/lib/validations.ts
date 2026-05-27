@@ -238,7 +238,7 @@ export type CreateInvoiceInput = z.infer<typeof createInvoiceSchema>;
 // ==========================================
 export const createContractSchema = z.object({
   lead_id: z.string().uuid("Invalid lead ID"),
-  proposal_id: z.string().uuid("Invalid proposal ID").optional().or(z.literal("")).transform(v => v || undefined),
+  proposal_id: z.string().uuid("A linked accepted proposal is required"),
   location_id: z.string().uuid().optional().or(z.literal("")).transform(v => v || undefined),
   billing_cycle: z.enum(["monthly", "quarterly", "half_yearly", "yearly"]),
   tenure_months: z.number().int().positive("Tenure must be positive"),
@@ -247,7 +247,9 @@ export const createContractSchema = z.object({
   // end date is derived from start_date + tenure_months.
   end_date: z.string().optional(),
   seats: z.number().int().positive("Seats must be positive"),
-  monthly_membership_fee: z.number().positive("Monthly fee must be positive"),
+  // Financials are always inherited from the linked proposal; this field is
+  // optional and ignored by the API (kept for form state compatibility).
+  monthly_membership_fee: z.number().min(0).optional().default(0),
   // Membership agreement fields
   workspace_description: z.string().min(1, "Workspace description is required"),
   parking_space: z.string().optional(),

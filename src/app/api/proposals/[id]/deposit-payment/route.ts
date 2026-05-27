@@ -37,6 +37,7 @@ export async function POST(
   const formData = await request.formData();
   const amountRaw = formData.get("amount") as string | null;
   const reference = (formData.get("reference") as string | null)?.trim() || null;
+  const paymentMedium = (formData.get("payment_medium") as string | null)?.trim() || null;
   const notes = (formData.get("notes") as string | null)?.trim() || null;
   const proofFile = formData.get("payment_proof") as File | null;
   const shortfallApproved = formData.get("shortfall_approved") === "true";
@@ -138,6 +139,7 @@ export async function POST(
       deposit_payment_status: "paid",
       deposit_payment_amount: amount,
       deposit_payment_reference: reference,
+      deposit_payment_medium: paymentMedium,
       deposit_payment_received_at: receivedAt,
       deposit_payment_screenshot_url: screenshotUrl,
       ...(shortfallApprovedById ? { deposit_shortfall_approved_by: shortfallApprovedById } : {}),

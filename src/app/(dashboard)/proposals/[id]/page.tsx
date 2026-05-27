@@ -81,6 +81,7 @@ export default function ProposalDetailPage({
   const [manualPayDialogOpen, setManualPayDialogOpen] = useState(false);
   const [manualPayAmount, setManualPayAmount] = useState("");
   const [manualPayRef, setManualPayRef] = useState("");
+  const [manualPayMedium, setManualPayMedium] = useState("");
   const [manualPayNotes, setManualPayNotes] = useState("");
   const [manualPayFile, setManualPayFile] = useState<File | null>(null);
   const [manualPaySubmitting, setManualPaySubmitting] = useState(false);
@@ -209,6 +210,7 @@ export default function ProposalDetailPage({
   const openManualPayDialog = () => {
     setManualPayAmount(String(proposal?.security_deposit_amount || ""));
     setManualPayRef("");
+    setManualPayMedium("");
     setManualPayNotes("");
     setManualPayFile(null);
     setManualPayShortfallApproved(false);
@@ -350,6 +352,7 @@ export default function ProposalDetailPage({
       const fd = new FormData();
       fd.append("amount", String(amt));
       if (manualPayRef.trim()) fd.append("reference", manualPayRef.trim());
+      if (manualPayMedium) fd.append("payment_medium", manualPayMedium);
       if (manualPayNotes.trim()) fd.append("notes", manualPayNotes.trim());
       if (manualPayFile) fd.append("payment_proof", manualPayFile);
       if (manualPayShortfallApproved) fd.append("shortfall_approved", "true");
@@ -1451,14 +1454,33 @@ export default function ProposalDetailPage({
               );
             })()}
 
-            <div className="space-y-1.5">
-              <Label htmlFor="mp-ref">Payment Reference / UTR</Label>
-              <Input
-                id="mp-ref"
-                value={manualPayRef}
-                onChange={(e) => setManualPayRef(e.target.value)}
-                placeholder="e.g. UTR12345678 or transaction ID"
-              />
+            <div className="grid grid-cols-2 gap-3">
+              <div className="space-y-1.5">
+                <Label htmlFor="mp-medium">Payment Mode</Label>
+                <select
+                  id="mp-medium"
+                  value={manualPayMedium}
+                  onChange={(e) => setManualPayMedium(e.target.value)}
+                  className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm shadow-sm"
+                >
+                  <option value="">Select mode</option>
+                  <option value="neft">NEFT</option>
+                  <option value="rtgs">RTGS</option>
+                  <option value="upi">UPI</option>
+                  <option value="cheque">Cheque</option>
+                  <option value="cash">Cash</option>
+                  <option value="razorpay">Razorpay</option>
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="mp-ref">Reference / UTR</Label>
+                <Input
+                  id="mp-ref"
+                  value={manualPayRef}
+                  onChange={(e) => setManualPayRef(e.target.value)}
+                  placeholder="UTR or transaction ID"
+                />
+              </div>
             </div>
 
             <div className="space-y-1.5">
