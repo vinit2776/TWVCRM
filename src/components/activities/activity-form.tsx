@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -54,6 +54,15 @@ export function ActivityForm({
   const [followUpDate, setFollowUpDate] = useState("");
   const [followUpNotes, setFollowUpNotes] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // Sync type when dialog opens — useState only captures the initial prop value,
+  // so without this, reopening with a different defaultType (e.g. "meeting" after
+  // a previous "call") would show the stale type from last open.
+  useEffect(() => {
+    if (open) {
+      setType(defaultType);
+    }
+  }, [open, defaultType]);
 
   const resetForm = () => {
     setType(defaultType);
