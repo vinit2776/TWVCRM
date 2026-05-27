@@ -594,13 +594,6 @@ export default function LeadDetailPage({
               />
             </CardContent>
           </Card>
-          <ActivityForm
-            leadId={id}
-            open={activityFormOpen}
-            onOpenChange={setActivityFormOpen}
-            onSuccess={handleActivitySuccess}
-            defaultType={activityDefaultType}
-          />
         </TabsContent>
 
         <TabsContent value="tasks" className="mt-4">
@@ -626,6 +619,16 @@ export default function LeadDetailPage({
           <LeadFeedbacksTab leadId={id} />
         </TabsContent>
       </Tabs>
+
+      {/* Activity Form — kept outside tabs so Quick Log buttons on the
+          Overview tab can open it regardless of which tab is active */}
+      <ActivityForm
+        leadId={id}
+        open={activityFormOpen}
+        onOpenChange={setActivityFormOpen}
+        onSuccess={handleActivitySuccess}
+        defaultType={activityDefaultType}
+      />
 
       {/* Print Usage Dialog — scoped to this lead's active contracts.
           If the lead has one active contract the dropdown is pre-filtered
