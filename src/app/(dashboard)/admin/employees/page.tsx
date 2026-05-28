@@ -564,7 +564,9 @@ export default function EmployeesPage() {
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <span className="font-medium">{emp.full_name}</span>
+                      <Link href={`/admin/employees/${emp.id}`} className="font-medium hover:underline">
+                        {emp.full_name}
+                      </Link>
                       {!emp.is_active && <Badge className="bg-gray-100 text-gray-500 text-xs">Inactive</Badge>}
                       {emp.cosec_ref_id && (
                         <span className="text-xs text-muted-foreground font-mono">#{emp.cosec_ref_id}</span>
