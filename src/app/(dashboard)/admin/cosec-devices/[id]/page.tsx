@@ -166,6 +166,7 @@ export default function CosecDeviceDetailPage() {
   const [contractSearch, setContractSearch]   = useState("");
   const [selectedContract, setSelectedContract] = useState<string>("");
   const [linking, setLinking]                 = useState(false);
+  const [syncing, setSyncing]                 = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -173,13 +174,15 @@ export default function CosecDeviceDetailPage() {
     const twelveMonthsAgo = new Date();
     twelveMonthsAgo.setFullYear(twelveMonthsAgo.getFullYear() - 1);
 
-    const [{ data: dev }, { data: accessUsers }, { data: accessLogs }] = await Promise.all([
+    const [{ data: dev }, { data: accessUsers }, { data: accessLogs }, { data: deviceUsers }] = await Promise.all([
       supabase.from("cosec_devices").select("*, location:locations(name)").eq("id", id).single(),
       supabase.from("cosec_access_users").select("*").eq("device_id", id)
         .neq("enrollment_status", "deleted").order("provisioned_at", { ascending: false }),
       supabase.from("access_logs").select("*").eq("device_id", id)
         .gte("event_time", twelveMonthsAgo.toISOString())
         .order("event_time", { ascending: false }).limit(500),
+      // Name cache for users provisioned directly on the device (not via CRM)
+      supabase.from("cosec_device_users").select("cosec_ref_id, name").eq("device_id", id),
     ]);
 
     if (!dev) { router.push("/admin/cosec-devices"); return; }
@@ -214,7 +217,12 @@ export default function CosecDeviceDetailPage() {
       setUsers(enriched);
       if (accessLogs) {
         const refMap: Record<number, string> = {};
+        // CRM-provisioned users (contracts, members, employees, bookings)
         enriched.forEach(u => { refMap[u.cosec_ref_id] = u.entity_name || u.cosec_user_id; });
+        // Device-side users cached from sync (fills in names for directly-provisioned users)
+        (deviceUsers ?? []).forEach((du: { cosec_ref_id: number; name: string | null }) => {
+          if (du.name && !refMap[du.cosec_ref_id]) refMap[du.cosec_ref_id] = du.name;
+        });
         setLogs((accessLogs as AccessLog[]).map(l => {
           const ts = new Date(l.event_time).getTime();
           const matched = bookingWindows.find(w => ts >= w.valid_from && ts <= w.valid_until);
@@ -423,6 +431,26 @@ export default function CosecDeviceDetailPage() {
   }, [load, loadLiveUsers]);
 
   // ── Action handlers ────────────────────────────────────────────────────────
+
+  async function handleSyncUsers() {
+    setSyncing(true);
+    try {
+      const res = await fetch("/api/cosec/sync-users", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_id: id }),
+      });
+      const result = await res.json();
+      if (res.ok) {
+        toast.success(`Synced ${result.namesResolved} names from device (${result.notFound} not found)`);
+        await load(); // reload logs so names appear immediately
+      } else {
+        toast.error(result.error ?? "Sync failed");
+      }
+    } finally {
+      setSyncing(false);
+    }
+  }
 
   async function handlePing() {
     setPinging(true); setPingResult(null);
@@ -798,6 +826,13 @@ export default function CosecDeviceDetailPage() {
 
         {/* ── Access Log ─────────────────────────────────────────────────── */}
         <TabsContent value="logs" className="mt-4">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-sm text-muted-foreground">Last 12 months · {logs.length} events</p>
+            <Button size="sm" variant="outline" onClick={handleSyncUsers} disabled={syncing}>
+              {syncing ? <Loader2 size={14} className="animate-spin mr-1.5" /> : <RefreshCw size={14} className="mr-1.5" />}
+              {syncing ? "Syncing names…" : "Sync User Names"}
+            </Button>
+          </div>
           {logs.length === 0 ? (
             <Card><CardContent className="py-12 text-center text-muted-foreground">
               <Clock size={36} className="mx-auto mb-3 opacity-30" />
