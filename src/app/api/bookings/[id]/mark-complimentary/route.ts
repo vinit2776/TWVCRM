@@ -28,7 +28,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
-const STAFF_ROLES = new Set(["admin", "manager", "floor_manager"]);
+// floor_manager must go through the comp-request approval flow instead.
+const STAFF_ROLES = new Set(["admin", "manager"]);
 const VALID_REASONS = new Set([
   "manager_goodwill", "aggregator_demo", "staff_use",
   "event_partnership", "other",
@@ -47,7 +48,11 @@ export async function PATCH(
     .from("users").select("id, role").eq("auth_id", user.id).single();
   if (!dbUser || !STAFF_ROLES.has(dbUser.role)) {
     return NextResponse.json(
-      { error: "Floor manager / manager / admin access required" },
+      {
+        error: dbUser?.role === "floor_manager"
+          ? "Floor managers must request complimentary approval — use the Request Approval flow from the booking page."
+          : "Manager or admin access required",
+      },
       { status: 403 }
     );
   }

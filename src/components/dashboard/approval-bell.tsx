@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   CheckCircle2, XCircle, ClipboardCheck, Loader2, RefreshCw,
-  Wifi, Copy, Check,
+  Wifi, Copy, Check, Gift,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -54,6 +54,7 @@ const APPROVAL_TYPE_LABELS: Record<string, string> = {
   escalation_reduction:  "Escalation Reduction",
   escalation_waiver:     "Escalation Waiver",
   unifi_adhoc_voucher:   "WiFi Voucher Request",
+  comp_request:          "Comp Request",
 };
 
 export function ApprovalBell() {
@@ -164,12 +165,20 @@ export function ApprovalBell() {
             <ClipboardCheck className="h-3.5 w-3.5 text-purple-600" />
             Pending Approvals
           </p>
-          <Button
-            variant="ghost" size="sm" className="h-6 text-xs"
-            onClick={() => { setLoading(true); fetchApprovals().finally(() => setLoading(false)); }}
-          >
-            {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
-          </Button>
+          <div className="flex items-center gap-1">
+            <Button
+              variant="ghost" size="sm" className="h-6 text-xs"
+              onClick={() => { setLoading(true); fetchApprovals().finally(() => setLoading(false)); }}
+            >
+              {loading ? <Loader2 className="h-3 w-3 animate-spin" /> : <RefreshCw className="h-3 w-3" />}
+            </Button>
+            <Button
+              variant="ghost" size="sm" className="h-6 text-xs"
+              onClick={() => { setOpen(false); router.push("/approvals"); }}
+            >
+              View all
+            </Button>
+          </div>
         </div>
 
         <div className="max-h-[480px] overflow-y-auto">
@@ -195,9 +204,16 @@ export function ApprovalBell() {
                   <div className="flex items-center justify-between gap-2">
                     <div className="flex items-center gap-1.5">
                       {isUnifi && <Wifi className="h-3.5 w-3.5 text-primary shrink-0" />}
+                      {a.approval_type === "comp_request" && <Gift className="h-3.5 w-3.5 text-emerald-600 shrink-0" />}
                       <Badge
                         variant="secondary"
-                        className={`text-[10px] px-1.5 py-0 ${isUnifi ? "bg-blue-100 text-blue-800" : "bg-purple-100 text-purple-800"}`}
+                        className={`text-[10px] px-1.5 py-0 ${
+                          isUnifi
+                            ? "bg-blue-100 text-blue-800"
+                            : a.approval_type === "comp_request"
+                              ? "bg-emerald-100 text-emerald-800"
+                              : "bg-purple-100 text-purple-800"
+                        }`}
                       >
                         {APPROVAL_TYPE_LABELS[a.approval_type] || a.approval_type}
                       </Badge>
@@ -312,6 +328,92 @@ export function ApprovalBell() {
                         </div>
                       </div>
                     )
+                  ) : a.approval_type === "comp_request" ? (
+                    /* ── Comp request ── */
+                    <div className="space-y-2">
+                      <div className="text-xs text-muted-foreground space-y-0.5">
+                        <p>
+                          <span className="font-medium text-foreground">
+                            {(a.requester as { full_name?: string } | null)?.full_name || "Unknown"}
+                          </span>
+                          {" "}is requesting to mark{" "}
+                          <span className="font-medium text-foreground font-mono">
+                            {a.entity_reference ?? a.entity_id}
+                          </span>
+                          {" "}as complimentary
+                        </p>
+                        {(() => {
+                          const meta = a.metadata || {};
+                          return (
+                            <>
+                              {meta.space_name != null && (
+                                <p>Space: <span className="font-medium text-foreground">{String(meta.space_name)}</span></p>
+                              )}
+                              {meta.reason_label != null && (
+                                <p>Reason: <span className="font-medium text-foreground">{String(meta.reason_label)}</span></p>
+                              )}
+                              {meta.details != null && (
+                                <p className="italic">&ldquo;{String(meta.details)}&rdquo;</p>
+                              )}
+                              {meta.total_amount_with_gst != null && Number(meta.total_amount_with_gst) > 0 && (
+                                <p>Total to waive: <span className="font-medium text-foreground">₹{Number(meta.total_amount_with_gst).toLocaleString("en-IN")}</span></p>
+                              )}
+                            </>
+                          );
+                        })()}
+                      </div>
+
+                      <button
+                        className="text-xs font-medium text-primary hover:underline"
+                        onClick={() => { setOpen(false); router.push(`/bookings/${a.entity_reference ?? a.entity_id}`); }}
+                      >
+                        View booking →
+                      </button>
+
+                      {isRejecting && (
+                        <Input
+                          autoFocus
+                          value={rejectionReason}
+                          onChange={(e) => setRejectionReason(e.target.value)}
+                          placeholder="Reason for rejection..."
+                          className="h-7 text-xs"
+                        />
+                      )}
+
+                      <div className="flex gap-2">
+                        <Button
+                          size="sm"
+                          className="flex-1 h-7 text-xs bg-emerald-600 hover:bg-emerald-700"
+                          disabled={actingOnId === a.id}
+                          onClick={() => handleAction(a.id, "approve")}
+                        >
+                          {actingOnId === a.id
+                            ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                            : <CheckCircle2 className="h-3 w-3 mr-1" />}
+                          Approve Comp
+                        </Button>
+                        {isRejecting ? (
+                          <Button
+                            size="sm" variant="destructive" className="flex-1 h-7 text-xs"
+                            disabled={actingOnId === a.id || !rejectionReason.trim()}
+                            onClick={() => handleAction(a.id, "reject")}
+                          >
+                            {actingOnId === a.id
+                              ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              : <XCircle className="h-3 w-3 mr-1" />}
+                            Confirm Reject
+                          </Button>
+                        ) : (
+                          <Button
+                            size="sm" variant="outline" className="flex-1 h-7 text-xs text-destructive hover:text-destructive"
+                            onClick={() => { setRejectingId(a.id); setRejectionReason(""); }}
+                          >
+                            <XCircle className="h-3 w-3 mr-1" />Reject
+                          </Button>
+                        )}
+                      </div>
+                    </div>
+
                   ) : (
                     /* ── Contract escalation (existing) ── */
                     <div className="space-y-2">

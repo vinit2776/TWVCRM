@@ -804,15 +804,25 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                   dialog shows a clear explanation when the booking is
                   already paid (forces refund flow first). Hidden when
                   the booking is already waived. */}
-              {booking.payment_status !== "waived" && (
+              {booking.payment_status !== "waived" &&
+               (userRole === "admin" || userRole === "manager" || userRole === "floor_manager") && (
                 <Button
                   variant="outline"
                   size="sm"
                   onClick={() => setMarkCompDialogOpen(true)}
-                  className="border-emerald-300 text-emerald-700 hover:bg-emerald-50"
-                  title="Mark this booking as complimentary (zero out the total + capture reason)"
+                  className={
+                    userRole === "floor_manager"
+                      ? "border-blue-300 text-blue-700 hover:bg-blue-50"
+                      : "border-emerald-300 text-emerald-700 hover:bg-emerald-50"
+                  }
+                  title={
+                    userRole === "floor_manager"
+                      ? "Request complimentary approval from a manager"
+                      : "Mark this booking as complimentary (zero out the total + capture reason)"
+                  }
                 >
-                  <Gift className="mr-1 h-4 w-4" />Comp
+                  <Gift className="mr-1 h-4 w-4" />
+                  {userRole === "floor_manager" ? "Request Comp" : "Comp"}
                 </Button>
               )}
             </>
@@ -2289,6 +2299,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         currentTotal={Number(booking.total_amount_with_gst) || Number(booking.total_amount) || 0}
         hasCollectedPayment={existingPayments.some((p) => p.status === "verified")}
         onSuccess={fetchBooking}
+        userRole={userRole}
       />
 
       <AddUsageChargeDialog

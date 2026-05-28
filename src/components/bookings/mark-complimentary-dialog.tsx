@@ -1,16 +1,17 @@
 "use client";
 
 /**
- * MarkComplimentaryDialog — post-hoc "this should have been a comp"
- * action. Used when staff realises after the fact that a booking
- * should be free (manager goodwill, demo, staff use, etc.).
+ * MarkComplimentaryDialog — two modes depending on the caller's role:
  *
- * Captures a locked-picklist reason + optional details. The endpoint
- * zeros the booking total and flips payment_status to 'waived'.
+ *   Admin / Manager:
+ *     Direct comp — zeros the booking total immediately. No approval needed.
+ *     Calls PATCH /api/bookings/[id]/mark-complimentary.
  *
- * Refuses to run if money has already been collected — staff must
- * issue a refund first via the cancel-with-refund flow. The dialog
- * surfaces this constraint up-front so staff doesn't waste time.
+ *   Floor Manager:
+ *     Request comp — creates an inbox approval request.
+ *     Admins/managers are notified via email, WhatsApp, and in-app bell.
+ *     Calls POST /api/bookings/[id]/comp-request.
+ *     Request expires in 24 hours if not acted on.
  */
 
 import { useState } from "react";
@@ -18,7 +19,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, Gift, AlertCircle } from "lucide-react";
+import { Loader2, Gift, AlertCircle, Clock, CheckCircle2, Send } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 import {
@@ -37,25 +38,36 @@ interface Props {
   /** Whether ANY verified payment exists. Disables the dialog if true. */
   hasCollectedPayment: boolean;
   onSuccess: () => void;
+  /** Role of the current user. Determines direct-comp vs. request-approval flow. */
+  userRole?: string | null;
 }
 
 export function MarkComplimentaryDialog({
   open, onOpenChange, bookingId, bookingNumber,
-  currentTotal, hasCollectedPayment, onSuccess,
+  currentTotal, hasCollectedPayment, onSuccess, userRole,
 }: Props) {
   const [reason, setReason] = useState<BookingComplimentaryReason | "">("");
   const [details, setDetails] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false); // floor-manager success state
 
-  const submit = async () => {
-    if (!reason) {
-      toast.error("Please pick a reason");
-      return;
-    }
-    if (reason === "other" && !details.trim()) {
-      toast.error("Details required when reason is 'other'");
-      return;
-    }
+  const isFloorManager = userRole === "floor_manager";
+
+  function resetForm() {
+    setReason("");
+    setDetails("");
+    setSubmitted(false);
+  }
+
+  function handleClose(val: boolean) {
+    if (!val) resetForm();
+    onOpenChange(val);
+  }
+
+  // ── Admin / Manager: direct comp ─────────────────────────────────────────
+  const submitDirect = async () => {
+    if (!reason) { toast.error("Please pick a reason"); return; }
+    if (reason === "other" && !details.trim()) { toast.error("Details required when reason is 'other'"); return; }
     setSubmitting(true);
     try {
       const res = await fetch(`/api/bookings/${bookingId}/mark-complimentary`, {
@@ -64,50 +76,109 @@ export function MarkComplimentaryDialog({
         body: JSON.stringify({ reason, details: details.trim() || undefined }),
       });
       const json = await res.json();
-      if (!res.ok) {
-        toast.error(json.error || "Failed to mark complimentary");
-        return;
-      }
+      if (!res.ok) { toast.error(json.error || "Failed to mark complimentary"); return; }
       toast.success(`${bookingNumber} marked complimentary`);
       onSuccess();
-      onOpenChange(false);
+      handleClose(false);
     } finally {
       setSubmitting(false);
     }
   };
 
+  // ── Floor Manager: request approval ──────────────────────────────────────
+  const submitRequest = async () => {
+    if (!reason) { toast.error("Please pick a reason"); return; }
+    if (reason === "other" && !details.trim()) { toast.error("Details required when reason is 'other'"); return; }
+    setSubmitting(true);
+    try {
+      const res = await fetch(`/api/bookings/${bookingId}/comp-request`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ reason, details: details.trim() || undefined }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Failed to submit request"); return; }
+      setSubmitted(true);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const title = isFloorManager ? "Request Complimentary Approval" : "Mark as Complimentary";
+
   return (
-    <Dialog open={open} onOpenChange={onOpenChange}>
+    <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-[500px]">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <Gift className="h-4 w-4 text-emerald-600" />
-            Mark as Complimentary — {bookingNumber}
+            {title} — {bookingNumber}
           </DialogTitle>
         </DialogHeader>
 
+        {/* ── Payment collected guard ── */}
         {hasCollectedPayment ? (
-          <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 flex items-start gap-2">
-            <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
-            <div>
-              <strong>Cannot mark complimentary directly.</strong>
-              <p className="mt-1 text-xs">
-                Payment has already been collected on this booking. You&apos;ll need to issue a
-                refund first via the Cancel-with-refund flow, then come back here if still applicable.
-              </p>
+          <>
+            <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 flex items-start gap-2">
+              <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+              <div>
+                <strong>Cannot {isFloorManager ? "request comp" : "mark complimentary"} directly.</strong>
+                <p className="mt-1 text-xs">
+                  Payment has already been collected on this booking. A refund must be issued
+                  first via the Cancel-with-refund flow, then re-attempt this action.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end pt-1">
+              <Button variant="outline" onClick={() => handleClose(false)}>Close</Button>
+            </div>
+          </>
+
+        ) : submitted ? (
+          /* ── Floor manager success state ── */
+          <div className="space-y-4">
+            <div className="rounded-md border border-emerald-300 bg-emerald-50 p-4 flex items-start gap-3">
+              <CheckCircle2 className="h-5 w-5 text-emerald-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-sm font-semibold text-emerald-800">Request submitted</p>
+                <p className="text-xs text-emerald-700 mt-1">
+                  Managers have been notified by email, WhatsApp, and in-app alert.
+                  You&apos;ll receive a notification once it&apos;s reviewed.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <Clock className="h-3.5 w-3.5" />
+              <span>Request expires in 24 hours if not acted on.</span>
+            </div>
+            <div className="flex justify-end">
+              <Button onClick={() => handleClose(false)}>Done</Button>
             </div>
           </div>
+
         ) : (
+          /* ── Form ── */
           <div className="space-y-4">
-            <p className="text-xs text-muted-foreground">
-              Zeros the booking total and marks it as waived. The reason is stored for finance
-              reporting and shows on the booking&apos;s payment summary banner.
-              {currentTotal > 0 && (
-                <>
-                  {" "}Current total: <span className="font-semibold text-foreground">{formatCurrency(currentTotal)}</span> → will become <span className="font-semibold text-foreground">₹0</span>.
-                </>
-              )}
-            </p>
+            {isFloorManager ? (
+              <div className="rounded-md border border-blue-200 bg-blue-50 p-3 text-xs text-blue-800 flex items-start gap-2">
+                <Send className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <p>
+                  Your request will be sent to all managers for approval.
+                  You&apos;ll be notified once it&apos;s reviewed.
+                  {currentTotal > 0 && (
+                    <> The current total is <strong>{formatCurrency(currentTotal)}</strong> — this will be zeroed if approved.</>
+                  )}
+                </p>
+              </div>
+            ) : (
+              <p className="text-xs text-muted-foreground">
+                Zeros the booking total and marks it as waived. The reason is stored for finance
+                reporting and shows on the booking&apos;s payment summary banner.
+                {currentTotal > 0 && (
+                  <> Current total: <span className="font-semibold text-foreground">{formatCurrency(currentTotal)}</span> → will become <span className="font-semibold text-foreground">₹0</span>.</>
+                )}
+              </p>
+            )}
 
             <div className="space-y-2">
               <Label>Reason *</Label>
@@ -148,27 +219,31 @@ export function MarkComplimentaryDialog({
             </div>
 
             <div className="flex justify-end gap-2 pt-1">
-              <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={submitting}>
+              <Button variant="ghost" onClick={() => handleClose(false)} disabled={submitting}>
                 Cancel
               </Button>
-              <Button
-                onClick={submit}
-                disabled={submitting || !reason}
-                className="bg-emerald-600 hover:bg-emerald-700"
-              >
-                {submitting
-                  ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Marking…</>
-                  : "Mark Complimentary"}
-              </Button>
+              {isFloorManager ? (
+                <Button
+                  onClick={submitRequest}
+                  disabled={submitting || !reason}
+                  className="bg-blue-600 hover:bg-blue-700"
+                >
+                  {submitting
+                    ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Submitting…</>
+                    : <><Send className="h-4 w-4 mr-1" />Request Approval</>}
+                </Button>
+              ) : (
+                <Button
+                  onClick={submitDirect}
+                  disabled={submitting || !reason}
+                  className="bg-emerald-600 hover:bg-emerald-700"
+                >
+                  {submitting
+                    ? <><Loader2 className="h-4 w-4 mr-1 animate-spin" />Marking…</>
+                    : "Mark Complimentary"}
+                </Button>
+              )}
             </div>
-          </div>
-        )}
-
-        {hasCollectedPayment && (
-          <div className="flex justify-end pt-1">
-            <Button variant="outline" onClick={() => onOpenChange(false)}>
-              Close
-            </Button>
           </div>
         )}
       </DialogContent>

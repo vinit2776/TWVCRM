@@ -2,6 +2,8 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { createUnifiVoucher, getUnifiHotspotSsid } from "@/lib/unifi";
+import { resend, EMAIL_FROM } from "@/lib/mailer";
+import { createNotification } from "@/lib/in-app-notifications";
 
 /**
  * PATCH /api/approval-requests/[id]
@@ -55,6 +57,13 @@ export async function PATCH(
     return NextResponse.json({
       error: `This request has already been ${approvalReq.status}`,
     }, { status: 400 });
+  }
+
+  // Reject if the request has passed its expiry (comp_request type)
+  if (approvalReq.expires_at && new Date(approvalReq.expires_at) < new Date()) {
+    // Mark it expired while we're here
+    await admin.from("approval_requests").update({ status: "expired" }).eq("id", id);
+    return NextResponse.json({ error: "This request has expired. The floor manager must re-submit." }, { status: 400 });
   }
 
   const now = new Date().toISOString();
@@ -135,6 +144,104 @@ export async function PATCH(
         .from("approval_requests")
         .update({ metadata: { ...(approvalReq.metadata || {}), issuance_error: err instanceof Error ? err.message : String(err) } })
         .eq("id", id);
+    }
+  }
+
+  // ── Complimentary booking request ────────────────────────────────────────
+  if (approvalReq.approval_type === "comp_request" && approvalReq.entity_type === "booking") {
+    const bookingId = approvalReq.entity_id;
+    const meta = (approvalReq.metadata || {}) as Record<string, unknown>;
+
+    if (action === "approve") {
+      // Zero out the booking totals and mark as waived
+      await admin
+        .from("bookings")
+        .update({
+          total_amount:          0,
+          gst_amount:            0,
+          total_amount_with_gst: 0,
+          payment_status:        "waived",
+          complimentary_reason:  String(meta.reason ?? approvalReq.reason ?? ""),
+          complimentary_details: meta.details ? String(meta.details) : null,
+        })
+        .eq("id", bookingId);
+
+      logAudit(admin, {
+        entityType:  "booking",
+        entityId:    bookingId,
+        action:      "update",
+        performedBy: dbUser.id,
+        changes: {
+          payment_status:        { old: "pending", new: "waived" },
+          total_amount_with_gst: { old: meta.total_amount_with_gst, new: 0 },
+          complimentary_reason:  { old: null, new: meta.reason ?? approvalReq.reason },
+          approved_via:          { old: null, new: "comp_request_inbox" },
+        },
+      });
+    }
+
+    // Notify the requesting floor manager (in-app + email)
+    const requesterRow = await admin
+      .from("users")
+      .select("id, full_name, email")
+      .eq("id", approvalReq.requested_by)
+      .single();
+    const requester = requesterRow.data;
+
+    if (requester) {
+      const bookingRef = String(meta.booking_number ?? bookingId);
+      const crmUrl = `/bookings/${bookingRef}`;
+
+      // In-app notification
+      await createNotification({
+        userId:     requester.id,
+        type:       "comp_request_resolved",
+        title:      action === "approve"
+          ? `Comp request approved — ${bookingRef}`
+          : `Comp request rejected — ${bookingRef}`,
+        body:       action === "approve"
+          ? `Your complimentary request for ${bookingRef} was approved by ${dbUser.full_name}. The booking has been marked as complimentary.`
+          : `Your complimentary request for ${bookingRef} was rejected by ${dbUser.full_name}${body.rejection_reason ? `: "${body.rejection_reason}"` : "."}`,
+        url:        crmUrl,
+        entityType: "booking",
+        entityId:   bookingId,
+      });
+
+      // Email notification
+      const approveHtml = `
+        <div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;color:#111;">
+          <div style="background:#f0fdf4;border-left:4px solid #16a34a;padding:14px 18px;border-radius:4px;margin-bottom:16px;">
+            <p style="margin:0;font-size:14px;font-weight:600;color:#15803d;">✅ Comp Request Approved</p>
+          </div>
+          <p style="font-size:14px;">Your complimentary booking request for <strong>${bookingRef}</strong> has been <strong>approved</strong> by ${dbUser.full_name}.</p>
+          <p style="font-size:14px;">The booking total has been zeroed and marked as complimentary.</p>
+          <p style="margin-top:20px;">
+            <a href="${process.env.NEXT_PUBLIC_APP_URL || "https://crm.theworkvilla.com"}${crmUrl}" style="padding:10px 20px;background:#015E65;color:#fff;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600;">View Booking →</a>
+          </p>
+        </div>`;
+
+      const rejectHtml = `
+        <div style="font-family:system-ui,sans-serif;max-width:520px;margin:0 auto;color:#111;">
+          <div style="background:#fef2f2;border-left:4px solid #dc2626;padding:14px 18px;border-radius:4px;margin-bottom:16px;">
+            <p style="margin:0;font-size:14px;font-weight:600;color:#991b1b;">❌ Comp Request Rejected</p>
+          </div>
+          <p style="font-size:14px;">Your complimentary booking request for <strong>${bookingRef}</strong> was <strong>rejected</strong> by ${dbUser.full_name}.</p>
+          ${body.rejection_reason ? `<p style="font-size:14px;background:#f9fafb;padding:10px 14px;border-radius:4px;border:1px solid #e5e7eb;"><strong>Reason:</strong> ${body.rejection_reason}</p>` : ""}
+          <p style="margin-top:20px;">
+            <a href="${process.env.NEXT_PUBLIC_APP_URL || "https://crm.theworkvilla.com"}${crmUrl}" style="padding:10px 20px;background:#015E65;color:#fff;border-radius:6px;text-decoration:none;font-size:13px;font-weight:600;">View Booking →</a>
+          </p>
+        </div>`;
+
+      if (requester.email) {
+        resend.emails.send({
+          from:    EMAIL_FROM,
+          to:      requester.email,
+          subject: action === "approve"
+            ? `Comp Request Approved — ${bookingRef}`
+            : `Comp Request Rejected — ${bookingRef}`,
+          html:    action === "approve" ? approveHtml : rejectHtml,
+        }).catch(err => console.error("[approval-requests] notify email failed:", err));
+      }
     }
   }
 
@@ -263,15 +370,20 @@ export async function PATCH(
   });
 
   // Build response — include voucher details for UniFi ad-hoc so the UI can show the code
-  const baseMessage = approvalReq.entity_type === "unifi_adhoc_voucher"
-    ? action === "approve"
-      ? unifiIssuanceResult
-        ? "Voucher issued successfully."
-        : "Approved, but voucher issuance encountered an error — check server logs."
-      : "Request rejected."
-    : action === "approve"
-      ? "Approval granted — the negotiated rate is confirmed."
-      : "Request rejected — escalation has been reverted to the default rate.";
+  const baseMessage =
+    approvalReq.entity_type === "unifi_adhoc_voucher"
+      ? action === "approve"
+        ? unifiIssuanceResult
+          ? "Voucher issued successfully."
+          : "Approved, but voucher issuance encountered an error — check server logs."
+        : "Request rejected."
+      : approvalReq.approval_type === "comp_request"
+        ? action === "approve"
+          ? "Complimentary approved — booking has been zeroed and marked as waived."
+          : "Comp request rejected. The floor manager has been notified."
+        : action === "approve"
+          ? "Approval granted — the negotiated rate is confirmed."
+          : "Request rejected — escalation has been reverted to the default rate.";
 
   return NextResponse.json({
     success: true,
