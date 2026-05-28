@@ -177,6 +177,7 @@ const navSections: NavSection[] = [
       { href: "/admin/employees",        label: "Employees",           icon: UsersRound,    roles: ["admin", "manager", "office_admin", "floor_manager", "fms"] },
       { href: "/admin/cosec-devices",    label: "COSEC Devices",       icon: Fingerprint,   roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },
       { href: "/admin/cosec-access",     label: "Access Enrollments",  icon: ShieldCheck,   roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },
+      { href: "/admin/access-profiles",  label: "Access Profiles",     icon: ShieldCheck,   roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },
       { href: "/admin/access-analytics", label: "Access Analytics",    icon: BarChart3Icon, roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },
     ],
   },
