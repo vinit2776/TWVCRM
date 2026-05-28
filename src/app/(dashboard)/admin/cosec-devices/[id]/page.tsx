@@ -781,7 +781,12 @@ export default function CosecDeviceDetailPage() {
                     </div>
                     <div className="text-right shrink-0">
                       <Badge variant={log.direction === "DENIED" ? "destructive" : "outline"} className="text-xs">{log.direction}</Badge>
-                      <div className="text-xs text-muted-foreground mt-0.5">{formatDate(log.event_time)}</div>
+                      <div className="text-xs text-muted-foreground mt-0.5">
+                        {formatDate(log.event_time)}{" "}
+                        <span className="font-mono">
+                          {new Date(log.event_time).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true, timeZone: "Asia/Kolkata" })}
+                        </span>
+                      </div>
                     </div>
                   </div>
                 ))}
