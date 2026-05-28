@@ -140,6 +140,9 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   const [draftTotal, setDraftTotal] = useState("");
   const [pricingSaving, setPricingSaving] = useState(false);
 
+  // Comp approval request state — fetched alongside booking data
+  const [compRequest, setCompRequest] = useState<import("@/components/bookings/booking-lifecycle-timeline").CompRequestData | null>(null);
+
   // Payment records + gateway config
   const [existingPayments, setExistingPayments] = useState<BookingPayment[]>([]);
   const [upiId, setUpiId] = useState("");
@@ -217,13 +220,25 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     if (!signal?.aborted) setLoading(false);
   }, [id]);
 
+  /** Fetch the latest comp request for this booking (if any). */
+  const fetchCompRequest = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/bookings/${id}/comp-request`);
+      if (res.ok) {
+        const json = await res.json();
+        setCompRequest(json.data ?? null);
+      }
+    } catch { /* silent — non-critical */ }
+  }, [id]);
+
   useEffect(() => {
     fetchControllerRef.current?.abort();
     const controller = new AbortController();
     fetchControllerRef.current = controller;
     fetchBooking(controller.signal);
+    fetchCompRequest();
     return () => controller.abort();
-  }, [fetchBooking]);
+  }, [fetchBooking, fetchCompRequest]);
   useEffect(() => { fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {}); }, []);
 
   const handlePricingSave = async () => {
@@ -721,7 +736,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   // Which UI region (if any) should carry the pulsing next-action halo?
   // Computed once per render from the same logic the textual banner uses
   // so the two stay in sync. Exactly one region lights up at a time.
-  const nextActionTarget = computeNextActionTarget(booking, existingPayments);
+  const nextActionTarget = computeNextActionTarget(booking, existingPayments, compRequest);
 
   // Pricing is locked once any of the following is true — changing the
   // rate after a customer has paid creates a silent mismatch between the
@@ -958,7 +973,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           Shows a junior staff member what to do next so they don't have
           to memorise the state machine. Veterans can ignore it; the
           action buttons remain. */}
-      <NextActionBanner booking={booking} existingPayments={existingPayments} />
+      <NextActionBanner booking={booking} existingPayments={existingPayments} compRequest={compRequest} />
 
       {/* Customer History — surfaced near the top so staff can calibrate
           the conversation immediately ("regular customer · 12 visits ·
@@ -1230,7 +1245,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           <CardTitle className="text-sm">Booking Lifecycle</CardTitle>
         </CardHeader>
         <CardContent className="pt-0">
-          <BookingLifecycleTimeline booking={booking} />
+          <BookingLifecycleTimeline booking={booking} compRequest={compRequest} />
         </CardContent>
       </Card>
 
@@ -2298,7 +2313,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
         bookingNumber={booking.booking_number || ""}
         currentTotal={Number(booking.total_amount_with_gst) || Number(booking.total_amount) || 0}
         hasCollectedPayment={existingPayments.some((p) => p.status === "verified")}
-        onSuccess={fetchBooking}
+        onSuccess={() => { fetchBooking(); fetchCompRequest(); }}
         userRole={userRole}
       />
 

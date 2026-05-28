@@ -24,7 +24,7 @@
 
 import {
   CalendarCheck, LogIn, LogOut, XCircle, AlertTriangle, Clock,
-  CheckCircle2, Circle, IndianRupee, Link2, Sparkles, ScrollText,
+  CheckCircle2, Circle, IndianRupee, Link2, Sparkles, ScrollText, Gift,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { Booking } from "@/types";
@@ -84,7 +84,7 @@ function slotDateTime(date: string, time: string): string {
 // Sub-components
 // ---------------------------------------------------------------------------
 
-type StepState = "done" | "active" | "pending" | "cancelled" | "no_show";
+type StepState = "done" | "active" | "pending" | "cancelled" | "no_show" | "warning";
 
 function StepDot({ state }: { state: StepState }) {
   const base = "flex-shrink-0 flex items-center justify-center w-8 h-8 rounded-full border-2 z-10";
@@ -98,6 +98,12 @@ function StepDot({ state }: { state: StepState }) {
     return (
       <div className={`${base} bg-blue-50 border-blue-500 text-blue-600 animate-pulse`}>
         <Circle className="h-3 w-3 fill-blue-500" />
+      </div>
+    );
+  if (state === "warning")
+    return (
+      <div className={`${base} bg-amber-50 border-amber-400 text-amber-600`}>
+        <AlertTriangle className="h-4 w-4" />
       </div>
     );
   if (state === "cancelled")
@@ -195,14 +201,45 @@ function Step({ state, icon, label, timestamp, sublabel, badge, isLast, highligh
 }
 
 // ---------------------------------------------------------------------------
+// Comp request types
+// ---------------------------------------------------------------------------
+
+export interface CompRequestData {
+  id: string;
+  status: "pending" | "approved" | "rejected" | "expired";
+  reason: string | null;
+  metadata: {
+    requested_by_name?: string;
+    reason_label?: string;
+    details?: string;
+    [key: string]: unknown;
+  };
+  rejection_reason: string | null;
+  requested_by: string;
+  created_at: string;
+  expires_at: string | null;
+  acted_at: string | null;
+  requester?: { id: string; full_name: string } | null;
+  actor?: { id: string; full_name: string } | null;
+}
+
+function timeLeft(iso: string): string {
+  const diff = Math.floor((new Date(iso).getTime() - Date.now()) / 1000);
+  if (diff <= 0) return "expired";
+  if (diff < 3600) return `${Math.floor(diff / 60)}m remaining`;
+  return `${Math.floor(diff / 3600)}h remaining`;
+}
+
+// ---------------------------------------------------------------------------
 // Main component
 // ---------------------------------------------------------------------------
 
 interface BookingLifecycleTimelineProps {
   booking: Booking;
+  compRequest?: CompRequestData | null;
 }
 
-export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelineProps) {
+export function BookingLifecycleTimeline({ booking, compRequest }: BookingLifecycleTimelineProps) {
   const status = booking.status;
   const scheduledStart = slotDateTime(booking.booking_date, booking.start_time);
   const scheduledEnd   = slotDateTime(booking.booking_date, booking.end_time);
@@ -394,6 +431,80 @@ export function BookingLifecycleTimeline({ booking }: BookingLifecycleTimelinePr
         sublabel={`${formatTime12(booking.start_time)} – ${formatTime12(booking.end_time)} · ${Number(booking.duration_hours)}h slot`}
         actorName={booking.created_by_name}
       />
+
+      {/* Step 1.5a: Comp approval request — only shown when a comp request
+          exists. Sits between "Booked" and "Payment" to explain WHY the
+          payment state is in limbo. Shows current status with enough
+          context for staff to know what to do next. */}
+      {compRequest && (() => {
+        const cr = compRequest;
+        const meta = cr.metadata || {};
+        const requesterName =
+          (cr.requester as { full_name?: string } | null)?.full_name
+          ?? meta.requested_by_name
+          ?? "Unknown";
+        const actorName = (cr.actor as { full_name?: string } | null)?.full_name;
+        const reasonLabel = meta.reason_label ?? cr.reason ?? "";
+
+        const compStepState: StepState =
+          cr.status === "approved"  ? "done"    :
+          cr.status === "pending"   ? "active"  :
+          cr.status === "rejected"  ? "warning" :
+          /* expired */               "warning";
+
+        const compLabel =
+          cr.status === "approved" ? "Comp Approved" :
+          cr.status === "pending"  ? "Comp Approval Pending" :
+          cr.status === "rejected" ? "Comp Request Rejected" :
+          "Comp Request Expired";
+
+        const compTimestamp =
+          cr.status === "approved" && cr.acted_at ? formatTs(cr.acted_at) :
+          cr.status === "rejected" && cr.acted_at ? formatTs(cr.acted_at) :
+          cr.status === "pending"  ? `Submitted ${formatTs(cr.created_at)}` :
+          `Expired ${cr.acted_at ? formatTs(cr.acted_at) : formatTs(cr.created_at)}`;
+
+        const compSublabel = (() => {
+          if (cr.status === "pending") {
+            const remaining = cr.expires_at ? ` · ${timeLeft(cr.expires_at)}` : "";
+            return `Requested by ${requesterName}${remaining} — managers notified`;
+          }
+          if (cr.status === "approved") {
+            return `Approved by ${actorName ?? "a manager"} · Booking marked complimentary`;
+          }
+          if (cr.status === "rejected") {
+            const reason = cr.rejection_reason ? `: "${cr.rejection_reason}"` : "";
+            return `Rejected by ${actorName ?? "a manager"}${reason} · Re-submit or collect payment`;
+          }
+          // expired
+          return `Request not reviewed in time — re-submit from the booking actions if still needed`;
+        })();
+
+        const compBadge = cr.status === "pending" ? (
+          <Badge variant="secondary" className="bg-amber-100 text-amber-700 text-[10px] font-normal animate-pulse">
+            Awaiting review
+          </Badge>
+        ) : cr.status === "rejected" ? (
+          <Badge variant="secondary" className="bg-red-100 text-red-700 text-[10px] font-normal">
+            Action required
+          </Badge>
+        ) : cr.status === "expired" ? (
+          <Badge variant="secondary" className="bg-slate-100 text-slate-600 text-[10px] font-normal">
+            Re-submit if needed
+          </Badge>
+        ) : null;
+
+        return (
+          <Step
+            state={compStepState}
+            icon={<Gift className="h-3.5 w-3.5" />}
+            label={compLabel}
+            timestamp={compTimestamp}
+            sublabel={compSublabel}
+            badge={compBadge}
+          />
+        );
+      })()}
 
       {/* Step 1.5: Payment — surfaces "where is the money" in plain
           language. Pending/link-sent vs paid vs prepaid vs waived vs

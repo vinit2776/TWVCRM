@@ -1,4 +1,42 @@
 /**
+ * GET /api/bookings/[id]/comp-request
+ *
+ * Returns the most recent comp_request approval_request for this booking
+ * (any status). Used by the booking detail page to surface comp request
+ * state in the lifecycle timeline and next-action banner.
+ *
+ * Returns { data: null } when no comp request exists.
+ */
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id: bookingId } = await params;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const admin = createAdminClient();
+
+  const { data, error } = await admin
+    .from("approval_requests")
+    .select(`
+      id, status, reason, metadata, rejection_reason,
+      requested_by, created_at, expires_at, acted_at,
+      requester:users!approval_requests_requested_by_fkey(id, full_name),
+      actor:users!approval_requests_acted_by_fkey(id, full_name)
+    `)
+    .eq("entity_id", bookingId)
+    .eq("approval_type", "comp_request")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  return NextResponse.json({ data: data ?? null });
+}
+
+/**
  * POST /api/bookings/[id]/comp-request
  *
  * Floor managers submit a complimentary-booking approval request.

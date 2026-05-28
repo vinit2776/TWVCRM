@@ -25,17 +25,19 @@
  * available action) so the banner is a HINT, not a replacement.
  */
 
-import { ArrowRight, AlertCircle, CheckCircle2 } from "lucide-react";
+import { ArrowRight, AlertCircle, CheckCircle2, Clock } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import type { Booking, BookingPayment } from "@/types";
+import type { CompRequestData } from "@/components/bookings/booking-lifecycle-timeline";
 
 interface Props {
   booking: Booking;
   existingPayments: BookingPayment[];
+  compRequest?: CompRequestData | null;
 }
 
-export function NextActionBanner({ booking, existingPayments }: Props) {
-  const hint = computeNextHint(booking, existingPayments);
+export function NextActionBanner({ booking, existingPayments, compRequest }: Props) {
+  const hint = computeNextHint(booking, existingPayments, compRequest);
   if (!hint) return null;
 
   // Tone styles — green for "done", amber for action needed, slate for terminal/info.
@@ -47,7 +49,11 @@ export function NextActionBanner({ booking, existingPayments }: Props) {
     blue:   "bg-blue-50 border-blue-200 text-blue-900",
   }[tone];
 
-  const Icon = tone === "green" ? CheckCircle2 : tone === "amber" ? AlertCircle : ArrowRight;
+  const Icon =
+    tone === "green" ? CheckCircle2 :
+    tone === "amber" ? AlertCircle  :
+    hint.clock      ? Clock         :
+    ArrowRight;
 
   return (
     <div className={`rounded-md border-l-4 px-3 py-2 flex items-center gap-2 ${styles}`}>
@@ -77,14 +83,71 @@ interface Hint {
   detail?: string;
   tone: "green" | "amber" | "slate" | "blue";
   target: NextActionTargetId;
+  clock?: boolean; // use Clock icon instead of Arrow
 }
 
-export function computeNextActionTarget(b: Booking, payments: BookingPayment[]): NextActionTargetId {
-  return computeNextHint(b, payments)?.target ?? null;
+export function computeNextActionTarget(b: Booking, payments: BookingPayment[], compRequest?: CompRequestData | null): NextActionTargetId {
+  return computeNextHint(b, payments, compRequest)?.target ?? null;
 }
 
-function computeNextHint(b: Booking, payments: BookingPayment[]): Hint | null {
+function computeNextHint(b: Booking, payments: BookingPayment[], compRequest?: CompRequestData | null): Hint | null {
   const status = b.status;
+
+  // ── Comp request state — takes priority over generic payment hints
+  // so staff always knows WHY the booking is in limbo. ────────────────────
+  if (compRequest && compRequest.status === "pending" && b.payment_status !== "waived") {
+    const meta = compRequest.metadata || {};
+    const requesterName =
+      (compRequest.requester as { full_name?: string } | null)?.full_name
+      ?? meta.requested_by_name
+      ?? "a floor manager";
+    const timeRemaining = compRequest.expires_at
+      ? (() => {
+          const diff = Math.floor((new Date(compRequest.expires_at).getTime() - Date.now()) / 1000);
+          if (diff <= 0) return null;
+          if (diff < 3600) return `${Math.floor(diff / 60)}m`;
+          return `${Math.floor(diff / 3600)}h`;
+        })()
+      : null;
+
+    return {
+      label: "Comp approval pending — payment on hold",
+      detail: `${requesterName} requested this booking be complimentary. A manager needs to approve or reject from the Approvals bell${timeRemaining ? ` · ${timeRemaining} left to decide` : ""}.`,
+      tone: "amber",
+      target: null,
+      clock: true,
+    };
+  }
+
+  if (compRequest && compRequest.status === "rejected" && b.payment_status !== "waived") {
+    const meta = compRequest.metadata || {};
+    const actorName = (compRequest.actor as { full_name?: string } | null)?.full_name ?? "a manager";
+    const rejectionNote = compRequest.rejection_reason ? `: "${compRequest.rejection_reason}"` : "";
+    const requesterName =
+      (compRequest.requester as { full_name?: string } | null)?.full_name
+      ?? meta.requested_by_name
+      ?? null;
+    return {
+      label: "Comp request rejected — payment still due",
+      detail: `Rejected by ${actorName}${rejectionNote}. ${requesterName ? `${requesterName} can re-submit, or` : "You can"} collect payment normally.`,
+      tone: "amber",
+      target: "collect_payment",
+    };
+  }
+
+  if (compRequest && compRequest.status === "expired" && b.payment_status !== "waived") {
+    const meta = compRequest.metadata || {};
+    const requesterName =
+      (compRequest.requester as { full_name?: string } | null)?.full_name
+      ?? meta.requested_by_name
+      ?? null;
+    return {
+      label: "Comp request expired — payment still due",
+      detail: `The approval window passed without a decision. ${requesterName ? `${requesterName} can re-submit, or` : ""} collect payment normally.`,
+      tone: "amber",
+      target: "collect_payment",
+    };
+  }
 
   // Terminal: cancelled / no_show. Calm — booking is recorded, no
   // further action expected from staff.
