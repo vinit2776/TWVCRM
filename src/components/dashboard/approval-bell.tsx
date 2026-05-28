@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import {
   CheckCircle2, XCircle, ClipboardCheck, Loader2, RefreshCw,
-  Wifi, Copy, Check, Gift,
+  Wifi, Copy, Check, Gift, Receipt,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
@@ -50,6 +50,17 @@ interface IssuedVoucher {
   locationName: string;
 }
 
+interface PendingBill {
+  id: string;
+  bill_number: string;
+  total_amount: number;
+  created_at: string;
+  due_date: string | null;
+  notes: string | null;
+  procurement_vendors: { name: string } | null;
+  purchase_orders: { po_number: string } | null;
+}
+
 const APPROVAL_TYPE_LABELS: Record<string, string> = {
   escalation_reduction:  "Escalation Reduction",
   escalation_waiver:     "Escalation Waiver",
@@ -69,13 +80,22 @@ export function ApprovalBell() {
   // After a UniFi voucher is approved, show the code inline before dismissing
   const [issuedVouchers, setIssuedVouchers] = useState<Record<string, IssuedVoucher>>({});
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  const [pendingBills, setPendingBills] = useState<PendingBill[]>([]);
+  const [billActingOnId, setBillActingOnId] = useState<string | null>(null);
 
   const fetchApprovals = useCallback(async () => {
     try {
-      const res = await fetch("/api/approval-requests?status=pending&limit=20");
-      if (res.ok) {
-        const json = await res.json();
+      const [approvalsRes, billsRes] = await Promise.all([
+        fetch("/api/approval-requests?status=pending&limit=20"),
+        fetch("/api/procurement/bills?approval_status=pending&limit=20"),
+      ]);
+      if (approvalsRes.ok) {
+        const json = await approvalsRes.json();
         setApprovals(json.data || []);
+      }
+      if (billsRes.ok) {
+        const json = await billsRes.json();
+        setPendingBills(json.data || []);
       }
     } catch { /* silent */ }
   }, []);
@@ -87,7 +107,28 @@ export function ApprovalBell() {
     return () => clearInterval(interval);
   }, [fetchApprovals]);
 
-  const pendingCount = approvals.length;
+  const pendingCount = approvals.length + pendingBills.length;
+
+  const handleBillAction = async (bill: PendingBill, action: "approve" | "reject") => {
+    setBillActingOnId(bill.id);
+    try {
+      const res = await fetch(`/api/procurement/bills/${bill.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action }),
+      });
+      if (res.ok) {
+        toast.success(action === "approve" ? `${bill.bill_number} approved` : `${bill.bill_number} rejected`);
+        setPendingBills(prev => prev.filter(b => b.id !== bill.id));
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || `Failed to ${action} bill`);
+      }
+    } catch {
+      toast.error("Network error");
+    }
+    setBillActingOnId(null);
+  };
 
   const handleAction = async (id: string, action: "approve" | "reject") => {
     setActingOnId(id);
@@ -182,7 +223,7 @@ export function ApprovalBell() {
         </div>
 
         <div className="max-h-[480px] overflow-y-auto">
-          {approvals.filter(a => !issuedVouchers[a.id] || true).length === 0 ? (
+          {approvals.length === 0 && pendingBills.length === 0 ? (
             <div className="px-4 py-8 text-center">
               <CheckCircle2 className="h-8 w-8 text-green-400 mx-auto mb-2" />
               <p className="text-sm text-muted-foreground">No pending approvals</p>
@@ -492,6 +533,76 @@ export function ApprovalBell() {
                 </div>
               );
             })
+          )}
+
+          {/* Vendor bills awaiting approval */}
+          {pendingBills.length > 0 && (
+            <>
+              {approvals.length > 0 && (
+                <div className="px-4 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground bg-muted/40 border-y">
+                  Vendor Bills
+                </div>
+              )}
+              {pendingBills.map((bill) => (
+                <div
+                  key={bill.id}
+                  className="border-b last:border-b-0 px-4 py-3 space-y-2 hover:bg-muted/30 transition-colors"
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <Receipt className="h-3.5 w-3.5 text-orange-500 shrink-0" />
+                      <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-orange-100 text-orange-800">
+                        Vendor Bill
+                      </Badge>
+                    </div>
+                    <span className="text-[10px] text-muted-foreground shrink-0">{timeAgo(bill.created_at)}</span>
+                  </div>
+
+                  <div className="text-xs text-muted-foreground space-y-0.5">
+                    <p className="font-medium text-foreground">{bill.bill_number}</p>
+                    {bill.procurement_vendors && (
+                      <p>Vendor: <span className="font-medium text-foreground">{bill.procurement_vendors.name}</span></p>
+                    )}
+                    {bill.purchase_orders && (
+                      <p>PO: <span className="font-medium text-foreground">{bill.purchase_orders.po_number}</span></p>
+                    )}
+                    <p>Amount: <span className="font-semibold text-foreground">{formatCurrency(bill.total_amount)}</span></p>
+                    {bill.notes && <p className="italic truncate">&ldquo;{bill.notes}&rdquo;</p>}
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                    <button
+                      className="text-xs font-medium text-primary hover:underline"
+                      onClick={() => { setOpen(false); router.push(`/procurement/bills/${bill.id}`); }}
+                    >
+                      View bill →
+                    </button>
+                    <div className="flex gap-1.5 ml-auto">
+                      <Button
+                        size="sm"
+                        className="h-7 text-xs bg-green-600 hover:bg-green-700"
+                        disabled={billActingOnId === bill.id}
+                        onClick={() => handleBillAction(bill, "approve")}
+                      >
+                        {billActingOnId === bill.id
+                          ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                          : <CheckCircle2 className="h-3 w-3 mr-1" />}
+                        Approve
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs text-destructive hover:text-destructive"
+                        disabled={billActingOnId === bill.id}
+                        onClick={() => { setOpen(false); router.push(`/procurement/bills/${bill.id}`); }}
+                      >
+                        View to Reject
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </>
           )}
         </div>
       </DropdownMenuContent>
