@@ -434,7 +434,7 @@ export default function ContractDetailPage({
       {/* Header */}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div className="flex items-center gap-3">
-          <Button variant="ghost" size="icon" onClick={() => router.push(contract.lead_id ? `/leads/${contract.lead_id}` : "/contracts")}>
+          <Button variant="ghost" size="icon" onClick={() => router.push("/contracts")}>
             <ArrowLeft className="h-4 w-4" />
           </Button>
           <div>
