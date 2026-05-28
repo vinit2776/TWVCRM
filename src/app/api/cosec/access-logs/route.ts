@@ -21,7 +21,7 @@ export async function GET(request: NextRequest) {
 
   const { data, error } = await admin
     .from("access_logs")
-    .select("id, direction, event_time, device:cosec_devices(id, label, device_category)")
+    .select("id, direction, event_time, device:cosec_devices(id, label, device_code, device_category)")
     .eq("entity_id", bookingId)
     .order("event_time", { ascending: true });
 

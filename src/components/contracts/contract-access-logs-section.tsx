@@ -13,7 +13,7 @@ interface AccessLog {
   event_time: string;
   denial_reason: string | null;
   entity_name: string | null;
-  device: { label: string } | null;
+  device: { id: string; label: string; device_code: string | null } | null;
 }
 
 function monthRange(year: number, month: number) {
@@ -42,7 +42,7 @@ export function ContractAccessLogsSection({ contractId }: { contractId: string }
       const { from, to } = monthRange(year, month);
       const { data } = await supabase
         .from("access_logs")
-        .select("id, direction, event_time, denial_reason, entity_name, device:cosec_devices(label)")
+        .select("id, direction, event_time, denial_reason, entity_name, device:cosec_devices(id, label, device_code)")
         .eq("entity_id", contractId)
         .gte("event_time", from)
         .lt("event_time", to)
@@ -163,8 +163,13 @@ export function ContractAccessLogsSection({ contractId }: { contractId: string }
 
                           <div className="flex-1 min-w-0 text-sm">
                             <span className="font-medium">{log.entity_name || "Unknown"}</span>
-                            {log.device?.label && (
-                              <span className="text-muted-foreground text-xs ml-2">@ {log.device.label}</span>
+                            {log.device && (
+                              <span className="text-muted-foreground text-xs ml-2">
+                                @{log.device.device_code && (
+                                  <span className="font-mono ml-1 text-slate-500">{log.device.device_code}</span>
+                                )}{" "}
+                                <span>{log.device.label}</span>
+                              </span>
                             )}
                             {log.denial_reason && (
                               <span className="ml-2 text-xs text-red-500">· {log.denial_reason}</span>

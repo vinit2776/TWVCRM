@@ -125,7 +125,7 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     id: string;
     direction: string;
     event_time: string;
-    device: { id: string; label: string; device_category: string } | null;
+    device: { id: string; label: string; device_code: string | null; device_category: string } | null;
   }>>([]);
 
   // GST inline-edit state
@@ -1618,7 +1618,10 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
                             <span className="text-xs text-muted-foreground font-mono">{fmtEventTime(log.event_time)}</span>
                             {log.device && (
                               <span className="text-xs text-muted-foreground">
-                                via <span className="text-foreground">{log.device.label}</span>
+                                via{log.device.device_code && (
+                                  <span className="font-mono ml-1 text-slate-500">{log.device.device_code}</span>
+                                )}{" "}
+                                <span className="text-foreground">{log.device.label}</span>
                               </span>
                             )}
                           </div>
