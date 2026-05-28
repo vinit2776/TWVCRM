@@ -4,7 +4,7 @@ import { use, useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
-  ArrowLeft, CalendarClock, Pencil, Power, Plus, Loader2,
+  ArrowLeft, CalendarClock, Pencil, Power, Plus, Loader2, ShieldCheck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -14,6 +14,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { SpaceFormDialog } from "@/components/spaces/space-form-dialog";
 import { SpaceChargesTab } from "@/components/spaces/space-charges-tab";
+import { SpaceAccessTab } from "@/components/spaces/space-access-tab";
 import { formatCurrency } from "@/lib/utils";
 import { BOOKING_STATUS_COLORS, BOOKING_STATUS_LABELS, BOOKING_CUSTOMER_TYPE_LABELS } from "@/lib/constants";
 import { toast } from "sonner";
@@ -115,6 +116,15 @@ export default function SpaceDetailPage({ params }: { params: Promise<{ id: stri
     return bookings.some(b => b.start_time.slice(0, 5) === slotTime);
   };
 
+  // Status-based slot colours — background + left accent border on the booking cell
+  const SLOT_STATUS_STYLE: Record<string, string> = {
+    confirmed:   "bg-blue-50 border-l-2 border-l-blue-400",
+    checked_in:  "bg-green-50 border-l-2 border-l-green-500",
+    checked_out: "bg-slate-100 border-l-2 border-l-slate-400",
+    cancelled:   "bg-red-50 border-l-2 border-l-red-300",
+    no_show:     "bg-orange-50 border-l-2 border-l-orange-400",
+  };
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -186,6 +196,10 @@ export default function SpaceDetailPage({ params }: { params: Promise<{ id: stri
           <TabsTrigger value="details">Details</TabsTrigger>
           <TabsTrigger value="facilities">Facilities</TabsTrigger>
           <TabsTrigger value="charges">Charges</TabsTrigger>
+          <TabsTrigger value="access" className="gap-1.5">
+            <ShieldCheck className="h-4 w-4" />
+            Access
+          </TabsTrigger>
         </TabsList>
 
         {/* Schedule Tab */}
@@ -215,32 +229,41 @@ export default function SpaceDetailPage({ params }: { params: Promise<{ id: stri
                 {timeSlots.map((slot) => {
                   const booking = getBookingForSlot(slot.time);
                   const isStart = isSlotStart(slot.time);
+                  const slotStyle = booking
+                    ? (SLOT_STATUS_STYLE[booking.status] ?? "bg-primary/10 border-l-2 border-l-primary")
+                    : "";
                   return (
                     <div key={slot.time} className="contents">
-                      <div className="px-3 py-2 text-xs text-muted-foreground border-r bg-muted/30 flex items-center">
-                        {slot.label}
+                      {/* Time label — bolder + slightly tinted on booked slots */}
+                      <div className={`px-3 py-2 text-xs border-r flex items-center ${booking ? "text-foreground/70 bg-muted/50" : "text-muted-foreground bg-muted/30"}`}>
+                        {isStart ? <span className="font-medium">{slot.label}</span> : slot.label}
                       </div>
-                      <div className={`px-3 py-2 min-h-[40px] ${booking ? "bg-primary/5" : "hover:bg-muted/20"}`}>
+                      {/* Booking / free cell */}
+                      <div className={`px-3 py-2 min-h-[40px] transition-colors ${slotStyle || "hover:bg-muted/20"}`}>
                         {booking && isStart && (
-                          <Link
-                            href={`/bookings/${booking.id}`}
-                            className="flex items-center gap-2 text-sm hover:underline"
-                          >
-                            <Badge variant="secondary" className={`text-[10px] ${BOOKING_STATUS_COLORS[booking.status]}`}>
-                              {BOOKING_STATUS_LABELS[booking.status]}
-                            </Badge>
-                            <span className="font-medium">
-                              {booking.start_time.slice(0, 5)} – {booking.end_time.slice(0, 5)}
+                          <div className="flex items-center gap-2 text-sm flex-wrap">
+                            {/* Booking number — primary hyperlink */}
+                            <Link
+                              href={`/bookings/${booking.id}`}
+                              className="font-mono font-semibold text-primary hover:underline text-xs shrink-0"
+                            >
+                              {booking.booking_number}
+                            </Link>
+                            <span className="text-muted-foreground text-xs shrink-0">
+                              {booking.start_time.slice(0, 5)}–{booking.end_time.slice(0, 5)}
                             </span>
-                            <span className="text-muted-foreground">
+                            <span className="font-medium truncate">
                               {booking.lead
                                 ? `${booking.lead.first_name} ${booking.lead.last_name}`
                                 : booking.guest_name || "Guest"}
                             </span>
-                            <Badge variant="outline" className="text-[10px]">
+                            <Badge variant="secondary" className={`text-[10px] shrink-0 ${BOOKING_STATUS_COLORS[booking.status]}`}>
+                              {BOOKING_STATUS_LABELS[booking.status]}
+                            </Badge>
+                            <Badge variant="outline" className="text-[10px] shrink-0">
                               {BOOKING_CUSTOMER_TYPE_LABELS[booking.customer_type]}
                             </Badge>
-                          </Link>
+                          </div>
                         )}
                       </div>
                     </div>
@@ -340,6 +363,11 @@ export default function SpaceDetailPage({ params }: { params: Promise<{ id: stri
         {/* Charges tab — per-space add-on catalogue (Tea, Coffee, Print, etc.) */}
         <TabsContent value="charges" className="space-y-4">
           <SpaceChargesTab spaceId={id} />
+        </TabsContent>
+
+        {/* Access tab — COSEC device info + door access logs */}
+        <TabsContent value="access" className="space-y-4">
+          <SpaceAccessTab deviceId={(space as unknown as Record<string, unknown>).cosec_device_id as string | null ?? null} spaceId={id} />
         </TabsContent>
       </Tabs>
 
