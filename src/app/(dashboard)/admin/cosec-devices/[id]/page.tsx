@@ -63,6 +63,15 @@ interface AccessLog {
   direction: "IN" | "OUT" | "DENIED"; raw_event_id: number;
   event_time: string; device_seq_number: number;
   entity_name?: string; denial_reason?: string;
+  // Annotated after load — null = unscheduled, object = within a booking window
+  booking?: { booking_number: string; guest_name: string | null } | null;
+}
+
+interface BookingWindow {
+  booking_number: string;
+  guest_name: string | null;
+  valid_from: number; // ms epoch
+  valid_until: number;
 }
 
 interface PresenceRow {
@@ -176,16 +185,45 @@ export default function CosecDeviceDetailPage() {
     if (!dev) { router.push("/admin/cosec-devices"); return; }
     setDevice(dev as Device);
 
+    // Fetch booking windows for the space linked to this device (±5 min buffer)
+    let bookingWindows: BookingWindow[] = [];
+    const { data: linkedSpace } = await supabase
+      .from("spaces")
+      .select("id")
+      .eq("cosec_device_id", id)
+      .maybeSingle();
+    if (linkedSpace?.id) {
+      const { data: bks } = await supabase
+        .from("bookings")
+        .select("booking_number, guest_name, booking_date, start_time, end_time")
+        .eq("space_id", linkedSpace.id)
+        .not("status", "in", '("cancelled","no_show")')
+        .gte("booking_date", twelveMonthsAgo.toISOString().slice(0, 10));
+      if (bks) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        bookingWindows = (bks as any[]).map(b => {
+          const from = new Date(`${b.booking_date}T${b.start_time}+05:30`).getTime() - 5 * 60000;
+          const until = new Date(`${b.booking_date}T${b.end_time}+05:30`).getTime() + 5 * 60000;
+          return { booking_number: b.booking_number, guest_name: b.guest_name, valid_from: from, valid_until: until };
+        });
+      }
+    }
+
     if (accessUsers) {
       const enriched = await enrichUsers(accessUsers as AccessUser[]);
       setUsers(enriched);
       if (accessLogs) {
         const refMap: Record<number, string> = {};
         enriched.forEach(u => { refMap[u.cosec_ref_id] = u.entity_name || u.cosec_user_id; });
-        setLogs((accessLogs as AccessLog[]).map(l => ({
-          ...l,
-          entity_name: l.entity_name || refMap[l.cosec_ref_id] || `Ref #${l.cosec_ref_id}`,
-        })));
+        setLogs((accessLogs as AccessLog[]).map(l => {
+          const ts = new Date(l.event_time).getTime();
+          const matched = bookingWindows.find(w => ts >= w.valid_from && ts <= w.valid_until);
+          return {
+            ...l,
+            entity_name: l.entity_name || refMap[l.cosec_ref_id] || `Ref #${l.cosec_ref_id}`,
+            booking: matched ?? null,
+          };
+        }));
       }
     }
     setLoading(false);
@@ -765,31 +803,63 @@ export default function CosecDeviceDetailPage() {
           ) : (
             <Card><CardContent className="p-0">
               <div className="divide-y">
-                {logs.map(log => (
-                  <div key={log.id} className={`flex items-center gap-3 px-4 py-2.5 ${log.direction === "DENIED" ? "bg-red-50/40" : ""}`}>
-                    <div className="shrink-0">
-                      {log.direction === "IN"     ? <LogIn  size={15} className="text-green-500" />
-                       : log.direction === "OUT"  ? <LogOut size={15} className="text-blue-500" />
-                                                  : <Ban    size={15} className="text-red-400" />}
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <span className="font-medium text-sm">{log.entity_name || `Ref #${log.cosec_ref_id}`}</span>
-                      <span className="text-xs text-muted-foreground ml-2">{TYPE_LABELS[log.user_type] ?? log.user_type}</span>
-                      {log.denial_reason && (
-                        <span className="ml-2 text-xs text-red-500">· {log.denial_reason}</span>
-                      )}
-                    </div>
-                    <div className="text-right shrink-0">
-                      <Badge variant={log.direction === "DENIED" ? "destructive" : "outline"} className="text-xs">{log.direction}</Badge>
-                      <div className="text-xs text-muted-foreground mt-0.5">
-                        {formatDate(log.event_time)}{" "}
-                        <span className="font-mono">
-                          {new Date(log.event_time).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true, timeZone: "Asia/Kolkata" })}
-                        </span>
+                {logs.map(log => {
+                  const isScheduled  = log.direction !== "DENIED" && log.booking != null;
+                  const isUnscheduled = log.direction !== "DENIED" && log.booking == null;
+                  const rowBg =
+                    log.direction === "DENIED" ? "bg-red-50/50 border-l-2 border-red-300" :
+                    isScheduled               ? "bg-green-50/60 border-l-2 border-green-400" :
+                                                "bg-amber-50/50 border-l-2 border-amber-300";
+                  return (
+                    <div key={log.id} className={`flex items-center gap-3 px-4 py-2.5 ${rowBg}`}>
+                      <div className="shrink-0">
+                        {log.direction === "IN"    ? <LogIn  size={15} className="text-green-600" />
+                        : log.direction === "OUT"  ? <LogOut size={15} className="text-blue-500" />
+                                                   : <Ban    size={15} className="text-red-400" />}
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="font-medium text-sm">{log.entity_name || `Ref #${log.cosec_ref_id}`}</span>
+                          {log.user_type && (
+                            <span className="text-xs text-muted-foreground">{TYPE_LABELS[log.user_type] ?? log.user_type}</span>
+                          )}
+                          {/* Booking badge */}
+                          {isScheduled && log.booking && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-green-100 border border-green-300 text-green-800">
+                              <CheckCircle2 size={10} />
+                              {log.booking.booking_number}
+                              {log.booking.guest_name ? ` · ${log.booking.guest_name}` : ""}
+                            </span>
+                          )}
+                          {/* Unscheduled badge */}
+                          {isUnscheduled && (
+                            <span className="inline-flex items-center gap-1 text-[11px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 border border-amber-300 text-amber-800">
+                              <AlertTriangle size={10} />
+                              No booking
+                            </span>
+                          )}
+                        </div>
+                        {log.denial_reason && (
+                          <span className="text-xs text-red-500 mt-0.5 block">· {log.denial_reason}</span>
+                        )}
+                      </div>
+                      <div className="text-right shrink-0">
+                        <Badge
+                          variant={log.direction === "DENIED" ? "destructive" : "outline"}
+                          className={`text-xs ${isScheduled ? "border-green-400 text-green-700" : isUnscheduled ? "border-amber-400 text-amber-700" : ""}`}
+                        >
+                          {log.direction}
+                        </Badge>
+                        <div className="text-xs text-muted-foreground mt-0.5">
+                          {formatDate(log.event_time)}{" "}
+                          <span className="font-mono">
+                            {new Date(log.event_time).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: true, timeZone: "Asia/Kolkata" })}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </CardContent></Card>
           )}
