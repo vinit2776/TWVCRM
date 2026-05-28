@@ -37,7 +37,7 @@ interface ContractOption {
 }
 
 interface Device {
-  id: string; label: string; device_ip: string; device_port: number;
+  id: string; device_code: string; label: string; device_ip: string; device_port: number;
   is_enabled: boolean; device_category: "entry_point" | "business_centre";
   supports_biometric: boolean;
   last_ping_at: string | null; last_ping_success: boolean | null;
@@ -561,6 +561,9 @@ export default function CosecDeviceDetailPage() {
           <div>
             <h1 className="text-2xl font-semibold flex items-center gap-2 flex-wrap">
               {isOnline === true ? <Wifi size={20} className="text-green-500" /> : isOnline === false ? <WifiOff size={20} className="text-red-500" /> : <Wifi size={20} className="text-muted-foreground opacity-40" />}
+              <span className="font-mono text-sm bg-slate-100 text-slate-600 border border-slate-200 rounded px-2 py-0.5 select-all" title="Internal device ID">
+                {device.device_code}
+              </span>
               {device.label}
               <Badge variant={device.is_enabled ? "default" : "secondary"} className="text-xs">{device.is_enabled ? "Enabled" : "Disabled"}</Badge>
               {/* Device category segmented control */}
@@ -596,6 +599,7 @@ export default function CosecDeviceDetailPage() {
             </h1>
             <p className="text-sm text-muted-foreground mt-1">
               {(device.location as { name: string })?.name} · {device.device_ip}:{device.device_port}
+              <span className="ml-2 text-xs font-mono text-slate-400">({device.device_code})</span>
             </p>
             <div className="flex flex-wrap gap-4 mt-1 text-xs text-muted-foreground">
               {device.last_ping_at    && <span>Ping: {formatDate(device.last_ping_at)}</span>}

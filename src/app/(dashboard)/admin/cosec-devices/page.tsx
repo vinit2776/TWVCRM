@@ -39,6 +39,7 @@ interface Location {
 
 interface CosecDevice {
   id: string;
+  device_code: string;
   location_id: string;
   label: string;
   device_ip: string;
@@ -302,6 +303,9 @@ export default function CosecDevicesPage() {
                                   ) : (
                                     <Wifi size={16} className="text-muted-foreground opacity-40" />
                                   )}
+                                  <span className="font-mono text-xs bg-slate-100 text-slate-600 border border-slate-200 rounded px-1.5 py-0.5 select-all">
+                                    {device.device_code}
+                                  </span>
                                   {device.label}
                                   <Badge variant={device.is_enabled ? "default" : "secondary"} className="text-xs">
                                     {device.is_enabled ? "Enabled" : "Disabled"}
