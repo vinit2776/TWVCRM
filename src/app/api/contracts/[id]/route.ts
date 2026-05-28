@@ -56,6 +56,7 @@ export async function PATCH(
   if (body.next_billing_date) allowedFields.next_billing_date = body.next_billing_date;
   if (body.end_date) allowedFields.end_date = body.end_date;
   if (body.tenure_months) allowedFields.tenure_months = body.tenure_months;
+  if (body.lock_in_months !== undefined) allowedFields.lock_in_months = body.lock_in_months ?? null;
   if (body.renewed_at) allowedFields.renewed_at = body.renewed_at;
   if (body.signed_document_id !== undefined) allowedFields.signed_document_id = body.signed_document_id;
 

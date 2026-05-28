@@ -181,6 +181,7 @@ export async function POST(request: NextRequest) {
       security_deposit_months: d.security_deposit_months,
       escalation_percentage: d.escalation_percentage,
       notice_period_months: d.notice_period_months,
+      lock_in_months: d.lock_in_months ?? null,
       member_signatory_name: d.member_signatory_name,
       member_signatory_designation: d.member_signatory_designation,
       member_signatory_pan: d.member_signatory_pan ?? null,

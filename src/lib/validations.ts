@@ -257,6 +257,7 @@ export const createContractSchema = z.object({
   security_deposit_months: z.number().min(0).default(3.0),
   escalation_percentage: z.number().min(0).max(100).default(10.0),
   notice_period_months: z.number().min(0).default(2.0),
+  lock_in_months: z.number().min(1).max(18).optional().nullable(),
   member_signatory_name: z.string().min(1, "Signatory name is required"),
   member_signatory_designation: z.string().min(1, "Signatory designation is required"),
   member_signatory_pan: z.string().optional(),

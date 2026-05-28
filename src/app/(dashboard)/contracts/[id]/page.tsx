@@ -776,6 +776,12 @@ export default function ContractDetailPage({
                     )}
                   </p>
                 </div>
+                {contract.lock_in_months != null && (
+                  <div>
+                    <p className="text-muted-foreground text-xs">Lock-in Period</p>
+                    <p>{contract.lock_in_months} month{contract.lock_in_months !== 1 ? "s" : ""}</p>
+                  </div>
+                )}
                 <div>
                   <p className="text-muted-foreground text-xs">Notice Period</p>
                   <p>{contract.notice_period_months || 2} months</p>

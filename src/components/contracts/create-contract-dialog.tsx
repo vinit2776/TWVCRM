@@ -385,6 +385,7 @@ export function CreateContractDialog({
       security_deposit_months: securityDepositMonths,
       escalation_percentage: escalationPercentage,
       notice_period_months: noticePeriodMonths,
+      lock_in_months: lockInMonths,
       member_signatory_name: signatoryName.trim(),
       member_signatory_designation: signatoryDesignation.trim(),
       member_signatory_pan: signatoryPan.trim() || undefined,
@@ -735,9 +736,9 @@ export function CreateContractDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {[3, 6, 11, 12, 13, 18, 24, 36].map((m) => (
+                    {Array.from({ length: 18 }, (_, i) => i + 1).map((m) => (
                       <SelectItem key={m} value={String(m)}>
-                        {m} months
+                        {m} month{m !== 1 ? "s" : ""}
                       </SelectItem>
                     ))}
                   </SelectContent>
@@ -755,7 +756,7 @@ export function CreateContractDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    {Array.from({ length: Math.max(derivedTenureMonths, 1) }, (_, i) => i + 1).map((m) => (
+                    {Array.from({ length: Math.min(Math.max(derivedTenureMonths, 1), 18) }, (_, i) => i + 1).map((m) => (
                       <SelectItem key={m} value={String(m)}>
                         {m} month{m !== 1 ? "s" : ""}
                       </SelectItem>

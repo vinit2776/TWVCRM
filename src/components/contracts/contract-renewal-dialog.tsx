@@ -265,16 +265,20 @@ export function ContractRenewalDialog({
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Renewal Terms</p>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1">
-                <Label className="text-xs" htmlFor="renewal-tenure">Tenure (months)<FieldHelp tip="Duration of the renewal contract. Can be shorter or longer than the current contract." /></Label>
-                <Input
-                  id="renewal-tenure"
-                  type="number"
-                  min={1}
-                  max={120}
-                  value={tenureMonths}
-                  onChange={(e) => setTenureMonths(parseInt(e.target.value) || contract.tenure_months)}
-                  className="h-9"
-                />
+                <Label className="text-xs" htmlFor="renewal-tenure">Tenure (months)<FieldHelp tip="Duration of the renewal contract (1–18 months). For longer custom tenures, set the end date directly on the contract after renewal." /></Label>
+                <Select
+                  value={String(tenureMonths)}
+                  onValueChange={(v) => setTenureMonths(parseInt(v) || contract.tenure_months)}
+                >
+                  <SelectTrigger id="renewal-tenure" className="h-9"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    {Array.from({ length: 18 }, (_, i) => i + 1).map((m) => (
+                      <SelectItem key={m} value={String(m)}>
+                        {m} month{m !== 1 ? "s" : ""}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
               </div>
               <div className="space-y-1">
                 <Label className="text-xs" htmlFor="renewal-seats">Seats<FieldHelp tip="Number of seats in the renewal. Changing seats may affect the security deposit requirement." /></Label>

@@ -469,6 +469,7 @@ export interface Contract {
   security_deposit_months?: number;
   escalation_percentage?: number;
   notice_period_months?: number;
+  lock_in_months?: number | null;
   member_signatory_name?: string;
   member_signatory_designation?: string;
   /** The signatory's personal ID number — may be PAN or Aadhaar depending on member_signatory_id_type */
