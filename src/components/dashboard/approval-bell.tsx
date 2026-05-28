@@ -103,9 +103,14 @@ export function ApprovalBell() {
   useEffect(() => {
     fetchApprovals();
     fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {});
-    const interval = setInterval(fetchApprovals, 60_000);
-    return () => clearInterval(interval);
+    // No polling interval — data refreshes on mount and each time the bell is opened.
+    // This avoids background DB hits every 60s across all open sessions.
   }, [fetchApprovals]);
+
+  // Refresh whenever the dropdown opens so the list is always up-to-date.
+  useEffect(() => {
+    if (open) fetchApprovals();
+  }, [open, fetchApprovals]);
 
   const pendingCount = approvals.length + pendingBills.length;
 
