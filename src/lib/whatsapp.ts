@@ -723,8 +723,8 @@ export const messaging = {
 
   /**
    * Proposal PDF → lead phone during negotiation phase.
-   * Template: proposal_send_doc
-   * Header: Document  |  Body: "Hi {{1}}, please find attached proposal {{2}} from The Work Villa."
+   * Template: twv_proposal_doc
+   * Header: Document  |  Body: "Hi {{customer_name}}, please find attached proposal {{proposal_number}} from The Work Villa."
    */
   proposalDocument(
     to: string,
@@ -737,7 +737,7 @@ export const messaging = {
     // so MSG91 component keys are "body_customer_name" / "body_proposal_number"
     return sendWhatsAppDocument({
       to,
-      template: "proposal_send_doc",
+      template: "twv_proposal_doc",
       documentUrl: pdfUrl,
       documentFilename: `${proposalNumber}.pdf`,
       namedParams: {
