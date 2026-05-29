@@ -154,7 +154,7 @@ export function CreateContractDialog({
   // Auto-populate from selected proposal
   useEffect(() => {
     if (selectedProposal) {
-      setMonthlyFee(selectedProposal.total_amount);
+      setMonthlyFee(selectedProposal.subtotal ?? selectedProposal.total_amount);
       if (selectedProposal.location_id) {
         setLocationId(selectedProposal.location_id);
       }
@@ -838,11 +838,16 @@ export function CreateContractDialog({
                 <p>
                   <span className="text-muted-foreground">Monthly Fee:</span>{" "}
                   <span className="font-medium">{formatCurrency(monthlyFee)}</span>
-                  <span className="text-muted-foreground text-xs ml-1">+ 18% GST ({formatCurrency(monthlyFee * 0.18)})</span>
+                  {(() => {
+                    const taxPct = selectedProposal?.tax_percentage ?? 18;
+                    return taxPct > 0 ? (
+                      <span className="text-muted-foreground text-xs ml-1">+ {taxPct}% GST ({formatCurrency(monthlyFee * taxPct / 100)})</span>
+                    ) : null;
+                  })()}
                 </p>
                 <p>
                   <span className="text-muted-foreground">Monthly Fee incl. GST:</span>{" "}
-                  <span className="font-semibold">{formatCurrency(monthlyFee * 1.18)}</span>
+                  <span className="font-semibold">{formatCurrency(monthlyFee * (1 + (selectedProposal?.tax_percentage ?? 18) / 100))}</span>
                 </p>
               </div>
             )}
