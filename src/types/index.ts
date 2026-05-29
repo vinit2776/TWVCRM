@@ -696,6 +696,14 @@ export interface BillingStatement {
   billing_payments?: BillingPayment[];
   // Accounting head (receivables classification)
   primary_head?: string | null;
+  // Auto-proforma split: 'combined' (legacy), 'rent' (auto-dispatched), 'usage' (admin review)
+  statement_type?: 'combined' | 'rent' | 'usage' | null;
+  // Proforma tracking
+  proforma_sent_at?: string | null;
+  proforma_sent_by?: string | null;
+  // Usage amounts split (set by generators)
+  service_usage_amount?: number;
+  booking_usage_amount?: number;
 }
 
 // ==========================================
