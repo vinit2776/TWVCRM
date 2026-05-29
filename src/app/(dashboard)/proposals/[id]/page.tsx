@@ -479,7 +479,14 @@ export default function ProposalDetailPage({
               <Button
                 size="sm"
                 className="bg-green-600 hover:bg-green-700 text-white"
-                onClick={() => setBookingConfirmOpen(true)}
+                onClick={() => {
+                  if (needsWaiver) {
+                    toast.error("Admin OTP approval required before accepting. Complete the deposit waiver approval below.");
+                    document.getElementById("deposit-waiver-gate")?.scrollIntoView({ behavior: "smooth" });
+                    return;
+                  }
+                  setBookingConfirmOpen(true);
+                }}
               >
                 <CheckCircle2 className="mr-2 h-4 w-4" />
                 Accept
@@ -861,13 +868,15 @@ export default function ProposalDetailPage({
 
           {/* Deposit Waiver Gate — shown for zero-deposit proposals */}
           {isZeroDeposit && (
-            <DepositWaiverGate
-              proposalId={proposal.id}
-              proposalNumber={proposal.proposal_number}
-              isVerified={waiverVerified}
-              requestedAt={proposal.deposit_waiver_requested_at}
-              onVerified={fetchProposal}
-            />
+            <div id="deposit-waiver-gate">
+              <DepositWaiverGate
+                proposalId={proposal.id}
+                proposalNumber={proposal.proposal_number}
+                isVerified={waiverVerified}
+                requestedAt={proposal.deposit_waiver_requested_at}
+                onVerified={fetchProposal}
+              />
+            </div>
           )}
 
           {/* Lifecycle Timeline */}

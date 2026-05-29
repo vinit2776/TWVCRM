@@ -427,7 +427,7 @@ export default function ContractDetailPage({
     );
   }
 
-  const securityDeposit = (contract.security_deposit_months || 3) * contract.total_amount;
+  const securityDeposit = (contract.security_deposit_months ?? 3) * (contract.subtotal ?? contract.total_amount);
 
   return (
     <div className="space-y-6">
@@ -571,7 +571,7 @@ export default function ContractDetailPage({
               </div>
             );
           })()}
-          {contract.status === "active" && (
+          {contract.status === "active" && ["admin", "manager"].includes(userRole ?? "") && (
             <Button variant="destructive" onClick={() => setTerminateOpen(true)}>
               <XCircle className="mr-2 h-4 w-4" />
               Terminate
@@ -701,7 +701,10 @@ export default function ContractDetailPage({
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
                 <div>
                   <p className="text-muted-foreground text-xs">Monthly Fee</p>
-                  <p className="font-bold text-lg">{formatCurrency(contract.total_amount)}</p>
+                  <p className="font-bold text-lg">{formatCurrency(contract.subtotal ?? contract.total_amount)}</p>
+                  {contract.tax_percentage > 0 && (
+                    <p className="text-muted-foreground text-xs mt-0.5">{formatCurrency(contract.total_amount)} incl. {contract.tax_percentage}% GST</p>
+                  )}
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">Tax ({contract.tax_percentage}%)</p>
@@ -709,7 +712,7 @@ export default function ContractDetailPage({
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">Security Deposit</p>
-                  <p className="font-medium">{formatCurrency(securityDeposit)}</p>
+                  <p className="font-medium">{(contract.security_deposit_months ?? 3) === 0 ? "Waived" : formatCurrency(securityDeposit)}</p>
                   {contract.deposit_carried_from && (
                     <p className="text-[10px] text-green-600 mt-0.5">✓ Carried from parent</p>
                   )}
@@ -765,7 +768,7 @@ export default function ContractDetailPage({
                 )}
                 <div>
                   <p className="text-muted-foreground text-xs">Security Deposit</p>
-                  <p>{contract.security_deposit_months || 3}x Monthly Fee = {formatCurrency(securityDeposit)}</p>
+                  <p>{(contract.security_deposit_months ?? 3) === 0 ? "Waived" : `${contract.security_deposit_months ?? 3}x Monthly Fee = ${formatCurrency(securityDeposit)}`}</p>
                 </div>
                 <div>
                   <p className="text-muted-foreground text-xs">Annual Escalation</p>

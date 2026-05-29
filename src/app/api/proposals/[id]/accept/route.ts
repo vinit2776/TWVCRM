@@ -74,6 +74,14 @@ export async function POST(
     );
   }
 
+  // Gate: zero-deposit proposals require admin OTP approval before acceptance
+  if (Number(proposal.security_deposit_months || 0) === 0 && !proposal.deposit_waiver_verified_at) {
+    return NextResponse.json(
+      { error: "This proposal has no security deposit. Admin OTP approval is required before accepting. Please use the Deposit Waiver Approval section to get admin sign-off." },
+      { status: 403 }
+    );
+  }
+
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lead = proposal.lead as any;
   const customerName = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Customer";
