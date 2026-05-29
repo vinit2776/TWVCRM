@@ -15,7 +15,6 @@ import {
   X,
   IndianRupee,
   ScrollText,
-  RefreshCcw,
   Send,
   FileCheck,
   Printer,
@@ -388,17 +387,58 @@ export default function BillingPage() {
   const [statementsLoading, setStatementsLoading]         = useState(true);
   const [statementsPage, setStatementsPage]               = useState(1);
   const [generateStatementOpen, setGenerateStatementOpen] = useState(false);
-  const [generatingMissing, setGeneratingMissing]         = useState(false);
   // Filter: 'all' | 'rent' | 'usage'
   const [stmtTypeFilter, setStmtTypeFilter]               = useState<"all" | "rent" | "usage">("all");
-  const [generatingProformas, setGeneratingProformas]     = useState(false);
 
-  // "Generate Missing Bills" — re-runs the auto-generate logic for the current
-  // month so any contracts activated mid-month (after the cron ran on the 1st)
-  // get their billing statement created right away. Idempotent: contracts that
-  // already have a statement for the period are skipped.
-  const handleGenerateMissingBills = async () => {
-    setGeneratingMissing(true);
+  // ── Manual Monthly Proforma Billing (cron is paused; this is the manual trigger) ──
+  type PreviewItem = { contract_number: string; type: "rent" | "usage"; period_label: string; subtotal: number; tax_amount: number; total_amount: number; note?: string };
+  const [previewItems, setPreviewItems]       = useState<PreviewItem[] | null>(null);
+  const [previewing, setPreviewing]           = useState(false);
+  const [previewedThisCycle, setPreviewedThisCycle] = useState(false);
+  const [runningBilling, setRunningBilling]   = useState(false);
+  const [runConfirmOpen, setRunConfirmOpen]   = useState(false);
+  const [billingDoneForNext, setBillingDoneForNext] = useState<boolean | null>(null); // null = unknown
+
+  // Next month label + last-3-days-of-month flag (drives the reminder banner)
+  const nextMonthInfo = (() => {
+    const now = new Date();
+    const nm = now.getMonth() === 11 ? 0 : now.getMonth() + 1;
+    const ny = now.getMonth() === 11 ? now.getFullYear() + 1 : now.getFullYear();
+    const label = new Date(ny, nm).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+    const daysInThis = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const nearMonthEnd = now.getDate() >= daysInThis - 2; // last 3 days
+    return { label, nearMonthEnd };
+  })();
+
+  // Dry-run preview: compute what WOULD be billed, write/send nothing
+  const handlePreviewBilling = async () => {
+    setPreviewing(true);
+    try {
+      const res = await fetch("/api/billing/auto-generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dry_run: true }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Preview failed"); return; }
+      const items: PreviewItem[] = [
+        ...(json.rent_proformas?.preview ?? []),
+        ...(json.usage_statements?.preview ?? []),
+      ];
+      setPreviewItems(items);
+      setPreviewedThisCycle(true);
+      setBillingDoneForNext(items.filter((i) => i.type === "rent").length === 0);
+      if (json.errors?.length) for (const e of json.errors) toast.error(e);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Preview failed");
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  // Live run: generate + finalize + dispatch. Gated behind the confirm dialog.
+  const handleRunBilling = async () => {
+    setRunningBilling(true);
     try {
       const res = await fetch("/api/billing/auto-generate", {
         method: "POST",
@@ -406,35 +446,28 @@ export default function BillingPage() {
         body: JSON.stringify({}),
       });
       const json = await res.json();
-      if (!res.ok) {
-        toast.error(json.error || "Failed to generate bills");
-      } else {
-        const rentGen  = json.rent_proformas?.generated ?? 0;
-        const usageGen = json.usage_statements?.generated ?? 0;
-        const noContact = json.rent_proformas?.no_contact ?? [];
-        if (rentGen === 0 && usageGen === 0) {
-          toast.info("No new bills to generate — all contracts already billed for this period");
-        } else {
-          toast.success(
-            `${rentGen} rent proforma${rentGen !== 1 ? "s" : ""} sent, ` +
-            `${usageGen} usage statement${usageGen !== 1 ? "s" : ""} created for review`
-          );
-        }
-        if (noContact.length > 0) {
-          toast.warning(`${noContact.length} contract${noContact.length > 1 ? "s" : ""} have no email/phone — proforma not sent: ${noContact.join(", ")}`);
-        }
-        await fetchStatements();
-        await fetchData();
+      if (!res.ok) { toast.error(json.error || "Billing run failed"); return; }
+      const rentGen  = json.rent_proformas?.generated ?? 0;
+      const usageGen = json.usage_statements?.generated ?? 0;
+      const noContact = json.rent_proformas?.no_contact ?? [];
+      toast.success(`${rentGen} rent proforma${rentGen !== 1 ? "s" : ""} sent · ${usageGen} usage statement${usageGen !== 1 ? "s" : ""} created for review`);
+      if (noContact.length > 0) {
+        toast.warning(`${noContact.length} contract${noContact.length > 1 ? "s" : ""} have no email/phone — proforma not sent: ${noContact.join(", ")}`);
       }
-      if (json.errors?.length) {
-        for (const e of json.errors) toast.error(e);
-      }
+      if (json.errors?.length) for (const e of json.errors) toast.error(e);
+      setRunConfirmOpen(false);
+      setPreviewItems(null);
+      setPreviewedThisCycle(false);
+      setBillingDoneForNext(true);
+      await fetchStatements();
+      await fetchData();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to generate bills");
+      toast.error(e instanceof Error ? e.message : "Billing run failed");
     } finally {
-      setGeneratingMissing(false);
+      setRunningBilling(false);
     }
   };
+
   const [viewStatementId, setViewStatementId]             = useState<string | null>(null);
 
   // ── Record Payment dialog ─────────────────────────────────────────────────
@@ -1190,17 +1223,99 @@ export default function BillingPage() {
               <p className="text-xs text-muted-foreground">Expand a row to see charges, review the statement, and take action.</p>
             </div>
             <div className="flex items-center gap-2">
-              <Button variant="outline" onClick={handleGenerateMissingBills} disabled={generatingMissing}>
-                {generatingMissing ? (
-                  <><span className="mr-2 h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin inline-block" />Generating…</>
-                ) : (
-                  <><RefreshCcw className="mr-2 h-4 w-4" />Generate Missing Bills</>
-                )}
-              </Button>
               <Button onClick={() => setGenerateStatementOpen(true)}>
                 <Plus className="mr-2 h-4 w-4" />Generate Statement
               </Button>
             </div>
+          </div>
+
+          {/* ── Reminder banner: near month-end + not yet run ── */}
+          {nextMonthInfo.nearMonthEnd && billingDoneForNext === false && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 flex items-center justify-between gap-4">
+              <p className="text-sm font-medium text-amber-900">
+                ⏰ Monthly proforma billing for <strong>{nextMonthInfo.label}</strong> hasn&rsquo;t been run yet. Run it before month-end.
+              </p>
+              <Button size="sm" variant="outline" className="border-amber-400 text-amber-900 shrink-0" onClick={handlePreviewBilling} disabled={previewing}>
+                {previewing ? "Loading…" : "Review now"}
+              </Button>
+            </div>
+          )}
+
+          {/* ── Monthly Proforma Billing (manual trigger — cron is paused) ── */}
+          <div className="rounded-lg border bg-card p-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <Receipt className="h-4 w-4 text-[#015E65]" />
+                  Monthly Proforma Billing — {nextMonthInfo.label}
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Automatic billing is paused. Preview the amounts, then run &amp; send manually.
+                  {billingDoneForNext === true && <span className="text-green-700 font-medium"> ✓ Nothing pending for {nextMonthInfo.label}.</span>}
+                  {billingDoneForNext === false && <span className="text-amber-700 font-medium"> Not yet run.</span>}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button variant="outline" onClick={handlePreviewBilling} disabled={previewing}>
+                  {previewing ? (
+                    <><span className="mr-2 h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin inline-block" />Previewing…</>
+                  ) : (
+                    <><Eye className="mr-2 h-4 w-4" />Preview</>
+                  )}
+                </Button>
+                <Button
+                  onClick={() => setRunConfirmOpen(true)}
+                  disabled={!previewedThisCycle || runningBilling}
+                  title={!previewedThisCycle ? "Preview first to enable" : "Generate, finalize, and send proformas"}
+                >
+                  <Send className="mr-2 h-4 w-4" />Run &amp; Send
+                </Button>
+              </div>
+            </div>
+
+            {/* Preview results */}
+            {previewItems && (
+              <div className="mt-4 rounded-md border overflow-x-auto">
+                <div className="px-3 py-2 bg-muted/50 text-xs font-medium flex items-center justify-between">
+                  <span>Preview — {previewItems.length} statement{previewItems.length !== 1 ? "s" : ""} would be created (nothing sent yet)</span>
+                  <span className="text-muted-foreground">
+                    Rent: {previewItems.filter(i => i.type === "rent").length} · Usage: {previewItems.filter(i => i.type === "usage").length} · Total ₹{previewItems.reduce((s, i) => s + i.total_amount, 0).toLocaleString("en-IN")}
+                  </span>
+                </div>
+                {previewItems.length === 0 ? (
+                  <p className="text-xs text-muted-foreground px-3 py-3">Nothing to generate — all contracts are already billed for this period.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/30">
+                        <th className="px-3 py-2 text-left font-medium">Contract</th>
+                        <th className="px-3 py-2 text-left font-medium">Type</th>
+                        <th className="px-3 py-2 text-left font-medium hidden md:table-cell">Period</th>
+                        <th className="px-3 py-2 text-right font-medium">Subtotal</th>
+                        <th className="px-3 py-2 text-right font-medium">GST</th>
+                        <th className="px-3 py-2 text-right font-medium">Total</th>
+                        <th className="px-3 py-2 text-left font-medium hidden lg:table-cell">Note</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewItems.map((it, idx) => (
+                        <tr key={idx} className="border-b">
+                          <td className="px-3 py-2 font-mono text-xs">{it.contract_number}</td>
+                          <td className="px-3 py-2">
+                            <Badge variant="outline" className={it.type === "rent" ? "border-teal-300 text-teal-700" : "border-purple-300 text-purple-700"}>{it.type}</Badge>
+                          </td>
+                          <td className="px-3 py-2 text-muted-foreground hidden md:table-cell">{it.period_label}</td>
+                          <td className="px-3 py-2 text-right">{formatCurrency(it.subtotal)}</td>
+                          <td className="px-3 py-2 text-right text-muted-foreground">{formatCurrency(it.tax_amount)}</td>
+                          <td className="px-3 py-2 text-right font-medium">{formatCurrency(it.total_amount)}</td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground hidden lg:table-cell">{it.note}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
           </div>
 
           {/* ── Auto-Proforma Statements (rent + usage split) ── */}
@@ -1266,7 +1381,7 @@ export default function BillingPage() {
 
                 {typedStmts.length === 0 ? (
                   <p className="text-xs text-muted-foreground py-3">
-                    No {stmtTypeFilter === "all" ? "" : stmtTypeFilter + " "}proforma statements yet. Run the monthly billing or click &ldquo;Generate Missing Bills&rdquo;.
+                    No {stmtTypeFilter === "all" ? "" : stmtTypeFilter + " "}proforma statements yet. Use the Monthly Proforma Billing card above (Preview, then Run &amp; Send).
                   </p>
                 ) : (
                   <div className="rounded-md border overflow-x-auto">
@@ -1542,6 +1657,36 @@ export default function BillingPage() {
       <AddUsageChargeDialog open={addChargeOpen} onOpenChange={setAddChargeOpen} onSuccess={fetchCharges} />
       <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={fetchCharges} />
       <GenerateStatementDialog open={generateStatementOpen} onOpenChange={setGenerateStatementOpen} onSuccess={fetchStatements} />
+
+      {/* Run & Send confirmation — live dispatch to clients */}
+      <Dialog open={runConfirmOpen} onOpenChange={setRunConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Run &amp; send proformas for {nextMonthInfo.label}?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            {previewItems && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">
+                This will finalize and <strong>send live proformas with payment links</strong> to clients:
+                <br />• {previewItems.filter(i => i.type === "rent").length} rent proforma(s) — emailed + Razorpay link
+                <br />• {previewItems.filter(i => i.type === "usage").length} usage statement(s) — created as drafts for your review (not sent)
+                <br />Total rent value: ₹{previewItems.filter(i => i.type === "rent").reduce((s, i) => s + i.total_amount, 0).toLocaleString("en-IN")}
+              </div>
+            )}
+            <p className="text-muted-foreground">Rent proformas are dispatched immediately. Usage statements stay as drafts until you send them individually.</p>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setRunConfirmOpen(false)} disabled={runningBilling}>Cancel</Button>
+            <Button onClick={handleRunBilling} disabled={runningBilling}>
+              {runningBilling ? (
+                <><span className="mr-2 h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin inline-block" />Sending…</>
+              ) : (
+                <><Send className="mr-2 h-4 w-4" />Confirm &amp; Send</>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <ViewStatementDialog
         statementId={viewStatementId}
         open={!!viewStatementId}
