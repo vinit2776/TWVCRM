@@ -1,7 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { pingCronHealth } from "@/lib/cron-ping";
 import { generateRentProformas, generateUsageStatements, type GenerateResult } from "@/lib/billing";
 
 type AdminClient = ReturnType<typeof createAdminClient>;
@@ -16,12 +15,12 @@ type AdminClient = ReturnType<typeof createAdminClient>;
  */
 async function runGenerators(
   client: AdminClient,
-  opts: { month?: number; year?: number; contractId?: string },
+  opts: { month?: number; year?: number; contractId?: string; dryRun?: boolean },
 ): Promise<{ rent: GenerateResult; usage: GenerateResult }> {
   const m = opts.month ?? 0, y = opts.year ?? 0;
   const empty = (err: string): GenerateResult => ({
     month: m, year: y, generated: 0, skipped: 0, errors: [err],
-    statementIds: [], noContact: [], quarterlySkipped: [],
+    statementIds: [], noContact: [], quarterlySkipped: [], preview: [],
   });
 
   let rent: GenerateResult;
@@ -36,67 +35,33 @@ async function runGenerators(
 }
 
 /**
- * GET — cron-triggered. Runs two generators:
- *   1. generateRentProformas  — auto-finalizes + dispatches rent proformas to clients
- *   2. generateUsageStatements — creates draft usage statements for admin review
+ * GET — DISABLED. Automatic month-end billing is paused. Proforma generation
+ * and dispatch are now manual-only (triggered from the Billing page, which
+ * calls the POST handler below). The vercel.json cron entry has been removed;
+ * `/api/cron/billing-reminder` only sends a nudge, it never bills.
  *
- * Cron runs daily on 28th–31st at 15:30 UTC (21:00 IST). The handler checks
- * if today (IST) is actually the last day of the month. If not, returns early.
- *
- * Query: ?month=4&year=2026 (defaults to current month IST)
- *        ?force=1           (skip the last-day guard — for manual backfills)
+ * This handler is intentionally inert so that if the endpoint is ever hit
+ * (stale cron config, manual curl), it cannot silently auto-dispatch proformas.
  */
-export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const month = searchParams.get("month") ? parseInt(searchParams.get("month")!) : undefined;
-  const year  = searchParams.get("year")  ? parseInt(searchParams.get("year")!)  : undefined;
-  const force = searchParams.get("force") === "1";
-
-  // Last-day-of-month guard
-  if (!force && !month && !year) {
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const nowIST = new Date(Date.now() + IST_OFFSET_MS);
-    const todayDate = nowIST.getUTCDate();
-    const daysInThisMonth = new Date(nowIST.getUTCFullYear(), nowIST.getUTCMonth() + 1, 0).getDate();
-
-    if (todayDate !== daysInThisMonth) {
-      return NextResponse.json({
-        skipped_reason: `Not the last day of month (day ${todayDate} of ${daysInThisMonth})`,
-      });
-    }
-  }
-
-  const supabase = createAdminClient();
-  const opts = { month, year };
-
-  const { rent, usage } = await runGenerators(supabase, opts);
-
-  const totalGenerated = rent.generated + usage.generated;
-  const totalSkipped   = rent.skipped   + usage.skipped;
-  const allErrors      = [...rent.errors, ...usage.errors];
-
-  if (totalGenerated > 0 || rent.noContact.length > 0 || usage.generated > 0) {
-    await notifyBillingRun(supabase, rent, usage);
-  }
-
-  await pingCronHealth("billing/auto-generate", "ok", {
-    month: rent.month, year: rent.year,
-    rent_generated: rent.generated, usage_generated: usage.generated,
-    skipped: totalSkipped, no_contact: rent.noContact.length,
-  });
-
+export async function GET() {
   return NextResponse.json({
-    month: rent.month,
-    year: rent.year,
-    rent_proformas: { generated: rent.generated, skipped: rent.skipped, no_contact: rent.noContact, quarterly_skipped: rent.quarterlySkipped },
-    usage_statements: { generated: usage.generated, skipped: usage.skipped },
-    errors: allErrors.length > 0 ? allErrors : undefined,
-  });
+    disabled: true,
+    message:
+      "Automatic billing is paused. Generate proformas manually from the Billing page " +
+      "(Monthly Proforma Billing card), or POST to this endpoint with a valid session.",
+  }, { status: 200 });
 }
 
 /**
  * POST — manual trigger from the Billing UI (admin/manager/accounts).
- * Body: { month?, year?, contract_id? }
+ *
+ * Body:
+ *   { month?, year?, contract_id? }   — run live: generate + finalize + dispatch
+ *   { dry_run: true, month?, year? }  — PREVIEW only: compute amounts/GST and
+ *                                        return what WOULD be generated, writing
+ *                                        nothing and sending nothing.
+ *
+ * Live runs send the internal summary email (notifyBillingRun). Dry runs do not.
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -113,17 +78,24 @@ export async function POST(request: NextRequest) {
   const month      = body.month      ? parseInt(String(body.month)) : undefined;
   const year       = body.year       ? parseInt(String(body.year))  : undefined;
   const contractId = body.contract_id || undefined;
+  const dryRun     = body.dry_run === true;
 
   const admin = createAdminClient();
-  const opts  = { month, year, contractId };
+  const opts  = { month, year, contractId, dryRun };
 
   const { rent, usage } = await runGenerators(admin, opts);
 
+  // Live runs notify staff; dry runs are silent previews.
+  if (!dryRun && (rent.generated > 0 || usage.generated > 0 || rent.noContact.length > 0)) {
+    await notifyBillingRun(admin, rent, usage);
+  }
+
   return NextResponse.json({
+    dry_run: dryRun,
     month: rent.month,
     year: rent.year,
-    rent_proformas: { generated: rent.generated, skipped: rent.skipped, no_contact: rent.noContact, quarterly_skipped: rent.quarterlySkipped },
-    usage_statements: { generated: usage.generated, skipped: usage.skipped },
+    rent_proformas: { generated: rent.generated, skipped: rent.skipped, no_contact: rent.noContact, quarterly_skipped: rent.quarterlySkipped, preview: rent.preview },
+    usage_statements: { generated: usage.generated, skipped: usage.skipped, preview: usage.preview },
     errors: [...rent.errors, ...usage.errors].length > 0 ? [...rent.errors, ...usage.errors] : undefined,
     statement_ids: [...rent.statementIds, ...usage.statementIds],
   });

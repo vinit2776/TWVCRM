@@ -22,30 +22,38 @@ export async function POST(
 
   let dbUserId: string | null = null;
 
-  const supabase = await createClient();
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  // Internal/cron calls authenticate with x-internal-secret + skipAuth (no session).
+  // Keeps the route callable by background jobs that dispatch proformas server-side.
+  const isInternalCall =
+    body.skipAuth === true &&
+    request.headers.get("x-internal-secret") === process.env.CRON_SECRET;
 
-  const { data: dbUser } = await supabase
-    .from("users").select("id, role").eq("auth_id", user.id).single();
-  if (!dbUser || !["admin", "manager", "accounts"].includes(dbUser.role)) {
-    return NextResponse.json(
-      { error: "Only admin, manager, or accounts can send proforma invoices" },
-      { status: 403 }
-    );
+  if (!isInternalCall) {
+    const supabase = await createClient();
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+    const { data: dbUser } = await supabase
+      .from("users").select("id, role").eq("auth_id", user.id).single();
+    if (!dbUser || !["admin", "manager", "accounts"].includes(dbUser.role)) {
+      return NextResponse.json(
+        { error: "Only admin, manager, or accounts can send proforma invoices" },
+        { status: 403 }
+      );
+    }
+    dbUserId = dbUser.id;
   }
-  dbUserId = dbUser.id;
 
   // Validate statement is ready to send
   const { data: stmt } = await adminSupabase
     .from("billing_statements")
-    .select("status")
+    .select("status, voided_at")
     .eq("id", id)
     .single();
 
   if (!stmt) return NextResponse.json({ error: "Statement not found" }, { status: 404 });
   if (stmt.status === "draft") return NextResponse.json({ error: "Finalize the statement before sending a proforma" }, { status: 400 });
-  if (stmt.status === "voided") return NextResponse.json({ error: "Statement is voided" }, { status: 400 });
+  if (stmt.voided_at) return NextResponse.json({ error: "Statement is voided" }, { status: 400 });
 
   const additionalCc: string[] = Array.isArray(body.cc) ? (body.cc as string[]).filter(Boolean) : [];
 

@@ -32,6 +32,25 @@ export interface GenerateOptions {
   year?: number;
   /** Restrict to a single contract (used by the activation hook). */
   contractId?: string;
+  /**
+   * Preview mode. When true, compute what WOULD be generated (amounts, GST,
+   * after applying all gates + idempotency) and push it to result.preview[],
+   * but write NOTHING and dispatch NOTHING. Used by the manual "Preview" button.
+   */
+  dryRun?: boolean;
+}
+
+/** One row of a dry-run preview — what a single statement would contain. */
+export interface PreviewItem {
+  contract_number: string;
+  type: "rent" | "usage";
+  /** Human label, e.g. "June 2026" */
+  period_label: string;
+  subtotal: number;
+  tax_amount: number;
+  total_amount: number;
+  /** For rent: whether it would be prorated. For usage: the chargeable categories present. */
+  note?: string;
 }
 
 export interface GenerateResult {
@@ -46,6 +65,8 @@ export interface GenerateResult {
   noContact: string[];
   /** Contract numbers skipped by the quarterly billing gate (expected, not errors). */
   quarterlySkipped: string[];
+  /** Populated only in dryRun mode: what each contract WOULD be billed. */
+  preview: PreviewItem[];
 }
 
 // ── Line-item types for the JSONB column ──────────────────────────────────
@@ -143,7 +164,7 @@ export async function generateMonthlyStatements(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [], statementIds: [],
-    noContact: [], quarterlySkipped: [],
+    noContact: [], quarterlySkipped: [], preview: [],
   };
 
   if (!contracts || contracts.length === 0) return result;
@@ -557,7 +578,7 @@ export async function generateRentProformas(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [],
-    statementIds: [], noContact: [], quarterlySkipped: [],
+    statementIds: [], noContact: [], quarterlySkipped: [], preview: [],
   };
 
   // Fetch active contracts overlapping the target month
@@ -676,6 +697,23 @@ export async function generateRentProformas(
       }
       const taxAmount   = cgst + sgst + igst;
       const totalAmount = prepaidRentAmount + taxAmount;
+
+      // ── Dry run: record what WOULD be billed, write/dispatch nothing ──────
+      if (opts.dryRun) {
+        result.preview.push({
+          contract_number: contractNumber,
+          type: "rent",
+          period_label: monthLabel(prepaid.month, prepaid.year),
+          subtotal: prepaidRentAmount,
+          tax_amount: taxAmount,
+          total_amount: totalAmount,
+          note: prepaidRentAmount < baseAmount
+            ? `Prorated (contract ends mid-month) · ${isInterstate ? "IGST" : "CGST+SGST"}`
+            : `Full month · ${isInterstate ? "IGST" : "CGST+SGST"}`,
+        });
+        result.generated++;
+        continue;
+      }
 
       const lineItems = [{
         type: "prepaid_rent" as const,
@@ -808,7 +846,7 @@ export async function generateUsageStatements(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [],
-    statementIds: [], noContact: [], quarterlySkipped: [],
+    statementIds: [], noContact: [], quarterlySkipped: [], preview: [],
   };
 
   // Fetch active contracts
@@ -973,6 +1011,27 @@ export async function generateUsageStatements(
       }
       const taxAmount   = cgst + sgst + igst;
       const totalAmount = totalUsage + taxAmount;
+
+      // ── Dry run: record what WOULD be billed, write/link nothing ─────────
+      if (opts.dryRun) {
+        const cats = [
+          adHocSubtotal > 0 ? "ad-hoc" : null,
+          facilitySubtotal > 0 ? "facility" : null,
+          serviceSubtotal > 0 ? "service" : null,
+          bookingSubtotal > 0 ? "bookings" : null,
+        ].filter(Boolean).join(", ");
+        result.preview.push({
+          contract_number: contractNumber,
+          type: "usage",
+          period_label: monthLabel(targetMonth, targetYear),
+          subtotal: totalUsage,
+          tax_amount: taxAmount,
+          total_amount: totalAmount,
+          note: `${cats || "usage"} · ${isInterstate ? "IGST" : "CGST+SGST"} · draft for review`,
+        });
+        result.generated++;
+        continue;
+      }
 
       // Build line_items sections
       const lineItems = [
