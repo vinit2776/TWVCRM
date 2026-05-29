@@ -385,6 +385,7 @@ export async function sendSms(
 
   const payload = {
     flow_id: flowId,
+    sender: DLT_SENDER,
     recipients: [{ mobiles: toNumber, ...vars }],
   };
 
@@ -457,6 +458,13 @@ export async function sendDltSms(
   if (variables.length !== tpl.vars) {
     console.error(`[messaging] DLT template "${templateKey}" expects ${tpl.vars} variable(s), got ${variables.length}`);
     return { success: false, error: `Variable count mismatch: expected ${tpl.vars}`, channel: "sms" };
+  }
+
+  // Guard: TRAI DLT template ID is empty — template not yet approved by TRAI.
+  // Sending without approval causes MSG91 to return 400. Skip gracefully.
+  if (!tpl.id) {
+    console.warn(`[messaging] DLT template "${templateKey}" has no TRAI template ID — skipping until approved.`);
+    return { success: false, error: `DLT template "${templateKey}" awaiting TRAI approval`, channel: "sms" };
   }
 
   const toNumber = normalisePhone(to);
