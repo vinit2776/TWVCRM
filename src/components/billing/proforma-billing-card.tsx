@@ -12,6 +12,7 @@ type Mode = "rent" | "usage";
 
 interface PreviewItem {
   contract_number: string;
+  customer_name?: string;
   type: "rent" | "usage";
   period_label: string;
   subtotal: number;
@@ -216,6 +217,7 @@ export function ProformaBillingCard({
               <thead>
                 <tr className="border-b bg-muted/30">
                   <th className="px-3 py-2 text-left font-medium">Contract</th>
+                  <th className="px-3 py-2 text-left font-medium">Customer</th>
                   <th className="px-3 py-2 text-left font-medium hidden md:table-cell">Period</th>
                   <th className="px-3 py-2 text-right font-medium">Subtotal</th>
                   <th className="px-3 py-2 text-right font-medium">GST</th>
@@ -227,6 +229,7 @@ export function ProformaBillingCard({
                 {[...previewItems].sort((a, b) => a.contract_number.localeCompare(b.contract_number, undefined, { numeric: true })).map((it, idx) => (
                   <tr key={idx} className="border-b">
                     <td className="px-3 py-2 font-mono text-xs">{it.contract_number}</td>
+                    <td className="px-3 py-2 text-xs">{it.customer_name || "—"}</td>
                     <td className="px-3 py-2 text-muted-foreground hidden md:table-cell">{it.period_label}</td>
                     <td className="px-3 py-2 text-right">{formatCurrency(it.subtotal)}</td>
                     <td className="px-3 py-2 text-right text-muted-foreground">{formatCurrency(it.tax_amount)}</td>

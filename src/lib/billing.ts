@@ -43,6 +43,7 @@ export interface GenerateOptions {
 /** One row of a dry-run preview — what a single statement would contain. */
 export interface PreviewItem {
   contract_number: string;
+  customer_name?: string;
   type: "rent" | "usage";
   /** Human label, e.g. "June 2026" */
   period_label: string;
@@ -442,7 +443,8 @@ export async function generateMonthlyStatements(
       // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
       const isInterstate = false;
 
-      let cgst = 0, sgst = 0, igst = 0;
+      let cgst = 0, sgst = 0;
+      const igst = 0;
       cgst = Math.round(subtotal * (taxPercentage / 200) );
         sgst = Math.round(subtotal * (taxPercentage / 200) );
       const taxAmount = cgst + sgst + igst;
@@ -758,8 +760,10 @@ export async function generateRentProformas(
       // ── Dry run: record what WOULD be billed, write/dispatch nothing ──────
       if (opts.dryRun) {
         const addonNote = addonsSubtotal > 0 ? ` + ₹${addonsSubtotal.toLocaleString("en-IN")} add-ons` : "";
+        const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || undefined;
         result.preview.push({
           contract_number: contractNumber,
+          customer_name: customerName,
           type: "rent",
           period_label: monthLabel(prepaid.month, prepaid.year),
           subtotal: totalPrepaidSubtotal,
@@ -1155,7 +1159,8 @@ export async function generateUsageStatements(
       const buyerState    = (lead?.state || "").toLowerCase().trim();
       // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
       const isInterstate = false;
-      let cgst = 0, sgst = 0, igst = 0;
+      let cgst = 0, sgst = 0;
+      const igst = 0;
       cgst = Math.round(totalUsage * (taxPercentage / 200) );
         sgst = Math.round(totalUsage * (taxPercentage / 200) );
       const taxAmount   = cgst + sgst + igst;
@@ -1171,6 +1176,7 @@ export async function generateUsageStatements(
         ].filter(Boolean).join(", ");
         result.preview.push({
           contract_number: contractNumber,
+          customer_name: lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || undefined,
           type: "usage",
           period_label: monthLabel(targetMonth, targetYear),
           subtotal: totalUsage,
