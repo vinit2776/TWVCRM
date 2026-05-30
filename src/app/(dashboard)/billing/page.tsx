@@ -1343,7 +1343,21 @@ export default function BillingPage() {
                                 finalized && !stmt.proforma_sent_at && !noContact ? "bg-red-50/50" : ""
                               }`}
                             >
-                              <td className="px-4 py-3 font-mono text-xs">{stmt.statement_number}</td>
+                              <td className="px-4 py-3 font-mono text-xs">
+                                {finalized ? (
+                                  <a
+                                    href={`/api/billing-statements/${stmt.id}/proforma-pdf`}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="text-[#015E65] hover:underline"
+                                    title="Open the proforma PDF that was sent"
+                                  >
+                                    {stmt.statement_number}
+                                  </a>
+                                ) : (
+                                  stmt.statement_number
+                                )}
+                              </td>
                               <td className="px-4 py-3">
                                 <Badge variant="outline" className={isRent ? "border-teal-300 text-teal-700" : "border-purple-300 text-purple-700"}>
                                   {isRent ? "Rent" : "Usage"}
@@ -1488,9 +1502,25 @@ export default function BillingPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {bookingStmts.map((stmt) => (
+                      {bookingStmts.map((stmt) => {
+                        const stmtFinalized = stmt.status === "finalized" || stmt.status === "exported";
+                        return (
                         <tr key={stmt.id} className="border-b hover:bg-muted/30 transition-colors">
-                          <td className="px-4 py-3 font-mono text-xs">{stmt.statement_number}</td>
+                          <td className="px-4 py-3 font-mono text-xs">
+                            {stmtFinalized ? (
+                              <a
+                                href={`/api/billing-statements/${stmt.id}/proforma-pdf`}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="text-[#015E65] hover:underline"
+                                title="Open the proforma PDF that was sent"
+                              >
+                                {stmt.statement_number}
+                              </a>
+                            ) : (
+                              stmt.statement_number
+                            )}
+                          </td>
                           <td className="px-4 py-3 font-mono text-xs hidden md:table-cell">
                             {stmt.booking?.booking_number || "—"}
                           </td>
@@ -1561,7 +1591,8 @@ export default function BillingPage() {
                             </DropdownMenu>
                           </td>
                         </tr>
-                      ))}
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
