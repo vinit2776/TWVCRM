@@ -106,7 +106,7 @@ const navSections: NavSection[] = [
       { href: "/invoices",   label: "Proforma Invoices",       icon: Receipt,     roles: LEGACY_ROLES },
       { href: "/contracts",  label: "Contracts",               icon: ScrollText,  roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/contracts/kyc-pending", label: "KYC Pending",   icon: ShieldCheck, roles: [...LEGACY_ROLES, "accounts"] },
-      { href: "/billing",    label: "Billing - Acc Receivables", icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
+      { href: "/billing",    label: "Billing", icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/accounting/receivables", label: "Receivables (AR)",  icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/accounting", label: "Acc Payables",             icon: Calculator,  roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/finance/gateway-activity", label: "Gateway Activity",   icon: Landmark,    roles: ["admin", "accounts", "viewer"] },
