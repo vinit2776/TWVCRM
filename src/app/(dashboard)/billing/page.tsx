@@ -539,9 +539,11 @@ export default function BillingPage() {
   const fetchStatements = useCallback(async (signal?: AbortSignal) => {
     setStatementsLoading(true);
     try {
-      const params = new URLSearchParams({ page: String(statementsPage), limit: "50" });
-      // Usage filter: show ALL pending usage statements across all months (carry-forward)
-      if (stmtTypeFilter !== "all") params.set("statement_type", stmtTypeFilter);
+      // Fetch all statements once. Both downstream sections — Booking Statements
+      // and Proforma Statements — filter client-side. This lets the rent/usage
+      // chips display accurate counts (e.g., "Usage (3)" even while "Rent" is
+      // selected) without a refetch on every chip click.
+      const params = new URLSearchParams({ page: String(statementsPage), limit: "100" });
       const res = await fetch(`/api/billing-statements?${params}`, { signal });
       if (signal?.aborted) return;
       if (res.ok) {
@@ -554,7 +556,7 @@ export default function BillingPage() {
     } finally {
       if (!signal?.aborted) setStatementsLoading(false);
     }
-  }, [statementsPage, stmtTypeFilter]);
+  }, [statementsPage]);
 
   // Only fire on the Statements tab — saves a round-trip on first load
   // for users who land on contracts/cash/gst tabs.
@@ -1209,9 +1211,15 @@ export default function BillingPage() {
 
           {/* ── Auto-Proforma Statements (rent + usage split) ── */}
           {!statementsLoading && (() => {
-            const typedStmts = statements.filter(
+            const allTyped = statements.filter(
               (s) => s.statement_type === "rent" || s.statement_type === "usage"
             );
+            const rentCount  = allTyped.filter((s) => s.statement_type === "rent").length;
+            const usageCount = allTyped.filter((s) => s.statement_type === "usage").length;
+            // Client-side chip filter — the server returned all typed statements
+            const typedStmts = stmtTypeFilter === "all"
+              ? allTyped
+              : allTyped.filter((s) => s.statement_type === stmtTypeFilter);
 
             // Helper — does this statement's lead have any contact info?
             const hasNoContact = (s: BillingStatement) =>
@@ -1225,6 +1233,21 @@ export default function BillingPage() {
                 (s.status === "finalized" || s.status === "exported") &&
                 hasNoContact(s)
             );
+
+            // If absolutely no typed statements exist AND we're on "All", the whole
+            // section is unhelpful noise — show a single friendly empty state pointing
+            // to the cards above. The chips only meaningfully filter when there's data.
+            if (allTyped.length === 0 && stmtTypeFilter === "all") {
+              return (
+                <div className="rounded-md border border-dashed border-muted px-4 py-6 text-center">
+                  <p className="text-sm font-medium text-muted-foreground">No proforma statements yet</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Use the <strong>Monthly Rent Proforma</strong> or <strong>Monthly Usage Drafts</strong> card above to generate.
+                    Once you do, sent rent proformas and pending usage drafts will appear here.
+                  </p>
+                </div>
+              );
+            }
 
             return (
               <div className="space-y-3 pt-2">
@@ -1248,21 +1271,25 @@ export default function BillingPage() {
                   </div>
                 )}
 
-                {/* Filter chips */}
+                {/* Filter chips — labels include counts so each chip's effect is visible */}
                 <div className="flex items-center gap-2">
                   <span className="text-xs font-semibold text-muted-foreground uppercase">Proforma Statements</span>
                   <div className="flex items-center gap-1 ml-2">
-                    {(["all", "rent", "usage"] as const).map((t) => (
+                    {([
+                      { key: "all" as const, label: "All", count: rentCount + usageCount },
+                      { key: "rent" as const, label: "Rent", count: rentCount },
+                      { key: "usage" as const, label: "Usage", count: usageCount },
+                    ]).map(({ key, label, count }) => (
                       <button
-                        key={t}
-                        onClick={() => setStmtTypeFilter(t)}
+                        key={key}
+                        onClick={() => setStmtTypeFilter(key)}
                         className={`px-3 py-1 text-xs rounded-full border transition-colors ${
-                          stmtTypeFilter === t
+                          stmtTypeFilter === key
                             ? "bg-[#015E65] text-white border-[#015E65]"
                             : "bg-white text-muted-foreground border-input hover:bg-muted"
                         }`}
                       >
-                        {t === "all" ? "All" : t === "rent" ? "Rent" : "Usage"}
+                        {label} ({count})
                       </button>
                     ))}
                   </div>
@@ -1270,7 +1297,7 @@ export default function BillingPage() {
 
                 {typedStmts.length === 0 ? (
                   <p className="text-xs text-muted-foreground py-3">
-                    No {stmtTypeFilter === "all" ? "" : stmtTypeFilter + " "}proforma statements yet. Use the Monthly Proforma Billing card above (Preview, then Run &amp; Send).
+                    No {stmtTypeFilter} proforma statements in this filter. {stmtTypeFilter === "rent" && rentCount === 0 && "Run the Monthly Rent Proforma card above to create them."}{stmtTypeFilter === "usage" && usageCount === 0 && "Run the Monthly Usage Drafts card above to create them."}
                   </p>
                 ) : (
                   <div className="rounded-md border overflow-x-auto">
