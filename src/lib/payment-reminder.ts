@@ -30,6 +30,14 @@ export interface Stage {
   ccAccounts: boolean;
   ccManagerAndAdmin: boolean;
   whatsApp: boolean;
+  /**
+   * Optional re-fire cadence (days). If set, the cron MAY send this stage
+   * again after `reminder_count` has already advanced past it, as long as
+   * `last_reminder_sent_at` is at least this many days old. Use on the
+   * terminal stage so reminders continue perpetually until payment lands
+   * or the statement is voided. Manual collections runs in parallel.
+   */
+  perpetualEveryDays?: number;
 }
 
 export const STAGES: Stage[] = [
@@ -64,10 +72,14 @@ export const STAGES: Stage[] = [
     ccAccounts: true, ccManagerAndAdmin: true, whatsApp: true,
   },
   {
-    day: 30, toneLabel: "Final notice",
-    subject: (ref, _due, amt) => `FINAL NOTICE — ${ref} · ₹${amt}`,
-    intro: "This is our final automated notice for the outstanding payment below. Our accounts team will contact you directly to arrange settlement. Please respond to avoid further escalation.",
+    day: 30, toneLabel: "Continued follow-up",
+    subject: (ref, due, amt) => `Payment still pending — ${ref} (${due} overdue) · ₹${amt}`,
+    intro: "The payment for the proforma below has been outstanding for some time despite multiple reminders. Our accounts team is also reaching out separately. We'd really appreciate it if you could close this out, or reply to let us know when we can expect settlement.",
     ccAccounts: true, ccManagerAndAdmin: true, whatsApp: true,
+    // Re-fires every 3 days perpetually until the statement is paid or voided.
+    // Manual collections (calls, in-person visits) runs in parallel — this
+    // is the steady automated drumbeat.
+    perpetualEveryDays: 3,
   },
 ];
 

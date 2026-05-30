@@ -16,7 +16,13 @@ export const maxDuration = 60;
  * Now" button on /accounting/receivables).
  *
  * Idempotency: reminder_count gates per-stage; only fires when stageIdx >=
- * reminder_count. 48h throttle prevents accidental double-sends.
+ * reminder_count, EXCEPT the terminal stage (stage 5, "Continued follow-up")
+ * which is marked perpetualEveryDays and re-fires on its own cadence (every 3
+ * days) until the statement is paid or voided. Manual collections runs in
+ * parallel — this is the steady automated drumbeat.
+ *
+ * Throttle: non-perpetual stages have a 48h floor between sends. Perpetual
+ * re-fires gate by the stage's own cadence (e.g. 3 days).
  *
  * Query: ?dry=1   — preview only, send nothing
  *        ?force=1 — bypass 48h throttle (testing)
@@ -72,12 +78,36 @@ export async function GET(request: NextRequest) {
     const daysOverdue = daysOverdueFromDueDate(s.due_date as string);
     const stageIdx = pickStageIndex(daysOverdue);
     if (stageIdx < 0) { skipped++; summary.push({ id: s.id, stmt: s.statement_number, stage: -1, tone: "pre-due", channel: "—", status: "skip", reason: "not yet due" }); continue; }
-    if (stageIdx < (s.reminder_count || 0)) { skipped++; summary.push({ id: s.id, stmt: s.statement_number, stage: stageIdx, tone: "—", channel: "—", status: "skip", reason: "stage already sent" }); continue; }
 
+    // Stage gating with perpetual re-fire support:
+    //   • Stage hasn't fired yet (stageIdx >= reminder_count) → send.
+    //   • Stage has fired AND is the terminal one AND has perpetualEveryDays
+    //     set → re-fire once enough time has passed.
+    //   • Otherwise skip (moved past this stage, or stage isn't perpetual).
+    const stage = STAGES[stageIdx];
+    const remCount = s.reminder_count || 0;
+    const isFirstFire = stageIdx >= remCount;
+    const isPerpetualRefire =
+      !isFirstFire && stage.perpetualEveryDays !== undefined && stageIdx === STAGES.length - 1;
+    if (!isFirstFire && !isPerpetualRefire) {
+      skipped++; summary.push({ id: s.id, stmt: s.statement_number, stage: stageIdx, tone: "—", channel: "—", status: "skip", reason: "stage already sent" });
+      continue;
+    }
+
+    // Throttle:
+    //   • Perpetual re-fires: gate by the stage's own cadence (e.g. 3 days).
+    //   • All other sends: 48h base throttle to prevent accidental double-fires.
     if (!force && s.last_reminder_sent_at) {
       const lastMs = Date.parse(s.last_reminder_sent_at as string);
-      if (Date.now() - lastMs < 48 * 60 * 60 * 1000) {
-        skipped++; summary.push({ id: s.id, stmt: s.statement_number, stage: stageIdx, tone: STAGES[stageIdx].toneLabel, channel: "—", status: "skip", reason: "<48h since last" });
+      const elapsedMs = Date.now() - lastMs;
+      const minIntervalMs = isPerpetualRefire
+        ? (stage.perpetualEveryDays as number) * 24 * 60 * 60 * 1000
+        : 48 * 60 * 60 * 1000;
+      if (elapsedMs < minIntervalMs) {
+        const reason = isPerpetualRefire
+          ? `<${stage.perpetualEveryDays}d since last (perpetual cadence)`
+          : "<48h since last";
+        skipped++; summary.push({ id: s.id, stmt: s.statement_number, stage: stageIdx, tone: stage.toneLabel, channel: "—", status: "skip", reason });
         continue;
       }
     }
