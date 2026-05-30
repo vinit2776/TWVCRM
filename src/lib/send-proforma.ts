@@ -22,22 +22,6 @@ import QRCode from "qrcode";
 const RAZORPAY_TIMEOUT_MS = 10_000;
 const EMAIL_TIMEOUT_MS    = 15_000;
 
-/**
- * The proforma's printed invoice date is always the LAST DAY of the current
- * IST calendar month — not "today" — so dispatches sent a day or two early
- * (e.g., last working day before a Sunday month-end) still bear the formal
- * month-end date that accounting expects. Sending on May 30 prints May 31;
- * sending on May 31 also prints May 31; sending on Jun 5 prints Jun 30.
- */
-function lastDayOfCurrentIstMonth(): string {
-  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-  const nowIST = new Date(Date.now() + IST_OFFSET_MS);
-  const y = nowIST.getUTCFullYear();
-  const m = nowIST.getUTCMonth(); // 0-11
-  // Day 0 of next month = last day of current month
-  return new Date(Date.UTC(y, m + 1, 0)).toISOString().slice(0, 10);
-}
-
 /** Reject the given promise after `ms` milliseconds with a clear error. */
 function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
   return new Promise<T>((resolve, reject) => {
@@ -264,7 +248,11 @@ export async function dispatchProforma(
 
   const invoiceData: GstInvoiceData = {
     invoiceNumber: proformaRef,
-    invoiceDate: lastDayOfCurrentIstMonth(),
+    // Invoice date = LAST DAY of the billing period this statement covers, not
+    // the send date. Sending a May proforma on Jun 1 still prints invoice date
+    // May 31. Sending early (May 30 for May period) also prints May 31.
+    // Sending July's proforma later still prints Jul 31.
+    invoiceDate: statement.period_end as string,
     isProforma: true,
     buyerName: lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer",
     buyerGstin: lead?.gst_number || undefined,
