@@ -110,6 +110,7 @@ export function ProformaBillingCard({
       if (!res.ok) { toast.error(json.error || "Run failed"); return; }
       const generated = isRent ? (json.rent_proformas?.generated ?? 0) : (json.usage_statements?.generated ?? 0);
       const noContact = isRent ? (json.rent_proformas?.no_contact ?? []) : [];
+      const errors: string[] = json.errors ?? [];
       const message = isRent
         ? `${generated} rent proforma${generated !== 1 ? "s" : ""} sent to clients`
         : `${generated} usage draft${generated !== 1 ? "s" : ""} created for review`;
@@ -117,7 +118,14 @@ export function ProformaBillingCard({
       if (noContact.length > 0) {
         toast.warning(`${noContact.length} contract${noContact.length > 1 ? "s" : ""} have no email/phone — proforma not sent: ${noContact.join(", ")}`);
       }
-      if (json.errors?.length) for (const e of json.errors) toast.error(e);
+      // Itemize failures cleanly. One summary toast + a single info toast
+      // listing all failed contract numbers so the operator can target
+      // recovery via the per-row Resend Proforma button instead of guessing.
+      if (errors.length > 0) {
+        toast.error(`${errors.length} contract${errors.length !== 1 ? "s" : ""} failed — use Resend Proforma on the affected rows`);
+        const summary = errors.slice(0, 10).join("\n") + (errors.length > 10 ? `\n…and ${errors.length - 10} more` : "");
+        toast(summary, { duration: 15000 });
+      }
       setConfirmOpen(false);
       setPreviewItems(null);
       setAlreadySent([]);
