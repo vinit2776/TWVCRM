@@ -122,6 +122,16 @@ function dueDateFromPeriodEnd(periodEndYmd: string): string {
   return dt.toISOString().slice(0, 10);
 }
 
+/** Due date for a rent proforma: 7 days from today (IST). Used instead of
+ *  dueDateFromPeriodEnd for prepaid rent statements, whose period_end is the
+ *  last day of the NEXT month — period_end + 7 would push the due date a full
+ *  month too late (e.g. June 30 + 7 = July 7 instead of June 7). */
+function dueDateFromSendDate(): string {
+  const dt = istNow();
+  dt.setUTCDate(dt.getUTCDate() + 7);
+  return dt.toISOString().slice(0, 10);
+}
+
 /** Advance month by 1, wrapping year */
 function nextMonth(month: number, year: number): { month: number; year: number } {
   return month === 12 ? { month: 1, year: year + 1 } : { month: month + 1, year };
@@ -840,7 +850,7 @@ export async function generateRentProformas(
           lead_id:             contract.lead_id,
           period_start:        prepaidFirstOfMonth,
           period_end:          prepaidLastOfMonth,
-          due_date:            dueDateFromPeriodEnd(prepaidLastOfMonth),
+          due_date:            dueDateFromSendDate(),
           statement_type:      "rent",
           fixed_amount:        totalPrepaidSubtotal,
           usage_amount:        0,

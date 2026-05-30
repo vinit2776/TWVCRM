@@ -381,6 +381,7 @@ export async function dispatchProforma(
     buyer_gstin: lead?.gst_number || null,
   };
   if (delivered) updatePayload.proforma_sent_at = now;
+  if (delivered) updatePayload.due_date = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
   if (delivered && dispatchedBy) updatePayload.proforma_sent_by = dispatchedBy;
   if (razorpayLinkId) updatePayload.razorpay_payment_link_id = razorpayLinkId;
   if (razorpayLinkUrl) updatePayload.razorpay_payment_link_url = razorpayLinkUrl;
