@@ -155,6 +155,11 @@ export function CreateContractDialog({
   useEffect(() => {
     if (selectedProposal) {
       setMonthlyFee(selectedProposal.subtotal ?? selectedProposal.total_amount);
+      // Derive seats from proposal items (sum of paid item quantities)
+      const proposalSeats = (selectedProposal.items ?? [])
+        .filter((i: { unit_price: number }) => (i.unit_price ?? 0) > 0)
+        .reduce((sum: number, i: { quantity: number }) => sum + (i.quantity || 0), 0);
+      if (proposalSeats > 0) setSeats(proposalSeats);
       if (selectedProposal.location_id) {
         setLocationId(selectedProposal.location_id);
       }
