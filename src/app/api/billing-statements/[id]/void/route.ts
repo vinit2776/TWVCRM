@@ -116,6 +116,15 @@ export async function POST(
     .update({ billing_statement_id: null })
     .eq("billing_statement_id", id);
 
+  // 2c. Un-link service usage records (printer/service overages) so they are
+  //     re-billable. Without this, service overages stay is_billed=true and the
+  //     usage generator's `is_billed=false` filter skips them forever — silent
+  //     revenue loss after a void.
+  await supabase
+    .from("service_usage_records")
+    .update({ billing_statement_id: null, is_billed: false })
+    .eq("billing_statement_id", id);
+
   // 3. Create a fresh draft copy (carries over the billing-relevant data
   //    but strips out all finalization artifacts)
   const { data: newStatement, error: insertErr } = await supabase
@@ -124,6 +133,7 @@ export async function POST(
       contract_id: statement.contract_id,
       booking_id: statement.booking_id,
       lead_id: statement.lead_id,
+      statement_type: statement.statement_type,
       period_start: statement.period_start,
       period_end: statement.period_end,
       accounting_period_id: statement.accounting_period_id,

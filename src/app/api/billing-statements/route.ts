@@ -4,7 +4,7 @@ import { generateBillingStatementSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 
 const SELECT_FIELDS =
-  "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company)";
+  "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -14,10 +14,11 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const page = parseInt(searchParams.get("page") || "1");
   const limit = parseInt(searchParams.get("limit") || "25");
-  const contractId = searchParams.get("contract_id");
-  const bookingId = searchParams.get("booking_id");
-  const leadId = searchParams.get("lead_id");
-  const status = searchParams.get("status");
+  const contractId    = searchParams.get("contract_id");
+  const bookingId     = searchParams.get("booking_id");
+  const leadId        = searchParams.get("lead_id");
+  const status        = searchParams.get("status");
+  const statementType = searchParams.get("statement_type"); // 'rent' | 'usage' | 'combined'
 
   const offset = (page - 1) * limit;
 
@@ -25,10 +26,11 @@ export async function GET(request: NextRequest) {
     .from("billing_statements")
     .select(SELECT_FIELDS, { count: "exact" });
 
-  if (contractId) query = query.eq("contract_id", contractId);
-  if (bookingId) query = query.eq("booking_id", bookingId);
-  if (leadId) query = query.eq("lead_id", leadId);
-  if (status) query = query.eq("status", status);
+  if (contractId)    query = query.eq("contract_id", contractId);
+  if (bookingId)     query = query.eq("booking_id", bookingId);
+  if (leadId)        query = query.eq("lead_id", leadId);
+  if (status)        query = query.eq("status", status);
+  if (statementType) query = query.eq("statement_type", statementType);
 
   query = query.order("created_at", { ascending: false }).range(offset, offset + limit - 1);
 

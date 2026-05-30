@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import dynamic from "next/dynamic";
 import Link from "next/link";
 import {
@@ -15,7 +15,6 @@ import {
   X,
   IndianRupee,
   ScrollText,
-  RefreshCcw,
   Send,
   FileCheck,
   Printer,
@@ -124,7 +123,8 @@ interface BillingStatement {
   booking_id?: string | null;
   contract?: { contract_number: string } | null;
   booking?: { booking_number: string; booking_date: string; guest_name?: string } | null;
-  lead?: { first_name: string; last_name: string; company?: string } | null;
+  lead_id?: string | null;
+  lead?: { id?: string; first_name: string; last_name: string; company?: string; email?: string | null; phone?: string | null; mobile?: string | null } | null;
   period_start: string;
   period_end: string;
   fixed_amount: number;
@@ -141,6 +141,8 @@ interface BillingStatement {
   gst_invoice_number?: string | null;
   voided_statement_id?: string | null;
   proforma_sent_at?: string | null;
+  // Auto-proforma split
+  statement_type?: 'combined' | 'rent' | 'usage' | null;
 }
 
 interface Pagination {
@@ -380,19 +382,63 @@ export default function BillingPage() {
   const [addChargeOpen, setAddChargeOpen]             = useState(false);
   const [printEntryOpen, setPrintEntryOpen]           = useState(false);
 
-  // ── Billing Statements (booking-only, non-contract) ──────────────────────
+  // ── Billing Statements ────────────────────────────────────────────────────
   const [statements, setStatements]                       = useState<BillingStatement[]>([]);
   const [statementsLoading, setStatementsLoading]         = useState(true);
   const [statementsPage, setStatementsPage]               = useState(1);
   const [generateStatementOpen, setGenerateStatementOpen] = useState(false);
-  const [generatingMissing, setGeneratingMissing] = useState(false);
+  // Filter: 'all' | 'rent' | 'usage'
+  const [stmtTypeFilter, setStmtTypeFilter]               = useState<"all" | "rent" | "usage">("all");
 
-  // "Generate Missing Bills" — re-runs the auto-generate logic for the current
-  // month so any contracts activated mid-month (after the cron ran on the 1st)
-  // get their billing statement created right away. Idempotent: contracts that
-  // already have a statement for the period are skipped.
-  const handleGenerateMissingBills = async () => {
-    setGeneratingMissing(true);
+  // ── Manual Monthly Proforma Billing (cron is paused; this is the manual trigger) ──
+  type PreviewItem = { contract_number: string; type: "rent" | "usage"; period_label: string; subtotal: number; tax_amount: number; total_amount: number; note?: string };
+  const [previewItems, setPreviewItems]       = useState<PreviewItem[] | null>(null);
+  const [previewing, setPreviewing]           = useState(false);
+  const [previewedThisCycle, setPreviewedThisCycle] = useState(false);
+  const [runningBilling, setRunningBilling]   = useState(false);
+  const [runConfirmOpen, setRunConfirmOpen]   = useState(false);
+  const [billingDoneForNext, setBillingDoneForNext] = useState<boolean | null>(null); // null = unknown
+
+  // Next month label + last-3-days-of-month flag (drives the reminder banner)
+  const nextMonthInfo = (() => {
+    const now = new Date();
+    const nm = now.getMonth() === 11 ? 0 : now.getMonth() + 1;
+    const ny = now.getMonth() === 11 ? now.getFullYear() + 1 : now.getFullYear();
+    const label = new Date(ny, nm).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+    const daysInThis = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
+    const nearMonthEnd = now.getDate() >= daysInThis - 2; // last 3 days
+    return { label, nearMonthEnd };
+  })();
+
+  // Dry-run preview: compute what WOULD be billed, write/send nothing
+  const handlePreviewBilling = async () => {
+    setPreviewing(true);
+    try {
+      const res = await fetch("/api/billing/auto-generate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dry_run: true }),
+      });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Preview failed"); return; }
+      const items: PreviewItem[] = [
+        ...(json.rent_proformas?.preview ?? []),
+        ...(json.usage_statements?.preview ?? []),
+      ];
+      setPreviewItems(items);
+      setPreviewedThisCycle(true);
+      setBillingDoneForNext(items.filter((i) => i.type === "rent").length === 0);
+      if (json.errors?.length) for (const e of json.errors) toast.error(e);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Preview failed");
+    } finally {
+      setPreviewing(false);
+    }
+  };
+
+  // Live run: generate + finalize + dispatch. Gated behind the confirm dialog.
+  const handleRunBilling = async () => {
+    setRunningBilling(true);
     try {
       const res = await fetch("/api/billing/auto-generate", {
         method: "POST",
@@ -400,28 +446,28 @@ export default function BillingPage() {
         body: JSON.stringify({}),
       });
       const json = await res.json();
-      if (!res.ok) {
-        toast.error(json.error || "Failed to generate bills");
-      } else if (json.generated === 0 && json.skipped === 0) {
-        toast.info("No active contracts need bills for this month");
-      } else if (json.generated === 0) {
-        toast.info(`All ${json.skipped} active contract${json.skipped > 1 ? "s" : ""} already have bills for this month`);
-      } else {
-        toast.success(
-          `Generated ${json.generated} draft bill${json.generated > 1 ? "s" : ""}` +
-          (json.skipped > 0 ? ` (${json.skipped} already existed)` : "")
-        );
-        await fetchStatements();
+      if (!res.ok) { toast.error(json.error || "Billing run failed"); return; }
+      const rentGen  = json.rent_proformas?.generated ?? 0;
+      const usageGen = json.usage_statements?.generated ?? 0;
+      const noContact = json.rent_proformas?.no_contact ?? [];
+      toast.success(`${rentGen} rent proforma${rentGen !== 1 ? "s" : ""} sent · ${usageGen} usage statement${usageGen !== 1 ? "s" : ""} created for review`);
+      if (noContact.length > 0) {
+        toast.warning(`${noContact.length} contract${noContact.length > 1 ? "s" : ""} have no email/phone — proforma not sent: ${noContact.join(", ")}`);
       }
-      if (json.errors?.length) {
-        for (const e of json.errors) toast.error(e);
-      }
+      if (json.errors?.length) for (const e of json.errors) toast.error(e);
+      setRunConfirmOpen(false);
+      setPreviewItems(null);
+      setPreviewedThisCycle(false);
+      setBillingDoneForNext(true);
+      await fetchStatements();
+      await fetchData();
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to generate bills");
+      toast.error(e instanceof Error ? e.message : "Billing run failed");
     } finally {
-      setGeneratingMissing(false);
+      setRunningBilling(false);
     }
   };
+
   const [viewStatementId, setViewStatementId]             = useState<string | null>(null);
 
   // ── Record Payment dialog ─────────────────────────────────────────────────
@@ -539,8 +585,9 @@ export default function BillingPage() {
   const fetchStatements = useCallback(async (signal?: AbortSignal) => {
     setStatementsLoading(true);
     try {
-      // Fetch all statements; we display only non-contract ones (booking-only) in the merged view
       const params = new URLSearchParams({ page: String(statementsPage), limit: "50" });
+      // Usage filter: show ALL pending usage statements across all months (carry-forward)
+      if (stmtTypeFilter !== "all") params.set("statement_type", stmtTypeFilter);
       const res = await fetch(`/api/billing-statements?${params}`, { signal });
       if (signal?.aborted) return;
       if (res.ok) {
@@ -553,7 +600,7 @@ export default function BillingPage() {
     } finally {
       if (!signal?.aborted) setStatementsLoading(false);
     }
-  }, [statementsPage]);
+  }, [statementsPage, stmtTypeFilter]);
 
   // Only fire on the Statements tab — saves a round-trip on first load
   // for users who land on contracts/cash/gst tabs.
@@ -1176,18 +1223,291 @@ export default function BillingPage() {
               <p className="text-xs text-muted-foreground">Expand a row to see charges, review the statement, and take action.</p>
             </div>
             <div className="flex items-center gap-2">
-              <Button variant="outline" onClick={handleGenerateMissingBills} disabled={generatingMissing}>
-                {generatingMissing ? (
-                  <><span className="mr-2 h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin inline-block" />Generating…</>
-                ) : (
-                  <><RefreshCcw className="mr-2 h-4 w-4" />Generate Missing Bills</>
-                )}
-              </Button>
               <Button onClick={() => setGenerateStatementOpen(true)}>
                 <Plus className="mr-2 h-4 w-4" />Generate Statement
               </Button>
             </div>
           </div>
+
+          {/* ── Reminder banner: near month-end + not yet run ── */}
+          {nextMonthInfo.nearMonthEnd && billingDoneForNext === false && (
+            <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 flex items-center justify-between gap-4">
+              <p className="text-sm font-medium text-amber-900">
+                ⏰ Monthly proforma billing for <strong>{nextMonthInfo.label}</strong> hasn&rsquo;t been run yet. Run it before month-end.
+              </p>
+              <Button size="sm" variant="outline" className="border-amber-400 text-amber-900 shrink-0" onClick={handlePreviewBilling} disabled={previewing}>
+                {previewing ? "Loading…" : "Review now"}
+              </Button>
+            </div>
+          )}
+
+          {/* ── Monthly Proforma Billing (manual trigger — cron is paused) ── */}
+          <div className="rounded-lg border bg-card p-4">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-sm font-semibold flex items-center gap-2">
+                  <Receipt className="h-4 w-4 text-[#015E65]" />
+                  Monthly Proforma Billing — {nextMonthInfo.label}
+                </h3>
+                <p className="text-xs text-muted-foreground mt-0.5">
+                  Automatic billing is paused. Preview the amounts, then run &amp; send manually.
+                  {billingDoneForNext === true && <span className="text-green-700 font-medium"> ✓ Nothing pending for {nextMonthInfo.label}.</span>}
+                  {billingDoneForNext === false && <span className="text-amber-700 font-medium"> Not yet run.</span>}
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <Button variant="outline" onClick={handlePreviewBilling} disabled={previewing}>
+                  {previewing ? (
+                    <><span className="mr-2 h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin inline-block" />Previewing…</>
+                  ) : (
+                    <><Eye className="mr-2 h-4 w-4" />Preview</>
+                  )}
+                </Button>
+                <Button
+                  onClick={() => setRunConfirmOpen(true)}
+                  disabled={!previewedThisCycle || runningBilling}
+                  title={!previewedThisCycle ? "Preview first to enable" : "Generate, finalize, and send proformas"}
+                >
+                  <Send className="mr-2 h-4 w-4" />Run &amp; Send
+                </Button>
+              </div>
+            </div>
+
+            {/* Preview results */}
+            {previewItems && (
+              <div className="mt-4 rounded-md border overflow-x-auto">
+                <div className="px-3 py-2 bg-muted/50 text-xs font-medium flex items-center justify-between">
+                  <span>Preview — {previewItems.length} statement{previewItems.length !== 1 ? "s" : ""} would be created (nothing sent yet)</span>
+                  <span className="text-muted-foreground">
+                    Rent: {previewItems.filter(i => i.type === "rent").length} · Usage: {previewItems.filter(i => i.type === "usage").length} · Total ₹{previewItems.reduce((s, i) => s + i.total_amount, 0).toLocaleString("en-IN")}
+                  </span>
+                </div>
+                {previewItems.length === 0 ? (
+                  <p className="text-xs text-muted-foreground px-3 py-3">Nothing to generate — all contracts are already billed for this period.</p>
+                ) : (
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/30">
+                        <th className="px-3 py-2 text-left font-medium">Contract</th>
+                        <th className="px-3 py-2 text-left font-medium">Type</th>
+                        <th className="px-3 py-2 text-left font-medium hidden md:table-cell">Period</th>
+                        <th className="px-3 py-2 text-right font-medium">Subtotal</th>
+                        <th className="px-3 py-2 text-right font-medium">GST</th>
+                        <th className="px-3 py-2 text-right font-medium">Total</th>
+                        <th className="px-3 py-2 text-left font-medium hidden lg:table-cell">Note</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {previewItems.map((it, idx) => (
+                        <tr key={idx} className="border-b">
+                          <td className="px-3 py-2 font-mono text-xs">{it.contract_number}</td>
+                          <td className="px-3 py-2">
+                            <Badge variant="outline" className={it.type === "rent" ? "border-teal-300 text-teal-700" : "border-purple-300 text-purple-700"}>{it.type}</Badge>
+                          </td>
+                          <td className="px-3 py-2 text-muted-foreground hidden md:table-cell">{it.period_label}</td>
+                          <td className="px-3 py-2 text-right">{formatCurrency(it.subtotal)}</td>
+                          <td className="px-3 py-2 text-right text-muted-foreground">{formatCurrency(it.tax_amount)}</td>
+                          <td className="px-3 py-2 text-right font-medium">{formatCurrency(it.total_amount)}</td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground hidden lg:table-cell">{it.note}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                )}
+              </div>
+            )}
+          </div>
+
+          {/* ── Auto-Proforma Statements (rent + usage split) ── */}
+          {!statementsLoading && (() => {
+            const typedStmts = statements.filter(
+              (s) => s.statement_type === "rent" || s.statement_type === "usage"
+            );
+
+            // Helper — does this statement's lead have any contact info?
+            const hasNoContact = (s: BillingStatement) =>
+              !s.lead?.email && !s.lead?.phone && !s.lead?.mobile;
+
+            // No-contact banner: rent statements finalized but unsent because lead has no contact
+            const noContactStmts = statements.filter(
+              (s) =>
+                s.statement_type === "rent" &&
+                !s.proforma_sent_at &&
+                (s.status === "finalized" || s.status === "exported") &&
+                hasNoContact(s)
+            );
+
+            return (
+              <div className="space-y-3 pt-2">
+                {/* Missing-contact banner */}
+                {noContactStmts.length > 0 && (
+                  <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3">
+                    <p className="text-sm font-medium text-amber-900">
+                      ⚠ {noContactStmts.length} proforma{noContactStmts.length > 1 ? "s" : ""} could not be sent — no email or phone on the lead record.
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {noContactStmts.map((s) => (
+                        <Link
+                          key={s.id}
+                          href={s.lead?.id ? `/leads/${s.lead.id}` : "#"}
+                          className="inline-flex items-center gap-1 rounded border border-amber-400 bg-white px-2 py-1 text-xs text-amber-900 hover:bg-amber-100"
+                        >
+                          {s.contract?.contract_number || s.statement_number} — Update lead →
+                        </Link>
+                      ))}
+                    </div>
+                  </div>
+                )}
+
+                {/* Filter chips */}
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-semibold text-muted-foreground uppercase">Proforma Statements</span>
+                  <div className="flex items-center gap-1 ml-2">
+                    {(["all", "rent", "usage"] as const).map((t) => (
+                      <button
+                        key={t}
+                        onClick={() => setStmtTypeFilter(t)}
+                        className={`px-3 py-1 text-xs rounded-full border transition-colors ${
+                          stmtTypeFilter === t
+                            ? "bg-[#015E65] text-white border-[#015E65]"
+                            : "bg-white text-muted-foreground border-input hover:bg-muted"
+                        }`}
+                      >
+                        {t === "all" ? "All" : t === "rent" ? "Rent" : "Usage"}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {typedStmts.length === 0 ? (
+                  <p className="text-xs text-muted-foreground py-3">
+                    No {stmtTypeFilter === "all" ? "" : stmtTypeFilter + " "}proforma statements yet. Use the Monthly Proforma Billing card above (Preview, then Run &amp; Send).
+                  </p>
+                ) : (
+                  <div className="rounded-md border overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b bg-muted/50">
+                          <th className="px-4 py-3 text-left font-medium">Statement #</th>
+                          <th className="px-4 py-3 text-left font-medium">Type</th>
+                          <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Contract</th>
+                          <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Client</th>
+                          <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Period</th>
+                          <th className="px-4 py-3 text-right font-medium">Total</th>
+                          <th className="px-4 py-3 text-left font-medium">Status</th>
+                          <th className="px-4 py-3 text-right font-medium">Actions</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {typedStmts.map((stmt) => {
+                          const isRent = stmt.statement_type === "rent";
+                          const finalized = stmt.status === "finalized" || stmt.status === "exported";
+                          const noContact = hasNoContact(stmt);
+                          const periodLabel = new Date(stmt.period_start + "T00:00:00").toLocaleDateString("en-IN", { month: "short", year: "numeric" });
+
+                          // Determine status badge
+                          let badge: ReactNode;
+                          if (stmt.status === "draft") {
+                            badge = <Badge className="bg-orange-100 text-orange-800 border-orange-200">Pending Review</Badge>;
+                          } else if (stmt.proforma_sent_at) {
+                            badge = <Badge className="bg-green-100 text-green-800 border-green-200">Proforma Sent</Badge>;
+                          } else if (finalized && noContact) {
+                            badge = <Badge className="bg-amber-100 text-amber-800 border-amber-300">No Contact Info</Badge>;
+                          } else if (finalized) {
+                            badge = <Badge className="bg-red-100 text-red-800 border-red-200">Dispatch Failed</Badge>;
+                          } else {
+                            badge = <Badge variant="outline">{stmt.status}</Badge>;
+                          }
+
+                          return (
+                            <tr
+                              key={stmt.id}
+                              className={`border-b hover:bg-muted/30 transition-colors ${
+                                finalized && !stmt.proforma_sent_at && !noContact ? "bg-red-50/50" : ""
+                              }`}
+                            >
+                              <td className="px-4 py-3 font-mono text-xs">{stmt.statement_number}</td>
+                              <td className="px-4 py-3">
+                                <Badge variant="outline" className={isRent ? "border-teal-300 text-teal-700" : "border-purple-300 text-purple-700"}>
+                                  {isRent ? "Rent" : "Usage"}
+                                </Badge>
+                              </td>
+                              <td className="px-4 py-3 font-mono text-xs hidden md:table-cell">{stmt.contract?.contract_number || "—"}</td>
+                              <td className="px-4 py-3 hidden lg:table-cell">
+                                {stmt.lead ? stmt.lead.company || `${stmt.lead.first_name} ${stmt.lead.last_name}` : "—"}
+                              </td>
+                              <td className="px-4 py-3 text-muted-foreground hidden md:table-cell">{periodLabel}</td>
+                              <td className="px-4 py-3 text-right font-medium">{formatCurrency(stmt.total_amount)}</td>
+                              <td className="px-4 py-3">
+                                <div className="flex items-center gap-2">
+                                  {badge}
+                                  {finalized && !stmt.proforma_sent_at && noContact && stmt.lead?.id && (
+                                    <Link href={`/leads/${stmt.lead.id}`} className="text-xs text-amber-700 underline hover:text-amber-900">
+                                      Update Lead
+                                    </Link>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="px-4 py-3 text-right">
+                                <DropdownMenu>
+                                  <DropdownMenuTrigger asChild>
+                                    <Button variant="ghost" size="sm"><MoreHorizontal className="h-4 w-4" /></Button>
+                                  </DropdownMenuTrigger>
+                                  <DropdownMenuContent align="end">
+                                    <DropdownMenuItem onClick={() => setViewStatementId(stmt.id)}>
+                                      <Eye className="mr-2 h-4 w-4" />View Detail
+                                    </DropdownMenuItem>
+                                    {/* Usage drafts: finalize first */}
+                                    {stmt.status === "draft" && (
+                                      <DropdownMenuItem onClick={() => handleFinalizeStatement(stmt.id)}>
+                                        <CheckCircle className="mr-2 h-4 w-4" />Finalize
+                                      </DropdownMenuItem>
+                                    )}
+                                    {/* Send / resend proforma */}
+                                    {finalized && !stmt.gst_invoice_number && stmt.payment_status !== "paid" && (
+                                      <DropdownMenuItem onClick={() => handleSendProforma(stmt.id)} disabled={noContact}>
+                                        <Send className="mr-2 h-4 w-4" />
+                                        {stmt.proforma_sent_at ? "Resend Proforma" : "Send Proforma"}
+                                      </DropdownMenuItem>
+                                    )}
+                                    {finalized && (
+                                      <DropdownMenuItem asChild>
+                                        <a href={`/api/billing-statements/${stmt.id}/proforma-pdf`} download={`Proforma-${stmt.statement_number?.replace(/\//g, "-")}.pdf`}>
+                                          <Download className="mr-2 h-4 w-4" />Download PDF
+                                        </a>
+                                      </DropdownMenuItem>
+                                    )}
+                                    {finalized && stmt.payment_status === "paid" && !stmt.gst_invoice_number && (
+                                      <DropdownMenuItem onClick={() => handleGenerateGstInvoice(stmt.id)}>
+                                        <FileCheck className="mr-2 h-4 w-4" />Generate & Send GST Invoice
+                                      </DropdownMenuItem>
+                                    )}
+                                    {finalized && (
+                                      <DropdownMenuItem onClick={() => { setRecordPaymentStatementId(stmt.id); setRecordPaymentDialogOpen(true); }}>
+                                        <IndianRupee className="mr-2 h-4 w-4" />Record Offline Payment
+                                      </DropdownMenuItem>
+                                    )}
+                                    {finalized && userRole === "admin" && (
+                                      <DropdownMenuItem
+                                        className="text-destructive focus:text-destructive"
+                                        onClick={() => { setVoidStatementId(stmt.id); setVoidReason(""); setVoidDialogOpen(true); }}
+                                      >
+                                        <X className="mr-2 h-4 w-4" />Void & Re-issue
+                                      </DropdownMenuItem>
+                                    )}
+                                  </DropdownMenuContent>
+                                </DropdownMenu>
+                              </td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })()}
 
           {/* Contract accordion rows */}
           {summaryLoading ? (
@@ -1337,6 +1657,36 @@ export default function BillingPage() {
       <AddUsageChargeDialog open={addChargeOpen} onOpenChange={setAddChargeOpen} onSuccess={fetchCharges} />
       <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={fetchCharges} />
       <GenerateStatementDialog open={generateStatementOpen} onOpenChange={setGenerateStatementOpen} onSuccess={fetchStatements} />
+
+      {/* Run & Send confirmation — live dispatch to clients */}
+      <Dialog open={runConfirmOpen} onOpenChange={setRunConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Run &amp; send proformas for {nextMonthInfo.label}?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            {previewItems && (
+              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">
+                This will finalize and <strong>send live proformas with payment links</strong> to clients:
+                <br />• {previewItems.filter(i => i.type === "rent").length} rent proforma(s) — emailed + Razorpay link
+                <br />• {previewItems.filter(i => i.type === "usage").length} usage statement(s) — created as drafts for your review (not sent)
+                <br />Total rent value: ₹{previewItems.filter(i => i.type === "rent").reduce((s, i) => s + i.total_amount, 0).toLocaleString("en-IN")}
+              </div>
+            )}
+            <p className="text-muted-foreground">Rent proformas are dispatched immediately. Usage statements stay as drafts until you send them individually.</p>
+          </div>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button variant="outline" onClick={() => setRunConfirmOpen(false)} disabled={runningBilling}>Cancel</Button>
+            <Button onClick={handleRunBilling} disabled={runningBilling}>
+              {runningBilling ? (
+                <><span className="mr-2 h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin inline-block" />Sending…</>
+              ) : (
+                <><Send className="mr-2 h-4 w-4" />Confirm &amp; Send</>
+              )}
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
       <ViewStatementDialog
         statementId={viewStatementId}
         open={!!viewStatementId}

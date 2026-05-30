@@ -1,71 +1,67 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { pingCronHealth } from "@/lib/cron-ping";
-import { generateMonthlyStatements } from "@/lib/billing";
+import { generateRentProformas, generateUsageStatements, type GenerateResult } from "@/lib/billing";
+
+type AdminClient = ReturnType<typeof createAdminClient>;
 
 /**
- * GET — cron-triggered. Generates draft billing statements for all active
- * contracts whose tenure overlaps the target month.
- *
- * Cron runs daily on 28th–31st at 15:30 UTC (21:00 IST). The handler checks
- * if today (IST) is actually the last day of the month. If not, it returns
- * early. This gives us "last day of month at 21:00 IST" semantics despite
- * standard cron not supporting "last day of month".
- *
- * Query: ?month=4&year=2026 (defaults to current month IST)
- *        ?force=1           (skip the last-day guard — for manual backfills)
+ * Run both generators SEQUENTIALLY (not concurrently). Each generator's per-contract
+ * loop is already sequential, but running the two concurrently let a brand-new
+ * contract's rent + usage inserts race on the MAX()+1 statement_number trigger,
+ * causing a duplicate-key collision that drops one proforma. Sequential execution
+ * removes that race. Each generator is independently try/caught so a thrown one
+ * never aborts the other.
  */
-export async function GET(request: NextRequest) {
-  const { searchParams } = new URL(request.url);
-  const month = searchParams.get("month") ? parseInt(searchParams.get("month")!) : undefined;
-  const year = searchParams.get("year") ? parseInt(searchParams.get("year")!) : undefined;
-  const force = searchParams.get("force") === "1";
-
-  // Last-day-of-month guard: cron fires on 28th–31st, but only the actual
-  // last day should generate bills. Skip unless forced or params override.
-  if (!force && !month && !year) {
-    const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
-    const nowIST = new Date(Date.now() + IST_OFFSET_MS);
-    const todayDate = nowIST.getUTCDate();
-    const daysInThisMonth = new Date(nowIST.getUTCFullYear(), nowIST.getUTCMonth() + 1, 0).getDate();
-
-    if (todayDate !== daysInThisMonth) {
-      return NextResponse.json({
-        skipped_reason: `Not the last day of month (day ${todayDate} of ${daysInThisMonth})`,
-      });
-    }
-  }
-
-  const supabase = createAdminClient();
-  const result = await generateMonthlyStatements(supabase, { month, year });
-
-  if (result.generated > 0) {
-    await notifyDraftBills(supabase, result);
-  }
-
-  await pingCronHealth("billing/auto-generate", "ok", {
-    month: result.month, year: result.year,
-    generated: result.generated, skipped: result.skipped,
+async function runGenerators(
+  client: AdminClient,
+  opts: { month?: number; year?: number; contractId?: string; dryRun?: boolean },
+): Promise<{ rent: GenerateResult; usage: GenerateResult }> {
+  const m = opts.month ?? 0, y = opts.year ?? 0;
+  const empty = (err: string): GenerateResult => ({
+    month: m, year: y, generated: 0, skipped: 0, errors: [err],
+    statementIds: [], noContact: [], quarterlySkipped: [], preview: [],
   });
 
-  return NextResponse.json({
-    month: result.month,
-    year: result.year,
-    generated: result.generated,
-    skipped: result.skipped,
-    errors: result.errors.length > 0 ? result.errors : undefined,
-  });
+  let rent: GenerateResult;
+  try { rent = await generateRentProformas(client, opts); }
+  catch (e) { rent = empty(`rent generator: ${String(e)}`); }
+
+  let usage: GenerateResult;
+  try { usage = await generateUsageStatements(client, opts); }
+  catch (e) { usage = empty(`usage generator: ${String(e)}`); }
+
+  return { rent, usage };
 }
 
 /**
- * POST — manual trigger from the Billing UI for admin/manager/accounts.
- * Use to backfill missing statements when contracts were activated mid-month
- * after the cron had already run, or to regenerate after fixing data.
+ * GET — DISABLED. Automatic month-end billing is paused. Proforma generation
+ * and dispatch are now manual-only (triggered from the Billing page, which
+ * calls the POST handler below). The vercel.json cron entry has been removed;
+ * `/api/cron/billing-reminder` only sends a nudge, it never bills.
  *
- * Body: { month?, year?, contract_id? }
- *   - omit all to generate for "current month, all eligible contracts"
- *   - pass `contract_id` to limit to one contract (used by activation hook)
+ * This handler is intentionally inert so that if the endpoint is ever hit
+ * (stale cron config, manual curl), it cannot silently auto-dispatch proformas.
+ */
+export async function GET() {
+  return NextResponse.json({
+    disabled: true,
+    message:
+      "Automatic billing is paused. Generate proformas manually from the Billing page " +
+      "(Monthly Proforma Billing card), or POST to this endpoint with a valid session.",
+  }, { status: 200 });
+}
+
+/**
+ * POST — manual trigger from the Billing UI (admin/manager/accounts).
+ *
+ * Body:
+ *   { month?, year?, contract_id? }   — run live: generate + finalize + dispatch
+ *   { dry_run: true, month?, year? }  — PREVIEW only: compute amounts/GST and
+ *                                        return what WOULD be generated, writing
+ *                                        nothing and sending nothing.
+ *
+ * Live runs send the internal summary email (notifyBillingRun). Dry runs do not.
  */
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
@@ -79,29 +75,37 @@ export async function POST(request: NextRequest) {
   }
 
   const body = await request.json().catch(() => ({}));
-  const month  = body.month ? parseInt(String(body.month)) : undefined;
-  const year   = body.year  ? parseInt(String(body.year))  : undefined;
+  const month      = body.month      ? parseInt(String(body.month)) : undefined;
+  const year       = body.year       ? parseInt(String(body.year))  : undefined;
   const contractId = body.contract_id || undefined;
+  const dryRun     = body.dry_run === true;
 
-  // Use the admin client so RLS doesn't block writes when the operator's
-  // role permits the action. The role check above is the gate.
   const admin = createAdminClient();
-  const result = await generateMonthlyStatements(admin, { month, year, contractId });
+  const opts  = { month, year, contractId, dryRun };
+
+  const { rent, usage } = await runGenerators(admin, opts);
+
+  // Live runs notify staff; dry runs are silent previews.
+  if (!dryRun && (rent.generated > 0 || usage.generated > 0 || rent.noContact.length > 0)) {
+    await notifyBillingRun(admin, rent, usage);
+  }
 
   return NextResponse.json({
-    month: result.month,
-    year: result.year,
-    generated: result.generated,
-    skipped: result.skipped,
-    errors: result.errors.length > 0 ? result.errors : undefined,
-    statement_ids: result.statementIds,
+    dry_run: dryRun,
+    month: rent.month,
+    year: rent.year,
+    rent_proformas: { generated: rent.generated, skipped: rent.skipped, no_contact: rent.noContact, quarterly_skipped: rent.quarterlySkipped, preview: rent.preview },
+    usage_statements: { generated: usage.generated, skipped: usage.skipped, preview: usage.preview },
+    errors: [...rent.errors, ...usage.errors].length > 0 ? [...rent.errors, ...usage.errors] : undefined,
+    statement_ids: [...rent.statementIds, ...usage.statementIds],
   });
 }
 
-// Email accounts/managers about freshly-generated draft bills (cron flow only).
-async function notifyDraftBills(
+/** Email accounts/managers/admins after the cron run — split counts clearly. */
+async function notifyBillingRun(
   supabase: ReturnType<typeof createAdminClient>,
-  result: Awaited<ReturnType<typeof generateMonthlyStatements>>,
+  rent: GenerateResult,
+  usage: GenerateResult,
 ) {
   const { data: recipients } = await supabase
     .from("users")
@@ -114,37 +118,67 @@ async function notifyDraftBills(
     .filter(Boolean) as string[];
   if (emails.length === 0) return;
 
-  const monthLabel = new Date(result.year, result.month - 1)
+  const monthLabel = new Date(rent.year, rent.month - 1)
     .toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "long", year: "numeric" });
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
+
+  const noContactHtml = rent.noContact.length > 0 ? `
+    <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:12px 16px;margin:12px 0;font-size:13px;color:#856404;">
+      ⚠️ <strong>${rent.noContact.length} contract${rent.noContact.length > 1 ? "s" : ""} have no email or phone — proforma not sent:</strong>
+      ${rent.noContact.map((c) => `<br/>• ${c}`).join("")}
+      <br/><br/>Update the lead record to enable auto-send next month.
+    </div>` : "";
+
+  const quarterlyHtml = rent.quarterlySkipped.length > 0 ? `
+    <p style="color:#666;font-size:12px;">
+      ${rent.quarterlySkipped.length} quarterly contract${rent.quarterlySkipped.length > 1 ? "s" : ""} not billed this cycle (expected — not their billing month):
+      ${rent.quarterlySkipped.join(", ")}
+    </p>` : "";
+
+  const errorHtml = [...rent.errors, ...usage.errors].length > 0 ? `
+    <div style="background:#f8d7da;border:1px solid #f5c2c7;border-radius:6px;padding:12px 16px;margin:12px 0;font-size:13px;color:#842029;">
+      ❌ Errors: ${[...rent.errors, ...usage.errors].join(", ")}
+    </div>` : "";
+
+  const html = `
+    <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+      <div style="background:#015E65;padding:20px 32px;">
+        <h1 style="color:white;margin:0;font-size:20px;">The WorkVilla</h1>
+        <p style="color:#00AE6C;margin:4px 0 0;font-size:12px;">Monthly Billing Run — ${monthLabel}</p>
+      </div>
+      <div style="padding:32px;">
+        <table style="width:100%;border-collapse:collapse;font-size:14px;margin-bottom:16px;">
+          <tr style="background:#f0fdf4;">
+            <td style="padding:10px 12px;border:1px solid #d1fae5;font-weight:600;">✅ Rent proformas sent to clients</td>
+            <td style="padding:10px 12px;border:1px solid #d1fae5;text-align:right;font-weight:700;">${rent.generated}</td>
+          </tr>
+          <tr style="background:#fff7ed;">
+            <td style="padding:10px 12px;border:1px solid #fed7aa;font-weight:600;">🟠 Usage statements needing your review</td>
+            <td style="padding:10px 12px;border:1px solid #fed7aa;text-align:right;font-weight:700;">${usage.generated}</td>
+          </tr>
+        </table>
+        ${noContactHtml}
+        ${errorHtml}
+        ${quarterlyHtml}
+        ${usage.generated > 0 ? `
+        <div style="text-align:center;margin:24px 0;">
+          <a href="${appUrl}/billing?tab=statements&type=usage" style="background:#015E65;color:white;padding:10px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;font-size:14px;">Review Usage Statements</a>
+        </div>` : ""}
+      </div>
+      <div style="background:#015E65;padding:12px 32px;text-align:center;">
+        <p style="color:#fff;margin:0;font-size:10px;">SREE DESIGN INFRASTRUCTURE PVT LTD | The WorkVilla</p>
+      </div>
+    </div>`;
 
   for (const email of emails) {
     resend.emails.send({
       from: EMAIL_FROM,
       replyTo: EMAIL_REPLY_TO,
       to: [email],
-      subject: `${result.generated} Draft Bills Ready for Review — ${monthLabel}`,
-      html: `
-        <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
-          <div style="background:#015E65;padding:20px 32px;">
-            <h1 style="color:white;margin:0;font-size:20px;">The WorkVilla</h1>
-            <p style="color:#00AE6C;margin:4px 0 0;font-size:12px;">Monthly Billing</p>
-          </div>
-          <div style="padding:32px;">
-            <p style="color:#333;font-size:14px;"><strong>${result.generated} draft billing statement${result.generated > 1 ? "s" : ""}</strong> have been auto-generated for <strong>${monthLabel}</strong>.</p>
-            <p style="color:#333;font-size:14px;">Each draft includes prepaid rent for next month and itemized current-month usage (bookings, ad-hoc charges, facility &amp; service usage). Please review, then click <strong>"Confirm & Send Invoice"</strong> to finalize and email the GST invoice.</p>
-            ${result.skipped > 0 ? `<p style="color:#666;font-size:13px;">${result.skipped} contract${result.skipped > 1 ? "s" : ""} already had a statement for this period and were skipped.</p>` : ""}
-            ${result.errors.length > 0 ? `<p style="color:#e53e3e;font-size:13px;">Errors: ${result.errors.join(", ")}</p>` : ""}
-            <div style="text-align:center;margin:24px 0;">
-              <a href="${appUrl}/billing" style="background:#015E65;color:white;padding:10px 24px;text-decoration:none;border-radius:6px;font-weight:bold;display:inline-block;font-size:14px;">Review Draft Bills</a>
-            </div>
-          </div>
-          <div style="background:#015E65;padding:12px 32px;text-align:center;">
-            <p style="color:#fff;margin:0;font-size:10px;">SREE DESIGN INFRASTRUCTURE PVT LTD | The WorkVilla</p>
-          </div>
-        </div>`,
+      subject: `Billing Run Complete — ${rent.generated} proformas sent, ${usage.generated} usage statements pending — ${monthLabel}`,
+      html,
     }).catch(console.error);
   }
 }
 
-export const maxDuration = 60;
+export const maxDuration = 300;

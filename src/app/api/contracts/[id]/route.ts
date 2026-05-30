@@ -194,6 +194,13 @@ export async function PATCH(
       allowedFields.activated_at = now;
       allowedFields.activated_by = actorId;
     } else if (body.status === "terminated") {
+      // Only admin or manager may terminate a contract
+      if (!["admin", "manager"].includes(dbUser?.role ?? "")) {
+        return NextResponse.json(
+          { error: "Only admins and managers can terminate a contract" },
+          { status: 403 }
+        );
+      }
       if (!body.termination_reason && !allowedFields.termination_reason) {
         return NextResponse.json({ error: "Termination reason is required" }, { status: 400 });
       }

@@ -32,6 +32,25 @@ export interface GenerateOptions {
   year?: number;
   /** Restrict to a single contract (used by the activation hook). */
   contractId?: string;
+  /**
+   * Preview mode. When true, compute what WOULD be generated (amounts, GST,
+   * after applying all gates + idempotency) and push it to result.preview[],
+   * but write NOTHING and dispatch NOTHING. Used by the manual "Preview" button.
+   */
+  dryRun?: boolean;
+}
+
+/** One row of a dry-run preview — what a single statement would contain. */
+export interface PreviewItem {
+  contract_number: string;
+  type: "rent" | "usage";
+  /** Human label, e.g. "June 2026" */
+  period_label: string;
+  subtotal: number;
+  tax_amount: number;
+  total_amount: number;
+  /** For rent: whether it would be prorated. For usage: the chargeable categories present. */
+  note?: string;
 }
 
 export interface GenerateResult {
@@ -42,6 +61,12 @@ export interface GenerateResult {
   errors: string[];
   /** IDs of generated statements — used by callers that want to email. */
   statementIds: string[];
+  /** Contract numbers skipped because lead has no email AND no phone/mobile. */
+  noContact: string[];
+  /** Contract numbers skipped by the quarterly billing gate (expected, not errors). */
+  quarterlySkipped: string[];
+  /** Populated only in dryRun mode: what each contract WOULD be billed. */
+  preview: PreviewItem[];
 }
 
 // ── Line-item types for the JSONB column ──────────────────────────────────
@@ -72,6 +97,11 @@ function nextMonth(month: number, year: number): { month: number; year: number }
 }
 
 /**
+ * @deprecated Use generateRentProformas() + generateUsageStatements() instead.
+ * This combined generator is kept for the contract-activation hook
+ * (src/app/api/contracts/[id]/route.ts) which generates the first statement
+ * immediately on activation. It will be removed once that hook is updated.
+ *
  * Generate draft billing statements for active contracts whose tenure overlaps
  * the target month. Idempotent: existing statements for the period are left
  * alone (they're never duplicated).
@@ -134,6 +164,7 @@ export async function generateMonthlyStatements(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [], statementIds: [],
+    noContact: [], quarterlySkipped: [], preview: [],
   };
 
   if (!contracts || contracts.length === 0) return result;
@@ -473,6 +504,645 @@ export async function generateMonthlyStatements(
       if (statement?.id) result.statementIds.push(statement.id as string);
     } catch (err) {
       result.errors.push(`${contract.contract_number}: ${String(err)}`);
+    }
+  }
+
+  return result;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// NEW GENERATORS — split rent proformas and usage statements
+// ═══════════════════════════════════════════════════════════════════════════
+
+import { dispatchProforma } from "@/lib/send-proforma";
+import { createAdminClient } from "@/lib/supabase/server";
+
+/** Create or fetch the accounting period row for a given month/year. */
+async function ensureAccountingPeriod(
+  supabase: SupabaseClient,
+  month: number,
+  year: number,
+): Promise<string | undefined> {
+  const { data: existing } = await supabase
+    .from("accounting_periods")
+    .select("id")
+    .eq("year", year)
+    .eq("month", month)
+    .maybeSingle();
+
+  if (existing?.id) return existing.id as string;
+
+  const { data: created } = await supabase
+    .from("accounting_periods")
+    .insert({ year, month, status: "open" })
+    .select("id")
+    .single();
+
+  return created?.id as string | undefined;
+}
+
+/**
+ * Auto-generate and dispatch rent proformas for the NEXT month.
+ *
+ * For each active contract:
+ *   1. Quarterly gate — only run in their billing month
+ *   2. Idempotency — skip if rent/combined statement already exists for next month
+ *   3. Prorate if contract expires mid-next-month
+ *   4. Insert + finalize statement
+ *   5. Call dispatchProforma() — creates Razorpay link, PDF, sends email
+ *   6. Advance quarterly next_billing_date by 3 months
+ *
+ * Fully automated — no human action required.
+ */
+export async function generateRentProformas(
+  supabase: SupabaseClient,
+  opts: GenerateOptions = {},
+): Promise<GenerateResult> {
+  const now = istNow();
+  const targetMonth = opts.month ?? now.getMonth() + 1;
+  const targetYear  = opts.year  ?? now.getFullYear();
+
+  // Rent proformas always cover the NEXT (prepaid) month
+  const prepaid            = nextMonth(targetMonth, targetYear);
+  const prepaidDaysInMonth = new Date(prepaid.year, prepaid.month, 0).getDate();
+  const prepaidFirstOfMonth = `${prepaid.year}-${String(prepaid.month).padStart(2, "0")}-01`;
+  const prepaidLastOfMonth  = `${prepaid.year}-${String(prepaid.month).padStart(2, "0")}-${prepaidDaysInMonth}`;
+
+  // Target month date strings (used for contract overlap query)
+  const daysInTargetMonth  = new Date(targetYear, targetMonth, 0).getDate();
+  const firstOfTargetMonth = `${targetYear}-${String(targetMonth).padStart(2, "0")}-01`;
+  const lastOfTargetMonth  = `${targetYear}-${String(targetMonth).padStart(2, "0")}-${daysInTargetMonth}`;
+
+  const periodId = await ensureAccountingPeriod(supabase, prepaid.month, prepaid.year);
+
+  const result: GenerateResult = {
+    month: targetMonth, year: targetYear,
+    generated: 0, skipped: 0, errors: [],
+    statementIds: [], noContact: [], quarterlySkipped: [], preview: [],
+  };
+
+  // Fetch active contracts overlapping the target month
+  let contractsQuery = supabase
+    .from("contracts")
+    .select(`
+      id, contract_number, title, total_amount, subtotal, tax_percentage,
+      billing_cycle, start_date, end_date, next_billing_date, seats,
+      location_id, lead_id,
+      lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, state, gst_number)
+    `)
+    .in("status", ["active", "renewal_in_progress"])
+    .lte("start_date", lastOfTargetMonth)
+    .gte("end_date", firstOfTargetMonth);
+
+  if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);
+  const { data: contracts } = await contractsQuery;
+  if (!contracts || contracts.length === 0) return result;
+
+  // Idempotency: fetch existing rent/combined statements for the prepaid month
+  const contractIds = contracts.map((c) => c.id as string);
+  // Idempotency: a contract's NEXT-month rent is "already billed" if any non-voided
+  // statement covers the prepaid month. Two cases must both be caught to prevent
+  // double-billing (the activation hook still creates `combined` statements):
+  //   (A) New `rent` or `combined` rows populate prepaid_month/prepaid_year with the
+  //       next-month values — match those directly.
+  //   (B) Legacy `combined` rows (created before prepaid_month existed) have
+  //       prepaid_month = NULL but embed next-month rent in their line items; their
+  //       period_start is the CURRENT (target) month — match those by period_start.
+  // Voided statements are excluded so a corrected proforma can regenerate after a void.
+  const alreadyHasRent = new Set<string>();
+
+  // NOTE: voided statements are excluded via `voided_at IS NULL`, not a status
+  // filter — `status` is a Postgres enum (draft|finalized|exported) that does NOT
+  // contain "voided"; voiding is tracked by the voided_at timestamp.
+  const { data: byPrepaid } = await supabase
+    .from("billing_statements")
+    .select("contract_id")
+    .in("contract_id", contractIds)
+    .eq("prepaid_month", prepaid.month)
+    .eq("prepaid_year", prepaid.year)
+    .in("statement_type", ["rent", "combined"])
+    .is("voided_at", null);
+  for (const s of (byPrepaid || []) as Array<{ contract_id: string }>) alreadyHasRent.add(s.contract_id);
+
+  const { data: legacyCombined } = await supabase
+    .from("billing_statements")
+    .select("contract_id")
+    .in("contract_id", contractIds)
+    .eq("statement_type", "combined")
+    .eq("period_start", firstOfTargetMonth)
+    .is("prepaid_month", null)
+    .is("voided_at", null);
+  for (const s of (legacyCombined || []) as Array<{ contract_id: string }>) alreadyHasRent.add(s.contract_id);
+
+  // We need an admin client for dispatchProforma (bypasses RLS for the update step)
+  const adminSupabase = createAdminClient();
+
+  for (const contract of contracts as Array<Record<string, unknown>>) {
+    const cid            = contract.id as string;
+    const contractNumber = contract.contract_number as string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lead           = contract.lead as any;
+
+    try {
+      // ── 1. Quarterly gate ───────────────────────────────────────────────
+      if (contract.billing_cycle === "quarterly") {
+        const nbd = contract.next_billing_date as string | null;
+        if (!nbd || nbd < prepaidFirstOfMonth || nbd > prepaidLastOfMonth) {
+          result.quarterlySkipped.push(contractNumber);
+          result.skipped++;
+          continue;
+        }
+      }
+
+      // ── 2. Idempotency ──────────────────────────────────────────────────
+      if (alreadyHasRent.has(cid)) {
+        result.skipped++;
+        continue;
+      }
+
+      // ── 3. Proration ────────────────────────────────────────────────────
+      const baseAmount    = Number(contract.subtotal || contract.total_amount);
+      const contractEnd   = new Date(String(contract.end_date) + "T00:00:00Z");
+      const contractStart = new Date(String(contract.start_date) + "T00:00:00Z");
+      const pFirst        = new Date(prepaidFirstOfMonth + "T00:00:00Z");
+      const pLast         = new Date(prepaidLastOfMonth  + "T00:00:00Z");
+
+      let prepaidRentAmount: number;
+      if (contractEnd < pFirst) {
+        prepaidRentAmount = 0; // contract ends before next month — nothing to bill
+      } else {
+        const billStart   = contractStart > pFirst ? contractStart : pFirst;
+        const billEnd     = contractEnd   < pLast  ? contractEnd   : pLast;
+        const billableDays = Math.floor((billEnd.getTime() - billStart.getTime()) / 86400000) + 1;
+        prepaidRentAmount = billableDays >= prepaidDaysInMonth
+          ? baseAmount
+          : Math.round((baseAmount / prepaidDaysInMonth) * billableDays * 100) / 100;
+      }
+
+      if (prepaidRentAmount <= 0) {
+        result.skipped++;
+        continue;
+      }
+
+      // ── 4. Calculate GST ────────────────────────────────────────────────
+      const taxPercentage = Number(contract.tax_percentage || 18);
+      const buyerState    = (lead?.state || "").toLowerCase().trim();
+      const isInterstate  = buyerState !== "" && buyerState !== "tamil nadu" && buyerState !== "tn";
+      let cgst = 0, sgst = 0, igst = 0;
+      if (isInterstate) {
+        igst = Math.round(prepaidRentAmount * (taxPercentage / 100) * 100) / 100;
+      } else {
+        cgst = Math.round(prepaidRentAmount * (taxPercentage / 200) * 100) / 100;
+        sgst = Math.round(prepaidRentAmount * (taxPercentage / 200) * 100) / 100;
+      }
+      const taxAmount   = cgst + sgst + igst;
+      const totalAmount = prepaidRentAmount + taxAmount;
+
+      // ── Dry run: record what WOULD be billed, write/dispatch nothing ──────
+      if (opts.dryRun) {
+        result.preview.push({
+          contract_number: contractNumber,
+          type: "rent",
+          period_label: monthLabel(prepaid.month, prepaid.year),
+          subtotal: prepaidRentAmount,
+          tax_amount: taxAmount,
+          total_amount: totalAmount,
+          note: prepaidRentAmount < baseAmount
+            ? `Prorated (contract ends mid-month) · ${isInterstate ? "IGST" : "CGST+SGST"}`
+            : `Full month · ${isInterstate ? "IGST" : "CGST+SGST"}`,
+        });
+        result.generated++;
+        continue;
+      }
+
+      const lineItems = [{
+        type: "prepaid_rent" as const,
+        label: `Prepaid Rent — ${monthLabel(prepaid.month, prepaid.year)}`,
+        items: [{
+          description: `Monthly rent${contract.seats ? ` (${contract.seats} seat${Number(contract.seats) > 1 ? "s" : ""})` : ""}`,
+          amount: prepaidRentAmount,
+        }],
+        subtotal: prepaidRentAmount,
+      }];
+
+      // ── 5. Insert statement as draft ────────────────────────────────────
+      const { data: stmt, error: insertErr } = await adminSupabase
+        .from("billing_statements")
+        .insert({
+          contract_id:         cid,
+          lead_id:             contract.lead_id,
+          period_start:        prepaidFirstOfMonth,
+          period_end:          prepaidLastOfMonth,
+          statement_type:      "rent",
+          fixed_amount:        prepaidRentAmount,
+          usage_amount:        0,
+          service_usage_amount: 0,
+          booking_usage_amount: 0,
+          subtotal:            prepaidRentAmount,
+          tax_percentage:      taxPercentage,
+          tax_amount:          taxAmount,
+          total_amount:        totalAmount,
+          status:              "draft",
+          accounting_period_id: periodId,
+          cgst_amount:         cgst,
+          sgst_amount:         sgst,
+          igst_amount:         igst,
+          is_interstate:       isInterstate,
+          buyer_gstin:         lead?.gst_number || null,
+          place_of_supply:     isInterstate ? (lead?.state || "Other") : "Tamil Nadu",
+          line_items:          lineItems,
+          prepaid_month:       prepaid.month,
+          prepaid_year:        prepaid.year,
+        })
+        .select("id")
+        .single();
+
+      if (insertErr || !stmt) {
+        result.errors.push(`${contractNumber}: ${insertErr?.message ?? "Insert failed"}`);
+        continue;
+      }
+
+      const stmtId = stmt.id as string;
+
+      // ── 6. Auto-finalize ────────────────────────────────────────────────
+      await adminSupabase
+        .from("billing_statements")
+        .update({ status: "finalized", finalized_at: new Date().toISOString() })
+        .eq("id", stmtId);
+
+      // ── 7. Dispatch (Razorpay + PDF + email) ────────────────────────────
+      const dispatchResult = await dispatchProforma(adminSupabase, stmtId, null, []);
+
+      if (dispatchResult.noContact) {
+        result.noContact.push(contractNumber);
+      }
+
+      // Was the proforma actually delivered? Only true when a channel produced
+      // something the client can act on (email sent OR a payment link exists).
+      // A no-contact or failed dispatch must NOT count as delivered — otherwise
+      // the quarterly anchor advances and the unbilled quarter is skipped forever.
+      const delivered =
+        dispatchResult.success &&
+        !dispatchResult.noContact &&
+        (Boolean(dispatchResult.emailedTo) || Boolean(dispatchResult.razorpayLinkUrl));
+
+      // ── 8. Advance quarterly next_billing_date (only on confirmed delivery) ──
+      // Anchor on year+month and clamp the day to the target month's length so a
+      // 30th/31st billing day never drifts via JS Date month-overflow (e.g. Nov 30
+      // + 3 months would otherwise roll into March). Clamping keeps the anchor stable.
+      if (contract.billing_cycle === "quarterly" && delivered) {
+        const nbd = new Date(String(contract.next_billing_date) + "T00:00:00Z");
+        const origDay = nbd.getUTCDate();
+        const absMonth = nbd.getUTCMonth() + 3;
+        const targetYear = nbd.getUTCFullYear() + Math.floor(absMonth / 12);
+        const targetMonth = ((absMonth % 12) + 12) % 12;
+        const daysInTarget = new Date(Date.UTC(targetYear, targetMonth + 1, 0)).getUTCDate();
+        const clampedDay = Math.min(origDay, daysInTarget);
+        const advanced = new Date(Date.UTC(targetYear, targetMonth, clampedDay));
+        await adminSupabase
+          .from("contracts")
+          .update({ next_billing_date: advanced.toISOString().slice(0, 10) })
+          .eq("id", cid);
+      }
+
+      result.generated++;
+      result.statementIds.push(stmtId);
+
+    } catch (err) {
+      result.errors.push(`${contractNumber}: ${String(err)}`);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Generate DRAFT usage statements for the CURRENT (target) month.
+ *
+ * Only created when chargeable usage exists:
+ *   - Ad-hoc usage charges (status=pending, billing_statement_id IS NULL)
+ *   - Facility overage records (billable_quantity > 0)
+ *   - Service overage records (overage_quantity > 0)
+ *   - Booking overages (paid bookings linked to contract this month)
+ *
+ * Statements are created as draft — admin reviews and sends via the billing page.
+ * Carry-forward: charges already linked to a draft statement (billing_statement_id set)
+ * are NOT picked up again. The old draft persists indefinitely until admin sends it.
+ */
+export async function generateUsageStatements(
+  supabase: SupabaseClient,
+  opts: GenerateOptions = {},
+): Promise<GenerateResult> {
+  const now = istNow();
+  const targetMonth = opts.month ?? now.getMonth() + 1;
+  const targetYear  = opts.year  ?? now.getFullYear();
+
+  const daysInMonth  = new Date(targetYear, targetMonth, 0).getDate();
+  const firstOfMonth = `${targetYear}-${String(targetMonth).padStart(2, "0")}-01`;
+  const lastOfMonth  = `${targetYear}-${String(targetMonth).padStart(2, "0")}-${daysInMonth}`;
+
+  const periodId = await ensureAccountingPeriod(supabase, targetMonth, targetYear);
+
+  const result: GenerateResult = {
+    month: targetMonth, year: targetYear,
+    generated: 0, skipped: 0, errors: [],
+    statementIds: [], noContact: [], quarterlySkipped: [], preview: [],
+  };
+
+  // Fetch active contracts
+  let contractsQuery = supabase
+    .from("contracts")
+    .select(`
+      id, contract_number, total_amount, subtotal, tax_percentage,
+      billing_cycle, start_date, end_date, lead_id,
+      lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, state, gst_number)
+    `)
+    .in("status", ["active", "renewal_in_progress"])
+    .lte("start_date", lastOfMonth)
+    .gte("end_date", firstOfMonth);
+
+  if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);
+  const { data: contracts } = await contractsQuery;
+  if (!contracts || contracts.length === 0) return result;
+
+  const contractIds = contracts.map((c) => c.id as string);
+
+  // Idempotency: skip if a non-voided usage/combined statement already exists for this
+  // period. Voided statements are excluded via `voided_at IS NULL` (status is an enum
+  // that does not contain "voided"; voiding is tracked by voided_at).
+  const { data: existingUsageStmts } = await supabase
+    .from("billing_statements")
+    .select("contract_id")
+    .in("contract_id", contractIds)
+    .eq("period_start", firstOfMonth)
+    .in("statement_type", ["usage", "combined"])
+    .is("voided_at", null);
+
+  const alreadyHasUsage = new Set(
+    (existingUsageStmts || []).map((s: { contract_id: string }) => s.contract_id)
+  );
+
+  const billable = contractIds.filter((id) => !alreadyHasUsage.has(id));
+  if (billable.length === 0) return result;
+
+  // Pre-fetch usage data in batch — only charges NOT yet linked to any statement
+  const [usageRes, facilityRes, serviceRes, bookingsRes] = await Promise.all([
+    supabase
+      .from("usage_charges")
+      .select("id, contract_id, description, quantity, unit_price, total")
+      .in("contract_id", billable)
+      .eq("status", "pending")
+      .is("billing_statement_id", null)
+      .gte("charge_date", firstOfMonth)
+      .lte("charge_date", lastOfMonth),
+
+    supabase
+      .from("facility_usage_records")
+      .select("contract_id, contract_facility_id, quantity_used, free_quota_applied, billable_quantity, unit_price, total_charge")
+      .in("contract_id", billable)
+      .eq("accounting_period_id", periodId ?? ""),
+
+    supabase
+      .from("service_usage_records")
+      .select("id, contract_id, service_id, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount, is_billed")
+      .in("contract_id", billable)
+      .eq("period_year", targetYear)
+      .eq("period_month", targetMonth)
+      .eq("is_billed", false),
+
+    supabase
+      .from("bookings")
+      .select("id, booking_number, contract_id, space_id, booking_date, start_time, end_time, duration_hours, pricing_model, hourly_rate, total_amount, quantity, payment_status, status, space:spaces!bookings_space_id_fkey(name)")
+      .in("contract_id", billable)
+      .eq("customer_type", "contract_holder")
+      .in("status", ["confirmed", "checked_in", "checked_out"])
+      .gte("booking_date", firstOfMonth)
+      .lte("booking_date", lastOfMonth),
+  ]);
+
+  type UsageRow = { id: string; contract_id: string; description: string; quantity: number; unit_price: number; total: number };
+  type FacilityRow = { contract_id: string; contract_facility_id: string; quantity_used: number; free_quota_applied: number; billable_quantity: number; unit_price: number; total_charge: number };
+  type ServiceRow = { id: string; contract_id: string; service_id: string; overage_quantity: number; overage_rate_snapshot: number; amount: number };
+  type BookingRow = { id: string; booking_number: string; contract_id: string; booking_date: string; start_time: string; end_time: string; duration_hours: number; pricing_model: string; total_amount: number; quantity: number; payment_status: string; space: { name: string }[] | { name: string } | null };
+
+  const usageByContract    = new Map<string, UsageRow[]>();
+  const facilityByContract = new Map<string, FacilityRow[]>();
+  const serviceByContract  = new Map<string, ServiceRow[]>();
+  const bookingsByContract = new Map<string, BookingRow[]>();
+
+  for (const u of (usageRes.data ?? []) as UsageRow[]) {
+    const list = usageByContract.get(u.contract_id) ?? [];
+    list.push(u); usageByContract.set(u.contract_id, list);
+  }
+  for (const f of (facilityRes.data ?? []) as FacilityRow[]) {
+    const list = facilityByContract.get(f.contract_id) ?? [];
+    list.push(f); facilityByContract.set(f.contract_id, list);
+  }
+  for (const s of (serviceRes.data ?? []) as ServiceRow[]) {
+    const list = serviceByContract.get(s.contract_id) ?? [];
+    list.push(s); serviceByContract.set(s.contract_id, list);
+  }
+  for (const b of (bookingsRes.data ?? []) as BookingRow[]) {
+    const list = bookingsByContract.get(b.contract_id) ?? [];
+    list.push(b); bookingsByContract.set(b.contract_id, list);
+  }
+
+  for (const contract of contracts as Array<Record<string, unknown>>) {
+    const cid            = contract.id as string;
+    const contractNumber = contract.contract_number as string;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lead           = contract.lead as any;
+
+    if (alreadyHasUsage.has(cid)) { result.skipped++; continue; }
+
+    try {
+      const usageCharges   = usageByContract.get(cid)    ?? [];
+      const facilityRecs   = facilityByContract.get(cid) ?? [];
+      const serviceRecs    = serviceByContract.get(cid)  ?? [];
+      const bookings       = bookingsByContract.get(cid) ?? [];
+
+      // Booking items — paid bookings only (free-quota rows show ₹0, skip for usage stmt)
+      const bookingItems = bookings
+        .filter((b) => b.payment_status !== "posted_to_bill" && b.payment_status !== "waived")
+        .map((b) => {
+          const spaceObj = Array.isArray(b.space) ? b.space[0] : b.space;
+          const spaceName = spaceObj && typeof spaceObj === "object" && "name" in spaceObj
+            ? (spaceObj as { name: string }).name : "Space";
+          return {
+            booking_id:     b.id,
+            booking_number: b.booking_number,
+            date:           b.booking_date,
+            space:          spaceName,
+            time:           `${b.start_time?.slice(0, 5)}–${b.end_time?.slice(0, 5)}`,
+            duration:       b.pricing_model === "daily"
+              ? `${Number(b.quantity || 1)} seat${Number(b.quantity || 1) > 1 ? "s" : ""}`
+              : `${Number(b.duration_hours)}h`,
+            amount: Number(b.total_amount || 0),
+          };
+        });
+
+      const adHocSubtotal   = usageCharges.reduce((s, c) => s + Number(c.total || 0), 0);
+      const facilitySubtotal = facilityRecs
+        .filter((f) => Number(f.billable_quantity) > 0)
+        .reduce((s, f) => s + Number(f.total_charge || 0), 0);
+      const serviceSubtotal = serviceRecs
+        .filter((s) => Number(s.overage_quantity) > 0)
+        .reduce((s, r) => s + Number(r.amount || 0), 0);
+      const bookingSubtotal = bookingItems.reduce((s, b) => s + b.amount, 0);
+
+      const totalUsage = adHocSubtotal + facilitySubtotal + serviceSubtotal + bookingSubtotal;
+
+      // Zero gate — skip if nothing chargeable
+      if (totalUsage <= 0 && usageCharges.length === 0 && facilityRecs.filter(f => Number(f.billable_quantity) > 0).length === 0 && serviceRecs.filter(s => Number(s.overage_quantity) > 0).length === 0) {
+        result.skipped++;
+        continue;
+      }
+
+      // GST
+      const taxPercentage = Number(contract.tax_percentage || 18);
+      const buyerState    = (lead?.state || "").toLowerCase().trim();
+      const isInterstate  = buyerState !== "" && buyerState !== "tamil nadu" && buyerState !== "tn";
+      let cgst = 0, sgst = 0, igst = 0;
+      if (isInterstate) {
+        igst = Math.round(totalUsage * (taxPercentage / 100) * 100) / 100;
+      } else {
+        cgst = Math.round(totalUsage * (taxPercentage / 200) * 100) / 100;
+        sgst = Math.round(totalUsage * (taxPercentage / 200) * 100) / 100;
+      }
+      const taxAmount   = cgst + sgst + igst;
+      const totalAmount = totalUsage + taxAmount;
+
+      // ── Dry run: record what WOULD be billed, write/link nothing ─────────
+      if (opts.dryRun) {
+        const cats = [
+          adHocSubtotal > 0 ? "ad-hoc" : null,
+          facilitySubtotal > 0 ? "facility" : null,
+          serviceSubtotal > 0 ? "service" : null,
+          bookingSubtotal > 0 ? "bookings" : null,
+        ].filter(Boolean).join(", ");
+        result.preview.push({
+          contract_number: contractNumber,
+          type: "usage",
+          period_label: monthLabel(targetMonth, targetYear),
+          subtotal: totalUsage,
+          tax_amount: taxAmount,
+          total_amount: totalAmount,
+          note: `${cats || "usage"} · ${isInterstate ? "IGST" : "CGST+SGST"} · draft for review`,
+        });
+        result.generated++;
+        continue;
+      }
+
+      // Build line_items sections
+      const lineItems = [
+        {
+          type: "booking_usage" as const,
+          label: `Meeting Room Usage — ${monthLabel(targetMonth, targetYear)}`,
+          items: bookingItems,
+          subtotal: bookingSubtotal,
+        },
+        {
+          type: "ad_hoc_charges" as const,
+          label: `Ad-hoc Charges — ${monthLabel(targetMonth, targetYear)}`,
+          items: usageCharges.map((c) => ({
+            usage_charge_id: c.id, description: c.description,
+            quantity: Number(c.quantity), unit_price: Number(c.unit_price), amount: Number(c.total || 0),
+          })),
+          subtotal: adHocSubtotal,
+        },
+        {
+          type: "facility_usage" as const,
+          label: `Facility Usage — ${monthLabel(targetMonth, targetYear)}`,
+          items: facilityRecs
+            .filter((f) => Number(f.billable_quantity) > 0)
+            .map((f) => ({
+              facility_id: f.contract_facility_id,
+              billable: Number(f.billable_quantity), rate: Number(f.unit_price),
+              amount: Number(f.total_charge || 0),
+            })),
+          subtotal: facilitySubtotal,
+        },
+        {
+          type: "service_usage" as const,
+          label: `Service Usage — ${monthLabel(targetMonth, targetYear)}`,
+          items: serviceRecs
+            .filter((s) => Number(s.overage_quantity) > 0)
+            .map((s) => ({
+              service_id: s.service_id,
+              overage: Number(s.overage_quantity), rate: Number(s.overage_rate_snapshot),
+              amount: Number(s.amount || 0),
+            })),
+          subtotal: serviceSubtotal,
+        },
+      ].filter((s) => s.items.length > 0);
+
+      // Insert usage statement as draft
+      const { data: stmt, error: insertErr } = await supabase
+        .from("billing_statements")
+        .insert({
+          contract_id:          cid,
+          lead_id:              contract.lead_id,
+          period_start:         firstOfMonth,
+          period_end:           lastOfMonth,
+          statement_type:       "usage",
+          fixed_amount:         0,
+          usage_amount:         adHocSubtotal + facilitySubtotal,
+          service_usage_amount: serviceSubtotal,
+          booking_usage_amount: bookingSubtotal,
+          subtotal:             totalUsage,
+          tax_percentage:       taxPercentage,
+          tax_amount:           taxAmount,
+          total_amount:         totalAmount,
+          status:               "draft",
+          accounting_period_id: periodId,
+          cgst_amount:          cgst,
+          sgst_amount:          sgst,
+          igst_amount:          igst,
+          is_interstate:        isInterstate,
+          buyer_gstin:          lead?.gst_number || null,
+          place_of_supply:      isInterstate ? (lead?.state || "Other") : "Tamil Nadu",
+          line_items:           lineItems,
+          prepaid_month:        null,
+          prepaid_year:         null,
+        })
+        .select("id")
+        .single();
+
+      if (insertErr || !stmt) {
+        result.errors.push(`${contractNumber}: ${insertErr?.message ?? "Insert failed"}`);
+        continue;
+      }
+
+      const stmtId = stmt.id as string;
+
+      // Link usage charges to this statement
+      if (usageCharges.length > 0) {
+        await supabase
+          .from("usage_charges")
+          .update({ billing_statement_id: stmtId, status: "billed" })
+          .in("id", usageCharges.map((c) => c.id));
+      }
+      // Link service usage records
+      if (serviceRecs.length > 0) {
+        await supabase
+          .from("service_usage_records")
+          .update({ billing_statement_id: stmtId, is_billed: true })
+          .in("id", serviceRecs.map((s) => s.id));
+      }
+      // Link bookings
+      const billableBookingIds = bookingItems.map((b) => b.booking_id);
+      if (billableBookingIds.length > 0) {
+        await supabase
+          .from("bookings")
+          .update({ billing_statement_id: stmtId })
+          .in("id", billableBookingIds);
+      }
+
+      result.generated++;
+      result.statementIds.push(stmtId);
+
+    } catch (err) {
+      result.errors.push(`${contractNumber}: ${String(err)}`);
     }
   }
 
