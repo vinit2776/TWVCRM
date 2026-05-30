@@ -425,15 +425,12 @@ export async function generateMonthlyStatements(
 
       // GST split — intra-state (TN) vs inter-state
       const buyerState = (lead?.state || "").toLowerCase().trim();
-      const isInterstate = buyerState !== "" && buyerState !== "tamil nadu" && buyerState !== "tn";
+      // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
+      const isInterstate = false;
 
       let cgst = 0, sgst = 0, igst = 0;
-      if (isInterstate) {
-        igst = Math.round(subtotal * (taxPercentage / 100) );
-      } else {
-        cgst = Math.round(subtotal * (taxPercentage / 200) );
+      cgst = Math.round(subtotal * (taxPercentage / 200) );
         sgst = Math.round(subtotal * (taxPercentage / 200) );
-      }
       const taxAmount = cgst + sgst + igst;
       const totalAmount = subtotal + taxAmount;
 
@@ -710,14 +707,11 @@ export async function generateRentProformas(
       // ── 4. Calculate GST ────────────────────────────────────────────────
       const taxPercentage = Number(contract.tax_percentage || 18);
       const buyerState    = (lead?.state || "").toLowerCase().trim();
-      const isInterstate  = buyerState !== "" && buyerState !== "tamil nadu" && buyerState !== "tn";
+      // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
+      const isInterstate = false;
       let cgst = 0, sgst = 0, igst = 0;
-      if (isInterstate) {
-        igst = Math.round(prepaidRentAmount * (taxPercentage / 100) );
-      } else {
-        cgst = Math.round(prepaidRentAmount * (taxPercentage / 200) );
+      cgst = Math.round(prepaidRentAmount * (taxPercentage / 200) );
         sgst = Math.round(prepaidRentAmount * (taxPercentage / 200) );
-      }
       const taxAmount   = cgst + sgst + igst;
       const totalAmount = prepaidRentAmount + taxAmount;
 
@@ -1114,14 +1108,11 @@ export async function generateUsageStatements(
       // GST
       const taxPercentage = Number(contract.tax_percentage || 18);
       const buyerState    = (lead?.state || "").toLowerCase().trim();
-      const isInterstate  = buyerState !== "" && buyerState !== "tamil nadu" && buyerState !== "tn";
+      // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
+      const isInterstate = false;
       let cgst = 0, sgst = 0, igst = 0;
-      if (isInterstate) {
-        igst = Math.round(totalUsage * (taxPercentage / 100) );
-      } else {
-        cgst = Math.round(totalUsage * (taxPercentage / 200) );
+      cgst = Math.round(totalUsage * (taxPercentage / 200) );
         sgst = Math.round(totalUsage * (taxPercentage / 200) );
-      }
       const taxAmount   = cgst + sgst + igst;
       const totalAmount = totalUsage + taxAmount;
 

@@ -102,15 +102,12 @@ export async function dispatchProforma(
   const taxPercentage = Number(statement.tax_percentage || 18);
 
   const buyerState = (lead?.state || "").toLowerCase().trim();
-  const isInterstate = buyerState !== "" && buyerState !== "tamil nadu" && buyerState !== "tn";
+  // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
+      const isInterstate = false;
 
   let cgst = 0, sgst = 0, igst = 0;
-  if (isInterstate) {
-    igst = Math.round(subtotal * (taxPercentage / 100) );
-  } else {
-    cgst = Math.round(subtotal * (taxPercentage / 200) );
+  cgst = Math.round(subtotal * (taxPercentage / 200) );
     sgst = Math.round(subtotal * (taxPercentage / 200) );
-  }
   const taxAmount = cgst + sgst + igst;
   const totalAmount = subtotal + taxAmount;
   const proformaRef = statement.statement_number as string;

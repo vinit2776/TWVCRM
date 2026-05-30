@@ -71,17 +71,12 @@ export async function GET(
   const subtotal = fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
   const taxPercentage = Number(statement.tax_percentage || 18);
 
-  const buyerState = (lead?.state || "").toLowerCase().trim();
-  const isInterstate = buyerState !== "" && buyerState !== "tamil nadu" && buyerState !== "tn";
-
-  let cgst = 0, sgst = 0, igst = 0;
-  if (isInterstate) {
-    igst = Math.round(subtotal * (taxPercentage / 100) * 100) / 100;
-  } else {
-    cgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
-    sgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
-  }
-  const totalAmount = subtotal + cgst + sgst + igst;
+  // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
+  const isInterstate = false;
+  const igst = 0;
+  const cgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
+  const sgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
+  const totalAmount = subtotal + cgst + sgst;
 
   // Fetch UPI ID
   let upiId: string | undefined;
