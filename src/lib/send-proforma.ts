@@ -256,6 +256,7 @@ export async function dispatchProforma(
     buyerState: lead?.state || undefined,
     periodStart: statement.period_start as string,
     periodEnd: statement.period_end as string,
+    dueDate: (statement.due_date as string | null) || undefined,
     contractNumber: contract.contract_number,
     lineItems,
     subtotal,
@@ -281,6 +282,9 @@ export async function dispatchProforma(
 
   // ── Send email ────────────────────────────────────────────────────────────
   const periodLabel = new Date((statement.period_start as string) + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" });
+  const dueDateStr = statement.due_date
+    ? new Date((statement.due_date as string) + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })
+    : null;
   const customerName = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Customer";
 
   const { data: ccUsers } = await adminSupabase
@@ -311,6 +315,7 @@ export async function dispatchProforma(
           <tr><td style="padding:6px 0;color:#666;">Proforma Ref</td><td style="padding:6px 0;font-weight:600;">${proformaRef}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">Contract</td><td style="padding:6px 0;">${contract.contract_number}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">Period</td><td style="padding:6px 0;">${periodLabel}</td></tr>
+          ${dueDateStr ? `<tr><td style="padding:6px 0;color:#666;">Payment Due By</td><td style="padding:6px 0;font-weight:600;color:#b45309;">${dueDateStr}</td></tr>` : ""}
           <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:600;color:#015E65;font-size:16px;">Rs. ${Math.round(totalAmount).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</td></tr>
         </table>
         ${paymentOptionsHtml}

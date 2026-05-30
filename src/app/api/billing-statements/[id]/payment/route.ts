@@ -98,6 +98,26 @@ export async function POST(
       .eq("id", id);
   }
 
+  // When an offline payment brings the statement to fully paid, auto-fire the
+  // GST tax invoice generation — same behaviour as the Razorpay webhook. Saves
+  // accounts the extra "Generate GST Invoice" click and prevents the
+  // proforma-paid-but-no-tax-invoice limbo state.
+  if (newPaymentStatus === "paid" && statement.payment_status !== "paid") {
+    try {
+      const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
+      fetch(`${appUrl}/api/billing-statements/${id}/generate-gst-invoice`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "x-internal-secret": process.env.CRON_SECRET || "",
+        },
+        body: JSON.stringify({ skipAuth: true }),
+      }).catch((err) => console.error("[payment] GST invoice auto-gen failed:", err));
+    } catch (err) {
+      console.error("[payment] Could not trigger GST invoice generation:", err);
+    }
+  }
+
   logAudit(supabase, {
     entityType: "billing_statement",
     entityId: id,

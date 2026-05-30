@@ -92,6 +92,8 @@ export interface GstInvoiceData {
   periodStart: string;
   periodEnd: string;
   contractNumber: string;
+  /** Customer payment due date (proforma only). YYYY-MM-DD. Printed in the totals block. */
+  dueDate?: string;
   // Line items
   lineItems: { description: string; hsnSac: string; qty: number; rate: number; amount: number }[];
   // Totals
@@ -285,7 +287,17 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   doc.setFontSize(8);
   doc.setTextColor(80, 80, 80);
   doc.text(`Amount in words: ${amountInWords(data.totalAmount)}`, 14, y);
-  y += 8;
+  y += 5;
+
+  // Payment due date (proforma only) — printed in amber so it draws the eye.
+  if (isProforma && data.dueDate) {
+    doc.setFont("helvetica", "bold");
+    doc.setTextColor(180, 83, 9); // amber-700
+    doc.text(`Payment Due By: ${formatDateInv(data.dueDate)}`, 14, y);
+    y += 5;
+    doc.setTextColor(80, 80, 80);
+  }
+  y += 3;
 
   // ── Payment Options ──
   doc.setFont("helvetica", "bold");
