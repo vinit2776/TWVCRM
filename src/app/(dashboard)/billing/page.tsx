@@ -1205,6 +1205,7 @@ export default function BillingPage() {
             <ProformaBillingCard
               mode="usage"
               periodLabel={currentMonthLabel}
+              pendingDraftsCount={statements.filter(s => s.statement_type === "usage" && s.status === "draft").length}
               onSuccess={refreshAfterRun}
             />
           </div>
@@ -1373,10 +1374,12 @@ export default function BillingPage() {
                                     <DropdownMenuItem onClick={() => setViewStatementId(stmt.id)}>
                                       <Eye className="mr-2 h-4 w-4" />View Detail
                                     </DropdownMenuItem>
-                                    {/* Usage drafts: finalize first */}
+                                    {/* Usage drafts: finalize first. (Rent auto-finalizes
+                                        in the new generator, so the Finalize button in
+                                        this section only ever applies to usage drafts.) */}
                                     {stmt.status === "draft" && (
                                       <DropdownMenuItem onClick={() => handleFinalizeStatement(stmt.id)}>
-                                        <CheckCircle className="mr-2 h-4 w-4" />Finalize
+                                        <CheckCircle className="mr-2 h-4 w-4" />Finalize Usage
                                       </DropdownMenuItem>
                                     )}
                                     {/* Send / resend proforma */}

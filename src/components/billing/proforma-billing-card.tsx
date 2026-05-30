@@ -31,6 +31,12 @@ interface ProformaBillingCardProps {
   showReminder?: boolean;
   /** Reminder text override */
   reminderText?: React.ReactNode;
+  /**
+   * Usage mode only: count of existing draft usage statements waiting on
+   * Finalize+Send. Surfaces these in the card so they don't get missed during
+   * the Generate Drafts flow (admin sees both pending and to-be-generated).
+   */
+  pendingDraftsCount?: number;
   /** Called when the live run completes successfully so the parent can refresh lists */
   onSuccess?: () => void | Promise<void>;
 }
@@ -51,6 +57,7 @@ export function ProformaBillingCard({
   deadlineLabel,
   showReminder = false,
   reminderText,
+  pendingDraftsCount = 0,
   onSuccess,
 }: ProformaBillingCardProps) {
   const isRent = mode === "rent";
@@ -143,6 +150,13 @@ export function ProformaBillingCard({
       {showReminder && (
         <div className="mb-3 rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm font-medium text-amber-900">
           {reminderText ?? <>⏰ <strong>{title}</strong> hasn&rsquo;t been run yet.</>}
+        </div>
+      )}
+      {/* Usage mode: surface existing unfinalized drafts so they don't get missed */}
+      {!isRent && pendingDraftsCount > 0 && (
+        <div className="mb-3 rounded-md border border-orange-300 bg-orange-50 px-3 py-2 text-sm text-orange-900">
+          <strong>⚠ {pendingDraftsCount} usage draft{pendingDraftsCount !== 1 ? "s" : ""} pending review</strong>
+          {" — finalize and send each in the Proforma Statements section below (Usage filter chip). Don&rsquo;t let them carry forward unsent."}
         </div>
       )}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
