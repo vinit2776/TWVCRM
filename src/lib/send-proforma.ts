@@ -17,6 +17,22 @@ import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import QRCode from "qrcode";
 
+/** Per-call timeout (ms) for outbound HTTP and the Resend SDK send. A single
+ *  slow/hung Razorpay or email call must not stall the whole batch loop. */
+const RAZORPAY_TIMEOUT_MS = 10_000;
+const EMAIL_TIMEOUT_MS    = 15_000;
+
+/** Reject the given promise after `ms` milliseconds with a clear error. */
+function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
+  return new Promise<T>((resolve, reject) => {
+    const t = setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms);
+    p.then(
+      (v) => { clearTimeout(t); resolve(v); },
+      (e) => { clearTimeout(t); reject(e); },
+    );
+  });
+}
+
 export interface DispatchResult {
   success: boolean;
   proformaRef: string;
@@ -149,11 +165,15 @@ export async function dispatchProforma(
           if (customerPhone) (payload.customer as Record<string, string>).contact = customerPhone.replace(/\s/g, "");
         }
 
-        const rzpRes = await fetch("https://api.razorpay.com/v1/payment_links", {
-          method: "POST",
-          headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
-          body: JSON.stringify(payload),
-        });
+        const rzpRes = await withTimeout(
+          fetch("https://api.razorpay.com/v1/payment_links", {
+            method: "POST",
+            headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          }),
+          RAZORPAY_TIMEOUT_MS,
+          "Razorpay create link",
+        );
 
         if (rzpRes.ok) {
           const linkData = await rzpRes.json();
@@ -162,9 +182,13 @@ export async function dispatchProforma(
         } else {
           const errBody = await rzpRes.json().catch(() => ({})) as { error?: { description?: string } };
           if (errBody?.error?.description?.includes("already exists")) {
-            const fetchRes = await fetch(`https://api.razorpay.com/v1/payment_links?reference_id=${refId}`, {
-              headers: { Authorization: `Basic ${auth}` },
-            });
+            const fetchRes = await withTimeout(
+              fetch(`https://api.razorpay.com/v1/payment_links?reference_id=${refId}`, {
+                headers: { Authorization: `Basic ${auth}` },
+              }),
+              RAZORPAY_TIMEOUT_MS,
+              "Razorpay dedup fetch",
+            );
             if (fetchRes.ok) {
               const fetchData = await fetchRes.json() as { items?: Array<{ id: string; short_url: string }> };
               const existing = fetchData?.items?.[0];
@@ -311,15 +335,19 @@ export async function dispatchProforma(
   if (customerEmail) {
     try {
       const allCc = [...ccEmails, ...additionalCc].filter(Boolean);
-      await resend.emails.send({
-        from: EMAIL_FROM,
-        replyTo: EMAIL_REPLY_TO,
-        to: [customerEmail],
-        cc: allCc.length > 0 ? allCc : undefined,
-        subject: `Proforma Invoice ${proformaRef} — ${contract.contract_number} — The WorkVilla`,
-        html: emailHtml,
-        attachments: [{ filename: `Proforma-${proformaRef.replace(/\//g, "-")}.pdf`, content: pdfBuffer, contentType: "application/pdf" }],
-      });
+      await withTimeout(
+        resend.emails.send({
+          from: EMAIL_FROM,
+          replyTo: EMAIL_REPLY_TO,
+          to: [customerEmail],
+          cc: allCc.length > 0 ? allCc : undefined,
+          subject: `Proforma Invoice ${proformaRef} — ${contract.contract_number} — The WorkVilla`,
+          html: emailHtml,
+          attachments: [{ filename: `Proforma-${proformaRef.replace(/\//g, "-")}.pdf`, content: pdfBuffer, contentType: "application/pdf" }],
+        }),
+        EMAIL_TIMEOUT_MS,
+        "Resend email send",
+      );
       emailedSuccessfully = true;
     } catch (err) {
       console.error("[send-proforma] Email failed:", err);

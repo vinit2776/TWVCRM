@@ -860,6 +860,11 @@ export async function generateRentProformas(
     } catch (err) {
       result.errors.push(`${contractNumber}: ${String(err)}`);
     }
+    // Small inter-contract breather. Stays well under Razorpay + Resend
+    // rate limits and prevents a burst of ~50 dispatches from tripping a
+    // throttle. ~5s of extra wall time over a 50-contract run — negligible
+    // vs the safety. Skip in dryRun (no external calls happen).
+    if (!opts.dryRun) await new Promise((r) => setTimeout(r, 100));
   }
 
   return result;
