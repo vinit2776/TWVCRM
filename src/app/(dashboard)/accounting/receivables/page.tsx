@@ -30,7 +30,7 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search } from "lucide-react";
+import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 
@@ -120,6 +120,23 @@ export default function AccountsReceivablePage() {
   const [payNotes, setPayNotes] = useState("");
   const [paySubmitting, setPaySubmitting] = useState(false);
   const [resending, setResending] = useState<string | null>(null);
+  const [remindingId, setRemindingId] = useState<string | null>(null);
+
+  // History drawer state
+  const [historyRow, setHistoryRow] = useState<ReceivableRow | null>(null);
+  const [historyItems, setHistoryItems] = useState<Array<{
+    id: string;
+    stage_index: number;
+    stage_label: string;
+    channel: string;
+    recipient: string;
+    status: string;
+    error: string | null;
+    triggered_by: string;
+    sent_at: string;
+    triggered_by_user?: { full_name: string } | null;
+  }>>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -194,6 +211,46 @@ export default function AccountsReceivablePage() {
     }
   };
 
+  const sendReminder = async (row: ReceivableRow) => {
+    setRemindingId(row.id);
+    try {
+      const res = await fetch(`/api/billing-statements/${row.id}/send-reminder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed");
+      const channels = [json.emailSent && "email", json.whatsAppSent && "WhatsApp"].filter(Boolean).join(" + ");
+      toast.success(`${json.toneLabel} sent via ${channels || "no channel"}`);
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to send reminder");
+    } finally {
+      setRemindingId(null);
+    }
+  };
+
+  const openHistory = async (row: ReceivableRow) => {
+    setHistoryRow(row);
+    setHistoryItems([]);
+    setHistoryLoading(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${row.id}/send-reminder`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed");
+      setHistoryItems(json.history || []);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load history");
+    } finally {
+      setHistoryLoading(false);
+    }
+  };
+
+  const exportCsv = () => {
+    window.location.href = "/api/accounting/receivables/export";
+  };
+
   const resendProforma = async (row: ReceivableRow) => {
     setResending(row.id);
     try {
@@ -260,14 +317,19 @@ export default function AccountsReceivablePage() {
             {f.label}
           </button>
         ))}
-        <div className="ml-auto relative">
-          <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
-          <Input
-            placeholder="Search contract, statement #, customer"
-            value={search}
-            onChange={(e) => setSearch(e.target.value)}
-            className="pl-8 w-72"
-          />
+        <div className="ml-auto flex items-center gap-2">
+          <div className="relative">
+            <Search className="absolute left-2.5 top-2.5 h-4 w-4 text-muted-foreground" />
+            <Input
+              placeholder="Search contract, statement #, customer"
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              className="pl-8 w-72"
+            />
+          </div>
+          <Button variant="outline" size="sm" onClick={exportCsv} title="Download AR aging report as CSV">
+            <Download className="h-4 w-4 mr-1" /> Export CSV
+          </Button>
         </div>
       </div>
 
@@ -351,7 +413,13 @@ export default function AccountsReceivablePage() {
                           <Button size="sm" variant="outline" onClick={() => openPayDialog(r)} title="Record offline payment">
                             <IndianRupee className="h-3.5 w-3.5 mr-1" /> Record
                           </Button>
-                          <Button size="sm" variant="ghost" onClick={() => resendProforma(r)} disabled={resending === r.id} title="Resend proforma email">
+                          <Button size="sm" variant="ghost" onClick={() => sendReminder(r)} disabled={remindingId === r.id} title="Send next reminder now (bypasses 48h throttle)">
+                            {remindingId === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => openHistory(r)} title="View reminder history">
+                            <History className="h-3.5 w-3.5" />
+                          </Button>
+                          <Button size="sm" variant="ghost" onClick={() => resendProforma(r)} disabled={resending === r.id} title="Resend full proforma email (with PDF attached)">
                             {resending === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
                           </Button>
                           {r.razorpay_payment_link_url && (
@@ -369,6 +437,57 @@ export default function AccountsReceivablePage() {
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Reminder history — {historyRow?.statement_number}</DialogTitle>
+          </DialogHeader>
+          {historyLoading ? (
+            <div className="p-6 text-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin inline mr-2" /> Loading…</div>
+          ) : historyItems.length === 0 ? (
+            <div className="p-6 text-center text-muted-foreground">No reminders sent yet for this statement.</div>
+          ) : (
+            <div className="max-h-[400px] overflow-y-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-b sticky top-0">
+                  <tr>
+                    <th className="px-3 py-2 text-left">Sent</th>
+                    <th className="px-3 py-2 text-left">Stage</th>
+                    <th className="px-3 py-2 text-left">Channel</th>
+                    <th className="px-3 py-2 text-left">Recipient</th>
+                    <th className="px-3 py-2 text-left">Status</th>
+                    <th className="px-3 py-2 text-left">By</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {historyItems.map((h) => (
+                    <tr key={h.id}>
+                      <td className="px-3 py-2 whitespace-nowrap text-xs">{new Date(h.sent_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })}</td>
+                      <td className="px-3 py-2 text-xs">{h.stage_label}</td>
+                      <td className="px-3 py-2 text-xs uppercase">{h.channel}</td>
+                      <td className="px-3 py-2 text-xs">{h.recipient}</td>
+                      <td className="px-3 py-2">
+                        {h.status === "sent" ? (
+                          <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px]">SENT</Badge>
+                        ) : (
+                          <Badge className="bg-red-100 text-red-800 border-red-300 text-[10px]" title={h.error || ""}>FAILED</Badge>
+                        )}
+                      </td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">
+                        {h.triggered_by === "cron" ? "Cron" : (h.triggered_by_user?.full_name || "Manual")}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setHistoryRow(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={!!payRow} onOpenChange={(o) => !o && setPayRow(null)}>
         <DialogContent>
