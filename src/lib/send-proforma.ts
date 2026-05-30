@@ -282,9 +282,6 @@ export async function dispatchProforma(
       <div style="padding:32px;">
         <p style="color:#333;font-size:14px;">Dear ${customerName},</p>
         <p style="color:#333;font-size:14px;">Please find attached your proforma invoice for <strong>${periodLabel}</strong>. Kindly make the payment at your earliest convenience.</p>
-        <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:10px 16px;margin:16px 0;font-size:12px;color:#5d4037;">
-          ⚠️ This is a proforma invoice for payment purposes only. A formal GST tax invoice will be issued once payment is confirmed.
-        </div>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
           <tr><td style="padding:6px 0;color:#666;">Proforma Ref</td><td style="padding:6px 0;font-weight:600;">${proformaRef}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">Contract</td><td style="padding:6px 0;">${contract.contract_number}</td></tr>
@@ -297,6 +294,9 @@ export async function dispatchProforma(
           <a href="${razorpayLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a>
         </div>` : ""}
         <p style="color:#333;font-size:14px;margin-top:24px;">Warm regards,<br/><strong>The WorkVilla</strong></p>
+        <div style="background:#fff8e1;border:1px solid #ffe082;border-radius:6px;padding:10px 16px;margin-top:24px;font-size:11px;color:#5d4037;">
+          ⚠️ This is a proforma invoice for payment purposes only. A formal GST tax invoice will be issued once payment is confirmed.
+        </div>
       </div>
       <div style="background:#015E65;padding:12px 32px;text-align:center;">
         <p style="color:#fff;margin:0;font-size:10px;">SREE DESIGN INFRASTRUCTURE PVT LTD</p>
