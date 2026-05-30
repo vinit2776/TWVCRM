@@ -158,7 +158,7 @@ export function ContractAddonsSection({ contractId, contractStartDate, contractE
           {loading ? (
             <p className="text-xs text-muted-foreground">Loading…</p>
           ) : addons.length === 0 ? (
-            <p className="text-xs text-muted-foreground italic">No recurring add-ons. Add items like name boards, parking, lockers — they'll auto-appear in every monthly bill.</p>
+            <p className="text-xs text-muted-foreground italic">No recurring add-ons. Add items like name boards, parking, lockers — they&apos;ll auto-appear in every monthly bill.</p>
           ) : (
             <div className="space-y-2">
               {[...active, ...inactive].map(addon => {
