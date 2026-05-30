@@ -55,6 +55,7 @@ import { ContractAccountingRow } from "@/components/accounting/contract-accounti
 import { ActionRequiredBanner } from "@/components/accounting/action-required-banner";
 import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
 import { BillingPipelineBar } from "@/components/billing/billing-pipeline-bar";
+import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
 // Per-tab components are dynamic-imported so the JS for tabs the user
 // never opens isn't downloaded. Each loader shows a small skeleton block.
 // SSR off because all four are client-state-driven (filters, dialogs).
@@ -390,15 +391,8 @@ export default function BillingPage() {
   // Filter: 'all' | 'rent' | 'usage'
   const [stmtTypeFilter, setStmtTypeFilter]               = useState<"all" | "rent" | "usage">("all");
 
-  // ── Manual Monthly Proforma Billing (cron is paused; this is the manual trigger) ──
-  type PreviewItem = { contract_number: string; type: "rent" | "usage"; period_label: string; subtotal: number; tax_amount: number; total_amount: number; note?: string; supersedes?: string };
-  const [previewItems, setPreviewItems]       = useState<PreviewItem[] | null>(null);
-  const [previewAlreadySent, setPreviewAlreadySent] = useState<string[]>([]);
-  const [previewing, setPreviewing]           = useState(false);
-  const [previewedThisCycle, setPreviewedThisCycle] = useState(false);
-  const [runningBilling, setRunningBilling]   = useState(false);
-  const [runConfirmOpen, setRunConfirmOpen]   = useState(false);
-  const [billingDoneForNext, setBillingDoneForNext] = useState<boolean | null>(null); // null = unknown
+  // Manual monthly billing — handled by <ProformaBillingCard /> per-mode. Cards
+  // own their own preview/run state; the page only computes the period labels.
 
   // Next-month label + working-day awareness. At The WorkVilla Sunday is the only
   // non-working day (Saturday is working). If the last calendar day of the current
@@ -421,71 +415,12 @@ export default function BillingPage() {
     return { label, nearMonthEnd, deadlineLabel, deadlineShifted };
   })();
 
-  // Dry-run preview: compute what WOULD be billed, write/send nothing
-  const handlePreviewBilling = async () => {
-    setPreviewing(true);
-    try {
-      const res = await fetch("/api/billing/auto-generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dry_run: true }),
-      });
-      const json = await res.json();
-      if (!res.ok) { toast.error(json.error || "Preview failed"); return; }
-      const items: PreviewItem[] = [
-        ...(json.rent_proformas?.preview ?? []),
-        ...(json.usage_statements?.preview ?? []),
-      ];
-      // Merge already-sent contracts from both generators (deduped)
-      const alreadySent: string[] = Array.from(new Set([
-        ...(json.rent_proformas?.already_sent ?? []),
-        ...(json.usage_statements?.already_sent ?? []),
-      ]));
-      setPreviewItems(items);
-      setPreviewAlreadySent(alreadySent);
-      setPreviewedThisCycle(true);
-      // "Done for next month" iff no rent will generate AND nothing was skipped due to already-sent
-      setBillingDoneForNext(items.filter((i) => i.type === "rent").length === 0 && alreadySent.length === 0);
-      if (json.errors?.length) for (const e of json.errors) toast.error(e);
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Preview failed");
-    } finally {
-      setPreviewing(false);
-    }
-  };
+  // Current-month label (for the Usage Drafts card, which bills the month that just closed)
+  const currentMonthLabel = new Date(new Date().getFullYear(), new Date().getMonth())
+    .toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 
-  // Live run: generate + finalize + dispatch. Gated behind the confirm dialog.
-  const handleRunBilling = async () => {
-    setRunningBilling(true);
-    try {
-      const res = await fetch("/api/billing/auto-generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
-      });
-      const json = await res.json();
-      if (!res.ok) { toast.error(json.error || "Billing run failed"); return; }
-      const rentGen  = json.rent_proformas?.generated ?? 0;
-      const usageGen = json.usage_statements?.generated ?? 0;
-      const noContact = json.rent_proformas?.no_contact ?? [];
-      toast.success(`${rentGen} rent proforma${rentGen !== 1 ? "s" : ""} sent · ${usageGen} usage statement${usageGen !== 1 ? "s" : ""} created for review`);
-      if (noContact.length > 0) {
-        toast.warning(`${noContact.length} contract${noContact.length > 1 ? "s" : ""} have no email/phone — proforma not sent: ${noContact.join(", ")}`);
-      }
-      if (json.errors?.length) for (const e of json.errors) toast.error(e);
-      setRunConfirmOpen(false);
-      setPreviewItems(null);
-      setPreviewAlreadySent([]);
-      setPreviewedThisCycle(false);
-      setBillingDoneForNext(true);
-      await fetchStatements();
-      await fetchData();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Billing run failed");
-    } finally {
-      setRunningBilling(false);
-    }
-  };
+  // Refresh statements + monthly summary after a successful run from any card
+  const refreshAfterRun = async () => { await fetchStatements(); await fetchData(); };
 
   const [viewStatementId, setViewStatementId]             = useState<string | null>(null);
 
@@ -1248,104 +1183,28 @@ export default function BillingPage() {
             </div>
           </div>
 
-          {/* ── Reminder banner: near month-end (or last working day) + not yet run ── */}
-          {nextMonthInfo.nearMonthEnd && billingDoneForNext === false && (
-            <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 flex items-center justify-between gap-4">
-              <p className="text-sm font-medium text-amber-900">
-                ⏰ Monthly proforma billing for <strong>{nextMonthInfo.label}</strong> hasn&rsquo;t been run yet.{" "}
-                {nextMonthInfo.deadlineShifted
-                  ? <>Month-end falls on a Sunday — please run it by <strong>{nextMonthInfo.deadlineLabel}</strong> (the last working day).</>
-                  : <>Run it by <strong>{nextMonthInfo.deadlineLabel}</strong> (month-end).</>}
-              </p>
-              <Button size="sm" variant="outline" className="border-amber-400 text-amber-900 shrink-0" onClick={handlePreviewBilling} disabled={previewing}>
-                {previewing ? "Loading…" : "Review now"}
-              </Button>
-            </div>
-          )}
-
-          {/* ── Monthly Proforma Billing (manual trigger — cron is paused) ── */}
-          <div className="rounded-lg border bg-card p-4">
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h3 className="text-sm font-semibold flex items-center gap-2">
-                  <Receipt className="h-4 w-4 text-[#015E65]" />
-                  Monthly Proforma Billing — {nextMonthInfo.label}
-                </h3>
-                <p className="text-xs text-muted-foreground mt-0.5">
-                  Automatic billing is paused. Preview the amounts, then run &amp; send manually.
-                  {billingDoneForNext === true && <span className="text-green-700 font-medium"> ✓ Nothing pending for {nextMonthInfo.label}.</span>}
-                  {billingDoneForNext === false && <span className="text-amber-700 font-medium"> Not yet run.</span>}
-                </p>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <Button variant="outline" onClick={handlePreviewBilling} disabled={previewing}>
-                  {previewing ? (
-                    <><span className="mr-2 h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin inline-block" />Previewing…</>
-                  ) : (
-                    <><Eye className="mr-2 h-4 w-4" />Preview</>
-                  )}
-                </Button>
-                <Button
-                  onClick={() => setRunConfirmOpen(true)}
-                  disabled={!previewedThisCycle || runningBilling}
-                  title={!previewedThisCycle ? "Preview first to enable" : "Generate, finalize, and send proformas"}
-                >
-                  <Send className="mr-2 h-4 w-4" />Run &amp; Send
-                </Button>
-              </div>
-            </div>
-
-            {/* Preview results */}
-            {previewItems && (
-              <div className="mt-4 rounded-md border overflow-x-auto">
-                <div className="px-3 py-2 bg-muted/50 text-xs font-medium flex items-center justify-between">
-                  <span>Preview — {previewItems.length} statement{previewItems.length !== 1 ? "s" : ""} would be created (nothing sent yet)</span>
-                  <span className="text-muted-foreground">
-                    Rent: {previewItems.filter(i => i.type === "rent").length} · Usage: {previewItems.filter(i => i.type === "usage").length} · Total ₹{previewItems.reduce((s, i) => s + i.total_amount, 0).toLocaleString("en-IN")}
-                  </span>
-                </div>
-                {previewAlreadySent.length > 0 && (
-                  <div className="px-3 py-2 bg-green-50 border-b text-xs text-green-900">
-                    ✓ {previewAlreadySent.length} contract{previewAlreadySent.length !== 1 ? "s" : ""} already billed (skipped to avoid double-billing): {previewAlreadySent.join(", ")}
-                  </div>
-                )}
-                {previewItems.length === 0 ? (
-                  <p className="text-xs text-muted-foreground px-3 py-3">Nothing to generate — all contracts are already billed for this period.</p>
-                ) : (
-                  <table className="w-full text-sm">
-                    <thead>
-                      <tr className="border-b bg-muted/30">
-                        <th className="px-3 py-2 text-left font-medium">Contract</th>
-                        <th className="px-3 py-2 text-left font-medium">Type</th>
-                        <th className="px-3 py-2 text-left font-medium hidden md:table-cell">Period</th>
-                        <th className="px-3 py-2 text-right font-medium">Subtotal</th>
-                        <th className="px-3 py-2 text-right font-medium">GST</th>
-                        <th className="px-3 py-2 text-right font-medium">Total</th>
-                        <th className="px-3 py-2 text-left font-medium hidden lg:table-cell">Note</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {previewItems.map((it, idx) => (
-                        <tr key={idx} className="border-b">
-                          <td className="px-3 py-2 font-mono text-xs">{it.contract_number}</td>
-                          <td className="px-3 py-2">
-                            <Badge variant="outline" className={it.type === "rent" ? "border-teal-300 text-teal-700" : "border-purple-300 text-purple-700"}>{it.type}</Badge>
-                          </td>
-                          <td className="px-3 py-2 text-muted-foreground hidden md:table-cell">{it.period_label}</td>
-                          <td className="px-3 py-2 text-right">{formatCurrency(it.subtotal)}</td>
-                          <td className="px-3 py-2 text-right text-muted-foreground">{formatCurrency(it.tax_amount)}</td>
-                          <td className="px-3 py-2 text-right font-medium">{formatCurrency(it.total_amount)}</td>
-                          <td className="px-3 py-2 text-xs text-muted-foreground hidden lg:table-cell">
-                            {it.note}
-                            {it.supersedes && <span className="block text-amber-700 mt-0.5">supersedes {it.supersedes}</span>}
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                )}
-              </div>
-            )}
+          {/* ── Two independent flows: Rent (send to clients) and Usage (admin review) ── */}
+          <div className="space-y-3">
+            <ProformaBillingCard
+              mode="rent"
+              periodLabel={nextMonthInfo.label}
+              deadlineLabel={nextMonthInfo.deadlineLabel}
+              showReminder={nextMonthInfo.nearMonthEnd}
+              reminderText={
+                <>
+                  ⏰ Monthly rent proforma for <strong>{nextMonthInfo.label}</strong> hasn&rsquo;t been run yet.{" "}
+                  {nextMonthInfo.deadlineShifted
+                    ? <>Month-end falls on a Sunday — please run it by <strong>{nextMonthInfo.deadlineLabel}</strong> (the last working day).</>
+                    : <>Run it by <strong>{nextMonthInfo.deadlineLabel}</strong> (month-end).</>}
+                </>
+              }
+              onSuccess={refreshAfterRun}
+            />
+            <ProformaBillingCard
+              mode="usage"
+              periodLabel={currentMonthLabel}
+              onSuccess={refreshAfterRun}
+            />
           </div>
 
           {/* ── Auto-Proforma Statements (rent + usage split) ── */}
@@ -1688,47 +1547,6 @@ export default function BillingPage() {
       <ManualPrintEntryDialog open={printEntryOpen} onOpenChange={setPrintEntryOpen} onSuccess={fetchCharges} />
       <GenerateStatementDialog open={generateStatementOpen} onOpenChange={setGenerateStatementOpen} onSuccess={fetchStatements} />
 
-      {/* Run & Send confirmation — live dispatch to clients */}
-      <Dialog open={runConfirmOpen} onOpenChange={setRunConfirmOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Run &amp; send proformas for {nextMonthInfo.label}?</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3 text-sm">
-            {previewItems && (() => {
-              const rentCount  = previewItems.filter(i => i.type === "rent").length;
-              const usageCount = previewItems.filter(i => i.type === "usage").length;
-              const supersedeCount = new Set(previewItems.map(i => i.supersedes).filter(Boolean) as string[]).size;
-              const rentTotal  = previewItems.filter(i => i.type === "rent").reduce((s, i) => s + i.total_amount, 0);
-              return (
-                <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">
-                  This will finalize and <strong>send live proformas with payment links</strong> to clients:
-                  <br />• {rentCount} rent proforma{rentCount !== 1 ? "s" : ""} — emailed + Razorpay link
-                  <br />• {usageCount} usage statement{usageCount !== 1 ? "s" : ""} — created as drafts for your review (not sent)
-                  <br />Total rent value: ₹{rentTotal.toLocaleString("en-IN")}
-                  {supersedeCount > 0 && (
-                    <>
-                      <br /><br />
-                      <strong>{supersedeCount} legacy combined draft{supersedeCount !== 1 ? "s" : ""} will be voided</strong> and replaced by the fresh rent + usage split above. These drafts were never sent to clients — no client impact. Audit trail preserved (status = voided).
-                    </>
-                  )}
-                </div>
-              );
-            })()}
-            <p className="text-muted-foreground">Rent proformas are dispatched immediately. Usage statements stay as drafts until you send them individually.</p>
-          </div>
-          <div className="flex justify-end gap-2 pt-2">
-            <Button variant="outline" onClick={() => setRunConfirmOpen(false)} disabled={runningBilling}>Cancel</Button>
-            <Button onClick={handleRunBilling} disabled={runningBilling}>
-              {runningBilling ? (
-                <><span className="mr-2 h-3 w-3 rounded-full border-2 border-current border-r-transparent animate-spin inline-block" />Sending…</>
-              ) : (
-                <><Send className="mr-2 h-4 w-4" />Confirm &amp; Send</>
-              )}
-            </Button>
-          </div>
-        </DialogContent>
-      </Dialog>
       <ViewStatementDialog
         statementId={viewStatementId}
         open={!!viewStatementId}

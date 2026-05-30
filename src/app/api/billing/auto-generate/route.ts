@@ -4,32 +4,44 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateRentProformas, generateUsageStatements, type GenerateResult } from "@/lib/billing";
 
 type AdminClient = ReturnType<typeof createAdminClient>;
+type GenMode = "rent" | "usage" | "both";
 
 /**
- * Run both generators SEQUENTIALLY (not concurrently). Each generator's per-contract
- * loop is already sequential, but running the two concurrently let a brand-new
- * contract's rent + usage inserts race on the MAX()+1 statement_number trigger,
- * causing a duplicate-key collision that drops one proforma. Sequential execution
- * removes that race. Each generator is independently try/caught so a thrown one
- * never aborts the other.
+ * Run the requested generator(s) SEQUENTIALLY (not concurrently). Each
+ * generator's per-contract loop is already sequential, but running rent + usage
+ * concurrently let a brand-new contract race on the MAX()+1 statement_number
+ * trigger. Each generator is independently try/caught so a thrown one never
+ * aborts the other.
+ *
+ * Mode lets the caller pick exactly one flow:
+ *   - "rent"  → only generateRentProformas. Used by the Monthly Rent Proforma
+ *               card (runs on the last working day, dispatches live).
+ *   - "usage" → only generateUsageStatements. Used by the Monthly Usage Drafts
+ *               card (runs AFTER month-end so all charges are captured).
+ *   - "both"  → backward compatibility / cron path.
  */
 async function runGenerators(
   client: AdminClient,
-  opts: { month?: number; year?: number; contractId?: string; dryRun?: boolean },
+  opts: { month?: number; year?: number; contractId?: string; dryRun?: boolean; mode?: GenMode },
 ): Promise<{ rent: GenerateResult; usage: GenerateResult }> {
   const m = opts.month ?? 0, y = opts.year ?? 0;
-  const empty = (err: string): GenerateResult => ({
-    month: m, year: y, generated: 0, skipped: 0, errors: [err],
+  const mode: GenMode = opts.mode ?? "both";
+  const empty = (err?: string): GenerateResult => ({
+    month: m, year: y, generated: 0, skipped: 0, errors: err ? [err] : [],
     statementIds: [], noContact: [], quarterlySkipped: [], superseded: [], alreadySent: [], preview: [],
   });
 
-  let rent: GenerateResult;
-  try { rent = await generateRentProformas(client, opts); }
-  catch (e) { rent = empty(`rent generator: ${String(e)}`); }
+  let rent: GenerateResult = empty();
+  if (mode === "rent" || mode === "both") {
+    try { rent = await generateRentProformas(client, opts); }
+    catch (e) { rent = empty(`rent generator: ${String(e)}`); }
+  }
 
-  let usage: GenerateResult;
-  try { usage = await generateUsageStatements(client, opts); }
-  catch (e) { usage = empty(`usage generator: ${String(e)}`); }
+  let usage: GenerateResult = empty();
+  if (mode === "usage" || mode === "both") {
+    try { usage = await generateUsageStatements(client, opts); }
+    catch (e) { usage = empty(`usage generator: ${String(e)}`); }
+  }
 
   return { rent, usage };
 }
@@ -79,9 +91,11 @@ export async function POST(request: NextRequest) {
   const year       = body.year       ? parseInt(String(body.year))  : undefined;
   const contractId = body.contract_id || undefined;
   const dryRun     = body.dry_run === true;
+  const modeIn     = String(body.mode || "both").toLowerCase();
+  const mode: GenMode = (modeIn === "rent" || modeIn === "usage") ? modeIn : "both";
 
   const admin = createAdminClient();
-  const opts  = { month, year, contractId, dryRun };
+  const opts  = { month, year, contractId, dryRun, mode };
 
   const { rent, usage } = await runGenerators(admin, opts);
 
