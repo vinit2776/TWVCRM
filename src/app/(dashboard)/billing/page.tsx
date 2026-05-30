@@ -828,13 +828,16 @@ export default function BillingPage() {
           Three finance-centric buckets above the tab list so the screen
           tells finance "what owes me / what came in / what goes out"
           before forcing them to pick a sub-view.
-            • Receivables — Contracts, Proposals, Usage Charges
+            • Pre-invoice — Proposals (awaiting deposit), Usage Charges (queued for next statement)
             • Collections — Walk-in, Cash Handovers
-            • Invoicing  — GST Invoices, Statements
+            • Invoicing   — GST Invoices, Statements
+          Renamed from "Receivables" so it no longer collides with the
+          accounting-true /accounting/receivables page (invoiced-but-unpaid
+          billing statements). This bucket is pre-invoice work-in-progress.
       */}
       <div className="flex flex-wrap gap-2 border-b pb-2">
         {([
-          { key: "receivables", label: "Receivables", hint: "Proposals & charges" },
+          { key: "receivables", label: "Pre-invoice", hint: "Proposals & charges awaiting invoicing" },
           { key: "collections", label: "Collections", hint: "Cash that came in" },
           { key: "invoicing",   label: "Invoicing",   hint: "Billing & statements" },
         ] as const).map((s) => {
