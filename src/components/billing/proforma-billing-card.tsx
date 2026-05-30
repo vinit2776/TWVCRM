@@ -1,10 +1,10 @@
 "use client";
 
-import { useState } from "react";
+import { useState, Fragment } from "react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Receipt, Eye, Send } from "lucide-react";
+import { Receipt, Eye, Send, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 
@@ -17,7 +17,10 @@ interface PreviewItem {
   period_label: string;
   subtotal: number;
   tax_amount: number;
+  cgst_amount?: number;
+  sgst_amount?: number;
   total_amount: number;
+  line_items?: { description: string; amount: number; note?: string }[];
   note?: string;
   supersedes?: string;
 }
@@ -64,6 +67,7 @@ export function ProformaBillingCard({
   const isRent = mode === "rent";
 
   const [previewItems, setPreviewItems] = useState<PreviewItem[] | null>(null);
+  const [expandedRow, setExpandedRow]   = useState<string | null>(null);
   const [alreadySent, setAlreadySent]   = useState<string[]>([]);
   const [previewing, setPreviewing]     = useState(false);
   const [previewed, setPreviewed]       = useState(false);
@@ -213,9 +217,14 @@ export function ProformaBillingCard({
           {previewItems.length === 0 ? (
             <p className="text-xs text-muted-foreground px-3 py-3">Nothing to {isRent ? "generate" : "create"} — all contracts are already covered for this period.</p>
           ) : (
+            <>
+            <div className="mb-2 px-3 py-2 text-[11px] text-blue-900 bg-blue-50 border-b">
+              ℹ Proforma numbers (TWV-BS-NNNN) are assigned only when you click <strong>Run &amp; Send</strong>. Click any row below to see the line-item breakdown that will appear on the proforma.
+            </div>
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/30">
+                  <th className="px-3 py-2 text-left font-medium w-6"></th>
                   <th className="px-3 py-2 text-left font-medium">Contract</th>
                   <th className="px-3 py-2 text-left font-medium">Customer</th>
                   <th className="px-3 py-2 text-left font-medium hidden md:table-cell">Period</th>
@@ -226,22 +235,91 @@ export function ProformaBillingCard({
                 </tr>
               </thead>
               <tbody>
-                {[...previewItems].sort((a, b) => a.contract_number.localeCompare(b.contract_number, undefined, { numeric: true })).map((it, idx) => (
-                  <tr key={idx} className="border-b">
-                    <td className="px-3 py-2 font-mono text-xs">{it.contract_number}</td>
-                    <td className="px-3 py-2 text-xs">{it.customer_name || "—"}</td>
-                    <td className="px-3 py-2 text-muted-foreground hidden md:table-cell">{it.period_label}</td>
-                    <td className="px-3 py-2 text-right">{formatCurrency(it.subtotal)}</td>
-                    <td className="px-3 py-2 text-right text-muted-foreground">{formatCurrency(it.tax_amount)}</td>
-                    <td className="px-3 py-2 text-right font-medium">{formatCurrency(it.total_amount)}</td>
-                    <td className="px-3 py-2 text-xs text-muted-foreground hidden lg:table-cell">
-                      {it.note}
-                      {it.supersedes && <span className="block text-amber-700 mt-0.5">supersedes {it.supersedes}</span>}
-                    </td>
-                  </tr>
-                ))}
+                {[...previewItems].sort((a, b) => a.contract_number.localeCompare(b.contract_number, undefined, { numeric: true })).map((it) => {
+                  const rowKey = it.contract_number;
+                  const isExpanded = expandedRow === rowKey;
+                  const hasBreakdown = (it.line_items?.length ?? 0) > 0;
+                  return (
+                    <Fragment key={rowKey}>
+                      <tr
+                        className={`border-b ${hasBreakdown ? "cursor-pointer hover:bg-muted/30" : ""}`}
+                        onClick={() => hasBreakdown && setExpandedRow(isExpanded ? null : rowKey)}
+                      >
+                        <td className="px-3 py-2">
+                          {hasBreakdown && (
+                            <ChevronRight className={`h-3.5 w-3.5 text-muted-foreground transition-transform ${isExpanded ? "rotate-90" : ""}`} />
+                          )}
+                        </td>
+                        <td className="px-3 py-2 font-mono text-xs">{it.contract_number}</td>
+                        <td className="px-3 py-2 text-xs">{it.customer_name || "—"}</td>
+                        <td className="px-3 py-2 text-muted-foreground hidden md:table-cell">{it.period_label}</td>
+                        <td className="px-3 py-2 text-right">{formatCurrency(it.subtotal)}</td>
+                        <td className="px-3 py-2 text-right text-muted-foreground">{formatCurrency(it.tax_amount)}</td>
+                        <td className="px-3 py-2 text-right font-medium">{formatCurrency(it.total_amount)}</td>
+                        <td className="px-3 py-2 text-xs text-muted-foreground hidden lg:table-cell">
+                          {it.note}
+                          {it.supersedes && <span className="block text-amber-700 mt-0.5">supersedes {it.supersedes}</span>}
+                        </td>
+                      </tr>
+                      {isExpanded && hasBreakdown && (
+                        <tr className="border-b bg-blue-50/30">
+                          <td colSpan={8} className="px-6 py-3">
+                            <div className="rounded-md bg-white border p-3">
+                              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground mb-2">
+                                Proforma Preview — {it.contract_number} · {it.period_label}
+                              </p>
+                              <table className="w-full text-xs">
+                                <thead>
+                                  <tr className="border-b text-muted-foreground">
+                                    <th className="text-left py-1 font-medium">Line Item</th>
+                                    <th className="text-right py-1 font-medium">Amount</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {it.line_items!.map((li, i) => (
+                                    <tr key={i} className="border-b last:border-0">
+                                      <td className="py-1.5">
+                                        {li.description}
+                                        {li.note && <span className="ml-2 text-[10px] text-amber-700">({li.note})</span>}
+                                      </td>
+                                      <td className="py-1.5 text-right">{formatCurrency(li.amount)}</td>
+                                    </tr>
+                                  ))}
+                                  <tr className="border-t-2 border-t-muted-foreground/20">
+                                    <td className="py-1.5 text-muted-foreground">Subtotal (taxable value)</td>
+                                    <td className="py-1.5 text-right font-medium">{formatCurrency(it.subtotal)}</td>
+                                  </tr>
+                                  {it.cgst_amount != null && (
+                                    <tr>
+                                      <td className="py-1 text-muted-foreground">CGST @ 9%</td>
+                                      <td className="py-1 text-right text-muted-foreground">{formatCurrency(it.cgst_amount)}</td>
+                                    </tr>
+                                  )}
+                                  {it.sgst_amount != null && (
+                                    <tr>
+                                      <td className="py-1 text-muted-foreground">SGST @ 9%</td>
+                                      <td className="py-1 text-right text-muted-foreground">{formatCurrency(it.sgst_amount)}</td>
+                                    </tr>
+                                  )}
+                                  <tr className="border-t-2 border-t-muted-foreground/30 font-semibold">
+                                    <td className="py-1.5">Grand Total</td>
+                                    <td className="py-1.5 text-right">{formatCurrency(it.total_amount)}</td>
+                                  </tr>
+                                </tbody>
+                              </table>
+                              <p className="text-[10px] text-muted-foreground mt-3 italic">
+                                Place of supply: Tamil Nadu · The proforma number will be assigned on Run &amp; Send.
+                              </p>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </Fragment>
+                  );
+                })}
               </tbody>
             </table>
+            </>
           )}
         </div>
       )}

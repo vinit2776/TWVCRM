@@ -49,7 +49,11 @@ export interface PreviewItem {
   period_label: string;
   subtotal: number;
   tax_amount: number;
+  cgst_amount?: number;
+  sgst_amount?: number;
   total_amount: number;
+  /** Itemised breakdown for the expandable detail view */
+  line_items?: { description: string; amount: number; note?: string }[];
   /** For rent: whether it would be prorated. For usage: the chargeable categories present. */
   note?: string;
   /**
@@ -761,6 +765,15 @@ export async function generateRentProformas(
       if (opts.dryRun) {
         const addonNote = addonsSubtotal > 0 ? ` + ₹${addonsSubtotal.toLocaleString("en-IN")} add-ons` : "";
         const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || undefined;
+        // Build line-item breakdown for the expandable detail view
+        const previewLineItems: { description: string; amount: number; note?: string }[] = [
+          {
+            description: `Monthly rent${contract.seats ? ` (${contract.seats} seat${Number(contract.seats) > 1 ? "s" : ""})` : ""}`,
+            amount: prepaidRentAmount,
+            ...(prepaidRentAmount < baseAmount ? { note: `Pro-rated (contract ends mid-month)` } : {}),
+          },
+          ...addonLineItems,
+        ];
         result.preview.push({
           contract_number: contractNumber,
           customer_name: customerName,
@@ -768,7 +781,10 @@ export async function generateRentProformas(
           period_label: monthLabel(prepaid.month, prepaid.year),
           subtotal: totalPrepaidSubtotal,
           tax_amount: combinedTax,
+          cgst_amount: combinedCgst,
+          sgst_amount: combinedSgst,
           total_amount: combinedTotal,
+          line_items: previewLineItems,
           note: prepaidRentAmount < baseAmount
             ? `Prorated (contract ends mid-month) · CGST+SGST${addonNote}`
             : `Full month · CGST+SGST${addonNote}`,
