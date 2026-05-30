@@ -105,7 +105,8 @@ export async function dispatchProforma(
   // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
       const isInterstate = false;
 
-  let cgst = 0, sgst = 0, igst = 0;
+  let cgst = 0, sgst = 0;
+      const igst = 0;
   cgst = Math.round(subtotal * (taxPercentage / 200) );
     sgst = Math.round(subtotal * (taxPercentage / 200) );
   const taxAmount = cgst + sgst + igst;
