@@ -391,8 +391,9 @@ export default function BillingPage() {
   const [stmtTypeFilter, setStmtTypeFilter]               = useState<"all" | "rent" | "usage">("all");
 
   // ── Manual Monthly Proforma Billing (cron is paused; this is the manual trigger) ──
-  type PreviewItem = { contract_number: string; type: "rent" | "usage"; period_label: string; subtotal: number; tax_amount: number; total_amount: number; note?: string };
+  type PreviewItem = { contract_number: string; type: "rent" | "usage"; period_label: string; subtotal: number; tax_amount: number; total_amount: number; note?: string; supersedes?: string };
   const [previewItems, setPreviewItems]       = useState<PreviewItem[] | null>(null);
+  const [previewAlreadySent, setPreviewAlreadySent] = useState<string[]>([]);
   const [previewing, setPreviewing]           = useState(false);
   const [previewedThisCycle, setPreviewedThisCycle] = useState(false);
   const [runningBilling, setRunningBilling]   = useState(false);
@@ -435,9 +436,16 @@ export default function BillingPage() {
         ...(json.rent_proformas?.preview ?? []),
         ...(json.usage_statements?.preview ?? []),
       ];
+      // Merge already-sent contracts from both generators (deduped)
+      const alreadySent: string[] = Array.from(new Set([
+        ...(json.rent_proformas?.already_sent ?? []),
+        ...(json.usage_statements?.already_sent ?? []),
+      ]));
       setPreviewItems(items);
+      setPreviewAlreadySent(alreadySent);
       setPreviewedThisCycle(true);
-      setBillingDoneForNext(items.filter((i) => i.type === "rent").length === 0);
+      // "Done for next month" iff no rent will generate AND nothing was skipped due to already-sent
+      setBillingDoneForNext(items.filter((i) => i.type === "rent").length === 0 && alreadySent.length === 0);
       if (json.errors?.length) for (const e of json.errors) toast.error(e);
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Preview failed");
@@ -467,6 +475,7 @@ export default function BillingPage() {
       if (json.errors?.length) for (const e of json.errors) toast.error(e);
       setRunConfirmOpen(false);
       setPreviewItems(null);
+      setPreviewAlreadySent([]);
       setPreviewedThisCycle(false);
       setBillingDoneForNext(true);
       await fetchStatements();
@@ -1295,6 +1304,11 @@ export default function BillingPage() {
                     Rent: {previewItems.filter(i => i.type === "rent").length} · Usage: {previewItems.filter(i => i.type === "usage").length} · Total ₹{previewItems.reduce((s, i) => s + i.total_amount, 0).toLocaleString("en-IN")}
                   </span>
                 </div>
+                {previewAlreadySent.length > 0 && (
+                  <div className="px-3 py-2 bg-green-50 border-b text-xs text-green-900">
+                    ✓ {previewAlreadySent.length} contract{previewAlreadySent.length !== 1 ? "s" : ""} already billed (skipped to avoid double-billing): {previewAlreadySent.join(", ")}
+                  </div>
+                )}
                 {previewItems.length === 0 ? (
                   <p className="text-xs text-muted-foreground px-3 py-3">Nothing to generate — all contracts are already billed for this period.</p>
                 ) : (
@@ -1321,7 +1335,10 @@ export default function BillingPage() {
                           <td className="px-3 py-2 text-right">{formatCurrency(it.subtotal)}</td>
                           <td className="px-3 py-2 text-right text-muted-foreground">{formatCurrency(it.tax_amount)}</td>
                           <td className="px-3 py-2 text-right font-medium">{formatCurrency(it.total_amount)}</td>
-                          <td className="px-3 py-2 text-xs text-muted-foreground hidden lg:table-cell">{it.note}</td>
+                          <td className="px-3 py-2 text-xs text-muted-foreground hidden lg:table-cell">
+                            {it.note}
+                            {it.supersedes && <span className="block text-amber-700 mt-0.5">supersedes {it.supersedes}</span>}
+                          </td>
                         </tr>
                       ))}
                     </tbody>
@@ -1678,14 +1695,26 @@ export default function BillingPage() {
             <DialogTitle>Run &amp; send proformas for {nextMonthInfo.label}?</DialogTitle>
           </DialogHeader>
           <div className="space-y-3 text-sm">
-            {previewItems && (
-              <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">
-                This will finalize and <strong>send live proformas with payment links</strong> to clients:
-                <br />• {previewItems.filter(i => i.type === "rent").length} rent proforma(s) — emailed + Razorpay link
-                <br />• {previewItems.filter(i => i.type === "usage").length} usage statement(s) — created as drafts for your review (not sent)
-                <br />Total rent value: ₹{previewItems.filter(i => i.type === "rent").reduce((s, i) => s + i.total_amount, 0).toLocaleString("en-IN")}
-              </div>
-            )}
+            {previewItems && (() => {
+              const rentCount  = previewItems.filter(i => i.type === "rent").length;
+              const usageCount = previewItems.filter(i => i.type === "usage").length;
+              const supersedeCount = new Set(previewItems.map(i => i.supersedes).filter(Boolean) as string[]).size;
+              const rentTotal  = previewItems.filter(i => i.type === "rent").reduce((s, i) => s + i.total_amount, 0);
+              return (
+                <div className="rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-amber-900">
+                  This will finalize and <strong>send live proformas with payment links</strong> to clients:
+                  <br />• {rentCount} rent proforma{rentCount !== 1 ? "s" : ""} — emailed + Razorpay link
+                  <br />• {usageCount} usage statement{usageCount !== 1 ? "s" : ""} — created as drafts for your review (not sent)
+                  <br />Total rent value: ₹{rentTotal.toLocaleString("en-IN")}
+                  {supersedeCount > 0 && (
+                    <>
+                      <br /><br />
+                      <strong>{supersedeCount} legacy combined draft{supersedeCount !== 1 ? "s" : ""} will be voided</strong> and replaced by the fresh rent + usage split above. These drafts were never sent to clients — no client impact. Audit trail preserved (status = voided).
+                    </>
+                  )}
+                </div>
+              );
+            })()}
             <p className="text-muted-foreground">Rent proformas are dispatched immediately. Usage statements stay as drafts until you send them individually.</p>
           </div>
           <div className="flex justify-end gap-2 pt-2">

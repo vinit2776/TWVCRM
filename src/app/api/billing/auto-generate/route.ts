@@ -20,7 +20,7 @@ async function runGenerators(
   const m = opts.month ?? 0, y = opts.year ?? 0;
   const empty = (err: string): GenerateResult => ({
     month: m, year: y, generated: 0, skipped: 0, errors: [err],
-    statementIds: [], noContact: [], quarterlySkipped: [], preview: [],
+    statementIds: [], noContact: [], quarterlySkipped: [], superseded: [], alreadySent: [], preview: [],
   });
 
   let rent: GenerateResult;
@@ -94,8 +94,8 @@ export async function POST(request: NextRequest) {
     dry_run: dryRun,
     month: rent.month,
     year: rent.year,
-    rent_proformas: { generated: rent.generated, skipped: rent.skipped, no_contact: rent.noContact, quarterly_skipped: rent.quarterlySkipped, preview: rent.preview },
-    usage_statements: { generated: usage.generated, skipped: usage.skipped, preview: usage.preview },
+    rent_proformas: { generated: rent.generated, skipped: rent.skipped, no_contact: rent.noContact, quarterly_skipped: rent.quarterlySkipped, superseded: rent.superseded, already_sent: rent.alreadySent, preview: rent.preview },
+    usage_statements: { generated: usage.generated, skipped: usage.skipped, superseded: usage.superseded, already_sent: usage.alreadySent, preview: usage.preview },
     errors: [...rent.errors, ...usage.errors].length > 0 ? [...rent.errors, ...usage.errors] : undefined,
     statement_ids: [...rent.statementIds, ...usage.statementIds],
   });
