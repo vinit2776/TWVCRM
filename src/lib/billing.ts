@@ -51,6 +51,11 @@ export interface PreviewItem {
   total_amount: number;
   /** For rent: whether it would be prorated. For usage: the chargeable categories present. */
   note?: string;
+  /**
+   * If set, this generation would supersede an existing unsent legacy combined
+   * statement (e.g., "TWV-BS-0070"). Used to surface the cutover to the operator.
+   */
+  supersedes?: string;
 }
 
 export interface GenerateResult {
@@ -65,6 +70,13 @@ export interface GenerateResult {
   noContact: string[];
   /** Contract numbers skipped by the quarterly billing gate (expected, not errors). */
   quarterlySkipped: string[];
+  /** Statement numbers of legacy combined drafts that were voided so a fresh
+   *  rent + usage split could replace them. Cutover housekeeping — surfaced in
+   *  the operator confirmation so they know what's being replaced. */
+  superseded: string[];
+  /** Contracts skipped because a covering statement was already SENT to the
+   *  client (proforma_sent_at set) or paid or GST-issued — never replaced. */
+  alreadySent: string[];
   /** Populated only in dryRun mode: what each contract WOULD be billed. */
   preview: PreviewItem[];
 }
@@ -164,7 +176,7 @@ export async function generateMonthlyStatements(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [], statementIds: [],
-    noContact: [], quarterlySkipped: [], preview: [],
+    noContact: [], quarterlySkipped: [], superseded: [], alreadySent: [], preview: [],
   };
 
   if (!contracts || contracts.length === 0) return result;
@@ -578,7 +590,7 @@ export async function generateRentProformas(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [],
-    statementIds: [], noContact: [], quarterlySkipped: [], preview: [],
+    statementIds: [], noContact: [], quarterlySkipped: [], superseded: [], alreadySent: [], preview: [],
   };
 
   // Fetch active contracts overlapping the target month
@@ -598,41 +610,47 @@ export async function generateRentProformas(
   const { data: contracts } = await contractsQuery;
   if (!contracts || contracts.length === 0) return result;
 
-  // Idempotency: fetch existing rent/combined statements for the prepaid month
   const contractIds = contracts.map((c) => c.id as string);
-  // Idempotency: a contract's NEXT-month rent is "already billed" if any non-voided
-  // statement covers the prepaid month. Two cases must both be caught to prevent
-  // double-billing (the activation hook still creates `combined` statements):
-  //   (A) New `rent` or `combined` rows populate prepaid_month/prepaid_year with the
-  //       next-month values — match those directly.
-  //   (B) Legacy `combined` rows (created before prepaid_month existed) have
-  //       prepaid_month = NULL but embed next-month rent in their line items; their
-  //       period_start is the CURRENT (target) month — match those by period_start.
-  // Voided statements are excluded so a corrected proforma can regenerate after a void.
-  const alreadyHasRent = new Set<string>();
 
-  // NOTE: voided statements are excluded via `voided_at IS NULL`, not a status
-  // filter — `status` is a Postgres enum (draft|finalized|exported) that does NOT
-  // contain "voided"; voiding is tracked by the voided_at timestamp.
-  const { data: byPrepaid } = await supabase
+  // Idempotency, partitioned by client-impact:
+  //   (1) alreadySent — a covering statement was actually dispatched to the client
+  //       (proforma_sent_at IS NOT NULL), or paid, or GST-issued. NEVER touch
+  //       these — superseding would risk duplicate dispatch / accounting confusion.
+  //   (2) supersedable — a covering combined/rent statement exists but was never
+  //       sent (legacy cron drafts, unsent finalized statements). These get
+  //       VOIDED so a fresh rent + usage split can replace them. The client never
+  //       saw the old one, so this is a no-impact internal cleanup.
+  //   (3) Neither — fresh contract, generate normally.
+  //
+  // Covering statements: rent|combined where either prepaid_month/year matches
+  // the target prepaid month (new rows), OR statement_type=combined with
+  // period_start=current target month (legacy combined rows whose prepaid is null
+  // but whose line items embed next-month rent).
+  const { data: coveringStmts } = await supabase
     .from("billing_statements")
-    .select("contract_id")
+    .select("id, contract_id, statement_number, prepaid_month, prepaid_year, period_start, statement_type, proforma_sent_at, gst_invoice_number, billing_payments:billing_payments(id)")
     .in("contract_id", contractIds)
-    .eq("prepaid_month", prepaid.month)
-    .eq("prepaid_year", prepaid.year)
     .in("statement_type", ["rent", "combined"])
-    .is("voided_at", null);
-  for (const s of (byPrepaid || []) as Array<{ contract_id: string }>) alreadyHasRent.add(s.contract_id);
+    .is("voided_at", null)
+    .or(`and(prepaid_month.eq.${prepaid.month},prepaid_year.eq.${prepaid.year}),and(statement_type.eq.combined,period_start.eq.${firstOfTargetMonth},prepaid_month.is.null)`);
 
-  const { data: legacyCombined } = await supabase
-    .from("billing_statements")
-    .select("contract_id")
-    .in("contract_id", contractIds)
-    .eq("statement_type", "combined")
-    .eq("period_start", firstOfTargetMonth)
-    .is("prepaid_month", null)
-    .is("voided_at", null);
-  for (const s of (legacyCombined || []) as Array<{ contract_id: string }>) alreadyHasRent.add(s.contract_id);
+  const alreadySent = new Set<string>();
+  const supersedable = new Map<string, { id: string; statement_number: string }>();
+  for (const s of (coveringStmts || []) as Array<{
+    id: string; contract_id: string; statement_number: string;
+    proforma_sent_at: string | null; gst_invoice_number: string | null;
+    billing_payments: { id: string }[];
+  }>) {
+    const wasSentOrPaid = !!s.proforma_sent_at || !!s.gst_invoice_number || (s.billing_payments?.length ?? 0) > 0;
+    if (wasSentOrPaid) {
+      alreadySent.add(s.contract_id);
+    } else if (!supersedable.has(s.contract_id)) {
+      // Take the first (typically only) unsent covering statement to supersede
+      supersedable.set(s.contract_id, { id: s.id, statement_number: s.statement_number });
+    }
+  }
+  // If a contract has BOTH a sent statement and an unsent one, the sent one wins — drop from supersedable
+  for (const cid of alreadySent) supersedable.delete(cid);
 
   // We need an admin client for dispatchProforma (bypasses RLS for the update step)
   const adminSupabase = createAdminClient();
@@ -654,11 +672,16 @@ export async function generateRentProformas(
         }
       }
 
-      // ── 2. Idempotency ──────────────────────────────────────────────────
-      if (alreadyHasRent.has(cid)) {
+      // ── 2. Idempotency partition ─────────────────────────────────────────
+      //   alreadySent   → covering proforma already dispatched/paid/GST-issued → SKIP
+      //   supersedable  → unsent covering combined/rent draft → VOID + replace
+      //   neither       → fresh generate
+      if (alreadySent.has(cid)) {
+        result.alreadySent.push(contractNumber);
         result.skipped++;
         continue;
       }
+      const toSupersede = supersedable.get(cid); // may be undefined
 
       // ── 3. Proration ────────────────────────────────────────────────────
       const baseAmount    = Number(contract.subtotal || contract.total_amount);
@@ -710,9 +733,35 @@ export async function generateRentProformas(
           note: prepaidRentAmount < baseAmount
             ? `Prorated (contract ends mid-month) · ${isInterstate ? "IGST" : "CGST+SGST"}`
             : `Full month · ${isInterstate ? "IGST" : "CGST+SGST"}`,
+          supersedes: toSupersede?.statement_number,
         });
         result.generated++;
         continue;
+      }
+
+      // ── Live: supersede legacy unsent draft (if any) before inserting fresh ──
+      // The client never saw this statement (no proforma_sent_at, no GST, no
+      // payments — guards enforced when building `supersedable`). Direct void
+      // update bypasses the void route's create-replacement logic; the fresh
+      // rent statement BELOW is the replacement.
+      if (toSupersede) {
+        // Unlink charges/records/bookings so the usage generator can repick them up
+        await adminSupabase.from("usage_charges").update({ billing_statement_id: null, status: "pending" }).eq("billing_statement_id", toSupersede.id);
+        await adminSupabase.from("service_usage_records").update({ billing_statement_id: null, is_billed: false }).eq("billing_statement_id", toSupersede.id);
+        await adminSupabase.from("bookings").update({ billing_statement_id: null }).eq("billing_statement_id", toSupersede.id);
+        const { error: voidErr } = await adminSupabase
+          .from("billing_statements")
+          .update({
+            status: "voided",
+            voided_at: new Date().toISOString(),
+            void_reason: "Auto-superseded by rent + usage split flow (no client impact: never sent)",
+          })
+          .eq("id", toSupersede.id);
+        if (voidErr) {
+          result.errors.push(`${contractNumber}: failed to supersede ${toSupersede.statement_number}: ${voidErr.message}`);
+          continue;
+        }
+        result.superseded.push(toSupersede.statement_number);
       }
 
       const lineItems = [{
@@ -846,7 +895,7 @@ export async function generateUsageStatements(
   const result: GenerateResult = {
     month: targetMonth, year: targetYear,
     generated: 0, skipped: 0, errors: [],
-    statementIds: [], noContact: [], quarterlySkipped: [], preview: [],
+    statementIds: [], noContact: [], quarterlySkipped: [], superseded: [], alreadySent: [], preview: [],
   };
 
   // Fetch active contracts
@@ -867,32 +916,86 @@ export async function generateUsageStatements(
 
   const contractIds = contracts.map((c) => c.id as string);
 
-  // Idempotency: skip if a non-voided usage/combined statement already exists for this
-  // period. Voided statements are excluded via `voided_at IS NULL` (status is an enum
-  // that does not contain "voided"; voiding is tracked by voided_at).
-  const { data: existingUsageStmts } = await supabase
+  // Idempotency partition (same model as the rent generator):
+  //   alreadySent  → covering usage/combined statement has been dispatched/paid → SKIP
+  //   supersedable → unsent covering combined/usage draft → VOID + replace fresh
+  // Note: a covering statement for usage is type usage|combined with
+  // period_start = first-of-current-month (the month whose usage we're billing).
+  const { data: coveringStmts } = await supabase
     .from("billing_statements")
-    .select("contract_id")
+    .select("id, contract_id, statement_number, proforma_sent_at, gst_invoice_number, billing_payments:billing_payments(id)")
     .in("contract_id", contractIds)
     .eq("period_start", firstOfMonth)
     .in("statement_type", ["usage", "combined"])
     .is("voided_at", null);
 
-  const alreadyHasUsage = new Set(
-    (existingUsageStmts || []).map((s: { contract_id: string }) => s.contract_id)
-  );
+  const alreadySent = new Set<string>();
+  const supersedable = new Map<string, { id: string; statement_number: string }>();
+  for (const s of (coveringStmts || []) as Array<{
+    id: string; contract_id: string; statement_number: string;
+    proforma_sent_at: string | null; gst_invoice_number: string | null;
+    billing_payments: { id: string }[];
+  }>) {
+    const wasSentOrPaid = !!s.proforma_sent_at || !!s.gst_invoice_number || (s.billing_payments?.length ?? 0) > 0;
+    if (wasSentOrPaid) alreadySent.add(s.contract_id);
+    else if (!supersedable.has(s.contract_id)) supersedable.set(s.contract_id, { id: s.id, statement_number: s.statement_number });
+  }
+  for (const cid of alreadySent) supersedable.delete(cid);
 
-  const billable = contractIds.filter((id) => !alreadyHasUsage.has(id));
+  // LIVE mode: void the supersedable statements BEFORE pre-fetch so the unlinked
+  // usage records show up in the pre-fetch's "billing_statement_id IS NULL" filter.
+  // DRYRUN: skip the void; broaden the pre-fetch instead (see filter below).
+  const supersedableIds = Array.from(supersedable.values()).map(s => s.id);
+  if (!opts.dryRun && supersedable.size > 0) {
+    for (const [cid, info] of supersedable) {
+      await supabase.from("usage_charges").update({ billing_statement_id: null, status: "pending" }).eq("billing_statement_id", info.id);
+      await supabase.from("service_usage_records").update({ billing_statement_id: null, is_billed: false }).eq("billing_statement_id", info.id);
+      await supabase.from("bookings").update({ billing_statement_id: null }).eq("billing_statement_id", info.id);
+      const { error: voidErr } = await supabase
+        .from("billing_statements")
+        .update({
+          status: "voided",
+          voided_at: new Date().toISOString(),
+          void_reason: "Auto-superseded by rent + usage split flow (no client impact: never sent)",
+        })
+        .eq("id", info.id);
+      if (voidErr) {
+        // Don't push to errors[] yet — let the per-contract loop report with contract_number
+        const c = contracts.find((x) => x.id === cid) as { contract_number?: string } | undefined;
+        result.errors.push(`${c?.contract_number ?? cid}: failed to supersede ${info.statement_number}: ${voidErr.message}`);
+        supersedable.delete(cid); // skip generation if void failed
+      } else {
+        result.superseded.push(info.statement_number);
+      }
+    }
+  }
+
+  const billable = contractIds.filter((id) => !alreadySent.has(id));
   if (billable.length === 0) return result;
 
-  // Pre-fetch usage data in batch — only charges NOT yet linked to any statement
+  // Pre-fetch usage data in batch. In dryRun mode (supersede pass was a no-op),
+  // also include records still linked to a supersedable statement — those would
+  // BE unlinked in live mode, so the preview should reflect them as billable.
+  // In live mode the supersede already ran, so those records have status=pending
+  // AND billing_statement_id=null (the fresh-charges branch matches them).
+  //
+  // Unified filter handles both modes:
+  //   (status=pending AND billing_statement_id IS NULL)  — fresh / post-supersede
+  //   OR billing_statement_id IN supersedable IDs        — dryRun pre-supersede
+  const usageOrFilter = supersedableIds.length > 0
+    ? `and(status.eq.pending,billing_statement_id.is.null),billing_statement_id.in.(${supersedableIds.join(",")})`
+    : `and(status.eq.pending,billing_statement_id.is.null)`;
+  // service_usage_records uses is_billed boolean instead of a status enum
+  const serviceOrFilter = supersedableIds.length > 0
+    ? `and(is_billed.eq.false,billing_statement_id.is.null),billing_statement_id.in.(${supersedableIds.join(",")})`
+    : `and(is_billed.eq.false,billing_statement_id.is.null)`;
+
   const [usageRes, facilityRes, serviceRes, bookingsRes] = await Promise.all([
     supabase
       .from("usage_charges")
       .select("id, contract_id, description, quantity, unit_price, total")
       .in("contract_id", billable)
-      .eq("status", "pending")
-      .is("billing_statement_id", null)
+      .or(usageOrFilter)
       .gte("charge_date", firstOfMonth)
       .lte("charge_date", lastOfMonth),
 
@@ -908,7 +1011,7 @@ export async function generateUsageStatements(
       .in("contract_id", billable)
       .eq("period_year", targetYear)
       .eq("period_month", targetMonth)
-      .eq("is_billed", false),
+      .or(serviceOrFilter),
 
     supabase
       .from("bookings")
@@ -953,7 +1056,12 @@ export async function generateUsageStatements(
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lead           = contract.lead as any;
 
-    if (alreadyHasUsage.has(cid)) { result.skipped++; continue; }
+    if (alreadySent.has(cid)) {
+      result.alreadySent.push(contractNumber);
+      result.skipped++;
+      continue;
+    }
+    const toSupersede = supersedable.get(cid); // already voided above in LIVE mode
 
     try {
       const usageCharges   = usageByContract.get(cid)    ?? [];
@@ -1028,6 +1136,7 @@ export async function generateUsageStatements(
           tax_amount: taxAmount,
           total_amount: totalAmount,
           note: `${cats || "usage"} · ${isInterstate ? "IGST" : "CGST+SGST"} · draft for review`,
+          supersedes: toSupersede?.statement_number,
         });
         result.generated++;
         continue;
