@@ -34,9 +34,20 @@ export async function GET(request: NextRequest) {
   const curYear = nowIST.getUTCFullYear();
   const daysInMonth = new Date(curYear, curMonth, 0).getDate();
 
-  // Only nudge on the actual last day of the month (unless forced)
-  if (!force && todayDate !== daysInMonth) {
-    return NextResponse.json({ skipped: true, reason: `Not last day (day ${todayDate}/${daysInMonth})` });
+  // Compute the LAST WORKING DAY of the current month (IST). Sunday is the only
+  // non-working day at The WorkVilla (Saturday is a working day, matching other
+  // crons in vercel.json that use Mon-Sat schedules). If the last calendar day
+  // falls on a Sunday, the last working day is the preceding Saturday. We nudge
+  // on BOTH the last working day AND the actual last calendar day so the team
+  // sees the reminder while in office, with a backstop on the final day itself.
+  const lastDayDow = new Date(Date.UTC(curYear, curMonth - 1, daysInMonth)).getUTCDay(); // 0=Sun
+  const lastWorkingDay = lastDayDow === 0 ? daysInMonth - 1 : daysInMonth;
+
+  if (!force && todayDate !== lastWorkingDay && todayDate !== daysInMonth) {
+    return NextResponse.json({
+      skipped: true,
+      reason: `Today ${todayDate} is not the last working day (${lastWorkingDay}) or last day (${daysInMonth}) of the month`,
+    });
   }
 
   // The month rent proformas would cover = NEXT month
@@ -73,6 +84,12 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ reminded: false, reason: "No recipients" });
   }
 
+  const isLastDay = todayDate === daysInMonth;
+  const todayLabel = nowIST.toLocaleDateString("en-IN", { weekday: "long", day: "numeric", month: "short" });
+  const headline = isLastDay
+    ? `Today is the last day of the month — please run the proformas before midnight.`
+    : `Today (${todayLabel}) is the last working day of the month — the actual last day falls on a Sunday, so please run the proformas today.`;
+
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
   const html = `
     <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
@@ -83,7 +100,7 @@ export async function GET(request: NextRequest) {
       <div style="padding:32px;">
         <div style="background:#fff3cd;border:1px solid #ffc107;border-radius:6px;padding:14px 18px;font-size:14px;color:#856404;">
           ⏰ <strong>Monthly proforma billing for ${prepaidLabel} has not been run yet.</strong>
-          Today is the last day of the month — please generate and send the rent proformas before month-end.
+          ${headline}
         </div>
         <p style="color:#333;font-size:14px;margin-top:16px;">Automatic billing is paused, so this step is manual. Open the Billing page, click <strong>Preview</strong> to check the amounts, then <strong>Run &amp; Send</strong>.</p>
         <div style="text-align:center;margin:24px 0;">
@@ -95,12 +112,16 @@ export async function GET(request: NextRequest) {
       </div>
     </div>`;
 
+  const subject = isLastDay
+    ? `⏰ Proforma billing for ${prepaidLabel} is due — run it before month-end`
+    : `⏰ Proforma billing for ${prepaidLabel} is due — last working day (month-end falls on Sunday)`;
+
   for (const email of emails) {
     resend.emails.send({
       from: EMAIL_FROM,
       replyTo: EMAIL_REPLY_TO,
       to: [email],
-      subject: `⏰ Proforma billing for ${prepaidLabel} is due — run it before month-end`,
+      subject,
       html,
     }).catch(console.error);
   }
