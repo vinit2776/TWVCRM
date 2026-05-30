@@ -224,7 +224,7 @@ export function ProformaBillingCard({
                 </tr>
               </thead>
               <tbody>
-                {previewItems.map((it, idx) => (
+                {[...previewItems].sort((a, b) => a.contract_number.localeCompare(b.contract_number, undefined, { numeric: true })).map((it, idx) => (
                   <tr key={idx} className="border-b">
                     <td className="px-3 py-2 font-mono text-xs">{it.contract_number}</td>
                     <td className="px-3 py-2 text-muted-foreground hidden md:table-cell">{it.period_label}</td>
