@@ -29,7 +29,10 @@ const SELLER = {
 };
 
 function fmt(amount: number): string {
-  return "Rs. " + new Intl.NumberFormat("en-IN", { minimumFractionDigits: 2, maximumFractionDigits: 2 }).format(amount);
+  // All billing amounts are rounded to the nearest rupee (see src/lib/billing.ts).
+  // PDF prints them as whole-rupee integers — no paise — and a "Round Off" line
+  // is shown in the totals block so the rounding adjustment is transparent.
+  return "Rs. " + new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(Math.round(amount));
 }
 
 function formatDateInv(date: string): string {
@@ -37,7 +40,9 @@ function formatDateInv(date: string): string {
 }
 
 // Convert number to words (Indian system)
-function amountInWords(n: number): string {
+function amountInWords(input: number): string {
+  // Invoices print whole rupees only — round before converting to words.
+  const n = Math.round(input);
   const ones = ["", "One", "Two", "Three", "Four", "Five", "Six", "Seven", "Eight", "Nine",
     "Ten", "Eleven", "Twelve", "Thirteen", "Fourteen", "Fifteen", "Sixteen", "Seventeen", "Eighteen", "Nineteen"];
   const tens = ["", "", "Twenty", "Thirty", "Forty", "Fifty", "Sixty", "Seventy", "Eighty", "Ninety"];
@@ -203,10 +208,10 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     : ["#", "Description", "HSN/SAC", "Qty", "Rate", "Amount", `CGST @${halfRate}%`, `SGST @${halfRate}%`, "Total"];
 
   const tableRows = data.lineItems.map((item, i) => {
-    const itemCgst = Math.round(item.amount * (halfRate / 100) * 100) / 100;
+    const itemCgst = Math.round(item.amount * (halfRate / 100));
     const itemSgst = itemCgst;
-    const itemIgst = Math.round(item.amount * (taxRate / 100) * 100) / 100;
-    const itemTotal = item.amount + (data.isInterstate ? itemIgst : itemCgst + itemSgst);
+    const itemIgst = Math.round(item.amount * (taxRate / 100));
+    const itemTotal = Math.round(item.amount) + (data.isInterstate ? itemIgst : itemCgst + itemSgst);
 
     return data.isInterstate
       ? [String(i + 1), item.description, item.hsnSac, String(item.qty), fmt(item.rate), fmt(item.amount), fmt(itemIgst), fmt(itemTotal)]
@@ -247,6 +252,17 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     totals.push([`CGST @${halfRate}%`, fmt(data.cgst)]);
     totals.push([`SGST @${halfRate}%`, fmt(data.sgst)]);
   }
+
+  // Round-off line — the gap between (subtotal + tax components) and the
+  // stored totalAmount. With rupee-rounded inputs this is usually 0, but we
+  // show it explicitly per Indian invoice convention so the math is
+  // transparent (and any paise-precision upstream is reconciled here).
+  const taxSum = data.isInterstate ? data.igst : data.cgst + data.sgst;
+  const roundedTotal = Math.round(data.totalAmount);
+  const roundOff = roundedTotal - (Math.round(data.subtotal) + Math.round(taxSum));
+  const roundOffStr = (roundOff >= 0 ? "+ " : "- ") + "Rs. " +
+    new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(Math.abs(roundOff));
+  totals.push(["Round Off", roundOffStr]);
 
   totals.forEach(([label, value]) => {
     doc.text(label, totalsX, y);

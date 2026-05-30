@@ -122,10 +122,10 @@ export async function dispatchProforma(
 
   let cgst = 0, sgst = 0, igst = 0;
   if (isInterstate) {
-    igst = Math.round(subtotal * (taxPercentage / 100) * 100) / 100;
+    igst = Math.round(subtotal * (taxPercentage / 100) );
   } else {
-    cgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
-    sgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
+    cgst = Math.round(subtotal * (taxPercentage / 200) );
+    sgst = Math.round(subtotal * (taxPercentage / 200) );
   }
   const taxAmount = cgst + sgst + igst;
   const totalAmount = subtotal + taxAmount;
@@ -326,7 +326,7 @@ export async function dispatchProforma(
           <tr><td style="padding:6px 0;color:#666;">Proforma Ref</td><td style="padding:6px 0;font-weight:600;">${proformaRef}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">Contract</td><td style="padding:6px 0;">${contract.contract_number}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">Period</td><td style="padding:6px 0;">${periodLabel}</td></tr>
-          <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:600;color:#015E65;font-size:16px;">Rs. ${totalAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
+          <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:600;color:#015E65;font-size:16px;">Rs. ${Math.round(totalAmount).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</td></tr>
         </table>
         ${paymentOptionsHtml}
         ${razorpayLinkUrl ? `

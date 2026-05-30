@@ -313,7 +313,7 @@ export async function generateMonthlyStatements(
         if (billableDays >= prepaidDaysInMonth) {
           prepaidRentAmount = baseAmount;
         } else {
-          prepaidRentAmount = Math.round((baseAmount / prepaidDaysInMonth) * billableDays * 100) / 100;
+          prepaidRentAmount = Math.round((baseAmount / prepaidDaysInMonth) * billableDays);
         }
       }
 
@@ -429,10 +429,10 @@ export async function generateMonthlyStatements(
 
       let cgst = 0, sgst = 0, igst = 0;
       if (isInterstate) {
-        igst = Math.round(subtotal * (taxPercentage / 100) * 100) / 100;
+        igst = Math.round(subtotal * (taxPercentage / 100) );
       } else {
-        cgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
-        sgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
+        cgst = Math.round(subtotal * (taxPercentage / 200) );
+        sgst = Math.round(subtotal * (taxPercentage / 200) );
       }
       const taxAmount = cgst + sgst + igst;
       const totalAmount = subtotal + taxAmount;
@@ -699,7 +699,7 @@ export async function generateRentProformas(
         const billableDays = Math.floor((billEnd.getTime() - billStart.getTime()) / 86400000) + 1;
         prepaidRentAmount = billableDays >= prepaidDaysInMonth
           ? baseAmount
-          : Math.round((baseAmount / prepaidDaysInMonth) * billableDays * 100) / 100;
+          : Math.round((baseAmount / prepaidDaysInMonth) * billableDays);
       }
 
       if (prepaidRentAmount <= 0) {
@@ -713,10 +713,10 @@ export async function generateRentProformas(
       const isInterstate  = buyerState !== "" && buyerState !== "tamil nadu" && buyerState !== "tn";
       let cgst = 0, sgst = 0, igst = 0;
       if (isInterstate) {
-        igst = Math.round(prepaidRentAmount * (taxPercentage / 100) * 100) / 100;
+        igst = Math.round(prepaidRentAmount * (taxPercentage / 100) );
       } else {
-        cgst = Math.round(prepaidRentAmount * (taxPercentage / 200) * 100) / 100;
-        sgst = Math.round(prepaidRentAmount * (taxPercentage / 200) * 100) / 100;
+        cgst = Math.round(prepaidRentAmount * (taxPercentage / 200) );
+        sgst = Math.round(prepaidRentAmount * (taxPercentage / 200) );
       }
       const taxAmount   = cgst + sgst + igst;
       const totalAmount = prepaidRentAmount + taxAmount;
@@ -1117,10 +1117,10 @@ export async function generateUsageStatements(
       const isInterstate  = buyerState !== "" && buyerState !== "tamil nadu" && buyerState !== "tn";
       let cgst = 0, sgst = 0, igst = 0;
       if (isInterstate) {
-        igst = Math.round(totalUsage * (taxPercentage / 100) * 100) / 100;
+        igst = Math.round(totalUsage * (taxPercentage / 100) );
       } else {
-        cgst = Math.round(totalUsage * (taxPercentage / 200) * 100) / 100;
-        sgst = Math.round(totalUsage * (taxPercentage / 200) * 100) / 100;
+        cgst = Math.round(totalUsage * (taxPercentage / 200) );
+        sgst = Math.round(totalUsage * (taxPercentage / 200) );
       }
       const taxAmount   = cgst + sgst + igst;
       const totalAmount = totalUsage + taxAmount;
