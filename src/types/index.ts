@@ -432,6 +432,19 @@ export type BillingCycle =
   | "half_yearly"
   | "yearly";
 
+export interface ContractAddon {
+  id: string;
+  contract_id: string;
+  description: string;
+  amount: number;
+  effective_from: string;
+  effective_until?: string | null;
+  is_active: boolean;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export interface Contract {
   id: string;
   contract_number: string;

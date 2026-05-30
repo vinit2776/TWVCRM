@@ -704,29 +704,54 @@ export async function generateRentProformas(
         continue;
       }
 
-      // ── 4. Calculate GST ────────────────────────────────────────────────
+      // ── 4. Recurring add-ons for the prepaid month ─────────────────────
       const taxPercentage = Number(contract.tax_percentage || 18);
-      const buyerState    = (lead?.state || "").toLowerCase().trim();
-      // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
-      const isInterstate = false;
-      let cgst = 0, sgst = 0, igst = 0;
-      cgst = Math.round(prepaidRentAmount * (taxPercentage / 200) );
-        sgst = Math.round(prepaidRentAmount * (taxPercentage / 200) );
-      const taxAmount   = cgst + sgst + igst;
-      const totalAmount = prepaidRentAmount + taxAmount;
+      const { data: addons } = await adminSupabase
+        .from("contract_addons")
+        .select("id,description,amount,effective_from,effective_until")
+        .eq("contract_id", cid)
+        .eq("is_active", true)
+        .lte("effective_from", prepaidLastOfMonth)
+        .or(`effective_until.is.null,effective_until.gte.${prepaidFirstOfMonth}`);
+
+      let addonsSubtotal = 0;
+      const addonLineItems: { description: string; amount: number; note?: string }[] = [];
+      for (const addon of (addons ?? [])) {
+        const aFrom = new Date(addon.effective_from + "T00:00:00Z");
+        const aUntil = addon.effective_until ? new Date(addon.effective_until + "T00:00:00Z") : null;
+        const billStart = aFrom > pFirst ? aFrom : pFirst;
+        const billEnd   = (aUntil && aUntil < pLast) ? aUntil : pLast;
+        const billDays  = Math.floor((billEnd.getTime() - billStart.getTime()) / 86400000) + 1;
+        const addonAmt  = billDays >= prepaidDaysInMonth
+          ? addon.amount
+          : Math.round((addon.amount / prepaidDaysInMonth) * billDays * 100) / 100;
+        addonLineItems.push({
+          description: addon.description,
+          amount: addonAmt,
+          ...(billDays < prepaidDaysInMonth ? { note: `Pro-rated ${billDays}/${prepaidDaysInMonth} days` } : {}),
+        });
+        addonsSubtotal += addonAmt;
+      }
+
+      const totalPrepaidSubtotal = prepaidRentAmount + addonsSubtotal;
+      const combinedCgst  = Math.round(totalPrepaidSubtotal * (taxPercentage / 200));
+      const combinedSgst  = Math.round(totalPrepaidSubtotal * (taxPercentage / 200));
+      const combinedTax   = combinedCgst + combinedSgst;
+      const combinedTotal = totalPrepaidSubtotal + combinedTax;
 
       // ── Dry run: record what WOULD be billed, write/dispatch nothing ──────
       if (opts.dryRun) {
+        const addonNote = addonsSubtotal > 0 ? ` + ₹${addonsSubtotal.toLocaleString("en-IN")} add-ons` : "";
         result.preview.push({
           contract_number: contractNumber,
           type: "rent",
           period_label: monthLabel(prepaid.month, prepaid.year),
-          subtotal: prepaidRentAmount,
-          tax_amount: taxAmount,
-          total_amount: totalAmount,
+          subtotal: totalPrepaidSubtotal,
+          tax_amount: combinedTax,
+          total_amount: combinedTotal,
           note: prepaidRentAmount < baseAmount
-            ? `Prorated (contract ends mid-month) · ${isInterstate ? "IGST" : "CGST+SGST"}`
-            : `Full month · ${isInterstate ? "IGST" : "CGST+SGST"}`,
+            ? `Prorated (contract ends mid-month) · CGST+SGST${addonNote}`
+            : `Full month · CGST+SGST${addonNote}`,
           supersedes: toSupersede?.statement_number,
         });
         result.generated++;
@@ -761,11 +786,14 @@ export async function generateRentProformas(
       const lineItems = [{
         type: "prepaid_rent" as const,
         label: `Prepaid Rent — ${monthLabel(prepaid.month, prepaid.year)}`,
-        items: [{
-          description: `Monthly rent${contract.seats ? ` (${contract.seats} seat${Number(contract.seats) > 1 ? "s" : ""})` : ""}`,
-          amount: prepaidRentAmount,
-        }],
-        subtotal: prepaidRentAmount,
+        items: [
+          {
+            description: `Monthly rent${contract.seats ? ` (${contract.seats} seat${Number(contract.seats) > 1 ? "s" : ""})` : ""}`,
+            amount: prepaidRentAmount,
+          },
+          ...addonLineItems,
+        ],
+        subtotal: totalPrepaidSubtotal,
       }];
 
       // ── 5. Insert statement as draft ────────────────────────────────────
@@ -777,22 +805,22 @@ export async function generateRentProformas(
           period_start:        prepaidFirstOfMonth,
           period_end:          prepaidLastOfMonth,
           statement_type:      "rent",
-          fixed_amount:        prepaidRentAmount,
+          fixed_amount:        totalPrepaidSubtotal,
           usage_amount:        0,
           service_usage_amount: 0,
           booking_usage_amount: 0,
-          subtotal:            prepaidRentAmount,
+          subtotal:            totalPrepaidSubtotal,
           tax_percentage:      taxPercentage,
-          tax_amount:          taxAmount,
-          total_amount:        totalAmount,
+          tax_amount:          combinedTax,
+          total_amount:        combinedTotal,
           status:              "draft",
           accounting_period_id: periodId,
-          cgst_amount:         cgst,
-          sgst_amount:         sgst,
-          igst_amount:         igst,
-          is_interstate:       isInterstate,
+          cgst_amount:         combinedCgst,
+          sgst_amount:         combinedSgst,
+          igst_amount:         0,
+          is_interstate:       false,
           buyer_gstin:         lead?.gst_number || null,
-          place_of_supply:     isInterstate ? (lead?.state || "Other") : "Tamil Nadu",
+          place_of_supply:     "Tamil Nadu",
           line_items:          lineItems,
           prepaid_month:       prepaid.month,
           prepaid_year:        prepaid.year,

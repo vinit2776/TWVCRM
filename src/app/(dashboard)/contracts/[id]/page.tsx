@@ -33,6 +33,7 @@ import { Skeleton } from "@/components/shared/loading-skeleton";
 import { ContractVouchersSection } from "@/components/contracts/contract-vouchers-section";
 import { ContractMembersAccessSection } from "@/components/contracts/contract-members-access-section";
 import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
+import { ContractAddonsSection } from "@/components/contracts/contract-addons-section";
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
 import { ContractDepositSection } from "@/components/contracts/contract-deposit-section";
@@ -729,6 +730,12 @@ export default function ContractDetailPage({
               </div>
             </CardContent>
           </Card>
+
+          {/* Recurring Add-ons */}
+          <ContractAddonsSection
+            contractId={id}
+            taxPercentage={contract.tax_percentage ?? 18}
+          />
 
           {/* Security Deposit Snapshot */}
           {linkedProposal && (
