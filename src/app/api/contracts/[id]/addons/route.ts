@@ -62,6 +62,67 @@ export async function POST(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Auto-update any existing UNSENT draft billing statements that overlap this add-on's date range.
+  // Sent statements are locked — never touched.
+  try {
+    const { data: draftStmts } = await adminSupabase
+      .from("billing_statements")
+      .select("id, subtotal, tax_percentage, cgst_amount, sgst_amount, line_items, fixed_amount, period_end")
+      .eq("contract_id", id)
+      .eq("status", "draft")
+      .is("proforma_sent_at", null);
+
+    for (const stmt of (draftStmts ?? [])) {
+      // Check add-on is active during the statement's period
+      const periodEnd = stmt.period_end as string;
+      const addonFrom = result.data.effective_from;
+      const addonUntil = result.data.effective_until;
+      if (addonFrom > periodEnd) continue;
+      if (addonUntil && addonUntil < periodEnd) continue;
+
+      // Check add-on isn't already in the line_items
+      const sections: Record<string, unknown>[] = (stmt.line_items as Record<string, unknown>[]) || [];
+      const alreadyAdded = sections.some(sec =>
+        ((sec.items as Record<string, unknown>[]) || []).some((item: Record<string, unknown>) =>
+          item.description === result.data.description && item.amount === result.data.amount
+        )
+      );
+      if (alreadyAdded) continue;
+
+      // Inject add-on into the prepaid rent section
+      const newSections = sections.map(sec => {
+        const label = ((sec.label as string) || "").toLowerCase();
+        if (label.includes("prepaid rent") || label.includes("rent")) {
+          const items = [...((sec.items as Record<string, unknown>[]) || []), {
+            description: result.data.description,
+            amount: result.data.amount,
+          }];
+          const secSub = (sec.subtotal as number || 0) + result.data.amount;
+          return { ...sec, items, subtotal: secSub };
+        }
+        return sec;
+      });
+
+      const newSub = (stmt.subtotal as number || 0) + result.data.amount;
+      const taxPct = (stmt.tax_percentage as number) || 18;
+      const cgst = Math.round(newSub * taxPct / 200);
+      const sgst = Math.round(newSub * taxPct / 200);
+
+      await adminSupabase.from("billing_statements").update({
+        subtotal: newSub,
+        fixed_amount: newSub,
+        tax_amount: cgst + sgst,
+        total_amount: newSub + cgst + sgst,
+        cgst_amount: cgst,
+        sgst_amount: sgst,
+        igst_amount: 0,
+        line_items: newSections,
+      }).eq("id", stmt.id);
+    }
+  } catch {
+    // Non-fatal — statement update failure doesn't block add-on creation
+  }
+
   logAudit(supabase, {
     entityType: "contract",
     entityId: id,
