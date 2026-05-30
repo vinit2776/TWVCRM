@@ -734,6 +734,8 @@ export default function ContractDetailPage({
           {/* Recurring Add-ons */}
           <ContractAddonsSection
             contractId={id}
+            contractStartDate={contract.start_date}
+            contractEndDate={contract.end_date}
             taxPercentage={contract.tax_percentage ?? 18}
           />
 

@@ -20,6 +20,8 @@ import type { ContractAddon } from "@/types";
 
 interface ContractAddonsSectionProps {
   contractId: string;
+  contractStartDate?: string;
+  contractEndDate?: string;
   taxPercentage?: number;
   readOnly?: boolean;
 }
@@ -31,7 +33,7 @@ const EMPTY_FORM = {
   effective_until: "",
 };
 
-export function ContractAddonsSection({ contractId, taxPercentage = 18, readOnly = false }: ContractAddonsSectionProps) {
+export function ContractAddonsSection({ contractId, contractStartDate, contractEndDate, taxPercentage = 18, readOnly = false }: ContractAddonsSectionProps) {
   const [addons, setAddons] = useState<ContractAddon[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialogOpen, setDialogOpen] = useState(false);
@@ -72,6 +74,24 @@ export function ContractAddonsSection({ contractId, taxPercentage = 18, readOnly
     const amount = parseFloat(form.amount);
     if (!amount || amount <= 0) { toast.error("Amount must be positive"); return; }
     if (!form.effective_from) { toast.error("Effective from date is required"); return; }
+    if (contractStartDate && form.effective_from < contractStartDate) {
+      toast.error(`Effective from cannot be before the contract start date (${formatDate(contractStartDate)})`);
+      return;
+    }
+    if (contractEndDate && form.effective_from > contractEndDate) {
+      toast.error(`Effective from cannot be after the contract end date (${formatDate(contractEndDate)})`);
+      return;
+    }
+    if (form.effective_until) {
+      if (contractEndDate && form.effective_until > contractEndDate) {
+        toast.error(`Effective until cannot be beyond the contract end date (${formatDate(contractEndDate)})`);
+        return;
+      }
+      if (form.effective_until < form.effective_from) {
+        toast.error("Effective until must be after effective from");
+        return;
+      }
+    }
 
     setSaving(true);
     try {
@@ -186,6 +206,12 @@ export function ContractAddonsSection({ contractId, taxPercentage = 18, readOnly
             <DialogTitle>{editing ? "Edit Add-on" : "Add Recurring Add-on"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
+            {(contractStartDate || contractEndDate) && (
+              <div className="rounded-md bg-muted/50 border px-3 py-2 text-xs text-muted-foreground flex gap-4">
+                {contractStartDate && <span>Contract starts: <span className="font-medium text-foreground">{formatDate(contractStartDate)}</span></span>}
+                {contractEndDate && <span>Contract ends: <span className="font-medium text-foreground">{formatDate(contractEndDate)}</span></span>}
+              </div>
+            )}
             <div>
               <Label htmlFor="addon-desc">Description <span className="text-destructive">*</span></Label>
               <Input
@@ -220,6 +246,8 @@ export function ContractAddonsSection({ contractId, taxPercentage = 18, readOnly
                   id="addon-from"
                   type="date"
                   value={form.effective_from}
+                  min={contractStartDate}
+                  max={contractEndDate}
                   onChange={e => setForm(f => ({ ...f, effective_from: e.target.value }))}
                   className="mt-1"
                 />
@@ -230,6 +258,8 @@ export function ContractAddonsSection({ contractId, taxPercentage = 18, readOnly
                   id="addon-until"
                   type="date"
                   value={form.effective_until}
+                  min={form.effective_from || contractStartDate}
+                  max={contractEndDate}
                   onChange={e => setForm(f => ({ ...f, effective_until: e.target.value }))}
                   className="mt-1"
                 />
