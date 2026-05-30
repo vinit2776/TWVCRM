@@ -399,15 +399,25 @@ export default function BillingPage() {
   const [runConfirmOpen, setRunConfirmOpen]   = useState(false);
   const [billingDoneForNext, setBillingDoneForNext] = useState<boolean | null>(null); // null = unknown
 
-  // Next month label + last-3-days-of-month flag (drives the reminder banner)
+  // Next-month label + working-day awareness. At The WorkVilla Sunday is the only
+  // non-working day (Saturday is working). If the last calendar day of the current
+  // month falls on a Sunday, the operational deadline for sending proformas shifts
+  // to the preceding Saturday — the banner and copy reflect that so the team isn't
+  // told to ship on a non-working day.
   const nextMonthInfo = (() => {
     const now = new Date();
     const nm = now.getMonth() === 11 ? 0 : now.getMonth() + 1;
     const ny = now.getMonth() === 11 ? now.getFullYear() + 1 : now.getFullYear();
     const label = new Date(ny, nm).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
     const daysInThis = new Date(now.getFullYear(), now.getMonth() + 1, 0).getDate();
-    const nearMonthEnd = now.getDate() >= daysInThis - 2; // last 3 days
-    return { label, nearMonthEnd };
+    const lastDayDow = new Date(now.getFullYear(), now.getMonth(), daysInThis).getDay(); // 0=Sun
+    const lastWorkingDay = lastDayDow === 0 ? daysInThis - 1 : daysInThis;
+    const deadlineShifted = lastWorkingDay !== daysInThis;
+    const deadlineLabel = new Date(now.getFullYear(), now.getMonth(), lastWorkingDay)
+      .toLocaleDateString("en-IN", { weekday: "short", day: "numeric", month: "short" });
+    // Show banner from 3 days before the last working day, up to (and including) the actual month-end
+    const nearMonthEnd = now.getDate() >= lastWorkingDay - 2;
+    return { label, nearMonthEnd, deadlineLabel, deadlineShifted };
   })();
 
   // Dry-run preview: compute what WOULD be billed, write/send nothing
@@ -1229,11 +1239,14 @@ export default function BillingPage() {
             </div>
           </div>
 
-          {/* ── Reminder banner: near month-end + not yet run ── */}
+          {/* ── Reminder banner: near month-end (or last working day) + not yet run ── */}
           {nextMonthInfo.nearMonthEnd && billingDoneForNext === false && (
             <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 flex items-center justify-between gap-4">
               <p className="text-sm font-medium text-amber-900">
-                ⏰ Monthly proforma billing for <strong>{nextMonthInfo.label}</strong> hasn&rsquo;t been run yet. Run it before month-end.
+                ⏰ Monthly proforma billing for <strong>{nextMonthInfo.label}</strong> hasn&rsquo;t been run yet.{" "}
+                {nextMonthInfo.deadlineShifted
+                  ? <>Month-end falls on a Sunday — please run it by <strong>{nextMonthInfo.deadlineLabel}</strong> (the last working day).</>
+                  : <>Run it by <strong>{nextMonthInfo.deadlineLabel}</strong> (month-end).</>}
               </p>
               <Button size="sm" variant="outline" className="border-amber-400 text-amber-900 shrink-0" onClick={handlePreviewBilling} disabled={previewing}>
                 {previewing ? "Loading…" : "Review now"}
