@@ -1,0 +1,138 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { generateUsageStatements } from "@/lib/billing";
+import { dispatchProforma } from "@/lib/send-proforma";
+import { logAudit } from "@/lib/audit";
+
+/**
+ * POST /api/billing/usage-finalize-and-send-for-contract
+ *
+ * Per-contract atomic "Verify & Send" for the Usage tab. The operator
+ * reviewed the line items in the expanded row and clicks Verify & Send —
+ * one call does the lot:
+ *
+ *   1. If no draft usage statement exists for (contract, month):
+ *        runs generateUsageStatements({contractId, month, year}) which
+ *        gathers all pending usage_charges + service_usage_records into a
+ *        single draft statement.
+ *   2. If a draft already exists (e.g. created by batch Generate Drafts
+ *      earlier) and isn't yet sent: continues with it.
+ *   3. Flips status → finalized, stamps finalized_at + due_date (= today + 7d).
+ *   4. Dispatches the proforma (Razorpay link + PDF + email + WhatsApp).
+ *
+ * Failure handling: if dispatch fails, status rolls back to draft so the
+ * operator can fix the underlying issue (e.g. missing customer email) and
+ * retry without the statement being stuck in finalized-but-unsent limbo.
+ *
+ * Body: { contract_id, year, month, additional_cc?: string[] }
+ */
+export async function POST(request: NextRequest) {
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data: dbUser } = await supabase
+    .from("users").select("id, role").eq("auth_id", user.id).single();
+  if (!dbUser || !["admin", "manager", "accounts"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Admin / Manager / Accounts access required" }, { status: 403 });
+  }
+
+  const body = await request.json().catch(() => ({})) as {
+    contract_id?: string; year?: number; month?: number; additional_cc?: string[];
+  };
+  const contractId = body.contract_id;
+  const year  = Number(body.year);
+  const month = Number(body.month);
+  if (!contractId) return NextResponse.json({ error: "contract_id is required" }, { status: 400 });
+  if (!year || !month || month < 1 || month > 12) {
+    return NextResponse.json({ error: "year + month (1-12) are required" }, { status: 400 });
+  }
+  const additionalCc = Array.isArray(body.additional_cc) ? body.additional_cc.filter(Boolean) : [];
+
+  const admin = createAdminClient();
+
+  const monthStart = `${year}-${String(month).padStart(2, "0")}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const monthEnd = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+
+  // ── 1. Find or create the usage draft for this (contract, month) ───────
+  let { data: existing } = await admin
+    .from("billing_statements")
+    .select("id, status, voided_at, total_amount")
+    .eq("contract_id", contractId)
+    .eq("statement_type", "usage")
+    .gte("period_start", monthStart)
+    .lte("period_start", monthEnd)
+    .is("voided_at", null)
+    .maybeSingle();
+
+  if (existing && existing.status !== "draft") {
+    return NextResponse.json({ error: `Usage statement already ${existing.status} for this month` }, { status: 400 });
+  }
+
+  if (!existing) {
+    // No draft yet — generate one for just this contract.
+    const result = await generateUsageStatements(admin, { contractId, month, year });
+    if (result.errors.length > 0) {
+      return NextResponse.json({ error: `Could not generate usage draft: ${result.errors.join("; ")}` }, { status: 500 });
+    }
+    if (result.statementIds.length === 0) {
+      return NextResponse.json({ error: "No usage charges found for this contract in the selected month — nothing to bill" }, { status: 400 });
+    }
+    const newStmtId = result.statementIds[0];
+    const { data: created } = await admin
+      .from("billing_statements")
+      .select("id, status, voided_at, total_amount")
+      .eq("id", newStmtId)
+      .single();
+    existing = created;
+  }
+  if (!existing) return NextResponse.json({ error: "Failed to obtain a draft statement" }, { status: 500 });
+  if (Number(existing.total_amount) <= 0) {
+    return NextResponse.json({ error: "Draft is zero-amount — nothing to bill (charges may all be free quota)" }, { status: 400 });
+  }
+
+  // ── 2. Finalize + due_date + audit ─────────────────────────────────────
+  const nowIso = new Date().toISOString();
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const istNow = new Date(Date.now() + IST_OFFSET_MS);
+  istNow.setUTCDate(istNow.getUTCDate() + 7);
+  const dueDate = istNow.toISOString().slice(0, 10);
+
+  const { error: updErr } = await admin
+    .from("billing_statements")
+    .update({ status: "finalized", finalized_at: nowIso, due_date: dueDate })
+    .eq("id", existing.id);
+  if (updErr) return NextResponse.json({ error: updErr.message }, { status: 500 });
+
+  logAudit(supabase, {
+    entityType: "billing_statement",
+    entityId: existing.id,
+    action: "update",
+    performedBy: dbUser.id,
+    changes: { status: { old: "draft", new: "finalized" }, due_date: { old: null, new: dueDate } },
+  });
+
+  // ── 3. Dispatch proforma. Roll back on failure. ────────────────────────
+  const r = await dispatchProforma(admin, existing.id, dbUser.id, additionalCc);
+  if (!r.success) {
+    await admin.from("billing_statements")
+      .update({ status: "draft", finalized_at: null })
+      .eq("id", existing.id);
+    return NextResponse.json({
+      error: `Finalize succeeded but dispatch failed (rolled back to draft): ${r.error || "unknown"}`,
+      rolled_back: true,
+    }, { status: 502 });
+  }
+
+  return NextResponse.json({
+    ok: true,
+    statement_id: existing.id,
+    statement_number: r.proformaRef,
+    total_amount: r.totalAmount,
+    due_date: dueDate,
+    razorpay_link_url: r.razorpayLinkUrl,
+    emailed_to: r.emailedTo,
+    no_contact: r.noContact,
+  });
+}
