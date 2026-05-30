@@ -1099,8 +1099,8 @@ export function generateMembershipAgreementPDF(
   const memberAddress = [lead?.street, lead?.city, lead?.state, lead?.zip_code, lead?.country]
     .filter(Boolean).join(", ") || "___________";
 
-  const monthlyFee = contract.total_amount || 0;
-  const securityDepositMonths = contract.security_deposit_months || 3;
+  const monthlyFee = contract.subtotal || contract.total_amount || 0;
+  const securityDepositMonths = contract.security_deposit_months ?? 3;
   const ifrsd = monthlyFee * securityDepositMonths;
   const escalation = contract.escalation_percentage || 10;
   const noticePeriod = contract.notice_period_months || 2;
