@@ -103,6 +103,20 @@ function monthLabel(month: number, year: number): string {
   return new Date(year, month - 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
 }
 
+/**
+ * Customer payment due date for a statement: period_end + 7 days. The
+ * /accounting/receivables page ages outstanding balances against this date
+ * (not period_end), and the payment-reminder cron uses it to decide which
+ * statements to nudge. 7 days matches our standard payment terms; revisit if
+ * a per-contract payment_terms_days override is added later.
+ */
+function dueDateFromPeriodEnd(periodEndYmd: string): string {
+  const [y, m, d] = periodEndYmd.split("-").map(Number);
+  const dt = new Date(Date.UTC(y, m - 1, d));
+  dt.setUTCDate(dt.getUTCDate() + 7);
+  return dt.toISOString().slice(0, 10);
+}
+
 /** Advance month by 1, wrapping year */
 function nextMonth(month: number, year: number): { month: number; year: number } {
   return month === 12 ? { month: 1, year: year + 1 } : { month: month + 1, year };
@@ -450,6 +464,7 @@ export async function generateMonthlyStatements(
           lead_id: contract.lead_id,
           period_start: firstOfMonth,
           period_end: lastOfMonth,
+          due_date: dueDateFromPeriodEnd(lastOfMonth),
           fixed_amount: fixedAmount,
           usage_amount: usageAmount,
           service_usage_amount: serviceUsageAmount,
@@ -590,7 +605,8 @@ export async function generateRentProformas(
     statementIds: [], noContact: [], quarterlySkipped: [], superseded: [], alreadySent: [], preview: [],
   };
 
-  // Fetch active contracts overlapping the target month
+  // Fetch active contracts: include any contract that starts before/during the prepaid month
+  // (contracts starting in June must appear in the May billing run that generates June rent)
   let contractsQuery = supabase
     .from("contracts")
     .select(`
@@ -600,7 +616,7 @@ export async function generateRentProformas(
       lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, state, gst_number)
     `)
     .in("status", ["active", "renewal_in_progress"])
-    .lte("start_date", lastOfTargetMonth)
+    .lte("start_date", prepaidLastOfMonth)
     .gte("end_date", firstOfTargetMonth);
 
   if (opts.contractId) contractsQuery = contractsQuery.eq("id", opts.contractId);
@@ -804,6 +820,7 @@ export async function generateRentProformas(
           lead_id:             contract.lead_id,
           period_start:        prepaidFirstOfMonth,
           period_end:          prepaidLastOfMonth,
+          due_date:            dueDateFromPeriodEnd(prepaidLastOfMonth),
           statement_type:      "rent",
           fixed_amount:        totalPrepaidSubtotal,
           usage_amount:        0,
@@ -1217,6 +1234,7 @@ export async function generateUsageStatements(
           lead_id:              contract.lead_id,
           period_start:         firstOfMonth,
           period_end:           lastOfMonth,
+          due_date:             dueDateFromPeriodEnd(lastOfMonth),
           statement_type:       "usage",
           fixed_amount:         0,
           usage_amount:         adHocSubtotal + facilitySubtotal,
