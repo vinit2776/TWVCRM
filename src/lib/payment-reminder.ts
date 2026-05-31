@@ -189,16 +189,22 @@ function renderEmail(opts: {
   customerName: string; stmt: string; contractNumber: string;
   periodStart: string; periodEnd: string; dueDate: string;
   amountStr: string; payLinkUrl: string | null; intro: string;
-  toneLabel: string; overdueDays: number;
+  toneLabel: string;
+  /** SIGNED days past due. Negative = pre-due (operator triggered manual
+   *  reminder before due date). 0 = due today. Positive = overdue. */
+  daysOverdue: number;
   /** When set, the customer has made a partial payment — show original
    *  total + amount paid alongside the balance figure. */
   originalTotal: string | null;
   paidSoFar: string | null;
 }): string {
   const periodLabel = `${fmtDate(opts.periodStart)} – ${fmtDate(opts.periodEnd)}`;
-  const overdueBanner = opts.overdueDays > 0
-    ? `<div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:6px;padding:10px 14px;margin:12px 0;font-size:13px;color:#991b1b;"><strong>${opts.overdueDays} day${opts.overdueDays > 1 ? "s" : ""} past due.</strong></div>`
-    : `<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:10px 14px;margin:12px 0;font-size:13px;color:#92400e;"><strong>Due today.</strong></div>`;
+  const d = opts.daysOverdue;
+  const overdueBanner = d > 0
+    ? `<div style="background:#fee2e2;border:1px solid #fca5a5;border-radius:6px;padding:10px 14px;margin:12px 0;font-size:13px;color:#991b1b;"><strong>${d} day${d > 1 ? "s" : ""} past due.</strong></div>`
+    : d === 0
+    ? `<div style="background:#fef3c7;border:1px solid #fcd34d;border-radius:6px;padding:10px 14px;margin:12px 0;font-size:13px;color:#92400e;"><strong>Due today.</strong></div>`
+    : `<div style="background:#ecfdf5;border:1px solid #6ee7b7;border-radius:6px;padding:10px 14px;margin:12px 0;font-size:13px;color:#065f46;"><strong>Due in ${Math.abs(d)} day${Math.abs(d) !== 1 ? "s" : ""}</strong> (${opts.dueDate}).</div>`;
 
   return `
     <div style="font-family:sans-serif;max-width:600px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
@@ -309,14 +315,33 @@ export async function sendOneReminder(
   // Email
   let emailSent = false;
   if (lead?.email) {
-    const overdueDays = Math.max(0, daysOverdue);
+    // For pre-due manual sends (operator clicked "Send Reminder Now" before
+    // the due date), Stage 0's hardcoded "due today" wording is misleading.
+    // Override subject + intro + banner to reflect the actual time remaining.
+    // Cron never fires reminders pre-due — this branch only ever applies to
+    // manual sends.
+    const isPreDue = daysOverdue < 0;
+    const daysUntilDue = Math.abs(daysOverdue);
+
+    let dynamicSubject: string;
+    let dynamicIntro: string;
+    if (isPreDue && stageIdx === 0) {
+      dynamicSubject = `Upcoming payment — ${s.statement_number} due in ${daysUntilDue} day${daysUntilDue !== 1 ? "s" : ""} · ₹${amountStr}`;
+      dynamicIntro = `A friendly heads-up that the payment for the proforma below is due in ${daysUntilDue} day${daysUntilDue !== 1 ? "s" : ""} (${dueStr}). Sharing the details so you can plan the transfer.`;
+    } else {
+      const subjDueDesc = daysOverdue > 0 ? `${daysOverdue}d` : "due today";
+      dynamicSubject = stage.subject(s.statement_number, subjDueDesc, amountStr);
+      dynamicIntro = stage.intro;
+    }
+
     const html = renderEmail({
       customerName, stmt: s.statement_number, contractNumber: contract.contract_number,
       periodStart: s.period_start as string, periodEnd: s.period_end as string,
-      dueDate: dueStr, amountStr, payLinkUrl, intro: stage.intro,
-      toneLabel: stage.toneLabel, overdueDays,
-      // Partial-payment context: original total + amount already paid so the
-      // customer sees the math behind the balance figure.
+      dueDate: dueStr, amountStr, payLinkUrl, intro: dynamicIntro,
+      toneLabel: stage.toneLabel,
+      // Pass signed days so the banner can pick the right wording for
+      // pre-due (green "due in X days"), due-today (amber), and overdue (red).
+      daysOverdue,
       originalTotal: isPartial ? fmtINR(total) : null,
       paidSoFar:     isPartial ? fmtINR(paidSoFar) : null,
     });
@@ -326,7 +351,7 @@ export async function sendOneReminder(
         replyTo: EMAIL_REPLY_TO,
         to: [lead.email],
         cc: uniqCc.length > 0 ? uniqCc : undefined,
-        subject: stage.subject(s.statement_number, overdueDays > 0 ? `${overdueDays}d` : "due today", amountStr),
+        subject: dynamicSubject,
         html,
       });
       emailSent = !r.error;
