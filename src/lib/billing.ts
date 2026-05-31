@@ -24,6 +24,7 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { computeGstAndRounding } from "@/lib/gst-math";
 
 export interface GenerateOptions {
   /** Target month (1-12). Defaults to current month in IST. */
@@ -473,12 +474,7 @@ export async function generateMonthlyStatements(
       // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
       const isInterstate = false;
 
-      let cgst = 0, sgst = 0;
-      const igst = 0;
-      cgst = Math.round(subtotal * (taxPercentage / 200) );
-        sgst = Math.round(subtotal * (taxPercentage / 200) );
-      const taxAmount = cgst + sgst + igst;
-      const totalAmount = subtotal + taxAmount;
+      const { cgst, sgst, igst, taxAmount, totalAmount } = computeGstAndRounding(subtotal, taxPercentage);
 
       // Build the line_items array (only include sections with items)
       const lineItems: LineItemSection[] = [
@@ -796,10 +792,7 @@ export async function generateRentProformas(
       }
 
       const totalPrepaidSubtotal = prepaidRentAmount + addonsSubtotal;
-      const combinedCgst  = Math.round(totalPrepaidSubtotal * (taxPercentage / 200));
-      const combinedSgst  = Math.round(totalPrepaidSubtotal * (taxPercentage / 200));
-      const combinedTax   = combinedCgst + combinedSgst;
-      const combinedTotal = totalPrepaidSubtotal + combinedTax;
+      const { cgst: combinedCgst, sgst: combinedSgst, taxAmount: combinedTax, totalAmount: combinedTotal } = computeGstAndRounding(totalPrepaidSubtotal, taxPercentage);
 
       // ── Dry run: record what WOULD be billed, write/dispatch nothing ──────
       if (opts.dryRun) {
@@ -1226,12 +1219,7 @@ export async function generateUsageStatements(
       const buyerState    = (lead?.state || "").toLowerCase().trim();
       // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
       const isInterstate = false;
-      let cgst = 0, sgst = 0;
-      const igst = 0;
-      cgst = Math.round(totalUsage * (taxPercentage / 200) );
-        sgst = Math.round(totalUsage * (taxPercentage / 200) );
-      const taxAmount   = cgst + sgst + igst;
-      const totalAmount = totalUsage + taxAmount;
+      const { cgst, sgst, igst, taxAmount, totalAmount } = computeGstAndRounding(totalUsage, taxPercentage);
 
       // ── Dry run: record what WOULD be billed, write/link nothing ─────────
       if (opts.dryRun) {

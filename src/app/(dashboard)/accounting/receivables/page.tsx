@@ -30,11 +30,10 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download } from "lucide-react";
+import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, Eye } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
-import { TDS_CLIENT_SECTIONS } from "@/lib/constants";
 
 interface Lead {
   id: string;
@@ -64,17 +63,12 @@ interface ReceivableRow {
   amount_paid: number;
   balance_due: number;
   payment_status: "unpaid" | "partially_paid";
-  status: string;
   proforma_sent_at: string | null;
   razorpay_payment_link_url: string | null;
   last_reminder_sent_at: string | null;
   reminder_count: number;
   days_overdue: number | null;
   contract: Contract;
-  // Lifecycle fields
-  gst_invoice_number: string | null;
-  pi_cancelled_at: string | null;
-  accounted: boolean | null;
 }
 
 interface Summary {
@@ -87,6 +81,21 @@ interface Summary {
 }
 
 type FilterKey = "all" | "due_soon" | "overdue" | "overdue_30" | "partial";
+type ViewMode = "detail" | "ageing";
+
+/** One row in the Ageing view — aggregates all statements for a contract. */
+interface AgingRow {
+  contractId: string;
+  contractNumber: string;
+  customerName: string;
+  lead?: Lead;
+  notDue: number;     // days_overdue < 0
+  d1_15: number;      // 0 – 15
+  d16_30: number;     // 16 – 30
+  d31_45: number;     // 31 – 45
+  d45plus: number;    // > 45
+  total: number;
+}
 
 const FILTERS: { key: FilterKey; label: string; hint: string }[] = [
   { key: "all",        label: "All open",       hint: "Every unpaid / partial statement" },
@@ -114,9 +123,11 @@ function daysOverdueBadge(days: number | null) {
 export default function AccountsReceivablePage() {
   const [rows, setRows] = useState<ReceivableRow[]>([]);
   const [summary, setSummary] = useState<Summary | null>(null);
+  const [avgDays, setAvgDays] = useState<Record<string, number>>({});
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState<FilterKey>("all");
   const [search, setSearch] = useState("");
+  const [viewMode, setViewMode] = useState<ViewMode>("detail");
 
   // Record-payment dialog state
   const [payRow, setPayRow] = useState<ReceivableRow | null>(null);
@@ -125,10 +136,6 @@ export default function AccountsReceivablePage() {
   const [payMode, setPayMode] = useState("bank_transfer");
   const [payRef, setPayRef] = useState("");
   const [payNotes, setPayNotes] = useState("");
-  // Shortfall classification (TDS is never inferred — declared here).
-  const [payShortReason, setPayShortReason] = useState<"tds" | "partial">("tds");
-  const [payTds, setPayTds] = useState("");
-  const [payTdsSection, setPayTdsSection] = useState("194I");
   const [paySubmitting, setPaySubmitting] = useState(false);
   const [resending, setResending] = useState<string | null>(null);
   const [remindingId, setRemindingId] = useState<string | null>(null);
@@ -157,6 +164,7 @@ export default function AccountsReceivablePage() {
       if (!res.ok) throw new Error(json.error || "Failed to load");
       setRows(json.rows || []);
       setSummary(json.summary || null);
+      setAvgDays(json.avgDays || {});
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to load receivables");
     } finally {
@@ -184,6 +192,37 @@ export default function AccountsReceivablePage() {
     return r;
   }, [rows, filter, search]);
 
+  // ── Ageing view: group filtered statements by contract ───────────────────
+  const agingRows = useMemo((): AgingRow[] => {
+    const byContract = new Map<string, AgingRow>();
+    for (const r of filtered) {
+      const key = r.contract.id;
+      if (!byContract.has(key)) {
+        byContract.set(key, {
+          contractId: r.contract.id,
+          contractNumber: r.contract.contract_number,
+          customerName: customerName(r.contract.lead),
+          lead: r.contract.lead,
+          notDue: 0, d1_15: 0, d16_30: 0, d31_45: 0, d45plus: 0, total: 0,
+        });
+      }
+      const row = byContract.get(key)!;
+      const d = r.days_overdue ?? -1;
+      if (d < 0)        row.notDue  += r.balance_due;
+      else if (d <= 15) row.d1_15   += r.balance_due;
+      else if (d <= 30) row.d16_30  += r.balance_due;
+      else if (d <= 45) row.d31_45  += r.balance_due;
+      else              row.d45plus += r.balance_due;
+      row.total += r.balance_due;
+    }
+    // Sort: worst bucket first (>45d), then 31-45, etc.
+    return Array.from(byContract.values()).sort((a, b) => {
+      if (b.d45plus !== a.d45plus) return b.d45plus - a.d45plus;
+      if (b.d31_45 !== a.d31_45)  return b.d31_45 - a.d31_45;
+      return b.total - a.total;
+    });
+  }, [filtered]);
+
   const openPayDialog = (row: ReceivableRow) => {
     setPayRow(row);
     setPayAmount(String(row.balance_due));
@@ -191,30 +230,12 @@ export default function AccountsReceivablePage() {
     setPayMode("bank_transfer");
     setPayRef("");
     setPayNotes("");
-    setPayShortReason("tds");
-    setPayTds("");
-    setPayTdsSection("194I");   // default: Rent (most common for coworking)
   };
 
   const submitPayment = async () => {
     if (!payRow) return;
     const amt = parseFloat(payAmount);
     if (!amt || amt <= 0) { toast.error("Enter a valid amount"); return; }
-
-    // Shortfall handling: if the cash is short of the balance and the operator
-    // declared TDS, send the TDS amount (cash + TDS settles the invoice). Otherwise
-    // it's a partial payment (balance stays). TDS is never inferred.
-    const isShort = amt < payRow.balance_due - 0.01;
-    const declaringTds = isShort && payShortReason === "tds";
-    const tdsAmt = declaringTds ? parseFloat(payTds || "0") : 0;
-    if (declaringTds) {
-      if (!tdsAmt || tdsAmt <= 0) { toast.error("Enter the TDS amount deducted"); return; }
-      if (Math.abs((amt + tdsAmt) - payRow.balance_due) > 1) {
-        toast.error(`Cash ₹${amt} + TDS ₹${tdsAmt} should equal the balance ₹${payRow.balance_due}`);
-        return;
-      }
-    }
-
     setPaySubmitting(true);
     try {
       const res = await fetch(`/api/billing-statements/${payRow.id}/payment`, {
@@ -226,8 +247,6 @@ export default function AccountsReceivablePage() {
           payment_mode: payMode,
           payment_reference: payRef || null,
           notes: payNotes || null,
-          tds_amount: tdsAmt,
-          tds_section: declaringTds ? (payTdsSection || null) : null,
         }),
       });
       const json = await res.json();
@@ -358,6 +377,22 @@ export default function AccountsReceivablePage() {
               className="pl-8 w-72"
             />
           </div>
+          <div className="flex items-center border rounded-md overflow-hidden">
+            <button
+              onClick={() => setViewMode("detail")}
+              title="Detailed statement view"
+              className={`px-2.5 py-1.5 text-xs flex items-center gap-1 transition ${viewMode === "detail" ? "bg-teal-700 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+            >
+              <LayoutList className="h-3.5 w-3.5" /> Detail
+            </button>
+            <button
+              onClick={() => setViewMode("ageing")}
+              title="Ageing bucket view — grouped by contract"
+              className={`px-2.5 py-1.5 text-xs flex items-center gap-1 border-l transition ${viewMode === "ageing" ? "bg-teal-700 text-white" : "bg-white text-gray-600 hover:bg-gray-50"}`}
+            >
+              <BarChart2 className="h-3.5 w-3.5" /> Ageing
+            </button>
+          </div>
           <Button variant="outline" size="sm" onClick={exportCsv} title="Download AR aging report as CSV">
             <Download className="h-4 w-4 mr-1" /> Export CSV
           </Button>
@@ -374,7 +409,71 @@ export default function AccountsReceivablePage() {
                 ? "No outstanding receivables — every finalized statement is paid in full. 🎉"
                 : "No statements match this filter."}
             </div>
+          ) : viewMode === "ageing" ? (
+            /* ── Ageing view ── */
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-b">
+                  <tr>
+                    <th className="px-4 py-3 text-left">Customer</th>
+                    <th className="px-4 py-3 text-right text-emerald-700">Not due</th>
+                    <th className="px-4 py-3 text-right text-yellow-700">1–15 days</th>
+                    <th className="px-4 py-3 text-right text-orange-700">16–30 days</th>
+                    <th className="px-4 py-3 text-right text-red-700">31–45 days</th>
+                    <th className="px-4 py-3 text-right text-red-900">45+ days</th>
+                    <th className="px-4 py-3 text-right font-semibold">Total</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {agingRows.map((r) => {
+                    const avg = avgDays[r.contractId];
+                    return (
+                      <tr key={r.contractId} className="hover:bg-gray-50">
+                        <td className="px-4 py-3">
+                          <div className="font-medium">
+                            <Link href={`/contracts/${r.contractId}`} className="text-teal-700 hover:underline">
+                              {r.contractNumber}
+                            </Link>
+                          </div>
+                          <div className="text-xs text-muted-foreground">{r.customerName}</div>
+                          {avg !== undefined && (
+                            <div className={`text-[10px] mt-0.5 font-medium ${avg > 0 ? "text-red-600" : "text-emerald-600"}`}>
+                              avg {avg > 0 ? `${avg}d late` : `${Math.abs(avg)}d early`}
+                            </div>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap text-emerald-700">{r.notDue > 0 ? formatCurrency(r.notDue) : <span className="text-gray-300">—</span>}</td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap">
+                          {r.d1_15 > 0 ? <span className="font-medium text-yellow-700">{formatCurrency(r.d1_15)}</span> : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap">
+                          {r.d16_30 > 0 ? <span className="font-medium text-orange-700">{formatCurrency(r.d16_30)}</span> : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap">
+                          {r.d31_45 > 0 ? <span className="font-medium text-red-700">{formatCurrency(r.d31_45)}</span> : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap">
+                          {r.d45plus > 0 ? <span className="font-bold text-red-900">{formatCurrency(r.d45plus)}</span> : <span className="text-gray-300">—</span>}
+                        </td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap font-semibold text-teal-700">{formatCurrency(r.total)}</td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+                <tfoot className="bg-gray-50 border-t font-semibold text-xs">
+                  <tr>
+                    <td className="px-4 py-2 text-muted-foreground">Totals ({agingRows.length} contracts)</td>
+                    {(["notDue","d1_15","d16_30","d31_45","d45plus","total"] as const).map((k) => (
+                      <td key={k} className="px-4 py-2 text-right">
+                        {formatCurrency(agingRows.reduce((s, r) => s + r[k], 0))}
+                      </td>
+                    ))}
+                  </tr>
+                </tfoot>
+              </table>
+            </div>
           ) : (
+            /* ── Detail view ── */
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-b">
@@ -392,87 +491,95 @@ export default function AccountsReceivablePage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y">
-                  {filtered.map((r) => (
-                    <tr key={r.id} className="hover:bg-gray-50">
-                      <td className="px-4 py-3">
-                        <div className="font-medium">
-                          <Link href={`/contracts/${r.contract.id}`} className="text-teal-700 hover:underline">
-                            {r.contract.contract_number}
+                  {filtered.map((r) => {
+                    const avg = avgDays[r.contract.id];
+                    return (
+                      <tr key={r.id} className="hover:bg-gray-50">
+                        <td className="px-4 py-3">
+                          <div className="font-medium">
+                            <Link href={`/contracts/${r.contract.id}`} className="text-teal-700 hover:underline">
+                              {r.contract.contract_number}
+                            </Link>
+                          </div>
+                          <div className="text-xs text-muted-foreground">{customerName(r.contract.lead)}</div>
+                          {avg !== undefined && (
+                            <div className={`text-[10px] mt-0.5 font-medium ${avg > 0 ? "text-red-600" : "text-emerald-600"}`}>
+                              avg {avg > 0 ? `${avg}d late` : `${Math.abs(avg)}d early`}
+                            </div>
+                          )}
+                          <div className="flex gap-2 mt-1">
+                            {r.contract.lead?.email && (
+                              <a href={`mailto:${r.contract.lead.email}`} title={r.contract.lead.email} className="text-muted-foreground hover:text-teal-700">
+                                <Mail className="h-3.5 w-3.5" />
+                              </a>
+                            )}
+                            {(r.contract.lead?.mobile || r.contract.lead?.phone) && (
+                              <a href={`tel:${r.contract.lead.mobile || r.contract.lead.phone}`} title={r.contract.lead.mobile || r.contract.lead.phone} className="text-muted-foreground hover:text-teal-700">
+                                <Phone className="h-3.5 w-3.5" />
+                              </a>
+                            )}
+                          </div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <Link href={`/api/billing-statements/${r.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
+                            {r.statement_number}
+                            <FileDown className="h-3 w-3" />
                           </Link>
-                        </div>
-                        <div className="text-xs text-muted-foreground">{customerName(r.contract.lead)}</div>
-                        <div className="flex gap-2 mt-1">
-                          {r.contract.lead?.email && (
-                            <a href={`mailto:${r.contract.lead.email}`} title={r.contract.lead.email} className="text-muted-foreground hover:text-teal-700">
-                              <Mail className="h-3.5 w-3.5" />
-                            </a>
+                          <Badge variant="outline" className="text-[10px] mt-1 capitalize">{r.statement_type}</Badge>
+                        </td>
+                        <td className="px-4 py-3 text-xs whitespace-nowrap">
+                          {formatDate(r.period_start)}<br />
+                          <span className="text-muted-foreground">→ {formatDate(r.period_end)}</span>
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div>{r.due_date ? formatDate(r.due_date) : "—"}</div>
+                          <div className="mt-1">{daysOverdueBadge(r.days_overdue)}</div>
+                        </td>
+                        <td className="px-4 py-3">
+                          <BillingLifecycleStatus
+                            status={r.status}
+                            payment_status={r.payment_status}
+                            proforma_sent_at={r.proforma_sent_at}
+                            gst_invoice_number={r.gst_invoice_number}
+                            pi_cancelled_at={r.pi_cancelled_at}
+                            accounted={r.accounted}
+                          />
+                        </td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap">{formatCurrency(r.total_amount)}</td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap text-emerald-700">
+                          {r.amount_paid > 0 ? formatCurrency(r.amount_paid) : "—"}
+                        </td>
+                        <td className="px-4 py-3 text-right whitespace-nowrap font-semibold text-teal-700">{formatCurrency(r.balance_due)}</td>
+                        <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
+                          {r.proforma_sent_at ? formatDate(r.proforma_sent_at) : "Never"}
+                          {r.reminder_count > 0 && (
+                            <div className="text-[10px] text-amber-700">+{r.reminder_count} reminder{r.reminder_count > 1 ? "s" : ""}</div>
                           )}
-                          {(r.contract.lead?.mobile || r.contract.lead?.phone) && (
-                            <a href={`tel:${r.contract.lead.mobile || r.contract.lead.phone}`} title={r.contract.lead.mobile || r.contract.lead.phone} className="text-muted-foreground hover:text-teal-700">
-                              <Phone className="h-3.5 w-3.5" />
-                            </a>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <Link href={`/api/billing-statements/${r.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
-                          {r.statement_number}
-                          <FileDown className="h-3 w-3" />
-                        </Link>
-                        <Badge variant="outline" className="text-[10px] mt-1 capitalize">{r.statement_type}</Badge>
-                      </td>
-                      <td className="px-4 py-3 text-xs whitespace-nowrap">
-                        {formatDate(r.period_start)}<br />
-                        <span className="text-muted-foreground">→ {formatDate(r.period_end)}</span>
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        <div>{r.due_date ? formatDate(r.due_date) : "—"}</div>
-                        <div className="mt-1">{daysOverdueBadge(r.days_overdue)}</div>
-                      </td>
-                      <td className="px-4 py-3">
-                        <BillingLifecycleStatus
-                          status={r.status}
-                          payment_status={r.payment_status}
-                          proforma_sent_at={r.proforma_sent_at}
-                          gst_invoice_number={r.gst_invoice_number}
-                          pi_cancelled_at={r.pi_cancelled_at}
-                          accounted={r.accounted}
-                        />
-                      </td>
-                      <td className="px-4 py-3 text-right whitespace-nowrap">{formatCurrency(r.total_amount)}</td>
-                      <td className="px-4 py-3 text-right whitespace-nowrap text-emerald-700">
-                        {r.amount_paid > 0 ? formatCurrency(r.amount_paid) : "—"}
-                      </td>
-                      <td className="px-4 py-3 text-right whitespace-nowrap font-semibold text-teal-700">{formatCurrency(r.balance_due)}</td>
-                      <td className="px-4 py-3 text-xs text-muted-foreground whitespace-nowrap">
-                        {r.proforma_sent_at ? formatDate(r.proforma_sent_at) : "Never"}
-                        {r.reminder_count > 0 && (
-                          <div className="text-[10px] text-amber-700">+{r.reminder_count} reminder{r.reminder_count > 1 ? "s" : ""}</div>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 whitespace-nowrap">
-                        <div className="flex items-center gap-1 justify-end">
-                          <Button size="sm" variant="outline" onClick={() => openPayDialog(r)} title="Record offline payment">
-                            <IndianRupee className="h-3.5 w-3.5 mr-1" /> Record
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => sendReminder(r)} disabled={remindingId === r.id} title="Send next reminder now (bypasses 48h throttle)">
-                            {remindingId === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => openHistory(r)} title="View reminder history">
-                            <History className="h-3.5 w-3.5" />
-                          </Button>
-                          <Button size="sm" variant="ghost" onClick={() => resendProforma(r)} disabled={resending === r.id} title="Resend full proforma email (with PDF attached)">
-                            {resending === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
-                          </Button>
-                          {r.razorpay_payment_link_url && (
-                            <a href={r.razorpay_payment_link_url} target="_blank" rel="noreferrer" className="p-1 text-muted-foreground hover:text-teal-700" title="Open Razorpay link">
-                              <ExternalLink className="h-3.5 w-3.5" />
-                            </a>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  ))}
+                        </td>
+                        <td className="px-4 py-3 whitespace-nowrap">
+                          <div className="flex items-center gap-1 justify-end">
+                            <Button size="sm" variant="outline" onClick={() => openPayDialog(r)} title="Record offline payment">
+                              <IndianRupee className="h-3.5 w-3.5 mr-1" /> Record
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => sendReminder(r)} disabled={remindingId === r.id} title="Send next reminder now (bypasses 48h throttle)">
+                              {remindingId === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => openHistory(r)} title="View reminder history">
+                              <History className="h-3.5 w-3.5" />
+                            </Button>
+                            <Button size="sm" variant="ghost" onClick={() => resendProforma(r)} disabled={resending === r.id} title="Resend full proforma email (with PDF attached)">
+                              {resending === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                            </Button>
+                            {r.razorpay_payment_link_url && (
+                              <a href={r.razorpay_payment_link_url} target="_blank" rel="noreferrer" className="p-1 text-muted-foreground hover:text-teal-700" title="Open Razorpay link">
+                                <ExternalLink className="h-3.5 w-3.5" />
+                              </a>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
@@ -510,7 +617,11 @@ export default function AccountsReceivablePage() {
                       <td className="px-3 py-2 text-xs uppercase">{h.channel}</td>
                       <td className="px-3 py-2 text-xs">{h.recipient}</td>
                       <td className="px-3 py-2">
-                        {h.status === "sent" ? (
+                        {h.status === "opened" ? (
+                          <Badge className="bg-teal-100 text-teal-800 border-teal-300 text-[10px] flex items-center gap-1 w-fit">
+                            <Eye className="h-2.5 w-2.5" /> OPENED
+                          </Badge>
+                        ) : h.status === "sent" ? (
                           <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px]">SENT</Badge>
                         ) : (
                           <Badge className="bg-red-100 text-red-800 border-red-300 text-[10px]" title={h.error || ""}>FAILED</Badge>
@@ -542,7 +653,7 @@ export default function AccountsReceivablePage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label>Amount received (₹)</Label>
+                  <Label>Amount (₹)</Label>
                   <Input type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
                 </div>
                 <div>
@@ -550,81 +661,6 @@ export default function AccountsReceivablePage() {
                   <Input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
                 </div>
               </div>
-
-              {/* Shortfall classification — only when cash is less than the balance.
-                  TDS is declared explicitly here, never assumed from the shortfall. */}
-              {parseFloat(payAmount || "0") > 0 && parseFloat(payAmount || "0") < payRow.balance_due - 0.01 && (
-                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
-                  <p className="text-xs text-amber-800">
-                    This is <strong>{formatCurrency(payRow.balance_due - parseFloat(payAmount || "0"))}</strong> short of the balance. Why?
-                  </p>
-                  <div className="flex gap-2 text-sm">
-                    <button type="button"
-                      onClick={() => { setPayShortReason("tds"); setPayTds(String(Math.round((payRow.balance_due - parseFloat(payAmount || "0")) * 100) / 100)); }}
-                      className={`px-3 py-1 rounded-md border ${payShortReason === "tds" ? "bg-teal-600 text-white border-teal-600" : "bg-white"}`}>
-                      TDS deducted
-                    </button>
-                    <button type="button"
-                      onClick={() => setPayShortReason("partial")}
-                      className={`px-3 py-1 rounded-md border ${payShortReason === "partial" ? "bg-teal-600 text-white border-teal-600" : "bg-white"}`}>
-                      Partial payment (balance stays due)
-                    </button>
-                  </div>
-                  {payShortReason === "tds" && (
-                    <div className="grid grid-cols-2 gap-3 pt-1">
-                      <div>
-                        <Label className="text-xs">TDS amount (₹) *</Label>
-                        <Input
-                          type="number"
-                          min={0.01}
-                          step="any"
-                          value={payTds}
-                          onChange={(e) => setPayTds(e.target.value)}
-                          placeholder="e.g. 1500"
-                        />
-                      </div>
-                      <div>
-                        <Label className="text-xs">TDS section *</Label>
-                        <Select value={payTdsSection} onValueChange={setPayTdsSection}>
-                          <SelectTrigger className="h-9 text-xs">
-                            <SelectValue placeholder="Select section…" />
-                          </SelectTrigger>
-                          <SelectContent>
-                            {TDS_CLIENT_SECTIONS.map((s) => (
-                              <SelectItem key={s.code} value={s.code} className="text-xs">
-                                <span className="font-mono font-medium">{s.label}</span>
-                                <span className="text-muted-foreground ml-1.5">— {s.description}</span>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      {/* Live settlement preview */}
-                      {parseFloat(payTds || "0") > 0 && (
-                        <div className={`col-span-2 rounded px-2.5 py-1.5 text-xs font-medium ${
-                          Math.abs((parseFloat(payAmount || "0") + parseFloat(payTds || "0")) - (payRow?.balance_due ?? 0)) < 1
-                            ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
-                            : "bg-amber-50 text-amber-800 border border-amber-200"
-                        }`}>
-                          Cash {formatCurrency(parseFloat(payAmount || "0"))} + TDS {formatCurrency(parseFloat(payTds || "0"))}
-                          {" = "}
-                          {formatCurrency(parseFloat(payAmount || "0") + parseFloat(payTds || "0"))}
-                          {" "}
-                          {Math.abs((parseFloat(payAmount || "0") + parseFloat(payTds || "0")) - (payRow?.balance_due ?? 0)) < 1
-                            ? "✓ settles invoice"
-                            : `(balance is ${formatCurrency(payRow?.balance_due ?? 0)})`}
-                        </div>
-                      )}
-                      <p className="col-span-2 text-[11px] text-muted-foreground">
-                        Invoice settles in full (cash + TDS). Tally receipt splits: bank debit + TDS ledger debit + party credit.
-                      </p>
-                    </div>
-                  )}
-                  {payShortReason === "partial" && (
-                    <p className="text-[11px] text-muted-foreground">The invoice keeps a balance and stays in collections.</p>
-                  )}
-                </div>
-              )}
               <div>
                 <Label>Payment mode</Label>
                 <Select value={payMode} onValueChange={setPayMode}>

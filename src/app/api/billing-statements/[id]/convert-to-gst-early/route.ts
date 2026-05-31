@@ -8,6 +8,7 @@ import { logAudit } from "@/lib/audit";
 import { routeGstGenerationToTally, isCrmGstEnabled } from "@/lib/tally/enqueue";
 import QRCode from "qrcode";
 import { z } from "zod";
+import { computeGstAndRounding } from "@/lib/gst-math";
 
 export const maxDuration = 30;
 
@@ -230,11 +231,7 @@ export async function POST(
   const subtotal = fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
   const taxPercentage = Number(statement.tax_percentage || 18);
   const isInterstate = false;
-  const igst = 0;
-  const cgst = Math.round(subtotal * (taxPercentage / 200));
-  const sgst = Math.round(subtotal * (taxPercentage / 200));
-  const taxAmount = cgst + sgst;
-  const totalAmount = subtotal + taxAmount;
+  const { cgst, sgst, igst, taxAmount, totalAmount } = computeGstAndRounding(subtotal, taxPercentage);
 
   // ── Generate GST invoice number ─────────────────────────────────────────
   const now = new Date();

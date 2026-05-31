@@ -33,6 +33,7 @@ import { messaging } from "@/lib/whatsapp";
 import { logAudit } from "@/lib/audit";
 import { enqueueReceiptsForPaidStatement } from "@/lib/tally/enqueue";
 import QRCode from "qrcode";
+import { computeGstAndRounding } from "@/lib/gst-math";
 
 export interface TallyInvoiceAck {
   invoiceNumber: string;
@@ -121,10 +122,7 @@ export async function dispatchTallyInvoice(
     const subtotal = fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
     const taxPercentage = Number(statement.tax_percentage || 18);
     const isInterstate = false; // coworking: always Tamil Nadu → CGST+SGST
-    const igst = 0;
-    const cgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
-    const sgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
-    const computedTotal = subtotal + cgst + sgst;
+    const { cgst, sgst, igst, totalAmount: computedTotal } = computeGstAndRounding(subtotal, taxPercentage);
     // OV3: trust Tally's total when it is sane; fall back to computed.
     const totalAmount = ack.totalAmount > 0 ? ack.totalAmount : computedTotal;
 

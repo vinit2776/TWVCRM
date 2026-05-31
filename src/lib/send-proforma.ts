@@ -19,6 +19,7 @@ import { getCachedSettings } from "@/lib/app-settings-cache";
 import { routeGstGenerationToTally, isCrmGstEnabled } from "@/lib/tally/enqueue";
 import QRCode from "qrcode";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
+import { computeGstAndRounding } from "@/lib/gst-math";
 
 /** Per-call timeout (ms) for outbound HTTP and the Resend SDK send. A single
  *  slow/hung Razorpay or email call must not stall the whole batch loop. */
@@ -112,12 +113,7 @@ export async function dispatchProforma(
   // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
       const isInterstate = false;
 
-  let cgst = 0, sgst = 0;
-      const igst = 0;
-  cgst = Math.round(subtotal * (taxPercentage / 200) );
-    sgst = Math.round(subtotal * (taxPercentage / 200) );
-  const taxAmount = cgst + sgst + igst;
-  const totalAmount = subtotal + taxAmount;
+  const { cgst, sgst, igst, taxAmount, totalAmount } = computeGstAndRounding(subtotal, taxPercentage);
   const proformaRef = statement.statement_number as string;
 
   // ── Fetch UPI ID and Razorpay keys from app_settings (single cached call) ─
@@ -506,11 +502,7 @@ export async function dispatchGstDirect(
   const subtotal = fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
   const taxPercentage = Number(statement.tax_percentage || 18);
   const isInterstate = false;
-  const igst = 0;
-  const cgst = Math.round(subtotal * (taxPercentage / 200));
-  const sgst = Math.round(subtotal * (taxPercentage / 200));
-  const taxAmount = cgst + sgst + igst;
-  const totalAmount = subtotal + taxAmount;
+  const { cgst, sgst, igst, taxAmount, totalAmount } = computeGstAndRounding(subtotal, taxPercentage);
   const stmtRef = statement.statement_number as string;
 
   // ── Due date: rent = period_start + 7, usage = today + 7 ─────────────────

@@ -5,6 +5,7 @@ import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-ge
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { messaging, dltSms } from "@/lib/whatsapp";
+import { computeGstAndRounding } from "@/lib/gst-math";
 
 /**
  * POST /api/billing-statements/[id]/confirm
@@ -92,11 +93,7 @@ export async function POST(
 
   // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
   const isInterstate = false;
-  const igst = 0;
-  const cgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
-  const sgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
-  const taxAmount = cgst + sgst + igst;
-  const totalAmount = subtotal + taxAmount;
+  const { cgst, sgst, igst, taxAmount, totalAmount } = computeGstAndRounding(subtotal, taxPercentage);
 
   // 3. Fetch UPI ID for PDF (text only — no QR)
   let upiId: string | undefined;

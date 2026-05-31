@@ -6,6 +6,7 @@ import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { routeGstGenerationToTally, isCrmGstEnabled } from "@/lib/tally/enqueue";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
+import { computeGstAndRounding } from "@/lib/gst-math";
 
 export const maxDuration = 30;
 
@@ -140,11 +141,7 @@ export async function POST(
 
   // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
   const isInterstate = false;
-  const igst = 0;
-  const cgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
-  const sgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
-  const taxAmount = cgst + sgst + igst;
-  const totalAmount = subtotal + taxAmount;
+  const { cgst, sgst, igst, taxAmount, totalAmount } = computeGstAndRounding(subtotal, taxPercentage);
 
   // Fetch UPI ID for PDF
   let upiId: string | undefined;
