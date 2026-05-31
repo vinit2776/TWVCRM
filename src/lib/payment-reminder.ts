@@ -190,6 +190,10 @@ function renderEmail(opts: {
   periodStart: string; periodEnd: string; dueDate: string;
   amountStr: string; payLinkUrl: string | null; intro: string;
   toneLabel: string; overdueDays: number;
+  /** When set, the customer has made a partial payment — show original
+   *  total + amount paid alongside the balance figure. */
+  originalTotal: string | null;
+  paidSoFar: string | null;
 }): string {
   const periodLabel = `${fmtDate(opts.periodStart)} – ${fmtDate(opts.periodEnd)}`;
   const overdueBanner = opts.overdueDays > 0
@@ -211,8 +215,15 @@ function renderEmail(opts: {
           <tr><td style="padding:6px 0;color:#666;">Contract</td><td style="padding:6px 0;">${opts.contractNumber}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">Period</td><td style="padding:6px 0;">${periodLabel}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">Due Date</td><td style="padding:6px 0;font-weight:600;color:#b45309;">${opts.dueDate}</td></tr>
+          ${opts.originalTotal && opts.paidSoFar ? `
+          <tr><td style="padding:6px 0;color:#666;">Original Total</td><td style="padding:6px 0;color:#666;">Rs. ${opts.originalTotal}</td></tr>
+          <tr><td style="padding:6px 0;color:#666;">Paid So Far</td><td style="padding:6px 0;color:#059669;">Rs. ${opts.paidSoFar}</td></tr>
+          <tr><td style="padding:6px 0;color:#666;">Balance Due</td><td style="padding:6px 0;font-weight:700;color:#015E65;font-size:17px;">Rs. ${opts.amountStr}</td></tr>
+          ` : `
           <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:700;color:#015E65;font-size:17px;">Rs. ${opts.amountStr}</td></tr>
+          `}
         </table>
+        ${opts.originalTotal ? `<p style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;padding:8px 12px;color:#065f46;font-size:12px;margin:8px 0;">Thank you for the partial payment. The balance shown above is what remains outstanding.</p>` : ""}
         ${opts.payLinkUrl ? `
         <div style="text-align:center;margin:24px 0;">
           <a href="${opts.payLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a>
@@ -268,7 +279,20 @@ export async function sendOneReminder(
   const stage = STAGES[stageIdx];
   const errors: string[] = [];
 
-  const amountStr = fmtINR(Number(s.total_amount));
+  // Compute current outstanding balance. Partial payments may have come in
+  // since the statement was finalized — in that case the reminder must show
+  // the remaining balance, not the original invoice total. The Razorpay
+  // link still tracks against the full statement; if the customer has paid
+  // partially, the partial-payment note in the email tells them to pay the
+  // balance via bank transfer / UPI (or reply for a fresh balance-only link).
+  const total = Math.round(Number(s.total_amount));
+  const { data: pays } = await admin
+    .from("billing_payments").select("amount").eq("billing_statement_id", s.id);
+  const paidSoFar = Math.round((pays || []).reduce((acc: number, p: { amount: number }) => acc + Number(p.amount), 0));
+  const balanceDue = Math.max(0, total - paidSoFar);
+  const isPartial = paidSoFar > 0 && balanceDue > 0;
+  const amountStr = fmtINR(balanceDue);
+
   const dueStr = fmtDate(s.due_date as string);
   const daysOverdue = daysOverdueFromDueDate(s.due_date as string);
   const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer";
@@ -291,6 +315,10 @@ export async function sendOneReminder(
       periodStart: s.period_start as string, periodEnd: s.period_end as string,
       dueDate: dueStr, amountStr, payLinkUrl, intro: stage.intro,
       toneLabel: stage.toneLabel, overdueDays,
+      // Partial-payment context: original total + amount already paid so the
+      // customer sees the math behind the balance figure.
+      originalTotal: isPartial ? fmtINR(total) : null,
+      paidSoFar:     isPartial ? fmtINR(paidSoFar) : null,
     });
     try {
       const r = await resend.emails.send({
