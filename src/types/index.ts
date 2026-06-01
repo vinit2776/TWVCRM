@@ -642,7 +642,7 @@ export interface AdminOtp {
 // Usage Charge & Billing Types
 // ==========================================
 export type UsageChargeStatus = "pending" | "billed" | "waived";
-export type BillingStatementStatus = "draft" | "finalized" | "exported";
+export type BillingStatementStatus = "draft" | "finalized" | "exported" | "voided";
 
 export interface UsageCharge {
   id: string;
@@ -717,6 +717,20 @@ export interface BillingStatement {
   // Usage amounts split (set by generators)
   service_usage_amount?: number;
   booking_usage_amount?: number;
+  // PI → early GST override fields
+  pi_cancelled_at?: string | null;
+  pi_cancelled_by?: string | null;
+  pi_override_reason?: string | null;
+  gst_invoice_due_date?: string | null;
+  due_date?: string | null;
+  // Voided statement tracking
+  voided_at?: string | null;
+  voided_by?: string | null;
+  void_reason?: string | null;
+  voided_statement_id?: string | null;
+  // Reminder tracking
+  reminder_count?: number;
+  last_reminder_sent_at?: string | null;
 }
 
 // ==========================================

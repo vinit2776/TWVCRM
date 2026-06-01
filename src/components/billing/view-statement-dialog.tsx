@@ -13,11 +13,12 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 import { Skeleton } from "@/components/shared/loading-skeleton";
-import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck, Ban, RotateCcw } from "lucide-react";
+import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck, Ban, RotateCcw, AlertTriangle } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
+import { ConvertToGstEarlyDialog } from "@/components/billing/convert-to-gst-early-dialog";
 
 interface UsageCharge {
   id: string;
@@ -89,10 +90,12 @@ interface Statement {
   finalized_at?: string | null;
   gst_invoice_number?: string | null;
   proforma_sent_at?: string | null;
+  pi_cancelled_at?: string | null;
+  due_date?: string | null;
   notes?: string;
   contract?: { id: string; contract_number: string; title?: string } | null;
   booking?: { id: string; booking_number: string; booking_date: string; guest_name?: string } | null;
-  lead?: { first_name: string; last_name: string; company?: string } | null;
+  lead?: { first_name: string; last_name: string; company?: string; email?: string } | null;
   usage_charges?: UsageCharge[];
   facility_charges?: FacilityCharge[];
   service_charges?: ServiceCharge[];
@@ -125,6 +128,7 @@ export function ViewStatementDialog({
   const [sendingProforma, setSendingProforma] = useState(false);
   const [generatingGst, setGeneratingGst] = useState(false);
   const [revertingToDraft, setRevertingToDraft] = useState(false);
+  const [showConvertToGst, setShowConvertToGst] = useState(false);
 
   // Waive-charge state — tracks which charge row has the waive form open
   const [waivedChargeId, setWaivedChargeId] = useState<string | null>(null);
@@ -365,6 +369,7 @@ export function ViewStatementDialog({
     : "—";
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
@@ -837,11 +842,22 @@ export function ViewStatementDialog({
               Finalize
             </Button>
           )}
-          {/* Finalized: Send proforma (or resend) */}
-          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
+          {/* Finalized: Send proforma (or resend) — only when PI not yet cancelled */}
+          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
             <Button onClick={handleSendProforma} disabled={sendingProforma} variant={statement?.proforma_sent_at ? "outline" : "default"}>
               {sendingProforma ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
               {statement?.proforma_sent_at ? "Resend Proforma" : "Send Proforma + Payment Link"}
+            </Button>
+          )}
+          {/* Early GST override — admin/manager, finalized, unpaid, no GST yet */}
+          {statement?.status === "finalized" && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.payment_status !== "paid" && userRole && ["admin", "manager"].includes(userRole) && (
+            <Button
+              variant="outline"
+              className="border-amber-400 text-amber-700 hover:bg-amber-50"
+              onClick={() => setShowConvertToGst(true)}
+            >
+              <AlertTriangle className="mr-2 h-4 w-4" />
+              Issue GST Invoice (Override)
             </Button>
           )}
           {/* Payment received offline: Generate GST invoice */}
@@ -856,10 +872,36 @@ export function ViewStatementDialog({
             <div className="flex items-center gap-2 text-sm text-green-700 font-medium">
               <FileCheck className="h-4 w-4" />
               {statement.gst_invoice_number}
+              {statement?.pi_cancelled_at && (
+                <span className="text-xs text-amber-600 font-normal">(Early override)</span>
+              )}
             </div>
           )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
+
+    {/* Early GST override confirmation dialog */}
+    {statement && (
+      <ConvertToGstEarlyDialog
+        open={showConvertToGst}
+        onOpenChange={setShowConvertToGst}
+        statementId={statement.id}
+        statementNumber={statement.statement_number}
+        customerName={
+          statement.lead?.company ||
+          `${statement.lead?.first_name || ""} ${statement.lead?.last_name || ""}`.trim() ||
+          "Customer"
+        }
+        customerEmail={statement.lead?.email}
+        periodLabel={new Date(statement.period_start + "T00:00:00").toLocaleDateString("en-IN", {
+          timeZone: "Asia/Kolkata", month: "short", year: "numeric",
+        })}
+        totalAmount={statement.total_amount}
+        hasExistingPaymentLink={!!statement.razorpay_payment_link_url}
+        onSuccess={() => { onStatusChange(); onOpenChange(false); }}
+      />
+    )}
+    </>
   );
 }

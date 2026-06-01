@@ -33,6 +33,7 @@ export async function GET(_req: NextRequest) {
       subtotal, tax_amount, total_amount, payment_status, status,
       proforma_sent_at, razorpay_payment_link_url, razorpay_payment_link_id,
       last_reminder_sent_at, reminder_count, voided_at, created_at,
+      gst_invoice_number, pi_cancelled_at, accounted,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, title,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)

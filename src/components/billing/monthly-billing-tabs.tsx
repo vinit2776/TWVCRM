@@ -84,9 +84,11 @@ interface Props {
   month: number; // 1-12
   /** Refresh AR aging / summary widgets after a successful send. */
   onFinalized?: () => void | Promise<void>;
+  /** Open the ViewStatementDialog for a given statement ID. */
+  onViewStatement?: (id: string) => void;
 }
 
-export function MonthlyBillingTabs({ year, month, onFinalized }: Props) {
+export function MonthlyBillingTabs({ year, month, onFinalized, onViewStatement }: Props) {
   const [tab, setTab] = useState<"rent" | "usage">("rent");
 
   // ── Data ────────────────────────────────────────────────────────────────
@@ -212,7 +214,7 @@ export function MonthlyBillingTabs({ year, month, onFinalized }: Props) {
             periodLabel={rentLabel}
             onSuccess={async () => { await loadRent(); if (onFinalized) await onFinalized(); }}
           />
-          <RentTable rows={rentStmts} loading={rentLoading} opsLabel={opsLabel} />
+          <RentTable rows={rentStmts} loading={rentLoading} opsLabel={opsLabel} onViewStatement={onViewStatement} />
         </div>
       )}
 
@@ -253,7 +255,7 @@ function Pill({ label, counts, active, onClick }: { label: string; counts: { sen
   );
 }
 
-function RentTable({ rows, loading, opsLabel }: { rows: RentStmt[]; loading: boolean; opsLabel: string }) {
+function RentTable({ rows, loading, opsLabel, onViewStatement }: { rows: RentStmt[]; loading: boolean; opsLabel: string; onViewStatement?: (id: string) => void }) {
   const sorted = useMemo(() => {
     return [...rows].sort((a, b) => (a.contract?.contract_number || "").localeCompare(b.contract?.contract_number || ""));
   }, [rows]);
@@ -304,9 +306,12 @@ function RentTable({ rows, loading, opsLabel }: { rows: RentStmt[]; loading: boo
                     </td>
                     <td className="px-4 py-3 text-xs whitespace-nowrap text-muted-foreground">{s.due_date ? formatDate(s.due_date) : "—"}</td>
                     <td className="px-4 py-3 text-right whitespace-nowrap font-semibold">{formatCurrency(s.total_amount)}</td>
-                    <td className="px-4 py-3 whitespace-nowrap text-right">
+                    <td className="px-4 py-3 whitespace-nowrap text-right space-x-2">
                       {s.razorpay_payment_link_url && (
                         <a href={s.razorpay_payment_link_url} target="_blank" rel="noreferrer" className="text-xs text-teal-700 hover:underline">Pay link</a>
+                      )}
+                      {onViewStatement && (
+                        <button onClick={() => onViewStatement(s.id)} className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">Details</button>
                       )}
                     </td>
                   </tr>

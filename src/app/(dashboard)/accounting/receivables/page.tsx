@@ -33,6 +33,7 @@ import {
 import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 
 interface Lead {
   id: string;
@@ -62,12 +63,17 @@ interface ReceivableRow {
   amount_paid: number;
   balance_due: number;
   payment_status: "unpaid" | "partially_paid";
+  status: string;
   proforma_sent_at: string | null;
   razorpay_payment_link_url: string | null;
   last_reminder_sent_at: string | null;
   reminder_count: number;
   days_overdue: number | null;
   contract: Contract;
+  // Lifecycle fields
+  gst_invoice_number: string | null;
+  pi_cancelled_at: string | null;
+  accounted: boolean | null;
 }
 
 interface Summary {
@@ -352,6 +358,7 @@ export default function AccountsReceivablePage() {
                     <th className="px-4 py-3 text-left">Statement</th>
                     <th className="px-4 py-3 text-left">Period</th>
                     <th className="px-4 py-3 text-left">Due</th>
+                    <th className="px-4 py-3 text-left">Lifecycle</th>
                     <th className="px-4 py-3 text-right">Total</th>
                     <th className="px-4 py-3 text-right">Paid</th>
                     <th className="px-4 py-3 text-right">Balance</th>
@@ -396,6 +403,16 @@ export default function AccountsReceivablePage() {
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div>{r.due_date ? formatDate(r.due_date) : "—"}</div>
                         <div className="mt-1">{daysOverdueBadge(r.days_overdue)}</div>
+                      </td>
+                      <td className="px-4 py-3">
+                        <BillingLifecycleStatus
+                          status={r.status}
+                          payment_status={r.payment_status}
+                          proforma_sent_at={r.proforma_sent_at}
+                          gst_invoice_number={r.gst_invoice_number}
+                          pi_cancelled_at={r.pi_cancelled_at}
+                          accounted={r.accounted}
+                        />
                       </td>
                       <td className="px-4 py-3 text-right whitespace-nowrap">{formatCurrency(r.total_amount)}</td>
                       <td className="px-4 py-3 text-right whitespace-nowrap text-emerald-700">

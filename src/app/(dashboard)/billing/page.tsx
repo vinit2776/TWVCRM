@@ -1181,7 +1181,7 @@ export default function BillingPage() {
               rent+usage cards below for the common case. The legacy
               "Active Contract Billing" view further down is preserved for
               cross-month / legacy combined statement management. */}
-          <MonthlyBillingTabs year={year} month={month} onFinalized={refreshAfterRun} />
+          <MonthlyBillingTabs year={year} month={month} onFinalized={refreshAfterRun} onViewStatement={setViewStatementId} />
 
         </TabsContent>
       </Tabs>
