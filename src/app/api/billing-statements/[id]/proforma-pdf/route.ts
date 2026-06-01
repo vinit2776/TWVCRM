@@ -136,7 +136,10 @@ export async function GET(
   const proformaRef = statement.statement_number as string;
   const invoiceData: GstInvoiceData = {
     invoiceNumber: proformaRef,
-    invoiceDate: statement.period_start as string,
+    // Rent: 1st of billed month. Usage: date PDF is downloaded (re-issued on demand).
+    invoiceDate: (statement.statement_type as string) === "rent"
+      ? (statement.period_start as string)
+      : new Date().toISOString().slice(0, 10),
     isProforma: true,
     buyerName: lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer",
     buyerGstin: lead?.gst_number || undefined,
