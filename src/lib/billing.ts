@@ -554,7 +554,7 @@ export async function generateMonthlyStatements(
 // NEW GENERATORS — split rent proformas and usage statements
 // ═══════════════════════════════════════════════════════════════════════════
 
-import { dispatchProforma } from "@/lib/send-proforma";
+import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
 import { createAdminClient } from "@/lib/supabase/server";
 
 /** Create or fetch the accounting period row for a given month/year. */
@@ -628,7 +628,7 @@ export async function generateRentProformas(
     .select(`
       id, contract_number, title, total_amount, subtotal, tax_percentage,
       billing_cycle, start_date, end_date, next_billing_date, seats,
-      location_id, lead_id,
+      location_id, lead_id, billing_mode,
       lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, state, gst_number)
     `)
     .in("status", ["active", "renewal_in_progress"])
@@ -889,7 +889,17 @@ export async function generateRentProformas(
         .eq("id", stmtId);
 
       // ── 7. Dispatch (Razorpay + PDF + email) ────────────────────────────
-      const dispatchResult = await dispatchProforma(adminSupabase, stmtId, null, []);
+      // GST Direct contracts skip the proforma step and issue a tax invoice immediately.
+      const isGstDirect = (contract.billing_mode as string | null) === "gst_direct";
+      // For GST Direct, update the due_date to period_start + 7 before dispatch
+      if (isGstDirect) {
+        const [py, pm, pd] = prepaidFirstOfMonth.split("-").map(Number);
+        const gstDueDate = new Date(Date.UTC(py, pm - 1, pd + 7)).toISOString().slice(0, 10);
+        await adminSupabase.from("billing_statements").update({ due_date: gstDueDate }).eq("id", stmtId);
+      }
+      const dispatchResult = isGstDirect
+        ? await dispatchGstDirect(adminSupabase, stmtId, null, [])
+        : await dispatchProforma(adminSupabase, stmtId, null, []);
 
       if (dispatchResult.noContact) {
         result.noContact.push(contractNumber);

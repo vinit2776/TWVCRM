@@ -59,6 +59,9 @@ export async function PATCH(
   if (body.lock_in_months !== undefined) allowedFields.lock_in_months = body.lock_in_months ?? null;
   if (body.renewed_at) allowedFields.renewed_at = body.renewed_at;
   if (body.signed_document_id !== undefined) allowedFields.signed_document_id = body.signed_document_id;
+  if (body.billing_mode !== undefined && ["proforma_first", "gst_direct"].includes(body.billing_mode as string)) {
+    allowedFields.billing_mode = body.billing_mode;
+  }
 
   // Department ID — printer-side identifier mapped to this contract.
   // Empty string is normalised to NULL so unique-per-location stays clean.
