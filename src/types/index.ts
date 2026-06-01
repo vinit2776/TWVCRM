@@ -464,6 +464,8 @@ export interface Contract {
   discount_amount: number;
   total_amount: number;
   billing_cycle: BillingCycle;
+  /** Controls whether monthly cycle issues PI first (default) or GST invoice directly. */
+  billing_mode?: 'proforma_first' | 'gst_direct';
   tenure_months: number;
   start_date: string;
   end_date: string;

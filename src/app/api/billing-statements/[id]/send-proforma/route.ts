@@ -1,16 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { dispatchProforma } from "@/lib/send-proforma";
+import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
 
 export const maxDuration = 30;
 
 /**
  * POST /api/billing-statements/[id]/send-proforma
  *
- * Thin auth wrapper over dispatchProforma() in src/lib/send-proforma.ts.
- * The actual Razorpay link creation, PDF generation, and email/WhatsApp
- * dispatch all live in that shared library so the billing cron can call
- * them directly without making HTTP self-calls.
+ * Thin auth wrapper over dispatchProforma() / dispatchGstDirect() in
+ * src/lib/send-proforma.ts. Checks the contract's billing_mode:
+ *   proforma_first (default) → dispatchProforma()
+ *   gst_direct               → dispatchGstDirect() — skips PI, issues tax invoice
  */
 export async function POST(
   request: NextRequest,
@@ -23,7 +23,6 @@ export async function POST(
   let dbUserId: string | null = null;
 
   // Internal/cron calls authenticate with x-internal-secret + skipAuth (no session).
-  // Keeps the route callable by background jobs that dispatch proformas server-side.
   const isInternalCall =
     body.skipAuth === true &&
     request.headers.get("x-internal-secret") === process.env.CRON_SECRET;
@@ -37,27 +36,40 @@ export async function POST(
       .from("users").select("id, role").eq("auth_id", user.id).single();
     if (!dbUser || !["admin", "manager", "accounts"].includes(dbUser.role)) {
       return NextResponse.json(
-        { error: "Only admin, manager, or accounts can send proforma invoices" },
+        { error: "Only admin, manager, or accounts can send invoices" },
         { status: 403 }
       );
     }
     dbUserId = dbUser.id;
   }
 
-  // Validate statement is ready to send
+  // Validate statement is ready to send + fetch billing_mode from contract
   const { data: stmt } = await adminSupabase
     .from("billing_statements")
-    .select("status, voided_at")
+    .select("status, voided_at, contract_id")
     .eq("id", id)
     .single();
 
   if (!stmt) return NextResponse.json({ error: "Statement not found" }, { status: 404 });
-  if (stmt.status === "draft") return NextResponse.json({ error: "Finalize the statement before sending a proforma" }, { status: 400 });
+  if (stmt.status === "draft") return NextResponse.json({ error: "Finalize the statement before sending" }, { status: 400 });
   if (stmt.voided_at) return NextResponse.json({ error: "Statement is voided" }, { status: 400 });
+
+  // Fetch billing_mode from the linked contract
+  let billingMode = "proforma_first";
+  if (stmt.contract_id) {
+    const { data: contract } = await adminSupabase
+      .from("contracts")
+      .select("billing_mode")
+      .eq("id", stmt.contract_id)
+      .single();
+    billingMode = (contract?.billing_mode as string | null) || "proforma_first";
+  }
 
   const additionalCc: string[] = Array.isArray(body.cc) ? (body.cc as string[]).filter(Boolean) : [];
 
-  const result = await dispatchProforma(adminSupabase, id, dbUserId, additionalCc);
+  const result = billingMode === "gst_direct"
+    ? await dispatchGstDirect(adminSupabase, id, dbUserId, additionalCc)
+    : await dispatchProforma(adminSupabase, id, dbUserId, additionalCc);
 
   if (!result.success) {
     return NextResponse.json({ error: result.error || "Dispatch failed" }, { status: 500 });

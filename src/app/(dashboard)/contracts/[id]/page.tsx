@@ -747,8 +747,12 @@ export default function ContractDetailPage({
             />
           )}
 
-          {/* Monthly Invoices (proforma + GST invoice) */}
-          <ContractInvoicesSection contractId={id} />
+          {/* Monthly Invoices (proforma + GST invoice) + billing mode toggle */}
+          <ContractInvoicesSection
+            contractId={id}
+            billingMode={contract.billing_mode}
+            contractStatus={contract.status}
+          />
 
           {/* Agreement Details Card */}
           <Card>

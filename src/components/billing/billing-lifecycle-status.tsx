@@ -43,6 +43,7 @@ type Stage =
   | "paid"
   | "gst_sent_unpaid"
   | "gst_override_unpaid"
+  | "gst_direct_unpaid"
   | "invoiced"
   | "complete";
 
@@ -113,6 +114,13 @@ const STAGE_CONFIG: Record<Stage, StageConfig> = {
     iconColor: "text-amber-600",
     Icon: AlertTriangle,
   },
+  gst_direct_unpaid: {
+    label: "Tax Invoice Sent",
+    next: "Awaiting payment",
+    pill: "bg-teal-50 text-teal-700 border border-teal-200",
+    iconColor: "text-teal-500",
+    Icon: Send,
+  },
   invoiced: {
     label: "GST Invoice Sent",
     next: "Mark as accounted",
@@ -153,9 +161,11 @@ function resolveStage(props: LifecycleProps): Stage {
   if (isAccounted && hasGstInvoice) return "complete";
   // If GST invoice exists, check whether payment was also received
   if (hasGstInvoice && isPaid) return "invoiced";
-  // GST issued early (override) — still waiting on payment
+  // GST issued early (manual override) — PI was cancelled
   if (hasGstInvoice && isGstOverride) return "gst_override_unpaid";
-  if (hasGstInvoice) return "gst_sent_unpaid"; // GST sent post-payment but unpaid (edge case)
+  // GST issued directly (billing_mode = gst_direct) — no PI was ever sent
+  if (hasGstInvoice && !hasProforma && !isGstOverride) return "gst_direct_unpaid";
+  if (hasGstInvoice) return "gst_sent_unpaid"; // edge case: post-payment but unpaid
   if (isPaid) return "paid";
   if (isPartiallyPaid) return "partially_paid";
   if (hasProforma) return "proforma_sent";

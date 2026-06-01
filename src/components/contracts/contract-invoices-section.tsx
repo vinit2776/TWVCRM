@@ -5,8 +5,9 @@ import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Loader2, ExternalLink, FileText, Receipt } from "lucide-react";
+import { Loader2, ExternalLink, FileText, Receipt, FileCheck, Zap } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { toast } from "sonner";
 
 interface Statement {
   id: string;
@@ -60,9 +61,21 @@ function periodLabel(start: string, end: string) {
   return `${formatDate(start)} – ${formatDate(end)}`;
 }
 
-export function ContractInvoicesSection({ contractId }: { contractId: string }) {
+interface ContractInvoicesSectionProps {
+  contractId: string;
+  billingMode?: 'proforma_first' | 'gst_direct' | null;
+  contractStatus?: string;
+}
+
+export function ContractInvoicesSection({ contractId, billingMode, contractStatus }: ContractInvoicesSectionProps) {
   const [statements, setStatements] = useState<Statement[]>([]);
   const [loading, setLoading] = useState(true);
+  const [savingMode, setSavingMode] = useState(false);
+  const [currentMode, setCurrentMode] = useState<'proforma_first' | 'gst_direct'>(billingMode || 'proforma_first');
+
+  useEffect(() => {
+    setCurrentMode(billingMode || 'proforma_first');
+  }, [billingMode]);
 
   useEffect(() => {
     fetch(`/api/billing-statements?contract_id=${contractId}&limit=100`)
@@ -71,6 +84,32 @@ export function ContractInvoicesSection({ contractId }: { contractId: string }) 
       .catch(() => setStatements([]))
       .finally(() => setLoading(false));
   }, [contractId]);
+
+  const handleModeChange = async (newMode: 'proforma_first' | 'gst_direct') => {
+    if (newMode === currentMode) return;
+    setSavingMode(true);
+    try {
+      const res = await fetch(`/api/contracts/${contractId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ billing_mode: newMode }),
+      });
+      if (res.ok) {
+        setCurrentMode(newMode);
+        toast.success(newMode === 'gst_direct' ? "GST Direct billing enabled from next cycle" : "Proforma First billing restored from next cycle");
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(err?.error || "Failed to update billing mode");
+      }
+    } catch {
+      toast.error("Failed to update billing mode");
+    } finally {
+      setSavingMode(false);
+    }
+  };
+
+  // Show toggle for active/live contracts — locked for terminated/expired/completed/renewed
+  const canEditMode = !contractStatus || ["active", "renewal_in_progress", "draft", "sent", "accepted"].includes(contractStatus);
 
   return (
     <Card>
@@ -86,6 +125,44 @@ export function ContractInvoicesSection({ contractId }: { contractId: string }) 
           </Button>
         </Link>
       </CardHeader>
+      {/* Billing mode toggle */}
+      {canEditMode && (
+        <div className="px-6 pb-3">
+          <p className="text-xs text-muted-foreground mb-2 font-medium">Invoice Type (from next billing cycle)</p>
+          <div className="flex gap-2">
+            <button
+              onClick={() => handleModeChange('proforma_first')}
+              disabled={savingMode}
+              className={`flex-1 flex items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                currentMode === 'proforma_first'
+                  ? 'bg-[#015E65] text-white border-[#015E65]'
+                  : 'bg-background text-muted-foreground border-border hover:bg-muted/30'
+              }`}
+            >
+              <FileCheck className="h-3.5 w-3.5 shrink-0" />
+              Proforma First
+            </button>
+            <button
+              onClick={() => handleModeChange('gst_direct')}
+              disabled={savingMode}
+              className={`flex-1 flex items-center justify-center gap-1.5 rounded-md border px-3 py-2 text-xs font-medium transition-colors ${
+                currentMode === 'gst_direct'
+                  ? 'bg-violet-700 text-white border-violet-700'
+                  : 'bg-background text-muted-foreground border-border hover:bg-muted/30'
+              }`}
+            >
+              <Zap className="h-3.5 w-3.5 shrink-0" />
+              GST Direct
+            </button>
+          </div>
+          {currentMode === 'gst_direct' && (
+            <p className="text-[10px] text-violet-700 mt-1.5">
+              Tax invoice issued directly each cycle · Due date = issue date + 7 days · No proforma
+            </p>
+          )}
+        </div>
+      )}
+
       <CardContent>
         {loading ? (
           <div className="flex items-center justify-center py-8">
