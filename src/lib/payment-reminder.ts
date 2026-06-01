@@ -62,7 +62,11 @@ export const STAGES: Stage[] = [
   {
     day: 14, toneLabel: "Escalation",
     subject: (ref, _due, amt) => `URGENT: Payment overdue — ${ref} · ₹${amt}`,
-    intro: "This payment is now significantly overdue. We've copied our management team on this email. Please clear the balance or get in touch to discuss.",
+    // Management is silently CC'd on this stage and above (see ccManagerAndAdmin
+    // below). The customer-facing body deliberately does NOT mention this —
+    // disclosing internal escalation paths reduces the urgency lever for
+    // subsequent stages and can come across as performative.
+    intro: "This payment is now significantly overdue. Please clear the balance at the earliest, or write back if there is a specific issue we can help resolve. We'd appreciate a response either way so we can plan accordingly.",
     ccAccounts: true, ccManagerAndAdmin: true, whatsApp: true,
   },
   {
