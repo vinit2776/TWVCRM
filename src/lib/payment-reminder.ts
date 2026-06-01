@@ -201,6 +201,10 @@ function renderEmail(opts: {
    *  total + amount paid alongside the balance figure. */
   originalTotal: string | null;
   paidSoFar: string | null;
+  /** When set, this statement has an early-issued GST invoice (PI was cancelled).
+   *  The ref label changes and the cancelled PI number is shown for context. */
+  gstInvoiceNumber?: string | null;
+  cancelledPiNumber?: string | null;
 }): string {
   const periodLabel = `${fmtDate(opts.periodStart)} – ${fmtDate(opts.periodEnd)}`;
   const d = opts.daysOverdue;
@@ -220,8 +224,12 @@ function renderEmail(opts: {
         <p style="color:#333;font-size:14px;">Dear ${opts.customerName},</p>
         <p style="color:#333;font-size:14px;">${opts.intro}</p>
         ${overdueBanner}
+        ${opts.gstInvoiceNumber && opts.cancelledPiNumber ? `
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:10px 14px;margin:12px 0;font-size:12px;color:#166534;">
+          This is a follow-up for Tax Invoice <strong>${opts.gstInvoiceNumber}</strong> which replaced Proforma Invoice ${opts.cancelledPiNumber}.
+        </div>` : ""}
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
-          <tr><td style="padding:6px 0;color:#666;">Proforma Ref</td><td style="padding:6px 0;font-weight:600;">${opts.stmt}</td></tr>
+          <tr><td style="padding:6px 0;color:#666;">${opts.gstInvoiceNumber ? "Tax Invoice Ref" : "Proforma Ref"}</td><td style="padding:6px 0;font-weight:600;">${opts.gstInvoiceNumber || opts.stmt}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">Contract</td><td style="padding:6px 0;">${opts.contractNumber}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">Period</td><td style="padding:6px 0;">${periodLabel}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">Due Date</td><td style="padding:6px 0;font-weight:600;color:#b45309;">${opts.dueDate}</td></tr>
@@ -338,6 +346,8 @@ export async function sendOneReminder(
       dynamicIntro = stage.intro;
     }
 
+    const isEarlyGst = !!s.pi_cancelled_at && !!s.gst_invoice_number;
+
     const html = renderEmail({
       customerName, stmt: s.statement_number, contractNumber: contract.contract_number,
       periodStart: s.period_start as string, periodEnd: s.period_end as string,
@@ -348,6 +358,9 @@ export async function sendOneReminder(
       daysOverdue,
       originalTotal: isPartial ? fmtINR(total) : null,
       paidSoFar:     isPartial ? fmtINR(paidSoFar) : null,
+      // Early GST override — show invoice number and cancelled PI for continuity
+      gstInvoiceNumber: isEarlyGst ? (s.gst_invoice_number as string) : null,
+      cancelledPiNumber: isEarlyGst ? s.statement_number : null,
     });
     try {
       const r = await resend.emails.send({
@@ -379,9 +392,11 @@ export async function sendOneReminder(
   // WhatsApp (stage 1 onwards, only if customer has a phone)
   let whatsAppSent = false;
   const phone = lead?.mobile || lead?.phone || null;
+  const isEarlyGst = !!s.pi_cancelled_at && !!s.gst_invoice_number;
+  const whatsAppRef = isEarlyGst ? (s.gst_invoice_number as string) : s.statement_number;
   if (stage.whatsApp && phone) {
     try {
-      const r = await messaging.paymentReminder(phone, s.statement_number, amountStr, dueStr, s.id);
+      const r = await messaging.paymentReminder(phone, whatsAppRef, amountStr, dueStr, s.id);
       whatsAppSent = r?.success === true;
       if (!whatsAppSent) errors.push(`whatsapp: ${r?.error || "unknown"}`);
     } catch (err) {

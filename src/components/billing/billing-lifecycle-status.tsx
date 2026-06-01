@@ -2,7 +2,7 @@
 
 import {
   FileText, CheckCircle2, Send, CreditCard, Receipt, BookCheck,
-  XCircle, Clock, AlertCircle,
+  XCircle, Clock, AlertCircle, AlertTriangle,
 } from "lucide-react";
 
 /**
@@ -28,6 +28,8 @@ interface LifecycleProps {
   finalized_at?: string | null;
   gst_invoice_number?: string | null;
   proforma_sent_at?: string | null;
+  /** Set when the PI was cancelled early and a GST invoice was issued before payment */
+  pi_cancelled_at?: string | null;
   /** compact = badge only; full = badge + next-action hint below */
   variant?: "compact" | "full";
 }
@@ -40,6 +42,7 @@ type Stage =
   | "partially_paid"
   | "paid"
   | "gst_sent_unpaid"
+  | "gst_override_unpaid"
   | "invoiced"
   | "complete";
 
@@ -103,6 +106,13 @@ const STAGE_CONFIG: Record<Stage, StageConfig> = {
     iconColor: "text-orange-500",
     Icon: AlertCircle,
   },
+  gst_override_unpaid: {
+    label: "Tax Invoice — Pending",
+    next: "PI cancelled · collect payment",
+    pill: "bg-amber-50 text-amber-800 border border-amber-300",
+    iconColor: "text-amber-600",
+    Icon: AlertTriangle,
+  },
   invoiced: {
     label: "GST Invoice Sent",
     next: "Mark as accounted",
@@ -126,6 +136,7 @@ function resolveStage(props: LifecycleProps): Stage {
     accounted,
     gst_invoice_number,
     proforma_sent_at,
+    pi_cancelled_at,
   } = props;
 
   if (status === "voided") return "voided";
@@ -136,12 +147,15 @@ function resolveStage(props: LifecycleProps): Stage {
   const isPaid = payment_status === "paid";
   const isPartiallyPaid = payment_status === "partially_paid";
   const isAccounted = !!accounted;
+  const isGstOverride = !!pi_cancelled_at; // PI was cancelled, GST issued early
 
   if (!isFinalized) return "draft";
   if (isAccounted && hasGstInvoice) return "complete";
   // If GST invoice exists, check whether payment was also received
   if (hasGstInvoice && isPaid) return "invoiced";
-  if (hasGstInvoice) return "gst_sent_unpaid"; // GST sent but money still owed
+  // GST issued early (override) — still waiting on payment
+  if (hasGstInvoice && isGstOverride) return "gst_override_unpaid";
+  if (hasGstInvoice) return "gst_sent_unpaid"; // GST sent post-payment but unpaid (edge case)
   if (isPaid) return "paid";
   if (isPartiallyPaid) return "partially_paid";
   if (hasProforma) return "proforma_sent";
