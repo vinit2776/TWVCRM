@@ -98,8 +98,12 @@ export function ContractSpaceManager({
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [adding, setAdding] = useState(false);
 
-  const isLocked = ["active", "renewal_in_progress", "renewed", "completed"].includes(contractStatus);
-  const isEditable = ["draft", "sent", "viewed", "accepted"].includes(contractStatus);
+  // Locked once the contract is fully closed out — client has left
+  const isLocked = ["renewed", "completed", "terminated", "expired"].includes(contractStatus);
+  // Editable during pre-activation AND while the contract is live (client is in the space)
+  const isEditable = ["draft", "sent", "viewed", "accepted", "active", "renewal_in_progress"].includes(contractStatus);
+  // Whether the contract is currently live (used to style the card as "still open")
+  const isLive = ["active", "renewal_in_progress"].includes(contractStatus);
 
   const allocatedSeats = allocations.reduce((sum, a) => sum + (a.space_unit?.capacity ?? 0), 0);
 
@@ -245,20 +249,26 @@ export function ContractSpaceManager({
   }, {});
 
   return (
-    <Card>
+    <Card className={isLive ? "border-teal-300 bg-teal-50/30 shadow-sm" : ""}>
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
-          <CardTitle className="text-base flex items-center gap-2">
-            <LayoutGrid className="h-4 w-4" />
+          <CardTitle className={`text-base flex items-center gap-2 ${isLive ? "text-teal-800" : ""}`}>
+            <LayoutGrid className={`h-4 w-4 ${isLive ? "text-teal-600" : ""}`} />
             Assigned Spaces
             {allocations.length > 0 && (
               <span className="text-xs font-normal text-muted-foreground">
                 ({allocatedSeats}/{contractSeats} seats)
               </span>
             )}
+            {allocations.length === 0 && (
+              <span className="inline-flex items-center gap-1 text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-amber-100 text-amber-700 border border-amber-200">
+                <span className="h-1.5 w-1.5 rounded-full bg-amber-500 inline-block" />
+                Unallocated
+              </span>
+            )}
           </CardTitle>
           {isEditable && locationId && (
-            <Button size="sm" variant="outline" onClick={openPicker} className="h-7 text-xs">
+            <Button size="sm" variant="outline" onClick={openPicker} className={`h-7 text-xs ${isLive ? "border-teal-300 hover:bg-teal-50" : ""}`}>
               <Plus className="mr-1 h-3 w-3" />
               Add Unit
             </Button>
