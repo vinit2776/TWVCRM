@@ -246,11 +246,10 @@ export async function dispatchProforma(
 
   const invoiceData: GstInvoiceData = {
     invoiceNumber: proformaRef,
-    // Invoice date = LAST DAY of the billing period this statement covers, not
-    // the send date. Sending a May proforma on Jun 1 still prints invoice date
-    // May 31. Sending early (May 30 for May period) also prints May 31.
-    // Sending July's proforma later still prints Jul 31.
-    invoiceDate: statement.period_end as string,
+    // Invoice date = FIRST DAY of the billing period being charged.
+    // A June rent proforma sent on May 30 prints invoice date June 1.
+    // This matches business convention: "invoice for the month starting X".
+    invoiceDate: statement.period_start as string,
     isProforma: true,
     buyerName: lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer",
     buyerGstin: lead?.gst_number || undefined,

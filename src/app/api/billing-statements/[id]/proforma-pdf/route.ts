@@ -136,9 +136,7 @@ export async function GET(
   const proformaRef = statement.statement_number as string;
   const invoiceData: GstInvoiceData = {
     invoiceNumber: proformaRef,
-    invoiceDate: statement.proforma_sent_at
-      ? new Date(statement.proforma_sent_at).toISOString().slice(0, 10)
-      : new Date().toISOString().slice(0, 10),
+    invoiceDate: statement.period_start as string,
     isProforma: true,
     buyerName: lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer",
     buyerGstin: lead?.gst_number || undefined,
