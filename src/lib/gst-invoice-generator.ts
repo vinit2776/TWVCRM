@@ -3,12 +3,14 @@
  *
  * Uses jsPDF + jspdf-autotable (same as pdf-generator.ts).
  * Generates a proper GST invoice with CGST/SGST or IGST split,
- * HSN/SAC codes, seller/buyer GSTIN, and payment options.
+ * HSN/SAC codes, service provider/recipient GSTIN, and payment options.
  */
 
 import jsPDF from "jspdf";
 import autoTable from "jspdf-autotable";
 import { TWV_LOGO_BASE64 } from "@/lib/logo-data";
+import { COMPANY_SEAL_BASE64 } from "@/lib/seal-data";
+import { COMPANY_SIGNATURE_BASE64 } from "@/lib/signature-data";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 
 // TWV Brand Colors
@@ -75,6 +77,80 @@ function amountInWords(input: number): string {
     if (num < 20) return ones[num];
     return tens[Math.floor(num / 10)] + (num % 10 ? " " + ones[num % 10] : "");
   }
+}
+
+/**
+ * Place the authorised signatory's signature on the page.
+ * (sx, baseY) is the lower-left anchor — the signature sits above baseY.
+ * Sized to maxH mm tall; width scales to preserve the source PNG aspect ratio.
+ */
+function drawSignatureMark(doc: jsPDF, sx: number, baseY: number): void {
+  const maxH = 22;
+  let sigW = maxH;
+  let sigH = maxH;
+  try {
+    const props = doc.getImageProperties(COMPANY_SIGNATURE_BASE64);
+    sigW = maxH * (props.width / props.height);
+    sigH = maxH;
+  } catch {
+    /* keep square fallback */
+  }
+  try {
+    doc.addImage(COMPANY_SIGNATURE_BASE64, "PNG", sx, baseY - sigH, sigW, sigH);
+  } catch {
+    /* signature failed to load — silently skip */
+  }
+}
+
+/**
+ * Place the official company seal image on the page.
+ * The PNG has a fully transparent background so it blends with the PDF.
+ */
+function drawCompanySeal(doc: jsPDF, cx: number, cy: number, r: number): void {
+  const size = r * 2;
+  try {
+    doc.addImage(COMPANY_SEAL_BASE64, "PNG", cx - r, cy - r, size, size);
+  } catch {
+    /* seal failed to load — silently skip */
+  }
+}
+
+/**
+ * Draws the authorised signatory block + company seal.
+ * Returns the bottom Y after the block.
+ */
+function drawSignatureBlock(doc: jsPDF, startY: number, pageWidth: number): number {
+  const sealR = 19;
+  const sealCx = pageWidth - 16 - sealR;
+  const sealCy = startY + sealR + 2;
+
+  const sigX = 14;
+  let sy = startY + 5;
+
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(...BRAND_TEAL);
+  doc.text("For SREE DESIGN INFRASTRUCTURE PVT LTD", sigX, sy);
+  sy += 3;
+
+  // Reserve room for the signature image (~22mm tall) then drop the line
+  const sigBaseline = sy + 22;
+  drawSignatureMark(doc, sigX, sigBaseline);
+  sy = sigBaseline;
+
+  doc.setDrawColor(120, 120, 120);
+  doc.setLineWidth(0.3);
+  doc.line(sigX, sy, sigX + 68, sy);
+  sy += 4;
+
+  doc.setFontSize(8);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(40, 40, 40);
+  doc.text("Authorised Signatory", sigX, sy);
+
+  drawCompanySeal(doc, sealCx, sealCy, sealR);
+
+  return Math.max(sy + 4, sealCy + sealR + 4);
 }
 
 export interface GstInvoiceData {
@@ -161,11 +237,11 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   doc.rect(14, y, pageWidth - 28, 36);
   doc.line(pageWidth / 2, y, pageWidth / 2, y + 36);
 
-  // Seller (left)
+  // Service Provider (left)
   doc.setFontSize(8);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_TEAL);
-  doc.text("SELLER", 16, y + 5);
+  doc.text("SERVICE PROVIDER", 16, y + 5);
   doc.setFont("helvetica", "normal");
   doc.setFontSize(8);
   doc.setTextColor(60, 60, 60);
@@ -176,11 +252,11 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   doc.text(`GSTIN: ${SELLER.gstin}`, 16, y + 26);
   doc.text(`State: ${SELLER.state} (${SELLER.stateCode})`, 16, y + 30);
 
-  // Buyer (right)
+  // Service Recipient (right)
   const bx = pageWidth / 2 + 4;
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_TEAL);
-  doc.text("BUYER", bx, y + 5);
+  doc.text("SERVICE RECIPIENT", bx, y + 5);
   doc.setFont("helvetica", "normal");
   doc.setTextColor(60, 60, 60);
   doc.text(data.buyerName, bx, y + 10);
@@ -392,13 +468,12 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   const footerH = 18;
   const footerY = pageHeight - footerH;
 
-  // Pre-footer note
-  if (y < footerY - 20) {
-    doc.setFontSize(8);
-    doc.setFont("helvetica", "normal");
-    doc.setTextColor(150, 150, 150);
-    doc.text("This is a computer-generated invoice and does not require a signature.", 14, footerY - 8);
+  // Signature block + seal — render if there's enough vertical room
+  const sigBlockH = 55; // mm needed for the block (signature 22mm + seal r=19 + text)
+  if (y + sigBlockH < footerY - 4) {
+    y = drawSignatureBlock(doc, y, pageWidth);
   }
+
   // Proforma disclaimer — subtle footer note
   if (isProforma) {
     doc.setFontSize(6.5);
