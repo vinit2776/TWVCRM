@@ -472,6 +472,22 @@ export async function PATCH(
     })();
   }
 
+  // On termination: release all active space allocations so units are available for re-allocation
+  if (body.status === "terminated" && oldContract.status !== "terminated") {
+    (async () => {
+      try {
+        const admin = createAdminClient();
+        await admin
+          .from("contract_space_allocations")
+          .update({ status: "ended", updated_at: new Date().toISOString() })
+          .eq("contract_id", id)
+          .eq("status", "active");
+      } catch (err) {
+        console.error("[contract-terminate] space allocation release failed:", err);
+      }
+    })();
+  }
+
   // On termination: revoke UniFi voucher instantly (Nungambakkam LGF only)
   if (body.status === "terminated" && oldContract.status !== "terminated" && oldContract.unifi_voucher_id) {
     revokeUnifiVoucher(oldContract.unifi_voucher_id)
