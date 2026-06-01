@@ -121,10 +121,10 @@ function drawCompanySeal(doc: jsPDF, cx: number, cy: number, r: number): void {
  */
 function drawSignatureBlock(doc: jsPDF, startY: number, pageWidth: number): number {
   const sealR = 19;
-  const sealCx = pageWidth - 16 - sealR;
-  const sealCy = startY + sealR + 2;
-
   const sigX = 14;
+  const sigW = 20;       // signature image width
+  const sealCx = sigX + sigW + 6 + sealR;   // seal sits to the right of the signature
+  const sealCy = startY + sealR + 6;        // align seal vertical centre with signature mid
   let sy = startY + 5;
 
   doc.setFontSize(8);
