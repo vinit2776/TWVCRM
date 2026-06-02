@@ -39,6 +39,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
+import { runPostAckActions } from "@/lib/tally/post-ack";
 
 const AckSuccessSchema = z.object({
   job_id:               z.string().uuid(),
@@ -171,6 +172,12 @@ export async function POST(request: NextRequest) {
       },
     });
 
+    // Trigger post-ack actions (Razorpay link + PDF overlay) once IRN is confirmed.
+    // When irn_pending=true, link creation is deferred until the bridge acks the IRN.
+    if (!data.irn_pending && job.billing_statement_id) {
+      void triggerPostAckActions(supabase, job.billing_statement_id, data);
+    }
+
     return NextResponse.json({
       ok: true,
       next_step: data.irn_pending ? "create_razorpay_link_when_irn_ready" : "create_razorpay_link",
@@ -218,5 +225,73 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json({ ok: true, status: finalStatus });
+  }
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Post-ack orchestration: Razorpay link + PDF overlay
+// Runs fire-and-forget — never blocks the ack response.
+// ─────────────────────────────────────────────────────────────────────────────
+async function triggerPostAckActions(
+  supabase: ReturnType<typeof createAdminClient>,
+  billingStatementId: string,
+  ackData: {
+    tally_total_amount:   number;
+    tally_invoice_number: string;
+    tally_signed_qr_code?:string;
+  }
+): Promise<void> {
+  try {
+    // Fetch Razorpay credentials
+    const { data: settings } = await supabase
+      .from("app_settings")
+      .select("key, value")
+      .in("key", ["razorpay_key_id", "razorpay_key_secret", "razorpay_enabled"]);
+
+    const creds = Object.fromEntries(
+      (settings ?? []).map((s: { key: string; value: string }) => [s.key, s.value])
+    );
+
+    if (creds["razorpay_enabled"] !== "true") {
+      console.log(`[tally/ack] Razorpay not enabled — skipping link for ${billingStatementId}`);
+      return;
+    }
+
+    // Fetch customer details from the statement
+    const { data: stmt } = await supabase
+      .from("billing_statements")
+      .select(`
+        id,
+        contract:contracts!billing_statements_contract_id_fkey(
+          lead:leads!contracts_lead_id_fkey(
+            first_name, last_name, company, email, phone, mobile
+          )
+        )
+      `)
+      .eq("id", billingStatementId)
+      .single();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lead = (stmt as any)?.contract?.lead ?? {};
+    const customerName  = (lead.company as string | undefined)
+      ?? `${(lead.first_name as string | undefined) ?? ""} ${(lead.last_name as string | undefined) ?? ""}`.trim()
+      ?? "Customer";
+    const customerEmail = (lead.email as string | null) ?? null;
+    const customerPhone = ((lead.mobile as string | null) ?? (lead.phone as string | null)) ?? null;
+
+    await runPostAckActions({
+      supabase,
+      billingStatementId,
+      tallyInvoiceNumber: ackData.tally_invoice_number,
+      tallyTotalAmount:   ackData.tally_total_amount,
+      tallySignedQrCode:  ackData.tally_signed_qr_code ?? null,
+      customerName,
+      customerEmail,
+      customerPhone,
+      razorpayKeyId:     creds["razorpay_key_id"] ?? "",
+      razorpayKeySecret: creds["razorpay_key_secret"] ?? "",
+    });
+  } catch (err) {
+    console.error(`[tally/ack] post-ack error for ${billingStatementId}:`, err);
   }
 }

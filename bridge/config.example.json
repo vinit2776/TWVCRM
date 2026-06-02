@@ -1,0 +1,14 @@
+{
+  "crm_base_url":       "https://twv-crm.vercel.app",
+  "agent_token":        "REPLACE_WITH_TALLY_AGENT_TOKEN_FROM_VERCEL_ENV",
+  "tally_host":         "localhost",
+  "tally_port":         9000,
+  "tally_company_gstin":"33AAACU4245J1ZF",
+  "poll_interval_ms":   120000,
+  "heartbeat_interval_ms": 60000,
+  "lease_seconds":      120,
+  "irn_alarm_hours":    4,
+  "log_dir":            "C:\\TWV-Bridge\\logs",
+  "status_port":        7788,
+  "instance_id":        "twv-tally-server-01"
+}

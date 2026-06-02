@@ -1,0 +1,24 @@
+{
+  "name": "twv-tally-bridge",
+  "version": "1.0.0",
+  "description": "TWV CRM ↔ Tally Prime bridge agent. Runs on the Tally server.",
+  "main": "dist/index.js",
+  "scripts": {
+    "build":   "tsc",
+    "start":   "node dist/index.js",
+    "dev":     "ts-node src/index.ts",
+    "install-service": "node dist/install-service.js",
+    "uninstall-service": "node dist/uninstall-service.js"
+  },
+  "dependencies": {
+    "node-windows": "^1.0.0-beta.8",
+    "fast-xml-parser": "^4.3.6",
+    "zod": "^3.22.4"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/node-windows": "^0.1.5",
+    "ts-node": "^10.9.2",
+    "typescript": "^5.3.0"
+  }
+}
