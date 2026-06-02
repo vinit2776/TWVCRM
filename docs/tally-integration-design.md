@@ -37,6 +37,33 @@ No more manual export/import between the two systems.
 
 ---
 
+## 2.5 Engineering review decisions (2026-06-02, /plan-eng-review)
+
+Locked during eng review. These refine §2 and govern Phase 1.
+
+| # | Decision | Detail |
+|---|---|---|
+| D1 | **Build Phase 1 first** | Full sync stays the goal; first build = connectivity + one-way sales invoice + recon. Prove the risky 20% before payments/CRN. |
+| D2 | **No-duplicate-invoice** | Deterministic key (billing_statement_id) stamped on the voucher + **check-before-create**: bridge asks Tally if the key exists before posting; on retry it reads back the existing number/IRN. |
+| D3 | **Tally total is authoritative** | Razorpay link is built from Tally's `total_invoice_value`, after issuance. |
+| D4 | **Minimal health for Phase 1** | Local status page + log file + CRM heartbeat card. Defer the packaged tray icon. |
+| D5 | **Verify IRN timing first** | Capture a real sample (voucher + e-invoice response, **plus an error response, a credit-note XML, and a current-company query**) from production Tally before writing the posting/ack code. Confirms sync-vs-async IRN. |
+| D6 | **Own typed XML builder** | One small typed module for party/sales/receipt/CRN. No third-party Tally lib on the money path. |
+| D8 | **Tally computes ALL tax** | CRM sends only taxable values + tax-ledger mapping. CRM never sends tax amounts (prevents line-vs-header mismatch → IRP rejection). |
+| D9 | **Recon report in Phase 1** | Read-only daily diff: CRM invoices vs Tally vouchers vs IRN status (count + total per day), flagging mismatches. The proof the integration is correct. |
+| D10 | **Safety hardenings + no auto-update** | See list below. Bridge self-update **removed from roadmap** (manual update only — unattended box, non-technical operator). |
+
+**D10 hardenings (all Phase 1):**
+1. **Company-GUID guard** — bridge reads the currently-open Tally company GUID and refuses to post unless it matches the configured GSTIN. Prevents wrong-company posts.
+2. **Strict response parser** — require `CREATED=1` + a real voucher GUID; treat `LINEERROR` / embedded soft-errors / `CREATED 0` as failure. Tally returns success-looking XML on partial failures.
+3. **Single-flight bridge + post-write read-back** — exactly one bridge instance posts at a time; after posting, read the voucher back to confirm before acking. Makes check-before-create safe against Tally's non-transactional gateway.
+4. **IRN-aging alarm** — escalate "voucher issued, IRN still missing for N hours" *distinctly* from generic stuck jobs (legal 30-day IRN clock; also surfaces expired IRP credentials inside Tally).
+5. **ALTERID cursor in schema now** — durable high-water mark for Phase 2 manual-receipt reads, added to the Phase 1 schema to avoid a re-migration.
+6. **Two-QR rule** — never obscure the legal IRP verification QR on the PDF; the Razorpay "Pay" QR is added in clear space and labelled "Scan to Pay".
+7. **Per-invoice intra/inter-state ledger selection** — bridge picks CGST/SGST vs IGST ledgers per party (buyer state vs seller state), not from a static map.
+
+---
+
 ## 3. Architecture
 
 ```
@@ -272,13 +299,19 @@ Even though scope is "full sync," build and prove in order — the plumbing is t
 - ✅ Connection test passes on the Tally server (port open).
 - ⏳ Confirm full XML round-trip (company name returned with company loaded).
 
-**Phase 1 — Sales invoices, one-way (CRM → Tally)**
-- Bridge skeleton + auth + queue + **tray icon + heartbeat/health card**.
-- Party master sync.
-- Sales voucher post → invoice number + IRN back → CRM mirror.
-- Razorpay link + pdf-lib QR overlay + send.
-- Status dashboard + alerts.
-- *Gate: a real finalized statement issues a real Tally GST invoice end-to-end.*
+**Phase 1 — Sales invoices, one-way (CRM → Tally)** — refined by eng review
+- Pre-req: capture the production Tally samples per D5 (happy + error + CRN + current-company).
+- Bridge skeleton + agent-token auth + queue (lease/visibility-timeout on claim) + **single-flight**.
+- **Minimal health (D4):** local status page + log file + CRM heartbeat card. (Tray icon deferred.)
+- Party master sync (idempotent).
+- **Company-GUID guard (D10.1)** before any post.
+- Sales voucher post (taxable values only, **Tally computes tax — D8**) → **check-before-create (D2)**
+  → **strict response parse (D10.2)** → post-write read-back (D10.3) → invoice number + IRN back → CRM mirror.
+- **IRN-aging alarm (D10.4)**; intra/inter-state ledger selection (D10.7).
+- Razorpay link from **Tally total (D3)** + pdf-lib QR overlay honouring the **two-QR rule (D10.6)** + send.
+- **Reconciliation report (D9)** — daily CRM-vs-Tally diff.
+- `tally_sync_jobs` schema incl. **ALTERID cursor (D10.5)**.
+- *Gate: a real finalized statement issues a real Tally GST invoice end-to-end, and the recon report shows zero mismatch.*
 
 **Phase 2 — Payments both ways**
 - Online: webhook → receipt voucher to Tally.
@@ -289,15 +322,17 @@ Even though scope is "full sync," build and prove in order — the plumbing is t
 - Void flow emits a Tally CRN; CRM mirrors it.
 
 **Phase 4 — Hardening**
-- Idempotency soak test, failure-injection (Tally off / no internet), reconciliation report,
-  self-update + rollback.
+- Idempotency soak test, failure-injection (Tally off / no internet), packaged tray icon (deferred from P1).
+- 24h-IRN-cancel vs >24h-credit-note distinction for voids (see Phase 3).
+- **Auto-update is removed** — manual update only (unattended box, non-technical operator).
 
 ---
 
 ## 13. Open items — needed from Vinit
 
-1. **Tally version** (Tally Prime release) + a **sample sales-voucher XML import** and an
-   **e-invoice response** from the current setup → pins the exact envelope shape.
+1. **Tally version** (Tally Prime release) + samples from production Tally (D5): a
+   **sales-voucher XML import**, the **e-invoice response**, an **error response**, a
+   **credit-note XML**, and a **current-company query** → pins envelope shape + parser + guard.
 2. **Ledger names** for each income head, tax head, round-off, and party-naming convention.
 3. **Voucher series** Tally uses for GST sales (so `TWV-BS-####` is demoted to internal ref).
 4. **HSN/SAC** — confirm `997212` covers all current billing.
@@ -313,3 +348,72 @@ Even though scope is "full sync," build and prove in order — the plumbing is t
 - Inventory / stock items (TWV is service-only).
 - Multi-GSTIN / multi-entity (single seller GSTIN today).
 - Historical backfill of past invoices into Tally.
+
+**Deferred by eng review (with rationale):**
+- Two-way payments (Door 1 + Door 2) → Phase 2. Reuses Phase-1 plumbing; prove core first.
+- Credit notes / voids → Phase 3. Plus 24h-IRN-cancel vs >24h-CRN distinction.
+- Packaged tray icon → Phase 4. Minimal health (local page + CRM card) suffices for Phase 1.
+- Bridge self-update → **cut entirely.** Manual update only on an unattended, non-technical box.
+
+---
+
+## 15. What already exists (reuse, don't rebuild)
+
+| Sub-problem | Existing code | Plan |
+|---|---|---|
+| Razorpay payment links | proposal/booking link flow | **Reuse** the same helper for invoice links |
+| Payment status tracking | `src/app/api/payments/webhook/route.ts` | **Reuse** webhook for Door 1 (Phase 2) |
+| GST invoice data model | `gst_invoices` + `gst_invoice_items` | **Reuse** as the Tally mirror (not generator) |
+| PDF generation | `pdf-lib` (already a dep) | **Reuse** for the QR overlay — zero new deps |
+| Config store | `app_settings` | **Reuse** for ledger map + agent token ref |
+| Audit trail | `logAudit()` | **Reuse** on all sync mutations |
+| e-invoice scaffolding | `/api/e-invoice/*` | **Park** behind a flag — becomes the mirror |
+
+---
+
+## 16. Failure modes (Phase 1)
+
+| Failure | Test? | Error handling? | User sees? | Verdict |
+|---|---|---|---|---|
+| Lost ack after Tally created voucher | ✅ CRITICAL | check-before-create (D2) | retried, no dup | covered |
+| Async IRN not in first response | ✅ | poll-back (D5) | invoice completes late | covered |
+| Wrong company open in Tally | ✅ | company-GUID guard (D10.1) | job fails + alert | covered |
+| Tally success-looking soft error | ✅ | strict parser (D10.2) | job fails + alert | covered |
+| IRN never issued (no net / IRP creds expired) | ✅ | IRN-aging alarm (D10.4) | distinct alert | covered |
+| Tax line-vs-header mismatch | ✅ | Tally computes all tax (D8) | n/a (prevented) | covered |
+| Silent CRM↔Tally drift | ✅ | recon report (D9) | daily mismatch flag | covered |
+| Bridge crashes mid-job | ✅ | claim lease/visibility-timeout | job re-served | covered |
+
+No remaining critical gaps: every Phase-1 failure mode has a test, error handling, and a
+visible signal (no silent failures).
+
+---
+
+## 17. Parallelization (worktree lanes)
+
+| Lane | Work | Modules | Depends on |
+|---|---|---|---|
+| A | CRM schema + `/api/tally/*` endpoints + recon | `supabase/migrations/`, `src/app/api/tally/` | — |
+| B | Bridge agent (XML builder, poll, post, parse, guard) | external repo / `bridge/` | D5 samples |
+| C | Invoice delivery (link + pdf-lib QR overlay) | `src/lib/`, `src/app/api/billing-statements/` | A (ack fields) |
+
+Execution: **A and B start in parallel** (B blocked only on the D5 samples; until then B
+builds against the mock Tally server). **C waits on A** (needs the ack write-back fields).
+Conflict risk low — A is CRM/DB, B is the external agent, C is delivery. No shared module
+between A and B.
+
+---
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | not run (optional) |
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 11 decisions resolved, 0 critical gaps |
+| Design Review | `/plan-design-review` | UI/UX gaps | 0 | — | n/a (backend/integration) |
+| Outside Voice | Claude subagent | Independent challenge | 1 | issues_found | 15 findings; 5 adopted into plan |
+
+- **OUTSIDE VOICE:** Independent agent surfaced India-GST/Tally specifics. Adopted: tax-ownership (D8), recon-in-Phase-1 (D9), company-GUID guard + strict parser + single-flight/read-back + IRN-aging + ALTERID cursor + two-QR + intra/inter-state ledgers (D10), cut auto-update.
+- **CROSS-MODEL:** One tension (recon timing) — outside voice won; pulled into Phase 1 (D9).
+- **UNRESOLVED:** 0.
+- **VERDICT:** ENG CLEARED — Phase 1 plan locked. Blocked only on D5 sample capture (TODOS.md) before bridge coding.
