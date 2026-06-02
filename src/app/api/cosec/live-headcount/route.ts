@@ -20,13 +20,11 @@ export async function GET(request: NextRequest) {
   const admin = createAdminClient();
 
   // Fetch everyone currently inside, with device + location info
-  let query = admin
+  const { data: rows, error } = await admin
     .from("cosec_presence")
     .select("entity_id, entity_name, user_type, last_entry_at, device:cosec_devices(id, label, location_id, location:locations(id, name))")
     .eq("is_inside", true)
     .order("last_entry_at", { ascending: false });
-
-  const { data: rows, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

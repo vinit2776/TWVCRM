@@ -16,19 +16,17 @@ export async function GET(request: NextRequest) {
   const locationId = request.nextUrl.searchParams.get("location_id");
 
   // Fetch all locations with capacity config
-  let locQuery = admin
+  const locBaseQuery = admin
     .from("locations")
     .select("id, name, capacity_config")
     .order("name");
-  if (locationId) locQuery = locQuery.eq("id", locationId);
-  const { data: locations } = await locQuery;
+  const { data: locations } = await (locationId ? locBaseQuery.eq("id", locationId) : locBaseQuery);
 
   // Fetch everyone currently inside
-  let presenceQuery = admin
+  const { data: presence } = await admin
     .from("cosec_presence")
     .select("entity_id, user_type, device:cosec_devices(location_id)")
     .eq("is_inside", true);
-  const { data: presence } = await presenceQuery;
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const rows = (presence ?? []) as unknown as Array<{
