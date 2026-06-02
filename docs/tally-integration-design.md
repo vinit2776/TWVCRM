@@ -33,6 +33,7 @@ No more manual export/import between the two systems.
 | Link timing | **After Tally issues** the invoice number | Cleanest reference; the real GST number is on the link and PDF. |
 | Sync scope | **Full** — sales invoices, payments (both directions), and credit notes (voids) | Closes the collections loop end to end. |
 | Payment instrument | **Razorpay only** (not Tally's native UPI QR) | Only way the CRM can track and chase the payment. |
+| Local visibility | **Tray icon on the Tally server + health card in the CRM** | Glanceable health on the machine *and* remotely. |
 
 ---
 
@@ -46,9 +47,10 @@ No more manual export/import between the two systems.
  │   + Supabase     │◄────────┤   Agent      ├───────────►┌───────────┐
  │                  │poll/│   │ (Node svc on │            │  Tally    │
  │  /api/tally/*    │ ack │   │  Tally box)  │◄───────────┤  Prime    │
- └──────────────────┘    │   └──────────────┘  IRN / QR  │ + e-inv   │
-                         │         ▲  reads receipts      └───────────┘
-                         │         └── (manual payments) ────┘        │
+ └──────────────────┘    │   └──────┬───────┘  IRN / QR  │ + e-inv   │
+        ▲ heartbeat      │          │ tray icon          └───────────┘
+        │                │      [🟢 systray]                         │
+        └─ health card ──┘                                           │
                          └────────────────────────────────────────────┘
 ```
 
@@ -60,6 +62,7 @@ Windows service (auto-start). It is the only component that talks to Tally. It:
   vouchers, credit notes.
 - **Reads** from Tally via `localhost:9000`: new receipt vouchers (manual payments).
 - **Acks** results back to the CRM (invoice number, IRN, QR, errors).
+- **Shows** a tray icon + sends a heartbeat to the CRM (see §7).
 
 The CRM never connects to Tally directly. The cloud can't reach the office LAN — the
 bridge bridges that gap by reaching *out* to the cloud.
@@ -128,9 +131,78 @@ If a TallyVault password is set, someone unlocks it after a reboot.
 
 ---
 
-## 7. CRM-side changes
+## 7. Health & monitoring
 
-### 7.1 Database (new migration, e.g. `00232_tally_sync.sql`)
+Health is visible in **two places** — on the server and remotely.
+
+### 7.1 On the Tally server — system tray icon
+A coloured dot near the clock, always visible. Click/hover for a status panel:
+
+```
+TWV ↔ Tally Bridge   (v1.0.3)
+──────────────────────────────
+● Tally        Connected (Sree Design… open)
+● CRM          Connected
+  Pending jobs   0
+  Failed jobs    0
+  Last sync      2 min ago
+──────────────────────────────
+[ Test connection ]  [ Retry failed ]  [ Open log ]
+```
+
+| Dot | Meaning | Action |
+|---|---|---|
+| 🟢 Green | Running; Tally + CRM reachable; queue flowing | None |
+| 🟡 Amber | Degraded — Tally company closed, internet down, jobs waiting | Usually self-heals; check Tally is open |
+| 🔴 Red | Service stopped, or jobs **failed** needing attention | Click → see error → fix / Retry |
+
+### 7.2 In the CRM — remote health card
+The bridge sends a **heartbeat** to the CRM every ~60s. The CRM shows a card: "Bridge:
+online, last seen 30s ago, 0 failed." If the heartbeat stops, it flips to "⚠️ Bridge
+offline" and can alert via email/WhatsApp. Lets you confirm health from anywhere.
+
+> The dot/heartbeat prove the **pipe is open**. The deepest proof — "Tally accepted a
+> voucher" — is the invoice status moving to **Issued** on a real invoice. We rely on both.
+
+---
+
+## 8. Local troubleshooting & updates (on the Windows server)
+
+Yes — the bridge is fully serviceable on the server, by you, without needing a developer
+on site for routine issues.
+
+### 8.1 Troubleshooting locally
+- **Logs:** rotating, timestamped plain-text log files at a fixed path; one click from the
+  tray ("Open log"). No PII / secrets written to logs.
+- **On-demand self-test:** the tray's **"Test connection"** button reruns the same checks
+  as the standalone tester — Tally reachable? CRM reachable? — and shows pass/fail.
+- **Service control:** Start / Stop / Restart from Windows **Services** (or the tray).
+- **Plain-English errors:** each failed job shows a human-readable reason + suggested fix
+  (e.g. "Ledger 'Usage Income' not found in Tally — create it or fix the mapping").
+- **Config in one file:** CRM URL, agent token, poll interval, ledger map live in a single
+  local config file; a **"Reload config"** action applies edits without reinstalling.
+- **Export logs for help:** a "Zip logs" action bundles recent logs to send for diagnosis.
+
+### 8.2 Updates / patches
+- **Versioned builds:** the running version shows in the tray (e.g. `v1.0.3`).
+- **Manual update (default):** download the new build, run `update.bat`; it stops the
+  service, swaps files, restarts. Takes seconds. Tally and its data are never touched.
+- **Safe rollback:** the previous version is kept. If a new build fails its startup
+  health-check, it **auto-rolls back** to the last good version.
+- **Assisted/auto-update (optional, later):** the bridge can check the CRM for a newer
+  **approved** version and self-update on a schedule, with the same rollback guard. We'd
+  start manual-first and enable auto only once it's proven.
+- **Remote diagnosis:** with your OK, the bridge can push recent (PII-free) logs to the CRM
+  so issues can be reviewed without remoting into the server.
+
+> Updates change only the bridge agent. They never alter Tally, its company data, or the
+> GST invoices already issued.
+
+---
+
+## 9. CRM-side changes
+
+### 9.1 Database (new migration, e.g. `00232_tally_sync.sql`)
 On `billing_statements` / `gst_invoices`:
 - `tally_sync_status` (`pending` | `posted` | `failed` | `not_applicable`)
 - `tally_voucher_guid` (Tally's voucher reference)
@@ -143,19 +215,23 @@ New table `tally_sync_jobs` (the queue): `id`, `job_type` (`sales` | `receipt` |
 `credit_note` | `party`), `payload`, `status`, `attempts`, `last_error`, `created_at`,
 `completed_at`.
 
-### 7.2 Ledger / Chart-of-Accounts mapping (config in `app_settings`)
+New table `tally_bridge_health` (heartbeat): `last_seen_at`, `version`, `tally_connected`,
+`pending_count`, `failed_count`.
+
+### 9.2 Ledger / Chart-of-Accounts mapping (config in `app_settings`)
 Tally posts to named ledgers. The CRM has none today. Need a configurable map:
 - charge type → Tally **sales ledger** (e.g. "Space Rent Income", "Usage Income")
 - tax → "Output CGST" / "Output SGST" / "Output IGST"
 - round-off → "Round Off"
 - party-ledger naming convention (e.g. company name + GSTIN)
 
-### 7.3 Bridge API endpoints (token-authenticated, not user session)
+### 9.3 Bridge API endpoints (token-authenticated, not user session)
 - `GET  /api/tally/pending` — bridge claims a batch of jobs
 - `POST /api/tally/ack` — write back invoice no. / IRN / QR / voucher GUID, or mark failed
 - `POST /api/tally/payments` — bridge reports manual receipts read from Tally
+- `POST /api/tally/heartbeat` — bridge health ping (drives the §7.2 card)
 
-### 7.4 Behaviour changes
+### 9.4 Behaviour changes
 - **Park** `/api/e-invoice/generate` + `/cancel` (no CRM-side IRN minting).
 - **Razorpay link** created after Tally ack; **pdf-lib overlay** of QR + link onto Tally PDF.
 - **Void → Credit Note:** the existing void flow queues a CRN job to Tally instead of a
@@ -164,38 +240,40 @@ Tally posts to named ledgers. The CRM has none today. Need a configurable map:
 
 ---
 
-## 8. The bridge agent (outside this repo)
+## 10. The bridge agent (outside this repo)
 
 - **Runtime:** Node.js (TypeScript), Windows service via `node-windows` / NSSM.
+- **Tray UI:** small system-tray app (health dot + status panel + buttons).
 - **Builds Tally XML** envelopes: party master, sales, receipt, credit note.
 - **Posts** to `http://localhost:9000`, parses responses (incl. e-invoice block).
 - **Polls** the CRM endpoints on an interval; backoff + retry on failure.
-- **Config:** CRM base URL, agent token, poll interval, ledger map (or fetched from CRM).
-- **Logs** locally + reports status to the CRM dashboard.
+- **Config:** single local file — CRM base URL, agent token, poll interval, ledger map.
+- **Logs** locally (rotating) + heartbeat to the CRM dashboard.
+- **Self-update** with rollback (§8.2).
 
 ---
 
-## 9. Security
+## 11. Security
 
 - Tally gateway is unauthenticated → **firewall it to localhost / office LAN only**.
 - Bridge ↔ CRM authenticated with a **dedicated agent token** (rotate-able), not a user
   session, scoped to the `/api/tally/*` routes only.
 - No Tally credentials are stored anywhere in the CRM.
 - All bridge↔CRM traffic over **HTTPS**.
-- Webhook signature verification on Razorpay stays as-is.
+- Logs are PII-free; webhook signature verification on Razorpay stays as-is.
 
 ---
 
-## 10. Phased rollout
+## 12. Phased rollout
 
 Even though scope is "full sync," build and prove in order — the plumbing is the risky 80%.
 
-**Phase 0 — Connectivity (DONE-ish)**
+**Phase 0 — Connectivity**
 - ✅ Connection test passes on the Tally server (port open).
 - ⏳ Confirm full XML round-trip (company name returned with company loaded).
 
 **Phase 1 — Sales invoices, one-way (CRM → Tally)**
-- Bridge skeleton + auth + queue.
+- Bridge skeleton + auth + queue + **tray icon + heartbeat/health card**.
 - Party master sync.
 - Sales voucher post → invoice number + IRN back → CRM mirror.
 - Razorpay link + pdf-lib QR overlay + send.
@@ -211,11 +289,12 @@ Even though scope is "full sync," build and prove in order — the plumbing is t
 - Void flow emits a Tally CRN; CRM mirrors it.
 
 **Phase 4 — Hardening**
-- Idempotency soak test, failure-injection (Tally off / no internet), reconciliation report.
+- Idempotency soak test, failure-injection (Tally off / no internet), reconciliation report,
+  self-update + rollback.
 
 ---
 
-## 11. Open items — needed from Vinit
+## 13. Open items — needed from Vinit
 
 1. **Tally version** (Tally Prime release) + a **sample sales-voucher XML import** and an
    **e-invoice response** from the current setup → pins the exact envelope shape.
@@ -228,7 +307,7 @@ Even though scope is "full sync," build and prove in order — the plumbing is t
 
 ---
 
-## 12. Out of scope (for now)
+## 14. Out of scope (for now)
 
 - Purchase / vendor bill sync into Tally (procurement side).
 - Inventory / stock items (TWV is service-only).
