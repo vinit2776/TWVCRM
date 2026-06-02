@@ -200,16 +200,16 @@ ALTER TABLE gst_invoices
 -- 5. app_settings seed — ledger mapping config keys
 --    Actual values to be filled by admin once Tally ledger names are confirmed.
 -- ─────────────────────────────────────────────────────────────────────────────
-INSERT INTO app_settings (key, value, description) VALUES
-  ('tally_ledger_rent_income',    '',   'Tally ledger name for space rent income'),
-  ('tally_ledger_usage_income',   '',   'Tally ledger name for usage/ad-hoc income'),
-  ('tally_ledger_cgst_output',    '',   'Tally ledger name for Output CGST'),
-  ('tally_ledger_sgst_output',    '',   'Tally ledger name for Output SGST'),
-  ('tally_ledger_igst_output',    '',   'Tally ledger name for Output IGST'),
-  ('tally_ledger_round_off',      '',   'Tally ledger name for round-off'),
-  ('tally_party_ledger_suffix',   '',   'Suffix appended to company name for party ledger (e.g. blank or GSTIN)'),
-  ('tally_company_gstin',         '33AAACU4245J1ZF', 'Seller GSTIN — bridge refuses to post if Tally''s open company doesn''t match'),
-  ('tally_voucher_series',        '',   'Tally voucher series for GST sales (e.g. "Sales")'),
-  ('tally_sync_enabled',          'false', 'Master switch — set to true once bridge is live and tested'),
-  ('tally_irn_alarm_hours',       '4',  'Alert if IRN is missing N hours after voucher was created in Tally')
+INSERT INTO app_settings (key, value) VALUES
+  ('tally_ledger_rent_income',    ''),
+  ('tally_ledger_usage_income',   ''),
+  ('tally_ledger_cgst_output',    ''),
+  ('tally_ledger_sgst_output',    ''),
+  ('tally_ledger_igst_output',    ''),
+  ('tally_ledger_round_off',      ''),
+  ('tally_party_ledger_suffix',   ''),
+  ('tally_company_gstin',         '33AAACU4245J1ZF'),
+  ('tally_voucher_series',        ''),
+  ('tally_sync_enabled',          'false'),
+  ('tally_irn_alarm_hours',       '4')
 ON CONFLICT (key) DO NOTHING;
