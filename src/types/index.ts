@@ -67,7 +67,8 @@ export type LeadStatus =
   | "proposal_sent"
   | "negotiating"
   | "won"
-  | "lost";
+  | "lost"
+  | "junk";
 
 export type LeadSource =
   | "meta_ads"

@@ -29,6 +29,7 @@ export const LEAD_STATUSES = [
   "negotiating",
   "won",
   "lost",
+  "junk",
 ] as const;
 
 /**
@@ -45,12 +46,15 @@ export const SYSTEM_LEAD_STATUSES = [
 
 /**
  * Statuses a sales rep can set manually in the lead edit form.
+ * "junk" marks leads that are spam, duplicates, or have invalid contact
+ * details — they are captured for tracking but hidden from the active pipeline.
  */
 export const MANUAL_LEAD_STATUSES = [
   "new",
   "contacted",
   "negotiating",
   "lost",
+  "junk",
 ] as const;
 
 export const LEAD_STATUS_LABELS: Record<string, string> = {
@@ -62,6 +66,7 @@ export const LEAD_STATUS_LABELS: Record<string, string> = {
   negotiating: "Negotiating",
   won: "Won",
   lost: "Lost",
+  junk: "Junk",
 };
 
 export const LEAD_STATUS_COLORS: Record<string, string> = {
@@ -73,6 +78,7 @@ export const LEAD_STATUS_COLORS: Record<string, string> = {
   negotiating: "bg-orange-100 text-orange-800",
   won: "bg-green-100 text-green-800",
   lost: "bg-red-100 text-red-800",
+  junk: "bg-zinc-100 text-zinc-500",
 };
 
 export const LEAD_SOURCES = [
