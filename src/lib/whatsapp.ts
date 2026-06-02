@@ -25,6 +25,7 @@
  *   billing_statement_ready — "Hi {{1}}, your billing statement {{2}} for {{3}} is ready. – TWV"
  *   payment_reminder       — "Reminder: Invoice {{1}} for {{2}} is due on {{3}}. – TWV"
  *   internal_new_lead      — "New lead: {{1}} ({{2}}). Source: {{3}}. Open CRM to follow up."
+ *   access_denied          — "Hi {{1}}, your access at {{2}} was denied at {{4}} (Reason: {{3}}). Please contact us if you need help. – The Work Villa"
  */
 
 import { createAdminClient } from "@/lib/supabase/server";

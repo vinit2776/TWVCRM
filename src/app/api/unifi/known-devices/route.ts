@@ -15,6 +15,8 @@ interface UnifiKnownDevice {
   last_seen?: number;
   oui?: string;
   noted?: boolean;
+  blocked?: boolean;
+  is_guest?: boolean;
 }
 
 function anonymizeMac(mac: string): string {
@@ -69,9 +71,12 @@ export async function GET(request: NextRequest) {
       mac: isAdmin ? d.mac : anonymizeMac(d.mac),
       hostname: d.hostname ?? null,
       name: d.name ?? null,
-      last_seen: d.last_seen ?? null,
+      // UniFi returns Unix seconds; convert to ISO string for formatDate()
+      last_seen: d.last_seen ? new Date(d.last_seen * 1000).toISOString() : null,
       oui: d.oui ?? null,
       noted: d.noted ?? false,
+      blocked: d.blocked ?? false,
+      is_guest: d.is_guest ?? false,
     }));
 
     return NextResponse.json({ data, total });

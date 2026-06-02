@@ -12,7 +12,7 @@ import {
   Wifi, WifiOff, Loader2, ArrowLeft, ShieldCheck, ShieldOff,
   Fingerprint, CreditCard, Clock, DoorOpen, RefreshCw,
   LogIn, LogOut, Ban, BarChart3, Users, AlertTriangle, TrendingUp,
-  MonitorSmartphone, CheckCircle2, XCircle,
+  MonitorSmartphone, CheckCircle2, XCircle, Download, FastForward,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import {
@@ -167,6 +167,11 @@ export default function CosecDeviceDetailPage() {
   const [selectedContract, setSelectedContract] = useState<string>("");
   const [linking, setLinking]                 = useState(false);
   const [syncing, setSyncing]                 = useState(false);
+
+  // Poll-now / skip-history state
+  const [polling, setPolling]                 = useState(false);
+  const [pollResult, setPollResult]           = useState<{ eventsFound: number; logsWritten: number; newSeqNumber: number; skippedHistory: boolean } | null>(null);
+  const [skipping, setSkipping]               = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -464,6 +469,63 @@ export default function CosecDeviceDetailPage() {
     } finally { setPinging(false); }
   }
 
+  async function handlePollNow() {
+    setPolling(true);
+    setPollResult(null);
+    try {
+      const res = await fetch("/api/cosec/poll-now", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_id: id, skip_history: false }),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        toast.error(result.error ?? "Poll failed");
+      } else {
+        setPollResult(result);
+        if (result.eventsFound === 0) {
+          toast.success("Device is up to date — no new events");
+        } else {
+          toast.success(`Fetched ${result.eventsFound} events, wrote ${result.logsWritten} log entries`);
+        }
+        await load();
+      }
+    } catch {
+      toast.error("Network error — could not reach server");
+    } finally {
+      setPolling(false);
+    }
+  }
+
+  async function handleSkipHistory() {
+    if (!confirm("This will fast-forward the sync cursor past all historical events. Future polls will only fetch new events from this point. Continue?")) return;
+    setSkipping(true);
+    setPollResult(null);
+    try {
+      const res = await fetch("/api/cosec/poll-now", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_id: id, skip_history: true }),
+      });
+      const result = await res.json();
+      if (!res.ok) {
+        toast.error(result.error ?? "Skip failed");
+      } else {
+        setPollResult(result);
+        toast.success(
+          result.exhausted
+            ? `Cursor advanced to seq #${result.newSeqNumber} — device is now fully drained`
+            : `Advanced by ${result.eventsFound} events to seq #${result.newSeqNumber} — run again to continue draining`,
+        );
+        await load();
+      }
+    } catch {
+      toast.error("Network error — could not reach server");
+    } finally {
+      setSkipping(false);
+    }
+  }
+
   async function handleSetDeviceCategory(category: "entry_point" | "business_centre") {
     if (!device || device.device_category === category) return;
     const { error } = await supabase.from("cosec_devices").update({ device_category: category }).eq("id", id);
@@ -631,8 +693,16 @@ export default function CosecDeviceDetailPage() {
             </p>
             <div className="flex flex-wrap gap-4 mt-1 text-xs text-muted-foreground">
               {device.last_ping_at    && <span>Ping: {formatDate(device.last_ping_at)}</span>}
-              {device.last_polled_at  && <span>Last sync: {formatDate(device.last_polled_at)}</span>}
+              {device.last_polled_at
+                ? <span>Last sync: {formatDate(device.last_polled_at)}</span>
+                : <span className="text-amber-600 font-medium">⚠ Never synced — cron may not be reaching device</span>
+              }
               <span>Seq #{device.last_seq_number}</span>
+              {pollResult && (
+                <span className="text-green-600 font-medium">
+                  ✓ +{pollResult.logsWritten} logs{pollResult.skippedHistory ? ` (cursor → #${pollResult.newSeqNumber})` : ""}
+                </span>
+              )}
             </div>
             {pingResult && (
               <p className={`text-xs font-medium mt-1 ${pingResult.ok ? "text-green-600" : "text-red-500"}`}>
@@ -641,12 +711,18 @@ export default function CosecDeviceDetailPage() {
             )}
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 flex-wrap">
           <Button size="sm" variant="outline" onClick={handlePing} disabled={pinging}>
             {pinging ? <Loader2 size={14} className="animate-spin mr-1" /> : <Wifi size={14} className="mr-1" />}Ping
           </Button>
           <Button size="sm" variant="outline" onClick={handleOpenDoor} disabled={openingDoor}>
             {openingDoor ? <Loader2 size={14} className="animate-spin mr-1" /> : <DoorOpen size={14} className="mr-1" />}Open Door
+          </Button>
+          <Button size="sm" variant="outline" onClick={handlePollNow} disabled={polling || skipping} title="Fetch next 100 events from device now, without waiting for the 5-minute cron">
+            {polling ? <Loader2 size={14} className="animate-spin mr-1" /> : <Download size={14} className="mr-1" />}Poll Now
+          </Button>
+          <Button size="sm" variant="outline" onClick={handleSkipHistory} disabled={polling || skipping} title="Fast-forward cursor past old historical events so future polls only fetch new events" className="text-amber-600 border-amber-300 hover:bg-amber-50">
+            {skipping ? <Loader2 size={14} className="animate-spin mr-1" /> : <FastForward size={14} className="mr-1" />}Skip History
           </Button>
         </div>
       </div>

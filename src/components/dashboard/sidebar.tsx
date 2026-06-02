@@ -54,6 +54,7 @@ import {
   CalendarCheck,
   FileSpreadsheet,
   BadgeIndianRupee,
+  Flame,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -180,6 +181,7 @@ const navSections: NavSection[] = [
       { href: "/admin/cosec-access",     label: "Access Enrollments",  icon: ShieldCheck,   roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },
       { href: "/admin/access-profiles",  label: "Access Profiles",     icon: ShieldCheck,   roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },
       { href: "/admin/access-analytics", label: "Access Analytics",    icon: BarChart3Icon, roles: ["admin", "manager", "fms", "it_manager", "it_technician"] },
+      { href: "/admin/live-headcount",   label: "Live Headcount",      icon: Flame,         roles: ["admin", "manager", "fms", "floor_manager", "office_admin"] },
     ],
   },
   {
