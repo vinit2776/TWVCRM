@@ -10,6 +10,7 @@ import { cachedUnifiRequest, siteConfigFromLocation } from "@/lib/unifi";
 
 interface UnifiDevice {
   _id: string;
+  mac?: string;
   name?: string;
   model?: string;
   type?: string;
@@ -63,6 +64,7 @@ export async function GET(request: NextRequest) {
 
     const data = devices.map((d) => ({
       _id: d._id,
+      mac: d.mac ?? null,
       name: d.name ?? null,
       model: d.model ?? null,
       type: d.type ?? null,
