@@ -26,6 +26,7 @@ const STATUS_ORDER: Record<LeadStatus, number> = {
   negotiating: 5,
   won: 6,
   lost: 6,
+  junk: -1,
 };
 
 /** Badge text shown on the single active step — reflects actual current status */

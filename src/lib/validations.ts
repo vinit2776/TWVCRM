@@ -23,6 +23,7 @@ export const createLeadSchema = z.object({
     "negotiating",
     "won",
     "lost",
+    "junk",
   ]),
   source: z.enum([
     "meta_ads",
@@ -91,7 +92,7 @@ export const importLeadSchema = z.object({
   secondary_email: z.string().email("Invalid email").optional().or(z.literal("")),
   status: z.enum([
     "new", "contacted", "tour_scheduled", "tour_completed",
-    "proposal_sent", "negotiating", "won", "lost",
+    "proposal_sent", "negotiating", "won", "lost", "junk",
   ]).default("new"),
   source: z.enum([
     "meta_ads", "google_ads", "direct_walkin", "online_form", "referral",
