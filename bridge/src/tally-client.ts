@@ -88,28 +88,19 @@ export class TallyClient {
     }
   }
 
-  /** Get the currently open company name and GSTIN from Tally (D10.1 guard). */
+  /** Get the currently open company name from Tally (D10.1 guard).
+   *  Uses the same "List of Companies" collection as ping() — proven to work.
+   *  GSTIN is read from config (not Tally) until D5 samples confirm the right query.
+   */
   async getCurrentCompany(): Promise<TallyCompanyInfo | null> {
-    // ── D5 TODO ──────────────────────────────────────────────────────────────
-    // Replace this skeleton with the exact XML once D5 sample is captured.
-    // We need: (1) the TDL query to read $$CurrentCompany, and (2) how Tally
-    // returns the company's GSTIN field in its XML response.
-    //
-    // Until D5 samples are available, this returns a placeholder so the
-    // bridge can be tested against the mock Tally server.
-    //
-    // Capture from your Tally server:
-    //   1. Open Tally → F12 → Gateway of Tally is active
-    //   2. POST the XML below to http://localhost:9000
-    //   3. Save the full XML response as bridge/samples/current-company-response.xml
-    // ─────────────────────────────────────────────────────────────────────────
     try {
+      // Reuse the exact XML from ping() / connection tester — already verified working.
       const xml = `<ENVELOPE>
   <HEADER>
     <VERSION>1</VERSION>
     <TALLYREQUEST>Export</TALLYREQUEST>
-    <TYPE>Data</TYPE>
-    <ID>GetCurrentCompany</ID>
+    <TYPE>Collection</TYPE>
+    <ID>List of Companies</ID>
   </HEADER>
   <BODY>
     <DESC>
@@ -118,25 +109,10 @@ export class TallyClient {
       </STATICVARIABLES>
       <TDL>
         <TDLMESSAGE>
-          <REPORT NAME="GetCurrentCompany" ISMODIFY="No">
-            <FORM NAME="GetCurrentCompany"/>
-          </REPORT>
-          <FORM NAME="GetCurrentCompany">
-            <PART NAME="GetCurrentCompany"/>
-          </FORM>
-          <PART NAME="GetCurrentCompany">
-            <LINE NAME="GetCurrentCompany"/>
-          </PART>
-          <LINE NAME="GetCurrentCompany">
-            <FIELD NAME="CmpName"/>
-            <FIELD NAME="CmpGSTIN"/>
-          </LINE>
-          <FIELD NAME="CmpName">
-            <SET>$$CurrentCompany</SET>
-          </FIELD>
-          <FIELD NAME="CmpGSTIN">
-            <SET>$GSTREGISTRATIONDETAILS.GSTIN:Company:$$CurrentCompany</SET>
-          </FIELD>
+          <COLLECTION NAME="List of Companies" ISMODIFY="No">
+            <TYPE>Company</TYPE>
+            <NATIVEMETHOD>Name</NATIVEMETHOD>
+          </COLLECTION>
         </TDLMESSAGE>
       </TDL>
     </DESC>
@@ -144,18 +120,20 @@ export class TallyClient {
 </ENVELOPE>`;
 
       const res = await this.post(xml);
-      const parsed = parser.parse(res) as Record<string, unknown>;
 
-      // ── D5 TODO ────────────────────────────────────────────────────────────
-      // Parse the actual field names from D5 sample response.
-      // The field paths below are best-estimate; verify against real response.
-      // ──────────────────────────────────────────────────────────────────────
-      const envelope = parsed["ENVELOPE"] as Record<string, unknown> | undefined;
-      const name  = String((envelope?.["CMPNAME"] as string | undefined) ?? "").trim();
-      const gstin = String((envelope?.["CMPGSTIN"] as string | undefined) ?? "").trim();
+      // Parse <NAME> tags from the List of Companies response
+      // Same approach as the connection tester (scripts/tally-connection-test/)
+      const names = [...res.matchAll(/<NAME>(.*?)<\/NAME>/gs)]
+        .map(m => m[1].trim())
+        .filter(Boolean);
 
+      const name = names[0] ?? "";
       if (!name) return null;
-      return { name, gstin };
+
+      // GSTIN: not available from this query — use empty string.
+      // The poller's GSTIN guard only fires when gstin is non-empty,
+      // so this safely skips the check until D5 samples confirm the right query.
+      return { name, gstin: "" };
     } catch (err) {
       log.error(`getCurrentCompany failed: ${String(err)}`);
       return null;
