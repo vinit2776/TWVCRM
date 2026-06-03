@@ -266,3 +266,54 @@ No silent-failure critical gaps remain.
 - **CROSS-MODEL:** no tension — outside voice was additive, not contradictory.
 - **UNRESOLVED:** 0.
 - **VERDICT:** ENG CLEARED — Phase 1 backend plan locked. Build order: guards+stamp → dispatchTallyInvoice+total-mirror → sweep crons. Blocked only on D4 B2B-IRN sample before the IRP QR.
+
+---
+
+## 15. SCOPE CORRECTION (authoritative — supersedes §3 routing breadth & §6 guard table)
+
+**The only change is the GST-invoice GENERATION engine: Tally instead of CRM. The
+Proforma flow and the per-contract mode choice are untouched.**
+
+### What the switch actually controls
+`tally_sync_enabled` decides **where a GST tax invoice is generated** (Tally vs CRM) —
+NOT whether there's a PI. The per-contract `billing_mode` (`proforma_first` | `gst_direct`)
+**stays, selectable on every contract.** Two independent axes.
+
+### Untouched (CRM, exactly as built)
+- `dispatchProforma` (PI issuance), the PI's Razorpay link, PI payment, PI dunning.
+- Per-contract `proforma_first` vs `gst_direct` selection.
+- PI→GST conversion *trigger* logic (`convert-to-gst-early`, webhook-on-PI-paid).
+
+### The swap: 3 GST-generation entry points → Tally (when sync ON)
+| Entry point | Today (CRM) | Under Tally |
+|---|---|---|
+| `dispatchGstDirect` (gst_direct, at finalize) | mints CRM GST # + PDF + link + send | enqueue Tally → voucher → number/IRN → `dispatchTallyInvoice` (unpaid: + link + dunning) |
+| `generate-gst-invoice` (proforma_first, after PI paid; or manual) | mints CRM GST # + PDF | enqueue Tally → voucher → `dispatchTallyInvoice` (PAID tax doc, **no new link**) |
+| `convert-to-gst-early` (PI→GST before payment) | mints CRM GST # + PDF | enqueue Tally → voucher → `dispatchTallyInvoice` (unpaid: + link + dunning) |
+
+The webhook auto-trigger needs no separate guard — it calls `generate-gst-invoice`, which
+routes to Tally internally.
+
+### Enqueue trigger MOVES: finalize → GST-generation moment
+Today `enqueueTallySalesVoucher` fires at finalize (wrong for proforma_first, where GST
+comes after PI payment). **Remove the finalize enqueue; enqueue at the 3 entry points
+above** when sync ON. Stamp `issuance_channel='tally'` there (D2).
+
+### dispatchTallyInvoice — paid vs unpaid (mirrors existing dispatchGstDirect/generate-gst-invoice)
+- **proforma_first (PI already paid):** Tally GST invoice = a **paid** tax document.
+  Deliver the PDF; **no new Razorpay link, no dunning** (already collected).
+- **gst_direct / convert-to-gst-early (unpaid):** Tally GST invoice + Razorpay link;
+  set `due_date` at delivery; dunning chases (OV1 predicate applies here only).
+
+### Revised guard set (smaller than §6.1)
+1. **3 GST-generation entry points** → redirect to Tally enqueue (not CRM mint) when sync ON.
+2. `payment-reminder` cron → only chase **delivered, unpaid** Tally GST invoices (OV1) —
+   PI dunning unchanged.
+3. Void of a Tally-issued statement → blocked (D5).
+4. `dispatchProforma` → **NOT guarded** (PI stays CRM).
+Decisions D2/D3/D4/D6, OV3/OV4/OV5/OV6/OV7 all still apply at the GST-generation/delivery layer.
+
+### Build order (revised, Phase 1)
+1. Move enqueue to the 3 GST-gen entry points + stamp `issuance_channel`; remove finalize enqueue.
+2. `dispatchTallyInvoice` (paid-vs-unpaid) + `total_amount` mirror (OV3) + delivered-once (D3).
+3. OV1 reminder predicate; void block (D5); sweep crons (OV4/OV5).
