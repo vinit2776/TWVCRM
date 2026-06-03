@@ -22,6 +22,9 @@ export interface PendingResponse {
   tally_company_gstin:  string;
   lease_seconds:        number;
   reason?:              string;
+  message?:             string;
+  locked_company?:      string;
+  detected_company?:    string;
 }
 
 export interface AckSuccess {
@@ -79,9 +82,9 @@ export class CrmClient {
     };
   }
 
-  private async fetch<T>(path: string, options?: RequestInit): Promise<T> {
+  private async fetch<T>(path: string, options?: RequestInit, extraHeaders?: Record<string, string>): Promise<T> {
     const url = `${this.baseUrl}${path}`;
-    const res = await fetch(url, { ...options, headers: this.headers() });
+    const res = await fetch(url, { ...options, headers: { ...this.headers(), ...extraHeaders } });
     if (res.status === 401) throw new Error("CRM rejected agent token (401). Check TALLY_AGENT_TOKEN in Vercel env.");
     if (!res.ok) {
       const body = await res.text().catch(() => "");
@@ -90,9 +93,14 @@ export class CrmClient {
     return res.json() as Promise<T>;
   }
 
-  /** Poll for pending jobs. Returns empty array when queue is clear. */
-  async getPending(): Promise<PendingResponse> {
-    return this.fetch<PendingResponse>("/api/tally/pending");
+  /** Poll for pending jobs. Sends the currently-open Tally company so the CRM
+   *  can enforce the wrong-company guard server-side. */
+  async getPending(detectedCompany: string | null): Promise<PendingResponse> {
+    return this.fetch<PendingResponse>(
+      "/api/tally/pending",
+      undefined,
+      detectedCompany ? { "x-tally-company": detectedCompany } : undefined
+    );
   }
 
   /** Ack a job (success or failure). */

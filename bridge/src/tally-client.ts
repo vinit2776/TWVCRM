@@ -123,7 +123,7 @@ export class TallyClient {
 
       // Parse <NAME> tags from the List of Companies response
       // Same approach as the connection tester (scripts/tally-connection-test/)
-      const names = [...res.matchAll(/<NAME>(.*?)<\/NAME>/gs)]
+      const names = [...res.matchAll(/<NAME>([\s\S]*?)<\/NAME>/g)]
         .map(m => m[1].trim())
         .filter(Boolean);
 

@@ -47,18 +47,35 @@ export async function GET(request: NextRequest) {
     .eq("status", "claimed")
     .lt("lease_expires_at", now.toISOString());
 
-  // Check master switch
+  // Check master switch + company lock
   const { data: settings } = await supabase
     .from("app_settings")
     .select("key, value")
-    .in("key", ["tally_sync_enabled", "tally_company_gstin"]);
+    .in("key", ["tally_sync_enabled", "tally_company_gstin", "tally_locked_company"]);
 
   const settingsMap = Object.fromEntries(
     (settings ?? []).map((s: { key: string; value: string }) => [s.key, s.value])
   );
 
   if (settingsMap["tally_sync_enabled"] !== "true") {
-    return NextResponse.json({ jobs: [], reason: "tally_sync_disabled" });
+    return NextResponse.json({ jobs: [], reason: "tally_sync_paused" });
+  }
+
+  // ── Company guard (D10.1, enforced server-side) ──────────────────────────────
+  // The bridge reports the currently-open Tally company via x-tally-company.
+  // If a company is locked and the open company doesn't match, refuse to serve
+  // jobs — this prevents posting invoices into the wrong company's books.
+  const lockedCompany   = (settingsMap["tally_locked_company"] ?? "").trim();
+  const detectedCompany = (request.headers.get("x-tally-company") ?? "").trim();
+
+  if (lockedCompany && detectedCompany && lockedCompany !== detectedCompany) {
+    return NextResponse.json({
+      jobs: [],
+      reason: "company_mismatch",
+      locked_company: lockedCompany,
+      detected_company: detectedCompany,
+      message: `Sync blocked: locked to "${lockedCompany}" but Tally has "${detectedCompany}" open.`,
+    });
   }
 
   // Claim a batch atomically: select then update

@@ -45,7 +45,7 @@ export class Poller {
   }
 
   private async runCycle(): Promise<void> {
-    // ── D10.1 Company GSTIN guard ─────────────────────────────────────────────
+    // Read the currently-open Tally company (drives the server-side guard).
     const company = await this.tally.getCurrentCompany();
     if (!company) {
       log.warn("Tally not reachable or no company loaded — skipping poll");
@@ -59,19 +59,26 @@ export class Poller {
     healthState.tallyCompanyName  = company.name;
     healthState.tallyCompanyGstin = company.gstin;
 
-    if (company.gstin && company.gstin !== this.config.tally_company_gstin) {
-      log.error(
-        `GSTIN MISMATCH — expected ${this.config.tally_company_gstin}, ` +
-        `Tally has ${company.gstin} (${company.name}). ` +
-        `Refusing to post until the correct company is loaded.`
-      );
-      healthState.lastError = `Wrong company open: ${company.name} (${company.gstin})`;
+    // ── Company guard (D10.1) — now enforced by the CRM ───────────────────────
+    // We send the open company name to /pending. The CRM compares it to the
+    // company locked on the Tally Sync Control page and refuses to serve jobs
+    // on mismatch. This keeps the lock controllable from the admin UI.
+    const { jobs, tally_company_gstin, reason, message } =
+      await this.crm.getPending(company.name);
+    healthState.pendingCount = jobs.length;
+
+    if (reason === "company_mismatch") {
+      log.error(message ?? "Sync blocked: wrong company open in Tally");
+      healthState.lastError = message ?? "Wrong company open in Tally";
       return;
     }
-
-    // ── Fetch pending jobs ────────────────────────────────────────────────────
-    const { jobs, tally_company_gstin } = await this.crm.getPending();
-    healthState.pendingCount = jobs.length;
+    if (reason === "tally_sync_paused") {
+      log.debug("Sync paused from the control page — not processing");
+      healthState.lastError = null;
+      return;
+    }
+    // Healthy poll — clear any prior mismatch/error
+    healthState.lastError = null;
 
     if (jobs.length === 0) {
       log.debug("No pending jobs");
