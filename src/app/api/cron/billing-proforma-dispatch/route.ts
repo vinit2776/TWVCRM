@@ -46,14 +46,23 @@ export async function GET(request: NextRequest) {
 
   const adminSupabase = createAdminClient();
 
-  // Fetch all finalized statements that haven't had proforma sent and no GST invoice yet
+  // Batch size: process at most 30 statements per cron run to stay well within
+  // Vercel's 60 s maxDuration. Each self-call takes ~1-2 s (Razorpay + Resend).
+  // Remaining unsent statements are picked up on the next cron run.
+  const BATCH_SIZE = 30;
+  // Max concurrent dispatch calls — keeps wall-clock time low without
+  // hammering Razorpay/Resend simultaneously.
+  const CONCURRENCY = 5;
+
+  // Fetch finalized statements that haven't had proforma sent (bounded)
   const { data: statements, error } = await adminSupabase
     .from("billing_statements")
     .select("id, statement_number, contract_id")
     .eq("status", "finalized")
     .is("proforma_sent_at", null)
     .is("gst_invoice_number", null)
-    .not("contract_id", "is", null); // only contract-linked statements
+    .not("contract_id", "is", null) // only contract-linked statements
+    .limit(BATCH_SIZE);
 
   if (error) {
     console.error("[proforma-dispatch] Failed to fetch statements:", error);
@@ -70,27 +79,34 @@ export async function GET(request: NextRequest) {
 
   const results: Array<{ id: string; number: string; ok: boolean; result?: unknown; error?: string }> = [];
 
-  for (const stmt of statements) {
-    try {
-      const res = await fetch(`${appUrl}/api/billing-statements/${stmt.id}/send-proforma`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-internal-secret": cronSecret,
-        },
-        body: JSON.stringify({ skipAuth: true }),
-      });
+  // Process in concurrent batches of CONCURRENCY to reduce total wall-clock time
+  // while avoiding overwhelming external APIs (Razorpay, Resend, MSG91).
+  for (let i = 0; i < statements.length; i += CONCURRENCY) {
+    const batch = statements.slice(i, i + CONCURRENCY);
+    const batchResults = await Promise.all(
+      batch.map(async (stmt) => {
+        try {
+          const res = await fetch(`${appUrl}/api/billing-statements/${stmt.id}/send-proforma`, {
+            method: "POST",
+            headers: {
+              "Content-Type": "application/json",
+              "x-internal-secret": cronSecret,
+            },
+            body: JSON.stringify({ skipAuth: true }),
+          });
 
-      const json = await res.json().catch(() => ({}));
-      results.push({ id: stmt.id, number: stmt.statement_number, ok: res.ok, result: json });
-
-      if (!res.ok) {
-        console.error(`[proforma-dispatch] Failed for ${stmt.statement_number}:`, json);
-      }
-    } catch (err) {
-      console.error(`[proforma-dispatch] Error for ${stmt.statement_number}:`, err);
-      results.push({ id: stmt.id, number: stmt.statement_number, ok: false, error: String(err) });
-    }
+          const json = await res.json().catch(() => ({}));
+          if (!res.ok) {
+            console.error(`[proforma-dispatch] Failed for ${stmt.statement_number}:`, json);
+          }
+          return { id: stmt.id, number: stmt.statement_number, ok: res.ok, result: json };
+        } catch (err) {
+          console.error(`[proforma-dispatch] Error for ${stmt.statement_number}:`, err);
+          return { id: stmt.id, number: stmt.statement_number, ok: false, error: String(err) };
+        }
+      })
+    );
+    results.push(...batchResults);
   }
 
   await pingCronHealth("billing-proforma-dispatch");
