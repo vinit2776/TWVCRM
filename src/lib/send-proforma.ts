@@ -15,6 +15,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
+import { getCachedSettings } from "@/lib/app-settings-cache";
 import QRCode from "qrcode";
 
 /** Per-call timeout (ms) for outbound HTTP and the Resend SDK send. A single
@@ -113,15 +114,17 @@ export async function dispatchProforma(
   const totalAmount = subtotal + taxAmount;
   const proformaRef = statement.statement_number as string;
 
-  // ── Fetch UPI ID from app_settings ───────────────────────────────────────
-  let upiId: string | undefined;
-  try {
-    const { data: settings } = await adminSupabase
-      .from("app_settings").select("key, value").eq("key", "upi_id");
-    const settingsMap: Record<string, string> = {};
-    (settings || []).forEach((s: { key: string; value: string }) => { settingsMap[s.key] = s.value; });
-    upiId = settingsMap.upi_id;
-  } catch { /* non-blocking */ }
+  // ── Fetch UPI ID and Razorpay keys from app_settings (single cached call) ─
+  const appSettings = await getCachedSettings(adminSupabase, [
+    "upi_id",
+    "razorpay_key_id",
+    "razorpay_key_secret",
+    "razorpay_enabled",
+  ]);
+  const upiId = appSettings["upi_id"] ?? undefined;
+  const rzpKeyId = appSettings["razorpay_key_id"];
+  const rzpKeySecret = appSettings["razorpay_key_secret"];
+  const rzpEnabled = appSettings["razorpay_enabled"] === "true";
 
   // ── Create or reuse Razorpay payment link ───────────────────────────────
   let razorpayLinkId: string | null = (statement.razorpay_payment_link_id as string | null) || null;
@@ -129,14 +132,8 @@ export async function dispatchProforma(
 
   if (!razorpayLinkId) {
     try {
-      const { data: rzpSettings } = await adminSupabase
-        .from("app_settings").select("key, value")
-        .in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret"]);
-      const rzpMap: Record<string, string> = {};
-      (rzpSettings || []).forEach((s: { key: string; value: string }) => { rzpMap[s.key] = s.value; });
-
-      if (rzpMap.razorpay_enabled === "true" && rzpMap.razorpay_key_id && rzpMap.razorpay_key_secret) {
-        const auth = Buffer.from(`${rzpMap.razorpay_key_id}:${rzpMap.razorpay_key_secret}`).toString("base64");
+      if (rzpEnabled && rzpKeyId && rzpKeySecret) {
+        const auth = Buffer.from(`${rzpKeyId}:${rzpKeySecret}`).toString("base64");
         const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
         const customerName = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Customer";
 
@@ -498,24 +495,24 @@ export async function dispatchGstDirect(
   const seqNum = (existingCount || 0) + 1;
   const invoiceNumber = `${fyPrefix}${String(seqNum).padStart(4, "0")}`;
 
-  // ── Fetch UPI ID ──────────────────────────────────────────────────────────
-  let upiId: string | undefined;
-  try {
-    const { data: settings } = await adminSupabase.from("app_settings").select("key, value").eq("key", "upi_id");
-    const map: Record<string, string> = {};
-    (settings || []).forEach((s: { key: string; value: string }) => { map[s.key] = s.value; });
-    upiId = map.upi_id;
-  } catch { /* non-blocking */ }
+  // ── Fetch UPI ID and Razorpay keys from app_settings (single cached call) ─
+  const appSettings = await getCachedSettings(adminSupabase, [
+    "upi_id",
+    "razorpay_key_id",
+    "razorpay_key_secret",
+    "razorpay_enabled",
+  ]);
+  const upiId = appSettings["upi_id"] ?? undefined;
+  const rzpKeyId = appSettings["razorpay_key_id"];
+  const rzpKeySecret = appSettings["razorpay_key_secret"];
+  const rzpEnabled = appSettings["razorpay_enabled"] === "true";
 
   // ── Razorpay payment link ────────────────────────────────────────────────
   let razorpayLinkId: string | null = null;
   let razorpayLinkUrl: string | null = null;
   try {
-    const { data: rzpRows } = await adminSupabase.from("app_settings").select("key, value")
-      .in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret"]);
-    const rzp = (rzpRows || []).reduce((m: Record<string, string>, r: { key: string; value: string }) => { m[r.key] = r.value; return m; }, {});
-    if (rzp.razorpay_enabled === "true" && rzp.razorpay_key_id && rzp.razorpay_key_secret) {
-      const auth = Buffer.from(`${rzp.razorpay_key_id}:${rzp.razorpay_key_secret}`).toString("base64");
+    if (rzpEnabled && rzpKeyId && rzpKeySecret) {
+      const auth = Buffer.from(`${rzpKeyId}:${rzpKeySecret}`).toString("base64");
       const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
       const customerName = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Customer";
       const refId = `${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}-gst`;
