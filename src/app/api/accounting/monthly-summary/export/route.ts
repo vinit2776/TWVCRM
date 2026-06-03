@@ -22,22 +22,28 @@ export async function GET(request: NextRequest) {
   const periodStart = new Date(year, month - 1, 1).toISOString().split("T")[0];
   const periodEnd = new Date(year, month, 0).toISOString().split("T")[0];
 
-  // Get period
-  const { data: period } = await adminSupabase
-    .from("accounting_periods")
-    .select("*")
-    .eq("year", year)
-    .eq("month", month)
-    .single();
-
-  // Get active contracts
-  const { data: contracts } = await adminSupabase
-    .from("contracts")
-    .select(
-      "id, contract_number, title, status, start_date, seats, total_amount, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)"
-    )
-    .lte("start_date", periodEnd)
-    .in("status", ["active", "renewal_in_progress"]);
+  // Fetch period, contracts, and walk-in payments in parallel (all independent)
+  const [{ data: period }, { data: contracts }, { data: walkinPayments }] = await Promise.all([
+    adminSupabase
+      .from("accounting_periods")
+      .select("*")
+      .eq("year", year)
+      .eq("month", month)
+      .single(),
+    adminSupabase
+      .from("contracts")
+      .select(
+        "id, contract_number, title, status, start_date, seats, total_amount, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)"
+      )
+      .lte("start_date", periodEnd)
+      .in("status", ["active", "renewal_in_progress"]),
+    adminSupabase
+      .from("booking_payments")
+      .select("*, booking:bookings!booking_payments_booking_id_fkey(guest_name, guest_company, customer_type)")
+      .gte("created_at", `${periodStart}T00:00:00`)
+      .lte("created_at", `${periodEnd}T23:59:59`)
+      .eq("status", "verified"),
+  ]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const activeContracts = (contracts || []).filter((c: any) => {
@@ -49,40 +55,31 @@ export async function GET(request: NextRequest) {
 
   const contractIds = activeContracts.map((c) => c.id);
 
-  // Facility usage
-  const { data: facilityUsages } = period
-    ? await adminSupabase
-        .from("facility_usage_records")
-        .select("*, contract_facility:contract_facilities!facility_usage_records_contract_facility_id_fkey(name, unit)")
-        .eq("accounting_period_id", period.id)
-    : { data: [] };
-
-  // Contract payments
-  const { data: payments } = period
-    ? await adminSupabase
-        .from("contract_payments")
-        .select("*")
-        .eq("accounting_period_id", period.id)
-        .eq("status", "verified")
-    : { data: [] };
-
-  // Usage charges
-  const { data: usageCharges } = contractIds.length > 0
-    ? await adminSupabase
-        .from("usage_charges")
-        .select("*")
-        .in("contract_id", contractIds)
-        .gte("charge_date", periodStart)
-        .lte("charge_date", periodEnd)
-    : { data: [] };
-
-  // Walk-in payments
-  const { data: walkinPayments } = await adminSupabase
-    .from("booking_payments")
-    .select("*, booking:bookings!booking_payments_booking_id_fkey(guest_name, guest_company, customer_type)")
-    .gte("created_at", `${periodStart}T00:00:00`)
-    .lte("created_at", `${periodEnd}T23:59:59`)
-    .eq("status", "verified");
+  // Fetch facility usages, contract payments, and usage charges in parallel
+  // (facility usages and payments depend on period; usage charges depend on contractIds)
+  const [{ data: facilityUsages }, { data: payments }, { data: usageCharges }] = await Promise.all([
+    period
+      ? adminSupabase
+          .from("facility_usage_records")
+          .select("*, contract_facility:contract_facilities!facility_usage_records_contract_facility_id_fkey(name, unit)")
+          .eq("accounting_period_id", period.id)
+      : Promise.resolve({ data: [] }),
+    period
+      ? adminSupabase
+          .from("contract_payments")
+          .select("*")
+          .eq("accounting_period_id", period.id)
+          .eq("status", "verified")
+      : Promise.resolve({ data: [] }),
+    contractIds.length > 0
+      ? adminSupabase
+          .from("usage_charges")
+          .select("*")
+          .in("contract_id", contractIds)
+          .gte("charge_date", periodStart)
+          .lte("charge_date", periodEnd)
+      : Promise.resolve({ data: [] }),
+  ]);
 
   // Build export data
   // eslint-disable-next-line @typescript-eslint/no-explicit-any

@@ -280,16 +280,48 @@ async function fetchLocationBreakdown(supabase: any, date: string): Promise<Loca
 
   if (!locs || locs.length === 0) return [];
 
-  const results: LocationRow[] = [];
+  const locationIds = locs.map((l: { id: string; name: string }) => l.id);
 
-  const { data: allPayments } = await supabase
-    .from("contract_payments")
-    .select("amount, contract:contracts!contract_payments_contract_id_fkey(location_id)")
-    .eq("status", "verified")
-    .eq("payment_date", date);
+  // Fetch payments, leads, and bookings for all locations in parallel using batched queries
+  const [paymentsRes, leadsRes, bookingsRes] = await Promise.all([
+    supabase
+      .from("contract_payments")
+      .select("amount, contract:contracts!contract_payments_contract_id_fkey(location_id)")
+      .eq("status", "verified")
+      .eq("payment_date", date),
+    supabase
+      .from("leads")
+      .select("location_id", { count: "exact", head: false })
+      .gte("created_at", dayStart)
+      .lte("created_at", dayEnd)
+      .in("location_id", locationIds),
+    supabase
+      .from("bookings")
+      .select("location_id", { count: "exact", head: false })
+      .eq("booking_date", date)
+      .in("status", ["confirmed", "checked_in", "checked_out", "completed"])
+      .in("location_id", locationIds),
+  ]);
 
-  for (const loc of locs) {
-    const locPayments = (allPayments || []).filter(
+  // Group leads count by location_id
+  const leadsCountByLocation: Record<string, number> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const row of (leadsRes.data || []) as any[]) {
+    const lid = row.location_id;
+    leadsCountByLocation[lid] = (leadsCountByLocation[lid] || 0) + 1;
+  }
+
+  // Group bookings count by location_id
+  const bookingsCountByLocation: Record<string, number> = {};
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  for (const row of (bookingsRes.data || []) as any[]) {
+    const lid = row.location_id;
+    bookingsCountByLocation[lid] = (bookingsCountByLocation[lid] || 0) + 1;
+  }
+
+  // Build results — payments are aggregated by location via the joined contract
+  return locs.map((loc: { id: string; name: string }) => {
+    const locPayments = (paymentsRes.data || []).filter(
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       (p: any) => p.contract?.location_id === loc.id
     );
@@ -299,30 +331,13 @@ async function fetchLocationBreakdown(supabase: any, date: string): Promise<Loca
       0
     );
 
-    const [leads, bookings] = await Promise.all([
-      supabase
-        .from("leads")
-        .select("id", { count: "exact", head: true })
-        .gte("created_at", dayStart)
-        .lte("created_at", dayEnd)
-        .eq("location_id", loc.id),
-      supabase
-        .from("bookings")
-        .select("id", { count: "exact", head: true })
-        .eq("booking_date", date)
-        .in("status", ["confirmed", "checked_in", "checked_out", "completed"])
-        .eq("location_id", loc.id),
-    ]);
-
-    results.push({
+    return {
       name: loc.name,
       collections: colTotal,
-      leads: leads.count || 0,
-      bookings: bookings.count || 0,
-    });
-  }
-
-  return results;
+      leads: leadsCountByLocation[loc.id] || 0,
+      bookings: bookingsCountByLocation[loc.id] || 0,
+    };
+  });
 }
 
 interface UnpaidBill {

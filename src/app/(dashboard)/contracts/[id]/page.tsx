@@ -136,24 +136,28 @@ export default function ContractDetailPage({
       const json = await res.json();
       setContract(json.data || null);
 
-      // Fetch linked proposal for payment gate check
+      // Fetch linked proposal and renewal draft in parallel (both are independent of each other)
       const proposalId = json.data?.proposal_id;
+      const hasRenewalDraft = ["renewal_in_progress", "renewed"].includes(json.data?.status);
+
+      const [proposalResult, renewalResult] = await Promise.allSettled([
+        proposalId
+          ? fetch(`/api/proposals/${proposalId}`).then(r => r.json())
+          : Promise.resolve(null),
+        hasRenewalDraft
+          ? fetch(`/api/contracts?parent_contract_id=${id}&is_renewal=true&limit=1`).then(r => r.json())
+          : Promise.resolve(null),
+      ]);
+
       if (proposalId) {
-        fetch(`/api/proposals/${proposalId}`)
-          .then(r => r.json())
-          .then(pJson => setLinkedProposal(pJson.data || null))
-          .catch(() => setLinkedProposal(null));
+        setLinkedProposal(
+          proposalResult.status === "fulfilled" ? (proposalResult.value?.data || null) : null
+        );
       }
 
-      // Fetch renewal draft link (for parent contracts in renewal_in_progress or renewed)
-      if (["renewal_in_progress", "renewed"].includes(json.data?.status)) {
-        fetch(`/api/contracts?parent_contract_id=${id}&is_renewal=true&limit=1`)
-          .then(r => r.json())
-          .then(rJson => {
-            const drafts = rJson.data || [];
-            setRenewalDraft(drafts.length > 0 ? drafts[0] : null);
-          })
-          .catch(() => setRenewalDraft(null));
+      if (hasRenewalDraft) {
+        const drafts = renewalResult.status === "fulfilled" ? (renewalResult.value?.data || []) : [];
+        setRenewalDraft(drafts.length > 0 ? drafts[0] : null);
       } else {
         setRenewalDraft(null);
       }
