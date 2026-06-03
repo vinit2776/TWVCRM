@@ -684,6 +684,25 @@ export async function generateRentProformas(
   // We need an admin client for dispatchProforma (bypasses RLS for the update step)
   const adminSupabase = createAdminClient();
 
+  // Pre-fetch ALL contract_addons for the full billing run in one query, then
+  // index by contract_id in a Map — eliminates the N+1 per-contract query that
+  // was firing inside the loop below (one DB round-trip per active contract).
+  const { data: allAddonsRaw } = await adminSupabase
+    .from("contract_addons")
+    .select("id,description,amount,effective_from,effective_until,contract_id")
+    .in("contract_id", contractIds)
+    .eq("is_active", true)
+    .lte("effective_from", prepaidLastOfMonth)
+    .or(`effective_until.is.null,effective_until.gte.${prepaidFirstOfMonth}`);
+
+  type AddonRow = { id: string; description: string; amount: number; effective_from: string; effective_until: string | null; contract_id: string };
+  const addonsByContractId = new Map<string, AddonRow[]>();
+  for (const addon of (allAddonsRaw ?? []) as AddonRow[]) {
+    const list = addonsByContractId.get(addon.contract_id) ?? [];
+    list.push(addon);
+    addonsByContractId.set(addon.contract_id, list);
+  }
+
   for (const contract of contracts as Array<Record<string, unknown>>) {
     const cid            = contract.id as string;
     const contractNumber = contract.contract_number as string;
@@ -737,14 +756,9 @@ export async function generateRentProformas(
       }
 
       // ── 4. Recurring add-ons for the prepaid month ─────────────────────
+      // addons are pre-fetched in bulk before the loop — no per-contract DB query needed
       const taxPercentage = Number(contract.tax_percentage || 18);
-      const { data: addons } = await adminSupabase
-        .from("contract_addons")
-        .select("id,description,amount,effective_from,effective_until")
-        .eq("contract_id", cid)
-        .eq("is_active", true)
-        .lte("effective_from", prepaidLastOfMonth)
-        .or(`effective_until.is.null,effective_until.gte.${prepaidFirstOfMonth}`);
+      const addons = addonsByContractId.get(cid) ?? null;
 
       let addonsSubtotal = 0;
       const addonLineItems: { description: string; amount: number; note?: string }[] = [];
