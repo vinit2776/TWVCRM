@@ -169,10 +169,7 @@ export class TallyClient {
     // ─────────────────────────────────────────────────────────────────────────
     const xml = `<ENVELOPE>
   <HEADER>
-    <VERSION>1</VERSION>
-    <TALLYREQUEST>Import</TALLYREQUEST>
-    <TYPE>Masters</TYPE>
-    <SUBTYPE>Ledger</SUBTYPE>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
   </HEADER>
   <BODY>
     <IMPORTDATA>
@@ -357,9 +354,7 @@ export class TallyClient {
 
     const xml = `<ENVELOPE>
   <HEADER>
-    <VERSION>1</VERSION>
-    <TALLYREQUEST>Import</TALLYREQUEST>
-    <TYPE>Vouchers</TYPE>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
   </HEADER>
   <BODY>
     <IMPORTDATA>
