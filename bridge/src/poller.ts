@@ -80,15 +80,67 @@ export class Poller {
     // Healthy poll — clear any prior mismatch/error
     healthState.lastError = null;
 
-    if (jobs.length === 0) {
-      log.debug("No pending jobs");
+    if (jobs.length > 0) {
+      log.info(`Processing ${jobs.length} pending job(s)`);
+      for (const job of jobs) {
+        await this.processJob(job, tally_company_gstin);
+      }
+    }
+
+    // IRN read-back: for B2B invoices created earlier and awaiting their IRN,
+    // check whether accounts has now generated it; if so, ack it (which
+    // completes the invoice and triggers customer delivery).
+    await this.checkAwaitingIrn();
+  }
+
+  /** Poll Tally for IRNs on invoices that are awaiting them (B2B). */
+  private async checkAwaitingIrn(): Promise<void> {
+    let awaiting: Awaited<ReturnType<CrmClient["getAwaitingIrn"]>>;
+    try {
+      awaiting = await this.crm.getAwaitingIrn();
+    } catch (err) {
+      log.warn(`awaiting-irn fetch failed: ${String(err)}`);
+      return;
+    }
+    if (awaiting.length === 0) return;
+
+    // Date range covering all awaiting vouchers (default to last 60 days).
+    const dates = awaiting
+      .map((v) => v.voucher_created_at)
+      .filter(Boolean)
+      .map((d) => (d as string).split("T")[0]);
+    const today = new Date().toISOString().split("T")[0];
+    const fromDate = dates.length ? dates.sort()[0] : today;
+    const toDate   = today;
+
+    log.info(`Checking IRN for ${awaiting.length} awaiting invoice(s) (${fromDate}..${toDate})`);
+
+    let irnMap: Awaited<ReturnType<TallyClient["getIrnMap"]>>;
+    try {
+      irnMap = await this.tally.getIrnMap(fromDate, toDate);
+    } catch (err) {
+      log.warn(`getIrnMap failed: ${String(err)}`);
       return;
     }
 
-    log.info(`Processing ${jobs.length} pending job(s)`);
-
-    for (const job of jobs) {
-      await this.processJob(job, tally_company_gstin);
+    for (const v of awaiting) {
+      const found = irnMap.get(v.invoice_number);
+      if (found?.irn) {
+        log.info(`IRN now available for ${v.invoice_number}: ${found.irn} — acking`);
+        await this.crm.ack({
+          success:              true,
+          job_id:               v.job_id,
+          tally_voucher_guid:   v.voucher_guid ?? "",
+          tally_invoice_number: v.invoice_number,
+          tally_irn:            found.irn,
+          tally_ack_no:         found.ack_no ?? undefined,
+          tally_ack_date:       found.ack_date ?? undefined,
+          tally_signed_qr_code: found.signed_qr_code ?? undefined,
+          tally_total_amount:   0,            // unchanged; CRM keeps the original total
+          irn_pending:          false,        // IRN is now present → complete + send
+          voucher_created_at:   v.voucher_created_at ?? undefined,
+        });
+      }
     }
   }
 

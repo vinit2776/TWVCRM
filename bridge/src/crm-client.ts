@@ -103,6 +103,16 @@ export class CrmClient {
     );
   }
 
+  /** Get B2B invoices created in Tally that are still awaiting their IRN. */
+  async getAwaitingIrn(): Promise<Array<{
+    job_id: string; invoice_number: string; voucher_guid: string | null; voucher_created_at: string | null;
+  }>> {
+    const res = await this.fetch<{ vouchers: Array<{
+      job_id: string; invoice_number: string; voucher_guid: string | null; voucher_created_at: string | null;
+    }> }>("/api/tally/awaiting-irn");
+    return res.vouchers ?? [];
+  }
+
   /** Ack a job (success or failure). */
   async ack(payload: AckPayload): Promise<void> {
     await this.fetch<unknown>("/api/tally/ack", {

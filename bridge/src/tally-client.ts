@@ -234,6 +234,56 @@ export class TallyClient {
   }
 
   /**
+   * Read IRN data for created vouchers by exporting the Day Book for a date
+   * range and matching on voucher number. Returns a map:
+   *   invoiceNumber -> { irn, ack_no, ack_date, signed_qr_code }
+   *
+   * Only vouchers whose IRN has actually been generated will have a non-empty
+   * IRN. Used by the IRN read-back loop to detect when accounts has generated
+   * the e-invoice for a B2B invoice (D5 format confirmed from production sample).
+   */
+  async getIrnMap(fromDate: string, toDate: string): Promise<Map<string, {
+    irn: string | null; ack_no: string | null; ack_date: string | null; signed_qr_code: string | null;
+  }>> {
+    const xml = `<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Export</TALLYREQUEST>
+    <TYPE>Data</TYPE>
+    <ID>Day Book</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+        <SVCURRENTCOMPANY>${escapeXml(this.targetCompany)}</SVCURRENTCOMPANY>
+        <SVFROMDATE TYPE="Date">${fromDate.replace(/-/g, "")}</SVFROMDATE>
+        <SVTODATE TYPE="Date">${toDate.replace(/-/g, "")}</SVTODATE>
+      </STATICVARIABLES>
+    </DESC>
+  </BODY>
+</ENVELOPE>`;
+
+    const res  = await this.post(xml);
+    const map  = new Map<string, { irn: string | null; ack_no: string | null; ack_date: string | null; signed_qr_code: string | null }>();
+
+    // Split into individual <VOUCHER ...>...</VOUCHER> blocks and read each
+    for (const m of res.matchAll(/<VOUCHER\b[\s\S]*?<\/VOUCHER>/gi)) {
+      const block  = m[0];
+      const number = firstTag(block, "VOUCHERNUMBER");
+      if (!number) continue;
+      const irn    = firstTag(block, "IRN");
+      map.set(number, {
+        irn:            irn || null,
+        ack_no:         firstTag(block, "IRNACKNO") || null,
+        ack_date:       firstTag(block, "IRNACKDATE") || null,
+        signed_qr_code: firstTag(block, "IRNQRCODE") || firstTag(block, "SIGNEDQRCODE") || null,
+      });
+    }
+    return map;
+  }
+
+  /**
    * Post a Sales Voucher to Tally. Returns the issued invoice number + IRN.
    *
    * ── D5 TODO ────────────────────────────────────────────────────────────────
@@ -426,6 +476,12 @@ export class TallyClient {
 
 function round2(n: number): number {
   return Math.round(n * 100) / 100;
+}
+
+/** Extract the text of the first <NAME>...</NAME> tag in a string ("" if absent). */
+function firstTag(xml: string, name: string): string {
+  const m = xml.match(new RegExp(`<${name}>([\\s\\S]*?)<\\/${name}>`, "i"));
+  return m ? m[1].trim() : "";
 }
 
 function escapeXml(s: string): string {

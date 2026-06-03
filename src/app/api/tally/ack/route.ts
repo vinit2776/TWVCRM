@@ -257,11 +257,11 @@ async function triggerPostAckActions(
       return;
     }
 
-    // Fetch customer details from the statement
+    // Fetch customer details + the statement total from the statement
     const { data: stmt } = await supabase
       .from("billing_statements")
       .select(`
-        id,
+        id, total_amount,
         contract:contracts!billing_statements_contract_id_fkey(
           lead:leads!contracts_lead_id_fkey(
             first_name, last_name, company, email, phone, mobile
@@ -279,11 +279,16 @@ async function triggerPostAckActions(
     const customerEmail = (lead.email as string | null) ?? null;
     const customerPhone = ((lead.mobile as string | null) ?? (lead.phone as string | null)) ?? null;
 
+    // Use Tally's total when provided (>0); on the IRN re-ack it's 0, so fall
+    // back to the statement's authoritative total (they match — built from it).
+    const statementTotal = Number((stmt as { total_amount?: number } | null)?.total_amount ?? 0);
+    const linkAmount = ackData.tally_total_amount > 0 ? ackData.tally_total_amount : statementTotal;
+
     await runPostAckActions({
       supabase,
       billingStatementId,
       tallyInvoiceNumber: ackData.tally_invoice_number,
-      tallyTotalAmount:   ackData.tally_total_amount,
+      tallyTotalAmount:   linkAmount,
       tallySignedQrCode:  ackData.tally_signed_qr_code ?? null,
       customerName,
       customerEmail,
