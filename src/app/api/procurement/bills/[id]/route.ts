@@ -137,8 +137,8 @@ export async function PATCH(
   if (!canAct) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
-  // Approval actions require admin or manager
-  const canApproveOrReject = ["admin", "manager"].includes(dbUser.role);
+  // Approval actions require admin only
+  const canApproveOrReject = dbUser.role === "admin";
 
   const { data: bill, error: fetchError } = await supabase
     .from("vendor_bills")
@@ -267,7 +267,7 @@ export async function PATCH(
 
     case "approve": {
       if (!canApproveOrReject) {
-        return NextResponse.json({ error: "Only admin or manager can approve bills" }, { status: 403 });
+        return NextResponse.json({ error: "Only admin can approve bills" }, { status: 403 });
       }
       if (bill.approval_status !== "pending") {
         return NextResponse.json(
@@ -426,7 +426,7 @@ export async function PATCH(
 
     case "approve_balance": {
       if (!canApproveOrReject) {
-        return NextResponse.json({ error: "Only admin or manager can approve the remaining balance" }, { status: 403 });
+        return NextResponse.json({ error: "Only admin can approve the remaining balance" }, { status: 403 });
       }
       if (bill.approval_status !== "approved") {
         return NextResponse.json({ error: "Bill must already be approved to extend balance approval" }, { status: 422 });
@@ -452,7 +452,7 @@ export async function PATCH(
 
     case "reject": {
       if (!canApproveOrReject) {
-        return NextResponse.json({ error: "Only admin or manager can reject bills" }, { status: 403 });
+        return NextResponse.json({ error: "Only admin can reject bills" }, { status: 403 });
       }
       if (bill.approval_status !== "pending") {
         return NextResponse.json(
@@ -579,7 +579,7 @@ export async function PATCH(
 
     case "release_hold": {
       if (!canApproveOrReject) {
-        return NextResponse.json({ error: "Only admin or manager can release a payment hold" }, { status: 403 });
+        return NextResponse.json({ error: "Only admin can release a payment hold" }, { status: 403 });
       }
       if (bill.payment_hold_status !== "on_hold") {
         return NextResponse.json({ error: "Bill is not on hold" }, { status: 422 });

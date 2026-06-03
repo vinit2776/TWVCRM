@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -75,6 +75,8 @@ type VendorBillItem = {
   cheque_signed_at: string | null;
   payment_reference: string | null;
   payment_date: string | null;
+  payment_batch_type: "immediate" | "15th" | "25th" | null;
+  payment_batch_date: string | null;
   vendor_id: string;
   po_id: string | null;
   procurement_vendors: { id: string; name: string; contact_email?: string | null } | null;
@@ -277,6 +279,9 @@ export default function AccountingPage() {
     }
   }
 
+  // Batch bucket filter (cash-flow planning strip)
+  const [activeBatchFilter, setActiveBatchFilter] = useState<"immediate" | "15th" | "25th" | "unscheduled" | null>(null);
+
   // Bill search (replaces the old simple textbox)
   const [filters, setFilters] = useState<BillFilters>({
     ...EMPTY_FILTERS,
@@ -284,23 +289,24 @@ export default function AccountingPage() {
     limit: "500",
   });
 
+  // Ref always holds the latest filters so fetchVendorBills stays stable (empty deps).
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
+
   const fetchVendorBills = useCallback(async () => {
-    setBillsLoading(true);
-    setPendingPage(1); // reset to first page on any data refresh
-    const params = filtersToParams(filters);
+    const params = filtersToParams(filtersRef.current);
     const res = await fetch(`/api/procurement/bills?${params}`);
     if (res.ok) {
       const { data } = await res.json();
       setVendorBills(data ?? []);
     }
-    setBillsLoading(false);
-  }, [filters]);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Auto-fetch on mount and whenever filters change (URL-state for free)
+  // Fire when filter VALUES change — stringify guards against reference churn.
+  const filtersKey = useMemo(() => filtersToParams(filters).toString(), [filters]);
   useEffect(() => {
     if (activeTab === "vendor-payments") fetchVendorBills();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [activeTab, filters]);
+  }, [activeTab, filtersKey, fetchVendorBills]);
 
   // Vendor-email audit count for the dashboard widget
   useEffect(() => {
@@ -314,7 +320,51 @@ export default function AccountingPage() {
   }, [vendorBills]);  // refresh after bill list refresh — likely things have changed
 
   // ── Vendor bill helpers ───────────────────────────────────────────────────
-  const pendingBills        = vendorBills.filter((b) => b.payment_status !== "paid");
+  const allPendingBills = useMemo(
+    () => vendorBills.filter((b) => b.payment_status !== "paid"),
+    [vendorBills]
+  );
+
+  // Batch bucket totals (for cash-flow planning strip)
+  const batchBuckets = useMemo(() => {
+    const outstanding = (b: VendorBillItem) =>
+      Math.max(0, Number(b.approved_amount ?? b.total_amount) + Number(b.gst_amount ?? 0) - Number(b.amount_paid ?? 0));
+
+    const todayStr = new Date().toISOString().split("T")[0];
+
+    // A batched bill is overdue if its scheduled batch date has already passed.
+    // Overdue bills escalate to Immediate regardless of their original batch type —
+    // they should have been paid and must be cleared now.
+    const isOverdue = (b: VendorBillItem) =>
+      !!b.payment_batch_date && b.payment_batch_date < todayStr;
+
+    const immediate   = allPendingBills.filter((b) =>
+      b.payment_batch_type === "immediate" || (b.payment_batch_type && isOverdue(b))
+    );
+    const fifteenth   = allPendingBills.filter((b) => b.payment_batch_type === "15th" && !isOverdue(b));
+    const twentyfifth = allPendingBills.filter((b) => b.payment_batch_type === "25th" && !isOverdue(b));
+    const unscheduled = allPendingBills.filter((b) => !b.payment_batch_type);
+
+    // Compute the next calendar date for a given day-of-month
+    const nextDateForDay = (day: number): string => {
+      const now = new Date();
+      const candidate = new Date(now.getFullYear(), now.getMonth(), day);
+      if (candidate < now) candidate.setMonth(candidate.getMonth() + 1);
+      return candidate.toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric", timeZone: "Asia/Kolkata" });
+    };
+
+    return {
+      immediate:   { bills: immediate,   total: immediate.reduce((s, b) => s + outstanding(b), 0),   date: "Pay now" },
+      "15th":      { bills: fifteenth,   total: fifteenth.reduce((s, b) => s + outstanding(b), 0),   date: nextDateForDay(15) },
+      "25th":      { bills: twentyfifth, total: twentyfifth.reduce((s, b) => s + outstanding(b), 0), date: nextDateForDay(25) },
+      unscheduled: { bills: unscheduled, total: unscheduled.reduce((s, b) => s + outstanding(b), 0), date: null },
+    };
+  }, [allPendingBills]);
+
+  const pendingBills = activeBatchFilter
+    ? batchBuckets[activeBatchFilter].bills
+    : allPendingBills;
+
   const pendingTotalPages   = Math.ceil(pendingBills.length / PENDING_PAGE_SIZE);
   const visiblePendingBills = pendingBills.slice((pendingPage - 1) * PENDING_PAGE_SIZE, pendingPage * PENDING_PAGE_SIZE);
   const allPaidBills        = vendorBills.filter((b) => b.payment_status === "paid");
@@ -324,8 +374,8 @@ export default function AccountingPage() {
 
   // Batch multiselect derived values
   const selectedBills = useMemo(
-    () => pendingBills.filter((b) => selectedBillIds.has(b.id)),
-    [pendingBills, selectedBillIds]
+    () => allPendingBills.filter((b) => selectedBillIds.has(b.id)),
+    [allPendingBills, selectedBillIds]
   );
   const selectedTotal = useMemo(
     () => selectedBills.reduce((s, b) => {
@@ -529,6 +579,90 @@ export default function AccountingPage() {
                 )}
               </div>
 
+              {/* Cash-flow batch buckets */}
+              {allPendingBills.length > 0 && (() => {
+                type BucketKey = "immediate" | "15th" | "25th" | "unscheduled";
+                const bucketConfig: Array<{
+                  key: BucketKey;
+                  label: string;
+                  description: string;
+                  activeClass: string;
+                  inactiveClass: string;
+                  dotClass: string;
+                }> = [
+                  {
+                    key: "immediate",
+                    label: "Immediate",
+                    description: "Pay now",
+                    activeClass: "border-orange-400 bg-orange-50 ring-2 ring-orange-300",
+                    inactiveClass: "border-orange-200 bg-orange-50/40 hover:bg-orange-50 hover:border-orange-300",
+                    dotClass: "bg-orange-500",
+                  },
+                  {
+                    key: "15th",
+                    label: "15th Batch",
+                    description: batchBuckets["15th"].date,
+                    activeClass: "border-blue-400 bg-blue-50 ring-2 ring-blue-300",
+                    inactiveClass: "border-blue-200 bg-blue-50/40 hover:bg-blue-50 hover:border-blue-300",
+                    dotClass: "bg-blue-500",
+                  },
+                  {
+                    key: "25th",
+                    label: "25th Batch",
+                    description: batchBuckets["25th"].date,
+                    activeClass: "border-violet-400 bg-violet-50 ring-2 ring-violet-300",
+                    inactiveClass: "border-violet-200 bg-violet-50/40 hover:bg-violet-50 hover:border-violet-300",
+                    dotClass: "bg-violet-500",
+                  },
+                  {
+                    key: "unscheduled",
+                    label: "Unscheduled",
+                    description: "No batch set",
+                    activeClass: "border-gray-400 bg-gray-100 ring-2 ring-gray-300",
+                    inactiveClass: "border-gray-200 bg-gray-50/40 hover:bg-gray-50 hover:border-gray-300",
+                    dotClass: "bg-gray-400",
+                  },
+                ];
+                return (
+                  <div className="grid grid-cols-2 md:grid-cols-4 gap-2">
+                    {bucketConfig.map(({ key, label, description, activeClass, inactiveClass, dotClass }) => {
+                      const bucket = batchBuckets[key];
+                      const isActive = activeBatchFilter === key;
+                      const isEmpty = bucket.bills.length === 0;
+                      return (
+                        <button
+                          key={key}
+                          onClick={() => {
+                            setActiveBatchFilter(isActive ? null : key);
+                            setPendingPage(1);
+                          }}
+                          className={cn(
+                            "rounded-lg border p-3 text-left transition-colors",
+                            isActive ? activeClass : inactiveClass,
+                            isEmpty && "opacity-50"
+                          )}
+                        >
+                          <div className="flex items-center gap-1.5 mb-1.5">
+                            <span className={cn("h-2 w-2 rounded-full shrink-0", dotClass)} />
+                            <span className="text-xs font-semibold text-foreground truncate">{label}</span>
+                            {isActive && (
+                              <span className="ml-auto text-[10px] font-medium text-muted-foreground">✕ clear</span>
+                            )}
+                          </div>
+                          <p className="text-base font-bold text-foreground leading-tight">
+                            {formatCurrency(bucket.total)}
+                          </p>
+                          <p className="text-[11px] text-muted-foreground mt-0.5">
+                            {bucket.bills.length} bill{bucket.bills.length !== 1 ? "s" : ""}
+                            {description && <span className="ml-1">· {description}</span>}
+                          </p>
+                        </button>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+
               {/* Vendor-email audit widget (touch point C — dashboard) */}
               {emailAuditCount !== null && emailAuditCount > 0 && (
                 <Link
@@ -628,6 +762,17 @@ export default function AccountingPage() {
               </div>
 
               {/* Pending bills */}
+              {activeBatchFilter && (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground bg-muted/40 rounded-md px-3 py-1.5">
+                  <span>Showing <strong>{activeBatchFilter === "unscheduled" ? "unscheduled" : `${activeBatchFilter} batch`}</strong> bills only</span>
+                  <button
+                    className="ml-auto text-blue-600 hover:text-blue-800 font-medium"
+                    onClick={() => { setActiveBatchFilter(null); setPendingPage(1); }}
+                  >
+                    Show all
+                  </button>
+                </div>
+              )}
               {pendingBills.length === 0 && !filters.q ? (
                 <EmptyState
                   icon={Building2}
