@@ -183,3 +183,86 @@ on `tally_sync_enabled`; with it OFF everything behaves exactly as today.
 - Manual "Mark paid" for bank/cash on the new page — needed day one? (Proposed: yes,
   reuse existing payment recording.)
 - B2C invoice PDF: send immediately on issue; B2B PDF: send only after IRN. (Confirmed.)
+
+---
+
+## 11. Engineering review decisions (locked — /plan-eng-review 2026-06-03)
+
+| # | Decision |
+|---|---|
+| D1 | **Backend first, new page second.** Phase 1 = guards + delivery + PDF (validated on current page). Phase 2 = new Billing page (own review). |
+| D2 | **Stamp `issuance_channel` ('tally'|'crm') on the statement at finalize.** All guards branch on the stamp, NOT the live switch — immune to mid-run flips. One `isTallyIssued(stmt)` helper everywhere. |
+| D3 | **Delivered-once gate + retry.** `dispatchTallyInvoice` checks `tally_delivered_at` (set = skip); Razorpay link uses a deterministic `reference_id` (no 2nd link); failures → 'issued, not sent' + an undelivered-sweep cron + manual Resend. |
+| D4 | **Verify IRP signed-QR from a real B2B IRN first.** Until confirmed, B2B PDF prints IRN + Ack No + Ack Date as TEXT; add the scannable QR once proven. |
+| D5 | **Block void of a Tally-issued statement** (`tally_invoice_number` set) with a clear message. Drafts/unissued void normally. |
+| D6 | **Isolate `dispatchTallyInvoice`** — own orchestration reusing leaf helpers (`generateGstInvoicePDF`/`resend`/`messaging`); do NOT refactor live `dispatchGstDirect`. TODO to unify later. |
+| D9 | **B2B: wait for IRN, then send invoice + link together** (reaffirmed). B2C sends immediately on issue. |
+
+### Outside-voice fixes (adopted — verified in code)
+| # | Fix |
+|---|---|
+| OV1 | **Dunning must not chase unsent invoices.** `payment-reminder` cron enrols on `due_date != null` + unpaid, and `due_date` is stamped at finalize (`billing.ts:483`). Add a predicate so the cron only chases **delivered/issued** invoices (e.g. `tally_delivered_at IS NOT NULL` for tally statements). **Highest-priority fix.** |
+| OV2 | **Guard the `generate-gst-invoice` route** (mints the CRM number + emails the PDF — was missing from the guard table). Audit EVERY PDF-email/link/number path, incl. the deposit/pro-rata `payment_link.paid` webhook and the legacy page's Resend. |
+| OV3 | **Mirror `total_amount := tally_total_amount` on ack** (`ack/route.ts` writes the number but not the amount). Otherwise a ₹1 GST round-off delta breaks payment auto-matching → stuck 'unpaid' → dunning a paid invoice. Decide canonical invoice-number column post-flip and migrate all readers. |
+| OV4 | **Flip-time migration sweep.** At go-live, enumerate finalized-but-unissued statements and assign an owner (force-complete legacy OR re-stamp tally) before flipping — no orphans. |
+| OV5 | **Reconciliation sweep cron.** Detect 'Tally has the voucher, CRM never got the ack' (lost-ack) and recover; also flag orphan Tally vouchers with no CRM statement. |
+| OV6 | **Documented manual correction procedure** for a mis-issued Tally invoice (cancel/CRN in Tally + mark CRM) for go-live, until CRN automation (Phase 3). |
+| OV7 | **Stamp a single `lifecycle_stage` enum** at each transition (ack, deliver, webhook) instead of deriving 9 states from 6 columns live — page + cron read the same field, no divergence. |
+
+### Guard table (corrected & complete)
+All branch on `issuance_channel === 'tally'`:
+1. `enqueueTallySalesVoucher` (finalize) — gated by stamp + sync.
+2. `dispatchProforma` — early return.
+3. `dispatchGstDirect` — early return.
+4. `generateRentProformas` cron — finalize only (FIFO drain; clocks start at delivery not finalize).
+5. Razorpay webhook auto-`generate-gst-invoice` — skip.
+6. **`generate-gst-invoice` route (direct)** — skip (OV2).
+7. Manual `finalize-and-send` / `send-proforma` — refuse.
+8. Legacy page Resend — respect guards (OV2).
+9. finalize `billingStatementReady` WhatsApp — suppress.
+10. `payment-reminder` cron — only chase delivered invoices (OV1).
+11. Void route — block if Tally-issued (D5).
+
+---
+
+## 12. NOT in scope (deferred, with rationale)
+- **New Billing page (Phase 2)** — own design + review after the backend is proven (D1).
+- **Credit-note automation (Phase 3)** — void is blocked + manual procedure documented (D5/OV6).
+- **IRP scannable QR on B2B PDF** — deferred until the signed-QR is verified (D4); text IRN meanwhile.
+- **Refactor/unify `dispatchTallyInvoice` ↔ `dispatchGstDirect`** — isolate now, unify when CRM issuance retired (D6).
+- **Multi-GSTIN / inter-state IGST** — coworking is always TN intra-state.
+
+## 13. What already exists (reused, not rebuilt)
+Charge computation (`billing.ts` generators), `generateGstInvoicePDF`, `resend`/`messaging`,
+the `payment-reminder` dunning cron, the Razorpay webhook, receivables/AR, contracts,
+the Tally bridge + ack + IRN read-back. New: `dispatchTallyInvoice`, guards, `issuance_channel`
++ `tally_delivered_at` + `lifecycle_stage` columns, sweep crons, the new page (Phase 2).
+
+## 14. Failure modes (Phase 1)
+| Failure | Test? | Handling | User sees | Verdict |
+|---|---|---|---|---|
+| Dunning chases unsent invoice | ✅ CRIT | OV1 delivered predicate | n/a (prevented) | covered |
+| Double invoice via any email/number path | ✅ CRIT | guard table 1-11 | n/a (prevented) | covered |
+| Payment ₹1 off → never matches | ✅ | OV3 total mirror | n/a (prevented) | covered |
+| Delivery fails (email/RZP down) | ✅ | 'issued not sent' + sweep + resend | retry visible | covered |
+| Lost ack → stuck in_progress | ✅ | OV5 reconciliation sweep | flagged | covered |
+| Orphan at flip | ✅ | OV4 flip-time sweep | n/a | covered |
+| Mis-issued Tally invoice | ✅ | OV6 manual procedure | documented | covered (manual) |
+| Switch flipped mid-run | ✅ | D2 stamp-at-finalize | n/a | covered |
+No silent-failure critical gaps remain.
+
+---
+
+## GSTACK REVIEW REPORT
+
+| Review | Trigger | Why | Runs | Status | Findings |
+|--------|---------|-----|------|--------|----------|
+| Eng Review | `/plan-eng-review` | Architecture & tests (required) | 1 | CLEAR | 6 decisions, 0 critical gaps |
+| Outside Voice | Claude subagent | Independent challenge | 1 | issues_found→adopted | 3 P0 (code-verified) + 4 hardening, all adopted |
+| CEO Review | `/plan-ceo-review` | Scope & strategy | 0 | — | not run |
+| Design Review | `/plan-design-review` | UI/UX | 0 | — | Phase 2 (new page) |
+
+- **OUTSIDE VOICE:** caught the dunning-chases-unsent leak (cron enrols on due_date stamped at finalize), the ungated generate-gst-invoice route, and total_amount not mirrored to Tally's total. All adopted (OV1-OV7).
+- **CROSS-MODEL:** no tension — outside voice was additive, not contradictory.
+- **UNRESOLVED:** 0.
+- **VERDICT:** ENG CLEARED — Phase 1 backend plan locked. Build order: guards+stamp → dispatchTallyInvoice+total-mirror → sweep crons. Blocked only on D4 B2B-IRN sample before the IRP QR.
