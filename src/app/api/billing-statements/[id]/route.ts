@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
-import { enqueueTallySalesVoucher } from "@/lib/tally/enqueue";
 
 export const maxDuration = 30;
 
@@ -257,11 +256,10 @@ export async function PATCH(
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Tally sync: enqueue a sales_voucher job when a statement is finalized.
-  // Fire-and-forget — failure here must never block the finalize response.
-  if (body.status === "finalized" && data) {
-    void enqueueTallySalesVoucher(supabase, data as { id: string; total_amount: number; tax_percentage: number; subtotal: number; line_items: unknown });
-  }
+  // NOTE: Tally GST-invoice issuance is NOT triggered at finalize. It is routed
+  // at the GST-generation moment (dispatchGstDirect / generate-gst-invoice /
+  // convert-to-gst-early) via routeGstGenerationToTally — because proforma_first
+  // statements generate their GST invoice only AFTER the PI is paid.
 
   // WhatsApp/SMS notification when statement is finalized — fire-and-forget
   if (body.status === "finalized" && oldStatement.lead_id && data) {

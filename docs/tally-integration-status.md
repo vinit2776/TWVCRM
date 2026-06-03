@@ -1,7 +1,44 @@
 # Tally Integration — Status & Resume Notes
 
 **Last updated:** 2026-06-03
-**State:** Core proven end-to-end against real Tally. Sync PAUSED. Delivery build remaining.
+**State:** Phase 1 (surgical GST-issuance swap) BUILT on `feat/tally-billing-phase1`. Sync PAUSED. Bridge receipt-voucher + B2B IRN real test remaining before go-live.
+
+---
+
+## ✅ Phase 1 built (branch `feat/tally-billing-phase1`)
+
+Surgical change: only GST-invoice GENERATION moves to Tally. PI flow + per-contract
+`billing_mode` (proforma_first/gst_direct) untouched. Master switch `tally_sync_enabled`
+controls WHERE the GST invoice is issued (CRM vs Tally), not whether a PI exists.
+
+With sync OFF the system is byte-for-byte identical to before — every guard checks the
+switch first and only stamps `issuance_channel='tally'` when ON.
+
+1. **Migration 00238** — `issuance_channel` ('crm'|'tally', default 'crm'), `tally_delivered_at`,
+   `lifecycle_stage`, + undelivered partial index. APPLIED to prod.
+2. **GST generation routes to Tally** at the 3 entry points via `routeGstGenerationToTally()`
+   (`src/lib/tally/enqueue.ts`): `dispatchGstDirect`, `generate-gst-invoice` route,
+   `convert-to-gst-early` route. Each stamps `issuance_channel='tally'` (decide-once),
+   enqueues a `sales_voucher` job, and returns early so the CRM mints/sends nothing.
+   Finalize no longer enqueues.
+3. **`dispatchTallyInvoice`** (`src/lib/tally/dispatch-tally-invoice.ts`) — delivers the
+   Tally-issued invoice: builds the PDF with Tally's number, emails + WhatsApps it, and
+   for UNPAID (gst_direct) creates the Razorpay link + due date so dunning takes over;
+   PAID (proforma_first) sends a receipt with no link. Delivered-once gated on
+   `tally_delivered_at`. Wired into `/api/tally/ack`; replaces the old `post-ack.ts`.
+   Ack now mirrors `total_amount` immediately (OV3).
+4. **Guards** — payment-reminder skips Tally invoices until `tally_delivered_at` is set
+   (OV1); CRM void is blocked for `issuance_channel='tally'` (D5 — cancel must go through
+   the Phase 1b credit-note flow so Tally reverses first).
+5. **Reverse-sync + self-heal** — `enqueueTallyReceiptVoucher()` queues a `receipt_voucher`
+   job when a payment is recorded (manual route + Razorpay webhook) against a Tally invoice;
+   `/api/cron/tally-reconcile` (every 15 min) re-drives delivery for issued-but-undelivered
+   invoices. **Bridge `postReceiptVoucher` is NOT built yet** — receipt jobs sit pending
+   until a real receipt-voucher XML sample is captured. Build before go-live.
+
+**Remaining for go-live:** bridge `postReceiptVoucher` (needs sample) + a real B2B IRN test
++ one full real-statement end-to-end with sync ON. Phase 1b (CRM-first cancel via credit note)
+and Phase 2 (new Billing page UI) are separate.
 
 ---
 

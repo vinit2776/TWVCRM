@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { enqueueTallyReceiptVoucher } from "@/lib/tally/enqueue";
 
 /**
  * GET /api/billing-statements/[id]/payment — list payments for a statement
@@ -74,6 +75,17 @@ export async function POST(
     .single();
 
   if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 });
+
+  // Reverse-sync the payment to Tally as a receipt voucher (closes the loop so
+  // Tally's books reflect the offline payment). No-op unless this statement's GST
+  // invoice was issued by Tally and sync is active. Fire-and-forget.
+  void enqueueTallyReceiptVoucher(id, {
+    paymentId: payment.id,
+    amount: Number(amount),
+    date: payment_date,
+    mode: payment_mode,
+    reference: payment_reference || null,
+  });
 
   // Check if fully paid
   const { data: allPayments } = await supabase

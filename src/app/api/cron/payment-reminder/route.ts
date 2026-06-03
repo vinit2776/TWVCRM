@@ -46,6 +46,7 @@ export async function GET(request: NextRequest) {
       id, statement_number, period_start, period_end, due_date, total_amount,
       payment_status, razorpay_payment_link_id, razorpay_payment_link_url,
       reminder_count, last_reminder_sent_at, voided_at,
+      issuance_channel, tally_delivered_at,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)
@@ -72,6 +73,15 @@ export async function GET(request: NextRequest) {
     const lead = contract.lead;
     if (!lead?.email && !(lead?.mobile || lead?.phone)) {
       skipped++; summary.push({ id: s.id, stmt: s.statement_number, stage: -1, tone: "—", channel: "—", status: "skip", reason: "no contact" });
+      continue;
+    }
+
+    // OV1: never dun a Tally-issued invoice the customer hasn't received yet.
+    // tally_delivered_at is set by dispatchTallyInvoice once the PDF + payment
+    // link have actually gone out. CRM-issued statements (issuance_channel='crm')
+    // are unaffected — they were delivered at the moment due_date was stamped.
+    if (s.issuance_channel === "tally" && !s.tally_delivered_at) {
+      skipped++; summary.push({ id: s.id, stmt: s.statement_number, stage: -1, tone: "—", channel: "—", status: "skip", reason: "tally not delivered" });
       continue;
     }
 

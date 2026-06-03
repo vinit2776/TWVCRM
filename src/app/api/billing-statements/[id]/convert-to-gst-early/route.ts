@@ -4,6 +4,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
+import { routeGstGenerationToTally } from "@/lib/tally/enqueue";
 import QRCode from "qrcode";
 import { z } from "zod";
 
@@ -131,6 +132,54 @@ export async function POST(
     } catch (err) {
       console.error("[convert-to-gst-early] Razorpay cancel failed (non-blocking):", err);
     }
+  }
+
+  // ── Tally routing gate (surgical swap point #3: early PI → GST override) ──
+  // The old PI link is now cancelled. When Tally GST issuance is active, hand
+  // the GST invoice to Tally rather than minting a CRM number + new Razorpay
+  // link + email here. We still record the PI-cancellation markers so the
+  // override is audited; the bridge mints the number and dispatchTallyInvoice
+  // (unpaid gst_direct path) creates the fresh Razorpay link, sends the PDF,
+  // and enrols dunning once the invoice is issued.
+  const tallyNow = new Date();
+  const tallyNowIso = tallyNow.toISOString();
+  const tallyNowYmd = tallyNowIso.slice(0, 10);
+  if (await routeGstGenerationToTally(id)) {
+    await adminSupabase.from("billing_statements").update({
+      pi_cancelled_at: tallyNowIso,
+      pi_cancelled_by: dbUser.id,
+      pi_override_reason: reason,
+      razorpay_payment_link_id: null,
+      razorpay_payment_link_url: null,
+      due_date: tallyNowYmd,
+      notes: [
+        statement.notes,
+        `PI ${statement.statement_number} cancelled ${tallyNowYmd} — early GST invoice routed to Tally. Reason: ${reason}`,
+      ].filter(Boolean).join("\n"),
+    }).eq("id", id);
+
+    logAudit(adminSupabase, {
+      entityType: "billing_statement",
+      entityId: id,
+      action: "update",
+      performedBy: dbUser.id,
+      changes: {
+        pi_cancelled_at: { old: null, new: tallyNowIso },
+        issuance_channel: { old: "crm", new: "tally" },
+        razorpay_payment_link_id: { old: existingLinkId, new: null },
+        override_reason: { old: null, new: reason },
+      },
+    });
+
+    return NextResponse.json({
+      success: true,
+      routedToTally: true,
+      invoiceNumber: null,    // assigned by Tally, mirrored back on ack
+      totalAmount: 0,
+      newPaymentLink: null,   // created by dispatchTallyInvoice after issuance
+      emailedTo: null,
+      emailSkipped: true,
+    });
   }
 
   // ── Recalculate totals ──────────────────────────────────────────────────

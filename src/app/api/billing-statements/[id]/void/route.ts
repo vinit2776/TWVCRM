@@ -61,6 +61,22 @@ export async function POST(
     );
   }
 
+  // D5: a Tally-issued GST invoice is on Tally's books (Tally = system of record).
+  // Voiding it in the CRM alone would desync — Tally would still hold the invoice
+  // and, for B2B, a live IRN with the IRP. Cancellation of a Tally invoice must go
+  // through the CRM-first credit-note flow (Phase 1b), which instructs Tally to
+  // reverse it before the CRM marks anything voided. Block the plain void here.
+  if (statement.issuance_channel === "tally") {
+    return NextResponse.json(
+      {
+        error: "This GST invoice was issued by Tally and cannot be voided from the CRM. Use the cancel/credit-note flow so Tally reverses it first, keeping the books in sync.",
+        issuance_channel: "tally",
+        tally_invoice_number: statement.tally_invoice_number ?? null,
+      },
+      { status: 409 }
+    );
+  }
+
   // Block if any payments have been recorded
   const { data: payments } = await supabase
     .from("billing_payments")

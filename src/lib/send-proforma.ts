@@ -16,6 +16,7 @@ import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-ge
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { getCachedSettings } from "@/lib/app-settings-cache";
+import { routeGstGenerationToTally } from "@/lib/tally/enqueue";
 import QRCode from "qrcode";
 
 /** Per-call timeout (ms) for outbound HTTP and the Resend SDK send. A single
@@ -43,6 +44,8 @@ export interface DispatchResult {
   emailSkipped: boolean;
   /** True when both email AND phone/mobile are missing — proforma could not be sent */
   noContact: boolean;
+  /** True when GST issuance was handed to Tally — CRM generated/sent nothing here. */
+  routedToTally?: boolean;
   error?: string;
 }
 
@@ -457,6 +460,25 @@ export async function dispatchGstDirect(
   const customerEmail = lead?.email as string | undefined;
   const customerPhone = (lead?.phone || lead?.mobile) as string | undefined;
   const noContact = !customerEmail && !customerPhone;
+
+  // ── Tally routing gate (surgical swap point #1) ───────────────────────────
+  // If Tally GST issuance is active, hand the GST invoice to Tally: stamp the
+  // statement issuance_channel='tally', enqueue the sales_voucher job, and STOP
+  // here — the bridge mints the invoice number, then dispatchTallyInvoice (the
+  // ack path) sends the PDF + Razorpay link. We must NOT mint a CRM gst number
+  // or send anything from this path, or the customer gets two invoices.
+  if (await routeGstGenerationToTally(statementId)) {
+    return {
+      success: true,
+      proformaRef: statement.statement_number as string,
+      totalAmount: 0,           // computed by Tally; mirrored back on ack
+      razorpayLinkUrl: null,    // dispatchTallyInvoice creates the link after issuance
+      emailedTo: null,
+      emailSkipped: true,       // delivery deferred to dispatchTallyInvoice
+      noContact,
+      routedToTally: true,
+    };
+  }
 
   // ── Totals ────────────────────────────────────────────────────────────────
   const usageCharges = (statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number }[];

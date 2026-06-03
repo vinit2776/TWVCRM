@@ -4,6 +4,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
+import { routeGstGenerationToTally } from "@/lib/tally/enqueue";
 
 export const maxDuration = 30;
 
@@ -86,6 +87,22 @@ export async function POST(
 
   if (!contract) {
     return NextResponse.json({ error: "No contract linked to this statement" }, { status: 400 });
+  }
+
+  // ── Tally routing gate (surgical swap point #2: PI → GST after payment) ────
+  // When Tally GST issuance is active, hand the invoice to Tally instead of
+  // minting a CRM number + emailing here. The bridge mints the number and
+  // dispatchTallyInvoice (ack path) sends the PDF. Returning here means the
+  // webhook / manual trigger does NOT double-issue.
+  if (await routeGstGenerationToTally(id)) {
+    return NextResponse.json({
+      success: true,
+      routedToTally: true,
+      invoiceNumber: null,   // assigned by Tally, mirrored back on ack
+      totalAmount: 0,
+      emailedTo: null,
+      emailSkipped: true,    // delivery deferred to dispatchTallyInvoice
+    });
   }
 
   // Generate sequential GST invoice number

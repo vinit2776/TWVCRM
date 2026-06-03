@@ -39,7 +39,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
-import { runPostAckActions } from "@/lib/tally/post-ack";
+import { dispatchTallyInvoice } from "@/lib/tally/dispatch-tally-invoice";
 
 const AckSuccessSchema = z.object({
   job_id:               z.string().uuid(),
@@ -137,6 +137,10 @@ export async function POST(request: NextRequest) {
           tally_invoice_number: data.tally_invoice_number,
           tally_voucher_guid:   data.tally_voucher_guid,
           tally_synced_at:      data.irn_pending ? null : now,
+          // OV3: mirror Tally's authoritative total immediately, even if delivery
+          // (dispatchTallyInvoice) is deferred or fails — books-of-record stays correct.
+          total_amount:         data.tally_total_amount,
+          lifecycle_stage:      data.irn_pending ? "awaiting_irn" : "issued",
           tally_last_error:     null,
         })
         .eq("id", job.billing_statement_id);
@@ -172,10 +176,17 @@ export async function POST(request: NextRequest) {
       },
     });
 
-    // Trigger post-ack actions (Razorpay link + PDF overlay) once IRN is confirmed.
-    // When irn_pending=true, link creation is deferred until the bridge acks the IRN.
+    // Deliver the invoice (PDF + email + Razorpay link for unpaid) once the
+    // invoice is fully issued. When irn_pending=true the B2B invoice has no IRN
+    // yet — delivery is deferred until the bridge acks again with the IRN.
+    // dispatchTallyInvoice is delivered-once gated, so a duplicate ack is safe.
     if (!data.irn_pending && job.billing_statement_id) {
-      void triggerPostAckActions(supabase, job.billing_statement_id, data);
+      void dispatchTallyInvoice(supabase, job.billing_statement_id, {
+        invoiceNumber: data.tally_invoice_number,
+        totalAmount:   data.tally_total_amount,
+        signedQrCode:  data.tally_signed_qr_code ?? null,
+        irn:           data.tally_irn ?? null,
+      });
     }
 
     return NextResponse.json({
@@ -187,7 +198,6 @@ export async function POST(request: NextRequest) {
   } else {
     // ── FAILURE PATH ──────────────────────────────────────────────────────────
 
-    const now = new Date().toISOString();
     const isExhausted = (job.attempt_count ?? 0) >= ((job as { max_attempts?: number }).max_attempts ?? 5);
     const finalStatus = (!data.retryable || isExhausted) ? "failed" : "pending";
 
@@ -225,78 +235,5 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json({ ok: true, status: finalStatus });
-  }
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-// Post-ack orchestration: Razorpay link + PDF overlay
-// Runs fire-and-forget — never blocks the ack response.
-// ─────────────────────────────────────────────────────────────────────────────
-async function triggerPostAckActions(
-  supabase: ReturnType<typeof createAdminClient>,
-  billingStatementId: string,
-  ackData: {
-    tally_total_amount:   number;
-    tally_invoice_number: string;
-    tally_signed_qr_code?:string;
-  }
-): Promise<void> {
-  try {
-    // Fetch Razorpay credentials
-    const { data: settings } = await supabase
-      .from("app_settings")
-      .select("key, value")
-      .in("key", ["razorpay_key_id", "razorpay_key_secret", "razorpay_enabled"]);
-
-    const creds = Object.fromEntries(
-      (settings ?? []).map((s: { key: string; value: string }) => [s.key, s.value])
-    );
-
-    if (creds["razorpay_enabled"] !== "true") {
-      console.log(`[tally/ack] Razorpay not enabled — skipping link for ${billingStatementId}`);
-      return;
-    }
-
-    // Fetch customer details + the statement total from the statement
-    const { data: stmt } = await supabase
-      .from("billing_statements")
-      .select(`
-        id, total_amount,
-        contract:contracts!billing_statements_contract_id_fkey(
-          lead:leads!contracts_lead_id_fkey(
-            first_name, last_name, company, email, phone, mobile
-          )
-        )
-      `)
-      .eq("id", billingStatementId)
-      .single();
-
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const lead = (stmt as any)?.contract?.lead ?? {};
-    const customerName  = (lead.company as string | undefined)
-      ?? `${(lead.first_name as string | undefined) ?? ""} ${(lead.last_name as string | undefined) ?? ""}`.trim()
-      ?? "Customer";
-    const customerEmail = (lead.email as string | null) ?? null;
-    const customerPhone = ((lead.mobile as string | null) ?? (lead.phone as string | null)) ?? null;
-
-    // Use Tally's total when provided (>0); on the IRN re-ack it's 0, so fall
-    // back to the statement's authoritative total (they match — built from it).
-    const statementTotal = Number((stmt as { total_amount?: number } | null)?.total_amount ?? 0);
-    const linkAmount = ackData.tally_total_amount > 0 ? ackData.tally_total_amount : statementTotal;
-
-    await runPostAckActions({
-      supabase,
-      billingStatementId,
-      tallyInvoiceNumber: ackData.tally_invoice_number,
-      tallyTotalAmount:   linkAmount,
-      tallySignedQrCode:  ackData.tally_signed_qr_code ?? null,
-      customerName,
-      customerEmail,
-      customerPhone,
-      razorpayKeyId:     creds["razorpay_key_id"] ?? "",
-      razorpayKeySecret: creds["razorpay_key_secret"] ?? "",
-    });
-  } catch (err) {
-    console.error(`[tally/ack] post-ack error for ${billingStatementId}:`, err);
   }
 }
