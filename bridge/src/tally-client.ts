@@ -361,25 +361,25 @@ export class TallyClient {
     const res = await this.post(xml);
     this.assertNoLineError(res, "postSalesVoucher");
 
-    // ── D5 TODO ────────────────────────────────────────────────────────────────
-    // Parse CREATED count, voucher GUID, invoice number, and e-invoice fields
-    // from the actual D5 response. The paths below are best-estimate.
-    // ─────────────────────────────────────────────────────────────────────────
-    const parsed  = parser.parse(res) as Record<string, unknown>;
-    const result  = (parsed["ENVELOPE"] as Record<string, unknown> | undefined) ?? {};
-    const created = Number((result["CREATED"] as string | number | undefined) ?? 0);
+    // Extract fields directly from the XML by tag name — robust to nesting depth.
+    // Works for both mock and real Tally regardless of where CREATED/GUID/etc sit.
+    // ── D5: confirm these tag names match your Tally version's import response ──
+    const tag = (name: string): string | null => {
+      const m = res.match(new RegExp(`<${name}>([\\s\\S]*?)<\\/${name}>`, "i"));
+      return m ? m[1].trim() : null;
+    };
 
+    const created = Number(tag("CREATED") ?? "0");
     if (created < 1) {
       throw new Error(`Tally created ${created} vouchers — expected 1. Response: ${res.slice(0, 500)}`);
     }
 
-    // D5 TODO: extract these from real response
-    const voucherGuid    = String((result["GUID"] as string | undefined) ?? "").trim();
-    const invoiceNumber  = String((result["VOUCHERNUMBER"] as string | undefined) ?? "").trim();
-    const irn            = String((result["IRN"] as string | undefined) ?? "").trim() || null;
-    const ackNo          = String((result["IRNACKNO"] as string | undefined) ?? "").trim() || null;
-    const ackDate        = String((result["IRNACKDATE"] as string | undefined) ?? "").trim() || null;
-    const signedQr       = String((result["SIGNEDQRCODE"] as string | undefined) ?? "").trim() || null;
+    const voucherGuid    = tag("GUID") ?? "";
+    const invoiceNumber  = tag("VOUCHERNUMBER") ?? "";
+    const irn            = tag("IRN") || null;
+    const ackNo          = tag("IRNACKNO") || null;
+    const ackDate        = tag("IRNACKDATE") || null;
+    const signedQr       = tag("SIGNEDQRCODE") || null;
     const irnPending     = !irn;   // if no IRN in response, Tally is generating it async
 
     log.info(`Voucher created: ${invoiceNumber} | GUID: ${voucherGuid} | IRN: ${irn ?? "pending"}`);
