@@ -14,6 +14,7 @@
  * Usage in tests: start this server on port 9000 before running the bridge.
  */
 
+import fs from "fs";
 import http from "http";
 
 const PORT = parseInt(process.env.MOCK_PORT ?? "9000", 10);
@@ -58,7 +59,7 @@ const server = http.createServer((req, res) => {
 
     if (body.includes("VCHTYPE") || body.includes("VOUCHER")) {
       // Sales voucher creation — for debugging, save the received XML
-      try { require("fs").writeFileSync("/tmp/last-voucher.xml", body); } catch { /* ignore */ }
+      try { fs.writeFileSync("/tmp/last-voucher.xml", body); } catch { /* ignore */ }
       const invoiceNum = `TWV/24-25/${String(requestCount).padStart(4, "0")}`;
       const guid       = `fake-guid-${Date.now()}`;
       const irn        = simulate === "async_irn" ? null : `fake-irn-${Date.now()}`;
