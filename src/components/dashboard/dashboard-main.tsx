@@ -5,7 +5,6 @@ import { EnquiryAlertBanner } from "@/components/dashboard/enquiry-alert-banner"
 import { PushNotificationPrompt } from "@/components/dashboard/push-notification-prompt";
 import { InstallPrompt } from "@/components/dashboard/install-prompt";
 import { EnquiryNotificationsProvider } from "@/providers/enquiry-notifications-provider";
-import { CurrentUserProvider } from "@/providers/current-user-provider";
 import { useServiceWorker } from "@/hooks/use-service-worker";
 import { FlowGuideHint } from "@/components/shared/flow-guide-hint";
 
@@ -23,7 +22,6 @@ export function DashboardMain({ children }: { children: React.ReactNode }) {
   useServiceWorker();
 
   return (
-    <CurrentUserProvider>
     <EnquiryNotificationsProvider>
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header />
@@ -40,6 +38,5 @@ export function DashboardMain({ children }: { children: React.ReactNode }) {
       {/* Contextual idle-triggered flow guide — zero infra, sessionStorage only */}
       <FlowGuideHint />
     </EnquiryNotificationsProvider>
-    </CurrentUserProvider>
   );
 }
