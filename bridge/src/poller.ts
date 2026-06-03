@@ -131,6 +131,12 @@ export class Poller {
       tax_percentage:       number;
       line_items:           Array<{ description?: string; amount?: number }>;
     };
+    const p = job.payload as Record<string, unknown>;
+    const str = (k: string, d = "") => String(p[k] ?? d);
+    void expectedGstin;
+
+    // E-invoice (IRN) only applies to B2B customers WITH a GSTIN. B2C never get one.
+    const hasGstin = str("buyer_gstin").trim().length >= 15;
 
     // ── D10.3 Check-before-create ─────────────────────────────────────────────
     // Ask Tally if a voucher with this idempotency key already exists.
@@ -145,7 +151,7 @@ export class Poller {
         tally_invoice_number: existing.invoice_number,
         tally_irn:            existing.irn ?? undefined,
         tally_total_amount:   payload.taxable_amount, // D5: get real total from Tally read-back
-        irn_pending:          !existing.irn,
+        irn_pending:          hasGstin && !existing.irn,   // B2C never awaits an IRN
         voucher_created_at:   new Date().toISOString(),
       });
       return;
@@ -153,10 +159,7 @@ export class Poller {
 
     // All invoice details (ledgers, party, stock item, place of supply) are
     // injected into the job payload by the CRM /pending endpoint from the
-    // Tally Sync Control settings + the customer record.
-    const p = job.payload as Record<string, unknown>;
-    const str = (k: string, d = "") => String(p[k] ?? d);
-    void expectedGstin;
+    // Tally Sync Control settings + the customer record (p/str defined above).
 
     // ── Post the voucher (SDIPL-REG item-invoice format) ───────────────────────
     const result = await this.tally.postSalesVoucher({
@@ -178,7 +181,11 @@ export class Poller {
       })),
     });
 
-    // ── Ack back to CRM ───────────────────────────────────────────────────────
+    // ── E-invoice applicability (GST rule) ─────────────────────────────────────
+    // IRN only applies to B2B (hasGstin, computed above). B2C never await an IRN
+    // (else they'd hang forever) — complete the moment the voucher exists.
+    const irnPending  = hasGstin && result.irn_pending;   // only B2B awaits an IRN
+
     await this.crm.ack({
       success:              true,
       job_id:               job.id,
@@ -189,12 +196,15 @@ export class Poller {
       tally_ack_date:       result.ack_date ?? undefined,
       tally_signed_qr_code: result.signed_qr_code ?? undefined,
       tally_total_amount:   result.total_amount,
-      irn_pending:          result.irn_pending,
+      irn_pending:          irnPending,
       voucher_created_at:   result.created_at,
     });
 
     healthState.lastSyncAt = new Date().toISOString();
     healthState.lastError  = null;
-    log.info(`Job ${job.id} completed — invoice ${result.invoice_number} issued`);
+    log.info(
+      `Job ${job.id} completed — invoice ${result.invoice_number} issued ` +
+      `(${hasGstin ? (irnPending ? "B2B, awaiting IRN" : "B2B, IRN present") : "B2C, no IRN needed"})`
+    );
   }
 }
