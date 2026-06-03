@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -238,9 +239,10 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const { id } = use(params);
   const router = useRouter();
 
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   const [chain, setChain] = useState<ChainData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [userRole, setUserRole] = useState<string | null>(null);
 
   // Payment form
   const [payAmount, setPayAmount] = useState("");
@@ -325,7 +327,6 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
 
   useEffect(() => {
     fetchChain();
-    fetch("/api/me").then((r) => r.json()).then((d) => setUserRole(d.role ?? null));
     fetch("/api/tds/sections").then((r) => r.json()).then((d) => {
       if (d.data) setTdsSections(d.data);
     });

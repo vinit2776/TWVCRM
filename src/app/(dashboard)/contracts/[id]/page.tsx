@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useState, useEffect, useCallback, useRef } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -106,9 +107,10 @@ export default function ContractDetailPage({
     else { setCopiedLessee(true); setTimeout(() => setCopiedLessee(false), 2000); }
   };
 
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [linkedProposal, setLinkedProposal] = useState<any>(null);
-  const [userRole, setUserRole] = useState<string | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
   const [kycStatus, setKycStatus] = useState<{ allSatisfied: boolean; total: number; approved: number; deferred: number }>({ allSatisfied: true, total: 0, approved: 0, deferred: 0 });
   const [showOverride, setShowOverride] = useState(false);
@@ -161,7 +163,6 @@ export default function ContractDetailPage({
 
   useEffect(() => {
     fetchContract(true);
-    fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {});
   }, [fetchContract]);
 
   /** Wraps activation to check space allocation first */

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -185,11 +186,12 @@ function AuditEntry({
 export default function VendorBillDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const currentUserRole = user?.role ?? null;
 
   const [bill, setBill] = useState<VendorBill | null>(null);
   const [chain, setChain] = useState<ChainData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
 
   // Approval
   const [approveLoading, setApproveLoading] = useState(false);
@@ -224,13 +226,6 @@ export default function VendorBillDetailPage() {
 
   const today = new Date().toISOString().split("T")[0];
 
-  // Fetch current user role
-  useEffect(() => {
-    fetch("/api/me")
-      .then((r) => r.json())
-      .then((json) => setCurrentUserRole(json.role || null))
-      .catch(() => setCurrentUserRole(null));
-  }, []);
 
   const fetchAll = useCallback(async () => {
     setLoading(true);

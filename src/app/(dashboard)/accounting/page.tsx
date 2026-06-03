@@ -41,6 +41,7 @@ import {
   BillSearchBar, filtersToParams, EMPTY_FILTERS, type BillFilters,
 } from "@/components/procurement/bill-search-bar";
 import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import {
   classifyExpense,
   EXPENSE_CLASS_LABELS,
@@ -167,10 +168,8 @@ export default function AccountingPage() {
   const [emailAuditHighPriority, setEmailAuditHighPriority] = useState(0);
 
   // Current user role (for payment permission checks)
-  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
-  useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((j) => setCurrentUserRole(j.role ?? null)).catch(() => setCurrentUserRole(null));
-  }, []);
+  const { user: currentUserCtx } = useCurrentUser();
+  const currentUserRole = currentUserCtx?.role ?? null;
   const canRecordPayment = ["admin", "accounts", "office_admin"].includes(currentUserRole ?? "");
   const canRecordCash = currentUserRole === "admin" || currentUserRole === "office_admin";
   // Rent payments tab

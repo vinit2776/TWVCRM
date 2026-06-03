@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Plus, Building2, Search, CheckCircle, AlertCircle, Clock } from "lucide-react";
@@ -25,17 +26,15 @@ const KYC_LABELS: Record<string, string> = {
 
 export default function LandlordsListPage() {
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   const [landlords, setLandlords] = useState<(Landlord & { active_lease_count?: number; bank_accounts?: { is_verified: boolean; is_primary: boolean }[] })[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
-  const [userRole, setUserRole] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((d) => {
-      setUserRole(d.role);
-      if (d.role && d.role !== "admin") router.replace("/dashboard");
-    });
-  }, [router]);
+    if (userRole !== null && userRole !== "admin") router.replace("/dashboard");
+  }, [userRole, router]);
 
   const fetchLandlords = useCallback(async () => {
     setLoading(true);

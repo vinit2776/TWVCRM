@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useState, useEffect } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -87,12 +88,12 @@ function MiniBar({ value, max, className }: { value: number; max: number; classN
 export default function ItemInsightsPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? "";
   const [data, setData] = useState<ItemInsights | null>(null);
   const [loading, setLoading] = useState(true);
-  const [userRole, setUserRole] = useState("");
 
   useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role ?? ""));
     fetch(`/api/procurement/items/${id}/insights`)
       .then((r) => r.json())
       .then((j) => { if (j.data) setData(j.data); })

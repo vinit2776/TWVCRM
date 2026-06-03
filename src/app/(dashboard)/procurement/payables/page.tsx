@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { IndianRupee, ChevronLeft, ChevronRight, Loader2, CalendarClock, AlertTriangle, CheckCircle2, ClockAlert, ChevronDown, ChevronUp, X, FileText } from "lucide-react";
@@ -50,8 +51,9 @@ type BatchTab = { key: string; label: string; date: string | null; count: number
 
 export default function PayablesPage() {
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const currentUserRole = user?.role ?? null;
   const [activeTab, setActiveTab] = useState<"bills" | "advances">("bills");
-  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
 
   // ── Bills state ────────────────────────────────────────────────────────────
   const [bills, setBills] = useState<VendorBill[]>([]);
@@ -82,13 +84,6 @@ export default function PayablesPage() {
   const [gapAlerts, setGapAlerts] = useState<GapAlertItem[]>([]);
   const [gapAlertsExpanded, setGapAlertsExpanded] = useState(false);
 
-  // ── Fetch current user role ───────────────────────────────────────────────
-  useEffect(() => {
-    fetch("/api/me")
-      .then((r) => r.json())
-      .then((j) => setCurrentUserRole(j.role ?? null))
-      .catch(() => setCurrentUserRole(null));
-  }, []);
 
   const canOverrideBatch = ["admin", "manager", "accounts"].includes(currentUserRole ?? "");
 

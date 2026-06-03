@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import {
   ClipboardCheck, CheckCircle2, XCircle, Clock, Loader2,
@@ -242,11 +243,12 @@ function CompRequestRow({
 // ---------------------------------------------------------------------------
 
 export default function ApprovalsPage() {
+  const { user, loading: userLoading } = useCurrentUser();
+  const userRole = user?.role ?? null;
+  const userId = user?.id ?? null;
   const [requests, setRequests]     = useState<ApprovalRequest[]>([]);
   const [history, setHistory]       = useState<ApprovalRequest[]>([]);
   const [loading, setLoading]       = useState(true);
-  const [userRole, setUserRole]     = useState<string | null>(null);
-  const [userId, setUserId]         = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
 
   const isApprover = userRole === "admin" || userRole === "manager";
@@ -285,15 +287,8 @@ export default function ApprovalsPage() {
   }, [isApprover, userId]);
 
   useEffect(() => {
-    fetch("/api/me")
-      .then(r => r.json())
-      .then(j => { setUserRole(j.role || null); setUserId(j.id || null); })
-      .catch(() => {});
-  }, []);
-
-  useEffect(() => {
-    if (userRole !== null) fetchData();
-  }, [userRole, fetchData]);
+    if (!userLoading && userRole !== null) fetchData();
+  }, [userLoading, userRole, fetchData]);
 
   const handleRefresh = async () => {
     setRefreshing(true);

@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { createClient } from "@/lib/supabase/client";
+import { useCurrentUser } from "@/providers/current-user-provider";
 
 interface Notification {
   id: string;
@@ -93,11 +94,13 @@ function NotificationItem({
 }
 
 export function InAppNotificationBell() {
+  const { user } = useCurrentUser();
+  // DB users.id from context — eliminates the 2-step auth.getUser() + users table query on mount
+  const userId = user?.id ?? null;
   const [open, setOpen] = useState(false);
   const [notifications, setNotifications] = useState<Notification[]>([]);
   const [unreadCount, setUnreadCount] = useState(0);
   const [loading, setLoading] = useState(false);
-  const [userId, setUserId] = useState<string | null>(null);
   const fetched = useRef(false);
 
   const fetchNotifications = useCallback(async () => {
@@ -112,20 +115,6 @@ export function InAppNotificationBell() {
     } finally {
       setLoading(false);
     }
-  }, []);
-
-  // Get user ID for realtime subscription
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (!user) return;
-      const { data: dbUser } = await supabase
-        .from("users")
-        .select("id")
-        .eq("auth_id", user.id)
-        .single();
-      if (dbUser) setUserId(dbUser.id);
-    });
   }, []);
 
   // Initial fetch

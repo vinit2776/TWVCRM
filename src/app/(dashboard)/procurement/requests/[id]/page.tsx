@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -181,13 +182,14 @@ function entityBadgeClass(entityType: string): string {
 // ─────────────────────────────────────────────────────────────────────────────
 
 export default function PurchaseRequestDetailPage() {
+  const { user } = useCurrentUser();
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
 
+  const userRole = user?.role ?? "";
   const [pr, setPr] = useState<PurchaseRequest | null>(null);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
-  const [userRole, setUserRole] = useState<string>("");
 
   // Dialog state
   const [actionDialog, setActionDialog] = useState<ActionType | null>(null);
@@ -245,9 +247,6 @@ export default function PurchaseRequestDetailPage() {
   }, [pr, isApprover]);
 
   useEffect(() => { fetchPr(); }, [fetchPr]);
-  useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role || ""));
-  }, []);
 
   // Fetch lifecycle after PR loads
   useEffect(() => {

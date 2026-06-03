@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ChevronLeft, ChevronRight, ScrollText, Search, X, CalendarX, RefreshCw, Settings2 } from "lucide-react";
@@ -39,6 +40,8 @@ function quotaCount(c: ContractWithQuotaCount): number {
 
 export default function ContractsPage() {
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   const [contracts, setContracts] = useState<ContractWithQuotaCount[]>([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
@@ -47,12 +50,7 @@ export default function ContractsPage() {
   const [search, setSearch] = useState("");
   const [expiringSoon, setExpiringSoon] = useState("");
   const [noQuotasFilter, setNoQuotasFilter] = useState(false);
-  const [userRole, setUserRole] = useState<string | null>(null);
   const [selectedContract, setSelectedContract] = useState<ContractWithQuotaCount | null>(null);
-
-  useEffect(() => {
-    fetch("/api/me").then(r => r.json()).then(d => setUserRole(d.role ?? null));
-  }, []);
 
   const fetchContracts = useCallback(async () => {
     setLoading(true);

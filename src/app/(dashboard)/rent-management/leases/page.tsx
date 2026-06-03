@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import { Plus, Building2, Search, Filter } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -22,18 +23,16 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 
 export default function LeasesListPage() {
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   const [leases, setLeases] = useState<PropertyLease[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
-  const [userRole, setUserRole] = useState<string | null>(null);
 
   useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((d) => {
-      setUserRole(d.role);
-      if (d.role && d.role !== "admin") router.replace("/dashboard");
-    });
-  }, [router]);
+    if (userRole !== null && userRole !== "admin") router.replace("/dashboard");
+  }, [userRole, router]);
 
   const fetchLeases = useCallback(async () => {
     setLoading(true);

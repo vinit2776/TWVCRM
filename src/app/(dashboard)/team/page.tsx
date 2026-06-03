@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import {
   Shield,
   ShieldCheck,
@@ -257,9 +258,10 @@ const ALL_ROLES = [
 ];
 
 export default function TeamPage() {
+  const { user } = useCurrentUser();
+  const currentUserRole = user?.role ?? null;
   const [users, setUsers] = useState<UserType[]>([]);
   const [loading, setLoading] = useState(true);
-  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
 
   // Create user dialog state
   const [createOpen, setCreateOpen] = useState(false);
@@ -321,11 +323,6 @@ export default function TeamPage() {
 
   useEffect(() => {
     fetchUsers();
-    // Fetch current user role via server-side API (bypasses browser extension blocks on supabase.co)
-    fetch("/api/me")
-      .then((r) => r.json())
-      .then((json) => setCurrentUserRole(json.role || null))
-      .catch(() => setCurrentUserRole(null));
   }, [fetchUsers]);
 
   // Close menu on outside click

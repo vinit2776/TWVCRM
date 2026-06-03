@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useParams, useRouter } from "next/navigation";
 import {
   ChevronLeft, Loader2, ArrowRight, MapPin, User, Calendar,
@@ -53,12 +54,13 @@ interface ReceiveLineItem {
 export default function TransferDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? "";
 
   const [transfer, setTransfer] = useState<StockTransfer | null>(null);
   const [stockLevels, setStockLevels] = useState<StockLevel[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
-  const [userRole, setUserRole] = useState("");
 
   // Dialog states
   const [rejectOpen, setRejectOpen] = useState(false);
@@ -83,15 +85,6 @@ export default function TransferDetailPage() {
 
   useEffect(() => { fetchTransfer(); }, [fetchTransfer]);
 
-  // Fetch user role
-  useEffect(() => {
-    fetch("/api/me")
-      .then((r) => r.json())
-      .then((json) => {
-        if (json.data?.role) setUserRole(json.data.role);
-        else if (json.role) setUserRole(json.role);
-      });
-  }, []);
 
   // ─── Action handlers ────────────────────────────────────────────────────
 

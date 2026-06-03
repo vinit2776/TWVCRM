@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useState, useEffect, useCallback, useRef } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -69,7 +70,7 @@ export default function ProposalDetailPage({
   const [loading, setLoading] = useState(true);
 
   // Current user (rep) profile for PDF/email attribution
-  const [currentUser, setCurrentUser] = useState<{ full_name: string; email: string; phone: string; role?: string } | null>(null);
+  const { user: currentUser } = useCurrentUser();
 
   // Service quotas for PDF rendering
   const [serviceQuotas, setServiceQuotas] = useState<{ name: string; unit_label: string; monthly_quota: number; overage_rate: number }[]>([]);
@@ -141,12 +142,6 @@ export default function ProposalDetailPage({
 
   useEffect(() => {
     fetchProposal();
-    fetch("/api/me")
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
-        if (data?.full_name) setCurrentUser({ full_name: data.full_name, email: data.email || "", phone: data.phone || "", role: data.role || "" });
-      })
-      .catch(() => {});
 
     // Fetch service quotas for this proposal to include in PDF
     fetch(`/api/proposals/${id}/service-quotas`)

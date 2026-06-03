@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import {
   Wifi, RefreshCw, Server, Users, Activity, MonitorSmartphone,
   Signal, Globe, ChevronLeft, ChevronRight, Settings2, Save,
@@ -173,22 +174,19 @@ const TABS: { id: Tab; label: string; icon: React.ElementType; adminOnly?: boole
 // ─── Main Page ────────────────────────────────────────────────────────────────
 
 export default function NetworkPage() {
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   const [tab, setTab] = useState<Tab>("overview");
   const [locations, setLocations] = useState<Location[]>([]);
   const [locationId, setLocationId] = useState<string>("");
-  const [userRole, setUserRole] = useState<string | null>(null);
 
   useEffect(() => {
-    Promise.all([
-      fetch("/api/locations").then((r) => r.json()),
-      fetch("/api/me").then((r) => r.json()),
-    ]).then(([locJson, meJson]) => {
+    fetch("/api/locations").then((r) => r.json()).then((locJson) => {
       const allLocs: Location[] = locJson.data ?? locJson ?? [];
       setLocations(allLocs);
       const firstUnifi = allLocs.find((l) => l.unifi_site_id);
       if (firstUnifi) setLocationId(firstUnifi.id);
       else if (allLocs.length > 0) setLocationId(allLocs[0].id);
-      setUserRole(meJson.role ?? null);
     }).catch(() => {});
   }, []);
 

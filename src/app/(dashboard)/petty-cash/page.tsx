@@ -1,6 +1,7 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Wallet, ArrowUpCircle, ArrowDownCircle, ClipboardCheck, Users, BarChart3 } from "lucide-react";
 import { MyBookTab } from "@/components/petty-cash/my-book-tab";
@@ -11,14 +12,8 @@ import { AllBooksTab } from "@/components/petty-cash/all-books-tab";
 import { AnalyticsTab } from "@/components/petty-cash/analytics-tab";
 
 export default function PettyCashPage() {
-  const [userRole, setUserRole] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch("/api/me")
-      .then((r) => r.json())
-      .then((json) => setUserRole(json.role || "sales_rep"))
-      .catch(() => setUserRole("sales_rep"));
-  }, []);
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
 
   const canApprove = userRole && ["admin", "manager", "accounts"].includes(userRole);
   const canViewAll = userRole && ["admin", "manager", "accounts"].includes(userRole);
