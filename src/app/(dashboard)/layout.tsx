@@ -1,8 +1,12 @@
+import dynamic from "next/dynamic";
 import { Sidebar } from "@/components/dashboard/sidebar";
 import { DashboardMain } from "@/components/dashboard/dashboard-main";
 import { MobileNav } from "@/components/shared/mobile-nav";
-import { CommandPalette } from "@/components/shared/command-palette";
 import { ReportIssueButton } from "@/components/support/report-issue-button";
+
+const CommandPalette = dynamic(
+  () => import("@/components/shared/command-palette").then(m => ({ default: m.CommandPalette }))
+);
 
 export default function DashboardLayout({
   children,

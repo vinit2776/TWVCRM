@@ -44,7 +44,10 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
 import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
 import { GenerateStatementDialog } from "@/components/billing/generate-statement-dialog";
-import { ViewStatementDialog } from "@/components/billing/view-statement-dialog";
+const ViewStatementDialog = dynamic(
+  () => import("@/components/billing/view-statement-dialog").then(m => ({ default: m.ViewStatementDialog })),
+  { ssr: false }
+);
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { toast } from "sonner";

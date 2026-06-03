@@ -55,7 +55,12 @@ import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
-import { CreateContractDialog } from "@/components/contracts/create-contract-dialog";
+import dynamic from "next/dynamic";
+
+const CreateContractDialog = dynamic(
+  () => import("@/components/contracts/create-contract-dialog").then(m => ({ default: m.CreateContractDialog })),
+  { ssr: false }
+);
 import { toast } from "sonner";
 import type { Proposal, Lead } from "@/types";
 
