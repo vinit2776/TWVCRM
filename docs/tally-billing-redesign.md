@@ -317,3 +317,34 @@ Decisions D2/D3/D4/D6, OV3/OV4/OV5/OV6/OV7 all still apply at the GST-generation
 1. Move enqueue to the 3 GST-gen entry points + stamp `issuance_channel`; remove finalize enqueue.
 2. `dispatchTallyInvoice` (paid-vs-unpaid) + `total_amount` mirror (OV3) + delivered-once (D3).
 3. OV1 reminder predicate; void block (D5); sweep crons (OV4/OV5).
+
+---
+
+## 16. Clarifications: cancel/modify + manual payments
+
+### Q1 — Cancel / modify a Tally-issued GST invoice (Tally is source of record)
+- **B2B within 24h of IRN:** cancel the IRN (via Tally), re-issue corrected.
+- **B2B after 24h:** issue a Credit Note in Tally, then a fresh invoice (IRN'd invoices can't be edited).
+- **B2C (no IRN):** edit/cancel directly in Tally.
+- **Reflect in CRM:** manual now (mark statement cancelled/superseded to match Tally; the
+  OV5 reconciliation sweep flags mismatches). **Phase 3:** one-click CRN from the CRM.
+- This is why CRM-only void is blocked (D5) — corrections must be Tally-first/coordinated.
+- Cheapest to modify **before** Tally issues (edit the PI/statement pre-conversion).
+
+### Q2 — Manual payments: CRM is primary; bridge posts the receipt to Tally
+**Decision: enter manual (bank/cash) payments ONCE in the CRM** (as today — `billing_payments`).
+- CRM marks the statement paid → **follow-up/dunning stops immediately** (CRM stays the
+  authority for collection).
+- **NEW build — receipt-voucher sync:** when a payment is recorded (manual entry OR the
+  Razorpay webhook), enqueue a `receipt_voucher` job (job type already exists in
+  `tally_sync_jobs`). The bridge posts a Receipt Voucher into Tally against the invoice,
+  so Tally's books show it paid. One entry, both systems agree.
+- **Online (Razorpay):** already flows CRM→Tally via the webhook → same receipt-voucher job.
+- **Interim (until receipt sync ships):** double-entry (CRM for follow-up + accounts records
+  the receipt in Tally). Build receipt sync in Phase 1 to remove the double entry.
+
+### Added to Phase 1 scope
+- `dispatchTallyInvoice` already handles paid (no link) vs unpaid (+link).
+- **Receipt-voucher sync** (CRM payment recorded → bridge posts receipt to Tally) — needed
+  for correct books once invoices are Tally-issued. Bridge: implement `postReceiptVoucher`
+  (mirror of `postSalesVoucher`); CRM: enqueue `receipt_voucher` on payment.
