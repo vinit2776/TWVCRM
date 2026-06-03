@@ -3,14 +3,16 @@
 // Preserves signatures and text layer — does NOT rasterize or touch page
 // content streams. Non-PDF files are returned unchanged. On any failure
 // (encrypted, malformed) the original file is returned so uploads never block.
-
-import { PDFDocument } from "pdf-lib";
+//
+// pdf-lib (~400 KB) is dynamically imported so it does NOT land in the initial
+// JS bundle — it only loads when the user actually processes a PDF file.
 
 export async function normalizePdfClient(file: File): Promise<File> {
   if (typeof window === "undefined") return file;
   if (file.type !== "application/pdf") return file;
 
   try {
+    const { PDFDocument } = await import("pdf-lib");
     const bytes = await file.arrayBuffer();
     const doc = await PDFDocument.load(bytes, { ignoreEncryption: true });
 
