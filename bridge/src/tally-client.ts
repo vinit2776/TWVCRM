@@ -10,15 +10,11 @@
  */
 
 import http from "http";
-import { XMLParser } from "fast-xml-parser";
 import { log } from "./logger";
 import { Config } from "./config";
 
-const parser = new XMLParser({
-  ignoreAttributes:    false,
-  attributeNamePrefix: "@_",
-  parseTagValue:       true,
-});
+// Tally responses are parsed by direct tag extraction (see tag() / matchAll below)
+// rather than a full XML parser — simpler and avoids a dependency we don't need.
 
 export interface TallyCompanyInfo {
   name:  string;
