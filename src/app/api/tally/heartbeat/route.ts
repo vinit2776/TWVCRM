@@ -31,10 +31,10 @@ import { z } from "zod";
 
 const HeartbeatSchema = z.object({
   bridge_instance_id:   z.string().min(1),
-  version:              z.string().optional(),
+  version:              z.string().nullable().optional(),
   tally_connected:      z.boolean(),
-  tally_company_name:   z.string().optional(),
-  tally_company_gstin:  z.string().optional(),
+  tally_company_name:   z.string().nullable().optional(),
+  tally_company_gstin:  z.string().nullable().optional(),
   crm_connected:        z.boolean().default(true),
   pending_count:        z.number().int().min(0).default(0),
   failed_count:         z.number().int().min(0).default(0),

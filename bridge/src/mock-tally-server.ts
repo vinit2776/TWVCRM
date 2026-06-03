@@ -76,9 +76,9 @@ const server = http.createServer((req, res) => {
   });
 });
 
-function companyResponse(name: string, gstin: string): string {
-  // Fields directly under ENVELOPE — matches tally-client.ts getCurrentCompany() parser
-  return `<ENVELOPE><CMPNAME>${name}</CMPNAME><CMPGSTIN>${gstin}</CMPGSTIN></ENVELOPE>`;
+function companyResponse(name: string, _gstin: string): string {
+  // Mimics real Tally "List of Companies" response — getCurrentCompany() parses <NAME> tags.
+  return `<ENVELOPE><BODY><DATA><COLLECTION><COMPANY><NAME>${name}</NAME></COMPANY></COLLECTION></DATA></BODY></ENVELOPE>`;
 }
 
 function voucherResponse(guid: string, invoiceNumber: string, irn: string): string {
