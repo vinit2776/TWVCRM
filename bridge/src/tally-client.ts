@@ -116,19 +116,19 @@ export class TallyClient {
 </ENVELOPE>`;
 
       const res = await this.post(xml);
+      const name = extractCompanyName(res);
 
-      // Parse <NAME> tags from the List of Companies response
-      // Same approach as the connection tester (scripts/tally-connection-test/)
-      const names = [...res.matchAll(/<NAME>([\s\S]*?)<\/NAME>/g)]
-        .map(m => m[1].trim())
-        .filter(Boolean);
+      if (!name) {
+        // Tally responded but we couldn't find the company name in any known
+        // format. Log a snippet of the raw response so we can pin the exact tag.
+        log.warn(
+          "Tally responded but no company name found. Raw response (first 600 chars): " +
+          res.slice(0, 600).replace(/\s+/g, " ")
+        );
+        return null;
+      }
 
-      const name = names[0] ?? "";
-      if (!name) return null;
-
-      // GSTIN: not available from this query — use empty string.
-      // The poller's GSTIN guard only fires when gstin is non-empty,
-      // so this safely skips the check until D5 samples confirm the right query.
+      // GSTIN read from config, not this query (poller guard now server-side).
       return { name, gstin: "" };
     } catch (err) {
       log.error(`getCurrentCompany failed: ${String(err)}`);
@@ -417,4 +417,27 @@ function escapeXml(s: string): string {
     .replace(/>/g,  "&gt;")
     .replace(/"/g,  "&quot;")
     .replace(/'/g,  "&apos;");
+}
+
+/**
+ * Extract the company name from a Tally "List of Companies" response.
+ * Tally versions return the name in different shapes, so we try each:
+ *   1. <NAME>Company</NAME>           (child element)
+ *   2. <COMPANY NAME="Company">       (attribute on COMPANY)
+ *   3. <COMPANYNAME>Company</COMPANYNAME>
+ *   4. <SVCURRENTCOMPANY>Company</SVCURRENTCOMPANY>
+ * Returns "" if none match.
+ */
+function extractCompanyName(xml: string): string {
+  const patterns: RegExp[] = [
+    /<NAME>([\s\S]*?)<\/NAME>/i,
+    /<COMPANY[^>]*\bNAME\s*=\s*"([^"]+)"/i,
+    /<COMPANYNAME>([\s\S]*?)<\/COMPANYNAME>/i,
+    /<SVCURRENTCOMPANY>([\s\S]*?)<\/SVCURRENTCOMPANY>/i,
+  ];
+  for (const re of patterns) {
+    const m = xml.match(re);
+    if (m && m[1] && m[1].trim()) return m[1].trim();
+  }
+  return "";
 }
