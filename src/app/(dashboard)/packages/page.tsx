@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import {
   Plus, Loader2, TicketCheck, Pencil, ToggleLeft, ToggleRight, Copy, Send, Clock,
 } from "lucide-react";
@@ -337,20 +338,13 @@ export default function PackagesPage() {
   const [purchasesLoading, setPurchasesLoading] = useState(true);
 
   const [packageFormOpen, setPackageFormOpen] = useState(false);
+  const { user } = useCurrentUser();
+  const currentUserRole = user?.role ?? null;
   const [editingPackage, setEditingPackage] = useState<PrepaidPackage | null>(null);
   const [sellOpen, setSellOpen] = useState(false);
   const [extendOpen, setExtendOpen] = useState(false);
   const [extendingPurchase, setExtendingPurchase] = useState<PrepaidPurchase | null>(null);
   const [resendingId, setResendingId] = useState<string | null>(null);
-  const [currentUserRole, setCurrentUserRole] = useState<string | null>(null);
-
-  // Fetch current user role via server-side API (bypasses browser extension blocks)
-  useEffect(() => {
-    fetch("/api/me")
-      .then((r) => r.json())
-      .then((json) => setCurrentUserRole(json.role || null))
-      .catch(() => setCurrentUserRole(null));
-  }, []);
 
   const fetchPackages = useCallback(async () => {
     setPackagesLoading(true);

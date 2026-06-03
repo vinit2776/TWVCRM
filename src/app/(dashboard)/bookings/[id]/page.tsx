@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useState, useEffect, useCallback, useRef } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter, useSearchParams } from "next/navigation";
 import Link from "next/link";
 import {
@@ -117,7 +118,8 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
   // Post-checkout usage charges linked to THIS booking
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [bookingCharges, setBookingCharges] = useState<any[]>([]);
-  const [userRole, setUserRole] = useState<string | null>(null);
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   const [bookingDevices, setBookingDevices] = useState<Array<{ id: string; device: { id: string; label: string; device_category: string } | null }>>([]);
   const [pinDelivery, setPinDelivery] = useState<{ whatsapp: string; sms: string; email: string } | null>(null);
   const [pinCopied, setPinCopied] = useState(false);
@@ -239,7 +241,6 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
     fetchCompRequest();
     return () => controller.abort();
   }, [fetchBooking, fetchCompRequest]);
-  useEffect(() => { fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {}); }, []);
 
   const handlePricingSave = async () => {
     const newRate = parseFloat(draftRate);

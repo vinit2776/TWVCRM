@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { Card, CardContent } from "@/components/ui/card";
 import { LocationSelector } from "@/components/shared/location-selector";
@@ -198,26 +199,19 @@ function LiveEnquiriesWidget() {
 // ─── Main dashboard page ──────────────────────────────────────────────────────
 
 export default function DashboardPage() {
+  const { user, loading: userLoading } = useCurrentUser();
+  const userRole = (user?.role as UserRole) ?? null;
   const [stats, setStats] = useState<DashboardStats | null>(null);
   const [locationFilter, setLocationFilter] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState<UserRole | null>(null);
   const [widgetConfig, setWidgetConfig] = useState<WidgetId[]>([]);
 
-  // Fetch role + widget config once on mount
+  // Fetch widget config once user role is available
   useEffect(() => {
-    fetch("/api/me")
-      .then((r) => r.json())
-      .then(async (json) => {
-        const role = (json.role as UserRole) ?? "sales_rep";
-        setUserRole(role);
-        const widgets = await fetchWidgetConfig(role);
-        setWidgetConfig(widgets);
-      })
-      .catch(() => {
-        setUserRole("sales_rep");
-        setWidgetConfig(DASHBOARD_ROLE_WIDGETS.sales_rep);
-      });
-  }, []);
+    if (userLoading) return;
+    const role = (user?.role as UserRole) ?? "sales_rep";
+    fetchWidgetConfig(role).then((widgets) => setWidgetConfig(widgets));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userLoading]);
 
   const fetchStats = useCallback(async () => {
     const params = new URLSearchParams();

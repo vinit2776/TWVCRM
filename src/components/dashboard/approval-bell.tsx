@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter } from "next/navigation";
 import {
   CheckCircle2, XCircle, ClipboardCheck, Loader2, RefreshCw,
@@ -70,10 +71,11 @@ const APPROVAL_TYPE_LABELS: Record<string, string> = {
 
 export function ApprovalBell() {
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   const [open, setOpen] = useState(false);
   const [approvals, setApprovals] = useState<ApprovalRequest[]>([]);
   const [loading, setLoading] = useState(false);
-  const [userRole, setUserRole] = useState<string | null>(null);
   const [actingOnId, setActingOnId] = useState<string | null>(null);
   const [rejectingId, setRejectingId] = useState<string | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
@@ -102,7 +104,6 @@ export function ApprovalBell() {
 
   useEffect(() => {
     fetchApprovals();
-    fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {});
     // No polling interval — data refreshes on mount and each time the bell is opened.
     // This avoids background DB hits every 60s across all open sessions.
   }, [fetchApprovals]);

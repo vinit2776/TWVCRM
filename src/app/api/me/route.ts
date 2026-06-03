@@ -23,11 +23,12 @@ export async function GET() {
 
     const { data } = await supabase
       .from("users")
-      .select("role, full_name, email, phone")
+      .select("id, role, full_name, email, phone")
       .eq("auth_id", user.id)
       .single();
 
     return NextResponse.json({
+      id: data?.id ?? null,
       role: data?.role ?? null,
       full_name: data?.full_name ?? "",
       email: data?.email ?? "",

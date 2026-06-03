@@ -14,40 +14,19 @@ import {
 import { useUiStore } from "@/stores/ui-store";
 import { createClient } from "@/lib/supabase/client";
 import { getInitials } from "@/lib/utils";
-import { useState, useEffect } from "react";
 import { NotificationBell } from "@/components/dashboard/notification-bell";
 import { ApprovalBell } from "@/components/dashboard/approval-bell";
 import { InAppNotificationBell } from "@/components/dashboard/in-app-notification-bell";
+import { useCurrentUser } from "@/providers/current-user-provider";
 
 export function Header() {
   const { toggleSidebar } = useUiStore();
   const router = useRouter();
-  const [userEmail, setUserEmail] = useState("");
-  const [userName, setUserName] = useState("");
-  const [userRole, setUserRole] = useState("");
-
-  useEffect(() => {
-    const supabase = createClient();
-    supabase.auth.getUser().then(async ({ data: { user } }) => {
-      if (!user) return;
-      setUserEmail(user.email || "");
-
-      // Fetch full_name from the users table (auth metadata may not have it for email/password users)
-      const { data: dbUser } = await supabase
-        .from("users")
-        .select("full_name, role")
-        .eq("auth_id", user.id)
-        .single();
-
-      if (dbUser) {
-        setUserName(dbUser.full_name || user.email || "");
-        setUserRole(dbUser.role || "");
-      } else {
-        // Fallback to auth metadata
-        setUserName(user.user_metadata?.full_name || user.email || "");
-      }
-    });
-  }, []);
+  // Read from the shared CurrentUserProvider — no extra round-trips needed
+  const { user } = useCurrentUser();
+  const userEmail = user?.email ?? "";
+  const userName = user?.full_name ?? "";
+  const userRole = user?.role ?? "";
 
   async function handleSignOut() {
     const supabase = createClient();

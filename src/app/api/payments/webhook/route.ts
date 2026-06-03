@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import crypto from "crypto";
 import { provisionBookingAccess } from "@/lib/provision-booking-access";
+import { getCachedSetting } from "@/lib/app-settings-cache";
 
 export const dynamic = "force-dynamic";
 
@@ -44,20 +45,16 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Missing signature" }, { status: 400 });
   }
 
-  // Fetch webhook secret from settings
-  const { data: secretSetting } = await supabase
-    .from("app_settings")
-    .select("value")
-    .eq("key", "razorpay_webhook_secret")
-    .single();
+  // Fetch webhook secret from settings (cached — avoids a DB round-trip on every webhook)
+  const webhookSecret = await getCachedSetting(supabase, "razorpay_webhook_secret");
 
-  if (!secretSetting?.value) {
+  if (!webhookSecret) {
     return NextResponse.json({ error: "Webhook secret not configured" }, { status: 500 });
   }
 
   // Verify webhook signature
   const expectedSignature = crypto
-    .createHmac("sha256", secretSetting.value)
+    .createHmac("sha256", webhookSecret)
     .update(rawBody)
     .digest("hex");
 

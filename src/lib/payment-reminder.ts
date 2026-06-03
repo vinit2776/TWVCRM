@@ -16,6 +16,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { messaging } from "@/lib/whatsapp";
+import { getCachedSettings } from "@/lib/app-settings-cache";
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -120,12 +121,13 @@ export async function ensureLivePaymentLink(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   admin: SupabaseClient, statement: any, contract: any, lead: any, appUrl: string,
 ): Promise<string | null> {
-  const { data: rzpRows } = await admin
-    .from("app_settings").select("key, value")
-    .in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret"]);
-  const rzp = (rzpRows || []).reduce((m: Record<string, string>, r: { key: string; value: string }) => { m[r.key] = r.value; return m; }, {});
-  if (rzp.razorpay_enabled !== "true" || !rzp.razorpay_key_id || !rzp.razorpay_key_secret) return null;
-  const auth = Buffer.from(`${rzp.razorpay_key_id}:${rzp.razorpay_key_secret}`).toString("base64");
+  const settings = await getCachedSettings(admin, [
+    "razorpay_key_id",
+    "razorpay_key_secret",
+    "razorpay_enabled",
+  ]);
+  if (settings["razorpay_enabled"] !== "true" || !settings["razorpay_key_id"] || !settings["razorpay_key_secret"]) return null;
+  const auth = Buffer.from(`${settings["razorpay_key_id"]}:${settings["razorpay_key_secret"]}`).toString("base64");
 
   const existingId = statement.razorpay_payment_link_id as string | undefined;
   const existingUrl = statement.razorpay_payment_link_url as string | undefined;

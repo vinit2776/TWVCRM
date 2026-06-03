@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useState, useEffect, useCallback, useRef } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -54,7 +55,12 @@ import { EmailDocumentDialog } from "@/components/shared/email-document-dialog";
 import { ProposalLifecycle } from "@/components/proposals/proposal-lifecycle";
 import { BookingConfirmationDialog } from "@/components/proposals/booking-confirmation-dialog";
 import { DepositWaiverGate } from "@/components/proposals/deposit-waiver-gate";
-import { CreateContractDialog } from "@/components/contracts/create-contract-dialog";
+import dynamic from "next/dynamic";
+
+const CreateContractDialog = dynamic(
+  () => import("@/components/contracts/create-contract-dialog").then(m => ({ default: m.CreateContractDialog })),
+  { ssr: false }
+);
 import { toast } from "sonner";
 import type { Proposal, Lead } from "@/types";
 
@@ -69,7 +75,7 @@ export default function ProposalDetailPage({
   const [loading, setLoading] = useState(true);
 
   // Current user (rep) profile for PDF/email attribution
-  const [currentUser, setCurrentUser] = useState<{ full_name: string; email: string; phone: string; role?: string } | null>(null);
+  const { user: currentUser } = useCurrentUser();
 
   // Service quotas for PDF rendering
   const [serviceQuotas, setServiceQuotas] = useState<{ name: string; unit_label: string; monthly_quota: number; overage_rate: number }[]>([]);
@@ -141,12 +147,6 @@ export default function ProposalDetailPage({
 
   useEffect(() => {
     fetchProposal();
-    fetch("/api/me")
-      .then((r) => r.ok ? r.json() : null)
-      .then((data) => {
-        if (data?.full_name) setCurrentUser({ full_name: data.full_name, email: data.email || "", phone: data.phone || "", role: data.role || "" });
-      })
-      .catch(() => {});
 
     // Fetch service quotas for this proposal to include in PDF
     fetch(`/api/proposals/${id}/service-quotas`)

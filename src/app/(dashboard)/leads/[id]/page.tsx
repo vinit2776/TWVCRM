@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useState, useCallback, useEffect } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter, useSearchParams } from "next/navigation";
 import {
   ArrowLeft,
@@ -77,15 +78,8 @@ export default function LeadDetailPage({
   const [activityDefaultType, setActivityDefaultType] = useState<"call" | "meeting" | "note" | "tour">("call");
   const [activityRefreshKey, setActivityRefreshKey] = useState(0);
   const [printEntryOpen, setPrintEntryOpen] = useState(false);
-  const [userRole, setUserRole] = useState<string | null>(null);
-
-  // Fetch current user role for conditional rendering
-  useEffect(() => {
-    fetch("/api/me")
-      .then(r => r.json())
-      .then(j => setUserRole(j.role ?? null))
-      .catch(() => null);
-  }, []);
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
 
   const handleActivitySuccess = useCallback(() => {
     setActivityRefreshKey((k) => k + 1);

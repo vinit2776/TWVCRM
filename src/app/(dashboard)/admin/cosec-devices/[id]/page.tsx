@@ -15,9 +15,12 @@ import {
   MonitorSmartphone, CheckCircle2, XCircle, Download, FastForward,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
-import {
-  BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
-} from "recharts";
+import dynamic from "next/dynamic";
+
+const CosecDeviceChart = dynamic(
+  () => import("@/components/admin/cosec-device-chart"),
+  { ssr: false }
+);
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -748,17 +751,7 @@ export default function CosecDeviceDetailPage() {
           <CardTitle className="text-sm flex items-center gap-2"><BarChart3 size={14} />Last 7 Days — Access Activity</CardTitle>
         </CardHeader>
         <CardContent>
-          <ResponsiveContainer width="100%" height={140}>
-            <BarChart data={sevenDayData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#f0f0f0" />
-              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} allowDecimals={false} />
-              <Tooltip />
-              <Bar dataKey="IN" fill="#00AE6C" radius={[2, 2, 0, 0]} name="Entry" />
-              <Bar dataKey="OUT" fill="#0284c7" radius={[2, 2, 0, 0]} name="Exit" />
-              <Bar dataKey="DENIED" fill="#ef4444" radius={[2, 2, 0, 0]} name="Denied" />
-            </BarChart>
-          </ResponsiveContainer>
+          <CosecDeviceChart data={sevenDayData} />
         </CardContent>
       </Card>
 

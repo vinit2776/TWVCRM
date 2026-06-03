@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
@@ -297,9 +298,10 @@ function BudgetBar({ row }: { row: BudgetRow }) {
 
 export default function ProcurementDashboard() {
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? "";
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [userRole, setUserRole] = useState("");
   const [budgetRows, setBudgetRows] = useState<BudgetRow[] | null>(null);
   const [budgetLoading, setBudgetLoading] = useState(false);
 
@@ -321,13 +323,14 @@ export default function ProcurementDashboard() {
   };
 
   useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((j) => {
-      const role = j.role ?? "";
-      setUserRole(role);
-      fetchBudgets(role);
-    });
     fetchData();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    if (userRole) fetchBudgets(userRole);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [userRole]);
 
   const canSeePrices = ["admin", "manager"].includes(userRole);
   const currentMonth = new Date().toLocaleString("en-IN", { timeZone: "Asia/Kolkata", month: "long", year: "numeric" });

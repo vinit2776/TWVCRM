@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -43,10 +44,11 @@ interface LeaseHandover {
 export default function LeaseDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
 
   const [lease, setLease] = useState<PropertyLease | null>(null);
   const [loading, setLoading] = useState(true);
-  const [userRole, setUserRole] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState("overview");
 
   // Per-tab data
@@ -73,11 +75,8 @@ export default function LeaseDetailPage() {
   const [submitting, setSubmitting] = useState(false);
 
   useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((d) => {
-      setUserRole(d.role);
-      if (d.role && d.role !== "admin") router.replace("/dashboard");
-    });
-  }, [router]);
+    if (userRole !== null && userRole !== "admin") router.replace("/dashboard");
+  }, [userRole, router]);
 
   const fetchLease = useCallback(async () => {
     setLoading(true);

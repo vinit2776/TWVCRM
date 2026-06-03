@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { ClipboardList, Plus, ChevronLeft, ChevronRight, Search, X } from "lucide-react";
@@ -21,6 +22,9 @@ import type { PurchaseRequest } from "@/types";
 
 export default function PurchaseRequestsPage() {
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? "";
+  const canSeePrices = ["admin", "manager"].includes(userRole);
   const [requests, setRequests] = useState<PurchaseRequest[]>([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
@@ -29,13 +33,6 @@ export default function PurchaseRequestsPage() {
   const [deptFilter, setDeptFilter] = useState("");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
-  const [userRole, setUserRole] = useState<string>("");
-
-  const canSeePrices = ["admin", "manager"].includes(userRole);
-
-  useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role || ""));
-  }, []);
 
   // Debounce search: wait 600 ms and require ≥3 chars before querying
   useEffect(() => {

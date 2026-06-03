@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import {
   Users, Plus, ChevronLeft, ChevronRight, Trash2, History, ClipboardEdit,
   MapPin, Navigation, X,
@@ -100,8 +101,9 @@ function UtilBar({ label, emoji, count, capacity }: {
 // ─── Main Page ───────────────────────────────────────────────────────────────
 
 export default function HeadcountPage() {
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   const { locations } = useLocations(true);
-  const [userRole, setUserRole] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"entry" | "history">("entry");
 
   // ── Entry state ──
@@ -135,10 +137,6 @@ export default function HeadcountPage() {
 
   const HISTORY_LIMIT = 20;
 
-  // ── Resolve user role ──
-  useEffect(() => {
-    fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {});
-  }, []);
 
   // ── Geolocation detection — runs once when locations are loaded ──
   useEffect(() => {

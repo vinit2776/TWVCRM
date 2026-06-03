@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,6 +27,8 @@ interface Location {
 }
 
 export default function ConsumptionHistoryPage() {
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? "";
   const [locations, setLocations] = useState<Location[]>([]);
   const [selectedLocation, setSelectedLocation] = useState("");
   const [fromDate, setFromDate] = useState("");
@@ -34,7 +37,6 @@ export default function ConsumptionHistoryPage() {
   const [logs, setLogs] = useState<ConsumptionLog[]>([]);
   const [loading, setLoading] = useState(false);
   const [expandedId, setExpandedId] = useState<string | null>(null);
-  const [userRole, setUserRole] = useState("");
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
 
@@ -43,15 +45,12 @@ export default function ConsumptionHistoryPage() {
   const [correctionOpen, setCorrectionOpen] = useState(false);
 
   useEffect(() => {
-    Promise.all([
-      fetch("/api/locations").then((r) => r.json()),
-      fetch("/api/me").then((r) => r.json()),
-    ])
-      .then(([locData, meData]) => {
+    fetch("/api/locations")
+      .then((r) => r.json())
+      .then((locData) => {
         const locs = locData.locations || locData || [];
         setLocations(locs);
         if (locs.length > 0) setSelectedLocation(locs[0].id);
-        setUserRole(meData.role || "");
       })
       .catch(() => toast.error("Failed to load data"));
   }, []);

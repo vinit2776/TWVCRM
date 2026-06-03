@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { ChevronLeft, ChevronRight, Ticket, Upload, Search, X, LayoutGrid, List, Wifi } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -74,10 +75,8 @@ export default function VouchersPage() {
   const [reclassifyOpen, setReclassifyOpen] = useState(false);
 
   // Resolve current user role
-  const [userRole, setUserRole] = useState<string>("sales_rep");
-  useEffect(() => {
-    fetch("/api/me").then(r => r.json()).then(d => { if (d.role) setUserRole(d.role); }).catch(() => {});
-  }, []);
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? "sales_rep";
 
   // Resolve selected location details (to check unifi_site_id)
   const { locations } = useLocations();

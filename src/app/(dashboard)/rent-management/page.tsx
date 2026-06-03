@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import {
   Building2, IndianRupee, AlertTriangle, Clock,
@@ -26,13 +27,10 @@ interface DashboardData {
 }
 
 export default function RentManagementDashboard() {
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
-  const [userRole, setUserRole] = useState<string | null>(null);
-
-  useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((d) => setUserRole(d.role));
-  }, []);
 
   useEffect(() => {
     async function load() {

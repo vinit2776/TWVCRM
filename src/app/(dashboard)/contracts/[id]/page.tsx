@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useState, useEffect, useCallback, useRef } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
@@ -106,9 +107,10 @@ export default function ContractDetailPage({
     else { setCopiedLessee(true); setTimeout(() => setCopiedLessee(false), 2000); }
   };
 
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [linkedProposal, setLinkedProposal] = useState<any>(null);
-  const [userRole, setUserRole] = useState<string | null>(null);
   const [overrideReason, setOverrideReason] = useState("");
   const [kycStatus, setKycStatus] = useState<{ allSatisfied: boolean; total: number; approved: number; deferred: number }>({ allSatisfied: true, total: 0, approved: 0, deferred: 0 });
   const [showOverride, setShowOverride] = useState(false);
@@ -134,24 +136,28 @@ export default function ContractDetailPage({
       const json = await res.json();
       setContract(json.data || null);
 
-      // Fetch linked proposal for payment gate check
+      // Fetch linked proposal and renewal draft in parallel (both are independent of each other)
       const proposalId = json.data?.proposal_id;
+      const hasRenewalDraft = ["renewal_in_progress", "renewed"].includes(json.data?.status);
+
+      const [proposalResult, renewalResult] = await Promise.allSettled([
+        proposalId
+          ? fetch(`/api/proposals/${proposalId}`).then(r => r.json())
+          : Promise.resolve(null),
+        hasRenewalDraft
+          ? fetch(`/api/contracts?parent_contract_id=${id}&is_renewal=true&limit=1`).then(r => r.json())
+          : Promise.resolve(null),
+      ]);
+
       if (proposalId) {
-        fetch(`/api/proposals/${proposalId}`)
-          .then(r => r.json())
-          .then(pJson => setLinkedProposal(pJson.data || null))
-          .catch(() => setLinkedProposal(null));
+        setLinkedProposal(
+          proposalResult.status === "fulfilled" ? (proposalResult.value?.data || null) : null
+        );
       }
 
-      // Fetch renewal draft link (for parent contracts in renewal_in_progress or renewed)
-      if (["renewal_in_progress", "renewed"].includes(json.data?.status)) {
-        fetch(`/api/contracts?parent_contract_id=${id}&is_renewal=true&limit=1`)
-          .then(r => r.json())
-          .then(rJson => {
-            const drafts = rJson.data || [];
-            setRenewalDraft(drafts.length > 0 ? drafts[0] : null);
-          })
-          .catch(() => setRenewalDraft(null));
+      if (hasRenewalDraft) {
+        const drafts = renewalResult.status === "fulfilled" ? (renewalResult.value?.data || []) : [];
+        setRenewalDraft(drafts.length > 0 ? drafts[0] : null);
       } else {
         setRenewalDraft(null);
       }
@@ -161,7 +167,6 @@ export default function ContractDetailPage({
 
   useEffect(() => {
     fetchContract(true);
-    fetch("/api/me").then(r => r.json()).then(j => setUserRole(j.role || null)).catch(() => {});
   }, [fetchContract]);
 
   /** Wraps activation to check space allocation first */

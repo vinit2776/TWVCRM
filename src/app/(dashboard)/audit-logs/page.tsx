@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import {
   Shield,
   ClipboardList,
@@ -101,9 +102,10 @@ function ChangesDisplay({ changes }: { changes: Record<string, { old: unknown; n
 }
 
 export default function AuditLogsPage() {
+  const { user, loading: userLoading } = useCurrentUser();
+  const isAdmin = userLoading ? null : (user?.role === "admin" ? true : false);
   const [logs, setLogs] = useState<AuditLog[]>([]);
   const [loading, setLoading] = useState(true);
-  const [isAdmin, setIsAdmin] = useState<boolean | null>(null);
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
@@ -124,19 +126,9 @@ export default function AuditLogsPage() {
       setLogs(json.data || []);
       setTotalPages(json.pagination?.totalPages || 1);
       setTotal(json.pagination?.total || 0);
-    } else if (res.status === 403) {
-      setIsAdmin(false);
     }
     setLoading(false);
   }, [page, entityTypeFilter, actionFilter]);
-
-  useEffect(() => {
-    // Check admin role via server-side API (bypasses browser extension blocks)
-    fetch("/api/me")
-      .then((r) => r.json())
-      .then((json) => setIsAdmin(json.role === "admin"))
-      .catch(() => setIsAdmin(false));
-  }, []);
 
   useEffect(() => {
     if (isAdmin) fetchLogs();

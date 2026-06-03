@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -23,7 +24,7 @@ import { EInvoiceSettings } from "@/components/settings/e-invoice-settings";
 import Link from "next/link";
 
 export default function SettingsPage() {
-  const [loading, setLoading] = useState(true);
+  const { user, loading } = useCurrentUser();
   const [saving, setSaving] = useState(false);
   const [profile, setProfile] = useState({
     full_name: "",
@@ -33,20 +34,15 @@ export default function SettingsPage() {
   });
 
   useEffect(() => {
-    // Fetch profile via server-side API (bypasses browser extension blocks on supabase.co)
-    fetch("/api/me")
-      .then((r) => r.json())
-      .then((json) => {
-        setProfile({
-          full_name: json.full_name || "",
-          email: json.email || "",
-          phone: json.phone || "",
-          role: json.role || "",
-        });
-      })
-      .catch(() => {})
-      .finally(() => setLoading(false));
-  }, []);
+    if (!loading && user) {
+      setProfile({
+        full_name: user.full_name || "",
+        email: user.email || "",
+        phone: user.phone || "",
+        role: user.role || "",
+      });
+    }
+  }, [loading, user]);
 
   const handleSave = async () => {
     setSaving(true);

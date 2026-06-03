@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter } from "next/navigation";
 import { Plus, Trash2, ChevronLeft, Search, Package, PenLine, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -58,6 +59,7 @@ const emptyItem = (): LineItem => ({
 
 export default function NewPurchaseRequestPage() {
   const router = useRouter();
+  const { user } = useCurrentUser();
   const [department, setDepartment] = useState<ProcurementDepartment>("pantry");
   const [locationId, setLocationId] = useState<string>("");
   const [expenditureType, setExpenditureType] = useState<"operational" | "amc">("operational");
@@ -73,13 +75,8 @@ export default function NewPurchaseRequestPage() {
   const [savingDraft, setSavingDraft] = useState(false);
   const [showPriceWarning, setShowPriceWarning] = useState(false);
   const [missingPriceItems, setMissingPriceItems] = useState<string[]>([]);
-  const [userRole, setUserRole] = useState<string>("");
-
+  const userRole = user?.role ?? "";
   const canSeePrices = ["admin", "manager"].includes(userRole);
-
-  useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role || ""));
-  }, []);
 
   // Catalog picker
   const [catalogOpen, setCatalogOpen] = useState(false);

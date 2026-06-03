@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter } from "next/navigation";
 import { Archive, Pencil, Plus, X, Check, Search, History, AlertTriangle, TrendingUp, TrendingDown, Minus, Sparkles, CheckCheck, Trash2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -68,8 +69,9 @@ function detectDuplicates(items: ProcurementItem[]): Set<string> {
 
 export default function CatalogPage() {
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? "";
   const [activeTab, setActiveTab] = useState<"catalog" | "suggested">("catalog");
-  const [userRole, setUserRole] = useState<string>("");
 
   // Catalog state
   const [items, setItems] = useState<ProcurementItem[]>([]);
@@ -96,11 +98,6 @@ export default function CatalogPage() {
   const [activateForm, setActivateForm] = useState({ name: "", standard_price: "", gst_rate: "0", description: "" });
   const [activating, setActivating] = useState(false);
 
-  // ── Role fetch ───────────────────────────────────────────────────────────────
-
-  useEffect(() => {
-    fetch("/api/me").then((r) => r.json()).then((j) => setUserRole(j.role || ""));
-  }, []);
 
   const isPrivileged = ["admin", "manager"].includes(userRole);
 

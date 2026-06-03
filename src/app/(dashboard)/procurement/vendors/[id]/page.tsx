@@ -1,6 +1,7 @@
 "use client";
 
 import { use, useState, useEffect, useCallback, useRef } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -161,10 +162,11 @@ function DocRow({
 export default function VendorDetailPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
 
   const [vendor, setVendor] = useState<ProcurementVendor | null>(null);
   const [loading, setLoading] = useState(true);
-  const [userRole, setUserRole] = useState<string | null>(null);
   const [docPaths, setDocPaths] = useState<Partial<Record<DocField, string>>>({});
   const [kycToggling, setKycToggling] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -259,7 +261,6 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
 
   useEffect(() => {
     fetchVendor();
-    fetch("/api/me").then((r) => r.json()).then((d) => setUserRole(d.role ?? null));
   }, [fetchVendor]);
   const isReadOnly = userRole === "accounts";
 

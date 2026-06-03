@@ -25,7 +25,11 @@ import {
   LEAD_SOURCE_LABELS,
 } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
-import { ImportLeadsDialog } from "@/components/leads/import-leads-dialog";
+import dynamic from "next/dynamic";
+const ImportLeadsDialog = dynamic(
+  () => import("@/components/leads/import-leads-dialog").then((m) => ({ default: m.ImportLeadsDialog })),
+  { ssr: false }
+);
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
 
 const FORM_TAGS = ["google-ads-form", "meta-ads-form", "walkin-form"];

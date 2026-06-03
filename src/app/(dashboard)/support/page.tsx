@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter } from "next/navigation";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -56,6 +57,7 @@ interface Ticket {
 
 export default function SupportPage() {
   const router = useRouter();
+  const { user, loading: userLoading } = useCurrentUser();
   const [loading, setLoading] = useState(true);
   const [authorized, setAuthorized] = useState(false);
   const [tickets, setTickets] = useState<Ticket[]>([]);
@@ -64,22 +66,15 @@ export default function SupportPage() {
   const [selectedTicketId, setSelectedTicketId] = useState<string | null>(null);
   const [detailOpen, setDetailOpen] = useState(false);
 
-  // Check authorization via server-side API (bypasses browser extension blocks on supabase.co)
   useEffect(() => {
-    fetch("/api/me")
-      .then((r) => r.json())
-      .then((json) => {
-        if (json.role !== "admin") {
-          router.push("/dashboard");
-          toast.error("Access denied. Admin only.");
-          return;
-        }
-        setAuthorized(true);
-      })
-      .catch(() => {
-        router.push("/dashboard");
-      });
-  }, [router]);
+    if (userLoading) return;
+    if (user?.role !== "admin") {
+      router.push("/dashboard");
+      toast.error("Access denied. Admin only.");
+      return;
+    }
+    setAuthorized(true);
+  }, [userLoading, user, router]);
 
   // Status sort priority: open → in_progress → build_approved → resolved → closed
   const STATUS_PRIORITY: Record<string, number> = {

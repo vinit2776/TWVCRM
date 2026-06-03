@@ -86,6 +86,23 @@ export async function GET(request: NextRequest) {
   // Non-fatal: runs after status update so expiry always succeeds even if
   // revocation has a transient failure.
   const revokeNow = new Date().toISOString();
+
+  // Pre-fetch ALL active voucher_issuances for expiring contracts in one query.
+  // Previously this was a per-contract query inside the loop (N+1).
+  const { data: allIssuances } = await admin
+    .from("voucher_issuances")
+    .select("id, voucher_id, contract_id")
+    .in("contract_id", expireIds)
+    .eq("is_active", true);
+
+  type IssuanceRow = { id: string; voucher_id: string | null; contract_id: string };
+  const issuancesByContractId = new Map<string, IssuanceRow[]>();
+  for (const issuance of (allIssuances ?? []) as IssuanceRow[]) {
+    const list = issuancesByContractId.get(issuance.contract_id) ?? [];
+    list.push(issuance);
+    issuancesByContractId.set(issuance.contract_id, list);
+  }
+
   for (const contract of toExpire) {
     // 1. UniFi API voucher (Nungambakkam LGF — direct device revocation)
     if (contract.unifi_voucher_id) {
@@ -95,21 +112,17 @@ export async function GET(request: NextRequest) {
 
     // 2. Import-based vouchers — mark as revoked in CRM DB
     try {
-      const { data: issuances } = await admin
-        .from("voucher_issuances")
-        .select("id, voucher_id")
-        .eq("contract_id", contract.id)
-        .eq("is_active", true);
+      const issuances = issuancesByContractId.get(contract.id) ?? [];
 
-      if (issuances && issuances.length > 0) {
-        const issuanceIds = issuances.map((i: { id: string }) => i.id);
+      if (issuances.length > 0) {
+        const issuanceIds = issuances.map((i) => i.id);
         await admin
           .from("voucher_issuances")
           .update({ is_active: false, revoked_at: revokeNow, revoke_reason: "Contract expired" })
           .in("id", issuanceIds);
 
         const voucherIds = issuances
-          .map((i: { voucher_id: string | null }) => i.voucher_id)
+          .map((i) => i.voucher_id)
           .filter(Boolean);
         if (voucherIds.length > 0) {
           await admin

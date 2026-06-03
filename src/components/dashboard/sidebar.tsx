@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -299,17 +300,11 @@ function CollapsibleSection({
 export function Sidebar() {
   const pathname = usePathname();
   const { sidebarOpen, setSidebarOpen } = useUiStore();
-  const [userRole, setUserRole] = useState<string | null>(null);
+  const { user } = useCurrentUser();
+  const userRole = user?.role ?? null;
   const [openSections, setOpenSections] = useState<Set<string>>(new Set());
   const [search, setSearch] = useState("");
   const searchRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    fetch("/api/me")
-      .then((r) => r.json())
-      .then((json) => setUserRole(json.role ?? null))
-      .catch(() => setUserRole(null));
-  }, []);
 
   // Auto-expand the section containing the active route
   useEffect(() => {
