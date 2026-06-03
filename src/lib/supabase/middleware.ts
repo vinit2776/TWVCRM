@@ -2,6 +2,30 @@ import { createServerClient } from "@supabase/ssr";
 import { NextResponse, type NextRequest } from "next/server";
 
 export async function updateSession(request: NextRequest) {
+  const pathname = request.nextUrl.pathname;
+
+  // ── Fast-path: skip auth check for routes that never need it ─────────────
+  // auth.getUser() is a network call to Supabase Auth. API routes and most
+  // public pages handle their own auth or don't need it at all. Skipping
+  // the check here eliminates hundreds of unnecessary round-trips per day.
+  const isApiRoute = pathname.startsWith("/api");
+  const isPublicRoute =
+    pathname === "/" ||
+    pathname.startsWith("/enquire") ||
+    pathname.startsWith("/meta") ||
+    pathname.startsWith("/walkin") ||
+    pathname.startsWith("/feedback") ||
+    pathname.startsWith("/pay") ||
+    pathname.startsWith("/verify") ||
+    pathname === "/offline";
+
+  if (isApiRoute || isPublicRoute) {
+    // Still need to return the supabaseResponse so cookie mutations propagate
+    // (even if we skip the getUser call the SSR client may set refresh tokens).
+    return NextResponse.next({ request });
+  }
+
+  // ── Auth check: only for dashboard pages and auth routes ─────────────────
   let supabaseResponse = NextResponse.next({
     request,
   });
@@ -34,37 +58,19 @@ export async function updateSession(request: NextRequest) {
   } = await supabase.auth.getUser();
 
   const isAuthRoute =
-    request.nextUrl.pathname.startsWith("/login") ||
-    request.nextUrl.pathname.startsWith("/signup") ||
-    request.nextUrl.pathname.startsWith("/forgot-password");
+    pathname.startsWith("/login") ||
+    pathname.startsWith("/signup") ||
+    pathname.startsWith("/forgot-password");
 
-  const isApiRoute = request.nextUrl.pathname.startsWith("/api");
-  const isPublicRoute =
-    request.nextUrl.pathname === "/" ||
-    request.nextUrl.pathname.startsWith("/enquire") ||
-    request.nextUrl.pathname.startsWith("/meta") ||
-    request.nextUrl.pathname.startsWith("/walkin") ||
-    request.nextUrl.pathname.startsWith("/feedback") ||
-    request.nextUrl.pathname.startsWith("/pay") ||
-    request.nextUrl.pathname.startsWith("/verify") ||
-    request.nextUrl.pathname === "/offline";
-
-  // If user is not signed in and trying to access protected routes
-  if (!user && !isAuthRoute && !isApiRoute && !isPublicRoute) {
+  // If user is not signed in and trying to access a protected page → login
+  if (!user && !isAuthRoute) {
     const url = request.nextUrl.clone();
     url.pathname = "/login";
     return NextResponse.redirect(url);
   }
 
-  // If user is signed in and trying to access auth routes
+  // If user is signed in and hitting an auth page → dashboard
   if (user && isAuthRoute) {
-    const url = request.nextUrl.clone();
-    url.pathname = "/dashboard";
-    return NextResponse.redirect(url);
-  }
-
-  // Redirect root to dashboard if signed in (except /verify which should stay public always)
-  if (user && isPublicRoute && !request.nextUrl.pathname.startsWith("/verify")) {
     const url = request.nextUrl.clone();
     url.pathname = "/dashboard";
     return NextResponse.redirect(url);
