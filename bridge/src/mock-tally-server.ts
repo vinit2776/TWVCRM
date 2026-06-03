@@ -77,7 +77,8 @@ const server = http.createServer((req, res) => {
 });
 
 function companyResponse(name: string, gstin: string): string {
-  return `<ENVELOPE><BODY><DATA><CMPNAME>${name}</CMPNAME><CMPGSTIN>${gstin}</CMPGSTIN></DATA></BODY></ENVELOPE>`;
+  // Fields directly under ENVELOPE — matches tally-client.ts getCurrentCompany() parser
+  return `<ENVELOPE><CMPNAME>${name}</CMPNAME><CMPGSTIN>${gstin}</CMPGSTIN></ENVELOPE>`;
 }
 
 function voucherResponse(guid: string, invoiceNumber: string, irn: string): string {
