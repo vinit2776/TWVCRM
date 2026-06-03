@@ -47,11 +47,16 @@ export async function GET(request: NextRequest) {
     .eq("status", "claimed")
     .lt("lease_expires_at", now.toISOString());
 
-  // Check master switch + company lock
+  // Check master switch + company lock + ledger mapping (for job enrichment)
   const { data: settings } = await supabase
     .from("app_settings")
     .select("key, value")
-    .in("key", ["tally_sync_enabled", "tally_company_gstin", "tally_locked_company"]);
+    .in("key", [
+      "tally_sync_enabled", "tally_company_gstin", "tally_locked_company",
+      "tally_ledger_rent_income", "tally_ledger_usage_income",
+      "tally_ledger_cgst_output", "tally_ledger_sgst_output", "tally_ledger_igst_output",
+      "tally_ledger_round_off", "tally_party_ledger_suffix", "tally_voucher_series",
+    ]);
 
   const settingsMap = Object.fromEntries(
     (settings ?? []).map((s: { key: string; value: string }) => [s.key, s.value])
@@ -120,6 +125,55 @@ export async function GET(request: NextRequest) {
         last_attempted_at: now.toISOString(),
       })
       .eq("id", job.id);
+  }
+
+  // Enrich each sales-voucher job with ledger names + party (customer) details
+  // so the bridge has everything it needs to build the Tally voucher.
+  const ledgers = {
+    rent_income:    settingsMap["tally_ledger_rent_income"]  ?? "",
+    usage_income:   settingsMap["tally_ledger_usage_income"] ?? "",
+    cgst:           settingsMap["tally_ledger_cgst_output"]  ?? "",
+    sgst:           settingsMap["tally_ledger_sgst_output"]  ?? "",
+    igst:           settingsMap["tally_ledger_igst_output"]  ?? "",
+    round_off:      settingsMap["tally_ledger_round_off"]    ?? "",
+  };
+  const voucherSeries = settingsMap["tally_voucher_series"] ?? "Sales";
+  const partySuffix   = settingsMap["tally_party_ledger_suffix"] ?? "";
+
+  for (const job of jobs) {
+    if (job.job_type !== "sales_voucher" || !job.billing_statement_id) continue;
+
+    // Resolve the customer (party) from the statement → contract → lead
+    const { data: stmt } = await supabase
+      .from("billing_statements")
+      .select(`
+        contract:contracts!billing_statements_contract_id_fkey(
+          lead:leads!contracts_lead_id_fkey(company, first_name, last_name, gst_number, state, street, city, zip_code)
+        )
+      `)
+      .eq("id", job.billing_statement_id)
+      .single();
+
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const lead = (stmt as any)?.contract?.lead ?? {};
+    const partyName = (lead.company as string | undefined)?.trim()
+      || `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim()
+      || "Walk-in Customer";
+
+    job.payload = {
+      ...(job.payload as Record<string, unknown>),
+      party_ledger:  partySuffix ? `${partyName}${partySuffix}` : partyName,
+      buyer_gstin:   (lead.gst_number as string | null) ?? "",
+      buyer_state:   (lead.state as string | null) ?? "",
+      buyer_address: [lead.street, lead.city, lead.zip_code].filter(Boolean).join(", "),
+      ledger_sales:    ledgers.rent_income || "Sales",
+      ledger_usage:    ledgers.usage_income || ledgers.rent_income || "Sales",
+      ledger_cgst:     ledgers.cgst || "Output CGST",
+      ledger_sgst:     ledgers.sgst || "Output SGST",
+      ledger_igst:     ledgers.igst || "Output IGST",
+      ledger_round_off: ledgers.round_off || "Round Off",
+      voucher_series:  voucherSeries,
+    };
   }
 
   return NextResponse.json({
