@@ -44,6 +44,7 @@ import { dispatchTallyInvoice } from "@/lib/tally/dispatch-tally-invoice";
 const AckSuccessSchema = z.object({
   job_id:               z.string().uuid(),
   success:              z.literal(true),
+  voucher_kind:         z.enum(["sales", "receipt"]).default("sales"),
   tally_voucher_guid:   z.string().min(1),
   tally_invoice_number: z.string().min(1),
   tally_irn:            z.string().optional(),       // may be absent if irn_pending=true
@@ -91,7 +92,7 @@ export async function POST(request: NextRequest) {
   // Fetch the job — must exist and be in a claimable state
   const { data: job, error: jobError } = await supabase
     .from("tally_sync_jobs")
-    .select("id, status, billing_statement_id, gst_invoice_id, job_type, idempotency_key, attempt_count")
+    .select("id, status, billing_statement_id, gst_invoice_id, job_type, idempotency_key, attempt_count, payload")
     .eq("id", data.job_id)
     .single();
 
@@ -104,8 +105,51 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ ok: true, idempotent: true });
   }
 
+  // ── RECEIPT-VOUCHER ACK ─────────────────────────────────────────────────────
+  // A receipt is the reverse-sync of a payment, not an invoice. Mark the job done
+  // and mirror the Tally receipt number onto billing_payments. Do NOT touch the
+  // statement's issuance fields and do NOT trigger invoice delivery.
+  if (data.success && data.voucher_kind === "receipt") {
+    const now = new Date().toISOString();
+
+    await supabase
+      .from("tally_sync_jobs")
+      .update({
+        status:               "completed",
+        tally_voucher_guid:   data.tally_voucher_guid,
+        tally_invoice_number: data.tally_invoice_number,   // the Receipt voucher number
+        completed_at:         now,
+      })
+      .eq("id", data.job_id);
+
+    const paymentId = (job.payload as { payment_id?: string } | null)?.payment_id;
+    if (paymentId) {
+      await supabase
+        .from("billing_payments")
+        .update({
+          tally_receipt_number:       data.tally_invoice_number,
+          tally_receipt_voucher_guid: data.tally_voucher_guid,
+          tally_receipt_synced_at:    now,
+        })
+        .eq("id", paymentId);
+    }
+
+    void logAudit(supabase, {
+      entityType:  "billing_statement" as const,
+      entityId:    job.billing_statement_id ?? data.job_id,
+      action:      "update" as const,
+      performedBy: "tally-bridge",
+      changes: {
+        tally_receipt_number: { old: null, new: data.tally_invoice_number },
+        receipt_amount:       { old: null, new: data.tally_total_amount },
+      },
+    });
+
+    return NextResponse.json({ ok: true, voucher_kind: "receipt", tally_receipt_number: data.tally_invoice_number });
+  }
+
   if (data.success) {
-    // ── SUCCESS PATH ──────────────────────────────────────────────────────────
+    // ── SUCCESS PATH (sales voucher) ────────────────────────────────────────────
 
     const now = new Date().toISOString();
     const syncStatus = data.irn_pending ? "in_progress" : "issued";

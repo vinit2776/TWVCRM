@@ -152,6 +152,9 @@ export class Poller {
         case "sales_voucher":
           await this.handleSalesVoucher(job, expectedGstin);
           break;
+        case "receipt_voucher":
+          await this.handleReceiptVoucher(job);
+          break;
         default:
           log.warn(`Unknown job_type: ${job.job_type} — skipping`);
           await this.crm.ack({
@@ -271,5 +274,87 @@ export class Poller {
       `Job ${job.id} completed — invoice ${result.invoice_number} issued ` +
       `(${hasGstin ? (irnPending ? "B2B, awaiting IRN" : "B2B, IRN present") : "B2C, no IRN needed"})`
     );
+  }
+
+  /**
+   * Reverse-sync: a payment recorded in the CRM → a Receipt voucher in Tally.
+   * The CRM /pending endpoint injects party_ledger, receipt_ledger (bank/cash),
+   * voucher_series, and narration. We guard both ledgers exist, post the receipt,
+   * and ack with voucher_kind='receipt' (the CRM marks the job done + mirrors the
+   * receipt number onto the payment; it does NOT trigger invoice delivery).
+   */
+  private async handleReceiptVoucher(job: PendingJob): Promise<void> {
+    const p = job.payload as Record<string, unknown>;
+    const str = (k: string, d = "") => String(p[k] ?? d);
+    const amount = Number(p["amount"] ?? 0);
+
+    if (!(amount > 0)) {
+      await this.crm.ack({ success: false, job_id: job.id, error: `Receipt amount is not positive (${amount})`, retryable: false });
+      return;
+    }
+
+    // Check-before-create (same stub as sales until a real REMOTEID query is wired —
+    // the REMOTEID is embedded so a future findExistingVoucher catches duplicates).
+    const existing = await this.tally.findExistingVoucher(job.idempotency_key);
+    if (existing) {
+      log.info(`Job ${job.id}: receipt already exists in Tally (${existing.invoice_number}) — acking with existing data`);
+      await this.crm.ack({
+        success:              true,
+        job_id:               job.id,
+        voucher_kind:         "receipt",
+        tally_voucher_guid:   existing.voucher_guid,
+        tally_invoice_number: existing.invoice_number,
+        tally_total_amount:   amount,
+        irn_pending:          false,
+        voucher_created_at:   new Date().toISOString(),
+      });
+      return;
+    }
+
+    // ── Ledger guards (require-existing, fail loud) ────────────────────────────
+    const partyLedger   = str("party_ledger");
+    const receiptLedger = str("receipt_ledger");
+
+    if (!receiptLedger) {
+      const msg = `No receipt account configured. Set the bank/cash ledger in Tally Sync settings ` +
+        `(tally_ledger_receipt_account) that receives customer payments, then Retry.`;
+      log.error(`Job ${job.id}: ${msg}`);
+      await this.crm.ack({ success: false, job_id: job.id, error: msg, retryable: false });
+      return;
+    }
+    for (const [label, ledger] of [["Customer", partyLedger], ["Receipt account", receiptLedger]] as const) {
+      if (!(await this.tally.ledgerExists(ledger))) {
+        const msg = `${label} ledger "${ledger}" does not exist in Tally. Create it, then Retry.`;
+        log.error(`Job ${job.id}: ${msg}`);
+        await this.crm.ack({ success: false, job_id: job.id, error: msg, retryable: false });
+        return;
+      }
+    }
+
+    const result = await this.tally.postReceiptVoucher({
+      idempotency_key: job.idempotency_key,
+      receipt_date:    str("payment_date") || new Date().toISOString().split("T")[0],
+      voucher_type:    str("voucher_series", "Receipt"),
+      party_ledger:    partyLedger,
+      receipt_ledger:  receiptLedger,
+      invoice_number:  str("tally_invoice_number"),
+      amount,
+      narration:       str("narration", "TWV CRM Receipt"),
+    });
+
+    await this.crm.ack({
+      success:              true,
+      job_id:               job.id,
+      voucher_kind:         "receipt",
+      tally_voucher_guid:   result.voucher_guid,
+      tally_invoice_number: result.voucher_number,   // receipt voucher number
+      tally_total_amount:   result.total_amount,
+      irn_pending:          false,
+      voucher_created_at:   result.created_at,
+    });
+
+    healthState.lastSyncAt = new Date().toISOString();
+    healthState.lastError  = null;
+    log.info(`Job ${job.id} completed — receipt ${result.voucher_number} for ${result.total_amount.toFixed(2)}`);
   }
 }

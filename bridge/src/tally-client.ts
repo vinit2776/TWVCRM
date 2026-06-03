@@ -33,6 +33,13 @@ export interface TallySalesResult {
   created_at:     string;
 }
 
+export interface TallyReceiptResult {
+  voucher_guid:   string;
+  voucher_number: string;   // Tally's Receipt voucher number
+  total_amount:   number;
+  created_at:     string;
+}
+
 export class TallyClient {
   private readonly host: string;
   private readonly port: number;
@@ -534,6 +541,135 @@ export class TallyClient {
       total_amount:    totalAmount,
       irn_pending:     irnPending,
       created_at:      new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Post a Receipt voucher to Tally (reverse-sync: a CRM payment → Tally Receipt).
+   *
+   * ── BEST-ESTIMATE — VERIFY AGAINST A REAL RECEIPT EXPORT ────────────────────
+   * Built from Tally's standard Receipt voucher format, NOT yet confirmed against
+   * a real export from this company (unlike postSalesVoucher, which matched a
+   * production SDIPL-REG sample). Before go-live, capture one real receipt:
+   *   1. In Tally, record a manual Receipt against a customer ledger settling an
+   *      invoice (Banking > Receipt, or Gateway > Vouchers > F6).
+   *   2. Export it as XML (Day Book → that voucher → Export → XML).
+   *   3. Diff against the envelope below — confirm: the bank ledger sign
+   *      (ISDEEMEDPOSITIVE/AMOUNT), whether BILLALLOCATIONS uses BILLTYPE
+   *      "Agst Ref" with the invoice number as NAME (requires the party ledger to
+   *      "Maintain balances bill-by-bill"; if not, drop BILLALLOCATIONS for an
+   *      on-account receipt), and the parent VOUCHERTYPENAME.
+   * ───────────────────────────────────────────────────────────────────────────
+   *
+   * Tally sign convention (matches postSalesVoucher): a DEBIT entry is
+   * ISDEEMEDPOSITIVE=Yes with a NEGATIVE amount; a CREDIT is ISDEEMEDPOSITIVE=No
+   * with a positive amount. A receipt debits the bank/cash (money in) and credits
+   * the party (settles the receivable).
+   */
+  async postReceiptVoucher(params: {
+    idempotency_key: string;
+    receipt_date:    string;            // YYYY-MM-DD
+    voucher_type:    string;            // "Receipt" (or a custom receipt series name)
+    party_ledger:    string;            // Sundry Debtor — credited
+    receipt_ledger:  string;            // Bank/Cash account — debited (money received)
+    invoice_number:  string;            // the Tally invoice this payment settles (bill ref)
+    amount:          number;            // amount received
+    narration:       string;
+  }): Promise<TallyReceiptResult> {
+    const { idempotency_key, receipt_date, voucher_type, party_ledger,
+            receipt_ledger, invoice_number, amount, narration } = params;
+
+    const tallyDate = receipt_date.replace(/-/g, "");   // YYYYMMDD
+    const amt       = round2(amount);
+
+    // Bill allocation knocks the receipt off the specific invoice. Only meaningful
+    // if the party ledger maintains balances bill-by-bill; harmless "Agst Ref" name
+    // is the invoice number. Omitted when there's no invoice reference.
+    const billAllocation = invoice_number ? `
+              <BILLALLOCATIONS.LIST>
+                <NAME>${escapeXml(invoice_number)}</NAME>
+                <BILLTYPE>Agst Ref</BILLTYPE>
+                <AMOUNT>${amt.toFixed(2)}</AMOUNT>
+              </BILLALLOCATIONS.LIST>` : "";
+
+    const xml = `<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Vouchers</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(this.targetCompany)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <VOUCHER VCHTYPE="${escapeXml(voucher_type)}" ACTION="Create">
+            <DATE>${tallyDate}</DATE>
+            <VOUCHERTYPENAME>${escapeXml(voucher_type)}</VOUCHERTYPENAME>
+            <PARTYLEDGERNAME>${escapeXml(party_ledger)}</PARTYLEDGERNAME>
+            <NARRATION>${escapeXml(narration)}</NARRATION>
+            <!-- Idempotency key for check-before-create -->
+            <UDF:REMOTEID.LIST TYPE="String">
+              <UDF:REMOTEID>${escapeXml(idempotency_key)}</UDF:REMOTEID>
+            </UDF:REMOTEID.LIST>
+            <!-- Bank/Cash (debit — money received) -->
+            <LEDGERENTRIES.LIST>
+              <LEDGERNAME>${escapeXml(receipt_ledger)}</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+              <AMOUNT>-${amt.toFixed(2)}</AMOUNT>
+            </LEDGERENTRIES.LIST>
+            <!-- Party (credit — settles the receivable) -->
+            <LEDGERENTRIES.LIST>
+              <LEDGERNAME>${escapeXml(party_ledger)}</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+              <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
+              <AMOUNT>${amt.toFixed(2)}</AMOUNT>${billAllocation}
+            </LEDGERENTRIES.LIST>
+          </VOUCHER>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`;
+
+    const res = await this.post(xml);
+    this.assertNoLineError(res, "postReceiptVoucher");
+
+    const created    = Number(firstTag(res, "CREATED") || "0");
+    const errors     = Number(firstTag(res, "ERRORS") || "0");
+    const exceptions = Number(firstTag(res, "EXCEPTIONS") || "0");
+
+    if (created < 1 || errors > 0 || exceptions > 0) {
+      throw new Error(
+        `Tally did not create the receipt (created=${created}, errors=${errors}, ` +
+        `exceptions=${exceptions}). Response: ${res.slice(0, 400)}`
+      );
+    }
+
+    const lastVchId = firstTag(res, "LASTVCHID");
+    if (!lastVchId) {
+      throw new Error(`Tally created the receipt but returned no LASTVCHID. Response: ${res.slice(0, 400)}`);
+    }
+
+    // Read back the assigned receipt voucher number (reuses the Day Book lookup).
+    const details = await this.getVoucherByMasterId(lastVchId, receipt_date);
+    const voucherNumber = details.invoice_number;   // VOUCHERNUMBER (receipts share the tag)
+    const voucherGuid   = details.guid || lastVchId;
+
+    if (!voucherNumber) {
+      throw new Error(`Receipt created (vchid ${lastVchId}) but could not read back its voucher number.`);
+    }
+
+    log.info(`Receipt created: ${voucherNumber} | vchid: ${lastVchId} | amount: ${amt.toFixed(2)}`);
+
+    return {
+      voucher_guid:   voucherGuid,
+      voucher_number: voucherNumber,
+      total_amount:   amt,
+      created_at:     new Date().toISOString(),
     };
   }
 

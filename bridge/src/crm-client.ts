@@ -30,8 +30,12 @@ export interface PendingResponse {
 export interface AckSuccess {
   success:              true;
   job_id:               string;
+  /** Which kind of voucher this ack is for. Defaults to 'sales' server-side.
+   *  'receipt' acks just mark the job done + mirror the receipt number onto the
+   *  payment — they do NOT trigger invoice delivery. */
+  voucher_kind?:        "sales" | "receipt";
   tally_voucher_guid:   string;
-  tally_invoice_number: string;
+  tally_invoice_number: string;   // for receipts, carries the Receipt voucher number
   tally_irn?:           string;
   tally_ack_no?:        string;
   tally_ack_date?:      string;

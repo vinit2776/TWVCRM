@@ -168,6 +168,7 @@ export async function enqueueTallyReceiptVoucher(
         billing_statement_id: statementId,
         tally_invoice_number: s.tally_invoice_number,
         tally_voucher_guid:   s.tally_voucher_guid ?? null,
+        payment_id:           payment.paymentId,   // so the ack can mirror back onto billing_payments
         party_name:           partyName,
         amount:               payment.amount,
         payment_date:         payment.date,

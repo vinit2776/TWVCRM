@@ -57,6 +57,7 @@ export async function GET(request: NextRequest) {
       "tally_ledger_cgst_output", "tally_ledger_sgst_output", "tally_ledger_igst_output",
       "tally_ledger_round_off", "tally_party_ledger_suffix", "tally_voucher_series",
       "tally_stock_item", "tally_place_of_supply", "tally_hsn_code",
+      "tally_ledger_receipt_account", "tally_receipt_voucher_series",
     ]);
 
   const settingsMap = Object.fromEntries(
@@ -128,6 +129,17 @@ export async function GET(request: NextRequest) {
       .eq("id", job.id);
   }
 
+  // Look up the bridge version from its last heartbeat (best-effort — null if not found)
+  let bridgeVersion: string | null = null;
+  if (bridgeInstanceId !== "unknown") {
+    const { data: health } = await supabase
+      .from("tally_bridge_health")
+      .select("version")
+      .eq("bridge_instance_id", bridgeInstanceId)
+      .single();
+    bridgeVersion = (health as { version?: string | null } | null)?.version ?? null;
+  }
+
   // Enrich each sales-voucher job with ledger names + party (customer) details
   // so the bridge has everything it needs to build the Tally voucher.
   const ledgers = {
@@ -150,14 +162,19 @@ export async function GET(request: NextRequest) {
     const { data: stmt } = await supabase
       .from("billing_statements")
       .select(`
-        subtotal, line_items,
+        subtotal, line_items, statement_number,
         contract:contracts!billing_statements_contract_id_fkey(
+          contract_number,
           lead:leads!contracts_lead_id_fkey(company, first_name, last_name, gst_number, state, street, city, zip_code)
         )
       `)
       .eq("id", job.billing_statement_id)
       .single();
 
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const contractNumber = (stmt as any)?.contract?.contract_number as string | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const statementNumber = (stmt as any)?.statement_number as string | undefined;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lead = (stmt as any)?.contract?.lead ?? {};
     const partyName = (lead.company as string | undefined)?.trim()
@@ -177,8 +194,17 @@ export async function GET(request: NextRequest) {
       invoiceLines = [{ description: "Coworking Services", amount: sub }];
     }
 
+    // Build a narration that identifies the source of this voucher for audit/reconciliation.
+    // Format: "TWV CRM | Contract: TWV-CON-001 | Stmt: BS-2025-001 | Bridge: v1.1.0"
+    const narrationParts = ["TWV CRM"];
+    if (contractNumber) narrationParts.push(`Contract: ${contractNumber}`);
+    if (statementNumber) narrationParts.push(`Stmt: ${statementNumber}`);
+    if (bridgeVersion)   narrationParts.push(`Bridge: v${bridgeVersion}`);
+    const narration = narrationParts.join(" | ");
+
     job.payload = {
       ...(job.payload as Record<string, unknown>),
+      narration,
       party_ledger:  partySuffix ? `${partyName}${partySuffix}` : partyName,
       buyer_gstin:   (lead.gst_number as string | null) ?? "",
       buyer_state:   (lead.state as string | null) ?? "",
@@ -192,6 +218,38 @@ export async function GET(request: NextRequest) {
       voucher_series:  voucherSeries,
       stock_item:      stockItem,
       place_of_supply: placeOfSupply,
+    };
+  }
+
+  // Enrich receipt-voucher jobs (reverse-sync: a CRM payment → Tally Receipt).
+  // The enqueue payload already carries party_name, amount, invoice number, etc.;
+  // here we add the resolved party ledger + the bank/cash ledger that receives the
+  // money + a narration. The bank ledger is a single configured account
+  // (tally_ledger_receipt_account) — the bridge fails loudly if it isn't set/known,
+  // same as the party-ledger guard.
+  const receiptAccount      = settingsMap["tally_ledger_receipt_account"] ?? "";
+  const receiptVoucherSeries = settingsMap["tally_receipt_voucher_series"] ?? "Receipt";
+  for (const job of jobs) {
+    if (job.job_type !== "receipt_voucher") continue;
+
+    const payload = job.payload as Record<string, unknown>;
+    const partyName = String(payload["party_name"] ?? "").trim() || "Walk-in Customer";
+    const mode = String(payload["payment_mode"] ?? "");
+    const ref  = String(payload["payment_reference"] ?? "");
+    const inv  = String(payload["tally_invoice_number"] ?? "");
+
+    const narrationParts = ["TWV CRM Receipt"];
+    if (inv)  narrationParts.push(`Inv: ${inv}`);
+    if (mode) narrationParts.push(`Mode: ${mode}`);
+    if (ref)  narrationParts.push(`Ref: ${ref}`);
+    if (bridgeVersion) narrationParts.push(`Bridge: v${bridgeVersion}`);
+
+    job.payload = {
+      ...payload,
+      party_ledger:    partySuffix ? `${partyName}${partySuffix}` : partyName,
+      receipt_ledger:  receiptAccount,           // bank/cash account that receives the money
+      voucher_series:  receiptVoucherSeries,
+      narration:       narrationParts.join(" | "),
     };
   }
 
