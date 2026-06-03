@@ -24,9 +24,16 @@ import {
 import { Skeleton } from "@/components/shared/loading-skeleton";
 import { toast } from "sonner";
 import { formatDate, formatDateTime } from "@/lib/utils";
-import {
-  AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, Legend,
-} from "recharts";
+import dynamic from "next/dynamic";
+
+const VisitorsChart = dynamic(
+  () => import("@/components/network/network-charts").then((m) => ({ default: m.VisitorsChart })),
+  { ssr: false }
+);
+const BandwidthChart = dynamic(
+  () => import("@/components/network/network-charts").then((m) => ({ default: m.BandwidthChart })),
+  { ssr: false }
+);
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -448,24 +455,7 @@ function VisitorsTab({ locationId, canRunCommands }: { locationId: string; canRu
           <CardTitle className="text-sm font-semibold">Unique Visitors — Last 24h</CardTitle>
         </CardHeader>
         <CardContent>
-          <ResponsiveContainer width="100%" height={250}>
-            <AreaChart data={stats} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-              <defs>
-                <linearGradient id="visitorGrad" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
-                  <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                </linearGradient>
-              </defs>
-              <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-              <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
-              <Area
-                type="monotone" dataKey="wlan_users" name="WiFi Users"
-                stroke="#6366f1" fill="url(#visitorGrad)" strokeWidth={2}
-              />
-            </AreaChart>
-          </ResponsiveContainer>
+          <VisitorsChart stats={stats} />
         </CardContent>
       </Card>
 
@@ -597,27 +587,7 @@ function BandwidthTab({ locationId }: { locationId: string }) {
             <CardTitle className="text-sm font-semibold">WAN Bandwidth</CardTitle>
           </CardHeader>
           <CardContent>
-            <ResponsiveContainer width="100%" height={300}>
-              <AreaChart data={stats} margin={{ top: 5, right: 10, left: 0, bottom: 5 }}>
-                <defs>
-                  <linearGradient id="txGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#10b981" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#10b981" stopOpacity={0} />
-                  </linearGradient>
-                  <linearGradient id="rxGrad" x1="0" y1="0" x2="0" y2="1">
-                    <stop offset="5%" stopColor="#6366f1" stopOpacity={0.3} />
-                    <stop offset="95%" stopColor="#6366f1" stopOpacity={0} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid strokeDasharray="3 3" className="opacity-30" />
-                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                <YAxis tickFormatter={(v: number) => fmtBytes(v)} tick={{ fontSize: 10 }} width={65} />
-                <Tooltip formatter={(v: number | string | undefined) => v != null ? fmtBytes(Number(v)) : "—"} />
-                <Legend />
-                <Area type="monotone" dataKey="wan_tx_bytes" name="Upload" stroke="#10b981" fill="url(#txGrad)" strokeWidth={2} />
-                <Area type="monotone" dataKey="wan_rx_bytes" name="Download" stroke="#6366f1" fill="url(#rxGrad)" strokeWidth={2} />
-              </AreaChart>
-            </ResponsiveContainer>
+            <BandwidthChart stats={stats} />
           </CardContent>
         </Card>
       )}

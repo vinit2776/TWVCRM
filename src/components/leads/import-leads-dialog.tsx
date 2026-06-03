@@ -26,7 +26,6 @@ import {
   XCircle,
 } from "lucide-react";
 import { toast } from "sonner";
-import Papa from "papaparse";
 
 interface ImportLeadsDialogProps {
   open: boolean;
@@ -70,7 +69,7 @@ export function ImportLeadsDialog({
     if (fileInputRef.current) fileInputRef.current.value = "";
   };
 
-  const handleFileSelect = (selectedFile: File) => {
+  const handleFileSelect = async (selectedFile: File) => {
     if (!selectedFile.name.toLowerCase().endsWith(".csv")) {
       setError("Only CSV files are supported");
       return;
@@ -85,7 +84,8 @@ export function ImportLeadsDialog({
 
     // Parse for preview
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
+      const Papa = (await import("papaparse")).default;
       const text = e.target?.result as string;
       const parsed = Papa.parse<Record<string, string>>(text, {
         header: true,
