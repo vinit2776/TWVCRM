@@ -36,11 +36,13 @@ export interface TallySalesResult {
 export class TallyClient {
   private readonly host: string;
   private readonly port: number;
+  private readonly targetCompany: string;
   private readonly timeoutMs = 30_000;
 
   constructor(config: Config) {
     this.host = config.tally_host;
     this.port = config.tally_port;
+    this.targetCompany = config.tally_target_company;
   }
 
   /** POST raw XML to Tally, return raw response body. */
@@ -84,13 +86,19 @@ export class TallyClient {
     }
   }
 
-  /** Get the currently open company name from Tally (D10.1 guard).
-   *  Uses the same "List of Companies" collection as ping() — proven to work.
-   *  GSTIN is read from config (not Tally) until D5 samples confirm the right query.
+  /**
+   * Confirm the TARGET company is open in Tally (D10.1 guard).
+   *
+   * Tally can have several companies open at once, returned in an arbitrary
+   * order. We never trust "the first one" — we look specifically for the
+   * configured target company (e.g. "Sree Design Infrastructure Pvt Ltd")
+   * among the open companies. If it's there, we return it; if not, we refuse
+   * (so nothing posts while the right company isn't loaded). Vouchers are
+   * additionally targeted to this company by name (SVCURRENTCOMPANY), so even
+   * with other companies open, posting to the wrong one is impossible.
    */
   async getCurrentCompany(): Promise<TallyCompanyInfo | null> {
     try {
-      // Reuse the exact XML from ping() / connection tester — already verified working.
       const xml = `<ENVELOPE>
   <HEADER>
     <VERSION>1</VERSION>
@@ -116,20 +124,28 @@ export class TallyClient {
 </ENVELOPE>`;
 
       const res = await this.post(xml);
-      const name = extractCompanyName(res);
+      const openCompanies = extractAllCompanyNames(res);
 
-      if (!name) {
-        // Tally responded but we couldn't find the company name in any known
-        // format. Log a snippet of the raw response so we can pin the exact tag.
-        log.warn(
-          "Tally responded but no company name found. Raw response (first 600 chars): " +
-          res.slice(0, 600).replace(/\s+/g, " ")
+      if (openCompanies.length === 0) {
+        log.warn("Tally responded but no companies parsed. Raw (first 600): " +
+          res.slice(0, 600).replace(/\s+/g, " "));
+        return null;
+      }
+
+      // Find the target company among the open ones (whitespace-insensitive).
+      const target = normalize(this.targetCompany);
+      const match = openCompanies.find((c) => normalize(c) === target);
+
+      if (!match) {
+        log.error(
+          `Target company "${this.targetCompany}" is NOT open in Tally. ` +
+          `Open companies: ${openCompanies.join(" | ")}. ` +
+          `Refusing to post until it is loaded.`
         );
         return null;
       }
 
-      // GSTIN read from config, not this query (poller guard now server-side).
-      return { name, gstin: "" };
+      return { name: match, gstin: "" };
     } catch (err) {
       log.error(`getCurrentCompany failed: ${String(err)}`);
       return null;
@@ -162,6 +178,9 @@ export class TallyClient {
     <IMPORTDATA>
       <REQUESTDESC>
         <REPORTNAME>All Masters</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(this.targetCompany)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
       </REQUESTDESC>
       <REQUESTDATA>
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
@@ -304,6 +323,9 @@ export class TallyClient {
     <IMPORTDATA>
       <REQUESTDESC>
         <REPORTNAME>Vouchers</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(this.targetCompany)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
       </REQUESTDESC>
       <REQUESTDATA>
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
@@ -420,24 +442,37 @@ function escapeXml(s: string): string {
 }
 
 /**
- * Extract the company name from a Tally "List of Companies" response.
- * Tally versions return the name in different shapes, so we try each:
- *   1. <NAME>Company</NAME>           (child element)
- *   2. <COMPANY NAME="Company">       (attribute on COMPANY)
- *   3. <COMPANYNAME>Company</COMPANYNAME>
- *   4. <SVCURRENTCOMPANY>Company</SVCURRENTCOMPANY>
- * Returns "" if none match.
+ * Extract ALL open company names from a Tally "List of Companies" response.
+ * Tally returns each as <COMPANY NAME="..." ...> (the name may contain
+ * newlines from XML formatting, which we collapse). Falls back to
+ * <NAME TYPE="String">...</NAME> elements if no attributes are found.
  */
-function extractCompanyName(xml: string): string {
-  const patterns: RegExp[] = [
-    /<NAME>([\s\S]*?)<\/NAME>/i,
-    /<COMPANY[^>]*\bNAME\s*=\s*"([^"]+)"/i,
-    /<COMPANYNAME>([\s\S]*?)<\/COMPANYNAME>/i,
-    /<SVCURRENTCOMPANY>([\s\S]*?)<\/SVCURRENTCOMPANY>/i,
-  ];
-  for (const re of patterns) {
-    const m = xml.match(re);
-    if (m && m[1] && m[1].trim()) return m[1].trim();
+function extractAllCompanyNames(xml: string): string[] {
+  const names: string[] = [];
+
+  // Primary: NAME="..." attribute on each <COMPANY ...> tag
+  for (const m of xml.matchAll(/<COMPANY\b[^>]*?\bNAME="([^"]*)"/gi)) {
+    const n = collapse(m[1]);
+    if (n) names.push(n);
   }
-  return "";
+
+  // Fallback: <NAME TYPE="String">...</NAME> elements
+  if (names.length === 0) {
+    for (const m of xml.matchAll(/<NAME\b[^>]*>([\s\S]*?)<\/NAME>/gi)) {
+      const n = collapse(m[1]);
+      if (n) names.push(n);
+    }
+  }
+
+  return names;
+}
+
+/** Collapse internal whitespace/newlines to single spaces and trim. */
+function collapse(s: string): string {
+  return s.replace(/\s+/g, " ").trim();
+}
+
+/** Normalize a company name for comparison (collapsed + lowercased). */
+function normalize(s: string): string {
+  return collapse(s).toLowerCase();
 }

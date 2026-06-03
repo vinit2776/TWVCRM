@@ -77,8 +77,15 @@ const server = http.createServer((req, res) => {
 });
 
 function companyResponse(name: string, _gstin: string): string {
-  // Mimics real Tally "List of Companies" response — getCurrentCompany() parses <NAME> tags.
-  return `<ENVELOPE><BODY><DATA><COLLECTION><COMPANY><NAME>${name}</NAME></COMPANY></COLLECTION></DATA></BODY></ENVELOPE>`;
+  // Mimics real Tally "List of Companies" — multiple companies open at once,
+  // each as <COMPANY NAME="..."> (the real format). The target may not be first.
+  const others = name === "Wrong Company Ltd"
+    ? [name]
+    : ["Recordsguru Information Management Pvt Ltd", name, "Stonecolour Exim Pvt Ltd"];
+  const companies = others.map((n) =>
+    `<COMPANY NAME="${n}" RESERVEDNAME=""><NAME TYPE="String">${n}</NAME></COMPANY>`
+  ).join("");
+  return `<ENVELOPE><BODY><DATA><COLLECTION>${companies}</COLLECTION></DATA></BODY></ENVELOPE>`;
 }
 
 function voucherResponse(guid: string, invoiceNumber: string, irn: string): string {

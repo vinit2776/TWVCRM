@@ -14,6 +14,9 @@ const ConfigSchema = z.object({
   tally_host:            z.string().default("localhost"),
   tally_port:            z.number().int().default(9000),
   tally_company_gstin:   z.string().min(15).max(15),
+  // The exact Tally company name to post into. Required when multiple
+  // companies are open. Every voucher is targeted explicitly to this company.
+  tally_target_company:  z.string().min(1),
   poll_interval_ms:      z.number().int().min(30_000).default(120_000),
   heartbeat_interval_ms: z.number().int().min(30_000).default(60_000),
   lease_seconds:         z.number().int().default(120),
