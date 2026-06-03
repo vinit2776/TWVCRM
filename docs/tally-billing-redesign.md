@@ -348,3 +348,40 @@ Decisions D2/D3/D4/D6, OV3/OV4/OV5/OV6/OV7 all still apply at the GST-generation
 - **Receipt-voucher sync** (CRM payment recorded → bridge posts receipt to Tally) — needed
   for correct books once invoices are Tally-issued. Bridge: implement `postReceiptVoucher`
   (mirror of `postSalesVoucher`); CRM: enqueue `receipt_voucher` on payment.
+
+---
+
+## 17. Guiding principle: CRM is the single control surface (locked)
+
+**Every accounting action is initiated in the CRM, executed in Tally by the bridge, and
+reflected back. Tally remains the system of record for the books; the CRM is the one
+place humans operate.** Same outbox pattern for all actions:
+
+```
+ CRM action ──enqueue job──▶ bridge ──XML──▶ Tally ──confirm/read-back──▶ CRM reflects
+   issue        sales_voucher                  voucher + IRN
+   payment      receipt_voucher                receipt
+   cancel       credit_note                    CRN + IRN (B2B)
+   modify       credit_note + sales_voucher    CRN + new invoice
+```
+
+### Cancel / modify (CRM-first) — build as fast-follow phase (Phase 1b)
+- "Modify" = **cancel + re-issue** (GST: e-invoices can't be edited).
+- **Cancel:** CRM "Cancel" → `credit_note` job → bridge posts CRN voucher in Tally
+  (+ its own IRN for B2B, via the existing IRN read-back loop) → CRM marks cancelled.
+- **Modify:** CRM "Modify" → CRN for the old + a new `sales_voucher` for the corrected →
+  CRM reflects both.
+- **<24h B2B optimization:** *optionally* cancel the IRN instead of a CRN — only if Tally
+  exposes IRN-cancellation via XML (verify with a sample). The CRN path always works, so
+  we never depend on it.
+- **Needs:** one real Credit Note XML sample from Tally (like the sales-voucher sample) +
+  CRN-IRN read-back. Bridge: `postCreditNote` (mirror of `postSalesVoucher`).
+- **Interim (until Phase 1b ships):** documented manual Tally cancel (§16 Q1) for the
+  short gap after core go-live.
+
+### Revised phase roadmap
+1. **Phase 1 (core):** GST issuance via Tally at the 3 entry points + `dispatchTallyInvoice`
+   (paid/unpaid) + **receipt-voucher sync** + guards/hardening (D2-D6, OV1-OV7).
+2. **Phase 1b (fast-follow):** CRM-first cancel/modify (credit_note voucher + IRN read-back).
+   Needs a CRN sample. Replaces the manual procedure + the deferred "Phase 3" CRN automation.
+3. **Phase 2:** new Billing page (UI) — own design + review.
