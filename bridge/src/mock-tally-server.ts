@@ -46,37 +46,60 @@ const server = http.createServer((req, res) => {
     }
 
     // Detect request type from body
-    if (body.includes("GetCurrentCompany") || body.includes("CurrentCompany") || body.includes("List of Companies")) {
+    if (body.includes("List of Companies")) {
       res.end(companyResponse("Sree Design Infrastructure Pvt Ltd", "33AAACU4245J1ZF"));
       return;
     }
 
+    // Day Book export — return all created mock vouchers (for read-back of
+    // invoice number + IRN, matching real Tally's MASTERID/VOUCHERNUMBER format).
+    if (body.includes("Day Book")) {
+      res.end(dayBookResponse());
+      return;
+    }
+
     if (body.includes("REPORTNAME>All Masters") || body.includes("Sundry Debtors")) {
-      // Party master creation
-      res.end(`<ENVELOPE><BODY><DATA><IMPORTRESULT><CREATED>1</CREATED><ALTERED>0</ALTERED></IMPORTRESULT></DATA></BODY></ENVELOPE>`);
+      res.end(importResult(1));   // party master created
       return;
     }
 
     if (body.includes("VCHTYPE") || body.includes("VOUCHER")) {
-      // Sales voucher creation — for debugging, save the received XML
+      // Sales voucher creation — save received XML for debug; assign a mock
+      // masterid + invoice number, return real-style counts + LASTVCHID.
       try { fs.writeFileSync("/tmp/last-voucher.xml", body); } catch { /* ignore */ }
-      const invoiceNum = `TWV/24-25/${String(requestCount).padStart(4, "0")}`;
-      const guid       = `fake-guid-${Date.now()}`;
-      const irn        = simulate === "async_irn" ? null : `fake-irn-${Date.now()}`;
-
-      if (irn) {
-        res.end(voucherResponse(guid, invoiceNum, irn));
-      } else {
-        // Async IRN: no IRN in response — bridge should poll or wait
-        res.end(voucherResponseNoIrn(guid, invoiceNum));
-      }
+      mockVchId += 1;
+      const number = `SD/A/26-27/MOCK${mockVchId}`;
+      // B2C (no IRN) unless ?simulate=irn, which fills the IRN immediately.
+      const irn = simulate === "irn" ? `MOCKIRN${mockVchId}` : "";
+      mockVouchers.push({ masterid: String(mockVchId), number, irn });
+      res.end(importResult(1, String(mockVchId)));
       return;
     }
 
-    // Default: empty OK
-    res.end(`<ENVELOPE><BODY><DATA><IMPORTRESULT><CREATED>0</CREATED><ALTERED>0</ALTERED></IMPORTRESULT></DATA></BODY></ENVELOPE>`);
+    res.end(importResult(0));
   });
 });
+
+let mockVchId = 90000;
+const mockVouchers: Array<{ masterid: string; number: string; irn: string }> = [];
+
+function importResult(created: number, lastVchId = "0"): string {
+  return `<RESPONSE><CREATED>${created}</CREATED><ALTERED>0</ALTERED><DELETED>0</DELETED>` +
+    `<LASTVCHID>${lastVchId}</LASTVCHID><LASTMID>0</LASTMID><COMBINED>0</COMBINED>` +
+    `<IGNORED>0</IGNORED><ERRORS>0</ERRORS><CANCELLED>0</CANCELLED><EXCEPTIONS>0</EXCEPTIONS></RESPONSE>`;
+}
+
+function dayBookResponse(): string {
+  const vouchers = mockVouchers.map((v) =>
+    `<VOUCHER VCHTYPE="SDIPL-REG" ACTION="Create">` +
+    `<DATE>20260603</DATE><MASTERID>${v.masterid}</MASTERID>` +
+    `<VOUCHERNUMBER>${v.number}</VOUCHERNUMBER><GUID>mock-guid-${v.masterid}</GUID>` +
+    `<IRN>${v.irn}</IRN><IRNACKNO>${v.irn ? "MOCKACK" : ""}</IRNACKNO>` +
+    `<IRNACKDATE>${v.irn ? "2026-06-03" : ""}</IRNACKDATE><IRNQRCODE>${v.irn ? "MOCKQR" : ""}</IRNQRCODE>` +
+    `</VOUCHER>`
+  ).join("");
+  return `<ENVELOPE><BODY><DATA><TALLYMESSAGE>${vouchers}</TALLYMESSAGE></DATA></BODY></ENVELOPE>`;
+}
 
 function companyResponse(name: string, _gstin: string): string {
   // Mimics real Tally "List of Companies" — multiple companies open at once,

@@ -242,6 +242,52 @@ export class TallyClient {
   async getIrnMap(fromDate: string, toDate: string): Promise<Map<string, {
     irn: string | null; ack_no: string | null; ack_date: string | null; signed_qr_code: string | null;
   }>> {
+    const res = await this.exportDayBook(fromDate, toDate);
+    const map = new Map<string, { irn: string | null; ack_no: string | null; ack_date: string | null; signed_qr_code: string | null }>();
+
+    for (const m of res.matchAll(/<VOUCHER\b[\s\S]*?<\/VOUCHER>/gi)) {
+      const block  = m[0];
+      const number = firstTag(block, "VOUCHERNUMBER");
+      if (!number) continue;
+      map.set(number, {
+        irn:            firstTag(block, "IRN") || null,
+        ack_no:         firstTag(block, "IRNACKNO") || null,
+        ack_date:       firstTag(block, "IRNACKDATE") || null,
+        signed_qr_code: firstTag(block, "IRNQRCODE") || firstTag(block, "SIGNEDQRCODE") || null,
+      });
+    }
+    return map;
+  }
+
+  /**
+   * Read back a voucher's details by its internal MASTERID (== LASTVCHID from
+   * the import response). Tally's create response doesn't return the invoice
+   * number, so right after creating we look it up in the Day Book.
+   */
+  async getVoucherByMasterId(masterId: string, date: string): Promise<{
+    invoice_number: string; guid: string;
+    irn: string | null; ack_no: string | null; ack_date: string | null; signed_qr_code: string | null;
+  }> {
+    const target = masterId.trim();
+    const res = await this.exportDayBook(date, date);
+
+    for (const m of res.matchAll(/<VOUCHER\b[\s\S]*?<\/VOUCHER>/gi)) {
+      const block = m[0];
+      if (firstTag(block, "MASTERID").trim() !== target) continue;
+      return {
+        invoice_number: firstTag(block, "VOUCHERNUMBER"),
+        guid:           firstTag(block, "GUID"),
+        irn:            firstTag(block, "IRN") || null,
+        ack_no:         firstTag(block, "IRNACKNO") || null,
+        ack_date:       firstTag(block, "IRNACKDATE") || null,
+        signed_qr_code: firstTag(block, "IRNQRCODE") || firstTag(block, "SIGNEDQRCODE") || null,
+      };
+    }
+    return { invoice_number: "", guid: "", irn: null, ack_no: null, ack_date: null, signed_qr_code: null };
+  }
+
+  /** Export the Day Book (all vouchers) for a date range as raw XML. */
+  private async exportDayBook(fromDate: string, toDate: string): Promise<string> {
     const xml = `<ENVELOPE>
   <HEADER>
     <VERSION>1</VERSION>
@@ -260,24 +306,7 @@ export class TallyClient {
     </DESC>
   </BODY>
 </ENVELOPE>`;
-
-    const res  = await this.post(xml);
-    const map  = new Map<string, { irn: string | null; ack_no: string | null; ack_date: string | null; signed_qr_code: string | null }>();
-
-    // Split into individual <VOUCHER ...>...</VOUCHER> blocks and read each
-    for (const m of res.matchAll(/<VOUCHER\b[\s\S]*?<\/VOUCHER>/gi)) {
-      const block  = m[0];
-      const number = firstTag(block, "VOUCHERNUMBER");
-      if (!number) continue;
-      const irn    = firstTag(block, "IRN");
-      map.set(number, {
-        irn:            irn || null,
-        ack_no:         firstTag(block, "IRNACKNO") || null,
-        ack_date:       firstTag(block, "IRNACKDATE") || null,
-        signed_qr_code: firstTag(block, "IRNQRCODE") || firstTag(block, "SIGNEDQRCODE") || null,
-      });
-    }
-    return map;
+    return this.post(xml);
   }
 
   /**
@@ -416,28 +445,41 @@ export class TallyClient {
     const res = await this.post(xml);
     this.assertNoLineError(res, "postSalesVoucher");
 
-    // Extract fields directly from the XML by tag name — robust to nesting depth.
-    // Works for both mock and real Tally regardless of where CREATED/GUID/etc sit.
-    // ── D5: confirm these tag names match your Tally version's import response ──
-    const tag = (name: string): string | null => {
-      const m = res.match(new RegExp(`<${name}>([\\s\\S]*?)<\\/${name}>`, "i"));
-      return m ? m[1].trim() : null;
-    };
+    // Tally's import response gives result COUNTS (CREATED/ERRORS/EXCEPTIONS) and
+    // LASTVCHID — NOT the invoice number. Verify the counts, then read the
+    // assigned invoice number back by matching MASTERID == LASTVCHID in the Day Book.
+    const created    = Number(firstTag(res, "CREATED") || "0");
+    const errors     = Number(firstTag(res, "ERRORS") || "0");
+    const exceptions = Number(firstTag(res, "EXCEPTIONS") || "0");
 
-    const created = Number(tag("CREATED") ?? "0");
-    if (created < 1) {
-      throw new Error(`Tally created ${created} vouchers — expected 1. Response: ${res.slice(0, 500)}`);
+    if (created < 1 || errors > 0 || exceptions > 0) {
+      throw new Error(
+        `Tally did not create the voucher (created=${created}, errors=${errors}, ` +
+        `exceptions=${exceptions}). Response: ${res.slice(0, 400)}`
+      );
     }
 
-    const voucherGuid    = tag("GUID") ?? "";
-    const invoiceNumber  = tag("VOUCHERNUMBER") ?? "";
-    const irn            = tag("IRN") || null;
-    const ackNo          = tag("IRNACKNO") || null;
-    const ackDate        = tag("IRNACKDATE") || null;
-    const signedQr       = tag("SIGNEDQRCODE") || null;
-    const irnPending     = !irn;   // if no IRN in response, Tally is generating it async
+    const lastVchId = firstTag(res, "LASTVCHID");
+    if (!lastVchId) {
+      throw new Error(`Tally created the voucher but returned no LASTVCHID. Response: ${res.slice(0, 400)}`);
+    }
 
-    log.info(`Voucher created: ${invoiceNumber} | GUID: ${voucherGuid} | IRN: ${irn ?? "pending"}`);
+    // Read back the assigned invoice number (+ IRN if already present) from Tally
+    const details = await this.getVoucherByMasterId(lastVchId, invoice_date);
+
+    const voucherGuid    = details.guid || lastVchId;
+    const invoiceNumber  = details.invoice_number;
+    const irn            = details.irn;
+    const ackNo          = details.ack_no;
+    const ackDate        = details.ack_date;
+    const signedQr       = details.signed_qr_code;
+    const irnPending     = !irn;   // no IRN yet → B2B awaits it (mfg by accounts later)
+
+    if (!invoiceNumber) {
+      throw new Error(`Voucher created (vchid ${lastVchId}) but could not read back its invoice number.`);
+    }
+
+    log.info(`Voucher created: ${invoiceNumber} | vchid: ${lastVchId} | IRN: ${irn ?? "pending"}`);
 
     return {
       voucher_guid:    voucherGuid,
@@ -461,11 +503,10 @@ export class TallyClient {
     if (lineErrMatch) {
       throw new Error(`Tally LINEERROR in ${context}: ${lineErrMatch[1].trim()}`);
     }
-    // Tally sometimes wraps errors in ERRORS block instead
-    const errMatch = xml.match(/<ERRORS>([\s\S]*?)<\/ERRORS>/i);
-    if (errMatch && errMatch[1].trim()) {
-      throw new Error(`Tally ERRORS in ${context}: ${errMatch[1].trim()}`);
-    }
+    // Note: <ERRORS>N</ERRORS> in an import RESPONSE is a COUNT, not a message —
+    // it is checked numerically by the caller, not here.
+    // "Unknown Request" style failures have no <CREATED> and are caught by the
+    // count check in postSalesVoucher.
   }
 }
 
