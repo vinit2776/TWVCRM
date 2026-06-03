@@ -48,3 +48,14 @@ scripts/backup/rclone.conf
 scripts/backup/logs/
 .env*.local
 .gstack/
+
+# Tally bridge — local runtime artifacts (never commit)
+/bridge/node_modules
+/bridge/config.json
+/bridge/logs
+/bridge/dist
+/bridge/package-lock.json
+/bridge-server-files
+/bridge-server-files.zip
+/twv-bridge-mock-fix.zip
+/twv-tally-bridge.zip
