@@ -87,6 +87,49 @@ export class TallyClient {
   }
 
   /**
+   * Check whether a ledger (e.g. a customer) exists in the target company.
+   * Used to fail an invoice clearly when the customer's ledger isn't in Tally
+   * yet (accounts must create it) rather than posting a broken voucher.
+   */
+  async ledgerExists(ledgerName: string): Promise<boolean> {
+    const xml = `<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Export</TALLYREQUEST>
+    <TYPE>Collection</TYPE>
+    <ID>List of Ledgers</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+        <SVCURRENTCOMPANY>${escapeXml(this.targetCompany)}</SVCURRENTCOMPANY>
+      </STATICVARIABLES>
+      <TDL>
+        <TDLMESSAGE>
+          <COLLECTION NAME="List of Ledgers" ISMODIFY="No">
+            <TYPE>Ledger</TYPE>
+            <NATIVEMETHOD>Name</NATIVEMETHOD>
+          </COLLECTION>
+        </TDLMESSAGE>
+      </TDL>
+    </DESC>
+  </BODY>
+</ENVELOPE>`;
+
+    const res    = await this.post(xml);
+    const target = normalize(ledgerName);
+    // Ledger names appear as <LEDGER NAME="..."> attributes and/or <NAME> elements.
+    for (const m of res.matchAll(/<LEDGER\b[^>]*?\bNAME="([^"]*)"/gi)) {
+      if (normalize(m[1]) === target) return true;
+    }
+    for (const m of res.matchAll(/<NAME\b[^>]*>([\s\S]*?)<\/NAME>/gi)) {
+      if (normalize(m[1]) === target) return true;
+    }
+    return false;
+  }
+
+  /**
    * Confirm the TARGET company is open in Tally (D10.1 guard).
    *
    * Tally can have several companies open at once, returned in an arbitrary

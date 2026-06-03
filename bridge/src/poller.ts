@@ -213,6 +213,19 @@ export class Poller {
     // injected into the job payload by the CRM /pending endpoint from the
     // Tally Sync Control settings + the customer record (p/str defined above).
 
+    // ── Customer ledger guard (require-existing) ───────────────────────────────
+    // Fail clearly if the customer isn't a ledger in Tally yet, rather than
+    // posting a broken voucher. Accounts creates the ledger, then Retry.
+    const partyLedger = str("party_ledger");
+    const partyExists = await this.tally.ledgerExists(partyLedger);
+    if (!partyExists) {
+      const msg = `Customer ledger "${partyLedger}" does not exist in Tally. ` +
+        `Please create it in Tally (Gateway > Create > Ledger, under Sundry Debtors), then Retry.`;
+      log.error(`Job ${job.id}: ${msg}`);
+      await this.crm.ack({ success: false, job_id: job.id, error: msg, retryable: false });
+      return;
+    }
+
     // ── Post the voucher (SDIPL-REG item-invoice format) ───────────────────────
     const result = await this.tally.postSalesVoucher({
       idempotency_key: job.idempotency_key,
