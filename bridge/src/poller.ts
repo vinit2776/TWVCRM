@@ -151,40 +151,31 @@ export class Poller {
       return;
     }
 
-    // ── Fetch ledger config from CRM-stored settings ──────────────────────────
-    // Ledger names come from app_settings, injected into the payload by the CRM.
-    // D5 TODO: extend PendingJob payload to include resolved ledger names.
-    const ledgers = {
-      sales:     String((job.payload as Record<string, unknown>)["ledger_sales"]    ?? "Sales"),
-      cgst:      String((job.payload as Record<string, unknown>)["ledger_cgst"]     ?? "Output CGST"),
-      sgst:      String((job.payload as Record<string, unknown>)["ledger_sgst"]     ?? "Output SGST"),
-      igst:      String((job.payload as Record<string, unknown>)["ledger_igst"]     ?? "Output IGST"),
-      round_off: String((job.payload as Record<string, unknown>)["ledger_round_off"]?? "Round Off"),
-    };
+    // All invoice details (ledgers, party, stock item, place of supply) are
+    // injected into the job payload by the CRM /pending endpoint from the
+    // Tally Sync Control settings + the customer record.
+    const p = job.payload as Record<string, unknown>;
+    const str = (k: string, d = "") => String(p[k] ?? d);
+    void expectedGstin;
 
-    const voucherSeries = String((job.payload as Record<string, unknown>)["voucher_series"] ?? "Sales");
-
-    // Determine intra/inter state from buyer GSTIN (D10.7)
-    const buyerGstin      = String((job.payload as Record<string, unknown>)["buyer_gstin"] ?? "");
-    const buyerStateCode  = buyerGstin.length >= 2 ? buyerGstin.slice(0, 2) : "";
-    const sellerStateCode = expectedGstin.slice(0, 2);
-    const isInterstate    = !!buyerStateCode && buyerStateCode !== sellerStateCode;
-
-    // ── Post the voucher ──────────────────────────────────────────────────────
+    // ── Post the voucher (SDIPL-REG item-invoice format) ───────────────────────
     const result = await this.tally.postSalesVoucher({
       idempotency_key: job.idempotency_key,
       invoice_date:    new Date().toISOString().split("T")[0],
-      party_ledger:    String((job.payload as Record<string, unknown>)["party_ledger"] ?? ""),
-      taxable_amount:  payload.taxable_amount,
-      tax_percentage:  payload.tax_percentage,
-      is_interstate:   isInterstate,
-      voucher_series:  voucherSeries,
+      voucher_type:    str("voucher_series", "SDIPL-REG"),
+      party_ledger:    str("party_ledger"),
+      party_gstin:     str("buyer_gstin"),
+      party_address:   str("buyer_address"),
+      place_of_supply: str("place_of_supply", "Tamil Nadu"),
+      stock_item:      str("stock_item", "Rent-The WorkVilla"),
+      income_ledger:   str("ledger_sales", "Rent The Workvilla 18%"),
+      cgst_ledger:     str("ledger_cgst", "CGST Output 9%"),
+      sgst_ledger:     str("ledger_sgst", "SGST Output 9%"),
+      tax_percentage:  payload.tax_percentage || 18,
       line_items:      (payload.line_items ?? []).map(li => ({
         description: String(li.description ?? "Service"),
         amount:      Number(li.amount ?? 0),
-        hsn_sac:     "997212",
       })),
-      ledgers,
     });
 
     // ── Ack back to CRM ───────────────────────────────────────────────────────

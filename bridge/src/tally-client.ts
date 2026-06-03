@@ -252,66 +252,58 @@ export class TallyClient {
   async postSalesVoucher(params: {
     idempotency_key:  string;
     invoice_date:     string;           // YYYY-MM-DD
+    voucher_type:     string;           // "SDIPL-REG"
     party_ledger:     string;
-    taxable_amount:   number;
-    tax_percentage:   number;           // e.g. 18
-    is_interstate:    boolean;
-    voucher_series:   string;
-    line_items:       Array<{
-      description:    string;
-      amount:         number;
-      hsn_sac:        string;
-    }>;
-    ledgers: {
-      sales:    string;   // e.g. "Space Rent Income"
-      cgst:     string;   // e.g. "Output CGST"  (intra-state)
-      sgst:     string;   // e.g. "Output SGST"  (intra-state)
-      igst:     string;   // e.g. "Output IGST"  (inter-state)
-      round_off:string;
-    };
+    party_gstin:      string;
+    party_address:    string;
+    place_of_supply:  string;           // "Tamil Nadu"
+    stock_item:       string;           // "Rent-The WorkVilla"
+    income_ledger:    string;           // "Rent The Workvilla 18%"
+    cgst_ledger:      string;           // "CGST Output 9%"
+    sgst_ledger:      string;           // "SGST Output 9%"
+    tax_percentage:   number;           // 18 (split 9 + 9)
+    line_items:       Array<{ description: string; amount: number }>;
   }): Promise<TallySalesResult> {
 
-    const { idempotency_key, invoice_date, party_ledger, taxable_amount,
-            tax_percentage, is_interstate, voucher_series, line_items, ledgers } = params;
+    const { idempotency_key, invoice_date, voucher_type, party_ledger, party_gstin,
+            party_address, place_of_supply, stock_item, income_ledger,
+            cgst_ledger, sgst_ledger, tax_percentage, line_items } = params;
 
-    // ── D5 TODO ────────────────────────────────────────────────────────────────
-    // Replace the XML skeleton below with the envelope from your D5 sample.
-    // Key things to confirm from sample:
-    //   - Field name for the idempotency/remote ID (REMOTEID? MASTERID? UDF?)
-    //   - Whether GSTDETAILS block is in the voucher or a separate sub-object
-    //   - How e-invoice fields (IRN, ACK, QR) appear in the import response
-    //   - The date format Tally expects (YYYYMMDD vs DD-Mon-YYYY)
-    //   - Tax ledger entry structure (one LEDGERENTRIES per tax type)
-    // ─────────────────────────────────────────────────────────────────────────
-    const tallyDate = invoice_date.replace(/-/g, "");  // YYYYMMDD — verify from D5 sample
+    // Built to match the real SDIPL-REG item-invoice format (from production sample).
+    // Place of supply is the coworking location (Tamil Nadu) → always CGST + SGST.
+    // Income ledger is attached INSIDE each inventory line (ACCOUNTINGALLOCATIONS);
+    // only party + CGST + SGST are top-level LEDGERENTRIES.
+    // VOUCHERNUMBER is omitted so Tally auto-numbers from the SDIPL-REG series.
 
-    const taxRate     = tax_percentage / 100;
-    const taxAmount   = Math.round(taxable_amount * taxRate * 100) / 100;
-    const roundOff    = Math.round((taxable_amount + taxAmount) * 100) / 100 -
-                        Math.floor((taxable_amount + taxAmount) * 100) / 100;
-    const totalAmount = taxable_amount + taxAmount + roundOff;
+    const tallyDate = invoice_date.replace(/-/g, "");          // YYYYMMDD
+    const taxable   = round2(line_items.reduce((s, li) => s + li.amount, 0));
+    const halfRate  = tax_percentage / 2 / 100;                // 9% each
+    const cgst      = round2(taxable * halfRate);
+    const sgst      = round2(taxable * halfRate);
+    const total     = round2(taxable + cgst + sgst);
 
-    // Note: Tally computes the tax amounts from its own ledger rates.
-    // We pass taxable_amount only. The individual CGST/SGST amounts below
-    // are for narration only and will be overridden by Tally's calculation.
-    const halfTax = Math.round((taxAmount / 2) * 100) / 100;
+    const inventoryEntries = line_items.map((li) => `
+            <ALLINVENTORYENTRIES.LIST>
+              <STOCKITEMNAME>${escapeXml(stock_item)}</STOCKITEMNAME>
+              <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+              <AMOUNT>${round2(li.amount).toFixed(2)}</AMOUNT>
+              <BASICUSERDESCRIPTION.LIST TYPE="String">
+                <BASICUSERDESCRIPTION>${escapeXml(li.description)}</BASICUSERDESCRIPTION>
+              </BASICUSERDESCRIPTION.LIST>
+              <GSTOVRDNTAXABILITY>Taxable</GSTOVRDNTAXABILITY>
+              <GSTSOURCETYPE>Ledger</GSTSOURCETYPE>
+              <GSTLEDGERSOURCE>${escapeXml(income_ledger)}</GSTLEDGERSOURCE>
+              <HSNSOURCETYPE>Ledger</HSNSOURCETYPE>
+              <HSNLEDGERSOURCE>${escapeXml(income_ledger)}</HSNLEDGERSOURCE>
+              <GSTOVRDNTYPEOFSUPPLY>Services</GSTOVRDNTYPEOFSUPPLY>
+              <ACCOUNTINGALLOCATIONS.LIST>
+                <LEDGERNAME>${escapeXml(income_ledger)}</LEDGERNAME>
+                <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+                <AMOUNT>${round2(li.amount).toFixed(2)}</AMOUNT>
+              </ACCOUNTINGALLOCATIONS.LIST>
+            </ALLINVENTORYENTRIES.LIST>`).join("");
 
-    const taxLedgerEntries = is_interstate
-      ? `<ALLLEDGERENTRIES.LIST>
-          <LEDGERNAME>${escapeXml(ledgers.igst)}</LEDGERNAME>
-          <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-          <AMOUNT>${taxAmount}</AMOUNT>
-        </ALLLEDGERENTRIES.LIST>`
-      : `<ALLLEDGERENTRIES.LIST>
-          <LEDGERNAME>${escapeXml(ledgers.cgst)}</LEDGERNAME>
-          <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-          <AMOUNT>${halfTax}</AMOUNT>
-        </ALLLEDGERENTRIES.LIST>
-        <ALLLEDGERENTRIES.LIST>
-          <LEDGERNAME>${escapeXml(ledgers.sgst)}</LEDGERNAME>
-          <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-          <AMOUNT>${halfTax}</AMOUNT>
-        </ALLLEDGERENTRIES.LIST>`;
+    const narration = `Inv to ${party_ledger} — ${invoice_date}`;
 
     const xml = `<ENVELOPE>
   <HEADER>
@@ -329,46 +321,45 @@ export class TallyClient {
       </REQUESTDESC>
       <REQUESTDATA>
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
-          <VOUCHER VCHTYPE="${escapeXml(voucher_series)}" ACTION="Create">
+          <VOUCHER VCHTYPE="${escapeXml(voucher_type)}" ACTION="Create" OBJVIEW="Invoice Voucher View">
             <DATE>${tallyDate}</DATE>
-            <VOUCHERTYPENAME>${escapeXml(voucher_series)}</VOUCHERTYPENAME>
+            <VOUCHERTYPENAME>${escapeXml(voucher_type)}</VOUCHERTYPENAME>
+            <PARTYLEDGERNAME>${escapeXml(party_ledger)}</PARTYLEDGERNAME>
+            <PARTYNAME>${escapeXml(party_ledger)}</PARTYNAME>
+            <BASICBUYERNAME>${escapeXml(party_ledger)}</BASICBUYERNAME>
+            ${party_gstin ? `<PARTYGSTIN>${escapeXml(party_gstin)}</PARTYGSTIN>
+            <CONSIGNEEGSTIN>${escapeXml(party_gstin)}</CONSIGNEEGSTIN>` : ""}
+            <PLACEOFSUPPLY>${escapeXml(place_of_supply)}</PLACEOFSUPPLY>
+            <COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>
             <ISINVOICE>Yes</ISINVOICE>
-            <PERSISTEDVIEW>Invoice Voucher View</PERSISTEDVIEW>
-            <!-- Idempotency key — D5: verify UDF field name in your Tally version -->
+            <NARRATION>${escapeXml(narration)}</NARRATION>
+            ${party_address ? `<BASICBUYERADDRESS.LIST TYPE="String">
+              <BASICBUYERADDRESS>${escapeXml(party_address)}</BASICBUYERADDRESS>
+            </BASICBUYERADDRESS.LIST>` : ""}
+            <!-- Idempotency key for check-before-create (D2) -->
             <UDF:REMOTEID.LIST TYPE="String">
               <UDF:REMOTEID>${escapeXml(idempotency_key)}</UDF:REMOTEID>
             </UDF:REMOTEID.LIST>
-
-            <!-- Party -->
-            <PARTYLEDGERNAME>${escapeXml(party_ledger)}</PARTYLEDGERNAME>
-            <ALLLEDGERENTRIES.LIST>
+            ${inventoryEntries}
+            <!-- Party (debit, total incl. tax) -->
+            <LEDGERENTRIES.LIST>
               <LEDGERNAME>${escapeXml(party_ledger)}</LEDGERNAME>
               <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
-              <AMOUNT>-${totalAmount}</AMOUNT>
-            </ALLLEDGERENTRIES.LIST>
-
-            <!-- Sales ledger with inventory/service lines -->
-            <ALLLEDGERENTRIES.LIST>
-              <LEDGERNAME>${escapeXml(ledgers.sales)}</LEDGERNAME>
+              <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
+              <AMOUNT>-${total.toFixed(2)}</AMOUNT>
+            </LEDGERENTRIES.LIST>
+            <!-- Output CGST -->
+            <LEDGERENTRIES.LIST>
+              <LEDGERNAME>${escapeXml(cgst_ledger)}</LEDGERNAME>
               <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-              <AMOUNT>${taxable_amount}</AMOUNT>
-              <INVENTORYENTRIES.LIST>
-                ${line_items.map(li => `<STOCKITEMNAME>${escapeXml(li.description)}</STOCKITEMNAME>
-                <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
-                <AMOUNT>${li.amount}</AMOUNT>
-                <HSNCODE>${escapeXml(li.hsn_sac)}</HSNCODE>`).join("\n")}
-              </INVENTORYENTRIES.LIST>
-            </ALLLEDGERENTRIES.LIST>
-
-            <!-- Tax ledgers (Tally computes actual amounts from rates — D8) -->
-            ${taxLedgerEntries}
-
-            <!-- Round-off -->
-            ${roundOff !== 0 ? `<ALLLEDGERENTRIES.LIST>
-              <LEDGERNAME>${escapeXml(ledgers.round_off)}</LEDGERNAME>
-              <ISDEEMEDPOSITIVE>${roundOff < 0 ? "Yes" : "No"}</ISDEEMEDPOSITIVE>
-              <AMOUNT>${Math.abs(roundOff)}</AMOUNT>
-            </ALLLEDGERENTRIES.LIST>` : ""}
+              <AMOUNT>${cgst.toFixed(2)}</AMOUNT>
+            </LEDGERENTRIES.LIST>
+            <!-- Output SGST -->
+            <LEDGERENTRIES.LIST>
+              <LEDGERNAME>${escapeXml(sgst_ledger)}</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+              <AMOUNT>${sgst.toFixed(2)}</AMOUNT>
+            </LEDGERENTRIES.LIST>
           </VOUCHER>
         </TALLYMESSAGE>
       </REQUESTDATA>
@@ -376,6 +367,7 @@ export class TallyClient {
   </BODY>
 </ENVELOPE>`;
 
+    const totalAmount = total;
     const res = await this.post(xml);
     this.assertNoLineError(res, "postSalesVoucher");
 
@@ -430,6 +422,10 @@ export class TallyClient {
       throw new Error(`Tally ERRORS in ${context}: ${errMatch[1].trim()}`);
     }
   }
+}
+
+function round2(n: number): number {
+  return Math.round(n * 100) / 100;
 }
 
 function escapeXml(s: string): string {

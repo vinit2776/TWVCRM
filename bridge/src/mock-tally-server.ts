@@ -57,7 +57,8 @@ const server = http.createServer((req, res) => {
     }
 
     if (body.includes("VCHTYPE") || body.includes("VOUCHER")) {
-      // Sales voucher creation
+      // Sales voucher creation — for debugging, save the received XML
+      try { require("fs").writeFileSync("/tmp/last-voucher.xml", body); } catch { /* ignore */ }
       const invoiceNum = `TWV/24-25/${String(requestCount).padStart(4, "0")}`;
       const guid       = `fake-guid-${Date.now()}`;
       const irn        = simulate === "async_irn" ? null : `fake-irn-${Date.now()}`;

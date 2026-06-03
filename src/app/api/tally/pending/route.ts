@@ -56,6 +56,7 @@ export async function GET(request: NextRequest) {
       "tally_ledger_rent_income", "tally_ledger_usage_income",
       "tally_ledger_cgst_output", "tally_ledger_sgst_output", "tally_ledger_igst_output",
       "tally_ledger_round_off", "tally_party_ledger_suffix", "tally_voucher_series",
+      "tally_stock_item", "tally_place_of_supply", "tally_hsn_code",
     ]);
 
   const settingsMap = Object.fromEntries(
@@ -137,16 +138,19 @@ export async function GET(request: NextRequest) {
     igst:           settingsMap["tally_ledger_igst_output"]  ?? "",
     round_off:      settingsMap["tally_ledger_round_off"]    ?? "",
   };
-  const voucherSeries = settingsMap["tally_voucher_series"] ?? "Sales";
+  const voucherSeries = settingsMap["tally_voucher_series"] ?? "SDIPL-REG";
   const partySuffix   = settingsMap["tally_party_ledger_suffix"] ?? "";
+  const stockItem     = settingsMap["tally_stock_item"] ?? "Rent-The WorkVilla";
+  const placeOfSupply = settingsMap["tally_place_of_supply"] ?? "Tamil Nadu";
 
   for (const job of jobs) {
     if (job.job_type !== "sales_voucher" || !job.billing_statement_id) continue;
 
-    // Resolve the customer (party) from the statement → contract → lead
+    // Resolve the customer (party) + line items from the statement
     const { data: stmt } = await supabase
       .from("billing_statements")
       .select(`
+        subtotal, line_items,
         contract:contracts!billing_statements_contract_id_fkey(
           lead:leads!contracts_lead_id_fkey(company, first_name, last_name, gst_number, state, street, city, zip_code)
         )
@@ -160,19 +164,34 @@ export async function GET(request: NextRequest) {
       || `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim()
       || "Walk-in Customer";
 
+    // Flatten the statement's sectioned line_items into invoice lines
+    // (one line per section: label + subtotal). Falls back to a single line.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const sections = ((stmt as any)?.line_items as Array<{ label?: string; subtotal?: number }> | null) ?? [];
+    let invoiceLines = sections
+      .filter((s) => Number(s.subtotal ?? 0) > 0)
+      .map((s) => ({ description: String(s.label ?? "Service"), amount: Number(s.subtotal ?? 0) }));
+    if (invoiceLines.length === 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sub = Number((stmt as any)?.subtotal ?? (job.payload as any)?.taxable_amount ?? 0);
+      invoiceLines = [{ description: "Coworking Services", amount: sub }];
+    }
+
     job.payload = {
       ...(job.payload as Record<string, unknown>),
       party_ledger:  partySuffix ? `${partyName}${partySuffix}` : partyName,
       buyer_gstin:   (lead.gst_number as string | null) ?? "",
       buyer_state:   (lead.state as string | null) ?? "",
       buyer_address: [lead.street, lead.city, lead.zip_code].filter(Boolean).join(", "),
-      ledger_sales:    ledgers.rent_income || "Sales",
-      ledger_usage:    ledgers.usage_income || ledgers.rent_income || "Sales",
-      ledger_cgst:     ledgers.cgst || "Output CGST",
-      ledger_sgst:     ledgers.sgst || "Output SGST",
-      ledger_igst:     ledgers.igst || "Output IGST",
+      line_items:    invoiceLines,                       // flattened for the bridge
+      ledger_sales:    ledgers.rent_income || "Rent The Workvilla 18%",
+      ledger_usage:    ledgers.usage_income || ledgers.rent_income || "Rent The Workvilla 18%",
+      ledger_cgst:     ledgers.cgst || "CGST Output 9%",
+      ledger_sgst:     ledgers.sgst || "SGST Output 9%",
       ledger_round_off: ledgers.round_off || "Round Off",
       voucher_series:  voucherSeries,
+      stock_item:      stockItem,
+      place_of_supply: placeOfSupply,
     };
   }
 
