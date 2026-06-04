@@ -18,6 +18,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
+import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
 import { ConvertToGstEarlyDialog } from "@/components/billing/convert-to-gst-early-dialog";
 
 interface UsageCharge {
@@ -93,6 +94,14 @@ interface Statement {
   pi_cancelled_at?: string | null;
   due_date?: string | null;
   notes?: string;
+  // Tally state (surfaced via TallyStatusBadge)
+  issuance_channel?: string | null;
+  lifecycle_stage?: string | null;
+  tally_invoice_number?: string | null;
+  tally_irn?: string | null;
+  tally_credit_note_number?: string | null;
+  tally_last_error?: string | null;
+  tally_delivered_at?: string | null;
   contract?: { id: string; contract_number: string; title?: string } | null;
   booking?: { id: string; booking_number: string; booking_date: string; guest_name?: string } | null;
   lead?: { first_name: string; last_name: string; company?: string; email?: string } | null;
@@ -128,6 +137,7 @@ export function ViewStatementDialog({
   const [sendingProforma, setSendingProforma] = useState(false);
   const [generatingGst, setGeneratingGst] = useState(false);
   const [revertingToDraft, setRevertingToDraft] = useState(false);
+  const [retryingTally, setRetryingTally] = useState(false);
   const [showConvertToGst, setShowConvertToGst] = useState(false);
 
   // Waive-charge state — tracks which charge row has the waive form open
@@ -286,6 +296,26 @@ export function ViewStatementDialog({
     setGeneratingGst(false);
   };
 
+  const handleTallyRetry = async () => {
+    if (!statementId) return;
+    setRetryingTally(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/tally-retry`, {
+        method: "POST", headers: { "Content-Type": "application/json" },
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(json.message || "Tally sync re-queued");
+        onStatusChange();
+        const refreshed = await fetch(`/api/billing-statements/${statementId}`);
+        if (refreshed.ok) { const j = await refreshed.json(); setStatement(j.data || null); }
+      } else {
+        toast.error(json.error || "Failed to retry Tally sync");
+      }
+    } catch { toast.error("Something went wrong"); }
+    setRetryingTally(false);
+  };
+
   const canWaive =
     statement?.status === "draft" &&
     !!userRole &&
@@ -386,6 +416,20 @@ export function ViewStatementDialog({
           </div>
         ) : statement ? (
           <div className="space-y-5">
+            {/* Tally state (only for Tally-issued statements; renders null otherwise) */}
+            <TallyStatusBadge
+              variant="full"
+              issuance_channel={statement.issuance_channel}
+              lifecycle_stage={statement.lifecycle_stage}
+              tally_invoice_number={statement.tally_invoice_number}
+              tally_irn={statement.tally_irn}
+              tally_credit_note_number={statement.tally_credit_note_number}
+              tally_last_error={statement.tally_last_error}
+              tally_delivered_at={statement.tally_delivered_at}
+              onRetry={handleTallyRetry}
+              retrying={retryingTally}
+            />
+
             {/* Header info */}
             <div className="grid grid-cols-2 gap-x-6 gap-y-3 text-sm">
               <div>
