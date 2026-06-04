@@ -31,6 +31,13 @@ const SETTING_KEYS = [
   "tally_party_ledger_suffix",
   "tally_voucher_series",
   "tally_irn_alarm_hours",
+  // Receipt reverse-sync (CRM payment → Tally Receipt voucher)
+  "tally_ledger_receipt_account",
+  "tally_receipt_voucher_series",
+  "tally_receipt_bill_by_bill",
+  "tally_receipt_account_is_bank",
+  "tally_receipt_transaction_type",
+  "tally_receipt_transfer_mode",
 ] as const;
 
 const OFFLINE_THRESHOLD_SECONDS = 90;
@@ -96,6 +103,15 @@ export async function GET(_request: NextRequest) {
       party_suffix: s["tally_party_ledger_suffix"] ?? "",
       voucher_series: s["tally_voucher_series"]    ?? "",
     },
+    receipt: {
+      account:          s["tally_ledger_receipt_account"]   ?? "",
+      voucher_series:   s["tally_receipt_voucher_series"]    ?? "Receipt",
+      // Defaults match the bridge: bill-by-bill ON, account treated as bank.
+      bill_by_bill:     (s["tally_receipt_bill_by_bill"]     ?? "true") !== "false",
+      account_is_bank:  (s["tally_receipt_account_is_bank"]  ?? "true") !== "false",
+      transaction_type: s["tally_receipt_transaction_type"]  ?? "e-Fund Transfer",
+      transfer_mode:    s["tally_receipt_transfer_mode"]     ?? "NEFT",
+    },
     bridge: {
       online,
       version:        bridge?.version ?? null,
@@ -116,6 +132,7 @@ const PatchSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("update_company"), company: z.string().min(1).max(200) }),
   z.object({ action: z.literal("unlock_company") }),
   z.object({ action: z.literal("update_ledgers"), ledgers: z.record(z.string(), z.string()) }),
+  z.object({ action: z.literal("update_receipt"), receipt: z.record(z.string(), z.string()) }),
   z.object({ action: z.literal("update_gstin"), gstin: z.string().min(15).max(15) }),
 ]);
 
@@ -128,6 +145,15 @@ const LEDGER_KEY_MAP: Record<string, string> = {
   round_off:    "tally_ledger_round_off",
   party_suffix: "tally_party_ledger_suffix",
   voucher_series: "tally_voucher_series",
+};
+
+const RECEIPT_KEY_MAP: Record<string, string> = {
+  account:          "tally_ledger_receipt_account",
+  voucher_series:   "tally_receipt_voucher_series",
+  bill_by_bill:     "tally_receipt_bill_by_bill",
+  account_is_bank:  "tally_receipt_account_is_bank",
+  transaction_type: "tally_receipt_transaction_type",
+  transfer_mode:    "tally_receipt_transfer_mode",
 };
 
 export async function PATCH(request: NextRequest) {
@@ -173,6 +199,12 @@ export async function PATCH(request: NextRequest) {
     case "update_ledgers":
       for (const [k, v] of Object.entries(data.ledgers)) {
         const settingKey = LEDGER_KEY_MAP[k];
+        if (settingKey) await set(settingKey, v);
+      }
+      break;
+    case "update_receipt":
+      for (const [k, v] of Object.entries(data.receipt)) {
+        const settingKey = RECEIPT_KEY_MAP[k];
         if (settingKey) await set(settingKey, v);
       }
       break;

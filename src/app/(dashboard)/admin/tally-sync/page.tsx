@@ -40,6 +40,14 @@ interface ControlState {
   gstin: string;
   irn_alarm_hours: string;
   ledgers: Record<string, string>;
+  receipt: {
+    account: string;
+    voucher_series: string;
+    bill_by_bill: boolean;
+    account_is_bank: boolean;
+    transaction_type: string;
+    transfer_mode: string;
+  };
   bridge: {
     online: boolean;
     version: string | null;
@@ -84,11 +92,20 @@ const LEDGER_FIELDS: Array<{ key: string; label: string; placeholder: string }> 
   { key: "party_suffix",   label: "Party name suffix",   placeholder: "(optional)" },
 ];
 
+// Receipt reverse-sync settings (CRM payment → Tally Receipt voucher).
+const RECEIPT_TEXT_FIELDS: Array<{ key: string; label: string; placeholder: string }> = [
+  { key: "account",          label: "Receipt account ledger", placeholder: "e.g. ICICI BANK A/C NO.000905000140" },
+  { key: "voucher_series",   label: "Receipt voucher type",   placeholder: "Receipt" },
+  { key: "transaction_type", label: "Bank transaction type",  placeholder: "e-Fund Transfer" },
+  { key: "transfer_mode",    label: "Bank transfer mode",     placeholder: "NEFT" },
+];
+
 export default function TallySyncPage() {
   const [state, setState] = useState<ControlState | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [ledgerDraft, setLedgerDraft] = useState<Record<string, string>>({});
+  const [receiptDraft, setReceiptDraft] = useState<Record<string, string>>({});
   const [pauseReason, setPauseReason] = useState("");
 
   // Audit log
@@ -104,6 +121,14 @@ export default function TallySyncPage() {
       const data = await res.json() as ControlState;
       setState(data);
       setLedgerDraft(data.ledgers);
+      setReceiptDraft({
+        account:          data.receipt.account,
+        voucher_series:   data.receipt.voucher_series,
+        transaction_type: data.receipt.transaction_type,
+        transfer_mode:    data.receipt.transfer_mode,
+        bill_by_bill:     String(data.receipt.bill_by_bill),
+        account_is_bank:  String(data.receipt.account_is_bank),
+      });
     } finally {
       setLoading(false);
     }
@@ -317,6 +342,53 @@ export default function TallySyncPage() {
           <Button size="sm" disabled={busy}
             onClick={() => void patch({ action: "update_ledgers", ledgers: ledgerDraft }, "Ledger mapping saved")}>
             Save ledger mapping
+          </Button>
+        </CardContent>
+      </Card>
+
+      {/* ── Receipt reverse-sync (CRM payment → Tally Receipt) ─────────────── */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base">Receipt sync (payments → Tally)</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            When a payment is recorded against a Tally-issued invoice, the bridge posts a Receipt voucher in Tally.
+            The <b>receipt account ledger</b> is required — use the exact Tally bank/cash ledger that receives customer payments.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            {RECEIPT_TEXT_FIELDS.map((f) => (
+              <div key={f.key} className="space-y-1">
+                <Label className="text-xs">{f.label}</Label>
+                <Input
+                  value={receiptDraft[f.key] ?? ""}
+                  placeholder={f.placeholder}
+                  onChange={(e) => setReceiptDraft((d) => ({ ...d, [f.key]: e.target.value }))}
+                />
+              </div>
+            ))}
+            <div className="space-y-1">
+              <Label className="text-xs">Knock off the invoice (bill-by-bill)</Label>
+              <select className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                value={receiptDraft["bill_by_bill"] ?? "true"}
+                onChange={(e) => setReceiptDraft((d) => ({ ...d, bill_by_bill: e.target.value }))}>
+                <option value="true">Yes — Agst Ref to the invoice</option>
+                <option value="false">No — on-account receipt</option>
+              </select>
+            </div>
+            <div className="space-y-1">
+              <Label className="text-xs">Receipt account is a bank</Label>
+              <select className="w-full h-9 rounded-md border px-3 text-sm bg-background"
+                value={receiptDraft["account_is_bank"] ?? "true"}
+                onChange={(e) => setReceiptDraft((d) => ({ ...d, account_is_bank: e.target.value }))}>
+                <option value="true">Yes — add bank allocation</option>
+                <option value="false">No — cash (no bank allocation)</option>
+              </select>
+            </div>
+          </div>
+          <Button size="sm" disabled={busy}
+            onClick={() => void patch({ action: "update_receipt", receipt: receiptDraft }, "Receipt settings saved")}>
+            Save receipt settings
           </Button>
         </CardContent>
       </Card>
