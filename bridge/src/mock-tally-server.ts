@@ -64,14 +64,22 @@ const server = http.createServer((req, res) => {
     }
 
     if (body.includes("VCHTYPE") || body.includes("VOUCHER")) {
-      // Sales voucher creation — save received XML for debug; assign a mock
-      // masterid + invoice number, return real-style counts + LASTVCHID.
-      try { fs.writeFileSync("/tmp/last-voucher.xml", body); } catch { /* ignore */ }
+      // Voucher creation — save received XML for debug; assign a mock masterid +
+      // voucher number, return real-style counts + LASTVCHID.
+      const isReceipt = /<VOUCHERTYPENAME>\s*Receipt/i.test(body) || /VCHTYPE="Receipt"/i.test(body);
+      try { fs.writeFileSync(isReceipt ? "/tmp/last-receipt.xml" : "/tmp/last-voucher.xml", body); } catch { /* ignore */ }
       mockVchId += 1;
+      if (isReceipt) {
+        // Receipts get a receipt-series number and never carry an IRN.
+        const number = `RCT/26-27/MOCK${mockVchId}`;
+        mockVouchers.push({ masterid: String(mockVchId), number, irn: "", vchtype: "Receipt" });
+        res.end(importResult(1, String(mockVchId)));
+        return;
+      }
       const number = `SD/A/26-27/MOCK${mockVchId}`;
       // B2C (no IRN) unless ?simulate=irn, which fills the IRN immediately.
       const irn = simulate === "irn" ? `MOCKIRN${mockVchId}` : "";
-      mockVouchers.push({ masterid: String(mockVchId), number, irn });
+      mockVouchers.push({ masterid: String(mockVchId), number, irn, vchtype: "SDIPL-REG" });
       res.end(importResult(1, String(mockVchId)));
       return;
     }
@@ -81,7 +89,7 @@ const server = http.createServer((req, res) => {
 });
 
 let mockVchId = 90000;
-const mockVouchers: Array<{ masterid: string; number: string; irn: string }> = [];
+const mockVouchers: Array<{ masterid: string; number: string; irn: string; vchtype: string }> = [];
 
 function importResult(created: number, lastVchId = "0"): string {
   return `<RESPONSE><CREATED>${created}</CREATED><ALTERED>0</ALTERED><DELETED>0</DELETED>` +
@@ -91,7 +99,7 @@ function importResult(created: number, lastVchId = "0"): string {
 
 function dayBookResponse(): string {
   const vouchers = mockVouchers.map((v) =>
-    `<VOUCHER VCHTYPE="SDIPL-REG" ACTION="Create">` +
+    `<VOUCHER VCHTYPE="${v.vchtype}" ACTION="Create">` +
     `<DATE>20260603</DATE><MASTERID>${v.masterid}</MASTERID>` +
     `<VOUCHERNUMBER>${v.number}</VOUCHERNUMBER><GUID>mock-guid-${v.masterid}</GUID>` +
     `<IRN>${v.irn}</IRN><IRNACKNO>${v.irn ? "MOCKACK" : ""}</IRNACKNO>` +
