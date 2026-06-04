@@ -60,6 +60,7 @@ export async function GET(request: NextRequest) {
       "tally_ledger_receipt_account", "tally_receipt_voucher_series",
       "tally_receipt_bill_by_bill", "tally_receipt_account_is_bank",
       "tally_receipt_transaction_type", "tally_receipt_transfer_mode",
+      "tally_credit_note_series",
     ]);
 
   const settingsMap = Object.fromEntries(
@@ -263,6 +264,37 @@ export async function GET(request: NextRequest) {
       bank_allocation: receiptIsBank
         ? { transaction_type: txnTypeDefault, transfer_mode: transferModeDefault, reference: ref }
         : null,
+      narration:       narrationParts.join(" | "),
+    };
+  }
+
+  // Enrich credit-note jobs (CRM-first cancel: reverse a Tally-issued invoice).
+  // A credit note reverses the original sale, so it reuses the same income + tax
+  // ledgers, party, stock item and place of supply as the sales voucher, plus the
+  // original invoice number as the reference.
+  const creditNoteSeries = settingsMap["tally_credit_note_series"] || "Credit Note";
+  for (const job of jobs) {
+    if (job.job_type !== "credit_note") continue;
+
+    const payload = job.payload as Record<string, unknown>;
+    const partyName = String(payload["party_name"] ?? "").trim() || "Walk-in Customer";
+    const origInv   = String(payload["original_invoice_number"] ?? "");
+    const reason    = String(payload["reason"] ?? "");
+
+    const narrationParts = ["TWV CRM Credit Note"];
+    if (origInv) narrationParts.push(`Reverses: ${origInv}`);
+    if (reason)  narrationParts.push(`Reason: ${reason}`);
+    if (bridgeVersion) narrationParts.push(`Bridge: v${bridgeVersion}`);
+
+    job.payload = {
+      ...payload,
+      party_ledger:    partySuffix ? `${partyName}${partySuffix}` : partyName,
+      ledger_sales:    ledgers.rent_income || "Rent The Workvilla 18%",
+      ledger_cgst:     ledgers.cgst || "CGST Output 9%",
+      ledger_sgst:     ledgers.sgst || "SGST Output 9%",
+      stock_item:      stockItem,
+      place_of_supply: placeOfSupply,
+      voucher_series:  creditNoteSeries,
       narration:       narrationParts.join(" | "),
     };
   }

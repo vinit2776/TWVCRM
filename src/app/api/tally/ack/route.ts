@@ -44,7 +44,7 @@ import { dispatchTallyInvoice } from "@/lib/tally/dispatch-tally-invoice";
 const AckSuccessSchema = z.object({
   job_id:               z.string().uuid(),
   success:              z.literal(true),
-  voucher_kind:         z.enum(["sales", "receipt"]).default("sales"),
+  voucher_kind:         z.enum(["sales", "receipt", "credit_note"]).default("sales"),
   tally_voucher_guid:   z.string().min(1),
   tally_invoice_number: z.string().min(1),
   tally_irn:            z.string().optional(),       // may be absent if irn_pending=true
@@ -146,6 +146,53 @@ export async function POST(request: NextRequest) {
     });
 
     return NextResponse.json({ ok: true, voucher_kind: "receipt", tally_receipt_number: data.tally_invoice_number });
+  }
+
+  // ── CREDIT-NOTE ACK (CRM-first cancel confirmed by Tally) ────────────────────
+  // Tally posted the reversing credit note. NOW it's safe to void the CRM statement
+  // (Tally reversed first → books in sync) and free its charges for re-billing.
+  if (data.success && data.voucher_kind === "credit_note" && job.billing_statement_id) {
+    const now = new Date().toISOString();
+    const reason = (job.payload as { reason?: string } | null)?.reason ?? "Cancelled via Tally credit note";
+    const stmtId = job.billing_statement_id;
+
+    await supabase.from("tally_sync_jobs").update({
+      status:               "completed",
+      tally_voucher_guid:   data.tally_voucher_guid,
+      tally_invoice_number: data.tally_invoice_number,   // the Credit Note number
+      completed_at:         now,
+    }).eq("id", data.job_id);
+
+    await supabase.from("billing_statements").update({
+      status:                   "voided",
+      voided_at:                now,
+      void_reason:              reason,
+      lifecycle_stage:          "cancelled",
+      tally_credit_note_number: data.tally_invoice_number,
+      tally_credit_note_guid:   data.tally_voucher_guid,
+      tally_last_error:         null,
+    }).eq("id", stmtId);
+
+    // Free the charges so they can be re-billed (mirrors the CRM void flow).
+    await supabase.from("usage_charges")
+      .update({ billing_statement_id: null, status: "pending" }).eq("billing_statement_id", stmtId);
+    await supabase.from("bookings")
+      .update({ billing_statement_id: null }).eq("billing_statement_id", stmtId);
+    await supabase.from("service_usage_records")
+      .update({ billing_statement_id: null, is_billed: false }).eq("billing_statement_id", stmtId);
+
+    void logAudit(supabase, {
+      entityType:  "billing_statement" as const,
+      entityId:    stmtId,
+      action:      "update" as const,
+      performedBy: "tally-bridge",
+      changes: {
+        status:                   { old: "exported", new: "voided" },
+        tally_credit_note_number: { old: null, new: data.tally_invoice_number },
+      },
+    });
+
+    return NextResponse.json({ ok: true, voucher_kind: "credit_note", tally_credit_note_number: data.tally_invoice_number });
   }
 
   if (data.success) {
