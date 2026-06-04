@@ -238,7 +238,7 @@ export async function GET(request: NextRequest) {
   // Bank receipts carry a bank allocation (all 80 sampled). Default to treating the
   // receipt account as a bank; set tally_receipt_account_is_bank='false' for cash.
   const receiptIsBank       = settingsMap["tally_receipt_account_is_bank"] !== "false";
-  const txnTypeDefault      = settingsMap["tally_receipt_transaction_type"] || "e-Fund Transfer";
+  const txnTypeDefault      = settingsMap["tally_receipt_transaction_type"] || "Cheque/DD";
   const transferModeDefault = settingsMap["tally_receipt_transfer_mode"] || "NEFT";
   for (const job of jobs) {
     if (job.job_type !== "receipt_voucher") continue;

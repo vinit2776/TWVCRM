@@ -1,35 +1,45 @@
 # Tally Integration — Status & Resume Notes
 
 **Last updated:** 2026-06-04
-**State:** Full Tally billing lifecycle BUILT across 6 PRs (issue → deliver → receipt → cancel). Sync PAUSED. Remaining before go-live is VERIFICATION ONLY (real-Tally), not build.
+**State:** HAND-OFF. Full Tally billing lifecycle BUILT + every voucher format VERIFIED against real exports, across 7 PRs (none merged). Sync PAUSED. Remaining is the live dress rehearsal only — no code left.
 
 ---
 
-## Build status — complete (6 PRs, none merged, sync paused)
+## Build status — complete & verified (7 PRs, none merged, sync paused)
 
 | PR | Scope | Base | Verified? |
 |----|-------|------|-----------|
 | #32 | Perf indexes (00239/00240) | main | applied to prod |
 | #33 | Phase 1 — GST issuance swap | main | sync-off = unchanged |
-| #34 | Receipt reverse-sync + control-page settings | #33 | **XML verified vs real 80-receipt export** |
+| #34 | Receipt reverse-sync + control-page settings | #33 | **verified vs real 80-receipt export** |
 | #35 | Repo hygiene | main | n/a |
-| #36 | Phase 1b — cancel via credit note | #34 | best-estimate (needs CN sample) |
+| #36 | Phase 1b — cancel via credit note | #34 | **verified vs real CN/A/26-27/1** |
+| #37 | Phase 2 — Tally state / IRN / retry on billing page | #36 | build clean (browser-verify on deploy) |
 
-**Bridge v1.3.0**: postSalesVoucher (proven real), postReceiptVoucher (verified vs real),
-postCreditNote (best-estimate). Mock e2e: `test-receipt-voucher.ts` (22), `test-credit-note.ts` (13) — green.
+Merge order: #32, #35 (independent) anytime; then #33 → #34 → #36 → #37 (stacked, bottom-up).
 
-### Remaining for go-live (all VERIFICATION, needs real Tally + you)
-1. **Credit-note sample** — export one manual Credit Note, confirm `postCreditNote` signs +
-   original-invoice reference + B2B IRN handling. (Receipt was confirmed this way already.)
-2. **Bank transaction-type tune** — confirm the `TRANSACTIONTYPE`/`TRANSFERMODE` your bank
-   ledger accepts on receipt import (settings, not code — runbook §5).
-3. **Real B2B IRN test** + one full sync-ON dress rehearsal (see `tally-go-live-runbook.md`).
+**Bridge v1.3.1** — all three voucher formats matched to real Tally exports:
+- `postSalesVoucher` — proven live (created `SD/A/26-27/182`)
+- `postReceiptVoucher` — verified vs the real 80-receipt export
+- `postCreditNote` — verified vs real `CN/A/26-27/1`
 
-### Settings to set before go-live (Admin → Tally Sync → Receipt sync)
-- `tally_ledger_receipt_account` — the bank ledger (likely `ICICI BANK A/C NO.000905000140`, confirm).
-- Everything else defaults correctly (bill-by-bill on, account-is-bank on, e-Fund Transfer / NEFT).
+Mock e2e (run in `bridge/`): `npx ts-node src/test-receipt-voucher.ts` (22) +
+`src/test-credit-note.ts` (15) — both green. Real samples archived at `~/twv-tally-samples/`.
 
-Phase 2 (new Billing page UI) is the only untouched forward area — needs a spec.
+### Remaining for go-live — the live dress rehearsal only (needs you + real Tally)
+Per `docs/tally-go-live-runbook.md`. No code remains; these are config + observation:
+1. **Set the receipt account ledger** — Admin → Tally Sync → Receipt sync →
+   `tally_ledger_receipt_account` (likely `ICICI BANK A/C NO.000905000140`, confirm). Everything
+   else defaults correctly (bill-by-bill on, account-is-bank on, e-Fund Transfer / NEFT).
+2. **Deploy bridge v1.3.1** on the Tally server (re-pull, `npm run build`), lock the company.
+3. **Flip sync ON for one test statement** and watch: voucher issued → IRN (B2B) → delivered →
+   payment → receipt → (optional) cancel → credit note. The billing page now shows each state
+   live (PR #37). If the receipt import errors on bank detail, adjust
+   `tally_receipt_transaction_type`/`_transfer_mode` settings and Retry (no code change).
+4. **Resume** (`tally_sync_enabled = true`) on the control page once the rehearsal passes.
+
+Kill switch at any time: Admin → Tally Sync → Pause = the pre-Tally CRM behaviour for every
+new statement (migrations are additive/nullable, so OFF == before).
 
 ---
 

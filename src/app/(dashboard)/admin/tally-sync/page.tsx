@@ -96,7 +96,7 @@ const LEDGER_FIELDS: Array<{ key: string; label: string; placeholder: string }> 
 const RECEIPT_TEXT_FIELDS: Array<{ key: string; label: string; placeholder: string }> = [
   { key: "account",          label: "Receipt account ledger", placeholder: "e.g. ICICI BANK A/C NO.000905000140" },
   { key: "voucher_series",   label: "Receipt voucher type",   placeholder: "Receipt" },
-  { key: "transaction_type", label: "Bank transaction type",  placeholder: "e-Fund Transfer" },
+  { key: "transaction_type", label: "Bank transaction type",  placeholder: "Cheque/DD" },
   { key: "transfer_mode",    label: "Bank transfer mode",     placeholder: "NEFT" },
 ];
 

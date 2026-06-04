@@ -9,6 +9,7 @@ import { FacilityUsageForm } from "./facility-usage-form";
 import { AddContractPaymentDialog } from "./add-contract-payment-dialog";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
+import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
 import { BillingLifecycleFlow, resolveBillingStage } from "@/components/billing/billing-lifecycle-flow";
 import { CONTRACT_PAYMENT_MODE_LABELS, CONTRACT_PAYMENT_STATUS_COLORS, CONTRACT_PAYMENT_STATUS_LABELS } from "@/lib/constants";
 import { toast } from "sonner";
@@ -107,6 +108,14 @@ interface ContractSummary {
     accounted_at?: string | null;
     razorpay_payment_link_url?: string | null;
     emailed_at?: string | null;
+    // Tally state (surfaced via the compact TallyStatusBadge)
+    issuance_channel?: string | null;
+    lifecycle_stage?: string | null;
+    tally_invoice_number?: string | null;
+    tally_irn?: string | null;
+    tally_credit_note_number?: string | null;
+    tally_last_error?: string | null;
+    tally_delivered_at?: string | null;
     /** Actor names from joined users table */
     finalized_by_user?: { full_name: string } | null;
     proforma_sent_by_user?: { full_name: string } | null;
@@ -291,6 +300,16 @@ export function ContractAccountingRow({
                   gst_invoice_number={statement.gst_invoice_number}
                   proforma_sent_at={statement.proforma_sent_at}
                   variant="compact"
+                />
+                <TallyStatusBadge
+                  variant="compact"
+                  issuance_channel={statement.issuance_channel}
+                  lifecycle_stage={statement.lifecycle_stage}
+                  tally_invoice_number={statement.tally_invoice_number}
+                  tally_irn={statement.tally_irn}
+                  tally_credit_note_number={statement.tally_credit_note_number}
+                  tally_last_error={statement.tally_last_error}
+                  tally_delivered_at={statement.tally_delivered_at}
                 />
               </div>
             ) : (
@@ -612,6 +631,16 @@ export function ContractAccountingRow({
                     finalized_at={statement.finalized_at}
                     gst_invoice_number={statement.gst_invoice_number}
                     proforma_sent_at={statement.proforma_sent_at}
+                  />
+                  <TallyStatusBadge
+                    variant="compact"
+                    issuance_channel={statement.issuance_channel}
+                    lifecycle_stage={statement.lifecycle_stage}
+                    tally_invoice_number={statement.tally_invoice_number}
+                    tally_irn={statement.tally_irn}
+                    tally_credit_note_number={statement.tally_credit_note_number}
+                    tally_last_error={statement.tally_last_error}
+                    tally_delivered_at={statement.tally_delivered_at}
                   />
                 </div>
 
