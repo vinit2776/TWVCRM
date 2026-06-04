@@ -59,4 +59,8 @@ scripts/backup/logs/
 /bridge-server-files.zip
 /twv-bridge-mock-fix.zip
 /twv-tally-bridge.zip
+/twv-tally-bridge-TESTED.zip
 /twv-tally-bridge-v1.3.1.zip
+# Local Tally export samples (may contain customer data — never commit)
+/tally-daybook-sample.xml
+*-tally-sample.xml
