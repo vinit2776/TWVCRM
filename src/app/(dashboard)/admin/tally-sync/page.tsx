@@ -25,13 +25,14 @@ import {
 } from "@/components/ui/table";
 import {
   CheckCircle2, AlertTriangle, WifiOff, RefreshCw, Lock, Unlock,
-  ChevronLeft, ChevronRight, Clock, Pause, Play,
+  ChevronLeft, ChevronRight, Clock, Pause, Play, FileText, Building2,
 } from "lucide-react";
 import { formatDateTime } from "@/lib/utils";
 import { toast } from "sonner";
 
 interface ControlState {
   sync_enabled: boolean;
+  crm_gst_enabled: boolean;
   paused_reason: string;
   locked_company: string;
   detected_company: string;
@@ -47,7 +48,9 @@ interface ControlState {
     account_is_bank: boolean;
     transaction_type: string;
     transfer_mode: string;
+    tds_ledger: string;
   };
+  auto_create_party_ledger: boolean;
   bridge: {
     online: boolean;
     version: string | null;
@@ -98,6 +101,7 @@ const RECEIPT_TEXT_FIELDS: Array<{ key: string; label: string; placeholder: stri
   { key: "voucher_series",   label: "Receipt voucher type",   placeholder: "Receipt" },
   { key: "transaction_type", label: "Bank transaction type",  placeholder: "Cheque/DD" },
   { key: "transfer_mode",    label: "Bank transfer mode",     placeholder: "NEFT" },
+  { key: "tds_ledger",       label: "TDS-receivable ledger",  placeholder: "TDS Paid (Deducted by the Party)" },
 ];
 
 export default function TallySyncPage() {
@@ -126,6 +130,7 @@ export default function TallySyncPage() {
         voucher_series:   data.receipt.voucher_series,
         transaction_type: data.receipt.transaction_type,
         transfer_mode:    data.receipt.transfer_mode,
+        tds_ledger:       data.receipt.tds_ledger,
         bill_by_bill:     String(data.receipt.bill_by_bill),
         account_is_bank:  String(data.receipt.account_is_bank),
       });
@@ -193,6 +198,96 @@ export default function TallySyncPage() {
           <RefreshCw className="h-4 w-4 mr-1" /> Refresh
         </Button>
       </div>
+
+      {/* ── GST Invoice Mode ──────────────────────────────────────────────── */}
+      <Card>
+        <CardHeader className="pb-3">
+          <CardTitle className="text-base flex items-center justify-between">
+            <span>GST Invoice Mode</span>
+            <Badge variant={state.crm_gst_enabled ? "outline" : state.sync_enabled ? "default" : "secondary"}>
+              {state.crm_gst_enabled ? "CRM Active" : state.sync_enabled ? "Tally Active" : "Standby"}
+            </Badge>
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          <p className="text-xs text-muted-foreground">
+            Controls which system issues GST invoices. Only one can be active at a time.
+            Payments are always recorded regardless of this setting.
+          </p>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
+            {/* CRM GST */}
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void patch({ action: "set_crm_gst", enabled: true }, "CRM GST mode activated")}
+              className={`relative flex flex-col items-start gap-2 rounded-lg border p-4 text-left transition-colors ${state.crm_gst_enabled ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border hover:border-muted-foreground/40 hover:bg-muted/30"} ${busy ? "cursor-not-allowed opacity-60" : ""}`}
+            >
+              {state.crm_gst_enabled && <CheckCircle2 className="absolute right-3 top-3 h-4 w-4 text-primary" />}
+              <div className={`rounded-md p-1.5 ${state.crm_gst_enabled ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                <FileText className="h-5 w-5" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">CRM GST</span>
+                  <Badge variant="outline" className="text-[10px] px-1.5 py-0">Existing</Badge>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">CRM mints the invoice number, generates PDF, and emails the customer after payment.</p>
+              </div>
+            </button>
+
+            {/* Standby */}
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void patch({ action: "set_crm_gst", enabled: false }, "GST invoicing set to standby")}
+              className={`relative flex flex-col items-start gap-2 rounded-lg border p-4 text-left transition-colors ${!state.crm_gst_enabled && !state.sync_enabled ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border hover:border-muted-foreground/40 hover:bg-muted/30"} ${busy ? "cursor-not-allowed opacity-60" : ""}`}
+            >
+              {!state.crm_gst_enabled && !state.sync_enabled && <CheckCircle2 className="absolute right-3 top-3 h-4 w-4 text-primary" />}
+              <div className={`rounded-md p-1.5 ${!state.crm_gst_enabled && !state.sync_enabled ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                <Clock className="h-5 w-5" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">Standby</span>
+                  <Badge variant="secondary" className="text-[10px] px-1.5 py-0">Transition</Badge>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">Payments recorded. No GST invoice issued by CRM or Tally. Use during switchover.</p>
+              </div>
+            </button>
+
+            {/* Tally Sync */}
+            <button
+              type="button"
+              disabled={busy}
+              onClick={() => void patch({ action: "resume" }, "Tally Sync mode activated")}
+              className={`relative flex flex-col items-start gap-2 rounded-lg border p-4 text-left transition-colors ${state.sync_enabled ? "border-primary bg-primary/5 ring-1 ring-primary" : "border-border hover:border-muted-foreground/40 hover:bg-muted/30"} ${busy ? "cursor-not-allowed opacity-60" : ""}`}
+            >
+              {state.sync_enabled && <CheckCircle2 className="absolute right-3 top-3 h-4 w-4 text-primary" />}
+              <div className={`rounded-md p-1.5 ${state.sync_enabled ? "bg-primary/10 text-primary" : "bg-muted text-muted-foreground"}`}>
+                <Building2 className="h-5 w-5" />
+              </div>
+              <div className="space-y-1">
+                <div className="flex items-center gap-2">
+                  <span className="text-sm font-medium">Tally Sync</span>
+                  <Badge variant="default" className="text-[10px] px-1.5 py-0">New</Badge>
+                </div>
+                <p className="text-xs text-muted-foreground leading-relaxed">Tally issues the invoice, applies IRN if eligible, and sends the customer the PDF + fresh payment link.</p>
+              </div>
+            </button>
+          </div>
+
+          {!state.crm_gst_enabled && !state.sync_enabled && (
+            <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+              <strong>Standby active.</strong> GST invoice buttons are disabled in the billing UI. Payments are recorded and will be invoiced once you activate a mode.
+            </div>
+          )}
+          {state.sync_enabled && (
+            <div className="rounded-md bg-blue-50 border border-blue-200 px-3 py-2 text-xs text-blue-800">
+              <strong>Tally Sync active.</strong> Ensure the bridge is online and the correct company is open in Tally before processing invoices.
+            </div>
+          )}
+        </CardContent>
+      </Card>
 
       {/* ── Status + master switch ─────────────────────────────────────────── */}
       <Card>
@@ -390,6 +485,23 @@ export default function TallySyncPage() {
             onClick={() => void patch({ action: "update_receipt", receipt: receiptDraft }, "Receipt settings saved")}>
             Save receipt settings
           </Button>
+
+          {/* Auto-create customer ledger — opt-in, default off (protects your books). */}
+          <div className="flex items-start justify-between gap-3 border-t pt-3 mt-1">
+            <div>
+              <Label className="text-xs font-medium">Auto-create missing customer ledger</Label>
+              <p className="text-[11px] text-muted-foreground max-w-md">
+                When OFF (recommended), a missing customer ledger fails loudly so you can fix the name.
+                When ON, the bridge creates the Sundry Debtor from the CRM&apos;s GST data (dup-checked) —
+                convenient, but a name mismatch can create a duplicate ledger.
+              </p>
+            </div>
+            <Switch
+              checked={state.auto_create_party_ledger}
+              disabled={busy}
+              onCheckedChange={(v) => void patch({ action: "set_auto_create_ledger", enabled: v }, v ? "Auto-create enabled" : "Auto-create disabled")}
+            />
+          </div>
         </CardContent>
       </Card>
 

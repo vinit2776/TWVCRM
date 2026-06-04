@@ -17,7 +17,7 @@
  * read-and-record only.
  */
 
-import { useState, useEffect, useMemo, useCallback } from "react";
+import { useState, useEffect, useMemo, useCallback, useRef } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,6 +34,13 @@ import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
+
+interface TdsSection {
+  code: string;
+  description: string;
+  rate_individual: number;
+  rate_company: number;
+}
 
 interface Lead {
   id: string;
@@ -117,6 +124,10 @@ export default function AccountsReceivablePage() {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [search, setSearch] = useState("");
 
+  // TDS sections — loaded once on mount for the payment dialog dropdown
+  const [tdsSections, setTdsSections] = useState<TdsSection[]>([]);
+  const tdsSectionsLoaded = useRef(false);
+
   // Record-payment dialog state
   const [payRow, setPayRow] = useState<ReceivableRow | null>(null);
   const [payAmount, setPayAmount] = useState("");
@@ -124,6 +135,10 @@ export default function AccountsReceivablePage() {
   const [payMode, setPayMode] = useState("bank_transfer");
   const [payRef, setPayRef] = useState("");
   const [payNotes, setPayNotes] = useState("");
+  // Shortfall classification (TDS is never inferred — declared here).
+  const [payShortReason, setPayShortReason] = useState<"tds" | "partial">("tds");
+  const [payTds, setPayTds] = useState("");
+  const [payTdsSection, setPayTdsSection] = useState("194I_b");
   const [paySubmitting, setPaySubmitting] = useState(false);
   const [resending, setResending] = useState<string | null>(null);
   const [remindingId, setRemindingId] = useState<string | null>(null);
@@ -161,6 +176,16 @@ export default function AccountsReceivablePage() {
 
   useEffect(() => { load(); }, [load]);
 
+  // Load TDS sections once for the payment dialog dropdown
+  useEffect(() => {
+    if (tdsSectionsLoaded.current) return;
+    tdsSectionsLoaded.current = true;
+    fetch("/api/tds/sections")
+      .then((r) => r.json())
+      .then((json) => { if (json.data) setTdsSections(json.data); })
+      .catch(() => { /* non-blocking — free-text fallback */ });
+  }, []);
+
   const filtered = useMemo(() => {
     let r = rows;
     if (filter === "due_soon")   r = r.filter((x) => x.days_overdue !== null && x.days_overdue >= -7 && x.days_overdue < 0);
@@ -186,12 +211,30 @@ export default function AccountsReceivablePage() {
     setPayMode("bank_transfer");
     setPayRef("");
     setPayNotes("");
+    setPayShortReason("tds");
+    setPayTds("");
+    setPayTdsSection("194I_b");   // default: Rent – Land/Building (most common for coworking)
   };
 
   const submitPayment = async () => {
     if (!payRow) return;
     const amt = parseFloat(payAmount);
     if (!amt || amt <= 0) { toast.error("Enter a valid amount"); return; }
+
+    // Shortfall handling: if the cash is short of the balance and the operator
+    // declared TDS, send the TDS amount (cash + TDS settles the invoice). Otherwise
+    // it's a partial payment (balance stays). TDS is never inferred.
+    const isShort = amt < payRow.balance_due - 0.01;
+    const declaringTds = isShort && payShortReason === "tds";
+    const tdsAmt = declaringTds ? parseFloat(payTds || "0") : 0;
+    if (declaringTds) {
+      if (!tdsAmt || tdsAmt <= 0) { toast.error("Enter the TDS amount deducted"); return; }
+      if (Math.abs((amt + tdsAmt) - payRow.balance_due) > 1) {
+        toast.error(`Cash ₹${amt} + TDS ₹${tdsAmt} should equal the balance ₹${payRow.balance_due}`);
+        return;
+      }
+    }
+
     setPaySubmitting(true);
     try {
       const res = await fetch(`/api/billing-statements/${payRow.id}/payment`, {
@@ -203,6 +246,8 @@ export default function AccountsReceivablePage() {
           payment_mode: payMode,
           payment_reference: payRef || null,
           notes: payNotes || null,
+          tds_amount: tdsAmt,
+          tds_section: declaringTds ? (payTdsSection || null) : null,
         }),
       });
       const json = await res.json();
@@ -517,7 +562,7 @@ export default function AccountsReceivablePage() {
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <Label>Amount (₹)</Label>
+                  <Label>Amount received (₹)</Label>
                   <Input type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
                 </div>
                 <div>
@@ -525,6 +570,92 @@ export default function AccountsReceivablePage() {
                   <Input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
                 </div>
               </div>
+
+              {/* Shortfall classification — only when cash is less than the balance.
+                  TDS is declared explicitly here, never assumed from the shortfall. */}
+              {parseFloat(payAmount || "0") > 0 && parseFloat(payAmount || "0") < payRow.balance_due - 0.01 && (
+                <div className="rounded-lg border border-amber-200 bg-amber-50 p-3 space-y-2">
+                  <p className="text-xs text-amber-800">
+                    This is <strong>{formatCurrency(payRow.balance_due - parseFloat(payAmount || "0"))}</strong> short of the balance. Why?
+                  </p>
+                  <div className="flex gap-2 text-sm">
+                    <button type="button"
+                      onClick={() => { setPayShortReason("tds"); setPayTds(String(Math.round((payRow.balance_due - parseFloat(payAmount || "0")) * 100) / 100)); }}
+                      className={`px-3 py-1 rounded-md border ${payShortReason === "tds" ? "bg-teal-600 text-white border-teal-600" : "bg-white"}`}>
+                      TDS deducted
+                    </button>
+                    <button type="button"
+                      onClick={() => setPayShortReason("partial")}
+                      className={`px-3 py-1 rounded-md border ${payShortReason === "partial" ? "bg-teal-600 text-white border-teal-600" : "bg-white"}`}>
+                      Partial payment (balance stays due)
+                    </button>
+                  </div>
+                  {payShortReason === "tds" && (
+                    <div className="grid grid-cols-2 gap-3 pt-1">
+                      <div>
+                        <Label className="text-xs">TDS amount (₹) *</Label>
+                        <Input
+                          type="number"
+                          min={0.01}
+                          step="any"
+                          value={payTds}
+                          onChange={(e) => setPayTds(e.target.value)}
+                          placeholder="e.g. 1500"
+                        />
+                      </div>
+                      <div>
+                        <Label className="text-xs">TDS section *</Label>
+                        {tdsSections.length > 0 ? (
+                          <Select value={payTdsSection} onValueChange={setPayTdsSection}>
+                            <SelectTrigger className="h-9 text-xs">
+                              <SelectValue placeholder="Select section…" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {tdsSections.map((s) => (
+                                <SelectItem key={s.code} value={s.code} className="text-xs">
+                                  <span className="font-mono font-medium">
+                                    {s.code.replace("_", "(")}{s.code.includes("_") ? ")" : ""}
+                                  </span>
+                                  <span className="text-muted-foreground ml-1.5">— {s.description}</span>
+                                </SelectItem>
+                              ))}
+                            </SelectContent>
+                          </Select>
+                        ) : (
+                          <Input
+                            value={payTdsSection}
+                            onChange={(e) => setPayTdsSection(e.target.value)}
+                            placeholder="e.g. 194I_b"
+                            className="text-xs"
+                          />
+                        )}
+                      </div>
+                      {/* Live settlement preview */}
+                      {parseFloat(payTds || "0") > 0 && (
+                        <div className={`col-span-2 rounded px-2.5 py-1.5 text-xs font-medium ${
+                          Math.abs((parseFloat(payAmount || "0") + parseFloat(payTds || "0")) - (payRow?.balance_due ?? 0)) < 1
+                            ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                            : "bg-amber-50 text-amber-800 border border-amber-200"
+                        }`}>
+                          Cash {formatCurrency(parseFloat(payAmount || "0"))} + TDS {formatCurrency(parseFloat(payTds || "0"))}
+                          {" = "}
+                          {formatCurrency(parseFloat(payAmount || "0") + parseFloat(payTds || "0"))}
+                          {" "}
+                          {Math.abs((parseFloat(payAmount || "0") + parseFloat(payTds || "0")) - (payRow?.balance_due ?? 0)) < 1
+                            ? "✓ settles invoice"
+                            : `(balance is ${formatCurrency(payRow?.balance_due ?? 0)})`}
+                        </div>
+                      )}
+                      <p className="col-span-2 text-[11px] text-muted-foreground">
+                        Invoice settles in full (cash + TDS). Tally receipt splits: bank debit + TDS ledger debit + party credit.
+                      </p>
+                    </div>
+                  )}
+                  {payShortReason === "partial" && (
+                    <p className="text-[11px] text-muted-foreground">The invoice keeps a balance and stays in collections.</p>
+                  )}
+                </div>
+              )}
               <div>
                 <Label>Payment mode</Label>
                 <Select value={payMode} onValueChange={setPayMode}>

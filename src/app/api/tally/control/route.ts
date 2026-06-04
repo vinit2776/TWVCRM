@@ -19,6 +19,7 @@ import { z } from "zod";
 
 const SETTING_KEYS = [
   "tally_sync_enabled",
+  "crm_gst_enabled",
   "tally_locked_company",
   "tally_sync_paused_reason",
   "tally_company_gstin",
@@ -38,6 +39,8 @@ const SETTING_KEYS = [
   "tally_receipt_account_is_bank",
   "tally_receipt_transaction_type",
   "tally_receipt_transfer_mode",
+  "tally_ledger_tds_receivable",
+  "tally_auto_create_party_ledger",
 ] as const;
 
 const OFFLINE_THRESHOLD_SECONDS = 90;
@@ -86,6 +89,7 @@ export async function GET(_request: NextRequest) {
 
   return NextResponse.json({
     sync_enabled:        s["tally_sync_enabled"] === "true",
+    crm_gst_enabled:     s["crm_gst_enabled"] === "true",
     paused_reason:       s["tally_sync_paused_reason"] ?? "",
     locked_company:      lockedCompany,
     detected_company:    detectedCompany,
@@ -111,7 +115,9 @@ export async function GET(_request: NextRequest) {
       account_is_bank:  (s["tally_receipt_account_is_bank"]  ?? "true") !== "false",
       transaction_type: s["tally_receipt_transaction_type"]  ?? "Cheque/DD",
       transfer_mode:    s["tally_receipt_transfer_mode"]     ?? "NEFT",
+      tds_ledger:       s["tally_ledger_tds_receivable"]     ?? "TDS Paid (Deducted by the Party)",
     },
+    auto_create_party_ledger: s["tally_auto_create_party_ledger"] === "true",
     bridge: {
       online,
       version:        bridge?.version ?? null,
@@ -128,11 +134,13 @@ export async function GET(_request: NextRequest) {
 const PatchSchema = z.discriminatedUnion("action", [
   z.object({ action: z.literal("pause"),  reason: z.string().max(200).optional() }),
   z.object({ action: z.literal("resume") }),
+  z.object({ action: z.literal("set_crm_gst"), enabled: z.boolean() }),
   z.object({ action: z.literal("lock_company"),   company: z.string().min(1).max(200) }),
   z.object({ action: z.literal("update_company"), company: z.string().min(1).max(200) }),
   z.object({ action: z.literal("unlock_company") }),
   z.object({ action: z.literal("update_ledgers"), ledgers: z.record(z.string(), z.string()) }),
   z.object({ action: z.literal("update_receipt"), receipt: z.record(z.string(), z.string()) }),
+  z.object({ action: z.literal("set_auto_create_ledger"), enabled: z.boolean() }),
   z.object({ action: z.literal("update_gstin"), gstin: z.string().min(15).max(15) }),
 ]);
 
@@ -154,6 +162,7 @@ const RECEIPT_KEY_MAP: Record<string, string> = {
   account_is_bank:  "tally_receipt_account_is_bank",
   transaction_type: "tally_receipt_transaction_type",
   transfer_mode:    "tally_receipt_transfer_mode",
+  tds_ledger:       "tally_ledger_tds_receivable",
 };
 
 export async function PATCH(request: NextRequest) {
@@ -183,8 +192,18 @@ export async function PATCH(request: NextRequest) {
       await set("tally_sync_paused_reason", data.reason ?? "");
       break;
     case "resume":
+      // Mutual exclusivity: Tally ON → CRM GST OFF
       await set("tally_sync_enabled", "true");
       await set("tally_sync_paused_reason", "");
+      await set("crm_gst_enabled", "false");
+      break;
+    case "set_crm_gst":
+      // Mutual exclusivity: CRM GST ON → Tally OFF
+      await set("crm_gst_enabled", data.enabled ? "true" : "false");
+      if (data.enabled) {
+        await set("tally_sync_enabled", "false");
+        await set("tally_sync_paused_reason", "CRM GST mode activated");
+      }
       break;
     case "lock_company":
     case "update_company":
@@ -207,6 +226,9 @@ export async function PATCH(request: NextRequest) {
         const settingKey = RECEIPT_KEY_MAP[k];
         if (settingKey) await set(settingKey, v);
       }
+      break;
+    case "set_auto_create_ledger":
+      await set("tally_auto_create_party_ledger", data.enabled ? "true" : "false");
       break;
   }
 

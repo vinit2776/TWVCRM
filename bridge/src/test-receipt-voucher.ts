@@ -111,6 +111,28 @@ async function main(): Promise<void> {
   check("on-account omits Agst Ref allocation", !/<BILLTYPE>Agst Ref<\/BILLTYPE>/.test(xml2));
   check("cash receipt omits bank allocation", !/<BANKALLOCATIONS\.LIST>/.test(xml2));
 
+  console.log("\n[5] postReceiptVoucher — TDS split (net 2124 + TDS 236 = 2360 invoice)");
+  const NET = 2124, TDS = 236;
+  const r3 = await tally.postReceiptVoucher({
+    idempotency_key: "receipt_voucher:test-payment-003",
+    receipt_date:    "2026-06-04",
+    voucher_type:    "Receipt",
+    party_ledger:    PARTY,
+    receipt_ledger:  BANK,
+    invoice_number:  INVOICE,
+    amount:          NET,
+    tds_amount:      TDS,
+    tds_ledger:      "TDS Paid (Deducted by the Party)",
+    narration:       "TWV CRM Receipt (TDS) | Inv: " + INVOICE,
+    bank_allocation: { transaction_type: "Cheque/DD", transfer_mode: "NEFT", reference: "UTR999" },
+  });
+  const xml3 = fs.readFileSync("/tmp/last-receipt.xml", "utf-8");
+  check("settled total = net + TDS (gross 2360)", r3.total_amount === 2360);
+  check("bank debited NET only (-2124.00)", xml3.includes("<AMOUNT>-2124.00</AMOUNT>"));
+  check("TDS ledger debited (-236.00)", /<LEDGERNAME>TDS Paid \(Deducted by the Party\)<\/LEDGERNAME>[\s\S]*?<AMOUNT>-236\.00<\/AMOUNT>/.test(xml3));
+  check("party credited GROSS (2360.00)", blockFor(xml3, PARTY)?.includes("<AMOUNT>2360.00</AMOUNT>") ?? false);
+  check("bill allocation knocks off GROSS (2360.00)", /<BILLALLOCATIONS\.LIST>[\s\S]*?<AMOUNT>2360\.00<\/AMOUNT>/.test(xml3));
+
   console.log("");
   if (failures.length) {
     console.error(`FAIL — ${failures.length} assertion(s) failed:`);

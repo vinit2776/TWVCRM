@@ -16,7 +16,7 @@ import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-ge
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { getCachedSettings } from "@/lib/app-settings-cache";
-import { routeGstGenerationToTally } from "@/lib/tally/enqueue";
+import { routeGstGenerationToTally, isCrmGstEnabled } from "@/lib/tally/enqueue";
 import QRCode from "qrcode";
 
 /** Per-call timeout (ms) for outbound HTTP and the Resend SDK send. A single
@@ -46,6 +46,8 @@ export interface DispatchResult {
   noContact: boolean;
   /** True when GST issuance was handed to Tally — CRM generated/sent nothing here. */
   routedToTally?: boolean;
+  /** True when both GST modes are off — invoice deferred until a mode is activated. */
+  standby?: boolean;
   error?: string;
 }
 
@@ -477,6 +479,20 @@ export async function dispatchGstDirect(
       emailSkipped: true,       // delivery deferred to dispatchTallyInvoice
       noContact,
       routedToTally: true,
+    };
+  }
+
+  // ── Standby gate: CRM GST off → no invoice issued, queued for later ────────
+  if (!(await isCrmGstEnabled(adminSupabase))) {
+    return {
+      success: true,
+      proformaRef: statement.statement_number as string,
+      totalAmount: 0,
+      razorpayLinkUrl: null,
+      emailedTo: null,
+      emailSkipped: true,
+      noContact,
+      standby: true,
     };
   }
 

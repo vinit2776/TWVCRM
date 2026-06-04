@@ -4,7 +4,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
-import { routeGstGenerationToTally } from "@/lib/tally/enqueue";
+import { routeGstGenerationToTally, isCrmGstEnabled } from "@/lib/tally/enqueue";
 
 export const maxDuration = 30;
 
@@ -102,6 +102,16 @@ export async function POST(
       totalAmount: 0,
       emailedTo: null,
       emailSkipped: true,    // delivery deferred to dispatchTallyInvoice
+    });
+  }
+
+  // ── Standby gate: CRM GST off → payment recorded, invoice deferred ─────────
+  if (!(await isCrmGstEnabled(adminSupabase))) {
+    return NextResponse.json({
+      success: true,
+      standby: true,
+      invoiceNumber: null,
+      message: "GST invoice generation is on standby. Activate CRM GST or Tally Sync from Admin → Tally Sync.",
     });
   }
 

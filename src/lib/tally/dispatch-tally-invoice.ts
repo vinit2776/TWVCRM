@@ -30,6 +30,7 @@ import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-ge
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { logAudit } from "@/lib/audit";
+import { enqueueReceiptsForPaidStatement } from "@/lib/tally/enqueue";
 import QRCode from "qrcode";
 
 export interface TallyInvoiceAck {
@@ -267,6 +268,13 @@ export async function dispatchTallyInvoice(
         tally_delivered_at: { old: null, new: now },
       },
     });
+
+    // proforma_first back-fill (#1): the PI was paid BEFORE this invoice existed,
+    // so the payment's receipt never enqueued. Now that the invoice is issued in
+    // Tally, post the receipt(s) for the money already received. Idempotent.
+    if (isPaid) {
+      void enqueueReceiptsForPaidStatement(billingStatementId);
+    }
 
     return { ok: true, emailedTo: emailedSuccessfully ? (customerEmail ?? null) : null, razorpayLinkUrl };
   } catch (err) {

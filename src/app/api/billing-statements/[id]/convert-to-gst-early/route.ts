@@ -4,7 +4,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
-import { routeGstGenerationToTally } from "@/lib/tally/enqueue";
+import { routeGstGenerationToTally, isCrmGstEnabled } from "@/lib/tally/enqueue";
 import QRCode from "qrcode";
 import { z } from "zod";
 
@@ -179,6 +179,44 @@ export async function POST(
       newPaymentLink: null,   // created by dispatchTallyInvoice after issuance
       emailedTo: null,
       emailSkipped: true,
+    });
+  }
+
+  // ── Standby gate: CRM GST off → PI cancelled, invoice deferred ─────────────
+  if (!(await isCrmGstEnabled(adminSupabase))) {
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const nowYmd = nowIso.slice(0, 10);
+    await adminSupabase.from("billing_statements").update({
+      pi_cancelled_at: nowIso,
+      pi_cancelled_by: dbUser.id,
+      pi_override_reason: reason,
+      razorpay_payment_link_id: null,
+      razorpay_payment_link_url: null,
+      due_date: nowYmd,
+      notes: [
+        statement.notes,
+        `PI ${statement.statement_number} cancelled ${nowYmd} — GST invoice on standby (neither CRM GST nor Tally Sync active). Reason: ${reason}`,
+      ].filter(Boolean).join("\n"),
+    }).eq("id", id);
+
+    logAudit(adminSupabase, {
+      entityType: "billing_statement",
+      entityId: id,
+      action: "update",
+      performedBy: dbUser.id,
+      changes: {
+        pi_cancelled_at: { old: null, new: nowIso },
+        override_reason: { old: null, new: reason },
+        status: { old: statement.status, new: "standby" },
+      },
+    });
+
+    return NextResponse.json({
+      success: true,
+      standby: true,
+      invoiceNumber: null,
+      message: "PI cancelled. GST invoice is on standby — activate CRM GST or Tally Sync from Admin → Settings to issue it.",
     });
   }
 
