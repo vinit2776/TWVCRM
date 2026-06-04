@@ -5,6 +5,10 @@
       "schedule": "0 13 * * *"
     },
     {
+      "path": "/api/cron/tally-reconcile",
+      "schedule": "*/15 * * * *"
+    },
+    {
       "path": "/api/digest",
       "schedule": "0 15 * * *"
     },

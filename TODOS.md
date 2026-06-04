@@ -23,3 +23,13 @@
 - Confirm B2C (walk-in / no-GSTIN) posts as plain sales voucher without IRN.
 - Server specs / access to install Node + Windows service.
 - TallyVault: is a company password set? Who unlocks after reboot?
+
+## Tally billing redesign (from /plan-eng-review)
+- [BLOCKING B2B QR] Capture one real B2B invoice's IRN data from Tally; confirm the
+  signed IRP QR content is fully returned + valid before rendering it on the PDF (D4).
+  Until then B2B PDF shows IRN/AckNo as text.
+- [TECH DEBT] Unify dispatchTallyInvoice ↔ dispatchGstDirect once CRM issuance is
+  retired (D6 — isolated now to protect live billing).
+- [PHASE 3] Credit-note (CRN) automation for voiding a Tally-issued invoice; until then
+  a documented manual procedure is the correction path (D5/OV6).
+- [PHASE 2] New Billing page (UI) — own design + review (D1).

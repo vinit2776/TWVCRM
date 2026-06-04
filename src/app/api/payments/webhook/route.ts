@@ -3,6 +3,7 @@ import { createClient, SupabaseClient } from "@supabase/supabase-js";
 import crypto from "crypto";
 import { provisionBookingAccess } from "@/lib/provision-booking-access";
 import { getCachedSetting } from "@/lib/app-settings-cache";
+import { enqueueTallyReceiptVoucher } from "@/lib/tally/enqueue";
 
 export const dynamic = "force-dynamic";
 
@@ -238,7 +239,7 @@ export async function POST(request: NextRequest) {
 
     if (billingStatement && billingStatement.payment_status !== "paid") {
       // Record payment
-      await supabase
+      const { data: insertedPayment } = await supabase
         .from("billing_payments")
         .insert({
           billing_statement_id: billingStatement.id,
@@ -247,7 +248,19 @@ export async function POST(request: NextRequest) {
           payment_mode: "razorpay",
           payment_reference: razorpayPaymentId || paymentLinkId,
           razorpay_payment_id: razorpayPaymentId,
-        });
+        })
+        .select("id")
+        .single();
+
+      // Reverse-sync to Tally as a receipt voucher (no-op unless this statement's
+      // GST invoice was issued by Tally and sync is active). Fire-and-forget.
+      void enqueueTallyReceiptVoucher(billingStatement.id, {
+        paymentId: insertedPayment?.id || (razorpayPaymentId as string) || paymentLinkId,
+        amount: amountPaid,
+        date: new Date().toISOString().slice(0, 10),
+        mode: "razorpay",
+        reference: razorpayPaymentId || paymentLinkId,
+      });
 
       // Check if fully paid
       const { data: allPayments } = await supabase
