@@ -17,7 +17,7 @@
  * read-and-record only.
  */
 
-import { useState, useEffect, useMemo, useCallback, useRef } from "react";
+import { useState, useEffect, useMemo, useCallback } from "react";
 import Link from "next/link";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
@@ -34,13 +34,7 @@ import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
-
-interface TdsSection {
-  code: string;
-  description: string;
-  rate_individual: number;
-  rate_company: number;
-}
+import { TDS_CLIENT_SECTIONS } from "@/lib/constants";
 
 interface Lead {
   id: string;
@@ -124,10 +118,6 @@ export default function AccountsReceivablePage() {
   const [filter, setFilter] = useState<FilterKey>("all");
   const [search, setSearch] = useState("");
 
-  // TDS sections — loaded once on mount for the payment dialog dropdown
-  const [tdsSections, setTdsSections] = useState<TdsSection[]>([]);
-  const tdsSectionsLoaded = useRef(false);
-
   // Record-payment dialog state
   const [payRow, setPayRow] = useState<ReceivableRow | null>(null);
   const [payAmount, setPayAmount] = useState("");
@@ -138,7 +128,7 @@ export default function AccountsReceivablePage() {
   // Shortfall classification (TDS is never inferred — declared here).
   const [payShortReason, setPayShortReason] = useState<"tds" | "partial">("tds");
   const [payTds, setPayTds] = useState("");
-  const [payTdsSection, setPayTdsSection] = useState("194I_b");
+  const [payTdsSection, setPayTdsSection] = useState("194I");
   const [paySubmitting, setPaySubmitting] = useState(false);
   const [resending, setResending] = useState<string | null>(null);
   const [remindingId, setRemindingId] = useState<string | null>(null);
@@ -176,16 +166,6 @@ export default function AccountsReceivablePage() {
 
   useEffect(() => { load(); }, [load]);
 
-  // Load TDS sections once for the payment dialog dropdown
-  useEffect(() => {
-    if (tdsSectionsLoaded.current) return;
-    tdsSectionsLoaded.current = true;
-    fetch("/api/tds/sections")
-      .then((r) => r.json())
-      .then((json) => { if (json.data) setTdsSections(json.data); })
-      .catch(() => { /* non-blocking — free-text fallback */ });
-  }, []);
-
   const filtered = useMemo(() => {
     let r = rows;
     if (filter === "due_soon")   r = r.filter((x) => x.days_overdue !== null && x.days_overdue >= -7 && x.days_overdue < 0);
@@ -213,7 +193,7 @@ export default function AccountsReceivablePage() {
     setPayNotes("");
     setPayShortReason("tds");
     setPayTds("");
-    setPayTdsSection("194I_b");   // default: Rent – Land/Building (most common for coworking)
+    setPayTdsSection("194I");   // default: Rent (most common for coworking)
   };
 
   const submitPayment = async () => {
@@ -605,30 +585,19 @@ export default function AccountsReceivablePage() {
                       </div>
                       <div>
                         <Label className="text-xs">TDS section *</Label>
-                        {tdsSections.length > 0 ? (
-                          <Select value={payTdsSection} onValueChange={setPayTdsSection}>
-                            <SelectTrigger className="h-9 text-xs">
-                              <SelectValue placeholder="Select section…" />
-                            </SelectTrigger>
-                            <SelectContent>
-                              {tdsSections.map((s) => (
-                                <SelectItem key={s.code} value={s.code} className="text-xs">
-                                  <span className="font-mono font-medium">
-                                    {s.code.replace("_", "(")}{s.code.includes("_") ? ")" : ""}
-                                  </span>
-                                  <span className="text-muted-foreground ml-1.5">— {s.description}</span>
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        ) : (
-                          <Input
-                            value={payTdsSection}
-                            onChange={(e) => setPayTdsSection(e.target.value)}
-                            placeholder="e.g. 194I_b"
-                            className="text-xs"
-                          />
-                        )}
+                        <Select value={payTdsSection} onValueChange={setPayTdsSection}>
+                          <SelectTrigger className="h-9 text-xs">
+                            <SelectValue placeholder="Select section…" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {TDS_CLIENT_SECTIONS.map((s) => (
+                              <SelectItem key={s.code} value={s.code} className="text-xs">
+                                <span className="font-mono font-medium">{s.label}</span>
+                                <span className="text-muted-foreground ml-1.5">— {s.description}</span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
                       </div>
                       {/* Live settlement preview */}
                       {parseFloat(payTds || "0") > 0 && (

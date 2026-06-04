@@ -148,12 +148,16 @@ export async function routeGstGenerationToTally(statementId: string): Promise<bo
  * before go-live — the bridge uses tds_ledger from the job payload directly.
  */
 const TDS_LEDGER_MAP: Record<string, string> = {
+  // Simplified codes used in the client-payment dialogs
   "194C":   "TDS Receivable 194C",
   "194H":   "TDS Receivable 194H",
-  "194I_a": "TDS Receivable 194I (Machinery)",
-  "194I_b": "TDS Receivable 194I (Building)",
-  "194J_a": "TDS Receivable 194J (Technical)",
-  "194J_b": "TDS Receivable 194J (Professional)",
+  "194I":   "TDS Receivable 194I",
+  "194J":   "TDS Receivable 194J",
+  // Sub-codes kept for any legacy records created before the simplification
+  "194I_a": "TDS Receivable 194I",
+  "194I_b": "TDS Receivable 194I",
+  "194J_a": "TDS Receivable 194J",
+  "194J_b": "TDS Receivable 194J",
 };
 
 function deriveTdsLedger(sectionCode: string | null | undefined): string | null {

@@ -5,6 +5,7 @@ import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-ge
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { routeGstGenerationToTally, isCrmGstEnabled } from "@/lib/tally/enqueue";
+import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 
 export const maxDuration = 30;
 
@@ -166,12 +167,12 @@ export async function POST(
         if (section.type === "booking_usage" && item.date) {
           label = [String(item.date), item.space ? String(item.space) : "", item.time ? String(item.time) : "", item.duration ? String(item.duration) : ""].filter(Boolean).join(" · ");
         }
-        lineItems.push({ description: label || section.label, hsnSac: "997212", qty: Number(item.quantity || item.billable || 1), rate: Number(item.unit_price || item.rate || item.amount || 0), amount: Number(item.amount || 0) });
+        lineItems.push({ description: label || section.label, hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label), qty: Number(item.quantity || item.billable || 1), rate: Number(item.unit_price || item.rate || item.amount || 0), amount: Number(item.amount || 0) });
       }
     }
   } else {
-    if (fixedAmount > 0) lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: "997212", qty: 1, rate: fixedAmount, amount: fixedAmount });
-    for (const charge of usageCharges) lineItems.push({ description: charge.description, hsnSac: "997212", qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
+    if (fixedAmount > 0) lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
+    for (const charge of usageCharges) lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
   }
 
   // Generate GST invoice PDF

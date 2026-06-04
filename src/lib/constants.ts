@@ -1,5 +1,17 @@
 export const APP_NAME = "TWV CRM";
 
+/**
+ * TDS sections applicable to payments received FROM clients (TDS on our income).
+ * Intentionally simpler than the payables-side sub-codes (194I_a/b, 194J_a/b)
+ * — for client deductions the sub-distinction isn't needed on the receipt.
+ */
+export const TDS_CLIENT_SECTIONS: { code: string; label: string; description: string }[] = [
+  { code: "194C",  label: "194C",  description: "Contractor" },
+  { code: "194I",  label: "194I",  description: "Rent" },
+  { code: "194J",  label: "194J",  description: "Professional Fees" },
+  { code: "194H",  label: "194H",  description: "Commission" },
+];
+
 export const LOST_REASONS = [
   "budget",
   "timing",
