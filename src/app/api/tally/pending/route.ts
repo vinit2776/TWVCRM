@@ -58,6 +58,7 @@ export async function GET(request: NextRequest) {
       "tally_ledger_round_off", "tally_party_ledger_suffix", "tally_voucher_series",
       "tally_stock_item", "tally_place_of_supply", "tally_hsn_code",
       "tally_ledger_receipt_account", "tally_receipt_voucher_series",
+      "tally_receipt_bill_by_bill",
     ]);
 
   const settingsMap = Object.fromEntries(
@@ -229,6 +230,10 @@ export async function GET(request: NextRequest) {
   // same as the party-ledger guard.
   const receiptAccount      = settingsMap["tally_ledger_receipt_account"] ?? "";
   const receiptVoucherSeries = settingsMap["tally_receipt_voucher_series"] ?? "Receipt";
+  // Default OFF: a real exported sales voucher shows empty bill allocations, so the
+  // party ledgers are treated as on-account. Flip to 'true' only if your Sundry
+  // Debtors maintain balances bill-by-bill and you want invoice-level knock-off.
+  const receiptBillByBill   = settingsMap["tally_receipt_bill_by_bill"] === "true";
   for (const job of jobs) {
     if (job.job_type !== "receipt_voucher") continue;
 
@@ -249,6 +254,7 @@ export async function GET(request: NextRequest) {
       party_ledger:    partySuffix ? `${partyName}${partySuffix}` : partyName,
       receipt_ledger:  receiptAccount,           // bank/cash account that receives the money
       voucher_series:  receiptVoucherSeries,
+      bill_by_bill:    receiptBillByBill,
       narration:       narrationParts.join(" | "),
     };
   }

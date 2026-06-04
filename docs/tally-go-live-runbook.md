@@ -36,6 +36,12 @@ UPDATE app_settings SET value = '<your bank ledger>' WHERE key = 'tally_ledger_r
 
 -- Optional: the receipt voucher type name if you use a custom one (default "Receipt").
 UPDATE app_settings SET value = 'Receipt' WHERE key = 'tally_receipt_voucher_series';
+
+-- Bill-by-bill: leave 'false' (default). A real exported sales voucher from this
+-- company shows EMPTY bill allocations, so receipts post ON-ACCOUNT (credit the
+-- party, reduce their balance) and always import. Set 'true' ONLY if your Sundry
+-- Debtors maintain balances bill-by-bill AND you want invoice-level knock-off.
+UPDATE app_settings SET value = 'false' WHERE key = 'tally_receipt_bill_by_bill';
 ```
 
 ---
@@ -146,21 +152,24 @@ WHERE issuance_channel='tally' AND tally_invoice_number IS NOT NULL
 
 ## 5. Verifying the receipt XML against real Tally (one-time, do before §3)
 
-The receipt voucher is **best-estimate** until checked. To verify:
+The receipt voucher defaults to an **on-account** posting (no bill allocation), chosen
+because a real exported sales voucher from this company shows EMPTY `<BILLALLOCATIONS.LIST>`
+— i.e. the Sundry Debtors look like they run a single on-account balance, not bill-by-bill.
+On-account always imports cleanly. The remaining unknowns are the **bank-ledger sign** and
+the **parent voucher type**, which a real receipt export confirms:
 
-1. In Tally (Sree Design company), record one manual **Receipt** settling an existing
-   invoice: Gateway → Vouchers → F6 (Receipt) → debit the bank ledger, credit the party,
-   allocate against the invoice.
+1. In Tally (Sree Design company), record one manual **Receipt** against a customer:
+   Gateway → Vouchers → F6 (Receipt) → debit the bank ledger, credit the party.
 2. Export it: Day Book → open that voucher → Export → XML.
 3. Diff against the envelope in `bridge/src/tally-client.ts` → `postReceiptVoucher`. Confirm:
    - **Bank ledger sign** — debit should be `ISDEEMEDPOSITIVE=Yes` with a negative `AMOUNT`.
-   - **Bill allocation** — is it `<BILLALLOCATIONS.LIST>` with `<BILLTYPE>Agst Ref</BILLTYPE>`
-     and `<NAME>` = the invoice number? This only works if the party ledger has
-     **"Maintain balances bill-by-bill" = Yes**. If not, the receipt must be on-account
-     (drop `BILLALLOCATIONS`) — tell me and I'll make it conditional.
    - **Parent type** — `VOUCHERTYPENAME` (default "Receipt").
+   - **Bill-by-bill?** — if the real receipt's party entry DOES carry a non-empty
+     `<BILLALLOCATIONS.LIST>` with `<BILLTYPE>Agst Ref</BILLTYPE>`, your ledgers ARE
+     bill-by-bill: set `tally_receipt_bill_by_bill = true` and confirm the `<NAME>` format
+     matches what Tally used as the bill reference (usually the invoice number).
 4. If anything differs, adjust `postReceiptVoucher` and re-run `npx ts-node
-   src/test-receipt-voucher.ts` (all 16 assertions must still pass).
+   src/test-receipt-voucher.ts` (all 18 assertions must still pass).
 
 ---
 

@@ -554,11 +554,18 @@ export class TallyClient {
    *   1. In Tally, record a manual Receipt against a customer ledger settling an
    *      invoice (Banking > Receipt, or Gateway > Vouchers > F6).
    *   2. Export it as XML (Day Book → that voucher → Export → XML).
-   *   3. Diff against the envelope below — confirm: the bank ledger sign
-   *      (ISDEEMEDPOSITIVE/AMOUNT), whether BILLALLOCATIONS uses BILLTYPE
-   *      "Agst Ref" with the invoice number as NAME (requires the party ledger to
-   *      "Maintain balances bill-by-bill"; if not, drop BILLALLOCATIONS for an
-   *      on-account receipt), and the parent VOUCHERTYPENAME.
+   *   3. Diff against the envelope below — confirm the bank ledger sign
+   *      (ISDEEMEDPOSITIVE/AMOUNT) and the parent VOUCHERTYPENAME.
+   *
+   * Bill-by-bill: a real exported sales voucher from this company shows EMPTY
+   * <BILLALLOCATIONS.LIST> on the party ledger — evidence the Sundry Debtors are
+   * NOT maintained bill-by-bill (single on-account running balance). So by default
+   * we post an ON-ACCOUNT receipt (no Agst Ref) — it credits the party and reduces
+   * their balance, and always imports cleanly. The invoice number is kept in the
+   * narration for reconciliation. If you DO maintain balances bill-by-bill and want
+   * the receipt to knock off the specific invoice, set bill_by_bill=true (settings:
+   * tally_receipt_bill_by_bill) — then the Agst Ref NAME must match the bill
+   * reference Tally created for that invoice (usually the invoice/voucher number).
    * ───────────────────────────────────────────────────────────────────────────
    *
    * Tally sign convention (matches postSalesVoucher): a DEBIT entry is
@@ -575,17 +582,19 @@ export class TallyClient {
     invoice_number:  string;            // the Tally invoice this payment settles (bill ref)
     amount:          number;            // amount received
     narration:       string;
+    bill_by_bill?:   boolean;           // true → emit Agst Ref allocation; default on-account
   }): Promise<TallyReceiptResult> {
     const { idempotency_key, receipt_date, voucher_type, party_ledger,
             receipt_ledger, invoice_number, amount, narration } = params;
+    const billByBill = params.bill_by_bill === true;
 
     const tallyDate = receipt_date.replace(/-/g, "");   // YYYYMMDD
     const amt       = round2(amount);
 
-    // Bill allocation knocks the receipt off the specific invoice. Only meaningful
-    // if the party ledger maintains balances bill-by-bill; harmless "Agst Ref" name
-    // is the invoice number. Omitted when there's no invoice reference.
-    const billAllocation = invoice_number ? `
+    // Bill allocation knocks the receipt off the specific invoice — ONLY when the
+    // party ledger is bill-by-bill (opt-in). Default: on-account (no allocation),
+    // which always imports; the invoice ref lives in the narration instead.
+    const billAllocation = (billByBill && invoice_number) ? `
               <BILLALLOCATIONS.LIST>
                 <NAME>${escapeXml(invoice_number)}</NAME>
                 <BILLTYPE>Agst Ref</BILLTYPE>

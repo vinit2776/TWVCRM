@@ -340,6 +340,7 @@ export class Poller {
       invoice_number:  str("tally_invoice_number"),
       amount,
       narration:       str("narration", "TWV CRM Receipt"),
+      bill_by_bill:    p["bill_by_bill"] === true || p["bill_by_bill"] === "true",
     });
 
     await this.crm.ack({
