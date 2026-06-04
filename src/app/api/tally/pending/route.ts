@@ -272,7 +272,7 @@ export async function GET(request: NextRequest) {
   // A credit note reverses the original sale, so it reuses the same income + tax
   // ledgers, party, stock item and place of supply as the sales voucher, plus the
   // original invoice number as the reference.
-  const creditNoteSeries = settingsMap["tally_credit_note_series"] || "Credit Note";
+  const creditNoteSeries = settingsMap["tally_credit_note_series"] || "CREDIT NOTE-REG";
   for (const job of jobs) {
     if (job.job_type !== "credit_note") continue;
 
