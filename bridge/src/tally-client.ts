@@ -547,25 +547,27 @@ export class TallyClient {
   /**
    * Post a Receipt voucher to Tally (reverse-sync: a CRM payment → Tally Receipt).
    *
-   * ── BEST-ESTIMATE — VERIFY AGAINST A REAL RECEIPT EXPORT ────────────────────
-   * Built from Tally's standard Receipt voucher format, NOT yet confirmed against
-   * a real export from this company (unlike postSalesVoucher, which matched a
-   * production SDIPL-REG sample). Before go-live, capture one real receipt:
-   *   1. In Tally, record a manual Receipt against a customer ledger settling an
-   *      invoice (Banking > Receipt, or Gateway > Vouchers > F6).
-   *   2. Export it as XML (Day Book → that voucher → Export → XML).
-   *   3. Diff against the envelope below — confirm the bank ledger sign
-   *      (ISDEEMEDPOSITIVE/AMOUNT) and the parent VOUCHERTYPENAME.
+   * ── MATCHED TO REAL RECEIPTS (80-voucher Day Book export, May 2026) ─────────
+   * Structure confirmed against real exported receipts from this company:
+   *   - Parent VOUCHERTYPENAME = "Receipt", OBJVIEW = "Accounting Voucher View".
+   *   - Entries use <ALLLEDGERENTRIES.LIST> (not LEDGERENTRIES.LIST).
+   *   - Bank/cash DEBIT: ISDEEMEDPOSITIVE=Yes, AMOUNT negative.
+   *   - Party CREDIT:   ISDEEMEDPOSITIVE=No, ISPARTYLEDGER=Yes, AMOUNT positive.
+   *   - 47/80 receipts knock off the invoice via <BILLALLOCATIONS.LIST> with
+   *     <BILLTYPE>Agst Ref</BILLTYPE> and <NAME> = the invoice number (e.g.
+   *     "SD/A/26-27/93"). So bill-by-bill is the DEFAULT here; the CRM always
+   *     knows the exact invoice. Set bill_by_bill=false for a plain on-account
+   *     receipt (settings: tally_receipt_bill_by_bill).
+   *   - 80/80 bank receipts carry a <BANKALLOCATIONS.LIST> (TRANSACTIONTYPE,
+   *     TRANSFERMODE, UNIQUEREFERENCENUMBER). We emit one whenever bank_allocation
+   *     is provided; omit it for a cash receipt ledger.
+   *   - Receipts are MANUALLY numbered (VOUCHERNUMBER usually blank) — we identify
+   *     them by GUID, not number.
    *
-   * Bill-by-bill: a real exported sales voucher from this company shows EMPTY
-   * <BILLALLOCATIONS.LIST> on the party ledger — evidence the Sundry Debtors are
-   * NOT maintained bill-by-bill (single on-account running balance). So by default
-   * we post an ON-ACCOUNT receipt (no Agst Ref) — it credits the party and reduces
-   * their balance, and always imports cleanly. The invoice number is kept in the
-   * narration for reconciliation. If you DO maintain balances bill-by-bill and want
-   * the receipt to knock off the specific invoice, set bill_by_bill=true (settings:
-   * tally_receipt_bill_by_bill) — then the Agst Ref NAME must match the bill
-   * reference Tally created for that invoice (usually the invoice/voucher number).
+   * REMAINING REHEARSAL TUNE: the exact TRANSACTIONTYPE / TRANSFERMODE strings for
+   * our payment modes (defaults "e-Fund Transfer" / "NEFT", both configurable). A
+   * real receipt showed TRANSACTIONTYPE="Cheque/DD", TRANSFERMODE="NEFT" — confirm
+   * what your bank ledger accepts on import during the dress rehearsal.
    * ───────────────────────────────────────────────────────────────────────────
    *
    * Tally sign convention (matches postSalesVoucher): a DEBIT entry is
@@ -582,24 +584,43 @@ export class TallyClient {
     invoice_number:  string;            // the Tally invoice this payment settles (bill ref)
     amount:          number;            // amount received
     narration:       string;
-    bill_by_bill?:   boolean;           // true → emit Agst Ref allocation; default on-account
+    bill_by_bill?:   boolean;           // true (default) → Agst Ref allocation to the invoice
+    bank_allocation?: {                 // present → bank receipt; omit for a cash ledger
+      transaction_type: string;         // e.g. "e-Fund Transfer", "Cheque/DD"
+      transfer_mode:    string;         // e.g. "NEFT", "RTGS", "UPI"
+      reference:        string;         // bank/UTR/instrument ref → UNIQUEREFERENCENUMBER
+    } | null;
   }): Promise<TallyReceiptResult> {
     const { idempotency_key, receipt_date, voucher_type, party_ledger,
             receipt_ledger, invoice_number, amount, narration } = params;
-    const billByBill = params.bill_by_bill === true;
+    const billByBill = params.bill_by_bill !== false;   // default ON (matches real receipts)
+    const bankAlloc  = params.bank_allocation ?? null;
 
     const tallyDate = receipt_date.replace(/-/g, "");   // YYYYMMDD
     const amt       = round2(amount);
 
-    // Bill allocation knocks the receipt off the specific invoice — ONLY when the
-    // party ledger is bill-by-bill (opt-in). Default: on-account (no allocation),
-    // which always imports; the invoice ref lives in the narration instead.
+    // Bill allocation knocks the receipt off the specific invoice (Agst Ref). Real
+    // receipts from this company use this with <NAME> = the invoice number, so it's
+    // the default. Set bill_by_bill=false for a plain on-account receipt.
     const billAllocation = (billByBill && invoice_number) ? `
               <BILLALLOCATIONS.LIST>
                 <NAME>${escapeXml(invoice_number)}</NAME>
                 <BILLTYPE>Agst Ref</BILLTYPE>
                 <AMOUNT>${amt.toFixed(2)}</AMOUNT>
               </BILLALLOCATIONS.LIST>` : "";
+
+    // Bank allocation — required by bank ledgers that capture transaction details
+    // (all 80 sampled receipts have one). Omit for a cash receipt ledger.
+    const bankAllocation = bankAlloc ? `
+              <BANKALLOCATIONS.LIST>
+                <DATE>${tallyDate}</DATE>
+                <INSTRUMENTDATE>${tallyDate}</INSTRUMENTDATE>
+                <TRANSACTIONTYPE>${escapeXml(bankAlloc.transaction_type)}</TRANSACTIONTYPE>
+                <TRANSFERMODE>${escapeXml(bankAlloc.transfer_mode)}</TRANSFERMODE>
+                ${bankAlloc.reference ? `<UNIQUEREFERENCENUMBER>${escapeXml(bankAlloc.reference)}</UNIQUEREFERENCENUMBER>` : ""}
+                <PAYMENTFAVOURING>${escapeXml(party_ledger)}</PAYMENTFAVOURING>
+                <AMOUNT>-${amt.toFixed(2)}</AMOUNT>
+              </BANKALLOCATIONS.LIST>` : "";
 
     const xml = `<ENVELOPE>
   <HEADER>
@@ -615,7 +636,7 @@ export class TallyClient {
       </REQUESTDESC>
       <REQUESTDATA>
         <TALLYMESSAGE xmlns:UDF="TallyUDF">
-          <VOUCHER VCHTYPE="${escapeXml(voucher_type)}" ACTION="Create">
+          <VOUCHER VCHTYPE="${escapeXml(voucher_type)}" ACTION="Create" OBJVIEW="Accounting Voucher View">
             <DATE>${tallyDate}</DATE>
             <VOUCHERTYPENAME>${escapeXml(voucher_type)}</VOUCHERTYPENAME>
             <PARTYLEDGERNAME>${escapeXml(party_ledger)}</PARTYLEDGERNAME>
@@ -624,19 +645,20 @@ export class TallyClient {
             <UDF:REMOTEID.LIST TYPE="String">
               <UDF:REMOTEID>${escapeXml(idempotency_key)}</UDF:REMOTEID>
             </UDF:REMOTEID.LIST>
-            <!-- Bank/Cash (debit — money received) -->
-            <LEDGERENTRIES.LIST>
+            <!-- Bank/Cash (debit — money received). Receipts use ALLLEDGERENTRIES.LIST
+                 (accounting voucher view), per real exported receipts. -->
+            <ALLLEDGERENTRIES.LIST>
               <LEDGERNAME>${escapeXml(receipt_ledger)}</LEDGERNAME>
               <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
-              <AMOUNT>-${amt.toFixed(2)}</AMOUNT>
-            </LEDGERENTRIES.LIST>
+              <AMOUNT>-${amt.toFixed(2)}</AMOUNT>${bankAllocation}
+            </ALLLEDGERENTRIES.LIST>
             <!-- Party (credit — settles the receivable) -->
-            <LEDGERENTRIES.LIST>
+            <ALLLEDGERENTRIES.LIST>
               <LEDGERNAME>${escapeXml(party_ledger)}</LEDGERNAME>
               <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
               <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
               <AMOUNT>${amt.toFixed(2)}</AMOUNT>${billAllocation}
-            </LEDGERENTRIES.LIST>
+            </ALLLEDGERENTRIES.LIST>
           </VOUCHER>
         </TALLYMESSAGE>
       </REQUESTDATA>
@@ -663,16 +685,14 @@ export class TallyClient {
       throw new Error(`Tally created the receipt but returned no LASTVCHID. Response: ${res.slice(0, 400)}`);
     }
 
-    // Read back the assigned receipt voucher number (reuses the Day Book lookup).
+    // Read back the GUID (receipts are manually numbered — VOUCHERNUMBER is usually
+    // blank, so we do NOT require it). The GUID is the stable identifier we store.
     const details = await this.getVoucherByMasterId(lastVchId, receipt_date);
-    const voucherNumber = details.invoice_number;   // VOUCHERNUMBER (receipts share the tag)
     const voucherGuid   = details.guid || lastVchId;
+    // Prefer a real voucher number if present; otherwise fall back to the GUID.
+    const voucherNumber = details.invoice_number || voucherGuid;
 
-    if (!voucherNumber) {
-      throw new Error(`Receipt created (vchid ${lastVchId}) but could not read back its voucher number.`);
-    }
-
-    log.info(`Receipt created: ${voucherNumber} | vchid: ${lastVchId} | amount: ${amt.toFixed(2)}`);
+    log.info(`Receipt created: vchid ${lastVchId} | guid ${voucherGuid} | amount: ${amt.toFixed(2)}`);
 
     return {
       voucher_guid:   voucherGuid,

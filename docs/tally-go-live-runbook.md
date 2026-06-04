@@ -37,11 +37,18 @@ UPDATE app_settings SET value = '<your bank ledger>' WHERE key = 'tally_ledger_r
 -- Optional: the receipt voucher type name if you use a custom one (default "Receipt").
 UPDATE app_settings SET value = 'Receipt' WHERE key = 'tally_receipt_voucher_series';
 
--- Bill-by-bill: leave 'false' (default). A real exported sales voucher from this
--- company shows EMPTY bill allocations, so receipts post ON-ACCOUNT (credit the
--- party, reduce their balance) and always import. Set 'true' ONLY if your Sundry
--- Debtors maintain balances bill-by-bill AND you want invoice-level knock-off.
-UPDATE app_settings SET value = 'false' WHERE key = 'tally_receipt_bill_by_bill';
+-- Bill-by-bill: leave 'true' (default). Real receipts from this company knock the
+-- payment off the invoice via Agst Ref (47/80 sampled). Set 'false' only for plain
+-- on-account receipts.
+UPDATE app_settings SET value = 'true' WHERE key = 'tally_receipt_bill_by_bill';
+
+-- Bank allocation: the receipt account is treated as a bank by default (all 80
+-- sampled receipts carry a bank allocation). For a CASH receipt ledger, set 'false'.
+UPDATE app_settings SET value = 'true' WHERE key = 'tally_receipt_account_is_bank';
+-- The transaction-type / transfer-mode strings the bank allocation uses. Defaults
+-- below; adjust to whatever your bank ledger accepts on import (confirm at rehearsal).
+UPDATE app_settings SET value = 'e-Fund Transfer' WHERE key = 'tally_receipt_transaction_type';
+UPDATE app_settings SET value = 'NEFT'            WHERE key = 'tally_receipt_transfer_mode';
 ```
 
 ---
@@ -150,26 +157,28 @@ WHERE issuance_channel='tally' AND tally_invoice_number IS NOT NULL
 
 ---
 
-## 5. Verifying the receipt XML against real Tally (one-time, do before §3)
+## 5. Receipt XML — verified against real Tally ✅ (one tune-item left)
 
-The receipt voucher defaults to an **on-account** posting (no bill allocation), chosen
-because a real exported sales voucher from this company shows EMPTY `<BILLALLOCATIONS.LIST>`
-— i.e. the Sundry Debtors look like they run a single on-account balance, not bill-by-bill.
-On-account always imports cleanly. The remaining unknowns are the **bank-ledger sign** and
-the **parent voucher type**, which a real receipt export confirms:
+The receipt envelope in `bridge/src/tally-client.ts` → `postReceiptVoucher` was matched
+against a real **80-receipt Day Book export** (May 2026). Confirmed correct:
+- Parent `VOUCHERTYPENAME = Receipt`, `OBJVIEW = Accounting Voucher View`.
+- `<ALLLEDGERENTRIES.LIST>` (not `LEDGERENTRIES.LIST`).
+- Bank DEBIT: `ISDEEMEDPOSITIVE=Yes`, negative `AMOUNT`. Party CREDIT: `No`, `ISPARTYLEDGER=Yes`, positive.
+- Bill-by-bill `Agst Ref` with `<NAME>` = the invoice number (47/80 used it → default ON).
+- Bank allocation on the bank entry (80/80 → default ON; off for cash).
+- Receipts are manually numbered (blank `VOUCHERNUMBER`) → identified by GUID.
 
-1. In Tally (Sree Design company), record one manual **Receipt** against a customer:
-   Gateway → Vouchers → F6 (Receipt) → debit the bank ledger, credit the party.
-2. Export it: Day Book → open that voucher → Export → XML.
-3. Diff against the envelope in `bridge/src/tally-client.ts` → `postReceiptVoucher`. Confirm:
-   - **Bank ledger sign** — debit should be `ISDEEMEDPOSITIVE=Yes` with a negative `AMOUNT`.
-   - **Parent type** — `VOUCHERTYPENAME` (default "Receipt").
-   - **Bill-by-bill?** — if the real receipt's party entry DOES carry a non-empty
-     `<BILLALLOCATIONS.LIST>` with `<BILLTYPE>Agst Ref</BILLTYPE>`, your ledgers ARE
-     bill-by-bill: set `tally_receipt_bill_by_bill = true` and confirm the `<NAME>` format
-     matches what Tally used as the bill reference (usually the invoice number).
-4. If anything differs, adjust `postReceiptVoucher` and re-run `npx ts-node
-   src/test-receipt-voucher.ts` (all 18 assertions must still pass).
+**The one remaining unknown** is which `TRANSACTIONTYPE` / `TRANSFERMODE` strings your bank
+ledger accepts on **import** (a real receipt showed `Cheque/DD` / `NEFT`; we default to
+`e-Fund Transfer` / `NEFT`, both configurable). Confirm this during the §3 rehearsal:
+
+1. Run one real payment → receipt through the bridge (sync ON, test customer).
+2. If the bridge logs a `LINEERROR` mentioning the bank/transaction details, set
+   `tally_receipt_transaction_type` / `tally_receipt_transfer_mode` to the values your
+   ledger expects and Retry. If your receipt account is **cash**, set
+   `tally_receipt_account_is_bank = false` to drop the bank allocation entirely.
+3. After any change, re-run `cd bridge && npx ts-node src/test-receipt-voucher.ts`
+   (22 assertions must still pass).
 
 ---
 

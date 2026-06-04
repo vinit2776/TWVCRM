@@ -340,7 +340,10 @@ export class Poller {
       invoice_number:  str("tally_invoice_number"),
       amount,
       narration:       str("narration", "TWV CRM Receipt"),
-      bill_by_bill:    p["bill_by_bill"] === true || p["bill_by_bill"] === "true",
+      bill_by_bill:    p["bill_by_bill"] !== false && p["bill_by_bill"] !== "false",   // default ON
+      bank_allocation: (p["bank_allocation"] && typeof p["bank_allocation"] === "object")
+        ? (p["bank_allocation"] as { transaction_type: string; transfer_mode: string; reference: string })
+        : null,
     });
 
     await this.crm.ack({

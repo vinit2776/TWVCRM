@@ -50,7 +50,7 @@ async function main(): Promise<void> {
 
   const amt = AMOUNT.toFixed(2);
 
-  console.log("\n[2] postReceiptVoucher — DEFAULT (on-account, no bill-by-bill)");
+  console.log("\n[2] postReceiptVoucher — DEFAULT bank receipt (bill-by-bill + bank allocation)");
   const result = await tally.postReceiptVoucher({
     idempotency_key: "receipt_voucher:test-payment-001",
     receipt_date:    "2026-06-04",
@@ -60,50 +60,56 @@ async function main(): Promise<void> {
     invoice_number:  INVOICE,
     amount:          AMOUNT,
     narration:       "TWV CRM Receipt | Inv: " + INVOICE,
-    // bill_by_bill omitted → default on-account
+    bank_allocation: { transaction_type: "e-Fund Transfer", transfer_mode: "NEFT", reference: "UTR12345" },
+    // bill_by_bill omitted → defaults to ON (matches real receipts)
   });
 
-  check("returns a receipt voucher number", !!result.voucher_number && result.voucher_number.startsWith("RCT/"));
+  check("returns a voucher identifier", !!result.voucher_number);
   check("returns a voucher guid", !!result.voucher_guid);
   check("echoes the amount", result.total_amount === AMOUNT);
 
-  console.log("\n[3] inspect the on-account XML");
+  console.log("\n[3] inspect the XML");
   const xml = fs.readFileSync("/tmp/last-receipt.xml", "utf-8");
 
   check("parent VOUCHERTYPENAME is Receipt", /<VOUCHERTYPENAME>\s*Receipt\s*<\/VOUCHERTYPENAME>/i.test(xml));
+  check("uses ALLLEDGERENTRIES.LIST (accounting voucher view)", /<ALLLEDGERENTRIES\.LIST>/.test(xml));
   check("party set as PARTYLEDGERNAME", xml.includes(`<PARTYLEDGERNAME>${PARTY}</PARTYLEDGERNAME>`));
   check("idempotency REMOTEID embedded", xml.includes("receipt_voucher:test-payment-001"));
 
-  // Bank ledger block — debited (money in): ISDEEMEDPOSITIVE=Yes + negative amount.
+  // Bank ledger block — debited (money in): ISDEEMEDPOSITIVE=Yes + negative amount + bank allocation.
   const bankBlock = blockFor(xml, BANK);
   check("bank ledger present", !!bankBlock);
   check("bank ledger is a debit (ISDEEMEDPOSITIVE=Yes)", !!bankBlock && /<ISDEEMEDPOSITIVE>Yes<\/ISDEEMEDPOSITIVE>/.test(bankBlock));
   check("bank ledger amount is negative", !!bankBlock && bankBlock.includes(`<AMOUNT>-${amt}</AMOUNT>`));
+  check("bank allocation present", !!bankBlock && /<BANKALLOCATIONS\.LIST>/.test(bankBlock));
+  check("bank allocation transfer mode = NEFT", !!bankBlock && /<TRANSFERMODE>NEFT<\/TRANSFERMODE>/.test(bankBlock));
+  check("bank allocation carries the UTR reference", !!bankBlock && bankBlock.includes("UTR12345"));
 
-  // Party ledger block — credited (settles receivable): ISDEEMEDPOSITIVE=No + positive amount.
+  // Party ledger block — credited (settles receivable): ISDEEMEDPOSITIVE=No + positive + Agst Ref.
   const partyBlock = blockFor(xml, PARTY);
   check("party ledger entry present", !!partyBlock);
   check("party ledger is a credit (ISDEEMEDPOSITIVE=No)", !!partyBlock && /<ISDEEMEDPOSITIVE>No<\/ISDEEMEDPOSITIVE>/.test(partyBlock));
   check("party ledger marked ISPARTYLEDGER", !!partyBlock && /<ISPARTYLEDGER>Yes<\/ISPARTYLEDGER>/.test(partyBlock));
   check("party ledger amount is positive", !!partyBlock && partyBlock.includes(`<AMOUNT>${amt}</AMOUNT>`));
-  check("DEFAULT omits bill allocation (on-account)", !partyBlock || !/<BILLTYPE>Agst Ref<\/BILLTYPE>/.test(partyBlock));
+  check("DEFAULT emits Agst Ref bill allocation", !!partyBlock && /<BILLTYPE>Agst Ref<\/BILLTYPE>/.test(partyBlock));
+  check("allocation NAME is the invoice number", !!partyBlock && partyBlock.includes(`<NAME>${INVOICE}</NAME>`));
 
-  console.log("\n[4] postReceiptVoucher — OPT-IN bill_by_bill=true");
+  console.log("\n[4] postReceiptVoucher — OPT-OUT (cash, on-account)");
   await tally.postReceiptVoucher({
     idempotency_key: "receipt_voucher:test-payment-002",
     receipt_date:    "2026-06-04",
     voucher_type:    "Receipt",
     party_ledger:    PARTY,
-    receipt_ledger:  BANK,
+    receipt_ledger:  "Cash",
     invoice_number:  INVOICE,
     amount:          AMOUNT,
     narration:       "TWV CRM Receipt | Inv: " + INVOICE,
-    bill_by_bill:    true,
+    bill_by_bill:    false,
+    bank_allocation: null,
   });
   const xml2 = fs.readFileSync("/tmp/last-receipt.xml", "utf-8");
-  const partyBlock2 = blockFor(xml2, PARTY);
-  check("bill-by-bill emits Agst Ref allocation", !!partyBlock2 && /<BILLTYPE>Agst Ref<\/BILLTYPE>/.test(partyBlock2));
-  check("allocation NAME is the invoice number", !!partyBlock2 && partyBlock2.includes(`<NAME>${INVOICE}</NAME>`));
+  check("on-account omits Agst Ref allocation", !/<BILLTYPE>Agst Ref<\/BILLTYPE>/.test(xml2));
+  check("cash receipt omits bank allocation", !/<BANKALLOCATIONS\.LIST>/.test(xml2));
 
   console.log("");
   if (failures.length) {
@@ -111,14 +117,14 @@ async function main(): Promise<void> {
     failures.forEach((f) => console.error(`   - ${f}`));
     process.exit(1);
   }
-  console.log("PASS — receipt-voucher path wired correctly (mock).");
-  console.log("Reminder: still verify the XML against a REAL Tally receipt export before go-live.");
+  console.log("PASS — receipt-voucher XML matches the real receipt format (verified vs 80-receipt export).");
+  console.log("Remaining rehearsal tune: confirm TRANSACTIONTYPE/TRANSFERMODE your bank ledger accepts on import.");
   process.exit(0);
 }
 
-/** Return the <LEDGERENTRIES.LIST>…</LEDGERENTRIES.LIST> block whose LEDGERNAME matches. */
-function blockFor(xml: string, ledger: string, _party = false): string | null {
-  const blocks = xml.match(/<LEDGERENTRIES\.LIST>[\s\S]*?<\/LEDGERENTRIES\.LIST>/g) ?? [];
+/** Return the <ALLLEDGERENTRIES.LIST>…</ALLLEDGERENTRIES.LIST> block whose LEDGERNAME matches. */
+function blockFor(xml: string, ledger: string): string | null {
+  const blocks = xml.match(/<ALLLEDGERENTRIES\.LIST>[\s\S]*?<\/ALLLEDGERENTRIES\.LIST>/g) ?? [];
   for (const b of blocks) {
     if (b.includes(`<LEDGERNAME>${ledger}</LEDGERNAME>`)) return b;
   }

@@ -58,7 +58,8 @@ export async function GET(request: NextRequest) {
       "tally_ledger_round_off", "tally_party_ledger_suffix", "tally_voucher_series",
       "tally_stock_item", "tally_place_of_supply", "tally_hsn_code",
       "tally_ledger_receipt_account", "tally_receipt_voucher_series",
-      "tally_receipt_bill_by_bill",
+      "tally_receipt_bill_by_bill", "tally_receipt_account_is_bank",
+      "tally_receipt_transaction_type", "tally_receipt_transfer_mode",
     ]);
 
   const settingsMap = Object.fromEntries(
@@ -230,10 +231,14 @@ export async function GET(request: NextRequest) {
   // same as the party-ledger guard.
   const receiptAccount      = settingsMap["tally_ledger_receipt_account"] ?? "";
   const receiptVoucherSeries = settingsMap["tally_receipt_voucher_series"] ?? "Receipt";
-  // Default OFF: a real exported sales voucher shows empty bill allocations, so the
-  // party ledgers are treated as on-account. Flip to 'true' only if your Sundry
-  // Debtors maintain balances bill-by-bill and you want invoice-level knock-off.
-  const receiptBillByBill   = settingsMap["tally_receipt_bill_by_bill"] === "true";
+  // Default ON: real receipts from this company knock the payment off the invoice
+  // via Agst Ref (47/80 sampled). Set 'false' for plain on-account receipts.
+  const receiptBillByBill   = settingsMap["tally_receipt_bill_by_bill"] !== "false";
+  // Bank receipts carry a bank allocation (all 80 sampled). Default to treating the
+  // receipt account as a bank; set tally_receipt_account_is_bank='false' for cash.
+  const receiptIsBank       = settingsMap["tally_receipt_account_is_bank"] !== "false";
+  const txnTypeDefault      = settingsMap["tally_receipt_transaction_type"] || "e-Fund Transfer";
+  const transferModeDefault = settingsMap["tally_receipt_transfer_mode"] || "NEFT";
   for (const job of jobs) {
     if (job.job_type !== "receipt_voucher") continue;
 
@@ -255,6 +260,9 @@ export async function GET(request: NextRequest) {
       receipt_ledger:  receiptAccount,           // bank/cash account that receives the money
       voucher_series:  receiptVoucherSeries,
       bill_by_bill:    receiptBillByBill,
+      bank_allocation: receiptIsBank
+        ? { transaction_type: txnTypeDefault, transfer_mode: transferModeDefault, reference: ref }
+        : null,
       narration:       narrationParts.join(" | "),
     };
   }
