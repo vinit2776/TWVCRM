@@ -60,7 +60,8 @@ export async function GET(request: NextRequest) {
       "tally_ledger_receipt_account", "tally_receipt_voucher_series",
       "tally_receipt_bill_by_bill", "tally_receipt_account_is_bank",
       "tally_receipt_transaction_type", "tally_receipt_transfer_mode",
-      "tally_credit_note_series",
+      "tally_credit_note_series", "tally_ledger_tds_receivable",
+      "tally_auto_create_party_ledger",
     ]);
 
   const settingsMap = Object.fromEntries(
@@ -221,6 +222,9 @@ export async function GET(request: NextRequest) {
       voucher_series:  voucherSeries,
       stock_item:      stockItem,
       place_of_supply: placeOfSupply,
+      // #2 auto-create: when ON, the bridge creates a missing Sundry Debtor ledger
+      // from this GST data (dup-checked) instead of failing. Default OFF.
+      auto_create_ledger: settingsMap["tally_auto_create_party_ledger"] === "true",
     };
   }
 
@@ -240,6 +244,9 @@ export async function GET(request: NextRequest) {
   const receiptIsBank       = settingsMap["tally_receipt_account_is_bank"] !== "false";
   const txnTypeDefault      = settingsMap["tally_receipt_transaction_type"] || "Cheque/DD";
   const transferModeDefault = settingsMap["tally_receipt_transfer_mode"] || "NEFT";
+  // TDS-receivable ledger (debited for the customer's TDS deduction). Default to
+  // the exact ledger seen in this company's real receipts.
+  const tdsLedger           = settingsMap["tally_ledger_tds_receivable"] || "TDS Paid (Deducted by the Party)";
   for (const job of jobs) {
     if (job.job_type !== "receipt_voucher") continue;
 
@@ -261,6 +268,9 @@ export async function GET(request: NextRequest) {
       receipt_ledger:  receiptAccount,           // bank/cash account that receives the money
       voucher_series:  receiptVoucherSeries,
       bill_by_bill:    receiptBillByBill,
+      // Prefer the per-section TDS ledger the enqueue already resolved (deriveTdsLedger);
+      // fall back to the single configured ledger only if none was set.
+      tds_ledger:      (payload["tds_ledger"] as string | null) || tdsLedger,
       bank_allocation: receiptIsBank
         ? { transaction_type: txnTypeDefault, transfer_mode: transferModeDefault, reference: ref }
         : null,

@@ -62,6 +62,8 @@ export async function PATCH(request: NextRequest) {
     "razorpay_enabled",
     "upi_id",
     "upi_qr_code_path",
+    "crm_gst_enabled",
+    "tally_sync_enabled",
   ];
 
   const updates: { key: string; value: string }[] = [];

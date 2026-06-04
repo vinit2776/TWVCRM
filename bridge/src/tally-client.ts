@@ -212,8 +212,15 @@ export class TallyClient {
   }
 
   /**
-   * Ensure a party ledger exists in Tally for this customer.
-   * Idempotent — Tally ignores duplicate master creation with ISMODIFY=No.
+   * Create a missing Sundry Debtor ledger for this customer (#2 auto-create).
+   * Only ever called after ledgerExists() returned false AND the auto-create
+   * setting is ON — so it never duplicates an existing ledger. Populated with the
+   * CRM's GST data (GSTIN, state, address) so the invoice carries correct GST.
+   *
+   * ── BEST-ESTIMATE — verify the master fields against a real exported ledger ──
+   * The GST field names (GSTREGISTRATIONTYPE, LEDSTATENAME, PARTYGSTIN) are the
+   * standard ones but not yet confirmed against an export from this company.
+   * Returns true if Tally reports it created the master.
    */
   async ensurePartyLedger(params: {
     ledger_name:  string;
@@ -221,11 +228,7 @@ export class TallyClient {
     address:      string;
     state:        string;
     state_code:   string;
-  }): Promise<void> {
-    // ── D5 TODO ──────────────────────────────────────────────────────────────
-    // Build the exact XML envelope using D5 sample.
-    // Below is a best-estimate structure; verify field names against Tally version.
-    // ─────────────────────────────────────────────────────────────────────────
+  }): Promise<boolean> {
     const xml = `<ENVELOPE>
   <HEADER>
     <TALLYREQUEST>Import Data</TALLYREQUEST>
@@ -261,7 +264,10 @@ export class TallyClient {
 
     const res = await this.post(xml);
     this.assertNoLineError(res, "ensurePartyLedger");
-    log.info(`Party ledger ensured: ${params.ledger_name}`);
+    const created = Number(firstTag(res, "CREATED") || "0");
+    const altered = Number(firstTag(res, "ALTERED") || "0");
+    log.info(`Party ledger create "${params.ledger_name}": created=${created} altered=${altered}`);
+    return created >= 1 || altered >= 1;
   }
 
   /**
@@ -591,9 +597,11 @@ export class TallyClient {
     party_ledger:    string;            // Sundry Debtor — credited
     receipt_ledger:  string;            // Bank/Cash account — debited (money received)
     invoice_number:  string;            // the Tally invoice this payment settles (bill ref)
-    amount:          number;            // amount received
+    amount:          number;            // NET cash received (excludes any TDS)
     narration:       string;
     bill_by_bill?:   boolean;           // true (default) → Agst Ref allocation to the invoice
+    tds_amount?:     number;            // customer's TDS deduction (0 = none)
+    tds_ledger?:     string;            // TDS-receivable ledger, debited for tds_amount
     bank_allocation?: {                 // present → bank receipt; omit for a cash ledger
       transaction_type: string;         // e.g. "e-Fund Transfer", "Cheque/DD"
       transfer_mode:    string;         // e.g. "NEFT", "RTGS", "UPI"
@@ -606,17 +614,29 @@ export class TallyClient {
     const bankAlloc  = params.bank_allocation ?? null;
 
     const tallyDate = receipt_date.replace(/-/g, "");   // YYYYMMDD
-    const amt       = round2(amount);
+    const amt       = round2(amount);                   // net cash to the bank
+    const tds       = round2(params.tds_amount || 0);   // customer's TDS deduction
+    const tdsLedger = (tds > 0 && params.tds_ledger) ? params.tds_ledger : null;
+    const gross     = round2(amt + tds);                // full invoice value settled
 
-    // Bill allocation knocks the receipt off the specific invoice (Agst Ref). Real
-    // receipts from this company use this with <NAME> = the invoice number, so it's
-    // the default. Set bill_by_bill=false for a plain on-account receipt.
+    // Bill allocation knocks the receipt off the specific invoice (Agst Ref) for the
+    // FULL invoice value (net + TDS) so the bill clears. Real receipts use the invoice
+    // number as <NAME>. Set bill_by_bill=false for a plain on-account receipt.
     const billAllocation = (billByBill && invoice_number) ? `
               <BILLALLOCATIONS.LIST>
                 <NAME>${escapeXml(invoice_number)}</NAME>
                 <BILLTYPE>Agst Ref</BILLTYPE>
-                <AMOUNT>${amt.toFixed(2)}</AMOUNT>
+                <AMOUNT>${gross.toFixed(2)}</AMOUNT>
               </BILLALLOCATIONS.LIST>` : "";
+
+    // TDS split — the customer deducted TDS, so the bank got only the net. The TDS
+    // is debited to the TDS-receivable ledger; party is credited the FULL (gross).
+    const tdsEntry = tdsLedger ? `
+            <ALLLEDGERENTRIES.LIST>
+              <LEDGERNAME>${escapeXml(tdsLedger)}</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+              <AMOUNT>-${tds.toFixed(2)}</AMOUNT>
+            </ALLLEDGERENTRIES.LIST>` : "";
 
     // Bank allocation — required by bank ledgers that capture transaction details
     // (all 80 sampled receipts have one). Omit for a cash receipt ledger.
@@ -660,13 +680,13 @@ export class TallyClient {
               <LEDGERNAME>${escapeXml(receipt_ledger)}</LEDGERNAME>
               <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
               <AMOUNT>-${amt.toFixed(2)}</AMOUNT>${bankAllocation}
-            </ALLLEDGERENTRIES.LIST>
-            <!-- Party (credit — settles the receivable) -->
+            </ALLLEDGERENTRIES.LIST>${tdsEntry}
+            <!-- Party (credit — settles the receivable for the FULL invoice value) -->
             <ALLLEDGERENTRIES.LIST>
               <LEDGERNAME>${escapeXml(party_ledger)}</LEDGERNAME>
               <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
               <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
-              <AMOUNT>${amt.toFixed(2)}</AMOUNT>${billAllocation}
+              <AMOUNT>${gross.toFixed(2)}</AMOUNT>${billAllocation}
             </ALLLEDGERENTRIES.LIST>
           </VOUCHER>
         </TALLYMESSAGE>
@@ -701,12 +721,12 @@ export class TallyClient {
     // Prefer a real voucher number if present; otherwise fall back to the GUID.
     const voucherNumber = details.invoice_number || voucherGuid;
 
-    log.info(`Receipt created: vchid ${lastVchId} | guid ${voucherGuid} | amount: ${amt.toFixed(2)}`);
+    log.info(`Receipt created: vchid ${lastVchId} | guid ${voucherGuid} | net ${amt.toFixed(2)}${tds > 0 ? ` + TDS ${tds.toFixed(2)} = ${gross.toFixed(2)}` : ""}`);
 
     return {
       voucher_guid:   voucherGuid,
       voucher_number: voucherNumber,
-      total_amount:   amt,
+      total_amount:   gross,
       created_at:     new Date().toISOString(),
     };
   }

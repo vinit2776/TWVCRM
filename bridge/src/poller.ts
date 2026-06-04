@@ -219,14 +219,32 @@ export class Poller {
     // injected into the job payload by the CRM /pending endpoint from the
     // Tally Sync Control settings + the customer record (p/str defined above).
 
-    // ── Customer ledger guard (require-existing) ───────────────────────────────
-    // Fail clearly if the customer isn't a ledger in Tally yet, rather than
-    // posting a broken voucher. Accounts creates the ledger, then Retry.
+    // ── Customer ledger guard ──────────────────────────────────────────────────
+    // Default: fail clearly if the customer isn't a ledger in Tally yet, rather
+    // than posting a broken voucher. If auto-create is ON (setting), create the
+    // Sundry Debtor ledger from the CRM's GST data — but ONLY when no ledger by
+    // that exact name exists, so we never duplicate an existing customer.
     const partyLedger = str("party_ledger");
-    const partyExists = await this.tally.ledgerExists(partyLedger);
+    let partyExists = await this.tally.ledgerExists(partyLedger);
+    if (!partyExists && (p["auto_create_ledger"] === true || p["auto_create_ledger"] === "true")) {
+      log.info(`Job ${job.id}: ledger "${partyLedger}" missing — auto-create is ON, creating it`);
+      try {
+        await this.tally.ensurePartyLedger({
+          ledger_name: partyLedger,
+          gstin:       str("buyer_gstin") || null,
+          address:     str("buyer_address"),
+          state:       str("buyer_state", "Tamil Nadu"),
+          state_code:  "",
+        });
+        partyExists = await this.tally.ledgerExists(partyLedger);   // confirm it took
+      } catch (err) {
+        log.error(`Job ${job.id}: auto-create ledger failed: ${String(err)}`);
+      }
+    }
     if (!partyExists) {
       const msg = `Customer ledger "${partyLedger}" does not exist in Tally. ` +
-        `Please create it in Tally (Gateway > Create > Ledger, under Sundry Debtors), then Retry.`;
+        `Create it in Tally (Gateway > Create > Ledger, under Sundry Debtors), then Retry. ` +
+        `(Or enable auto-create in Admin > Tally Sync.)`;
       log.error(`Job ${job.id}: ${msg}`);
       await this.crm.ack({ success: false, job_id: job.id, error: msg, retryable: false });
       return;
@@ -342,6 +360,8 @@ export class Poller {
       receipt_ledger:  receiptLedger,
       invoice_number:  str("tally_invoice_number"),
       amount,
+      tds_amount:      Number(p["tds_amount"] ?? 0),
+      tds_ledger:      str("tds_ledger") || undefined,
       narration:       str("narration", "TWV CRM Receipt"),
       bill_by_bill:    p["bill_by_bill"] !== false && p["bill_by_bill"] !== "false",   // default ON
       bank_allocation: (p["bank_allocation"] && typeof p["bank_allocation"] === "object")

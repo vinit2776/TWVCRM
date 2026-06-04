@@ -431,12 +431,19 @@ export default function BillingPage() {
   // ── Record Payment dialog ─────────────────────────────────────────────────
   const [recordPaymentDialogOpen, setRecordPaymentDialogOpen]   = useState(false);
   const [recordPaymentStatementId, setRecordPaymentStatementId] = useState<string | null>(null);
+  const [recordPaymentBalance, setRecordPaymentBalance]         = useState<number | null>(null);
   const [rpAmount, setRpAmount]       = useState("");
   const [rpDate, setRpDate]           = useState(now.toISOString().slice(0, 10));
   const [rpMode, setRpMode]           = useState("neft");
   const [rpReference, setRpReference] = useState("");
   const [rpNotes, setRpNotes]         = useState("");
   const [rpSubmitting, setRpSubmitting] = useState(false);
+  // TDS deduction on this payment (declared explicitly, never inferred).
+  const [rpTdsEnabled, setRpTdsEnabled]   = useState(false);
+  const [rpTdsSection, setRpTdsSection]   = useState("194I_b");
+  const [rpTdsAmount, setRpTdsAmount]     = useState("");
+  const [rpTdsSections, setRpTdsSections] = useState<{ code: string; description: string }[]>([]);
+  const rpTdsSectionsLoaded = useRef(false);
 
   // ── Void Statement dialog ────────────────────────────────────────────────
   const [voidDialogOpen, setVoidDialogOpen]       = useState(false);
@@ -446,6 +453,16 @@ export default function BillingPage() {
 
   // ── Contract list for filter dropdowns ───────────────────────────────────
   const [contractFilters, setContractFilters] = useState<ContractFilter[]>([]);
+
+  // ── Load TDS sections once for the Record Payment dialog dropdown ────────
+  useEffect(() => {
+    if (rpTdsSectionsLoaded.current) return;
+    rpTdsSectionsLoaded.current = true;
+    fetch("/api/tds/sections")
+      .then((r) => r.json())
+      .then((json) => { if (json.data) setRpTdsSections(json.data); })
+      .catch(() => { /* non-blocking */ });
+  }, []);
 
   // ── Get user role ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -610,6 +627,15 @@ export default function BillingPage() {
       toast.error("Amount must be positive");
       return;
     }
+    const tdsAmt = rpTdsEnabled ? Math.max(0, Number(rpTdsAmount) || 0) : 0;
+    if (rpTdsEnabled && tdsAmt <= 0) {
+      toast.error("Enter the TDS amount deducted by the client");
+      return;
+    }
+    if (rpTdsEnabled && !rpTdsSection) {
+      toast.error("Select the TDS section");
+      return;
+    }
     setRpSubmitting(true);
     const res = await fetch(`/api/billing-statements/${recordPaymentStatementId}/payment`, {
       method: "POST",
@@ -620,6 +646,8 @@ export default function BillingPage() {
         payment_mode: rpMode,
         payment_reference: rpReference.trim() || undefined,
         notes: rpNotes.trim() || undefined,
+        tds_amount:   tdsAmt,
+        tds_section:  rpTdsEnabled ? rpTdsSection : null,
       }),
     });
     setRpSubmitting(false);
@@ -632,6 +660,7 @@ export default function BillingPage() {
       );
       setRecordPaymentDialogOpen(false);
       setRpAmount(""); setRpReference(""); setRpNotes("");
+      setRpTdsEnabled(false); setRpTdsAmount(""); setRpTdsSection("194I_b");
       fetchStatements();
       fetchData();
     } else {
@@ -1223,13 +1252,16 @@ export default function BillingPage() {
         userRole={userRole}
       />
 
-      <Dialog open={recordPaymentDialogOpen} onOpenChange={setRecordPaymentDialogOpen}>
+      <Dialog open={recordPaymentDialogOpen} onOpenChange={(open) => {
+        setRecordPaymentDialogOpen(open);
+        if (!open) { setRpTdsEnabled(false); setRpTdsAmount(""); setRpTdsSection("194I_b"); }
+      }}>
         <DialogContent>
           <DialogHeader><DialogTitle>Record Payment</DialogTitle></DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Amount (₹)</Label>
+                <Label>Amount received (₹)</Label>
                 <Input type="number" value={rpAmount} onChange={(e) => setRpAmount(e.target.value)} placeholder="e.g. 15000" />
               </div>
               <div className="space-y-2">
@@ -1261,6 +1293,87 @@ export default function BillingPage() {
               <Label>Notes (optional)</Label>
               <Textarea value={rpNotes} onChange={(e) => setRpNotes(e.target.value)} placeholder="Additional notes…" rows={2} />
             </div>
+
+            {/* ── TDS deduction block ──────────────────────────────────── */}
+            <div className="rounded-lg border border-border">
+              <button
+                type="button"
+                className="w-full flex items-center justify-between px-3 py-2.5 text-sm hover:bg-muted/30 rounded-lg transition-colors"
+                onClick={() => { setRpTdsEnabled((v) => !v); if (!rpTdsEnabled) setRpTdsAmount(""); }}
+              >
+                <span className="flex items-center gap-2 font-medium">
+                  <span className={`w-4 h-4 rounded border flex items-center justify-center text-xs ${rpTdsEnabled ? "bg-teal-600 border-teal-600 text-white" : "border-gray-400"}`}>
+                    {rpTdsEnabled ? "✓" : ""}
+                  </span>
+                  Client deducted TDS on this payment
+                </span>
+                <span className="text-xs text-muted-foreground">TDS on income</span>
+              </button>
+
+              {rpTdsEnabled && (
+                <div className="px-3 pb-3 pt-1 space-y-3 border-t">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-xs">TDS section *</Label>
+                      {rpTdsSections.length > 0 ? (
+                        <Select value={rpTdsSection} onValueChange={setRpTdsSection}>
+                          <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                          <SelectContent>
+                            {rpTdsSections.map((s) => (
+                              <SelectItem key={s.code} value={s.code} className="text-xs">
+                                <span className="font-mono font-medium">
+                                  {s.code.replace("_", "(")}{s.code.includes("_") ? ")" : ""}
+                                </span>
+                                <span className="text-muted-foreground ml-1.5">— {s.description}</span>
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      ) : (
+                        <Input
+                          value={rpTdsSection}
+                          onChange={(e) => setRpTdsSection(e.target.value)}
+                          placeholder="e.g. 194I_b"
+                          className="h-9 text-xs"
+                        />
+                      )}
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">TDS amount (₹) *</Label>
+                      <Input
+                        type="number"
+                        min={0.01}
+                        step="any"
+                        value={rpTdsAmount}
+                        onChange={(e) => setRpTdsAmount(e.target.value)}
+                        placeholder="e.g. 1500"
+                        className="h-9 text-xs"
+                      />
+                    </div>
+                  </div>
+                  {/* Live settlement preview */}
+                  {parseFloat(rpTdsAmount || "0") > 0 && (
+                    <div className={`rounded px-2.5 py-1.5 text-xs font-medium ${
+                      recordPaymentBalance !== null &&
+                      Math.abs((parseFloat(rpAmount || "0") + parseFloat(rpTdsAmount || "0")) - recordPaymentBalance) < 1
+                        ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                        : "bg-blue-50 text-blue-800 border border-blue-200"
+                    }`}>
+                      Cash {formatCurrency(parseFloat(rpAmount || "0"))} + TDS {formatCurrency(parseFloat(rpTdsAmount || "0"))}
+                      {" = "}{formatCurrency(parseFloat(rpAmount || "0") + parseFloat(rpTdsAmount || "0"))}
+                      {recordPaymentBalance !== null &&
+                        Math.abs((parseFloat(rpAmount || "0") + parseFloat(rpTdsAmount || "0")) - recordPaymentBalance) < 1
+                        ? " ✓ settles invoice"
+                        : ""}
+                    </div>
+                  )}
+                  <p className="text-[11px] text-muted-foreground">
+                    Invoice settles as: cash received + TDS deducted = invoice total. Tally receipt splits bank + TDS ledger + party.
+                  </p>
+                </div>
+              )}
+            </div>
+
             <Button onClick={handleRecordPayment} disabled={rpSubmitting} className="w-full">
               {rpSubmitting ? "Recording…" : "Record Payment"}
             </Button>

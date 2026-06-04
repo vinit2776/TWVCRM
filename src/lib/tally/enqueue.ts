@@ -24,6 +24,16 @@
 import { createAdminClient } from "@/lib/supabase/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+/** Cheap check: is CRM GST issuance enabled right now? */
+export async function isCrmGstEnabled(admin: SupabaseClient): Promise<boolean> {
+  const { data } = await admin
+    .from("app_settings")
+    .select("value")
+    .eq("key", "crm_gst_enabled")
+    .single();
+  return data?.value === "true";
+}
+
 /** Cheap check: is Tally the GST-invoice issuer right now? (master switch ON) */
 export async function isTallyIssuanceActive(admin: SupabaseClient): Promise<boolean> {
   const { data } = await admin
@@ -129,9 +139,40 @@ export async function routeGstGenerationToTally(statementId: string): Promise<bo
  *
  * Never throws — a reverse-sync failure must never break payment recording.
  */
+/**
+ * Maps a TDS section code (as stored in tds_sections.code) to the Tally ledger
+ * name the receipt voucher should credit for the TDS portion.
+ *
+ * Keys must match the tds_sections seed values exactly (194C, 194H, 194I_a,
+ * 194I_b, 194J_a, 194J_b). Update values to match your Tally chart of accounts
+ * before go-live — the bridge uses tds_ledger from the job payload directly.
+ */
+const TDS_LEDGER_MAP: Record<string, string> = {
+  "194C":   "TDS Receivable 194C",
+  "194H":   "TDS Receivable 194H",
+  "194I_a": "TDS Receivable 194I (Machinery)",
+  "194I_b": "TDS Receivable 194I (Building)",
+  "194J_a": "TDS Receivable 194J (Technical)",
+  "194J_b": "TDS Receivable 194J (Professional)",
+};
+
+function deriveTdsLedger(sectionCode: string | null | undefined): string | null {
+  if (!sectionCode) return null;
+  return TDS_LEDGER_MAP[sectionCode] ?? `TDS Receivable ${sectionCode}`;
+}
+
 export async function enqueueTallyReceiptVoucher(
   statementId: string,
-  payment: { paymentId: string; amount: number; date: string; mode: string; reference?: string | null },
+  payment: {
+    paymentId: string;
+    amount: number;
+    date: string;
+    mode: string;
+    reference?: string | null;
+    tdsAmount?: number;
+    /** TDS section code from tds_sections.code — used to derive the Tally ledger name */
+    tdsSection?: string | null;
+  },
 ): Promise<void> {
   try {
     const admin = createAdminClient();
@@ -159,6 +200,10 @@ export async function enqueueTallyReceiptVoucher(
       || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim()
       || "Customer";
 
+    const tdsAmt  = Math.max(0, payment.tdsAmount || 0);
+    const tdsSec  = payment.tdsSection ?? null;
+    const tdsLedger = tdsAmt > 0 ? deriveTdsLedger(tdsSec) : null;
+
     const { error } = await admin.from("tally_sync_jobs").insert({
       job_type:             "receipt_voucher",
       billing_statement_id: statementId,
@@ -170,7 +215,10 @@ export async function enqueueTallyReceiptVoucher(
         tally_voucher_guid:   s.tally_voucher_guid ?? null,
         payment_id:           payment.paymentId,   // so the ack can mirror back onto billing_payments
         party_name:           partyName,
-        amount:               payment.amount,
+        amount:               payment.amount,      // net cash received
+        tds_amount:           tdsAmt,              // customer's TDS deduction (0 = none)
+        tds_section:          tdsSec,              // e.g. "194I_b" — for reference/audit
+        tds_ledger:           tdsLedger,           // resolved Tally ledger name for the bridge
         payment_date:         payment.date,
         payment_mode:         payment.mode,
         payment_reference:    payment.reference ?? null,
@@ -182,6 +230,45 @@ export async function enqueueTallyReceiptVoucher(
     }
   } catch (err) {
     console.error("[tally/receipt] unexpected error:", err);
+  }
+}
+
+/**
+ * Enqueue Tally receipts for EVERY recorded payment on a statement that hasn't
+ * been synced yet. Used at Tally-issuance time for the proforma_first flow: a PI
+ * is paid BEFORE the GST invoice exists, so the per-payment receipt enqueue
+ * (above) no-ops at payment time (not yet Tally-issued). Once the invoice is
+ * issued in Tally, this back-fills the receipt(s) so the money-in is recorded and
+ * the party balance clears. Idempotent (one job per payment id).
+ */
+export async function enqueueReceiptsForPaidStatement(statementId: string): Promise<void> {
+  try {
+    const admin = createAdminClient();
+    if (!(await isTallyIssuanceActive(admin))) return;
+
+    const { data: payments } = await admin
+      .from("billing_payments")
+      .select("id, amount, tds_amount, tds_section, payment_date, payment_mode, payment_reference, tally_receipt_number")
+      .eq("billing_statement_id", statementId);
+
+    for (const p of (payments ?? []) as Array<{
+      id: string; amount: number; tds_amount: number | null; tds_section: string | null;
+      payment_date: string; payment_mode: string; payment_reference: string | null;
+      tally_receipt_number: string | null;
+    }>) {
+      if (p.tally_receipt_number) continue;   // already synced
+      await enqueueTallyReceiptVoucher(statementId, {
+        paymentId:  p.id,
+        amount:     Number(p.amount),
+        tdsAmount:  Number(p.tds_amount || 0),
+        tdsSection: p.tds_section,
+        date:       p.payment_date,
+        mode:       p.payment_mode,
+        reference:  p.payment_reference,
+      });
+    }
+  } catch (err) {
+    console.error("[tally/receipt] back-fill error:", err);
   }
 }
 

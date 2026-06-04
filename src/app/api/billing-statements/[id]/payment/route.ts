@@ -43,6 +43,11 @@ export async function POST(
 
   const body = await request.json();
   const { amount, payment_date, payment_mode, payment_reference, proof_path, notes } = body;
+  // TDS declared by the operator (never inferred). The cash received (amount) is
+  // net; tds_amount is the customer's deduction. The statement settles on
+  // (amount + tds_amount) so a TDS-short payment still closes the invoice.
+  const tdsAmount  = Math.max(0, Number(body.tds_amount) || 0);
+  const tdsSection = (typeof body.tds_section === "string" && body.tds_section.trim()) ? body.tds_section.trim() : null;
 
   if (!amount || amount <= 0) return NextResponse.json({ error: "Amount must be positive" }, { status: 400 });
   if (!payment_date) return NextResponse.json({ error: "Payment date is required" }, { status: 400 });
@@ -69,6 +74,8 @@ export async function POST(
       payment_reference: payment_reference || null,
       proof_path: proof_path || null,
       notes: notes || null,
+      tds_amount: tdsAmount,
+      tds_section: tdsSection,
       recorded_by: dbUser.id,
     })
     .select()
@@ -78,22 +85,25 @@ export async function POST(
 
   // Reverse-sync the payment to Tally as a receipt voucher (closes the loop so
   // Tally's books reflect the offline payment). No-op unless this statement's GST
-  // invoice was issued by Tally and sync is active. Fire-and-forget.
+  // invoice was issued by Tally and sync is active. Fire-and-forget. TDS, when
+  // declared, splits the Tally receipt: bank (net) + TDS ledger + party (gross).
   void enqueueTallyReceiptVoucher(id, {
-    paymentId: payment.id,
-    amount: Number(amount),
-    date: payment_date,
-    mode: payment_mode,
-    reference: payment_reference || null,
+    paymentId:  payment.id,
+    amount:     Number(amount),
+    tdsAmount,
+    tdsSection: tdsSection,
+    date:       payment_date,
+    mode:       payment_mode,
+    reference:  payment_reference || null,
   });
 
-  // Check if fully paid
+  // Check if fully paid. TDS counts toward settlement: cash + TDS = invoice.
   const { data: allPayments } = await supabase
     .from("billing_payments")
-    .select("amount")
+    .select("amount, tds_amount")
     .eq("billing_statement_id", id);
 
-  const totalPaid = (allPayments || []).reduce((s, p) => s + Number(p.amount), 0);
+  const totalPaid = (allPayments || []).reduce((s, p) => s + Number(p.amount) + Number(p.tds_amount || 0), 0);
   const invoiceAmount = Number(statement.total_amount);
 
   let newPaymentStatus = "unpaid";

@@ -139,6 +139,7 @@ export function ViewStatementDialog({
   const [revertingToDraft, setRevertingToDraft] = useState(false);
   const [retryingTally, setRetryingTally] = useState(false);
   const [showConvertToGst, setShowConvertToGst] = useState(false);
+  const [gstModeReady, setGstModeReady] = useState<boolean | null>(null); // null = loading
 
   // Waive-charge state — tracks which charge row has the waive form open
   const [waivedChargeId, setWaivedChargeId] = useState<string | null>(null);
@@ -226,6 +227,18 @@ export function ViewStatementDialog({
       .catch(() => toast.error("Failed to load statement"))
       .finally(() => setLoading(false));
   }, [open, statementId]);
+
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/settings/public")
+      .then((res) => res.json())
+      .then((json: { data?: Record<string, string> }) => {
+        const crm = json.data?.["crm_gst_enabled"] === "true";
+        const tally = json.data?.["tally_sync_enabled"] === "true";
+        setGstModeReady(crm || tally);
+      })
+      .catch(() => setGstModeReady(true)); // fail open — don't block UI on settings error
+  }, [open]);
 
   const handleStatusTransition = async (newStatus: "finalized" | "exported") => {
     if (!statementId) return;
@@ -897,7 +910,9 @@ export function ViewStatementDialog({
           {statement?.status === "finalized" && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.payment_status !== "paid" && userRole && ["admin", "manager"].includes(userRole) && (
             <Button
               variant="outline"
-              className="border-amber-400 text-amber-700 hover:bg-amber-50"
+              className="border-amber-400 text-amber-700 hover:bg-amber-50 disabled:opacity-50 disabled:cursor-not-allowed"
+              disabled={gstModeReady === false}
+              title={gstModeReady === false ? "GST invoicing is on standby — activate CRM GST or Tally Sync from Admin → Tally Sync" : undefined}
               onClick={() => setShowConvertToGst(true)}
             >
               <AlertTriangle className="mr-2 h-4 w-4" />
@@ -906,7 +921,12 @@ export function ViewStatementDialog({
           )}
           {/* Payment received offline: Generate GST invoice */}
           {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && (statement?.payment_status === "paid" || statement?.payment_status === "partially_paid") && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
-            <Button onClick={handleGenerateGstInvoice} disabled={generatingGst} className="bg-green-700 hover:bg-green-800">
+            <Button
+              onClick={handleGenerateGstInvoice}
+              disabled={generatingGst || gstModeReady === false}
+              title={gstModeReady === false ? "GST invoicing is on standby — activate CRM GST or Tally Sync from Admin → Tally Sync" : undefined}
+              className="bg-green-700 hover:bg-green-800 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
               {generatingGst ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <FileCheck className="mr-2 h-4 w-4" />}
               Generate &amp; Send GST Invoice
             </Button>
