@@ -109,7 +109,7 @@ export async function GET(_request: NextRequest) {
       // Defaults match the bridge: bill-by-bill ON, account treated as bank.
       bill_by_bill:     (s["tally_receipt_bill_by_bill"]     ?? "true") !== "false",
       account_is_bank:  (s["tally_receipt_account_is_bank"]  ?? "true") !== "false",
-      transaction_type: s["tally_receipt_transaction_type"]  ?? "e-Fund Transfer",
+      transaction_type: s["tally_receipt_transaction_type"]  ?? "Cheque/DD",
       transfer_mode:    s["tally_receipt_transfer_mode"]     ?? "NEFT",
     },
     bridge: {

@@ -47,7 +47,7 @@ UPDATE app_settings SET value = 'true' WHERE key = 'tally_receipt_bill_by_bill';
 UPDATE app_settings SET value = 'true' WHERE key = 'tally_receipt_account_is_bank';
 -- The transaction-type / transfer-mode strings the bank allocation uses. Defaults
 -- below; adjust to whatever your bank ledger accepts on import (confirm at rehearsal).
-UPDATE app_settings SET value = 'e-Fund Transfer' WHERE key = 'tally_receipt_transaction_type';
+UPDATE app_settings SET value = 'Cheque/DD' WHERE key = 'tally_receipt_transaction_type';
 UPDATE app_settings SET value = 'NEFT'            WHERE key = 'tally_receipt_transfer_mode';
 ```
 
@@ -168,17 +168,24 @@ against a real **80-receipt Day Book export** (May 2026). Confirmed correct:
 - Bank allocation on the bank entry (80/80 → default ON; off for cash).
 - Receipts are manually numbered (blank `VOUCHERNUMBER`) → identified by GUID.
 
-**The one remaining unknown** is which `TRANSACTIONTYPE` / `TRANSFERMODE` strings your bank
-ledger accepts on **import** (a real receipt showed `Cheque/DD` / `NEFT`; we default to
-`e-Fund Transfer` / `NEFT`, both configurable). Confirm this during the §3 rehearsal:
+**Bank transaction type — now defaulted from your real data.** Mining the 80-receipt
+export: `TRANSACTIONTYPE = Cheque/DD` (76/80) + `TRANSFERMODE = NEFT` (71/80) are the
+dominant values your ICICI ledger accepts, so those are now the defaults. The remaining
+import risk is near-zero. Confirm at the §3 rehearsal:
 
 1. Run one real payment → receipt through the bridge (sync ON, test customer).
-2. If the bridge logs a `LINEERROR` mentioning the bank/transaction details, set
+2. If the bridge logs a `LINEERROR` on the bank/transaction details, set
    `tally_receipt_transaction_type` / `tally_receipt_transfer_mode` to the values your
-   ledger expects and Retry. If your receipt account is **cash**, set
-   `tally_receipt_account_is_bank = false` to drop the bank allocation entirely.
-3. After any change, re-run `cd bridge && npx ts-node src/test-receipt-voucher.ts`
-   (22 assertions must still pass).
+   ledger expects (Admin → Tally Sync → Receipt sync) and Retry. If your receipt account is
+   **cash**, set `account-is-bank = No` to drop the bank allocation entirely.
+3. After any change, re-run `cd bridge && npx ts-node src/test-receipt-voucher.ts` (22 pass).
+
+**Heads-up — TDS-deducted receipts (21% of sampled).** 17/80 real receipts split between the
+bank ledger (net) and a `TDS Paid (Deducted by the Party)` ledger because the customer
+deducted TDS. The current receipt voucher posts the full amount to the bank only. If the CRM
+records the **net** amount the customer actually paid, the invoice keeps a TDS-sized balance —
+correct-ish but the Tally receipt won't carry the TDS ledger split. Watch for this in the
+rehearsal; full TDS-on-receipt handling is a follow-up if you want the split mirrored.
 
 ---
 
