@@ -5,6 +5,7 @@ import Link from "next/link";
 import {
   AlertCircle, CheckCircle, CreditCard, ExternalLink,
   FileText, ChevronDown, ChevronUp, Calendar, Download, BookOpen,
+  ArrowDownToLine,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -17,6 +18,230 @@ import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
+
+// ── TDS Receivable types ──────────────────────────────────────
+type TdsReceivableRow = {
+  id: string;
+  payment_date: string;
+  amount: number;
+  tds_amount: number;
+  tds_section: string | null;
+  payment_mode: string;
+  payment_reference: string | null;
+  statement_number: string | null;
+  invoice_number: string | null;
+  period_start: string | null;
+  period_end: string | null;
+  contract_number: string | null;
+  client_name: string;
+  pan_number: string | null;
+};
+
+// ── Section display helper ────────────────────────────────────
+function fmtSection(code: string | null): string {
+  if (!code) return "—";
+  return code.replace("_", "(") + (code.includes("_") ? ")" : "");
+}
+
+// ── TDS Receivable Panel ──────────────────────────────────────
+function TdsReceivablePanel() {
+  const [rows, setRows] = useState<TdsReceivableRow[]>([]);
+  const [summary, setSummary] = useState<{
+    grand_total: number; by_section: Record<string, number>; count: number;
+  } | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [quarter, setQuarter] = useState<string>("all");
+  const [year, setYear] = useState(String(currentFyYear()));
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    const q = quarter !== "all" ? `&quarter=${quarter}` : "";
+    const res = await fetch(`/api/tds/receivable?fy_year=${year}${q}`);
+    const json = await res.json();
+    if (res.ok) { setRows(json.rows ?? []); setSummary(json.summary ?? null); }
+    else toast.error(json.error || "Failed to load TDS receivable data");
+    setLoading(false);
+  }, [quarter, year]);
+
+  useEffect(() => { load(); }, [load]);
+
+  const fyYears = [currentFyYear() - 1, currentFyYear(), currentFyYear() + 1];
+
+  function exportCsv() {
+    if (!rows.length) { toast.info("No data to export"); return; }
+    const headers = [
+      "Payment Date","Client","Contract","Invoice No.","Statement No.",
+      "TDS Section","TDS Amount","Cash Received","Payment Mode","Reference",
+    ];
+    const csv = [headers.join(",")]
+      .concat(rows.map((r) => [
+        r.payment_date,
+        `"${r.client_name}"`,
+        r.contract_number || "",
+        r.invoice_number || "",
+        r.statement_number || "",
+        fmtSection(r.tds_section),
+        r.tds_amount,
+        r.amount,
+        r.payment_mode,
+        r.payment_reference || "",
+      ].join(",")))
+      .join("\n");
+    const blob = new Blob([csv], { type: "text/csv" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    a.href = url;
+    a.download = `TDS-Receivable_FY${year}-${String(Number(year)+1).slice(2)}${quarter !== "all" ? `_Q${quarter}` : ""}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    toast.success("CSV downloaded");
+  }
+
+  return (
+    <div className="space-y-5">
+      <div className="flex items-start justify-between gap-3 flex-wrap">
+        <div>
+          <h2 className="text-base font-semibold flex items-center gap-2">
+            <ArrowDownToLine className="h-4 w-4 text-teal-600" />
+            TDS Receivable — Deducted by Clients
+          </h2>
+          <p className="text-sm text-muted-foreground mt-0.5">
+            TDS clients deduct on our invoices before paying. Use this to reconcile against Form 26AS.
+          </p>
+        </div>
+        {summary && summary.grand_total > 0 && (
+          <div className="text-right shrink-0">
+            <p className="text-xs text-muted-foreground">Total TDS receivable</p>
+            <p className="text-lg font-bold text-teal-700">{formatCurrency(summary.grand_total)}</p>
+            <p className="text-xs text-muted-foreground">{summary.count} payment{summary.count !== 1 ? "s" : ""}</p>
+          </div>
+        )}
+      </div>
+
+      {/* Filters */}
+      <div className="flex gap-3 flex-wrap items-end">
+        <div className="space-y-1 w-36">
+          <label className="text-xs text-muted-foreground">Quarter</label>
+          <Select value={quarter} onValueChange={setQuarter}>
+            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all" className="text-xs">All quarters</SelectItem>
+              {QUARTERS.map((q) => <SelectItem key={q.value} value={q.value} className="text-xs">{q.label}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1 w-28">
+          <label className="text-xs text-muted-foreground">FY Start Year</label>
+          <Select value={year} onValueChange={setYear}>
+            <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
+            <SelectContent>
+              {fyYears.map((y) => <SelectItem key={y} value={String(y)} className="text-xs">{y}–{String(y+1).slice(2)}</SelectItem>)}
+            </SelectContent>
+          </Select>
+        </div>
+        <button
+          onClick={exportCsv}
+          className="flex items-center gap-1.5 px-3 py-1.5 h-8 rounded-md border text-xs hover:bg-muted/40 transition-colors"
+        >
+          <Download className="h-3.5 w-3.5" /> Export CSV
+        </button>
+      </div>
+
+      {/* Section summary cards */}
+      {summary && Object.keys(summary.by_section).length > 0 && (
+        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-3">
+          {Object.entries(summary.by_section).map(([code, amt]) => (
+            <div key={code} className="rounded-lg border border-teal-200 bg-teal-50/40 px-3 py-2">
+              <p className="text-xs font-semibold text-teal-800 font-mono">{fmtSection(code)}</p>
+              <p className="text-sm font-bold text-teal-900 mt-0.5">{formatCurrency(amt)}</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Table */}
+      {loading ? (
+        <div className="space-y-2">
+          {[...Array(4)].map((_, i) => <div key={i} className="animate-pulse bg-muted rounded h-10" />)}
+        </div>
+      ) : rows.length === 0 ? (
+        <div className="text-center py-12 text-muted-foreground border rounded-lg">
+          <CheckCircle className="h-8 w-8 mx-auto mb-2 text-teal-300" />
+          <p className="font-medium">No TDS deductions recorded for this period</p>
+          <p className="text-sm mt-1">When clients deduct TDS on payments, they appear here.</p>
+        </div>
+      ) : (
+        <div className="rounded-lg border overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-b">
+              <tr>
+                <th className="px-3 py-2 text-left">Date</th>
+                <th className="px-3 py-2 text-left">Client</th>
+                <th className="px-3 py-2 text-left">Contract</th>
+                <th className="px-3 py-2 text-left">Invoice</th>
+                <th className="px-3 py-2 text-left">Section</th>
+                <th className="px-3 py-2 text-right">TDS Amount</th>
+                <th className="px-3 py-2 text-right">Cash Received</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y">
+              {rows.map((r) => (
+                <tr key={r.id} className="hover:bg-gray-50">
+                  <td className="px-3 py-2.5 whitespace-nowrap text-xs">{formatDate(r.payment_date)}</td>
+                  <td className="px-3 py-2.5">
+                    <p className="font-medium">{r.client_name}</p>
+                    {r.pan_number && <p className="text-[10px] text-muted-foreground font-mono">{r.pan_number}</p>}
+                  </td>
+                  <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">{r.contract_number || "—"}</td>
+                  <td className="px-3 py-2.5 text-xs">
+                    {r.invoice_number
+                      ? <span className="font-mono font-medium">{r.invoice_number}</span>
+                      : <span className="text-muted-foreground">{r.statement_number || "—"}</span>}
+                    {r.period_start && (
+                      <p className="text-[10px] text-muted-foreground">
+                        {new Date(r.period_start + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" })}
+                      </p>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5">
+                    {r.tds_section ? (
+                      <span className="inline-block px-1.5 py-0.5 rounded bg-teal-100 text-teal-800 text-[11px] font-mono font-semibold">
+                        {fmtSection(r.tds_section)}
+                      </span>
+                    ) : (
+                      <span className="text-muted-foreground text-xs">—</span>
+                    )}
+                  </td>
+                  <td className="px-3 py-2.5 text-right font-semibold text-teal-700">{formatCurrency(r.tds_amount)}</td>
+                  <td className="px-3 py-2.5 text-right text-muted-foreground">{formatCurrency(r.amount)}</td>
+                </tr>
+              ))}
+            </tbody>
+            <tfoot className="border-t bg-gray-50">
+              <tr>
+                <td colSpan={5} className="px-3 py-2 text-xs font-semibold text-right">Total</td>
+                <td className="px-3 py-2 text-right font-bold text-teal-700">
+                  {formatCurrency(rows.reduce((s, r) => s + r.tds_amount, 0))}
+                </td>
+                <td className="px-3 py-2 text-right font-bold text-muted-foreground">
+                  {formatCurrency(rows.reduce((s, r) => s + r.amount, 0))}
+                </td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+      )}
+
+      <div className="rounded-lg border border-amber-200 bg-amber-50/40 px-4 py-3 text-xs text-amber-800 space-y-1">
+        <p className="font-semibold">Reconciliation note</p>
+        <p>
+          The client (deductor) files <strong>Form 26Q</strong> for TDS deducted on your invoices.
+          Download your <strong>Form 26AS</strong> from the Income Tax portal and match amounts here to claim the TDS credit in your annual IT return.
+        </p>
+      </div>
+    </div>
+  );
+}
 
 // ── Types ─────────────────────────────────────────────────────
 type TdsEntry = {
@@ -650,6 +875,7 @@ function ReportsPanel() {
 
 // ── Main Page ─────────────────────────────────────────────────
 export default function TdsPayablePage() {
+  const [activeTab, setActiveTab] = useState<"payable" | "receivable">("payable");
   const [entries, setEntries] = useState<TdsEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<"pending" | "deposited" | "all">("pending");
@@ -686,19 +912,49 @@ export default function TdsPayablePage() {
         <div>
           <h1 className="text-xl font-semibold flex items-center gap-2">
             <FileText className="h-5 w-5 text-blue-600" />
-            TDS Payable
+            TDS
           </h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Tax deducted at source — challan register & Form 16A
+            Tax deducted at source — payable to government &amp; receivable from clients
           </p>
         </div>
-        {totalPending > 0 && (
+        {activeTab === "payable" && totalPending > 0 && (
           <div className="text-right shrink-0">
             <p className="text-xs text-muted-foreground">Pending deposit</p>
             <p className="text-lg font-bold text-blue-700">{formatCurrency(totalPending)}</p>
           </div>
         )}
       </div>
+
+      {/* Tab switcher */}
+      <div className="flex gap-1 rounded-lg bg-muted p-1 w-fit">
+        <button
+          onClick={() => setActiveTab("payable")}
+          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            activeTab === "payable"
+              ? "bg-white shadow-sm text-foreground"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          TDS Payable
+        </button>
+        <button
+          onClick={() => setActiveTab("receivable")}
+          className={`px-4 py-1.5 rounded-md text-sm font-medium transition-colors ${
+            activeTab === "receivable"
+              ? "bg-white shadow-sm text-foreground"
+              : "text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          TDS Receivable
+        </button>
+      </div>
+
+      {/* ── TDS Receivable tab ─────────────────────────────── */}
+      {activeTab === "receivable" && <TdsReceivablePanel />}
+
+      {/* ── TDS Payable tab content ────────────────────────── */}
+      {activeTab === "payable" && <>
 
       {/* Compliance guide */}
       <TdsGuide />
@@ -761,7 +1017,7 @@ export default function TdsPayablePage() {
                   className="w-full flex items-center justify-between px-4 py-3 hover:bg-muted/30 transition-colors rounded-t-lg"
                   onClick={() => setExpandedMonths((prev) => {
                     const next = new Set(prev);
-                    next.has(mk) ? next.delete(mk) : next.add(mk);
+                    if (next.has(mk)) { next.delete(mk); } else { next.add(mk); }
                     return next;
                   })}
                 >
@@ -888,6 +1144,9 @@ export default function TdsPayablePage() {
           onSaved={fetchEntries}
         />
       )}
+
+      {/* end payable tab */}
+      </>}
     </div>
   );
 }
