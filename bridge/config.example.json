@@ -4,6 +4,7 @@
   "tally_host":         "localhost",
   "tally_port":         9000,
   "tally_company_gstin":"33AAACU4245J1ZF",
+  "tally_target_company":"Sree Design Infrastructure Pvt Ltd",
   "poll_interval_ms":   120000,
   "heartbeat_interval_ms": 60000,
   "lease_seconds":      120,
