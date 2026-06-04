@@ -174,6 +174,7 @@ export async function POST(request: NextRequest) {
       gst_amount: gstAmount,
       total_with_gst: totalWithGst,
       charge_date: result.data.charge_date,
+      hsn_sac_code: result.data.hsn_sac_code || "999799",
       notes: result.data.notes,
       proof_path: body.proof_path || null,
       lead_id: leadId,

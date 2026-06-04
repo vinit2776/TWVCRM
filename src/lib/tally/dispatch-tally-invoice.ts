@@ -25,6 +25,7 @@
  */
 
 import type { SupabaseClient } from "@supabase/supabase-js";
+import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
@@ -298,7 +299,7 @@ function buildLineItems(
   statement: any,
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   contract: any,
-  usageCharges: { description: string; quantity: number; unit_price: number; total: number }[],
+  usageCharges: { description: string; quantity: number; unit_price: number; total: number; hsn_sac_code?: string | null }[],
   fixedAmount: number,
 ): GstInvoiceData["lineItems"] {
   const lineItems: GstInvoiceData["lineItems"] = [];
@@ -314,7 +315,7 @@ function buildLineItems(
         }
         lineItems.push({
           description: label || section.label,
-          hsnSac: "997212",
+          hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label),
           qty: Number(item.quantity || item.billable || 1),
           rate: Number(item.unit_price || item.rate || item.amount || 0),
           amount: Number(item.amount || 0),
@@ -322,8 +323,8 @@ function buildLineItems(
       }
     }
   } else {
-    if (fixedAmount > 0) lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: "997212", qty: 1, rate: fixedAmount, amount: fixedAmount });
-    for (const charge of usageCharges) lineItems.push({ description: charge.description, hsnSac: "997212", qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
+    if (fixedAmount > 0) lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
+    for (const charge of usageCharges) lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", charge.hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
   }
   return lineItems;
 }

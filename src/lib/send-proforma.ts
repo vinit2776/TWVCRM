@@ -18,6 +18,7 @@ import { logAudit } from "@/lib/audit";
 import { getCachedSettings } from "@/lib/app-settings-cache";
 import { routeGstGenerationToTally, isCrmGstEnabled } from "@/lib/tally/enqueue";
 import QRCode from "qrcode";
+import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 
 /** Per-call timeout (ms) for outbound HTTP and the Resend SDK send. A single
  *  slow/hung Razorpay or email call must not stall the whole batch loop. */
@@ -220,7 +221,7 @@ export async function dispatchProforma(
         }
         lineItems.push({
           description: label || section.label,
-          hsnSac: "997212",
+          hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label),
           qty: Number(item.quantity || item.billable || 1),
           rate: Number(item.unit_price || item.rate || item.amount || 0),
           amount: Number(item.amount || 0),
@@ -229,10 +230,10 @@ export async function dispatchProforma(
     }
   } else {
     if (fixedAmount > 0) {
-      lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: "997212", qty: 1, rate: fixedAmount, amount: fixedAmount });
+      lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
     }
     for (const charge of usageCharges) {
-      lineItems.push({ description: charge.description, hsnSac: "997212", qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
+      lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
     }
   }
 

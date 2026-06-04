@@ -50,6 +50,7 @@ const ViewStatementDialog = dynamic(
 );
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { TDS_CLIENT_SECTIONS } from "@/lib/constants";
 import { toast } from "sonner";
 import { MonthPicker } from "@/components/accounting/month-picker";
 import { PeriodStatusBar } from "@/components/accounting/period-status-bar";
@@ -440,10 +441,8 @@ export default function BillingPage() {
   const [rpSubmitting, setRpSubmitting] = useState(false);
   // TDS deduction on this payment (declared explicitly, never inferred).
   const [rpTdsEnabled, setRpTdsEnabled]   = useState(false);
-  const [rpTdsSection, setRpTdsSection]   = useState("194I_b");
+  const [rpTdsSection, setRpTdsSection]   = useState("194I");
   const [rpTdsAmount, setRpTdsAmount]     = useState("");
-  const [rpTdsSections, setRpTdsSections] = useState<{ code: string; description: string }[]>([]);
-  const rpTdsSectionsLoaded = useRef(false);
 
   // ── Void Statement dialog ────────────────────────────────────────────────
   const [voidDialogOpen, setVoidDialogOpen]       = useState(false);
@@ -454,15 +453,6 @@ export default function BillingPage() {
   // ── Contract list for filter dropdowns ───────────────────────────────────
   const [contractFilters, setContractFilters] = useState<ContractFilter[]>([]);
 
-  // ── Load TDS sections once for the Record Payment dialog dropdown ────────
-  useEffect(() => {
-    if (rpTdsSectionsLoaded.current) return;
-    rpTdsSectionsLoaded.current = true;
-    fetch("/api/tds/sections")
-      .then((r) => r.json())
-      .then((json) => { if (json.data) setRpTdsSections(json.data); })
-      .catch(() => { /* non-blocking */ });
-  }, []);
 
   // ── Get user role ────────────────────────────────────────────────────────
   useEffect(() => {
@@ -660,7 +650,7 @@ export default function BillingPage() {
       );
       setRecordPaymentDialogOpen(false);
       setRpAmount(""); setRpReference(""); setRpNotes("");
-      setRpTdsEnabled(false); setRpTdsAmount(""); setRpTdsSection("194I_b");
+      setRpTdsEnabled(false); setRpTdsAmount(""); setRpTdsSection("194I");
       fetchStatements();
       fetchData();
     } else {
@@ -1254,7 +1244,7 @@ export default function BillingPage() {
 
       <Dialog open={recordPaymentDialogOpen} onOpenChange={(open) => {
         setRecordPaymentDialogOpen(open);
-        if (!open) { setRpTdsEnabled(false); setRpTdsAmount(""); setRpTdsSection("194I_b"); }
+        if (!open) { setRpTdsEnabled(false); setRpTdsAmount(""); setRpTdsSection("194I"); }
       }}>
         <DialogContent>
           <DialogHeader><DialogTitle>Record Payment</DialogTitle></DialogHeader>
@@ -1315,28 +1305,17 @@ export default function BillingPage() {
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1">
                       <Label className="text-xs">TDS section *</Label>
-                      {rpTdsSections.length > 0 ? (
-                        <Select value={rpTdsSection} onValueChange={setRpTdsSection}>
-                          <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {rpTdsSections.map((s) => (
-                              <SelectItem key={s.code} value={s.code} className="text-xs">
-                                <span className="font-mono font-medium">
-                                  {s.code.replace("_", "(")}{s.code.includes("_") ? ")" : ""}
-                                </span>
-                                <span className="text-muted-foreground ml-1.5">— {s.description}</span>
-                              </SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      ) : (
-                        <Input
-                          value={rpTdsSection}
-                          onChange={(e) => setRpTdsSection(e.target.value)}
-                          placeholder="e.g. 194I_b"
-                          className="h-9 text-xs"
-                        />
-                      )}
+                      <Select value={rpTdsSection} onValueChange={setRpTdsSection}>
+                        <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {TDS_CLIENT_SECTIONS.map((s) => (
+                            <SelectItem key={s.code} value={s.code} className="text-xs">
+                              <span className="font-mono font-medium">{s.label}</span>
+                              <span className="text-muted-foreground ml-1.5">— {s.description}</span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
                     </div>
                     <div className="space-y-1">
                       <Label className="text-xs">TDS amount (₹) *</Label>

@@ -22,6 +22,7 @@ import {
 import { Loader2, FileText, CalendarDays } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { HSN_SAC_OPTIONS } from "@/lib/e-invoice/sac-codes";
 
 interface Contract {
   id: string;
@@ -97,6 +98,7 @@ export function AddUsageChargeDialog({
     defaultChargeDate || new Date().toISOString().split("T")[0]
   );
   const [notes, setNotes] = useState("");
+  const [hsnSacCode, setHsnSacCode] = useState("999799");
   const [submitting, setSubmitting] = useState(false);
 
   const subtotal = quantity * unitPrice;
@@ -221,6 +223,7 @@ export function AddUsageChargeDialog({
     setContractGstLocked(false);
     setChargeDate(defaultChargeDate || new Date().toISOString().split("T")[0]);
     setNotes("");
+    setHsnSacCode("999799");
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -270,6 +273,7 @@ export function AddUsageChargeDialog({
           total: subtotal,
           gst_rate: gstRate,
           charge_date: chargeDate,
+          hsn_sac_code: hsnSacCode,
           notes: notes.trim() || undefined,
         }),
       });
@@ -589,6 +593,26 @@ export function AddUsageChargeDialog({
                 billing cycle
               </p>
             )}
+          </div>
+
+          {/* HSN / SAC code */}
+          <div className="space-y-2">
+            <Label htmlFor="charge-hsn">
+              HSN / SAC Code <span className="text-destructive">*</span>
+            </Label>
+            <Select value={hsnSacCode} onValueChange={setHsnSacCode}>
+              <SelectTrigger id="charge-hsn">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {HSN_SAC_OPTIONS.map((opt) => (
+                  <SelectItem key={opt.code} value={opt.code}>
+                    <span className="font-mono font-medium">{opt.code}</span>
+                    <span className="text-muted-foreground ml-2">— {opt.label}</span>
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
           </div>
 
           {/* Notes */}

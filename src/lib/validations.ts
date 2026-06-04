@@ -291,6 +291,9 @@ export const createUsageChargeSchema = z.object({
   // source of truth for gst_amount + total_with_gst (computed from these).
   gst_rate: z.number().min(0).max(28).optional(),
   charge_date: z.string().min(1, "Charge date is required"),
+  // HSN/SAC code for this line item — defaults to 999799 (Other Charges) when
+  // not supplied. Stored on the row so invoice builders can use per-item codes.
+  hsn_sac_code: z.string().optional(),
   notes: z.string().optional(),
 }).refine(
   (data) => data.contract_id || data.booking_id,
