@@ -214,7 +214,7 @@ export async function enqueueTallyCreditNote(
       .from("billing_statements")
       .select(`
         id, issuance_channel, tally_invoice_number, tally_voucher_guid,
-        subtotal, tax_percentage, line_items, statement_number,
+        subtotal, tax_percentage, line_items, statement_number, gst_invoice_date,
         contract:contracts!billing_statements_contract_id_fkey(
           contract_number,
           lead:leads!contracts_lead_id_fkey(company, first_name, last_name, gst_number)
@@ -231,6 +231,7 @@ export async function enqueueTallyCreditNote(
       tax_percentage?: number;
       line_items?: unknown;
       statement_number?: string;
+      gst_invoice_date?: string | null;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       contract?: any;
     } | null;
@@ -257,6 +258,7 @@ export async function enqueueTallyCreditNote(
       payload: {
         billing_statement_id:   statementId,
         original_invoice_number: s.tally_invoice_number,
+        original_invoice_date:   s.gst_invoice_date ?? null,
         original_voucher_guid:   s.tally_voucher_guid ?? null,
         taxable_amount:          s.subtotal,
         tax_percentage:          s.tax_percentage,

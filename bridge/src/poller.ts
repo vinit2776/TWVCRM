@@ -410,7 +410,7 @@ export class Poller {
     const result = await this.tally.postCreditNote({
       idempotency_key:  job.idempotency_key,
       credit_date:      new Date().toISOString().split("T")[0],
-      voucher_type:     str("voucher_series", "Credit Note"),
+      voucher_type:     str("voucher_series", "CREDIT NOTE-REG"),
       party_ledger:     partyLedger,
       party_gstin:      str("buyer_gstin"),
       place_of_supply:  str("place_of_supply", "Tamil Nadu"),
@@ -420,6 +420,7 @@ export class Poller {
       sgst_ledger:      str("ledger_sgst", "SGST Output 9%"),
       tax_percentage:   Number(p["tax_percentage"] ?? 18),
       original_invoice: str("original_invoice_number"),
+      original_invoice_date: str("original_invoice_date") || undefined,
       line_items:       lines,
       narration:        str("narration", "TWV CRM Credit Note"),
     });

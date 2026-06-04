@@ -49,7 +49,7 @@ async function main(): Promise<void> {
   const result = await tally.postCreditNote({
     idempotency_key:  "credit_note:test-stmt-001",
     credit_date:      "2026-06-04",
-    voucher_type:     "Credit Note",
+    voucher_type:     "CREDIT NOTE-REG",
     party_ledger:     PARTY,
     party_gstin:      "33AAAAA0000A1Z5",
     place_of_supply:  "Tamil Nadu",
@@ -59,6 +59,7 @@ async function main(): Promise<void> {
     sgst_ledger:      "SGST Output 9%",
     tax_percentage:   18,
     original_invoice: INVOICE,
+    original_invoice_date: "2026-04-10",
     line_items:       [{ description: "Coworking — May", amount: TAXABLE }],
     narration:        "TWV CRM Credit Note | Reverses: " + INVOICE,
   });
@@ -70,7 +71,9 @@ async function main(): Promise<void> {
   console.log("\n[3] inspect the reversal XML");
   const xml = fs.readFileSync("/tmp/last-creditnote.xml", "utf-8");
 
-  check("VOUCHERTYPENAME is Credit Note", /<VOUCHERTYPENAME>\s*Credit Note\s*<\/VOUCHERTYPENAME>/i.test(xml));
+  check("VOUCHERTYPENAME is CREDIT NOTE-REG", /<VOUCHERTYPENAME>\s*CREDIT NOTE-REG\s*<\/VOUCHERTYPENAME>/i.test(xml));
+  check("top-level REFERENCE to the original invoice", xml.includes(`<REFERENCE>${INVOICE}</REFERENCE>`));
+  check("REFERENCEDATE present (20260410)", xml.includes("<REFERENCEDATE>20260410</REFERENCEDATE>"));
   check("idempotency REMOTEID embedded", xml.includes("credit_note:test-stmt-001"));
 
   // Party — CREDITED on a credit note (opposite of the sale): ISDEEMEDPOSITIVE=No, positive.
@@ -94,8 +97,7 @@ async function main(): Promise<void> {
     failures.forEach((f) => console.error(`   - ${f}`));
     process.exit(1);
   }
-  console.log("PASS — credit-note reversal wired correctly (mock).");
-  console.log("BEST-ESTIMATE: verify signs + original-invoice reference against a REAL credit-note export before go-live.");
+  console.log("PASS — credit-note reversal matches the real CN/A/26-27/1 format (verified).");
   process.exit(0);
 }
 

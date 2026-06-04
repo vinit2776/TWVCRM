@@ -714,23 +714,25 @@ export class TallyClient {
   /**
    * Post a Credit Note to Tally — REVERSES a sales invoice (CRM-first cancel).
    *
-   * ── BEST-ESTIMATE — VERIFY AGAINST A REAL CREDIT-NOTE EXPORT ────────────────
-   * Mirrors the proven SDIPL-REG sales item-invoice format with the signs FLIPPED
-   * (a credit note is a sales return): the party is CREDITED, income + output tax
-   * are DEBITED. NOT yet confirmed against a real credit-note export from this
-   * company. Before relying on it, export one manual Credit Note (Day Book →
-   * Export → XML) and confirm:
-   *   - VCHTYPE / VOUCHERTYPENAME ("Credit Note") + OBJVIEW.
-   *   - Sign of each entry (party, income, CGST, SGST).
-   *   - How the ORIGINAL invoice is referenced (we use Agst Ref bill allocation +
-   *     narration; GST e-invoice credit notes also carry an original-doc block).
-   *   - Whether B2B credit notes need their own IRN (we expose irn_pending for it).
+   * ── VERIFIED against a real credit note (CN/A/26-27/1, Apr 2026) ────────────
+   * Item-invoice format (OBJVIEW="Invoice Voucher View", ISINVOICE=Yes) with the
+   * signs flipped vs a sale — confirmed against the real export:
+   *   - VOUCHERTYPENAME = the custom credit-note type (default "CREDIT NOTE-REG").
+   *   - Party CREDITED: ISDEEMEDPOSITIVE=No, ISPARTYLEDGER=Yes, +total, with a
+   *     <BILLALLOCATIONS.LIST> Agst Ref → the original invoice number (matched).
+   *   - Income (inventory ACCOUNTINGALLOCATIONS) + CGST + SGST DEBITED:
+   *     ISDEEMEDPOSITIVE=Yes, negative amounts (matched).
+   *   - Original invoice also referenced via top-level <REFERENCE>/<REFERENCEDATE>
+   *     (GST original-doc ref) — now emitted.
+   * Credit notes get a real VOUCHERNUMBER (CN/A/… series) read back from the Day
+   * Book. B2B credit notes carry an IRN (captured in the result if present; the
+   * cancel does not gate on it — the reversal is effective once the voucher exists).
    * ───────────────────────────────────────────────────────────────────────────
    */
   async postCreditNote(params: {
     idempotency_key: string;
     credit_date:     string;            // YYYY-MM-DD
-    voucher_type:    string;            // "Credit Note"
+    voucher_type:    string;            // custom credit-note type, e.g. "CREDIT NOTE-REG"
     party_ledger:    string;
     party_gstin:     string;
     place_of_supply: string;
@@ -740,12 +742,13 @@ export class TallyClient {
     sgst_ledger:     string;
     tax_percentage:  number;
     original_invoice: string;           // the invoice this note reverses
+    original_invoice_date?: string;     // YYYY-MM-DD — GST original-doc reference date
     line_items:      Array<{ description: string; amount: number }>;
     narration:       string;
   }): Promise<TallyCreditNoteResult> {
     const { idempotency_key, credit_date, voucher_type, party_ledger, party_gstin,
             place_of_supply, stock_item, income_ledger, cgst_ledger, sgst_ledger,
-            tax_percentage, original_invoice, line_items, narration } = params;
+            tax_percentage, original_invoice, original_invoice_date, line_items, narration } = params;
 
     const tallyDate = credit_date.replace(/-/g, "");
     const taxable   = round2(line_items.reduce((s, li) => s + li.amount, 0));
@@ -799,6 +802,8 @@ export class TallyClient {
             <PLACEOFSUPPLY>${escapeXml(place_of_supply)}</PLACEOFSUPPLY>
             <COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>
             <ISINVOICE>Yes</ISINVOICE>
+            ${original_invoice ? `<REFERENCE>${escapeXml(original_invoice)}</REFERENCE>` : ""}
+            ${original_invoice_date ? `<REFERENCEDATE>${original_invoice_date.replace(/-/g, "")}</REFERENCEDATE>` : ""}
             <NARRATION>${escapeXml(narration)}</NARRATION>
             <UDF:REMOTEID.LIST TYPE="String">
               <UDF:REMOTEID>${escapeXml(idempotency_key)}</UDF:REMOTEID>
