@@ -66,13 +66,21 @@ const server = http.createServer((req, res) => {
     if (body.includes("VCHTYPE") || body.includes("VOUCHER")) {
       // Voucher creation — save received XML for debug; assign a mock masterid +
       // voucher number, return real-style counts + LASTVCHID.
-      const isReceipt = /<VOUCHERTYPENAME>\s*Receipt/i.test(body) || /VCHTYPE="Receipt"/i.test(body);
-      try { fs.writeFileSync(isReceipt ? "/tmp/last-receipt.xml" : "/tmp/last-voucher.xml", body); } catch { /* ignore */ }
+      const isReceipt    = /<VOUCHERTYPENAME>\s*Receipt/i.test(body) || /VCHTYPE="Receipt"/i.test(body);
+      const isCreditNote = /<VOUCHERTYPENAME>\s*Credit Note/i.test(body) || /VCHTYPE="Credit Note"/i.test(body);
+      const dumpPath = isReceipt ? "/tmp/last-receipt.xml" : isCreditNote ? "/tmp/last-creditnote.xml" : "/tmp/last-voucher.xml";
+      try { fs.writeFileSync(dumpPath, body); } catch { /* ignore */ }
       mockVchId += 1;
       if (isReceipt) {
         // Receipts get a receipt-series number and never carry an IRN.
         const number = `RCT/26-27/MOCK${mockVchId}`;
         mockVouchers.push({ masterid: String(mockVchId), number, irn: "", vchtype: "Receipt" });
+        res.end(importResult(1, String(mockVchId)));
+        return;
+      }
+      if (isCreditNote) {
+        const number = `CN/26-27/MOCK${mockVchId}`;
+        mockVouchers.push({ masterid: String(mockVchId), number, irn: "", vchtype: "Credit Note" });
         res.end(importResult(1, String(mockVchId)));
         return;
       }

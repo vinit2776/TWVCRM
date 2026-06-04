@@ -1,7 +1,35 @@
 # Tally Integration — Status & Resume Notes
 
-**Last updated:** 2026-06-03
-**State:** Phase 1 (surgical GST-issuance swap) BUILT on `feat/tally-billing-phase1`. Sync PAUSED. Bridge receipt-voucher + B2B IRN real test remaining before go-live.
+**Last updated:** 2026-06-04
+**State:** Full Tally billing lifecycle BUILT across 6 PRs (issue → deliver → receipt → cancel). Sync PAUSED. Remaining before go-live is VERIFICATION ONLY (real-Tally), not build.
+
+---
+
+## Build status — complete (6 PRs, none merged, sync paused)
+
+| PR | Scope | Base | Verified? |
+|----|-------|------|-----------|
+| #32 | Perf indexes (00239/00240) | main | applied to prod |
+| #33 | Phase 1 — GST issuance swap | main | sync-off = unchanged |
+| #34 | Receipt reverse-sync + control-page settings | #33 | **XML verified vs real 80-receipt export** |
+| #35 | Repo hygiene | main | n/a |
+| #36 | Phase 1b — cancel via credit note | #34 | best-estimate (needs CN sample) |
+
+**Bridge v1.3.0**: postSalesVoucher (proven real), postReceiptVoucher (verified vs real),
+postCreditNote (best-estimate). Mock e2e: `test-receipt-voucher.ts` (22), `test-credit-note.ts` (13) — green.
+
+### Remaining for go-live (all VERIFICATION, needs real Tally + you)
+1. **Credit-note sample** — export one manual Credit Note, confirm `postCreditNote` signs +
+   original-invoice reference + B2B IRN handling. (Receipt was confirmed this way already.)
+2. **Bank transaction-type tune** — confirm the `TRANSACTIONTYPE`/`TRANSFERMODE` your bank
+   ledger accepts on receipt import (settings, not code — runbook §5).
+3. **Real B2B IRN test** + one full sync-ON dress rehearsal (see `tally-go-live-runbook.md`).
+
+### Settings to set before go-live (Admin → Tally Sync → Receipt sync)
+- `tally_ledger_receipt_account` — the bank ledger (likely `ICICI BANK A/C NO.000905000140`, confirm).
+- Everything else defaults correctly (bill-by-bill on, account-is-bank on, e-Fund Transfer / NEFT).
+
+Phase 2 (new Billing page UI) is the only untouched forward area — needs a spec.
 
 ---
 
@@ -33,12 +61,7 @@ switch first and only stamps `issuance_channel='tally'` when ON.
 5. **Reverse-sync + self-heal** — `enqueueTallyReceiptVoucher()` queues a `receipt_voucher`
    job when a payment is recorded (manual route + Razorpay webhook) against a Tally invoice;
    `/api/cron/tally-reconcile` (every 15 min) re-drives delivery for issued-but-undelivered
-   invoices. **Bridge `postReceiptVoucher` is NOT built yet** — receipt jobs sit pending
-   until a real receipt-voucher XML sample is captured. Build before go-live.
-
-**Remaining for go-live:** bridge `postReceiptVoucher` (needs sample) + a real B2B IRN test
-+ one full real-statement end-to-end with sync ON. Phase 1b (CRM-first cancel via credit note)
-and Phase 2 (new Billing page UI) are separate.
+   invoices. (Receipt sync + cancel are now fully built — see PR #34 / #36 above.)
 
 ---
 

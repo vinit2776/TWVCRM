@@ -184,3 +184,98 @@ export async function enqueueTallyReceiptVoucher(
     console.error("[tally/receipt] unexpected error:", err);
   }
 }
+
+export type CreditNoteResult =
+  | { ok: true }
+  | { ok: false; reason: "sync_off" | "not_tally" | "not_found" | "error" };
+
+/**
+ * Enqueue a Credit Note to REVERSE a Tally-issued invoice (CRM-first cancel, Phase 1b).
+ *
+ * A Tally invoice is on Tally's books, so the CRM can't just void it. This queues a
+ * credit_note job; the bridge posts a Credit Note in Tally reversing the invoice, and
+ * only on confirmation does the ack mark the statement voided + un-link its charges
+ * (Tally reverses first, CRM follows — books stay in sync).
+ *
+ * Returns a typed result so the cancel endpoint can give a precise error:
+ *   - sync_off  → the bridge is paused; can't reverse in Tally right now
+ *   - not_tally → this statement wasn't issued by Tally (use the normal CRM void)
+ * Stamps lifecycle_stage='cancelling'. Idempotent (one credit_note job per statement).
+ */
+export async function enqueueTallyCreditNote(
+  statementId: string,
+  reason: string,
+): Promise<CreditNoteResult> {
+  try {
+    const admin = createAdminClient();
+    if (!(await isTallyIssuanceActive(admin))) return { ok: false, reason: "sync_off" };
+
+    const { data: stmt } = await admin
+      .from("billing_statements")
+      .select(`
+        id, issuance_channel, tally_invoice_number, tally_voucher_guid,
+        subtotal, tax_percentage, line_items, statement_number, gst_invoice_date,
+        contract:contracts!billing_statements_contract_id_fkey(
+          contract_number,
+          lead:leads!contracts_lead_id_fkey(company, first_name, last_name, gst_number)
+        )
+      `)
+      .eq("id", statementId)
+      .single();
+
+    const s = stmt as {
+      issuance_channel?: string;
+      tally_invoice_number?: string | null;
+      tally_voucher_guid?: string | null;
+      subtotal?: number;
+      tax_percentage?: number;
+      line_items?: unknown;
+      statement_number?: string;
+      gst_invoice_date?: string | null;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      contract?: any;
+    } | null;
+
+    if (!s) return { ok: false, reason: "not_found" };
+    if (s.issuance_channel !== "tally" || !s.tally_invoice_number) return { ok: false, reason: "not_tally" };
+
+    const lead = s.contract?.lead;
+    const partyName = lead?.company
+      || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim()
+      || "Customer";
+
+    // Stamp cancelling so the UI + crons know a reversal is in flight.
+    await admin
+      .from("billing_statements")
+      .update({ lifecycle_stage: "cancelling", tally_sync_status: "pending" })
+      .eq("id", statementId);
+
+    const { error } = await admin.from("tally_sync_jobs").insert({
+      job_type:             "credit_note",
+      billing_statement_id: statementId,
+      idempotency_key:      `credit_note:${statementId}`,
+      status:               "pending",
+      payload: {
+        billing_statement_id:   statementId,
+        original_invoice_number: s.tally_invoice_number,
+        original_invoice_date:   s.gst_invoice_date ?? null,
+        original_voucher_guid:   s.tally_voucher_guid ?? null,
+        taxable_amount:          s.subtotal,
+        tax_percentage:          s.tax_percentage,
+        line_items:              s.line_items,
+        party_name:              partyName,
+        buyer_gstin:             (lead?.gst_number as string | null) ?? "",
+        reason,
+      },
+    });
+
+    if (error && error.code !== "23505") {
+      console.error("[tally/credit-note] failed to enqueue credit_note:", error.message);
+      return { ok: false, reason: "error" };
+    }
+    return { ok: true };
+  } catch (err) {
+    console.error("[tally/credit-note] unexpected error:", err);
+    return { ok: false, reason: "error" };
+  }
+}

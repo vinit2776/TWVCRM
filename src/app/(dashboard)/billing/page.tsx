@@ -669,6 +669,26 @@ export default function BillingPage() {
         setVoidReason("");
         fetchStatements();
         fetchData();
+      } else if (json.issuance_channel === "tally") {
+        // Tally-issued invoice — can't be plain-voided. Route to the CRM-first
+        // cancel: post a credit note in Tally; the statement voids once Tally
+        // confirms the reversal.
+        const cancelRes = await fetch(`/api/billing-statements/${voidStatementId}/cancel-tally`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: voidReason.trim() }),
+        });
+        const cancelJson = await cancelRes.json();
+        if (cancelRes.ok) {
+          toast.success(cancelJson.message || "Credit note queued — invoice will cancel once Tally confirms.");
+          setVoidDialogOpen(false);
+          setVoidStatementId(null);
+          setVoidReason("");
+          fetchStatements();
+          fetchData();
+        } else {
+          toast.error(cancelJson.error || "Failed to queue the Tally credit note");
+        }
       } else {
         toast.error(json.error || "Failed to void statement");
       }

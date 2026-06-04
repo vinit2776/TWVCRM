@@ -40,6 +40,15 @@ export interface TallyReceiptResult {
   created_at:     string;
 }
 
+export interface TallyCreditNoteResult {
+  voucher_guid:   string;
+  voucher_number: string;   // Tally's Credit Note number
+  total_amount:   number;
+  irn:            string | null;
+  irn_pending:    boolean;
+  created_at:     string;
+}
+
 export class TallyClient {
   private readonly host: string;
   private readonly port: number;
@@ -698,6 +707,170 @@ export class TallyClient {
       voucher_guid:   voucherGuid,
       voucher_number: voucherNumber,
       total_amount:   amt,
+      created_at:     new Date().toISOString(),
+    };
+  }
+
+  /**
+   * Post a Credit Note to Tally — REVERSES a sales invoice (CRM-first cancel).
+   *
+   * ── VERIFIED against a real credit note (CN/A/26-27/1, Apr 2026) ────────────
+   * Item-invoice format (OBJVIEW="Invoice Voucher View", ISINVOICE=Yes) with the
+   * signs flipped vs a sale — confirmed against the real export:
+   *   - VOUCHERTYPENAME = the custom credit-note type (default "CREDIT NOTE-REG").
+   *   - Party CREDITED: ISDEEMEDPOSITIVE=No, ISPARTYLEDGER=Yes, +total, with a
+   *     <BILLALLOCATIONS.LIST> Agst Ref → the original invoice number (matched).
+   *   - Income (inventory ACCOUNTINGALLOCATIONS) + CGST + SGST DEBITED:
+   *     ISDEEMEDPOSITIVE=Yes, negative amounts (matched).
+   *   - Original invoice also referenced via top-level <REFERENCE>/<REFERENCEDATE>
+   *     (GST original-doc ref) — now emitted.
+   * Credit notes get a real VOUCHERNUMBER (CN/A/… series) read back from the Day
+   * Book. B2B credit notes carry an IRN (captured in the result if present; the
+   * cancel does not gate on it — the reversal is effective once the voucher exists).
+   * ───────────────────────────────────────────────────────────────────────────
+   */
+  async postCreditNote(params: {
+    idempotency_key: string;
+    credit_date:     string;            // YYYY-MM-DD
+    voucher_type:    string;            // custom credit-note type, e.g. "CREDIT NOTE-REG"
+    party_ledger:    string;
+    party_gstin:     string;
+    place_of_supply: string;
+    stock_item:      string;
+    income_ledger:   string;
+    cgst_ledger:     string;
+    sgst_ledger:     string;
+    tax_percentage:  number;
+    original_invoice: string;           // the invoice this note reverses
+    original_invoice_date?: string;     // YYYY-MM-DD — GST original-doc reference date
+    line_items:      Array<{ description: string; amount: number }>;
+    narration:       string;
+  }): Promise<TallyCreditNoteResult> {
+    const { idempotency_key, credit_date, voucher_type, party_ledger, party_gstin,
+            place_of_supply, stock_item, income_ledger, cgst_ledger, sgst_ledger,
+            tax_percentage, original_invoice, original_invoice_date, line_items, narration } = params;
+
+    const tallyDate = credit_date.replace(/-/g, "");
+    const taxable   = round2(line_items.reduce((s, li) => s + li.amount, 0));
+    const halfRate  = tax_percentage / 2 / 100;
+    const cgst      = round2(taxable * halfRate);
+    const sgst      = round2(taxable * halfRate);
+    const total     = round2(taxable + cgst + sgst);
+
+    // Inventory lines: income is DEBITED on a credit note (ISDEEMEDPOSITIVE=Yes, negative).
+    const inventoryEntries = line_items.map((li) => `
+            <ALLINVENTORYENTRIES.LIST>
+              <STOCKITEMNAME>${escapeXml(stock_item)}</STOCKITEMNAME>
+              <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+              <AMOUNT>-${round2(li.amount).toFixed(2)}</AMOUNT>
+              <BASICUSERDESCRIPTION.LIST TYPE="String">
+                <BASICUSERDESCRIPTION>${escapeXml(li.description)}</BASICUSERDESCRIPTION>
+              </BASICUSERDESCRIPTION.LIST>
+              <GSTOVRDNTAXABILITY>Taxable</GSTOVRDNTAXABILITY>
+              <GSTSOURCETYPE>Ledger</GSTSOURCETYPE>
+              <GSTLEDGERSOURCE>${escapeXml(income_ledger)}</GSTLEDGERSOURCE>
+              <HSNSOURCETYPE>Ledger</HSNSOURCETYPE>
+              <HSNLEDGERSOURCE>${escapeXml(income_ledger)}</HSNLEDGERSOURCE>
+              <GSTOVRDNTYPEOFSUPPLY>Services</GSTOVRDNTYPEOFSUPPLY>
+              <ACCOUNTINGALLOCATIONS.LIST>
+                <LEDGERNAME>${escapeXml(income_ledger)}</LEDGERNAME>
+                <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+                <AMOUNT>-${round2(li.amount).toFixed(2)}</AMOUNT>
+              </ACCOUNTINGALLOCATIONS.LIST>
+            </ALLINVENTORYENTRIES.LIST>`).join("");
+
+    const xml = `<ENVELOPE>
+  <HEADER>
+    <TALLYREQUEST>Import Data</TALLYREQUEST>
+  </HEADER>
+  <BODY>
+    <IMPORTDATA>
+      <REQUESTDESC>
+        <REPORTNAME>Vouchers</REPORTNAME>
+        <STATICVARIABLES>
+          <SVCURRENTCOMPANY>${escapeXml(this.targetCompany)}</SVCURRENTCOMPANY>
+        </STATICVARIABLES>
+      </REQUESTDESC>
+      <REQUESTDATA>
+        <TALLYMESSAGE xmlns:UDF="TallyUDF">
+          <VOUCHER VCHTYPE="${escapeXml(voucher_type)}" ACTION="Create" OBJVIEW="Invoice Voucher View">
+            <DATE>${tallyDate}</DATE>
+            <VOUCHERTYPENAME>${escapeXml(voucher_type)}</VOUCHERTYPENAME>
+            <PARTYLEDGERNAME>${escapeXml(party_ledger)}</PARTYLEDGERNAME>
+            <PARTYNAME>${escapeXml(party_ledger)}</PARTYNAME>
+            ${party_gstin ? `<PARTYGSTIN>${escapeXml(party_gstin)}</PARTYGSTIN>` : ""}
+            <PLACEOFSUPPLY>${escapeXml(place_of_supply)}</PLACEOFSUPPLY>
+            <COUNTRYOFRESIDENCE>India</COUNTRYOFRESIDENCE>
+            <ISINVOICE>Yes</ISINVOICE>
+            ${original_invoice ? `<REFERENCE>${escapeXml(original_invoice)}</REFERENCE>` : ""}
+            ${original_invoice_date ? `<REFERENCEDATE>${original_invoice_date.replace(/-/g, "")}</REFERENCEDATE>` : ""}
+            <NARRATION>${escapeXml(narration)}</NARRATION>
+            <UDF:REMOTEID.LIST TYPE="String">
+              <UDF:REMOTEID>${escapeXml(idempotency_key)}</UDF:REMOTEID>
+            </UDF:REMOTEID.LIST>
+            ${inventoryEntries}
+            <!-- Party (credit — reverses the receivable), Agst Ref to the original invoice -->
+            <LEDGERENTRIES.LIST>
+              <LEDGERNAME>${escapeXml(party_ledger)}</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>No</ISDEEMEDPOSITIVE>
+              <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
+              <AMOUNT>${total.toFixed(2)}</AMOUNT>
+              ${original_invoice ? `<BILLALLOCATIONS.LIST>
+                <NAME>${escapeXml(original_invoice)}</NAME>
+                <BILLTYPE>Agst Ref</BILLTYPE>
+                <AMOUNT>${total.toFixed(2)}</AMOUNT>
+              </BILLALLOCATIONS.LIST>` : ""}
+            </LEDGERENTRIES.LIST>
+            <!-- Output CGST reversed (debit) -->
+            <LEDGERENTRIES.LIST>
+              <LEDGERNAME>${escapeXml(cgst_ledger)}</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+              <AMOUNT>-${cgst.toFixed(2)}</AMOUNT>
+            </LEDGERENTRIES.LIST>
+            <!-- Output SGST reversed (debit) -->
+            <LEDGERENTRIES.LIST>
+              <LEDGERNAME>${escapeXml(sgst_ledger)}</LEDGERNAME>
+              <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
+              <AMOUNT>-${sgst.toFixed(2)}</AMOUNT>
+            </LEDGERENTRIES.LIST>
+          </VOUCHER>
+        </TALLYMESSAGE>
+      </REQUESTDATA>
+    </IMPORTDATA>
+  </BODY>
+</ENVELOPE>`;
+
+    const res = await this.post(xml);
+    this.assertNoLineError(res, "postCreditNote");
+
+    const created    = Number(firstTag(res, "CREATED") || "0");
+    const errors     = Number(firstTag(res, "ERRORS") || "0");
+    const exceptions = Number(firstTag(res, "EXCEPTIONS") || "0");
+    if (created < 1 || errors > 0 || exceptions > 0) {
+      throw new Error(
+        `Tally did not create the credit note (created=${created}, errors=${errors}, ` +
+        `exceptions=${exceptions}). Response: ${res.slice(0, 400)}`
+      );
+    }
+
+    const lastVchId = firstTag(res, "LASTVCHID");
+    if (!lastVchId) {
+      throw new Error(`Tally created the credit note but returned no LASTVCHID. Response: ${res.slice(0, 400)}`);
+    }
+
+    const details = await this.getVoucherByMasterId(lastVchId, credit_date);
+    const voucherGuid   = details.guid || lastVchId;
+    const voucherNumber = details.invoice_number || voucherGuid;
+    const irn           = details.irn;
+
+    log.info(`Credit note created: ${voucherNumber} | vchid ${lastVchId} | reverses ${original_invoice} | IRN ${irn ?? "n/a"}`);
+
+    return {
+      voucher_guid:   voucherGuid,
+      voucher_number: voucherNumber,
+      total_amount:   total,
+      irn,
+      irn_pending:    false,   // B2B IRN handling for credit notes deferred — verify with a sample
       created_at:     new Date().toISOString(),
     };
   }

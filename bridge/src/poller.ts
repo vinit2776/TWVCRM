@@ -155,6 +155,9 @@ export class Poller {
         case "receipt_voucher":
           await this.handleReceiptVoucher(job);
           break;
+        case "credit_note":
+          await this.handleCreditNote(job);
+          break;
         default:
           log.warn(`Unknown job_type: ${job.job_type} — skipping`);
           await this.crm.ack({
@@ -360,5 +363,82 @@ export class Poller {
     healthState.lastSyncAt = new Date().toISOString();
     healthState.lastError  = null;
     log.info(`Job ${job.id} completed — receipt ${result.voucher_number} for ${result.total_amount.toFixed(2)}`);
+  }
+
+  /**
+   * CRM-first cancel: post a Credit Note in Tally that reverses a sales invoice.
+   * The CRM /pending endpoint injects the ledgers, party, stock item and the
+   * original invoice number. On success we ack with voucher_kind='credit_note';
+   * the CRM then voids the statement (Tally reversed first → books in sync).
+   */
+  private async handleCreditNote(job: PendingJob): Promise<void> {
+    const p = job.payload as Record<string, unknown>;
+    const str = (k: string, d = "") => String(p[k] ?? d);
+
+    const partyLedger = str("party_ledger");
+    if (!(await this.tally.ledgerExists(partyLedger))) {
+      const msg = `Customer ledger "${partyLedger}" does not exist in Tally. Create it, then Retry.`;
+      log.error(`Job ${job.id}: ${msg}`);
+      await this.crm.ack({ success: false, job_id: job.id, error: msg, retryable: false });
+      return;
+    }
+
+    const existing = await this.tally.findExistingVoucher(job.idempotency_key);
+    if (existing) {
+      log.info(`Job ${job.id}: credit note already exists in Tally (${existing.invoice_number}) — acking with existing data`);
+      await this.crm.ack({
+        success:              true,
+        job_id:               job.id,
+        voucher_kind:         "credit_note",
+        tally_voucher_guid:   existing.voucher_guid,
+        tally_invoice_number: existing.invoice_number,
+        tally_total_amount:   Number(p["taxable_amount"] ?? 0),
+        irn_pending:          false,
+        voucher_created_at:   new Date().toISOString(),
+      });
+      return;
+    }
+
+    const lineItems = (p["line_items"] as Array<{ label?: string; description?: string; subtotal?: number; amount?: number }> | undefined) ?? [];
+    const lines = lineItems
+      .map((li) => ({ description: String(li.label ?? li.description ?? "Service"), amount: Number(li.subtotal ?? li.amount ?? 0) }))
+      .filter((li) => li.amount > 0);
+    if (lines.length === 0) {
+      lines.push({ description: "Coworking Services", amount: Number(p["taxable_amount"] ?? 0) });
+    }
+
+    const result = await this.tally.postCreditNote({
+      idempotency_key:  job.idempotency_key,
+      credit_date:      new Date().toISOString().split("T")[0],
+      voucher_type:     str("voucher_series", "CREDIT NOTE-REG"),
+      party_ledger:     partyLedger,
+      party_gstin:      str("buyer_gstin"),
+      place_of_supply:  str("place_of_supply", "Tamil Nadu"),
+      stock_item:       str("stock_item", "Rent-The WorkVilla"),
+      income_ledger:    str("ledger_sales", "Rent The Workvilla 18%"),
+      cgst_ledger:      str("ledger_cgst", "CGST Output 9%"),
+      sgst_ledger:      str("ledger_sgst", "SGST Output 9%"),
+      tax_percentage:   Number(p["tax_percentage"] ?? 18),
+      original_invoice: str("original_invoice_number"),
+      original_invoice_date: str("original_invoice_date") || undefined,
+      line_items:       lines,
+      narration:        str("narration", "TWV CRM Credit Note"),
+    });
+
+    await this.crm.ack({
+      success:              true,
+      job_id:               job.id,
+      voucher_kind:         "credit_note",
+      tally_voucher_guid:   result.voucher_guid,
+      tally_invoice_number: result.voucher_number,   // credit note number
+      tally_irn:            result.irn ?? undefined,
+      tally_total_amount:   result.total_amount,
+      irn_pending:          result.irn_pending,
+      voucher_created_at:   result.created_at,
+    });
+
+    healthState.lastSyncAt = new Date().toISOString();
+    healthState.lastError  = null;
+    log.info(`Job ${job.id} completed — credit note ${result.voucher_number} reverses ${str("original_invoice_number")}`);
   }
 }
