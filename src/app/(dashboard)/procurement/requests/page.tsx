@@ -1,8 +1,6 @@
 "use client";
 
-export const dynamic = "force-dynamic";
-
-import { useState, useEffect, useCallback } from "react";
+import { Suspense, useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -22,7 +20,8 @@ import {
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { PurchaseRequest } from "@/types";
 
-export default function PurchaseRequestsPage() {
+// Inner component — uses useSearchParams, must be inside <Suspense>
+function PurchaseRequestsContent() {
   const router = useRouter();
   const urlParams = useSearchParams();
   const { user } = useCurrentUser();
@@ -256,5 +255,14 @@ export default function PurchaseRequestsPage() {
         </div>
       )}
     </div>
+  );
+}
+
+// Suspense boundary required by Next.js because PurchaseRequestsContent uses useSearchParams()
+export default function PurchaseRequestsPage() {
+  return (
+    <Suspense fallback={<TableSkeleton rows={8} />}>
+      <PurchaseRequestsContent />
+    </Suspense>
   );
 }
