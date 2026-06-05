@@ -3,8 +3,8 @@
 import { useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
-import { ClipboardList, Plus, ChevronLeft, ChevronRight, Search, X } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { ClipboardList, Plus, ChevronLeft, ChevronRight, Search, X, PieChart } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -22,6 +22,7 @@ import type { PurchaseRequest } from "@/types";
 
 export default function PurchaseRequestsPage() {
   const router = useRouter();
+  const urlParams = useSearchParams();
   const { user } = useCurrentUser();
   const userRole = user?.role ?? "";
   const canSeePrices = ["admin", "manager"].includes(userRole);
@@ -29,10 +30,15 @@ export default function PurchaseRequestsPage() {
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
-  const [statusFilter, setStatusFilter] = useState("");
-  const [deptFilter, setDeptFilter] = useState("");
+  const [statusFilter, setStatusFilter] = useState(() => urlParams?.get("status") ?? "");
+  const [deptFilter, setDeptFilter] = useState(() => urlParams?.get("department") ?? "");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
+  // Hidden filters set from URL (budget drill-through)
+  const [fromDate] = useState(() => urlParams?.get("from_date") ?? "");
+  const [toDate] = useState(() => urlParams?.get("to_date") ?? "");
+  const [expenditureType] = useState(() => urlParams?.get("expenditure_type") ?? "");
+  const isBudgetView = urlParams?.get("budget_view") === "1";
 
   // Debounce search: wait 600 ms and require ≥3 chars before querying
   useEffect(() => {
@@ -53,6 +59,9 @@ export default function PurchaseRequestsPage() {
     if (statusFilter) params.set("status", statusFilter);
     if (deptFilter) params.set("department", deptFilter);
     if (search) params.set("search", search);
+    if (fromDate) params.set("from_date", fromDate);
+    if (toDate) params.set("to_date", toDate);
+    if (expenditureType) params.set("expenditure_type", expenditureType);
     const res = await fetch(`/api/procurement/requests?${params}`);
     if (res.ok) {
       const json = await res.json();
@@ -60,12 +69,32 @@ export default function PurchaseRequestsPage() {
       setPagination(json.pagination);
     }
     setLoading(false);
-  }, [page, statusFilter, deptFilter, search]);
+  }, [page, statusFilter, deptFilter, search, fromDate, toDate, expenditureType]);
 
   useEffect(() => { fetchRequests(); }, [fetchRequests]);
 
+  // Format month label from from_date for the budget banner
+  const budgetMonthLabel = fromDate
+    ? new Date(fromDate + "T00:00:00").toLocaleString("en-IN", { month: "long", year: "numeric" })
+    : "";
+
   return (
     <div className="space-y-4">
+      {isBudgetView && (
+        <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50 px-4 py-2.5 text-sm text-blue-800">
+          <PieChart className="h-4 w-4 shrink-0 text-blue-600" />
+          <span>
+            Budget drill-through — showing active {deptFilter ? PROCUREMENT_DEPARTMENT_LABELS[deptFilter] : ""} MRs
+            {budgetMonthLabel ? ` for ${budgetMonthLabel}` : ""}. These are the requests counted in the budget spend.
+          </span>
+          <button
+            className="ml-auto text-blue-600 hover:text-blue-900 underline text-xs shrink-0"
+            onClick={() => router.push("/procurement/requests")}
+          >
+            Clear filters
+          </button>
+        </div>
+      )}
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Material Requests</h1>
@@ -116,6 +145,7 @@ export default function PurchaseRequestsPage() {
             </SelectTrigger>
             <SelectContent position="popper">
               <SelectItem value="all">All Statuses</SelectItem>
+              <SelectItem value="active">Active (excl. cancelled)</SelectItem>
               {PR_STATUSES.map((s) => (
                 <SelectItem key={s} value={s}>{PR_STATUS_LABELS[s]}</SelectItem>
               ))}
