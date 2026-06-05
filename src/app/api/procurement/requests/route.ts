@@ -63,12 +63,19 @@ export async function GET(request: NextRequest) {
 
   const fromDate = searchParams.get("from_date");
   const toDate = searchParams.get("to_date");
+  const expenditureType = searchParams.get("expenditure_type");
 
-  if (status) query = query.eq("status", status);
+  // "active" is a meta-status: all non-cancelled, non-rejected — matches what the budget bar counts
+  if (status === "active") {
+    query = query.not("status", "in", '("cancelled","rejected")');
+  } else if (status) {
+    query = query.eq("status", status);
+  }
   if (department) query = query.eq("department", department);
   if (locationId) query = query.eq("location_id", locationId);
   if (fromDate) query = query.gte("created_at", fromDate);
   if (toDate) query = query.lte("created_at", toDate);
+  if (expenditureType) query = query.eq("expenditure_type", expenditureType);
 
   // Search: require ≥3 chars to prevent full-table scans on short terms
   if (search.length >= 3) {
