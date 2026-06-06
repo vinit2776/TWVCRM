@@ -250,11 +250,15 @@ export class Poller {
       return;
     }
 
-    // ── Post the voucher (SDIPL-REG item-invoice format) ───────────────────────
+    // ── Post the voucher (SDIPL-REG for GST-registered, SDIPL-UNREG for others) ──
+    // Use the UNREG voucher type when the customer has no GSTIN — it uses a
+    // different numbering series and omits e-invoice fields.
+    const salesHasGstin  = !!str("buyer_gstin");
+    const defaultSeries  = salesHasGstin ? "SDIPL-REG" : "SDIPL-UNREG";
     const result = await this.tally.postSalesVoucher({
       idempotency_key: job.idempotency_key,
       invoice_date:    new Date().toISOString().split("T")[0],
-      voucher_type:    str("voucher_series", "SDIPL-REG"),
+      voucher_type:    str("voucher_series", defaultSeries),
       party_ledger:    str("party_ledger"),
       party_gstin:     str("buyer_gstin"),
       party_address:   str("buyer_address"),
@@ -430,7 +434,7 @@ export class Poller {
     const result = await this.tally.postCreditNote({
       idempotency_key:  job.idempotency_key,
       credit_date:      new Date().toISOString().split("T")[0],
-      voucher_type:     str("voucher_series", "CREDIT NOTE-REG"),
+      voucher_type:     str("voucher_series", str("buyer_gstin") ? "CREDIT NOTE-REG" : "CREDIT NOTE-UNREG"),
       party_ledger:     partyLedger,
       party_gstin:      str("buyer_gstin"),
       place_of_supply:  str("place_of_supply", "Tamil Nadu"),
