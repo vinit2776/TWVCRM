@@ -14,7 +14,7 @@ import { Config } from "./config";
 import { CrmClient, PendingJob } from "./crm-client";
 import { TallyClient } from "./tally-client";
 import { log } from "./logger";
-import { healthState } from "./health-state";
+import { healthState, incrementCompletedToday } from "./health-state";
 
 export class Poller {
   private readonly config: Config;
@@ -295,6 +295,7 @@ export class Poller {
 
     healthState.lastSyncAt = new Date().toISOString();
     healthState.lastError  = null;
+    incrementCompletedToday();
     log.info(
       `Job ${job.id} completed — invoice ${result.invoice_number} issued ` +
       `(${hasGstin ? (irnPending ? "B2B, awaiting IRN" : "B2B, IRN present") : "B2C, no IRN needed"})`
@@ -386,6 +387,7 @@ export class Poller {
 
     healthState.lastSyncAt = new Date().toISOString();
     healthState.lastError  = null;
+    incrementCompletedToday();
     log.info(`Job ${job.id} completed — receipt ${result.voucher_number} for ${result.total_amount.toFixed(2)}`);
   }
 
@@ -463,6 +465,7 @@ export class Poller {
 
     healthState.lastSyncAt = new Date().toISOString();
     healthState.lastError  = null;
+    incrementCompletedToday();
     log.info(`Job ${job.id} completed — credit note ${result.voucher_number} reverses ${str("original_invoice_number")}`);
   }
 }
