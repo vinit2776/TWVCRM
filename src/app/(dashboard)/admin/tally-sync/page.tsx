@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import {
   Table, TableBody, TableCell, TableHead, TableHeader, TableRow,
@@ -91,8 +92,9 @@ const LEDGER_FIELDS: Array<{ key: string; label: string; placeholder: string }> 
   { key: "sgst",           label: "Output SGST ledger",  placeholder: "e.g. Output SGST" },
   { key: "igst",           label: "Output IGST ledger",  placeholder: "e.g. Output IGST" },
   { key: "round_off",      label: "Round-off ledger",    placeholder: "e.g. Round Off" },
-  { key: "voucher_series", label: "Sales voucher series",placeholder: "e.g. Sales" },
-  { key: "party_suffix",   label: "Party name suffix",   placeholder: "(optional)" },
+  { key: "voucher_series", label: "Sales voucher series", placeholder: "e.g. Sales" },
+  { key: "party_suffix",   label: "Party name suffix",    placeholder: "(optional)" },
+  { key: "stock_item",     label: "Stock item name",      placeholder: "e.g. Membership Fees" },
 ];
 
 // Receipt reverse-sync settings (CRM payment → Tally Receipt voucher).
@@ -434,6 +436,23 @@ export default function TallySyncPage() {
               </div>
             ))}
           </div>
+          {/* Per-location income ledger map */}
+          <div className="space-y-1 border-t pt-4">
+            <Label className="text-xs">Per-location income ledger (JSON)</Label>
+            <p className="text-[11px] text-muted-foreground">
+              Map each CRM location name to its Tally income ledger. The fallback for
+              unmapped locations is the <em>Rent income ledger</em> above.
+              Format: <code className="bg-muted px-1 rounded text-[10px]">{`{"Kamala Arcade": "Membership Fees-Kamala Arcade", ...}`}</code>
+            </p>
+            <Textarea
+              rows={8}
+              className="font-mono text-xs"
+              value={ledgerDraft["income_by_location"] ?? ""}
+              placeholder={`{\n  "Kamala Arcade": "Membership Fees-Kamala Arcade"\n}`}
+              onChange={(e) => setLedgerDraft((d) => ({ ...d, income_by_location: e.target.value }))}
+            />
+          </div>
+
           <Button size="sm" disabled={busy}
             onClick={() => void patch({ action: "update_ledgers", ledgers: ledgerDraft }, "Ledger mapping saved")}>
             Save ledger mapping
