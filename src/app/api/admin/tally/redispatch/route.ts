@@ -76,15 +76,15 @@ export async function POST(request: NextRequest) {
     tally_invoice_number: string | null;
     tally_irn: string | null;
     tally_signed_qr_code: string | null;
-    tally_total_amount: number | null;
     gst_invoice_id: string | null;
+    // NOTE: tally_total_amount is NOT a column on tally_sync_jobs — use stmt.total_amount
   };
 
   // ── Path 1: jobs linked by billing_statement_id ──────────────────────────
   let jobs: JobRow[] = [];
   const { data: jobsByStmt } = await supabase
     .from("tally_sync_jobs")
-    .select("id, status, tally_invoice_number, tally_irn, tally_signed_qr_code, tally_total_amount, gst_invoice_id")
+    .select("id, status, tally_invoice_number, tally_irn, tally_signed_qr_code, gst_invoice_id")
     .eq("billing_statement_id", billing_statement_id)
     .order("created_at", { ascending: false });
   if (jobsByStmt?.length) jobs = jobsByStmt as JobRow[];
@@ -93,7 +93,7 @@ export async function POST(request: NextRequest) {
   if (!jobs.length) {
     const { data: jobsByNum } = await supabase
       .from("tally_sync_jobs")
-      .select("id, status, tally_invoice_number, tally_irn, tally_signed_qr_code, tally_total_amount, gst_invoice_id")
+      .select("id, status, tally_invoice_number, tally_irn, tally_signed_qr_code, gst_invoice_id")
       .eq("tally_invoice_number", stmt.tally_invoice_number)
       .order("created_at", { ascending: false });
     if (jobsByNum?.length) jobs = jobsByNum as JobRow[];
@@ -136,9 +136,8 @@ export async function POST(request: NextRequest) {
     .update({ tally_delivered_at: null })
     .eq("id", billing_statement_id);
 
-  // ── Resolve total_amount ──────────────────────────────────────────────────
-  let totalAmount = Number(jobs[0]?.tally_total_amount ?? 0);
-  if (totalAmount === 0) totalAmount = Number(stmt.total_amount ?? 0);
+  // ── Resolve total_amount — always from billing_statement ─────────────────
+  const totalAmount = Number(stmt.total_amount ?? 0);
 
   // ── Re-dispatch ───────────────────────────────────────────────────────────
   const result = await dispatchTallyInvoice(supabase, billing_statement_id, {
