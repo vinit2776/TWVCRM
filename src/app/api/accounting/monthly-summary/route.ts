@@ -77,6 +77,7 @@ export async function GET(request: NextRequest) {
     { data: priorPeriods },
     { data: priorAdHoc },
     { data: priorBillingStatements },
+    { data: priorVoidedStatements },
   ] = await Promise.all([
     // ── Current-period queries ──
     // 3. Facility usage records
@@ -194,6 +195,18 @@ export async function GET(request: NextRequest) {
           .gte("period_start", "2026-05-01")
           .lt("period_start", periodStart)
       : Promise.resolve({ data: [] }),
+    // 13. Prior voided statements (go-live onwards, before this period).
+    // Voided statements = explicitly cancelled debts. Fallback subtracts these
+    // so months that were billed-then-voided don't inflate carry-forward.
+    hasContracts
+      ? adminSupabase
+          .from("billing_statements")
+          .select("contract_id, total_amount")
+          .in("contract_id", contractIds)
+          .eq("status", "voided")
+          .gte("period_start", "2026-05-01")
+          .lt("period_start", periodStart)
+      : Promise.resolve({ data: [] }),
   ]);
 
   // ── Fetch billing_payments for prior statements (needs their IDs) ─────
@@ -271,6 +284,13 @@ export async function GET(request: NextRequest) {
       priorAdHocByContract[c.contract_id] = (priorAdHocByContract[c.contract_id] || 0) + Number(c.total);
     });
 
+    // Sum voided statement totals per contract — subtracted in fallback to avoid
+    // charging for months that were explicitly billed-then-cancelled.
+    const priorVoidedByContract: Record<string, number> = {};
+    (priorVoidedStatements || []).forEach((s) => {
+      priorVoidedByContract[s.contract_id] = (priorVoidedByContract[s.contract_id] || 0) + Number(s.total_amount);
+    });
+
     activeContracts.forEach((contract) => {
       const stmts = priorStmtsByContract[contract.id];
 
@@ -297,8 +317,11 @@ export async function GET(request: NextRequest) {
           cursor.setMonth(cursor.getMonth() + 1);
         }
         const totalRecurringBefore = monthsBeforeThisPeriod * Number(contract.total_amount);
+        // Subtract voided statement totals: those months were billed and then explicitly
+        // cancelled, so they should not appear as carry-forward.
+        const voidedTotal = priorVoidedByContract[contract.id] || 0;
         const totalChargesBefore =
-          totalRecurringBefore +
+          Math.max(0, totalRecurringBefore - voidedTotal) +
           (priorUsageByContract[contract.id] || 0) +
           (priorAdHocByContract[contract.id] || 0);
         const totalPaidBefore = priorPaymentsByContract[contract.id] || 0;
