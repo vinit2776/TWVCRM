@@ -51,7 +51,7 @@ const AckSuccessSchema = z.object({
   tally_ack_no:         z.string().optional(),
   tally_ack_date:       z.string().optional(),
   tally_signed_qr_code: z.string().optional(),
-  tally_total_amount:   z.number().positive(),
+  tally_total_amount:   z.number().min(0),   // 0 = IRN-only ack (total already stored from initial ack)
   irn_pending:          z.boolean().default(false),  // voucher created, IRN not yet assigned
   voucher_created_at:   z.string().optional(),
 });
@@ -221,19 +221,23 @@ export async function POST(request: NextRequest) {
 
     // 2. Mirror onto billing_statement
     if (job.billing_statement_id) {
+      // tally_total_amount=0 means this is an IRN-only ack (second ack after async IRN).
+      // The total was already written during the initial voucher-creation ack — don't overwrite with 0.
+      const statementUpdate: Record<string, unknown> = {
+        tally_sync_status:    syncStatus,
+        tally_invoice_number: data.tally_invoice_number,
+        tally_voucher_guid:   data.tally_voucher_guid,
+        tally_synced_at:      data.irn_pending ? null : now,
+        lifecycle_stage:      data.irn_pending ? "awaiting_irn" : "issued",
+        tally_last_error:     null,
+      };
+      // OV3: mirror Tally's authoritative total only when we actually have it.
+      if (data.tally_total_amount > 0) {
+        statementUpdate.total_amount = data.tally_total_amount;
+      }
       await supabase
         .from("billing_statements")
-        .update({
-          tally_sync_status:    syncStatus,
-          tally_invoice_number: data.tally_invoice_number,
-          tally_voucher_guid:   data.tally_voucher_guid,
-          tally_synced_at:      data.irn_pending ? null : now,
-          // OV3: mirror Tally's authoritative total immediately, even if delivery
-          // (dispatchTallyInvoice) is deferred or fails — books-of-record stays correct.
-          total_amount:         data.tally_total_amount,
-          lifecycle_stage:      data.irn_pending ? "awaiting_irn" : "issued",
-          tally_last_error:     null,
-        })
+        .update(statementUpdate)
         .eq("id", job.billing_statement_id);
     }
 
@@ -272,9 +276,19 @@ export async function POST(request: NextRequest) {
     // yet — delivery is deferred until the bridge acks again with the IRN.
     // dispatchTallyInvoice is delivered-once gated, so a duplicate ack is safe.
     if (!data.irn_pending && job.billing_statement_id) {
+      // For IRN-only acks (tally_total_amount=0), look up the stored total from the statement.
+      let totalAmount = data.tally_total_amount;
+      if (totalAmount === 0) {
+        const { data: stmt } = await supabase
+          .from("billing_statements")
+          .select("total_amount")
+          .eq("id", job.billing_statement_id)
+          .single();
+        totalAmount = stmt?.total_amount ?? 0;
+      }
       void dispatchTallyInvoice(supabase, job.billing_statement_id, {
         invoiceNumber: data.tally_invoice_number,
-        totalAmount:   data.tally_total_amount,
+        totalAmount,
         signedQrCode:  data.tally_signed_qr_code ?? null,
         irn:           data.tally_irn ?? null,
       });
