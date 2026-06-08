@@ -41,6 +41,8 @@ const SETTING_KEYS = [
   "tally_receipt_transfer_mode",
   "tally_ledger_tds_receivable",
   "tally_auto_create_party_ledger",
+  "tally_stock_item",
+  "tally_ledger_income_by_location",
 ] as const;
 
 const OFFLINE_THRESHOLD_SECONDS = 90;
@@ -105,7 +107,9 @@ export async function GET(_request: NextRequest) {
       igst:         s["tally_ledger_igst_output"]  ?? "",
       round_off:    s["tally_ledger_round_off"]    ?? "",
       party_suffix: s["tally_party_ledger_suffix"] ?? "",
-      voucher_series: s["tally_voucher_series"]    ?? "",
+      voucher_series:      s["tally_voucher_series"]              ?? "",
+      stock_item:          s["tally_stock_item"]                  ?? "",
+      income_by_location:  s["tally_ledger_income_by_location"]   ?? "",
     },
     receipt: {
       account:          s["tally_ledger_receipt_account"]   ?? "",
@@ -151,8 +155,10 @@ const LEDGER_KEY_MAP: Record<string, string> = {
   sgst:         "tally_ledger_sgst_output",
   igst:         "tally_ledger_igst_output",
   round_off:    "tally_ledger_round_off",
-  party_suffix: "tally_party_ledger_suffix",
-  voucher_series: "tally_voucher_series",
+  party_suffix:       "tally_party_ledger_suffix",
+  voucher_series:     "tally_voucher_series",
+  stock_item:         "tally_stock_item",
+  income_by_location: "tally_ledger_income_by_location",
 };
 
 const RECEIPT_KEY_MAP: Record<string, string> = {

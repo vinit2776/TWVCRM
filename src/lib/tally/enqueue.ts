@@ -147,17 +147,20 @@ export async function routeGstGenerationToTally(statementId: string): Promise<bo
  * 194I_b, 194J_a, 194J_b). Update values to match your Tally chart of accounts
  * before go-live — the bridge uses tds_ledger from the job payload directly.
  */
+// All TDS deducted by customers flows into a single ledger in this company's
+// chart of accounts (confirmed from Master.xml / Tally ledger report).
+// All section codes point to the same ledger — do NOT split by section here.
+const TDS_RECEIVABLE_LEDGER = "TDS Paid (Deducted by the Party)";
+
 const TDS_LEDGER_MAP: Record<string, string> = {
-  // Simplified codes used in the client-payment dialogs
-  "194C":   "TDS Receivable 194C",
-  "194H":   "TDS Receivable 194H",
-  "194I":   "TDS Receivable 194I",
-  "194J":   "TDS Receivable 194J",
-  // Sub-codes kept for any legacy records created before the simplification
-  "194I_a": "TDS Receivable 194I",
-  "194I_b": "TDS Receivable 194I",
-  "194J_a": "TDS Receivable 194J",
-  "194J_b": "TDS Receivable 194J",
+  "194C":   TDS_RECEIVABLE_LEDGER,
+  "194H":   TDS_RECEIVABLE_LEDGER,
+  "194I":   TDS_RECEIVABLE_LEDGER,
+  "194J":   TDS_RECEIVABLE_LEDGER,
+  "194I_a": TDS_RECEIVABLE_LEDGER,
+  "194I_b": TDS_RECEIVABLE_LEDGER,
+  "194J_a": TDS_RECEIVABLE_LEDGER,
+  "194J_b": TDS_RECEIVABLE_LEDGER,
 };
 
 function deriveTdsLedger(sectionCode: string | null | undefined): string | null {

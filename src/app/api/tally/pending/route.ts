@@ -62,6 +62,7 @@ export async function GET(request: NextRequest) {
       "tally_receipt_transaction_type", "tally_receipt_transfer_mode",
       "tally_credit_note_series", "tally_ledger_tds_receivable",
       "tally_auto_create_party_ledger",
+      "tally_ledger_income_by_location",   // JSON: { "Kamala Arcade": "Membership Fees-Kamala Arcade", ... }
     ]);
 
   const settingsMap = Object.fromEntries(
@@ -156,8 +157,17 @@ export async function GET(request: NextRequest) {
   };
   const voucherSeries = settingsMap["tally_voucher_series"] ?? "SDIPL-REG";
   const partySuffix   = settingsMap["tally_party_ledger_suffix"] ?? "";
-  const stockItem     = settingsMap["tally_stock_item"] ?? "Rent-The WorkVilla";
+  const stockItem     = settingsMap["tally_stock_item"] ?? "Membership Fees";
   const placeOfSupply = settingsMap["tally_place_of_supply"] ?? "Tamil Nadu";
+
+  // Location-specific income ledger map (JSON in app_settings).
+  // Falls back to the global tally_ledger_rent_income if a location has no entry.
+  // Format: { "Kamala Arcade": "Membership Fees-Kamala Arcade", "Whites Road": "..." }
+  let incomeByLocation: Record<string, string> = {};
+  try {
+    const raw = settingsMap["tally_ledger_income_by_location"] ?? "";
+    if (raw.trim().startsWith("{")) incomeByLocation = JSON.parse(raw);
+  } catch { /* malformed JSON — silently ignore, fall back to global */ }
 
   for (const job of jobs) {
     if (job.job_type !== "sales_voucher" || !job.billing_statement_id) continue;
@@ -169,6 +179,7 @@ export async function GET(request: NextRequest) {
         subtotal, line_items, statement_number,
         contract:contracts!billing_statements_contract_id_fkey(
           contract_number,
+          location:locations!contracts_location_id_fkey(name),
           lead:leads!contracts_lead_id_fkey(company, first_name, last_name, gst_number, state, street, city, zip_code)
         )
       `)
@@ -179,6 +190,8 @@ export async function GET(request: NextRequest) {
     const contractNumber = (stmt as any)?.contract?.contract_number as string | undefined;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const statementNumber = (stmt as any)?.statement_number as string | undefined;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const locationName = ((stmt as any)?.contract?.location?.name as string | undefined)?.trim() ?? "";
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const lead = (stmt as any)?.contract?.lead ?? {};
     const partyName = (lead.company as string | undefined)?.trim()
@@ -214,8 +227,15 @@ export async function GET(request: NextRequest) {
       buyer_state:   (lead.state as string | null) ?? "",
       buyer_address: [lead.street, lead.city, lead.zip_code].filter(Boolean).join(", "),
       line_items:    invoiceLines,                       // flattened for the bridge
-      ledger_sales:    ledgers.rent_income || "Rent The Workvilla 18%",
-      ledger_usage:    ledgers.usage_income || ledgers.rent_income || "Rent The Workvilla 18%",
+      // Location-aware income ledger: check the per-location map first, then the
+      // global setting, then a hardcoded fallback.
+      ledger_sales:    (locationName && incomeByLocation[locationName])
+                       || ledgers.rent_income
+                       || "Membership Fees",
+      ledger_usage:    (locationName && incomeByLocation[locationName])
+                       || ledgers.usage_income
+                       || ledgers.rent_income
+                       || "Membership Fees",
       ledger_cgst:     ledgers.cgst || "CGST Output 9%",
       ledger_sgst:     ledgers.sgst || "SGST Output 9%",
       ledger_round_off: ledgers.round_off || "Round Off",
@@ -299,7 +319,7 @@ export async function GET(request: NextRequest) {
     job.payload = {
       ...payload,
       party_ledger:    partySuffix ? `${partyName}${partySuffix}` : partyName,
-      ledger_sales:    ledgers.rent_income || "Rent The Workvilla 18%",
+      ledger_sales:    ledgers.rent_income || "Membership Fees",
       ledger_cgst:     ledgers.cgst || "CGST Output 9%",
       ledger_sgst:     ledgers.sgst || "SGST Output 9%",
       stock_item:      stockItem,

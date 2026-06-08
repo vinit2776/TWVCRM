@@ -11,4 +11,17 @@ export const healthState = {
   lastSyncAt:         null as string | null,
   lastError:          null as string | null,
   startedAt:          new Date().toISOString(),
+  // Rolling today counter — incremented on every completed job, reset at midnight.
+  completedToday:     0,
+  completedTodayDate: new Date().toDateString(), // "Mon Jun 09 2025"
 };
+
+/** Increment the today counter, resetting it first if the date has rolled over. */
+export function incrementCompletedToday(): void {
+  const today = new Date().toDateString();
+  if (healthState.completedTodayDate !== today) {
+    healthState.completedToday     = 0;
+    healthState.completedTodayDate = today;
+  }
+  healthState.completedToday++;
+}

@@ -272,14 +272,26 @@ export class TallyClient {
 
   /**
    * Check whether a voucher with this idempotency key already exists in Tally.
-   * Returns the existing invoice number + IRN if found, null if not found.
-   * Part of the check-before-create flow (D2 + D10.3).
+   * Returns the existing voucher details if found, null if not found.
    *
-   * ── D5 TODO ────────────────────────────────────────────────────────────────
-   * Tally stores the idempotency key in a UDF field (REMOTEID / MASTERID).
-   * The exact TDL query depends on how Tally exposes custom fields.
-   * Verify the field name from D5 sample once captured.
-   * ───────────────────────────────────────────────────────────────────────────
+   * How Tally exposes the idempotency key (confirmed from Day Book export sample):
+   *
+   *   1. As a VOUCHER opening-tag ATTRIBUTE:
+   *        <VOUCHER REMOTEID="our-key" VCHKEY="..." ...>
+   *      Tally maps our UDF:REMOTEID value onto its own REMOTEID attribute in
+   *      Day Book exports. This is the primary match path.
+   *
+   *   2. As a child element (fallback — Tally version / config dependent):
+   *        <REMOTEID>our-key</REMOTEID>
+   *        <UDF:REMOTEID>our-key</UDF:REMOTEID>
+   *
+   * Our idempotency keys have the format "sales_voucher:<uuid>" or
+   * "credit_note:<uuid>" — structurally different from Tally's own internal
+   * GUIDs ("xxxxxxxx-xxxx-11d8-…"), so false-positive matches are impossible.
+   *
+   * Searches the full current financial year (April → March).
+   * Fails open: if the Day Book query throws, returns null so the bridge
+   * creates rather than silently drops the job.
    */
   async findExistingVoucher(idempotencyKey: string): Promise<{
     voucher_guid:   string;
@@ -287,12 +299,46 @@ export class TallyClient {
     irn:            string | null;
   } | null> {
     log.debug(`check-before-create: searching for idempotency key ${idempotencyKey}`);
-    // ── D5 TODO ───────────────────────────────────────────────────────────────
-    // Build the TDL query using D5 sample. For now returns null (no match)
-    // so the bridge always creates — safe until real check is wired.
-    // ─────────────────────────────────────────────────────────────────────────
-    void idempotencyKey;
-    return null;
+
+    try {
+      const today        = new Date();
+      const isAfterApril = today.getMonth() >= 3;         // getMonth() is 0-indexed; April = 3
+      const fyStartYear  = isAfterApril ? today.getFullYear() : today.getFullYear() - 1;
+      const fromDate     = `${fyStartYear}-04-01`;
+      const toDate       = `${fyStartYear + 1}-03-31`;
+
+      const xml = await this.exportDayBook(fromDate, toDate);
+      const key = idempotencyKey.trim();
+
+      for (const m of xml.matchAll(/<VOUCHER\b[\s\S]*?<\/VOUCHER>/gi)) {
+        const block = m[0];
+
+        // Path 1 — REMOTEID as an attribute on the opening <VOUCHER ...> tag
+        const openTag    = block.match(/<VOUCHER\b[^>]*>/i)?.[0] ?? "";
+        const attrMatch  = openTag.match(/\bREMOTEID="([^"]*)"/i);
+        const attrValue  = attrMatch?.[1]?.trim() ?? "";
+
+        // Path 2 — REMOTEID as a child element (namespace stripped or kept)
+        const childValue = (firstTag(block, "REMOTEID") || firstTag(block, "UDF:REMOTEID")).trim();
+
+        if (attrValue !== key && childValue !== key) continue;
+
+        const result = {
+          voucher_guid:   firstTag(block, "GUID"),
+          invoice_number: firstTag(block, "VOUCHERNUMBER"),
+          irn:            firstTag(block, "IRN") || null,
+        };
+        log.info(`check-before-create HIT: invoice=${result.invoice_number} guid=${result.voucher_guid}`);
+        return result;
+      }
+
+      log.debug(`check-before-create: not found in FY Day Book (${fromDate} → ${toDate})`);
+      return null;
+    } catch (err) {
+      // Fail open — Day Book query failure must never prevent invoice creation
+      log.warn(`check-before-create: Day Book query failed, proceeding with create. Error: ${err}`);
+      return null;
+    }
   }
 
   /**
@@ -480,12 +526,20 @@ export class TallyClient {
               <UDF:REMOTEID>${escapeXml(idempotency_key)}</UDF:REMOTEID>
             </UDF:REMOTEID.LIST>
             ${inventoryEntries}
-            <!-- Party (debit, total incl. tax) -->
+            <!-- Party (debit, total incl. tax).
+                 BILLALLOCATIONS New Ref creates the bill reference in the party's
+                 account so the receipt voucher can knock it off with Agst Ref.
+                 NAME is empty — Tally auto-fills it with the assigned voucher number. -->
             <LEDGERENTRIES.LIST>
               <LEDGERNAME>${escapeXml(party_ledger)}</LEDGERNAME>
               <ISDEEMEDPOSITIVE>Yes</ISDEEMEDPOSITIVE>
               <ISPARTYLEDGER>Yes</ISPARTYLEDGER>
               <AMOUNT>-${total.toFixed(2)}</AMOUNT>
+              <BILLALLOCATIONS.LIST>
+                <BILLTYPE>New Ref</BILLTYPE>
+                <TDSDEDUCTEEISSPECIALRATE>No</TDSDEDUCTEEISSPECIALRATE>
+                <AMOUNT>-${total.toFixed(2)}</AMOUNT>
+              </BILLALLOCATIONS.LIST>
             </LEDGERENTRIES.LIST>
             <!-- Output CGST -->
             <LEDGERENTRIES.LIST>
@@ -890,7 +944,7 @@ export class TallyClient {
       voucher_number: voucherNumber,
       total_amount:   total,
       irn,
-      irn_pending:    false,   // B2B IRN handling for credit notes deferred — verify with a sample
+      irn_pending:    !irn,    // same as postSalesVoucher — B2B credit notes also await IRN async
       created_at:     new Date().toISOString(),
     };
   }

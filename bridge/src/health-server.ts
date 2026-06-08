@@ -70,8 +70,34 @@ function escapeHtml(s: string): string {
   return s.replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;");
 }
 
+function jsonPayload(): object {
+  const h = healthState;
+  const overall = h.tallyConnected && !h.lastError && h.failedCount === 0;
+  return {
+    version:          VERSION,
+    state:            !h.tallyConnected || h.failedCount > 0 ? (h.failedCount > 0 ? "degraded" : "offline") : "healthy",
+    healthy:          overall,
+    tallyConnected:   h.tallyConnected,
+    tallyCompanyName: h.tallyCompanyName,
+    pendingCount:     h.pendingCount,
+    failedCount:      h.failedCount,
+    completedToday:   h.completedToday,
+    lastSyncAt:       h.lastSyncAt,
+    lastError:        h.lastError,
+    startedAt:        h.startedAt,
+  };
+}
+
 export function startHealthServer(port: number): void {
-  const server = http.createServer((_req, res) => {
+  const server = http.createServer((req, res) => {
+    if (req.url === "/json") {
+      res.writeHead(200, {
+        "Content-Type": "application/json",
+        "Access-Control-Allow-Origin": "*",
+      });
+      res.end(JSON.stringify(jsonPayload()));
+      return;
+    }
     res.writeHead(200, { "Content-Type": "text/html; charset=utf-8" });
     res.end(htmlPage());
   });
