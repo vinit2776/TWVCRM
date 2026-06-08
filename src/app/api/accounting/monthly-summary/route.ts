@@ -57,11 +57,12 @@ export async function GET(request: NextRequest) {
 
   const contractIds = activeContracts.map((c) => c.id);
 
-  // ── Single batch: ALL 11 queries in parallel ─────────────────────────
-  // Current-period data (7 queries) + carry-forward data (4 queries)
+  // ── Single batch: ALL 12 queries in parallel ─────────────────────────
+  // Current-period data (7 queries) + carry-forward data (5 queries)
   // all depend only on contractIds + period.id — neither set depends on
-  // the other's results, so they all fire in one Promise.all. This cuts
-  // 2 sequential round-trips down to 1.
+  // the other's results, so they all fire in one Promise.all. billing_payments
+  // for prior statements runs as a 13th query after this (needs statement IDs).
+
   const hasContracts = contractIds.length > 0;
   const [
     { data: facilityUsages },
@@ -75,6 +76,7 @@ export async function GET(request: NextRequest) {
     { data: priorUsages },
     { data: priorPeriods },
     { data: priorAdHoc },
+    { data: priorBillingStatements },
   ] = await Promise.all([
     // ── Current-period queries ──
     // 3. Facility usage records
@@ -169,7 +171,7 @@ export async function GET(request: NextRequest) {
       .from("accounting_periods")
       .select("id, year, month")
       .or(`year.lt.${year},and(year.eq.${year},month.lt.${month})`),
-    // 11. Prior ad-hoc charges (only from go-live onwards)
+    // 11. Prior ad-hoc charges (only from go-live onwards) — kept for fallback path
     hasContracts
       ? adminSupabase
           .from("usage_charges")
@@ -178,7 +180,32 @@ export async function GET(request: NextRequest) {
           .gte("charge_date", "2026-05-01")
           .lt("charge_date", periodStart)
       : Promise.resolve({ data: [] }),
+    // 12. Prior finalized billing statements (go-live onwards, before this period).
+    // Used as the primary carry-forward source: the statement's total_amount is the
+    // ground truth for what was billed, matching the AR view exactly. This avoids
+    // double-counting facility_usage_records that were already included in the statement.
+    hasContracts
+      ? adminSupabase
+          .from("billing_statements")
+          .select("id, contract_id, total_amount")
+          .in("contract_id", contractIds)
+          .in("status", ["finalized", "exported"])
+          .is("voided_at", null)
+          .gte("period_start", "2026-05-01")
+          .lt("period_start", periodStart)
+      : Promise.resolve({ data: [] }),
   ]);
+
+  // ── Fetch billing_payments for prior statements (needs their IDs) ─────
+  const priorStatementIds = (priorBillingStatements || []).map((s) => s.id as string);
+  let priorBillingPmts: { billing_statement_id: string; amount: number }[] = [];
+  if (priorStatementIds.length > 0) {
+    const { data } = await adminSupabase
+      .from("billing_payments")
+      .select("billing_statement_id, amount")
+      .in("billing_statement_id", priorStatementIds);
+    priorBillingPmts = data || [];
+  }
 
   const allPaymentsThisMonth = [...(contractPayments || []), ...(generalPayments || [])];
 
@@ -189,34 +216,51 @@ export async function GET(request: NextRequest) {
   });
 
   // ── Carry-forward computation ──────────────────────────────────────
+  //
+  // Primary path (statement-based): when a finalized billing statement exists
+  // for a prior period, use statement.total_amount − billing_payments as the
+  // carry-forward. This is the same number the AR view shows and avoids
+  // double-counting facility_usage_records that were already included in the
+  // statement total.
+  //
+  // Fallback path (recalculation): for contracts with no prior finalized
+  // statement (e.g. billing cron missed, or contract just started), fall back
+  // to months × contract.total_amount + unbilled usage − contract_payments.
   const carryForwardByContract: Record<string, number> = {};
   if (hasContracts) {
 
+    // Index prior statements by contract
+    const priorStmtsByContract: Record<string, { id: string; total: number }[]> = {};
+    (priorBillingStatements || []).forEach((s) => {
+      if (!priorStmtsByContract[s.contract_id]) priorStmtsByContract[s.contract_id] = [];
+      priorStmtsByContract[s.contract_id].push({ id: s.id as string, total: Number(s.total_amount) });
+    });
+
+    // Index billing_payments by statement id
+    const priorBillingPmtsByStmt: Record<string, number> = {};
+    priorBillingPmts.forEach((p) => {
+      priorBillingPmtsByStmt[p.billing_statement_id] = (priorBillingPmtsByStmt[p.billing_statement_id] || 0) + Number(p.amount);
+    });
+
+    // contract_payments from prior periods (legacy payment path)
     const priorPaymentsByContract: Record<string, number> = {};
     (priorPayments || []).forEach((p) => {
       priorPaymentsByContract[p.contract_id] = (priorPaymentsByContract[p.contract_id] || 0) + Number(p.amount);
     });
 
-    // ── Go-live anchor ───────────────────────────────────────────────────
-    // The billing system went live in May 2026. All months before this were
-    // invoiced and collected manually (outside the system). We only track
-    // charges and payments from May 2026 onwards so those manual months don't
-    // appear as outstanding carry-forward.
+    // ── Go-live anchor (fallback path only) ─────────────────────────────
     const BILLING_GO_LIVE = new Date(2026, 4, 1); // May 1 2026 (month is 0-indexed)
     const GO_LIVE_YEAR = 2026;
     const GO_LIVE_MONTH = 5;
 
-    // Build a set of period IDs that are at or after go-live
     const validPriorPeriodIds = new Set(
       (priorPeriods || [])
         .filter(p => p.year > GO_LIVE_YEAR || (p.year === GO_LIVE_YEAR && p.month >= GO_LIVE_MONTH))
         .map(p => p.id)
     );
 
-    const priorPeriodIds = new Set((priorPeriods || []).map((p) => p.id));
     const priorUsageByContract: Record<string, number> = {};
     (priorUsages || []).forEach((u) => {
-      // Only count usage from periods at or after go-live
       if (validPriorPeriodIds.has(u.accounting_period_id)) {
         priorUsageByContract[u.contract_id] = (priorUsageByContract[u.contract_id] || 0) + Number(u.total_charge);
       }
@@ -227,28 +271,39 @@ export async function GET(request: NextRequest) {
       priorAdHocByContract[c.contract_id] = (priorAdHocByContract[c.contract_id] || 0) + Number(c.total);
     });
 
-    // Calculate months of recurring charges before this period per contract
     activeContracts.forEach((contract) => {
-      const contractStart = new Date(contract.start_date);
-      const thisMonthStart = new Date(year, month - 1, 1);
+      const stmts = priorStmtsByContract[contract.id];
 
-      // Count from the later of: contract start OR system go-live.
-      // Months before go-live are treated as settled externally.
-      const countFrom = contractStart > BILLING_GO_LIVE ? contractStart : BILLING_GO_LIVE;
-      let monthsBeforeThisPeriod = 0;
-      const cursor = new Date(countFrom.getFullYear(), countFrom.getMonth(), 1);
-      while (cursor < thisMonthStart) {
-        monthsBeforeThisPeriod++;
-        cursor.setMonth(cursor.getMonth() + 1);
+      if (stmts && stmts.length > 0) {
+        // ── Primary: statement-based ──────────────────────────────────
+        // Sum unpaid balances across all prior finalized statements.
+        // Matches the AR view exactly; no risk of double-counting usage.
+        const statementBalance = stmts.reduce((sum, s) => {
+          const paid = priorBillingPmtsByStmt[s.id] || 0;
+          return sum + Math.max(0, s.total - paid);
+        }, 0);
+        // Subtract any direct contract_payments not tied to a statement
+        const directPaid = priorPaymentsByContract[contract.id] || 0;
+        carryForwardByContract[contract.id] = Math.max(0, statementBalance - directPaid);
+      } else {
+        // ── Fallback: recalculate from contract monthly amount ─────────
+        const contractStart = new Date(contract.start_date);
+        const thisMonthStart = new Date(year, month - 1, 1);
+        const countFrom = contractStart > BILLING_GO_LIVE ? contractStart : BILLING_GO_LIVE;
+        let monthsBeforeThisPeriod = 0;
+        const cursor = new Date(countFrom.getFullYear(), countFrom.getMonth(), 1);
+        while (cursor < thisMonthStart) {
+          monthsBeforeThisPeriod++;
+          cursor.setMonth(cursor.getMonth() + 1);
+        }
+        const totalRecurringBefore = monthsBeforeThisPeriod * Number(contract.total_amount);
+        const totalChargesBefore =
+          totalRecurringBefore +
+          (priorUsageByContract[contract.id] || 0) +
+          (priorAdHocByContract[contract.id] || 0);
+        const totalPaidBefore = priorPaymentsByContract[contract.id] || 0;
+        carryForwardByContract[contract.id] = Math.max(0, totalChargesBefore - totalPaidBefore);
       }
-
-      const totalRecurringBefore = monthsBeforeThisPeriod * Number(contract.total_amount);
-      const totalChargesBefore =
-        totalRecurringBefore +
-        (priorUsageByContract[contract.id] || 0) +
-        (priorAdHocByContract[contract.id] || 0);
-      const totalPaidBefore = priorPaymentsByContract[contract.id] || 0;
-      carryForwardByContract[contract.id] = Math.max(0, totalChargesBefore - totalPaidBefore);
     });
   }
 
