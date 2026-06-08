@@ -148,6 +148,14 @@ export async function dispatchTallyInvoice(
       upiId = (s as { value?: string } | null)?.value || undefined;
     } catch { /* non-blocking */ }
 
+    // ── IRP QR code (e-invoice — mandatory on B2B tax invoices) ─────────────
+    let irnQrBase64: string | undefined;
+    if (ack.signedQrCode) {
+      try {
+        irnQrBase64 = await QRCode.toDataURL(ack.signedQrCode, { width: 200, margin: 1, errorCorrectionLevel: "M" });
+      } catch { /* skip — QR is non-blocking */ }
+    }
+
     // ── Line items ───────────────────────────────────────────────────────────
     const lineItems = buildLineItems(statement, contract, usageCharges, fixedAmount);
 
@@ -178,6 +186,8 @@ export async function dispatchTallyInvoice(
       razorpayUrl: razorpayLinkUrl ?? undefined,
       razorpayQrBase64,
       upiId,
+      irn:         ack.irn ?? undefined,
+      irnQrBase64: irnQrBase64 ?? undefined,
     };
     const doc = generateGstInvoicePDF(invoiceData);
     const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
