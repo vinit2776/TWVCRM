@@ -187,6 +187,11 @@ export interface GstInvoiceData {
   /** Human-readable expiry date of the payment link, e.g. "May 28, 2026" */
   razorpayExpiry?: string;
   upiId?: string;
+  // e-Invoice (IRP / Tally Sync)
+  /** IRN hash from IRP — printed on the tax invoice per GST rules */
+  irn?: string | null;
+  /** Base64 PNG of the IRP signed QR code — mandatory on B2B e-invoices */
+  irnQrBase64?: string | null;
 }
 
 export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
@@ -227,9 +232,26 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     doc.text(`Invoice No: ${data.invoiceNumber}`, pageWidth - 14, 22, { align: "right" });
     doc.text(`Date: ${formatDateInv(data.invoiceDate)}`, pageWidth - 14, 27, { align: "right" });
     doc.text(`Contract: ${data.contractNumber}`, pageWidth - 14, 32, { align: "right" });
+
+    // e-Invoice: IRN + IRP QR code (B2B mandatory per GST rules)
+    if (data.irn) {
+      doc.setFontSize(6.5);
+      doc.setTextColor(100, 100, 100);
+      const irnShort = data.irn.length > 40 ? data.irn.slice(0, 40) + "…" : data.irn;
+      doc.text(`IRN: ${irnShort}`, pageWidth - 14, 37, { align: "right" });
+    }
+    if (data.irnQrBase64) {
+      try {
+        const qrSize = 22; // mm — small but scannable
+        doc.addImage(data.irnQrBase64, "PNG", 14, 8, qrSize, qrSize);
+        doc.setFontSize(5.5);
+        doc.setTextColor(100, 100, 100);
+        doc.text("e-Invoice QR", 14 + qrSize / 2, 8 + qrSize + 2, { align: "center" });
+      } catch { /* skip if image fails */ }
+    }
   }
 
-  y = 38;
+  y = data.irn ? 42 : 38;
 
   // ── Seller / Buyer box ──
   doc.setDrawColor(200, 200, 200);
