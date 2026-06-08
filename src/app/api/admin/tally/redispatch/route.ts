@@ -41,13 +41,13 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Parse body ───────────────────────────────────────────────────────────
-  let body: { billing_statement_id?: string; irn?: string; signed_qr_code?: string };
+  let body: { billing_statement_id?: string; irn?: string; signed_qr_code?: string; force?: boolean };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
-  const { billing_statement_id, irn: irnOverride, signed_qr_code: qrOverride } = body;
+  const { billing_statement_id, irn: irnOverride, signed_qr_code: qrOverride, force } = body;
   if (!billing_statement_id) {
     return NextResponse.json({ error: "billing_statement_id required" }, { status: 400 });
   }
@@ -129,6 +129,25 @@ export async function POST(request: NextRequest) {
 
   // Use the invoice number from the most recent job (or from the statement)
   const invoiceNumber = jobs[0]?.tally_invoice_number ?? stmt.tally_invoice_number;
+
+  // ── Gate check — refuse to re-send if already delivered within 24h ────────
+  // This prevents accidental double-sends from repeated API calls.
+  const { data: gateCheck } = await supabase
+    .from("billing_statements")
+    .select("tally_delivered_at")
+    .eq("id", billing_statement_id)
+    .single();
+  const deliveredAt = gateCheck?.tally_delivered_at as string | null;
+  if (deliveredAt && !force) {
+    const ageMs = Date.now() - new Date(deliveredAt).getTime();
+    const ageMinutes = Math.round(ageMs / 60_000);
+    return NextResponse.json({
+      ok: false,
+      alreadyDelivered: true,
+      deliveredAt,
+      error: `Invoice was already delivered ${ageMinutes} minute(s) ago. Pass force=true to override.`,
+    }, { status: 409 });
+  }
 
   // ── Clear the delivered-once gate ─────────────────────────────────────────
   await supabase
