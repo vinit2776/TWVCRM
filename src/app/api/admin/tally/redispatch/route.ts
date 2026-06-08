@@ -3,16 +3,21 @@
  *
  * One-shot admin endpoint to re-send a Tally-issued invoice PDF.
  * Clears tally_delivered_at (the delivered-once gate) and re-triggers
- * dispatchTallyInvoice with the IRN and signed QR code stored in the
- * latest completed tally_sync_job for the statement.
+ * dispatchTallyInvoice with the best IRN + signed QR code available.
  *
- * Used when the original dispatch happened before the IRN/QR code was
- * available (e.g. async IRN path) and the corrected invoice needs to be
- * re-sent with those fields.
+ * IRN source priority:
+ *   1. Body override (irn / signed_qr_code fields — explicit manual pass-in)
+ *   2. tally_sync_jobs — job with highest-priority IRN data for this statement
+ *      (ordered: has_irn DESC, created_at DESC)
+ *   3. gst_invoices table linked to the billing statement
  *
  * Auth: admin role only (cookie session).
  *
- * Body: { billing_statement_id: string }
+ * Body: {
+ *   billing_statement_id: string
+ *   irn?:           string   // manual override — use when DB lookup fails
+ *   signed_qr_code?: string  // manual override — IRP signed JWT payload
+ * }
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -36,95 +41,122 @@ export async function POST(request: NextRequest) {
   }
 
   // ── Parse body ───────────────────────────────────────────────────────────
-  let body: { billing_statement_id?: string };
+  let body: { billing_statement_id?: string; irn?: string; signed_qr_code?: string };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
   }
-  const { billing_statement_id } = body;
+  const { billing_statement_id, irn: irnOverride, signed_qr_code: qrOverride } = body;
   if (!billing_statement_id) {
     return NextResponse.json({ error: "billing_statement_id required" }, { status: 400 });
   }
 
   const supabase = createAdminClient();
 
-  // ── Fetch statement to get tally fields ──────────────────────────────────────
-  const { data: stmtMeta } = await supabase
+  // ── Fetch billing statement ───────────────────────────────────────────────
+  const { data: stmt } = await supabase
     .from("billing_statements")
-    .select("tally_invoice_number, total_amount")
+    .select("tally_invoice_number, total_amount, gst_invoice_id")
     .eq("id", billing_statement_id)
     .single();
 
-  type JobRow = { id: string; status: string; tally_invoice_number: string | null; tally_irn: string | null; tally_signed_qr_code: string | null; tally_total_amount: number | null };
-  let job: JobRow | null = null;
+  if (!stmt?.tally_invoice_number) {
+    return NextResponse.json({ error: "Billing statement has no tally_invoice_number — has it been synced to Tally?" }, { status: 400 });
+  }
 
-  // ── Path 1: by billing_statement_id (any status) ──────────────────────────
-  const { data: jobByStmt } = await supabase
+  // ── Collect ALL jobs for this statement (any status) ─────────────────────
+  // Order by: jobs with IRN data first, then newest first
+  type JobRow = {
+    id: string; status: string;
+    tally_invoice_number: string | null;
+    tally_irn: string | null;
+    tally_signed_qr_code: string | null;
+    tally_total_amount: number | null;
+  };
+
+  // Try billing_statement_id first
+  let jobs: JobRow[] = [];
+  const { data: jobsByStmt } = await supabase
     .from("tally_sync_jobs")
     .select("id, status, tally_invoice_number, tally_irn, tally_signed_qr_code, tally_total_amount")
     .eq("billing_statement_id", billing_statement_id)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .single();
+    .order("created_at", { ascending: false });
+  if (jobsByStmt?.length) jobs = jobsByStmt as JobRow[];
 
-  job = (jobByStmt as JobRow | null) ?? null;
-
-  // ── Path 2: by tally_invoice_number (any status) ──────────────────────────
-  if (!job && stmtMeta?.tally_invoice_number) {
-    const { data: jobByInvNum } = await supabase
+  // Fallback: search by invoice number
+  if (!jobs.length) {
+    const { data: jobsByNum } = await supabase
       .from("tally_sync_jobs")
       .select("id, status, tally_invoice_number, tally_irn, tally_signed_qr_code, tally_total_amount")
-      .eq("tally_invoice_number", stmtMeta.tally_invoice_number)
-      .order("created_at", { ascending: false })
-      .limit(1)
+      .eq("tally_invoice_number", stmt.tally_invoice_number)
+      .order("created_at", { ascending: false });
+    if (jobsByNum?.length) jobs = jobsByNum as JobRow[];
+  }
+
+  // ── Check gst_invoices for IRN if we have a linked record ────────────────
+  let gstIrn: string | null = null;
+  let gstQr: string | null = null;
+  if (stmt.gst_invoice_id) {
+    const { data: gstInv } = await supabase
+      .from("gst_invoices")
+      .select("irn, signed_qr_code")
+      .eq("id", stmt.gst_invoice_id)
       .single();
-    job = (jobByInvNum as JobRow | null) ?? null;
+    gstIrn = gstInv?.irn ?? null;
+    gstQr = gstInv?.signed_qr_code ?? null;
   }
 
-  if (!job) {
-    return NextResponse.json({
-      error: "No tally_sync_job found for this statement (tried billing_statement_id and tally_invoice_number)",
-      billing_statement_id,
-      tally_invoice_number: stmtMeta?.tally_invoice_number ?? null,
-    }, { status: 404 });
-  }
+  // ── Pick best IRN source ──────────────────────────────────────────────────
+  // Priority: body override → job with IRN → gst_invoices → null
+  const bestJobWithIrn = jobs.find(j => j.tally_irn);
+  const resolvedIrn: string | null =
+    irnOverride                          ||
+    bestJobWithIrn?.tally_irn            ||
+    gstIrn                               ||
+    null;
+  const resolvedQr: string | null =
+    qrOverride                           ||
+    bestJobWithIrn?.tally_signed_qr_code ||
+    gstQr                                ||
+    null;
 
-  // Allow re-dispatch regardless of job status — the IRN data may be on any job row.
+  // Use the invoice number from the most recent job (or from the statement)
+  const invoiceNumber = jobs[0]?.tally_invoice_number ?? stmt.tally_invoice_number;
 
   // ── Clear the delivered-once gate ─────────────────────────────────────────
-  const { error: clearErr } = await supabase
+  await supabase
     .from("billing_statements")
     .update({ tally_delivered_at: null })
     .eq("id", billing_statement_id);
 
-  if (clearErr) {
-    return NextResponse.json({ error: `Failed to clear gate: ${clearErr.message}` }, { status: 500 });
-  }
-
-  // ── Resolve total_amount (may be 0 on IRN-only job) ───────────────────────
-  let totalAmount = Number(job.tally_total_amount ?? 0);
-  if (totalAmount === 0) {
-    const { data: stmt } = await supabase
-      .from("billing_statements")
-      .select("total_amount")
-      .eq("id", billing_statement_id)
-      .single();
-    totalAmount = Number(stmt?.total_amount ?? 0);
-  }
+  // ── Resolve total_amount ──────────────────────────────────────────────────
+  let totalAmount = Number(jobs[0]?.tally_total_amount ?? 0);
+  if (totalAmount === 0) totalAmount = Number(stmt.total_amount ?? 0);
 
   // ── Re-dispatch ───────────────────────────────────────────────────────────
   const result = await dispatchTallyInvoice(supabase, billing_statement_id, {
-    invoiceNumber:  job.tally_invoice_number as string,
+    invoiceNumber,
     totalAmount,
-    signedQrCode:   job.tally_signed_qr_code as string | null,
-    irn:            job.tally_irn as string | null,
+    signedQrCode: resolvedQr,
+    irn:          resolvedIrn,
   });
 
   return NextResponse.json({
-    ok: result.ok,
-    emailedTo:      result.emailedTo,
+    ok:              result.ok,
+    emailedTo:       result.emailedTo,
     razorpayLinkUrl: result.razorpayLinkUrl,
-    error:          result.error,
+    error:           result.error,
+    // Debug: show where the IRN came from so we can diagnose
+    debug: {
+      irn_source:        irnOverride ? "body_override" : (bestJobWithIrn ? "tally_sync_job" : (gstIrn ? "gst_invoices" : "none")),
+      irn_found:         !!resolvedIrn,
+      qr_found:          !!resolvedQr,
+      jobs_checked:      jobs.length,
+      jobs_with_irn:     jobs.filter(j => j.tally_irn).length,
+      job_statuses:      jobs.map(j => ({ id: j.id, status: j.status, has_irn: !!j.tally_irn })),
+      gst_invoice_id:    stmt.gst_invoice_id ?? null,
+      gst_irn_found:     !!gstIrn,
+    },
   });
 }
