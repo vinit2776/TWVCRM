@@ -49,47 +49,48 @@ export async function POST(request: NextRequest) {
 
   const supabase = createAdminClient();
 
-  // ── Fetch statement to get tally_invoice_number as fallback key ─────────────
+  // ── Fetch statement to get tally fields ──────────────────────────────────────
   const { data: stmtMeta } = await supabase
     .from("billing_statements")
     .select("tally_invoice_number, total_amount")
     .eq("id", billing_statement_id)
     .single();
 
-  // ── Fetch latest completed sync job — primary: by billing_statement_id ──────
-  let job: { tally_invoice_number: string | null; tally_irn: string | null; tally_signed_qr_code: string | null; tally_total_amount: number | null } | null = null;
+  type JobRow = { id: string; status: string; tally_invoice_number: string | null; tally_irn: string | null; tally_signed_qr_code: string | null; tally_total_amount: number | null };
+  let job: JobRow | null = null;
 
+  // ── Path 1: by billing_statement_id (any status) ──────────────────────────
   const { data: jobByStmt } = await supabase
     .from("tally_sync_jobs")
-    .select("tally_invoice_number, tally_irn, tally_signed_qr_code, tally_total_amount")
+    .select("id, status, tally_invoice_number, tally_irn, tally_signed_qr_code, tally_total_amount")
     .eq("billing_statement_id", billing_statement_id)
-    .in("status", ["completed", "posted"])   // posted = voucher exists, IRN may be pending
-    .order("completed_at", { ascending: false })
+    .order("created_at", { ascending: false })
     .limit(1)
     .single();
 
-  job = jobByStmt ?? null;
+  job = (jobByStmt as JobRow | null) ?? null;
 
-  // ── Fallback: find by tally_invoice_number stored on the statement ───────────
+  // ── Path 2: by tally_invoice_number (any status) ──────────────────────────
   if (!job && stmtMeta?.tally_invoice_number) {
     const { data: jobByInvNum } = await supabase
       .from("tally_sync_jobs")
-      .select("tally_invoice_number, tally_irn, tally_signed_qr_code, tally_total_amount")
+      .select("id, status, tally_invoice_number, tally_irn, tally_signed_qr_code, tally_total_amount")
       .eq("tally_invoice_number", stmtMeta.tally_invoice_number)
-      .in("status", ["completed", "posted"])
-      .order("completed_at", { ascending: false })
+      .order("created_at", { ascending: false })
       .limit(1)
       .single();
-    job = jobByInvNum ?? null;
+    job = (jobByInvNum as JobRow | null) ?? null;
   }
 
   if (!job) {
     return NextResponse.json({
-      error: "No completed tally_sync_job found for this statement",
+      error: "No tally_sync_job found for this statement (tried billing_statement_id and tally_invoice_number)",
       billing_statement_id,
       tally_invoice_number: stmtMeta?.tally_invoice_number ?? null,
     }, { status: 404 });
   }
+
+  // Allow re-dispatch regardless of job status — the IRN data may be on any job row.
 
   // ── Clear the delivered-once gate ─────────────────────────────────────────
   const { error: clearErr } = await supabase
