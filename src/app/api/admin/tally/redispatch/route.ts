@@ -49,18 +49,46 @@ export async function POST(request: NextRequest) {
 
   const supabase = createAdminClient();
 
-  // ── Fetch latest completed sync job for this statement ────────────────────
-  const { data: job, error: jobErr } = await supabase
+  // ── Fetch statement to get tally_invoice_number as fallback key ─────────────
+  const { data: stmtMeta } = await supabase
+    .from("billing_statements")
+    .select("tally_invoice_number, total_amount")
+    .eq("id", billing_statement_id)
+    .single();
+
+  // ── Fetch latest completed sync job — primary: by billing_statement_id ──────
+  let job: { tally_invoice_number: string | null; tally_irn: string | null; tally_signed_qr_code: string | null; tally_total_amount: number | null } | null = null;
+
+  const { data: jobByStmt } = await supabase
     .from("tally_sync_jobs")
     .select("tally_invoice_number, tally_irn, tally_signed_qr_code, tally_total_amount")
     .eq("billing_statement_id", billing_statement_id)
-    .eq("status", "completed")
+    .in("status", ["completed", "posted"])   // posted = voucher exists, IRN may be pending
     .order("completed_at", { ascending: false })
     .limit(1)
     .single();
 
-  if (jobErr || !job) {
-    return NextResponse.json({ error: "No completed tally_sync_job found for this statement" }, { status: 404 });
+  job = jobByStmt ?? null;
+
+  // ── Fallback: find by tally_invoice_number stored on the statement ───────────
+  if (!job && stmtMeta?.tally_invoice_number) {
+    const { data: jobByInvNum } = await supabase
+      .from("tally_sync_jobs")
+      .select("tally_invoice_number, tally_irn, tally_signed_qr_code, tally_total_amount")
+      .eq("tally_invoice_number", stmtMeta.tally_invoice_number)
+      .in("status", ["completed", "posted"])
+      .order("completed_at", { ascending: false })
+      .limit(1)
+      .single();
+    job = jobByInvNum ?? null;
+  }
+
+  if (!job) {
+    return NextResponse.json({
+      error: "No completed tally_sync_job found for this statement",
+      billing_statement_id,
+      tally_invoice_number: stmtMeta?.tally_invoice_number ?? null,
+    }, { status: 404 });
   }
 
   // ── Clear the delivered-once gate ─────────────────────────────────────────
