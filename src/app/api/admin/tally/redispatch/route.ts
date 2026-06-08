@@ -54,14 +54,18 @@ export async function POST(request: NextRequest) {
 
   const supabase = createAdminClient();
 
-  // ── Fetch billing statement ───────────────────────────────────────────────
-  const { data: stmt } = await supabase
+  // ── Fetch billing statement (tally fields only — avoids nullable FK issues) ──
+  const { data: stmt, error: stmtErr } = await supabase
     .from("billing_statements")
-    .select("tally_invoice_number, total_amount, gst_invoice_id")
+    .select("tally_invoice_number, total_amount")
     .eq("id", billing_statement_id)
     .single();
 
-  if (!stmt?.tally_invoice_number) {
+  if (stmtErr || !stmt) {
+    return NextResponse.json({ error: `Billing statement not found: ${stmtErr?.message ?? "unknown"}` }, { status: 404 });
+  }
+
+  if (!stmt.tally_invoice_number) {
     return NextResponse.json({ error: "Billing statement has no tally_invoice_number — has it been synced to Tally?" }, { status: 400 });
   }
 
@@ -73,35 +77,37 @@ export async function POST(request: NextRequest) {
     tally_irn: string | null;
     tally_signed_qr_code: string | null;
     tally_total_amount: number | null;
+    gst_invoice_id: string | null;
   };
 
-  // Try billing_statement_id first
+  // ── Path 1: jobs linked by billing_statement_id ──────────────────────────
   let jobs: JobRow[] = [];
   const { data: jobsByStmt } = await supabase
     .from("tally_sync_jobs")
-    .select("id, status, tally_invoice_number, tally_irn, tally_signed_qr_code, tally_total_amount")
+    .select("id, status, tally_invoice_number, tally_irn, tally_signed_qr_code, tally_total_amount, gst_invoice_id")
     .eq("billing_statement_id", billing_statement_id)
     .order("created_at", { ascending: false });
   if (jobsByStmt?.length) jobs = jobsByStmt as JobRow[];
 
-  // Fallback: search by invoice number
+  // ── Path 2: fallback — jobs linked by invoice number ─────────────────────
   if (!jobs.length) {
     const { data: jobsByNum } = await supabase
       .from("tally_sync_jobs")
-      .select("id, status, tally_invoice_number, tally_irn, tally_signed_qr_code, tally_total_amount")
+      .select("id, status, tally_invoice_number, tally_irn, tally_signed_qr_code, tally_total_amount, gst_invoice_id")
       .eq("tally_invoice_number", stmt.tally_invoice_number)
       .order("created_at", { ascending: false });
     if (jobsByNum?.length) jobs = jobsByNum as JobRow[];
   }
 
-  // ── Check gst_invoices for IRN if we have a linked record ────────────────
+  // ── Check gst_invoices for IRN via gst_invoice_id on the job ─────────────
   let gstIrn: string | null = null;
   let gstQr: string | null = null;
-  if (stmt.gst_invoice_id) {
+  const gstInvoiceId = jobs.find(j => j.gst_invoice_id)?.gst_invoice_id ?? null;
+  if (gstInvoiceId) {
     const { data: gstInv } = await supabase
       .from("gst_invoices")
       .select("irn, signed_qr_code")
-      .eq("id", stmt.gst_invoice_id)
+      .eq("id", gstInvoiceId)
       .single();
     gstIrn = gstInv?.irn ?? null;
     gstQr = gstInv?.signed_qr_code ?? null;
@@ -155,7 +161,7 @@ export async function POST(request: NextRequest) {
       jobs_checked:      jobs.length,
       jobs_with_irn:     jobs.filter(j => j.tally_irn).length,
       job_statuses:      jobs.map(j => ({ id: j.id, status: j.status, has_irn: !!j.tally_irn })),
-      gst_invoice_id:    stmt.gst_invoice_id ?? null,
+      gst_invoice_id:    gstInvoiceId,
       gst_irn_found:     !!gstIrn,
     },
   });
