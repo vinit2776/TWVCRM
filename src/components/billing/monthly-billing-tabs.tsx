@@ -30,7 +30,8 @@ import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Send, FileDown, ChevronDown, ChevronRight, Printer } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Loader2, Send, FileDown, ChevronDown, ChevronRight, Printer, Search, X } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
@@ -102,6 +103,7 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
   const [sendingContract, setSendingContract] = useState<string | null>(null);
   const [printDialogContractId, setPrintDialogContractId] = useState<string | null>(null);
   const [reviewRow, setReviewRow] = useState<UsageRow | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
 
   // Operations month = `month`. Rent we're sending in this month covers next month.
   const rentPeriodMonth = useMemo(() => nextMonth(year, month), [year, month]);
@@ -157,6 +159,52 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
     pending: usageRows.filter((r) => !r.statement?.proforma_sent_at).length,
   };
 
+  // ── Client-side search filtering ────────────────────────────────────────
+  const q = searchQuery.trim().toLowerCase();
+
+  const filteredRentStmts = useMemo(() => {
+    if (!q) return rentStmts;
+    return rentStmts.filter((s) => {
+      const lead = s.lead;
+      const customer = `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim().toLowerCase();
+      const company = (lead?.company || "").toLowerCase();
+      const contractNum = (s.contract?.contract_number || "").toLowerCase();
+      const stmtNum = (s.statement_number || "").toLowerCase();
+      const payStatus = (s.payment_status || "").toLowerCase();
+      const status = s.proforma_sent_at ? "sent" : s.status;
+      return (
+        contractNum.includes(q) ||
+        customer.includes(q) ||
+        company.includes(q) ||
+        stmtNum.includes(q) ||
+        payStatus.includes(q) ||
+        status.includes(q)
+      );
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rentStmts, q]);
+
+  const filteredUsageRows = useMemo(() => {
+    if (!q) return usageRows;
+    return usageRows.filter((r) => {
+      const customer = (r.customer || "").toLowerCase();
+      const contractNum = r.contract_number.toLowerCase();
+      const stmtNum = (r.statement?.statement_number || "").toLowerCase();
+      const payStatus = (r.statement?.payment_status || "").toLowerCase();
+      const isSent = !!r.statement?.proforma_sent_at;
+      const status = r.statement
+        ? (r.statement.payment_status === "paid" ? "paid" : isSent ? "sent" : r.statement.status)
+        : "pending";
+      return (
+        contractNum.includes(q) ||
+        customer.includes(q) ||
+        stmtNum.includes(q) ||
+        payStatus.includes(q) ||
+        status.includes(q)
+      );
+    });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usageRows, q]);
 
   // ── Usage: open review dialog ──────────────────────────────────────────
   const openReview = (row: UsageRow) => setReviewRow(row);
@@ -173,7 +221,26 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
             <span className="text-muted-foreground font-normal"> — change month at the top of the page</span>
           </p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex items-center gap-2 flex-wrap justify-end">
+          {/* Search — filters contract/customer/company/statement#/status across both tabs */}
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search contract, customer, status…"
+              className="pl-8 pr-8 h-9 w-[230px] text-sm"
+            />
+            {searchQuery && (
+              <button
+                type="button"
+                onClick={() => setSearchQuery("")}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              >
+                <X className="h-3.5 w-3.5" />
+              </button>
+            )}
+          </div>
           <Pill label="Rent"  counts={rentCounts}  active={tab === "rent"}  onClick={() => setTab("rent")}  />
           <Pill label="Usage" counts={usageCounts} active={tab === "usage"} onClick={() => setTab("usage")} />
         </div>
@@ -190,7 +257,12 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
             periodLabel={rentLabel}
             onSuccess={async () => { await loadRent(); if (onFinalized) await onFinalized(); }}
           />
-          <RentTable rows={rentStmts} loading={rentLoading} opsLabel={opsLabel} onViewStatement={onViewStatement} />
+          {q && !rentLoading && (
+            <p className="text-xs text-muted-foreground">
+              {filteredRentStmts.length} of {rentStmts.length} statements match &ldquo;{searchQuery}&rdquo;
+            </p>
+          )}
+          <RentTable rows={filteredRentStmts} loading={rentLoading} opsLabel={opsLabel} onViewStatement={onViewStatement} />
         </div>
       )}
 
@@ -200,8 +272,13 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
           <div className="rounded-md bg-amber-50 border border-amber-200 px-4 py-2 text-xs text-amber-900">
             Usage charges for <strong>{opsLabel}</strong>. Enter print counts for contracts that haven&apos;t been logged yet, then click <strong>Verify &amp; Send</strong> to dispatch the proforma. Due date = send date + 7 days.
           </div>
+          {q && !usageLoading && (
+            <p className="text-xs text-muted-foreground">
+              {filteredUsageRows.length} of {usageRows.length} contracts match &ldquo;{searchQuery}&rdquo;
+            </p>
+          )}
           <UsageTable
-            rows={usageRows}
+            rows={filteredUsageRows}
             loading={usageLoading}
             opsLabel={opsLabel}
             expandedContract={expandedContract}
@@ -275,6 +352,7 @@ function RentTable({ rows, loading, opsLabel, onViewStatement }: { rows: RentStm
             <tbody className="divide-y">
               {sorted.map((s) => {
                 const isPaid = s.payment_status === "paid";
+                const isPartial = s.payment_status === "partially_paid";
                 const isSent = !!s.proforma_sent_at;
                 // /api/billing-statements joins lead directly on the statement,
                 // not under contract — use s.lead.
@@ -294,6 +372,7 @@ function RentTable({ rows, loading, opsLabel, onViewStatement }: { rows: RentStm
                     <td className="px-4 py-3 text-xs whitespace-nowrap text-muted-foreground">{formatDate(s.period_start)} → {formatDate(s.period_end)}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
                       {isPaid ? <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px]">PAID</Badge>
+                        : isPartial ? <Badge className="bg-orange-100 text-orange-800 border-orange-300 text-[10px]">PARTIAL</Badge>
                         : isSent ? <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-[10px]">SENT</Badge>
                         : <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[10px]">DRAFT</Badge>}
                     </td>
@@ -363,12 +442,14 @@ function UsageTable(props: {
                 const stmt = r.statement;
                 const isSent = !!stmt?.proforma_sent_at;
                 const isPaid = stmt?.payment_status === "paid";
-                const status = isPaid ? "PAID" : isSent ? "SENT" : (stmt?.status === "draft" ? "DRAFT" : "PENDING");
+                const isPartialUsage = stmt?.payment_status === "partially_paid";
+                const status = isPaid ? "PAID" : isPartialUsage ? "PARTIAL" : isSent ? "SENT" : (stmt?.status === "draft" ? "DRAFT" : "PENDING");
                 const statusClass =
-                  status === "PAID"  ? "bg-emerald-100 text-emerald-800 border-emerald-300"
-                : status === "SENT"  ? "bg-blue-100    text-blue-800    border-blue-300"
-                : status === "DRAFT" ? "bg-amber-100   text-amber-800   border-amber-300"
-                :                      "bg-orange-100  text-orange-800  border-orange-300";
+                  status === "PAID"    ? "bg-emerald-100 text-emerald-800 border-emerald-300"
+                : status === "PARTIAL" ? "bg-orange-100  text-orange-800  border-orange-300"
+                : status === "SENT"    ? "bg-blue-100    text-blue-800    border-blue-300"
+                : status === "DRAFT"   ? "bg-amber-100   text-amber-800   border-amber-300"
+                :                        "bg-orange-100  text-orange-800  border-orange-300";
                 const rowBg = !isSent ? "bg-amber-50/40" : "";
 
                 return (

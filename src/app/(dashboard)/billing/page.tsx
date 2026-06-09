@@ -18,6 +18,7 @@ import {
   Send,
   FileCheck,
   Printer,
+  Search,
 } from "lucide-react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
@@ -385,6 +386,7 @@ export default function BillingPage() {
   const [chargesStatusFilter, setChargesStatusFilter] = useState("");
   const [chargesDateFrom, setChargesDateFrom]         = useState("");
   const [chargesDateTo, setChargesDateTo]             = useState("");
+  const [chargesSearchQuery, setChargesSearchQuery]   = useState("");
   const [addChargeOpen, setAddChargeOpen]             = useState(false);
   const [printEntryOpen, setPrintEntryOpen]           = useState(false);
 
@@ -784,9 +786,27 @@ export default function BillingPage() {
   const clearChargesFilters = () => {
     setChargesContractFilter(""); setChargesStatusFilter("");
     setChargesDateFrom(""); setChargesDateTo(""); setChargesPage(1);
+    setChargesSearchQuery("");
   };
 
-  const hasChargesFilters = chargesContractFilter || chargesStatusFilter || chargesDateFrom || chargesDateTo;
+  const hasChargesFilters = chargesContractFilter || chargesStatusFilter || chargesDateFrom || chargesDateTo || chargesSearchQuery;
+
+  // Client-side text search over already-fetched charges
+  const filteredCharges = chargesSearchQuery.trim()
+    ? charges.filter((c) => {
+        const q = chargesSearchQuery.trim().toLowerCase();
+        return (
+          c.description.toLowerCase().includes(q) ||
+          (c.contract?.contract_number || "").toLowerCase().includes(q) ||
+          (c.booking?.booking_number || "").toLowerCase().includes(q) ||
+          (c.lead?.first_name || "").toLowerCase().includes(q) ||
+          (c.lead?.last_name || "").toLowerCase().includes(q) ||
+          (c.lead?.company || "").toLowerCase().includes(q) ||
+          (USAGE_STATUS_LABELS[c.status] || c.status).toLowerCase().includes(q) ||
+          c.status.toLowerCase().includes(q)
+        );
+      })
+    : charges;
   const isLocked      = summary?.period?.status === "locked";
   const selectedMonth = `${year}-${String(month).padStart(2, "0")}`;
   const pendingHandover = cashHandovers.filter((c) => c.cash_handover_status === "pending_handover");
@@ -972,6 +992,16 @@ export default function BillingPage() {
                   onFinalize={handleFinalizeStatement}
                   onMarkAccounted={handleMarkAccounted}
                   userRole={userRole}
+                  onRecordStatementPayment={(statementId) => {
+                    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+                    const stmtData = (cs as any).billing_statement;
+                    const pmts: Array<{ amount: number; tds_amount?: number }> = stmtData?.billing_payments || [];
+                    const paid = pmts.reduce((s, p) => s + Number(p.amount) + Number(p.tds_amount || 0), 0);
+                    const balance = Math.max(0, Number(stmtData?.total_amount || 0) - paid);
+                    setRecordPaymentStatementId(statementId);
+                    setRecordPaymentBalance(balance);
+                    setRecordPaymentDialogOpen(true);
+                  }}
                 />
               );
             })
@@ -1041,6 +1071,25 @@ export default function BillingPage() {
         <TabsContent value="usage-charges" className="space-y-4 mt-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
             <div className="flex flex-wrap items-center gap-2">
+              {/* Free-text search — description, contract#, booking#, customer, status */}
+              <div className="relative">
+                <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground pointer-events-none" />
+                <Input
+                  value={chargesSearchQuery}
+                  onChange={(e) => setChargesSearchQuery(e.target.value)}
+                  placeholder="Search description, contract, customer…"
+                  className="pl-8 pr-8 h-9 w-[260px] text-sm"
+                />
+                {chargesSearchQuery && (
+                  <button
+                    type="button"
+                    onClick={() => setChargesSearchQuery("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                  >
+                    <X className="h-3.5 w-3.5" />
+                  </button>
+                )}
+              </div>
               <Select
                 value={chargesContractFilter}
                 onValueChange={(val) => { setChargesContractFilter(val === "all" ? "" : val); setChargesPage(1); }}
@@ -1097,16 +1146,21 @@ export default function BillingPage() {
 
           {chargesLoading ? (
             <TableSkeleton rows={6} />
-          ) : charges.length === 0 ? (
+          ) : filteredCharges.length === 0 ? (
             <EmptyState
               icon={Receipt}
               title="No usage charges found"
-              description={hasChargesFilters ? "Try adjusting your filters." : "Add your first usage charge to get started."}
+              description={hasChargesFilters ? "Try adjusting your filters or search." : "Add your first usage charge to get started."}
               actionLabel={!hasChargesFilters ? "Add Charge" : undefined}
               onAction={!hasChargesFilters ? () => setAddChargeOpen(true) : undefined}
             />
           ) : (
             <div className="rounded-md border overflow-x-auto">
+              {chargesSearchQuery.trim() && (
+                <p className="text-xs text-muted-foreground px-4 py-2 border-b">
+                  {filteredCharges.length} of {charges.length} charges match &ldquo;{chargesSearchQuery}&rdquo;
+                </p>
+              )}
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
@@ -1124,7 +1178,7 @@ export default function BillingPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {charges.map((charge) => (
+                  {filteredCharges.map((charge) => (
                     <tr key={charge.id} className="border-b hover:bg-muted/30 transition-colors">
                       <td className="px-4 py-3 font-medium max-w-[200px] truncate">{charge.description}</td>
                       <td className="px-4 py-3 font-mono text-xs hidden md:table-cell">
@@ -1240,6 +1294,12 @@ export default function BillingPage() {
         onOpenChange={(v) => { if (!v) setViewStatementId(null); }}
         onStatusChange={fetchStatements}
         userRole={userRole}
+        onRecordPayment={(statementId, balanceDue) => {
+          setRecordPaymentStatementId(statementId);
+          setRecordPaymentBalance(balanceDue);
+          setViewStatementId(null);
+          setRecordPaymentDialogOpen(true);
+        }}
       />
 
       <Dialog open={recordPaymentDialogOpen} onOpenChange={(open) => {
@@ -1247,7 +1307,14 @@ export default function BillingPage() {
         if (!open) { setRpTdsEnabled(false); setRpTdsAmount(""); setRpTdsSection("194I"); }
       }}>
         <DialogContent>
-          <DialogHeader><DialogTitle>Record Payment</DialogTitle></DialogHeader>
+          <DialogHeader>
+            <DialogTitle>Record Payment</DialogTitle>
+            {recordPaymentBalance !== null && recordPaymentBalance > 0 && (
+              <p className="text-sm text-amber-700 font-medium mt-1">
+                Balance due: {formatCurrency(recordPaymentBalance)}
+              </p>
+            )}
+          </DialogHeader>
           <div className="space-y-4 mt-2">
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
