@@ -117,15 +117,16 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // ── 4. Add active contracts with print quotas even if no usage yet ───────
-  //   These show up in the Usage tab so operators know to enter print counts.
-  const { data: printQuotaContracts } = await admin
-    .from("contract_service_quotas")
-    .select("contract_id, contracts!inner(status)")
-    .eq("contracts.status", "active");
+  // ── 4. Add ALL active contracts so Log Print is always available ──────────
+  //   Not gated on service quotas — the print entry dialog handles missing
+  //   quota rows by falling back to catalogue rates.
+  const { data: allActiveContracts } = await admin
+    .from("contracts")
+    .select("id")
+    .eq("status", "active");
 
-  const printContractIds = new Set((printQuotaContracts || []).map((r) => r.contract_id as string));
-  for (const cid of printContractIds) {
+  for (const c of allActiveContracts || []) {
+    const cid = c.id as string;
     if (!agg.has(cid)) {
       agg.set(cid, { contract_id: cid, free_count: 0, paid_count: 0, paid_total: 0, line_items: [], has_print_quota: true });
     } else {
