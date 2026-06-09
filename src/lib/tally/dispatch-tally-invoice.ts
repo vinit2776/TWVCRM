@@ -249,6 +249,29 @@ export async function dispatchTallyInvoice(
       }
     }
 
+    // ── CRITICAL: Close D3 gate immediately after email, in its own update ────
+    // This MUST be a separate, minimal update so that even if the full payload
+    // update below fails (e.g. an unknown column causes PostgREST to reject the
+    // whole request), the gate is already closed and no retry will double-send.
+    const gatePayload: Record<string, unknown> = {
+      tally_delivered_at: now,
+      lifecycle_stage: "sent",
+      tally_last_error: null,
+    };
+    if (emailedSuccessfully) {
+      gatePayload.emailed_at = now;
+      gatePayload.emailed_to = customerEmail;
+    }
+    const { error: gateErr } = await supabase
+      .from("billing_statements")
+      .update(gatePayload)
+      .eq("id", billingStatementId);
+    if (gateErr) {
+      // Gate close failed — log loudly. We'll return ok:false so the caller knows.
+      console.error("[dispatch-tally] CRITICAL: D3 gate close failed:", gateErr.message, gateErr);
+      return { ok: false, error: `D3 gate update failed: ${gateErr.message}` };
+    }
+
     // ── WhatsApp (fire-and-forget) ───────────────────────────────────────────
     if (customerPhone && pdfPublicUrl) {
       void messaging.invoiceDocument(
@@ -262,10 +285,13 @@ export async function dispatchTallyInvoice(
       ).catch((err: unknown) => console.error("[dispatch-tally] WhatsApp failed:", err));
     }
 
-    // ── Persist: mirror Tally number + total, mark delivered (D3 gate) ────────
+    // ── Persist: mirror Tally number + total (metadata update — gate already closed above) ──
+    // NOTE: gst_invoice_date is intentionally omitted — that column does not exist
+    // in billing_statements. Using it in the payload caused PostgREST to reject
+    // the entire update silently, which is what was preventing tally_delivered_at
+    // from being written (D3 gate never closing → email spam).
     const updatePayload: Record<string, unknown> = {
       gst_invoice_number: ack.invoiceNumber,   // mirror Tally's number into the CRM field
-      gst_invoice_date: issueDateYmd,
       gst_invoice_path: storagePath,
       subtotal,
       tax_amount: cgst + sgst + igst,
@@ -277,18 +303,20 @@ export async function dispatchTallyInvoice(
       buyer_gstin: lead?.gst_number || null,
       status: "exported",
       exported_at: now,
-      tally_delivered_at: now,
-      lifecycle_stage: "sent",
-      tally_last_error: null,
     };
-    if (emailedSuccessfully) { updatePayload.emailed_at = now; updatePayload.emailed_to = customerEmail; }
     if (!isPaid) {
       updatePayload.due_date = dueDate;
       if (razorpayLinkId) updatePayload.razorpay_payment_link_id = razorpayLinkId;
       if (razorpayLinkUrl) updatePayload.razorpay_payment_link_url = razorpayLinkUrl;
     }
 
-    await supabase.from("billing_statements").update(updatePayload).eq("id", billingStatementId);
+    const { error: metaErr } = await supabase
+      .from("billing_statements")
+      .update(updatePayload)
+      .eq("id", billingStatementId);
+    if (metaErr) {
+      console.error("[dispatch-tally] Metadata update failed (gate already closed, non-fatal):", metaErr.message, metaErr);
+    }
 
     void logAudit(supabase, {
       entityType: "billing_statement",
