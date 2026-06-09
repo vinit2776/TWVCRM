@@ -121,9 +121,21 @@ export function ManualPrintEntryDialog({
     if (!open) return;
     setContractsLoading(true);
     const leadParam = filterLeadId ? `&lead_id=${filterLeadId}` : "";
-    fetch(`/api/contracts?status=active&limit=200${leadParam}`)
-      .then(r => r.json())
-      .then(j => setContracts(j.data || []))
+    // Fetch active + recently terminated (last 3 months) so final-month
+    // billing is still possible after a contract ends.
+    const threeMonthsAgo = new Date();
+    threeMonthsAgo.setMonth(threeMonthsAgo.getMonth() - 3);
+    const sinceDate = threeMonthsAgo.toISOString().slice(0, 10);
+    Promise.all([
+      fetch(`/api/contracts?status=active&limit=200${leadParam}`).then(r => r.json()),
+      fetch(`/api/contracts?status=terminated&limit=200${leadParam}&terminated_after=${sinceDate}`).then(r => r.json()),
+    ])
+      .then(([activeJson, terminatedJson]) => {
+        const combined = [...(activeJson.data || []), ...(terminatedJson.data || [])];
+        // Deduplicate by id
+        const seen = new Set<string>();
+        setContracts(combined.filter(c => { if (seen.has(c.id)) return false; seen.add(c.id); return true; }));
+      })
       .catch(() => toast.error("Failed to load contracts"))
       .finally(() => setContractsLoading(false));
   }, [open, filterLeadId]);

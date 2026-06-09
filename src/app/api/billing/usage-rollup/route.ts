@@ -117,13 +117,14 @@ export async function GET(req: NextRequest) {
     }
   }
 
-  // ── 4. Add ALL active contracts so Log Print is always available ──────────
-  //   Not gated on service quotas — the print entry dialog handles missing
-  //   quota rows by falling back to catalogue rates.
+  // ── 4. Add active + recently-terminated contracts ─────────────────────────
+  //   Include terminated contracts where terminated_at >= month_start so that
+  //   the final billing month (e.g. May for a contract terminated 30-May) is
+  //   still accessible for print entry and PI dispatch.
   const { data: allActiveContracts } = await admin
     .from("contracts")
     .select("id")
-    .eq("status", "active");
+    .or(`status.eq.active,and(status.eq.terminated,terminated_at.gte.${monthStart})`);
 
   for (const c of allActiveContracts || []) {
     const cid = c.id as string;

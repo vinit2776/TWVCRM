@@ -18,6 +18,7 @@ export async function GET(request: NextRequest) {
   const expiringSoon = searchParams.get("expiring_soon"); // "30" or "60"
   const parentContractId = searchParams.get("parent_contract_id");
   const isRenewal = searchParams.get("is_renewal");
+  const terminatedAfter = searchParams.get("terminated_after"); // ISO date — include terminated contracts after this date
 
   const offset = (page - 1) * limit;
 
@@ -59,6 +60,7 @@ export async function GET(request: NextRequest) {
     `, { count: "exact" });
 
   if (status) query = query.eq("status", status);
+  if (terminatedAfter) query = query.gte("terminated_at", terminatedAfter);
   if (leadId) query = query.eq("lead_id", leadId);
   if (parentContractId) query = query.eq("parent_contract_id", parentContractId);
   if (isRenewal === "true") query = query.eq("is_renewal", true);
