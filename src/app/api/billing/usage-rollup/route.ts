@@ -88,6 +88,7 @@ export async function GET(req: NextRequest) {
     paid_count: number;
     paid_total: number;
     line_items: LineItem[];
+    has_print_quota?: boolean;
   }
   const agg = new Map<string, Agg>();
   const bump = (contract_id: string, item: LineItem) => {
@@ -116,9 +117,25 @@ export async function GET(req: NextRequest) {
     }
   }
 
+  // ── 4. Add active contracts with print quotas even if no usage yet ───────
+  //   These show up in the Usage tab so operators know to enter print counts.
+  const { data: printQuotaContracts } = await admin
+    .from("contract_service_quotas")
+    .select("contract_id, contracts!inner(status)")
+    .eq("contracts.status", "active");
+
+  const printContractIds = new Set((printQuotaContracts || []).map((r) => r.contract_id as string));
+  for (const cid of printContractIds) {
+    if (!agg.has(cid)) {
+      agg.set(cid, { contract_id: cid, free_count: 0, paid_count: 0, paid_total: 0, line_items: [], has_print_quota: true });
+    } else {
+      (agg.get(cid) as Agg).has_print_quota = true;
+    }
+  }
+
   if (agg.size === 0) return NextResponse.json({ year, month, rows: [] });
 
-  // ── 4. Enrich with contract + lead info ────────────────────────────────
+  // ── 5. Enrich with contract + lead info ────────────────────────────────
   const { data: contracts } = await admin
     .from("contracts")
     .select("id, contract_number, lead:leads(first_name, last_name, company)")
@@ -137,6 +154,7 @@ export async function GET(req: NextRequest) {
       free_count: a.free_count,
       paid_count: a.paid_count,
       paid_total: Math.round(a.paid_total),
+      has_print_quota: a.has_print_quota ?? false,
       line_items: a.line_items.map((li) => ({ ...li, amount: Math.round(li.amount) })),
       statement: stmt
         ? {

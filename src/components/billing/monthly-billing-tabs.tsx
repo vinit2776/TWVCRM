@@ -30,10 +30,11 @@ import Link from "next/link";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Send, FileDown, ChevronDown, ChevronRight } from "lucide-react";
+import { Loader2, Send, FileDown, ChevronDown, ChevronRight, Printer } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
+import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
 
 interface Lead { email?: string; phone?: string; mobile?: string; company?: string; first_name?: string; last_name?: string; }
 
@@ -57,6 +58,7 @@ interface UsageRow {
   free_count: number;
   paid_count: number;
   paid_total: number;
+  has_print_quota: boolean;
   line_items: LineItem[];
   statement: {
     id: string;
@@ -99,6 +101,7 @@ export function MonthlyBillingTabs({ year, month, onFinalized, onViewStatement }
   const [usageLoading, setUsageLoading] = useState(true);
   const [expandedContract, setExpandedContract] = useState<string | null>(null);
   const [sendingContract, setSendingContract] = useState<string | null>(null);
+  const [printDialogContractId, setPrintDialogContractId] = useState<string | null>(null);
 
   // Operations month = `month`. Rent we're sending in this month covers next month.
   const rentPeriodMonth = useMemo(() => nextMonth(year, month), [year, month]);
@@ -153,6 +156,7 @@ export function MonthlyBillingTabs({ year, month, onFinalized, onViewStatement }
     sent: usageRows.filter((r) => !!r.statement?.proforma_sent_at).length,
     pending: usageRows.filter((r) => !r.statement?.proforma_sent_at).length,
   };
+
 
   // ── Usage: Verify & Send for a single contract ─────────────────────────
   const verifyAndSend = async (row: UsageRow) => {
@@ -222,7 +226,7 @@ export function MonthlyBillingTabs({ year, month, onFinalized, onViewStatement }
       {tab === "usage" && (
         <div className="space-y-3">
           <div className="rounded-md bg-amber-50 border border-amber-200 px-4 py-2 text-xs text-amber-900">
-            Usage charges for <strong>{opsLabel}</strong>. Review each contract&apos;s usage, then click <strong>Verify &amp; Send</strong> to dispatch the proforma. Due date = send date + 7 days.
+            Usage charges for <strong>{opsLabel}</strong>. Enter print counts for contracts that haven&apos;t been logged yet, then click <strong>Verify &amp; Send</strong> to dispatch the proforma. Due date = send date + 7 days.
           </div>
           <UsageTable
             rows={usageRows}
@@ -232,9 +236,17 @@ export function MonthlyBillingTabs({ year, month, onFinalized, onViewStatement }
             onToggleExpand={(id) => setExpandedContract((prev) => (prev === id ? null : id))}
             onVerifyAndSend={verifyAndSend}
             sendingContract={sendingContract}
+            onLogPrint={(contractId) => setPrintDialogContractId(contractId)}
           />
         </div>
       )}
+
+      <ManualPrintEntryDialog
+        open={!!printDialogContractId}
+        onOpenChange={(open) => { if (!open) setPrintDialogContractId(null); }}
+        defaultContractId={printDialogContractId ?? undefined}
+        onSuccess={() => { setPrintDialogContractId(null); loadUsage(); }}
+      />
     </div>
   );
 }
@@ -331,8 +343,9 @@ function UsageTable(props: {
   onToggleExpand: (id: string) => void;
   onVerifyAndSend: (row: UsageRow) => void;
   sendingContract: string | null;
+  onLogPrint: (contractId: string) => void;
 }) {
-  const { rows, loading, opsLabel, expandedContract, onToggleExpand, onVerifyAndSend, sendingContract } = props;
+  const { rows, loading, opsLabel, expandedContract, onToggleExpand, onVerifyAndSend, sendingContract, onLogPrint } = props;
 
   // Pending first (call-to-action), sorted by contract number within group.
   const sorted = useMemo(() => {
@@ -403,7 +416,16 @@ function UsageTable(props: {
                       </td>
                       <td className="px-4 py-3 text-xs whitespace-nowrap text-muted-foreground">{stmt?.due_date ? formatDate(stmt.due_date) : "—"}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-right">
-                        {!isSent && (r.paid_count > 0 || r.free_count > 0) && (
+                        {!isSent && r.paid_count === 0 && r.free_count === 0 && r.has_print_quota ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => onLogPrint(r.contract_id)}
+                            className="border-amber-400 text-amber-700 hover:bg-amber-50"
+                          >
+                            <Printer className="h-3.5 w-3.5 mr-1" />Log Print
+                          </Button>
+                        ) : !isSent && (r.paid_count > 0 || r.free_count > 0) ? (
                           <Button
                             size="sm"
                             onClick={() => onVerifyAndSend(r)}
@@ -415,7 +437,7 @@ function UsageTable(props: {
                               ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />Sending…</>
                               : <><Send className="h-3.5 w-3.5 mr-1" />Verify &amp; Send</>}
                           </Button>
-                        )}
+                        ) : null}
                       </td>
                     </tr>
                     {expanded && (() => {
