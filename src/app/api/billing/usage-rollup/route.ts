@@ -140,7 +140,7 @@ export async function GET(req: NextRequest) {
   // ── 5. Enrich with contract + lead info ────────────────────────────────
   const { data: contracts } = await admin
     .from("contracts")
-    .select("id, contract_number, lead:leads(first_name, last_name, company)")
+    .select("id, contract_number, billing_mode, lead:leads(first_name, last_name, company)")
     .in("id", Array.from(agg.keys()));
 
   const rows = (contracts || []).map((c) => {
@@ -152,6 +152,7 @@ export async function GET(req: NextRequest) {
     return {
       contract_id: c.id,
       contract_number: c.contract_number,
+      billing_mode: (c as unknown as { billing_mode?: string | null }).billing_mode ?? null,
       customer,
       free_count: a.free_count,
       paid_count: a.paid_count,

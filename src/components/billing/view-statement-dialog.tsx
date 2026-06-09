@@ -11,14 +11,16 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Badge } from "@/components/ui/badge";
 
 import { Skeleton } from "@/components/shared/loading-skeleton";
-import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck, Ban, RotateCcw, AlertTriangle, Trash2 } from "lucide-react";
+import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck, Ban, RotateCcw, AlertTriangle, Trash2, IndianRupee, ExternalLink, Bell, Clock, Copy, Download, Mail } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
+import { BillingModeTag } from "@/components/billing/billing-mode-tag";
 import { ConvertToGstEarlyDialog } from "@/components/billing/convert-to-gst-early-dialog";
 
 interface UsageCharge {
@@ -67,6 +69,19 @@ interface BookingCharge {
   is_free: boolean;
 }
 
+interface ReminderRecord {
+  id: string;
+  stage_index: number;
+  stage_label: string;
+  channel: string;
+  recipient: string;
+  status: string;
+  error?: string | null;
+  triggered_by: string;
+  sent_at: string;
+  triggered_by_user?: { full_name: string } | null;
+}
+
 interface Statement {
   id: string;
   statement_number: string;
@@ -94,6 +109,8 @@ interface Statement {
   pi_cancelled_at?: string | null;
   due_date?: string | null;
   notes?: string;
+  reminder_count?: number | null;
+  voided_at?: string | null;
   // Tally state (surfaced via TallyStatusBadge)
   issuance_channel?: string | null;
   lifecycle_stage?: string | null;
@@ -102,13 +119,23 @@ interface Statement {
   tally_credit_note_number?: string | null;
   tally_last_error?: string | null;
   tally_delivered_at?: string | null;
-  contract?: { id: string; contract_number: string; title?: string } | null;
+  contract?: { id: string; contract_number: string; title?: string; billing_mode?: string | null } | null;
   booking?: { id: string; booking_number: string; booking_date: string; guest_name?: string } | null;
   lead?: { first_name: string; last_name: string; company?: string; email?: string } | null;
   usage_charges?: UsageCharge[];
   facility_charges?: FacilityCharge[];
   service_charges?: ServiceCharge[];
   booking_charges?: BookingCharge[];
+  billing_payments?: Array<{
+    id: string;
+    amount: number;
+    tds_amount?: number | null;
+    payment_date: string;
+    payment_mode: string;
+    payment_reference?: string | null;
+    razorpay_payment_id?: string | null;
+    recorded_by_user?: { full_name: string } | null;
+  }> | null;
 }
 
 
@@ -122,6 +149,8 @@ interface ViewStatementDialogProps {
   onStatusChange: () => void;
   /** Current user's role — drives visibility of "Add charge" on draft statements */
   userRole?: string | null;
+  /** Called when user clicks Record Payment — opens payment dialog in parent */
+  onRecordPayment?: (statementId: string, balanceDue: number) => void;
 }
 
 export function ViewStatementDialog({
@@ -130,6 +159,7 @@ export function ViewStatementDialog({
   onOpenChange,
   onStatusChange,
   userRole,
+  onRecordPayment,
 }: ViewStatementDialogProps) {
   const [statement, setStatement] = useState<Statement | null>(null);
   const [loading, setLoading] = useState(false);
@@ -140,6 +170,15 @@ export function ViewStatementDialog({
   const [retryingTally, setRetryingTally] = useState(false);
   const [showConvertToGst, setShowConvertToGst] = useState(false);
   const [gstModeReady, setGstModeReady] = useState<boolean | null>(null); // null = loading
+
+  // Reminder state
+  const [sendingReminder, setSendingReminder] = useState(false);
+  const [showReminderHistory, setShowReminderHistory] = useState(false);
+  const [reminderHistory, setReminderHistory] = useState<ReminderRecord[]>([]);
+  const [reminderHistoryLoading, setReminderHistoryLoading] = useState(false);
+
+  // Resend GST email state
+  const [resendingGstEmail, setResendingGstEmail] = useState(false);
 
   // Void / Cancel-Tally state
   const [showVoidConfirm, setShowVoidConfirm] = useState(false);
@@ -466,6 +505,67 @@ export function ViewStatementDialog({
     ? `Booking ${statement.booking.booking_number}`
     : "—";
 
+  const handleSendReminder = async () => {
+    if (!statement) return;
+    setSendingReminder(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statement.id}/send-reminder`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({}),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed");
+      const channels = [json.emailSent && "email", json.whatsAppSent && "WhatsApp"].filter(Boolean).join(" + ");
+      toast.success(`${json.toneLabel} sent via ${channels || "no channel"}`);
+      onStatusChange();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to send reminder");
+    } finally {
+      setSendingReminder(false);
+    }
+  };
+
+  const handleLoadReminderHistory = async () => {
+    if (!statement) return;
+    setShowReminderHistory(true);
+    setReminderHistoryLoading(true);
+    setReminderHistory([]);
+    try {
+      const res = await fetch(`/api/billing-statements/${statement.id}/send-reminder`);
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed");
+      setReminderHistory(json.history || []);
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to load history");
+    } finally {
+      setReminderHistoryLoading(false);
+    }
+  };
+
+  const handleResendGstEmail = async () => {
+    if (!statement?.lead?.email) {
+      toast.error("No email address on file for this customer");
+      return;
+    }
+    setResendingGstEmail(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statement.id}/gst-invoice-email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ recipients: [statement.lead.email] }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed");
+      toast.success("GST invoice email resent");
+      onStatusChange();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to resend GST email");
+    } finally {
+      setResendingGstEmail(false);
+    }
+  };
+
   return (
     <>
     <Dialog open={open} onOpenChange={onOpenChange}>
@@ -515,7 +615,10 @@ export function ViewStatementDialog({
               </div>
               <div>
                 <p className="text-muted-foreground text-xs mb-0.5">Reference</p>
-                <p className="font-mono font-medium">{reference}</p>
+                <div className="flex items-center gap-2 flex-wrap">
+                  <p className="font-mono font-medium">{reference}</p>
+                  <BillingModeTag mode={statement.contract?.billing_mode} />
+                </div>
               </div>
               <div>
                 <p className="text-muted-foreground text-xs mb-0.5">Customer</p>
@@ -539,7 +642,11 @@ export function ViewStatementDialog({
               const serviceAmt = Number(statement.service_usage_amount || 0);
 
               return (
-                <div className="rounded-md border bg-muted/30 p-4 space-y-2 text-sm">
+                <div className="rounded-lg overflow-hidden border border-l-4 border-l-slate-400 border-gray-200">
+                  <div className="px-4 py-2.5 bg-slate-50 border-b border-slate-100">
+                    <h4 className="text-sm font-semibold text-slate-700">Billing Summary</h4>
+                  </div>
+                  <div className="p-4 space-y-2 text-sm">
                   <div className="flex justify-between">
                     <span className="text-muted-foreground">{prepaidLabel}</span>
                     <span>{formatCurrency(statement.fixed_amount)}</span>
@@ -582,15 +689,141 @@ export function ViewStatementDialog({
                     <span>Total</span>
                     <span>{formatCurrency(statement.total_amount)}</span>
                   </div>
+                  </div>
+                </div>
+              );
+            })()}
+
+            {/* Payment history — shown on finalized/exported statements */}
+            {(statement.status === "finalized" || statement.status === "exported") && (() => {
+              const payments = statement.billing_payments || [];
+              const totalReceived = payments.reduce((s, p) => s + Number(p.amount) + Number(p.tds_amount || 0), 0);
+              const balanceDue = Math.max(0, statement.total_amount - totalReceived);
+              const isFullyPaid = statement.payment_status === "paid";
+
+              return (
+                <div className="rounded-lg overflow-hidden border border-l-4 border-l-emerald-400 border-gray-200">
+                  <div className="flex items-center justify-between px-4 py-2.5 bg-emerald-50 border-b border-emerald-100">
+                    <h4 className="text-sm font-semibold text-emerald-800">Payments Received</h4>
+                    {!isFullyPaid && onRecordPayment && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="h-7 text-xs border-emerald-300 text-emerald-700 hover:bg-emerald-100"
+                        onClick={() => onRecordPayment(statement.id, balanceDue)}
+                      >
+                        <IndianRupee className="h-3 w-3 mr-1" />
+                        Record Payment
+                      </Button>
+                    )}
+                    {isFullyPaid && (
+                      <span className="text-xs text-emerald-700 bg-emerald-100 border border-emerald-200 rounded px-2 py-0.5">
+                        ✓ Fully paid
+                      </span>
+                    )}
+                  </div>
+                  <div className="p-4 space-y-2">
+                  {!isFullyPaid && statement.razorpay_payment_link_url && (
+                    <div className="flex items-center gap-2 rounded-md border border-teal-200 bg-teal-50 px-3 py-2">
+                      <span className="text-xs text-teal-700 flex-1 truncate">Payment link</span>
+                      <a
+                        href={statement.razorpay_payment_link_url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs text-teal-700 hover:text-teal-900 underline"
+                        title="Open payment link"
+                      >
+                        <ExternalLink className="h-3.5 w-3.5" />
+                      </a>
+                      <button
+                        className="text-xs text-teal-700 hover:text-teal-900"
+                        title="Copy payment link"
+                        onClick={() => {
+                          navigator.clipboard.writeText(statement.razorpay_payment_link_url!);
+                          toast.success("Payment link copied");
+                        }}
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  )}
+
+                  {payments.length > 0 ? (
+                    <div className="rounded-md border divide-y text-sm">
+                      {payments.map((p) => {
+                        const isRazorpay = p.payment_mode === "razorpay" || !!p.razorpay_payment_id;
+                        const modeLabel = isRazorpay ? "Razorpay" : (p.payment_mode?.toUpperCase() || "—");
+                        const settled = Number(p.amount) + Number(p.tds_amount || 0);
+                        return (
+                          <div key={p.id} className="flex items-center justify-between px-3 py-2">
+                            <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
+                              <span className="text-xs text-muted-foreground">{formatDate(p.payment_date)}</span>
+                              <Badge variant="outline" className={`text-xs ${isRazorpay ? "border-violet-300 text-violet-700 bg-violet-50" : ""}`}>
+                                {modeLabel}
+                              </Badge>
+                              {p.razorpay_payment_id ? (
+                                <a
+                                  href={`https://dashboard.razorpay.com/app/payments/${p.razorpay_payment_id}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-0.5 text-xs text-violet-700 hover:text-violet-900 underline font-mono"
+                                >
+                                  {p.razorpay_payment_id}
+                                  <ExternalLink className="h-2.5 w-2.5" />
+                                </a>
+                              ) : p.payment_reference ? (
+                                <span className="text-xs text-muted-foreground font-mono">Ref: {p.payment_reference}</span>
+                              ) : null}
+                              {(p.tds_amount || 0) > 0 && (
+                                <span className="text-xs text-muted-foreground">TDS: {formatCurrency(p.tds_amount!)}</span>
+                              )}
+                              {p.recorded_by_user?.full_name ? (
+                                <span className="text-xs text-muted-foreground">· {p.recorded_by_user.full_name}</span>
+                              ) : isRazorpay ? (
+                                <span className="text-xs text-muted-foreground italic">· via gateway</span>
+                              ) : null}
+                            </div>
+                            <div className="flex flex-col items-end ml-2 flex-shrink-0">
+                              <span className="font-medium text-green-700">{formatCurrency(p.amount)}</span>
+                              {(p.tds_amount || 0) > 0 && (
+                                <span className="text-[10px] text-muted-foreground">settled {formatCurrency(settled)}</span>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <div className="flex justify-between items-center px-3 py-2 bg-muted/30 text-xs">
+                        <span className="text-muted-foreground">Total received</span>
+                        <span className="font-medium text-green-700">{formatCurrency(totalReceived)}</span>
+                      </div>
+                      {balanceDue > 0 && (
+                        <div className="flex justify-between items-center px-3 py-2 bg-amber-50 text-xs">
+                          <span className="font-medium text-amber-700">Balance due</span>
+                          <span className="font-semibold text-amber-700">{formatCurrency(balanceDue)}</span>
+                        </div>
+                      )}
+                    </div>
+                  ) : (
+                    <p className="text-sm text-muted-foreground">No payments recorded yet.</p>
+                  )}
+
+                  {!isFullyPaid && balanceDue > 0 && (
+                    <p className="text-xs text-amber-600">
+                      Outstanding: {formatCurrency(balanceDue)} of {formatCurrency(statement.total_amount)}
+                    </p>
+                  )}
+                  </div>
                 </div>
               );
             })()}
 
             {/* Booking charges table (auto-rolled contract bookings) */}
             {(statement.booking_charges?.length ?? 0) > 0 && (
-              <div>
-                <h4 className="text-sm font-semibold mb-2">Meeting Room Bookings</h4>
-                <div className="rounded-md border overflow-x-auto">
+              <div className="rounded-lg overflow-hidden border border-l-4 border-l-sky-400 border-gray-200">
+                <div className="px-4 py-2.5 bg-sky-50 border-b border-sky-100">
+                  <h4 className="text-sm font-semibold text-sky-800">Meeting Room Bookings</h4>
+                </div>
+                <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b bg-muted/50">
@@ -629,9 +862,11 @@ export function ViewStatementDialog({
 
             {/* Usage charges table (ad-hoc + facility) */}
             {((statement.usage_charges?.length ?? 0) > 0 || (statement.facility_charges?.length ?? 0) > 0) && (
-              <div>
-                <h4 className="text-sm font-semibold mb-2">Ad-hoc &amp; Facility Charges</h4>
-                <div className="rounded-md border overflow-x-auto">
+              <div className="rounded-lg overflow-hidden border border-l-4 border-l-amber-400 border-gray-200">
+                <div className="px-4 py-2.5 bg-amber-50 border-b border-amber-100">
+                  <h4 className="text-sm font-semibold text-amber-800">Ad-hoc &amp; Facility Charges</h4>
+                </div>
+                <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b bg-muted/50">
@@ -768,9 +1003,11 @@ export function ViewStatementDialog({
 
             {/* Service charges table (printer/service overages) */}
             {(statement.service_charges?.length ?? 0) > 0 && (
-              <div>
-                <h4 className="text-sm font-semibold mb-2">Service Usage</h4>
-                <div className="rounded-md border overflow-x-auto">
+              <div className="rounded-lg overflow-hidden border border-l-4 border-l-violet-400 border-gray-200">
+                <div className="px-4 py-2.5 bg-violet-50 border-b border-violet-100">
+                  <h4 className="text-sm font-semibold text-violet-800">Service Usage</h4>
+                </div>
+                <div className="overflow-x-auto">
                   <table className="w-full text-sm">
                     <thead>
                       <tr className="border-b bg-muted/50">
@@ -932,6 +1169,22 @@ export function ViewStatementDialog({
           <Button variant="outline" onClick={() => onOpenChange(false)}>
             Close
           </Button>
+          {/* Record Payment — finalized/exported, not yet fully paid */}
+          {(statement?.status === "finalized" || statement?.status === "exported") && statement?.payment_status !== "paid" && onRecordPayment && (() => {
+            const payments = statement.billing_payments || [];
+            const totalReceived = payments.reduce((s, p) => s + Number(p.amount) + Number(p.tds_amount || 0), 0);
+            const balanceDue = Math.max(0, statement.total_amount - totalReceived);
+            return (
+              <Button
+                variant="default"
+                className="bg-teal-700 hover:bg-teal-800"
+                onClick={() => onRecordPayment(statement.id, balanceDue)}
+              >
+                <IndianRupee className="mr-2 h-4 w-4" />
+                Record Payment{balanceDue > 0 ? ` — ${formatCurrency(balanceDue)} due` : ""}
+              </Button>
+            );
+          })()}
           {/* Revert to Draft — admin/manager only, finalized statements */}
           {canRevertToDraft && (
             <Button
@@ -961,6 +1214,34 @@ export function ViewStatementDialog({
               {statement?.proforma_sent_at ? "Resend Proforma" : "Send Proforma + Payment Link"}
             </Button>
           )}
+          {/* Send Reminder — finalized/exported, not yet paid, proforma already sent, not voided */}
+          {(statement?.status === "finalized" || statement?.status === "exported") && statement?.payment_status !== "paid" && !!statement?.proforma_sent_at && !statement?.voided_at && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
+            <div className="flex gap-1">
+              <Button
+                variant="outline"
+                className="border-amber-300 text-amber-700 hover:bg-amber-50"
+                onClick={handleSendReminder}
+                disabled={sendingReminder}
+              >
+                {sendingReminder ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Bell className="mr-2 h-4 w-4" />}
+                Send Reminder
+                {(statement?.reminder_count ?? 0) > 0 && (
+                  <span className="ml-1.5 text-[10px] bg-amber-100 text-amber-800 rounded-full px-1.5 py-0.5 font-semibold">
+                    {statement!.reminder_count}
+                  </span>
+                )}
+              </Button>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="text-amber-600 hover:bg-amber-50"
+                title="View reminder history"
+                onClick={handleLoadReminderHistory}
+              >
+                <Clock className="h-4 w-4" />
+              </Button>
+            </div>
+          )}
           {/* Early GST override — admin/manager, finalized, unpaid, no GST yet */}
           {statement?.status === "finalized" && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.payment_status !== "paid" && userRole && ["admin", "manager"].includes(userRole) && (
             <Button
@@ -986,13 +1267,38 @@ export function ViewStatementDialog({
               Generate &amp; Send GST Invoice
             </Button>
           )}
-          {/* GST invoice already generated: show number */}
+          {/* GST invoice already generated: show number + download + resend */}
           {statement?.gst_invoice_number && (
-            <div className="flex items-center gap-2 text-sm text-green-700 font-medium">
-              <FileCheck className="h-4 w-4" />
-              {statement.gst_invoice_number}
-              {statement?.pi_cancelled_at && (
-                <span className="text-xs text-amber-600 font-normal">(Early override)</span>
+            <div className="flex flex-wrap items-center gap-2">
+              <div className="flex items-center gap-1.5 text-sm text-green-700 font-medium">
+                <FileCheck className="h-4 w-4" />
+                {statement.gst_invoice_number}
+                {statement?.pi_cancelled_at && (
+                  <span className="text-xs text-amber-600 font-normal">(Early override)</span>
+                )}
+              </div>
+              <a
+                href={`/api/billing-statements/${statement.id}/gst-invoice-pdf`}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 text-xs text-green-700 border border-green-300 rounded px-2 py-1 hover:bg-green-50"
+                title="Download GST invoice PDF"
+              >
+                <Download className="h-3 w-3" />
+                PDF
+              </a>
+              {statement?.lead?.email && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 text-xs border-green-300 text-green-700 hover:bg-green-50"
+                  onClick={handleResendGstEmail}
+                  disabled={resendingGstEmail}
+                  title="Resend GST invoice email"
+                >
+                  {resendingGstEmail ? <Loader2 className="h-3 w-3 mr-1 animate-spin" /> : <Mail className="h-3 w-3 mr-1" />}
+                  Resend Email
+                </Button>
               )}
             </div>
           )}
@@ -1072,6 +1378,62 @@ export function ViewStatementDialog({
         onSuccess={() => { onStatusChange(); onOpenChange(false); }}
       />
     )}
+
+    {/* Reminder history dialog */}
+    <Dialog open={showReminderHistory} onOpenChange={(o) => !o && setShowReminderHistory(false)}>
+      <DialogContent className="max-w-2xl">
+        <DialogHeader>
+          <DialogTitle>Reminder history — {statement?.statement_number}</DialogTitle>
+        </DialogHeader>
+        {reminderHistoryLoading ? (
+          <div className="p-6 text-center text-muted-foreground">
+            <Loader2 className="h-5 w-5 animate-spin inline mr-2" /> Loading…
+          </div>
+        ) : reminderHistory.length === 0 ? (
+          <div className="p-6 text-center text-muted-foreground">No reminders sent yet for this statement.</div>
+        ) : (
+          <div className="max-h-[400px] overflow-y-auto">
+            <table className="w-full text-sm">
+              <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-b sticky top-0">
+                <tr>
+                  <th className="px-3 py-2 text-left">Sent</th>
+                  <th className="px-3 py-2 text-left">Stage</th>
+                  <th className="px-3 py-2 text-left">Channel</th>
+                  <th className="px-3 py-2 text-left">Recipient</th>
+                  <th className="px-3 py-2 text-left">Status</th>
+                  <th className="px-3 py-2 text-left">By</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y">
+                {reminderHistory.map((h) => (
+                  <tr key={h.id}>
+                    <td className="px-3 py-2 whitespace-nowrap text-xs">
+                      {new Date(h.sent_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })}
+                    </td>
+                    <td className="px-3 py-2 text-xs">{h.stage_label}</td>
+                    <td className="px-3 py-2 text-xs uppercase">{h.channel}</td>
+                    <td className="px-3 py-2 text-xs">{h.recipient}</td>
+                    <td className="px-3 py-2">
+                      {h.status === "sent" ? (
+                        <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px]">SENT</Badge>
+                      ) : (
+                        <Badge className="bg-red-100 text-red-800 border-red-300 text-[10px]" title={h.error || ""}>FAILED</Badge>
+                      )}
+                    </td>
+                    <td className="px-3 py-2 text-xs text-muted-foreground">
+                      {h.triggered_by === "cron" ? "Cron" : (h.triggered_by_user?.full_name || "Manual")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => setShowReminderHistory(false)}>Close</Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
     </>
   );
 }

@@ -31,12 +31,14 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Loader2, Send, FileDown, ChevronDown, ChevronRight, Printer, Search, X } from "lucide-react";
+import { Loader2, Send, FileDown, ChevronDown, ChevronRight, Search, X, Copy, ExternalLink } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
 import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
 import { UsageReviewDialog } from "@/components/billing/usage-review-dialog";
+import { BillingModeTag } from "@/components/billing/billing-mode-tag";
+import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
 
 interface Lead { email?: string; phone?: string; mobile?: string; company?: string; first_name?: string; last_name?: string; }
 
@@ -46,7 +48,13 @@ interface RentStmt {
   total_amount: number; payment_status: string | null;
   proforma_sent_at: string | null; razorpay_payment_link_url: string | null;
   voided_at: string | null;
-  contract?: { id: string; contract_number: string };
+  reminder_count?: number | null;
+  // Tally fields — present when issuance_channel = 'tally'
+  issuance_channel?: string | null;
+  lifecycle_stage?: string | null;
+  tally_invoice_number?: string | null;
+  tally_irn?: string | null;
+  contract?: { id: string; contract_number: string; billing_mode?: string | null };
   /** /api/billing-statements joins the lead directly on the statement (not
    *  nested under contract). Use this for customer display. */
   lead?: Lead;
@@ -57,6 +65,7 @@ interface UsageRow {
   contract_id: string;
   contract_number: string;
   customer: string;
+  billing_mode?: string | null;
   free_count: number;
   paid_count: number;
   paid_total: number;
@@ -241,16 +250,21 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
               </button>
             )}
           </div>
-          <Pill label="Rent"  counts={rentCounts}  active={tab === "rent"}  onClick={() => setTab("rent")}  />
-          <Pill label="Usage" counts={usageCounts} active={tab === "usage"} onClick={() => setTab("usage")} />
+          <Pill label="Wave 1 · Advance Rent"   counts={rentCounts}  active={tab === "rent"}  onClick={() => setTab("rent")}  />
+          <Pill label="Wave 2 · Usage Charges"  counts={usageCounts} active={tab === "usage"} onClick={() => setTab("usage")} />
         </div>
       </div>
 
       {/* ── Rent tab ──────────────────────────────────────────────────────── */}
       {tab === "rent" && (
         <div className="space-y-3">
-          <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-2 text-xs text-blue-900">
-            Rent is collected <strong>in advance</strong>. Running this in <strong>{opsLabel}</strong> sends PIs to all contract customers for <strong>{rentLabel}</strong> rent.
+          <div className="rounded-md bg-blue-50 border border-blue-200 px-4 py-2 text-xs text-blue-900 flex items-start gap-3">
+            <div>
+              <span className="font-semibold">Wave 1 — Advance Rent</span>
+              <span className="mx-1.5 text-blue-400">·</span>
+              Running in <strong>{opsLabel}</strong> sends invoices for <strong>{rentLabel}</strong> rent.
+              Batch action — no per-contract checks needed.
+            </div>
           </div>
           <ProformaBillingCard
             mode="rent"
@@ -270,7 +284,10 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
       {tab === "usage" && (
         <div className="space-y-3">
           <div className="rounded-md bg-amber-50 border border-amber-200 px-4 py-2 text-xs text-amber-900">
-            Usage charges for <strong>{opsLabel}</strong>. Enter print counts for contracts that haven&apos;t been logged yet, then click <strong>Verify &amp; Send</strong> to dispatch the proforma. Due date = send date + 7 days.
+            <span className="font-semibold">Wave 2 — Usage Charges</span>
+            <span className="mx-1.5 text-amber-400">·</span>
+            Bookings, printing, and ad-hoc charges for <strong>{opsLabel}</strong>.
+            Review each contract, adjust or waive items, then click <strong>Verify &amp; Send</strong>. Due date = send date + 7 days.
           </div>
           {q && !usageLoading && (
             <p className="text-xs text-muted-foreground">
@@ -284,7 +301,6 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
             expandedContract={expandedContract}
             onToggleExpand={(id) => setExpandedContract((prev) => (prev === id ? null : id))}
             onVerifyAndSend={openReview}
-            onLogPrint={(contractId) => setPrintDialogContractId(contractId)}
           />
         </div>
       )}
@@ -304,6 +320,7 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
         month={month}
         userRole={userRole ?? null}
         onSuccess={async () => { setReviewRow(null); await loadUsage(); if (onFinalized) await onFinalized(); }}
+        onLogPrint={reviewRow ? () => { setReviewRow(null); setPrintDialogContractId(reviewRow.contract_id); } : undefined}
       />
     </div>
   );
@@ -363,6 +380,7 @@ function RentTable({ rows, loading, opsLabel, onViewStatement }: { rows: RentStm
                     <td className="px-4 py-3">
                       <Link href={`/contracts/${s.contract?.id}`} className="font-medium text-teal-700 hover:underline">{s.contract?.contract_number || "—"}</Link>
                       <div className="text-xs text-muted-foreground">{customer}</div>
+                      <BillingModeTag mode={s.contract?.billing_mode} />
                     </td>
                     <td className="px-4 py-3">
                       <Link href={`/api/billing-statements/${s.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
@@ -371,20 +389,58 @@ function RentTable({ rows, loading, opsLabel, onViewStatement }: { rows: RentStm
                     </td>
                     <td className="px-4 py-3 text-xs whitespace-nowrap text-muted-foreground">{formatDate(s.period_start)} → {formatDate(s.period_end)}</td>
                     <td className="px-4 py-3 whitespace-nowrap">
-                      {isPaid ? <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px]">PAID</Badge>
-                        : isPartial ? <Badge className="bg-orange-100 text-orange-800 border-orange-300 text-[10px]">PARTIAL</Badge>
-                        : isSent ? <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-[10px]">SENT</Badge>
-                        : <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[10px]">DRAFT</Badge>}
+                      <div className="flex flex-col gap-1">
+                        {isPaid ? <Badge className="bg-emerald-100 text-emerald-800 border-emerald-300 text-[10px]">PAID</Badge>
+                          : isPartial ? <Badge className="bg-orange-100 text-orange-800 border-orange-300 text-[10px]">PARTIAL</Badge>
+                          : isSent ? <Badge className="bg-blue-100 text-blue-800 border-blue-300 text-[10px]">SENT</Badge>
+                          : <Badge className="bg-amber-100 text-amber-800 border-amber-300 text-[10px]">DRAFT</Badge>}
+                        {s.issuance_channel === "tally" && (
+                          <TallyStatusBadge
+                            variant="compact"
+                            issuance_channel={s.issuance_channel}
+                            lifecycle_stage={s.lifecycle_stage}
+                            tally_invoice_number={s.tally_invoice_number}
+                            tally_irn={s.tally_irn}
+                          />
+                        )}
+                      </div>
                     </td>
                     <td className="px-4 py-3 text-xs whitespace-nowrap text-muted-foreground">{s.due_date ? formatDate(s.due_date) : "—"}</td>
                     <td className="px-4 py-3 text-right whitespace-nowrap font-semibold">{formatCurrency(s.total_amount)}</td>
-                    <td className="px-4 py-3 whitespace-nowrap text-right space-x-2">
-                      {s.razorpay_payment_link_url && (
-                        <a href={s.razorpay_payment_link_url} target="_blank" rel="noreferrer" className="text-xs text-teal-700 hover:underline">Pay link</a>
-                      )}
-                      {onViewStatement && (
-                        <button onClick={() => onViewStatement(s.id)} className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">Details</button>
-                      )}
+                    <td className="px-4 py-3 whitespace-nowrap text-right">
+                      <div className="flex items-center justify-end gap-1.5">
+                        {(s.reminder_count ?? 0) > 0 && (
+                          <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-1.5 py-0.5">
+                            +{s.reminder_count} reminder{s.reminder_count! > 1 ? "s" : ""}
+                          </span>
+                        )}
+                        {s.razorpay_payment_link_url && (
+                          <>
+                            <a
+                              href={s.razorpay_payment_link_url}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="p-1 text-muted-foreground hover:text-teal-700"
+                              title="Open payment link"
+                            >
+                              <ExternalLink className="h-3.5 w-3.5" />
+                            </a>
+                            <button
+                              className="p-1 text-muted-foreground hover:text-teal-700"
+                              title="Copy payment link"
+                              onClick={() => {
+                                navigator.clipboard.writeText(s.razorpay_payment_link_url!);
+                                toast.success("Payment link copied");
+                              }}
+                            >
+                              <Copy className="h-3.5 w-3.5" />
+                            </button>
+                          </>
+                        )}
+                        {onViewStatement && (
+                          <button onClick={() => onViewStatement(s.id)} className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2">Details</button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -402,9 +458,8 @@ function UsageTable(props: {
   expandedContract: string | null;
   onToggleExpand: (id: string) => void;
   onVerifyAndSend: (row: UsageRow) => void;
-  onLogPrint: (contractId: string) => void;
 }) {
-  const { rows, loading, opsLabel, expandedContract, onToggleExpand, onVerifyAndSend, onLogPrint } = props;
+  const { rows, loading, opsLabel, expandedContract, onToggleExpand, onVerifyAndSend } = props;
 
   // Pending first (call-to-action), sorted by contract number within group.
   const sorted = useMemo(() => {
@@ -450,7 +505,7 @@ function UsageTable(props: {
                 : status === "SENT"    ? "bg-blue-100    text-blue-800    border-blue-300"
                 : status === "DRAFT"   ? "bg-amber-100   text-amber-800   border-amber-300"
                 :                        "bg-orange-100  text-orange-800  border-orange-300";
-                const rowBg = !isSent ? "bg-amber-50/40" : "";
+                const rowBg = status === "PENDING" ? "bg-amber-50" : !isSent ? "bg-amber-50/30" : "";
 
                 return (
                   <>
@@ -463,6 +518,7 @@ function UsageTable(props: {
                       <td className="px-4 py-3">
                         <div className="font-medium text-teal-700">{r.contract_number}</div>
                         <div className="text-xs text-muted-foreground">{r.customer}</div>
+                        <BillingModeTag mode={r.billing_mode} />
                       </td>
                       <td className="px-4 py-3 text-center text-muted-foreground">{r.free_count > 0 ? r.free_count : "—"}</td>
                       <td className="px-4 py-3 text-center font-medium">{r.paid_count > 0 ? r.paid_count : "—"}</td>
@@ -478,28 +534,24 @@ function UsageTable(props: {
                       <td className="px-4 py-3 text-xs whitespace-nowrap text-muted-foreground">{stmt?.due_date ? formatDate(stmt.due_date) : "—"}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-right">
                         <div className="flex items-center justify-end gap-2">
-                          {/* Log Print — always visible pre-send for print-quota contracts */}
-                          {!isSent && r.has_print_quota && (
-                            <Button
-                              size="sm"
-                              variant="outline"
-                              onClick={() => onLogPrint(r.contract_id)}
-                              className="border-amber-400 text-amber-700 hover:bg-amber-50"
-                            >
-                              <Printer className="h-3.5 w-3.5 mr-1" />Log Print
-                            </Button>
-                          )}
-                          {/* Verify & Send — shown when there is any usage to review */}
-                          {!isSent && (r.paid_count > 0 || r.free_count > 0) && (
-                            <Button
-                              size="sm"
-                              onClick={() => onVerifyAndSend(r)}
-                              disabled={r.paid_total <= 0}
-                              className="bg-teal-700 hover:bg-teal-800"
-                              title={r.paid_total <= 0 ? "All charges are free quota — nothing to bill" : undefined}
-                            >
-                              <Send className="h-3.5 w-3.5 mr-1" />Verify &amp; Send
-                            </Button>
+                          {/* Verify & Send / Review & Add — always shown for unsent rows (including ₹0) */}
+                          {!isSent && (
+                            <div className="relative">
+                              {status === "PENDING" && r.paid_total > 0 && (
+                                <span className="absolute -top-1 -right-1 h-2 w-2 rounded-full bg-amber-500 animate-pulse" />
+                              )}
+                              <Button
+                                size="sm"
+                                onClick={() => onVerifyAndSend(r)}
+                                className={status === "PENDING" && r.paid_total > 0
+                                  ? "bg-amber-600 hover:bg-amber-700 text-white"
+                                  : "bg-teal-700 hover:bg-teal-800"}
+                                title={r.paid_total <= 0 ? "No charges yet — open to add charges" : undefined}
+                              >
+                                <Send className="h-3.5 w-3.5 mr-1" />
+                                {r.paid_total > 0 ? <>Verify &amp; Send</> : <>Review &amp; Add</>}
+                              </Button>
+                            </div>
                           )}
                         </div>
                       </td>

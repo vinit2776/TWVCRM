@@ -17,7 +17,7 @@ export async function GET(
   const { data: statement, error } = await supabase
     .from("billing_statements")
     .select(
-      "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company)"
+      "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title, billing_mode), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company)"
     )
     .eq("id", id)
     .single();
@@ -153,6 +153,13 @@ export async function GET(
     }
   }
 
+  // Fetch payment history for this statement
+  const { data: billingPayments } = await supabase
+    .from("billing_payments")
+    .select("id, amount, tds_amount, payment_date, payment_mode, payment_reference, razorpay_payment_id, recorded_by_user:users!billing_payments_recorded_by_fkey(full_name)")
+    .eq("billing_statement_id", id)
+    .order("payment_date", { ascending: true });
+
   return NextResponse.json({
     data: {
       ...statement,
@@ -160,6 +167,7 @@ export async function GET(
       facility_charges: facilityCharges,
       service_charges: serviceCharges,
       booking_charges: bookingCharges,
+      billing_payments: billingPayments || [],
     },
   });
 }

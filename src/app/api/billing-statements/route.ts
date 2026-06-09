@@ -4,7 +4,7 @@ import { generateBillingStatementSchema } from "@/lib/validations";
 import { logAudit } from "@/lib/audit";
 
 const SELECT_FIELDS =
-  "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)";
+  "*, contract:contracts!billing_statements_contract_id_fkey(id, contract_number, title, billing_mode), booking:bookings!billing_statements_booking_id_fkey(id, booking_number, booking_date, guest_name), lead:leads!billing_statements_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)";
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();

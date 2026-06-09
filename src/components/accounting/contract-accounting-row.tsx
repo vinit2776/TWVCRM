@@ -125,6 +125,7 @@ interface ContractSummary {
     billing_payments?: Array<{
       id: string;
       amount: number;
+      tds_amount?: number | null;
       payment_date: string;
       payment_mode: string;
       payment_reference?: string | null;
@@ -268,6 +269,14 @@ export function ContractAccountingRow({
   };
 
   const isFinalized = statement?.status === "finalized" || statement?.status === "exported";
+
+  const stmtPayments = statement?.billing_payments || [];
+  const totalReceived = isFinalized
+    ? stmtPayments.reduce((s, p) => s + Number(p.amount) + Number(p.tds_amount || 0), 0)
+    : summary.total_paid_this_month;
+  const balanceDue = isFinalized
+    ? Math.max(0, Number(statement?.total_amount || 0) - totalReceived)
+    : summary.outstanding;
 
   return (
     <div className="border rounded-lg">
@@ -503,10 +512,17 @@ export function ContractAccountingRow({
               {/* When a finalized statement exists, route to statement-level payment (updates payment_status).
                   Hide button when statement is fully paid — no further payment needed. */}
               {isFinalized && statement?.payment_status !== "paid" && onRecordStatementPayment && (
-                <Button variant="outline" size="sm" onClick={() => onRecordStatementPayment(statement!.id)}>
-                  <IndianRupee className="h-3 w-3 mr-1" />
-                  Record Payment
-                </Button>
+                <div className="flex items-center gap-3">
+                  {balanceDue > 0 && (
+                    <span className="text-xs text-amber-700 font-medium">
+                      Balance: {formatCurrency(balanceDue)}
+                    </span>
+                  )}
+                  <Button variant="outline" size="sm" onClick={() => onRecordStatementPayment(statement!.id)}>
+                    <IndianRupee className="h-3 w-3 mr-1" />
+                    Record Payment
+                  </Button>
+                </div>
               )}
               {isFinalized && statement?.payment_status === "paid" && (
                 <span className="text-xs text-green-700 bg-green-50 border border-green-200 rounded px-2 py-1">
@@ -527,6 +543,7 @@ export function ContractAccountingRow({
                 {statement.billing_payments.map((p) => {
                   const isRazorpay = p.payment_mode === "razorpay" || !!p.razorpay_payment_id;
                   const modeLabel = isRazorpay ? "Razorpay" : (p.payment_mode?.toUpperCase() || "—");
+                  const settled = Number(p.amount) + Number(p.tds_amount || 0);
                   return (
                     <div key={p.id} className="flex items-center justify-between text-sm px-2 py-1.5 rounded bg-background border">
                       <div className="flex flex-wrap items-center gap-x-2 gap-y-0.5">
@@ -549,6 +566,10 @@ export function ContractAccountingRow({
                         ) : p.payment_reference ? (
                           <span className="text-xs text-muted-foreground font-mono">Ref: {p.payment_reference}</span>
                         ) : null}
+                        {/* TDS deduction note */}
+                        {(p.tds_amount || 0) > 0 && (
+                          <span className="text-xs text-muted-foreground">TDS: {formatCurrency(p.tds_amount!)}</span>
+                        )}
                         {/* Who recorded this payment */}
                         {p.recorded_by_user?.full_name ? (
                           <span className="text-xs text-muted-foreground">· {p.recorded_by_user.full_name}</span>
@@ -556,10 +577,28 @@ export function ContractAccountingRow({
                           <span className="text-xs text-muted-foreground italic">· via gateway</span>
                         ) : null}
                       </div>
-                      <span className="font-medium text-green-700 ml-2 flex-shrink-0">{formatCurrency(p.amount)}</span>
+                      <div className="flex flex-col items-end ml-2 flex-shrink-0">
+                        <span className="font-medium text-green-700">{formatCurrency(p.amount)}</span>
+                        {(p.tds_amount || 0) > 0 && (
+                          <span className="text-[10px] text-muted-foreground">settled {formatCurrency(settled)}</span>
+                        )}
+                      </div>
                     </div>
                   );
                 })}
+                {/* Summary footer: total received + balance due */}
+                {stmtPayments.length > 0 && (
+                  <div className="flex justify-between items-center pt-1 border-t text-xs px-1">
+                    <span className="text-muted-foreground">Total received</span>
+                    <span className="font-medium text-green-700">{formatCurrency(totalReceived)}</span>
+                  </div>
+                )}
+                {balanceDue > 0 && (
+                  <div className="flex justify-between items-center text-xs px-1">
+                    <span className="font-medium text-amber-700">Balance due</span>
+                    <span className="font-semibold text-amber-700">{formatCurrency(balanceDue)}</span>
+                  </div>
+                )}
               </div>
             ) : isFinalized ? (
               <p className="text-sm text-muted-foreground px-2">No payments recorded</p>
