@@ -46,19 +46,19 @@ export function GstInvoiceEntry({ entries, onRefresh }: GstInvoiceEntryProps) {
     const contractId = entry.contract_id;
     setDownloading(contractId);
     try {
-      // Statement-generated PDFs → billing-statements endpoint
-      // Legacy upload PDFs → contract-payments endpoint
-      const url = entry.gst_source === "statement" && entry.billing_statement_id
-        ? `/api/billing-statements/${entry.billing_statement_id}/gst-invoice-pdf`
-        : `/api/accounting/gst-invoices/${entry.payment_id}/download`;
-
-      const res = await fetch(url);
-      if (!res.ok) {
-        toast.error("Failed to get download URL");
-        return;
+      if (entry.gst_source === "statement" && entry.billing_statement_id) {
+        // Endpoint streams the PDF directly — open it as a new tab download
+        window.open(`/api/billing-statements/${entry.billing_statement_id}/gst-invoice-pdf`, "_blank");
+      } else {
+        // Legacy upload path — endpoint returns a signed URL as JSON
+        const res = await fetch(`/api/accounting/gst-invoices/${entry.payment_id}/download`);
+        if (!res.ok) {
+          toast.error("Failed to get download URL");
+          return;
+        }
+        const { data } = await res.json();
+        window.open(data.download_url, "_blank");
       }
-      const { data } = await res.json();
-      window.open(data.download_url, "_blank");
     } catch {
       toast.error("Network error");
     } finally {
