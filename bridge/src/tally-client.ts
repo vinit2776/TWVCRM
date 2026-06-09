@@ -450,11 +450,12 @@ export class TallyClient {
     sgst_ledger:      string;           // "SGST Output 9%"
     tax_percentage:   number;           // 18 (split 9 + 9)
     line_items:       Array<{ description: string; amount: number }>;
+    narration_suffix?: string;          // optional payment summary from CRM (e.g. "Paid: Rs.17700 via Bank Transfer (Ref: HDFC001)")
   }): Promise<TallySalesResult> {
 
     const { idempotency_key, invoice_date, voucher_type, party_ledger, party_gstin,
             party_address, place_of_supply, stock_item, income_ledger,
-            cgst_ledger, sgst_ledger, tax_percentage, line_items } = params;
+            cgst_ledger, sgst_ledger, tax_percentage, line_items, narration_suffix } = params;
 
     // Built to match the real SDIPL-REG item-invoice format (from production sample).
     // Place of supply is the coworking location (Tamil Nadu) → always CGST + SGST.
@@ -490,7 +491,9 @@ export class TallyClient {
               </ACCOUNTINGALLOCATIONS.LIST>
             </ALLINVENTORYENTRIES.LIST>`).join("");
 
-    const narration = `Inv to ${party_ledger} — ${invoice_date}`;
+    const narration = narration_suffix
+      ? `Inv to ${party_ledger} — ${invoice_date} | ${narration_suffix}`
+      : `Inv to ${party_ledger} — ${invoice_date}`;
 
     const xml = `<ENVELOPE>
   <HEADER>
