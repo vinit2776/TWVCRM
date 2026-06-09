@@ -83,6 +83,36 @@ export async function routeGstGenerationToTally(statementId: string): Promise<bo
       return false; // can't route — let CRM handle it rather than drop the invoice
     }
 
+    // Best-effort: build a payment summary so the Tally user can see payment details
+    // in the voucher narration before triggering IRN — avoids manual cross-checking.
+    let paymentNarration: string | null = null;
+    try {
+      const { data: payments } = await admin
+        .from("billing_payments")
+        .select("amount, payment_mode, payment_reference")
+        .eq("billing_statement_id", statementId)
+        .order("payment_date", { ascending: true });
+
+      if (payments && payments.length > 0) {
+        const modeLabel: Record<string, string> = {
+          cash: "Cash", upi: "UPI", card: "Card",
+          bank_transfer: "Bank Transfer", razorpay: "Online (Razorpay)",
+        };
+        const parts = (payments as Array<{ amount: number; payment_mode: string; payment_reference: string | null }>)
+          .map(p => {
+            const amt = `Rs.${Math.round(Number(p.amount))}`;
+            const mode = modeLabel[p.payment_mode] ?? p.payment_mode;
+            const ref = p.payment_reference?.trim();
+            return ref ? `${amt} via ${mode} (Ref: ${ref})` : `${amt} via ${mode}`;
+          });
+        paymentNarration = parts.length === 1
+          ? `Paid: ${parts[0]}`
+          : `Paid: ${parts.join(" + ")}`;
+      }
+    } catch {
+      // best-effort — missing narration never blocks invoice creation
+    }
+
     // Stamp issuance_channel='tally' ONCE (decide-once) + queued lifecycle.
     await admin
       .from("billing_statements")
@@ -104,6 +134,7 @@ export async function routeGstGenerationToTally(statementId: string): Promise<bo
         taxable_amount:       (stmt as { subtotal: number }).subtotal,
         tax_percentage:       (stmt as { tax_percentage: number }).tax_percentage,
         line_items:           (stmt as { line_items: unknown }).line_items,
+        ...(paymentNarration ? { payment_narration: paymentNarration } : {}),
       },
     });
 

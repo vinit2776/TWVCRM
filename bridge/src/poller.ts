@@ -267,11 +267,12 @@ export class Poller {
       income_ledger:   str("ledger_sales", "Rent The Workvilla 18%"),
       cgst_ledger:     str("ledger_cgst", "CGST Output 9%"),
       sgst_ledger:     str("ledger_sgst", "SGST Output 9%"),
-      tax_percentage:  payload.tax_percentage || 18,
-      line_items:      (payload.line_items ?? []).map(li => ({
+      tax_percentage:    payload.tax_percentage || 18,
+      line_items:        (payload.line_items ?? []).map(li => ({
         description: String(li.description ?? "Service"),
         amount:      Number(li.amount ?? 0),
       })),
+      narration_suffix:  str("payment_narration") || undefined,
     });
 
     // ── E-invoice applicability (GST rule) ─────────────────────────────────────
