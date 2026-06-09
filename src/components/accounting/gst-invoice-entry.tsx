@@ -259,7 +259,8 @@ export function GstInvoiceEntry({ entries, onRefresh }: GstInvoiceEntryProps) {
         <GstInvoiceEmailDialog
           open={!!emailDialogEntry}
           onOpenChange={(open) => !open && setEmailDialogEntry(null)}
-          paymentId={emailDialogEntry.payment_id!}
+          statementId={emailDialogEntry.gst_source === "statement" ? emailDialogEntry.billing_statement_id : null}
+          paymentId={emailDialogEntry.gst_source !== "statement" ? emailDialogEntry.payment_id : null}
           contractNumber={emailDialogEntry.contract_number}
           company={emailDialogEntry.company}
           leadEmail={emailDialogEntry.lead_email}

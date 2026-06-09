@@ -17,7 +17,9 @@ import { toast } from "sonner";
 interface GstInvoiceEmailDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  paymentId: string;
+  /** Exactly one of paymentId or statementId must be provided */
+  paymentId?: string | null;
+  statementId?: string | null;
   contractNumber: string;
   company: string;
   leadEmail?: string;
@@ -31,6 +33,7 @@ export function GstInvoiceEmailDialog({
   open,
   onOpenChange,
   paymentId,
+  statementId,
   contractNumber,
   company,
   leadEmail,
@@ -66,7 +69,11 @@ export function GstInvoiceEmailDialog({
 
     setSending(true);
     try {
-      const res = await fetch(`/api/accounting/gst-invoices/${paymentId}/email`, {
+      const emailUrl = statementId
+        ? `/api/billing-statements/${statementId}/gst-invoice-email`
+        : `/api/accounting/gst-invoices/${paymentId}/email`;
+
+      const res = await fetch(emailUrl, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
