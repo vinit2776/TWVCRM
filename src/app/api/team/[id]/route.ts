@@ -35,6 +35,27 @@ export async function PATCH(
     return NextResponse.json({ error: "User not found" }, { status: 404 });
   }
 
+  // Handle email change via admin API (updates both auth.users and public.users)
+  if (body.email && typeof body.email === "string") {
+    const newEmail = body.email.trim().toLowerCase();
+    const adminSupabase = await createAdminClient();
+    const { error: emailError } = await adminSupabase.auth.admin.updateUserById(
+      targetUser.auth_id,
+      { email: newEmail }
+    );
+    if (emailError) {
+      return NextResponse.json({ error: emailError.message }, { status: 400 });
+    }
+    // Also update public.users so CC queries pick up the correct email immediately
+    const { error: dbEmailError } = await adminSupabase
+      .from("users")
+      .update({ email: newEmail })
+      .eq("id", id);
+    if (dbEmailError) {
+      return NextResponse.json({ error: dbEmailError.message }, { status: 500 });
+    }
+  }
+
   // Handle password change via admin API
   if (body.password) {
     if (body.password.length < 6) {
@@ -55,7 +76,7 @@ export async function PATCH(
     }
 
     // If only password change, log and return early
-    if (!body.role && typeof body.is_active !== "boolean" && !body.full_name && !body.phone) {
+    if (!body.role && typeof body.is_active !== "boolean" && !body.full_name && !body.phone && !body.email) {
       const { data: adminDbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
       if (adminDbUser?.id) {
         logAudit(supabase, {

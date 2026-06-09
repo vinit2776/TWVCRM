@@ -294,6 +294,7 @@ export default function TeamPage() {
   const [editTarget, setEditTarget] = useState<UserType | null>(null);
   const [editForm, setEditForm] = useState({
     full_name: "",
+    email: "",
     phone: "",
     role: "sales_rep",
   });
@@ -550,6 +551,7 @@ export default function TeamPage() {
     setEditTarget(member);
     setEditForm({
       full_name: member.full_name,
+      email: member.email,
       phone: member.phone || "",
       role: member.role,
     });
@@ -1166,11 +1168,6 @@ export default function TeamPage() {
           <DialogHeader>
             <DialogTitle>
               Edit User
-              {editTarget && (
-                <span className="block text-sm font-normal text-muted-foreground mt-1">
-                  {editTarget.email}
-                </span>
-              )}
             </DialogTitle>
           </DialogHeader>
           <form onSubmit={handleEditUser} className="space-y-4">
@@ -1183,6 +1180,19 @@ export default function TeamPage() {
                 value={editForm.full_name}
                 onChange={(e) =>
                   setEditForm({ ...editForm, full_name: e.target.value })
+                }
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-email">
+                Email <span className="text-destructive">*</span>
+              </Label>
+              <Input
+                id="edit-email"
+                type="email"
+                value={editForm.email}
+                onChange={(e) =>
+                  setEditForm({ ...editForm, email: e.target.value })
                 }
               />
             </div>
