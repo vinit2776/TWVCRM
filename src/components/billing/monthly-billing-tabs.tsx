@@ -35,6 +35,7 @@ import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
 import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
+import { UsageReviewDialog } from "@/components/billing/usage-review-dialog";
 
 interface Lead { email?: string; phone?: string; mobile?: string; company?: string; first_name?: string; last_name?: string; }
 
@@ -50,7 +51,7 @@ interface RentStmt {
   lead?: Lead;
 }
 
-interface LineItem { description: string; amount: number; source: "ad_hoc" | "service" }
+interface LineItem { description: string; amount: number; source: "ad_hoc" | "service"; item_id: string }
 interface UsageRow {
   contract_id: string;
   contract_number: string;
@@ -81,16 +82,14 @@ function nextMonth(year: number, month: number): { year: number; month: number }
 }
 
 interface Props {
-  /** Page-level <MonthPicker /> is the single source of truth. */
   year: number;
   month: number; // 1-12
-  /** Refresh AR aging / summary widgets after a successful send. */
+  userRole?: string | null;
   onFinalized?: () => void | Promise<void>;
-  /** Open the ViewStatementDialog for a given statement ID. */
   onViewStatement?: (id: string) => void;
 }
 
-export function MonthlyBillingTabs({ year, month, onFinalized, onViewStatement }: Props) {
+export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewStatement }: Props) {
   const [tab, setTab] = useState<"rent" | "usage">("rent");
 
   // ── Data ────────────────────────────────────────────────────────────────
@@ -102,6 +101,7 @@ export function MonthlyBillingTabs({ year, month, onFinalized, onViewStatement }
   const [expandedContract, setExpandedContract] = useState<string | null>(null);
   const [sendingContract, setSendingContract] = useState<string | null>(null);
   const [printDialogContractId, setPrintDialogContractId] = useState<string | null>(null);
+  const [reviewRow, setReviewRow] = useState<UsageRow | null>(null);
 
   // Operations month = `month`. Rent we're sending in this month covers next month.
   const rentPeriodMonth = useMemo(() => nextMonth(year, month), [year, month]);
@@ -158,36 +158,8 @@ export function MonthlyBillingTabs({ year, month, onFinalized, onViewStatement }
   };
 
 
-  // ── Usage: Verify & Send for a single contract ─────────────────────────
-  const verifyAndSend = async (row: UsageRow) => {
-    const amount = formatCurrency(row.statement?.total_amount || row.paid_total);
-    if (!confirm(
-      `Verify & Send usage proforma for ${row.contract_number} (${row.customer})?\n\n` +
-      `${row.paid_count} paid items · ${row.free_count} free items · Total ${amount}\n\n` +
-      `Due date will be set to today + 7 days. Proforma will be emailed (and WhatsApped if a phone is on file).`
-    )) return;
-    setSendingContract(row.contract_id);
-    try {
-      const res = await fetch("/api/billing/usage-finalize-and-send-for-contract", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ contract_id: row.contract_id, year, month }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed");
-      toast.success(
-        json.no_contact
-          ? "Finalized — but customer has no contact info; proforma was NOT sent"
-          : `Sent to ${json.emailed_to || "customer"}. Due ${formatDate(json.due_date)}.`,
-      );
-      await loadUsage();
-      if (onFinalized) await onFinalized();
-    } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to send");
-    } finally {
-      setSendingContract(null);
-    }
-  };
+  // ── Usage: open review dialog ──────────────────────────────────────────
+  const openReview = (row: UsageRow) => setReviewRow(row);
 
   // ── Render ─────────────────────────────────────────────────────────────
   return (
@@ -234,8 +206,7 @@ export function MonthlyBillingTabs({ year, month, onFinalized, onViewStatement }
             opsLabel={opsLabel}
             expandedContract={expandedContract}
             onToggleExpand={(id) => setExpandedContract((prev) => (prev === id ? null : id))}
-            onVerifyAndSend={verifyAndSend}
-            sendingContract={sendingContract}
+            onVerifyAndSend={openReview}
             onLogPrint={(contractId) => setPrintDialogContractId(contractId)}
           />
         </div>
@@ -246,6 +217,16 @@ export function MonthlyBillingTabs({ year, month, onFinalized, onViewStatement }
         onOpenChange={(open) => { if (!open) setPrintDialogContractId(null); }}
         defaultContractId={printDialogContractId ?? undefined}
         onSuccess={() => { setPrintDialogContractId(null); loadUsage(); }}
+      />
+
+      <UsageReviewDialog
+        open={!!reviewRow}
+        onOpenChange={(open) => { if (!open) setReviewRow(null); }}
+        row={reviewRow}
+        year={year}
+        month={month}
+        userRole={userRole ?? null}
+        onSuccess={async () => { setReviewRow(null); await loadUsage(); if (onFinalized) await onFinalized(); }}
       />
     </div>
   );
@@ -342,10 +323,9 @@ function UsageTable(props: {
   expandedContract: string | null;
   onToggleExpand: (id: string) => void;
   onVerifyAndSend: (row: UsageRow) => void;
-  sendingContract: string | null;
   onLogPrint: (contractId: string) => void;
 }) {
-  const { rows, loading, opsLabel, expandedContract, onToggleExpand, onVerifyAndSend, sendingContract, onLogPrint } = props;
+  const { rows, loading, opsLabel, expandedContract, onToggleExpand, onVerifyAndSend, onLogPrint } = props;
 
   // Pending first (call-to-action), sorted by contract number within group.
   const sorted = useMemo(() => {
@@ -416,28 +396,31 @@ function UsageTable(props: {
                       </td>
                       <td className="px-4 py-3 text-xs whitespace-nowrap text-muted-foreground">{stmt?.due_date ? formatDate(stmt.due_date) : "—"}</td>
                       <td className="px-4 py-3 whitespace-nowrap text-right">
-                        {!isSent && r.paid_count === 0 && r.free_count === 0 && r.has_print_quota ? (
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => onLogPrint(r.contract_id)}
-                            className="border-amber-400 text-amber-700 hover:bg-amber-50"
-                          >
-                            <Printer className="h-3.5 w-3.5 mr-1" />Log Print
-                          </Button>
-                        ) : !isSent && (r.paid_count > 0 || r.free_count > 0) ? (
-                          <Button
-                            size="sm"
-                            onClick={() => onVerifyAndSend(r)}
-                            disabled={sendingContract === r.contract_id || r.paid_total <= 0}
-                            className="bg-teal-700 hover:bg-teal-800"
-                            title={r.paid_total <= 0 ? "All charges are free quota — nothing to bill" : undefined}
-                          >
-                            {sendingContract === r.contract_id
-                              ? <><Loader2 className="h-3.5 w-3.5 animate-spin mr-1" />Sending…</>
-                              : <><Send className="h-3.5 w-3.5 mr-1" />Verify &amp; Send</>}
-                          </Button>
-                        ) : null}
+                        <div className="flex items-center justify-end gap-2">
+                          {/* Log Print — always visible pre-send for print-quota contracts */}
+                          {!isSent && r.has_print_quota && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              onClick={() => onLogPrint(r.contract_id)}
+                              className="border-amber-400 text-amber-700 hover:bg-amber-50"
+                            >
+                              <Printer className="h-3.5 w-3.5 mr-1" />Log Print
+                            </Button>
+                          )}
+                          {/* Verify & Send — shown when there is any usage to review */}
+                          {!isSent && (r.paid_count > 0 || r.free_count > 0) && (
+                            <Button
+                              size="sm"
+                              onClick={() => onVerifyAndSend(r)}
+                              disabled={r.paid_total <= 0}
+                              className="bg-teal-700 hover:bg-teal-800"
+                              title={r.paid_total <= 0 ? "All charges are free quota — nothing to bill" : undefined}
+                            >
+                              <Send className="h-3.5 w-3.5 mr-1" />Verify &amp; Send
+                            </Button>
+                          )}
+                        </div>
                       </td>
                     </tr>
                     {expanded && (() => {

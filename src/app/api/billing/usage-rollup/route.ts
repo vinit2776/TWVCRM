@@ -60,7 +60,7 @@ export async function GET(req: NextRequest) {
   const stmtIds = (stmts || []).map((s) => s.id);
   const { data: charges } = await admin
     .from("usage_charges")
-    .select("contract_id, description, total, billing_statement_id, created_at")
+    .select("id, contract_id, description, total, billing_statement_id, created_at")
     .gte("created_at", `${monthStart}T00:00:00`)
     .lte("created_at", `${monthEnd}T23:59:59.999`)
     .or(
@@ -71,7 +71,7 @@ export async function GET(req: NextRequest) {
 
   const { data: svc } = await admin
     .from("service_usage_records")
-    .select("contract_id, description, total_amount, billing_statement_id, used_at")
+    .select("id, contract_id, service_id, description, total_amount, billing_statement_id, used_at")
     .gte("used_at", monthStart)
     .lte("used_at", monthEnd)
     .or(
@@ -81,7 +81,7 @@ export async function GET(req: NextRequest) {
     );
 
   // ── 3. Group by contract ───────────────────────────────────────────────
-  interface LineItem { description: string; amount: number; source: "ad_hoc" | "service" }
+  interface LineItem { description: string; amount: number; source: "ad_hoc" | "service"; item_id: string }
   interface Agg {
     contract_id: string;
     free_count: number;
@@ -102,10 +102,10 @@ export async function GET(req: NextRequest) {
     row.line_items.push(item);
   };
   for (const c of charges || []) {
-    bump(c.contract_id as string, { description: c.description || "—", amount: Number(c.total || 0), source: "ad_hoc" });
+    bump(c.contract_id as string, { description: c.description || "—", amount: Number(c.total || 0), source: "ad_hoc", item_id: c.id as string });
   }
   for (const s of svc || []) {
-    bump(s.contract_id as string, { description: s.description || "Service usage", amount: Number(s.total_amount || 0), source: "service" });
+    bump(s.contract_id as string, { description: s.description || "Service usage", amount: Number(s.total_amount || 0), source: "service", item_id: s.service_id as string });
   }
 
   // Also surface contracts that already have a usage statement but zero raw
@@ -155,7 +155,7 @@ export async function GET(req: NextRequest) {
       paid_count: a.paid_count,
       paid_total: Math.round(a.paid_total),
       has_print_quota: a.has_print_quota ?? false,
-      line_items: a.line_items.map((li) => ({ ...li, amount: Math.round(li.amount) })),
+      line_items: a.line_items.map((li) => ({ ...li, amount: Math.round(li.amount), item_id: li.item_id })),
       statement: stmt
         ? {
             id: stmt.id,

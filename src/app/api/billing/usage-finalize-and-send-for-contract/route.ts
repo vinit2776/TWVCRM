@@ -37,8 +37,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Admin / Manager / Accounts access required" }, { status: 403 });
   }
 
+  interface OverrideItem { source: string; item_id: string; amount: number; reason: string }
   const body = await request.json().catch(() => ({})) as {
     contract_id?: string; year?: number; month?: number; additional_cc?: string[];
+    overrides?: OverrideItem[];
   };
   const contractId = body.contract_id;
   const year  = Number(body.year);
@@ -48,6 +50,7 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "year + month (1-12) are required" }, { status: 400 });
   }
   const additionalCc = Array.isArray(body.additional_cc) ? body.additional_cc.filter(Boolean) : [];
+  const overrides: OverrideItem[] = Array.isArray(body.overrides) ? body.overrides : [];
 
   const admin = createAdminClient();
 
@@ -88,11 +91,89 @@ export async function POST(request: NextRequest) {
     existing = created;
   }
   if (!existing) return NextResponse.json({ error: "Failed to obtain a draft statement" }, { status: 500 });
+
+  // ── 2. Apply overrides (waive / adjust line items) ─────────────────────
+  if (overrides.length > 0) {
+    const { data: stmtFull } = await admin
+      .from("billing_statements")
+      .select("line_items, tax_percentage, is_interstate")
+      .eq("id", existing.id)
+      .single();
+
+    if (stmtFull?.line_items) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sections: any[] = JSON.parse(JSON.stringify(stmtFull.line_items));
+
+      for (const ov of overrides) {
+        for (const section of sections) {
+          if (!Array.isArray(section.items)) continue;
+          for (const item of section.items) {
+            const matched =
+              (ov.source === "ad_hoc"  && item.usage_charge_id === ov.item_id) ||
+              (ov.source === "service" && item.service_id       === ov.item_id);
+            if (matched) {
+              item.original_amount = item.amount;
+              item.amount          = ov.amount;
+              item.waived          = ov.amount === 0;
+              item.override_reason = ov.reason;
+            }
+          }
+          // Recalculate section subtotal
+          section.subtotal = section.items.reduce((s: number, i: { amount: number }) => s + (i.amount || 0), 0);
+        }
+      }
+
+      // Recalculate statement-level totals
+      const newSubtotal = sections.reduce((s: number, sec: { subtotal: number }) => s + (sec.subtotal || 0), 0);
+      const taxRate     = Number(stmtFull.tax_percentage || 0);
+      const newTax      = parseFloat((newSubtotal * taxRate / 100).toFixed(2));
+      const isInter     = stmtFull.is_interstate;
+      const cgst        = isInter ? 0 : parseFloat((newTax / 2).toFixed(2));
+      const sgst        = isInter ? 0 : parseFloat((newTax / 2).toFixed(2));
+      const igst        = isInter ? newTax : 0;
+      const newTotal    = parseFloat((newSubtotal + newTax).toFixed(2));
+
+      const usageSec   = sections.find((s: { type: string }) => s.type === "ad_hoc_charges"  || s.type === "facility_usage");
+      const serviceSec = sections.find((s: { type: string }) => s.type === "service_usage");
+      const bookingSec = sections.find((s: { type: string }) => s.type === "booking_usage");
+
+      await admin.from("billing_statements").update({
+        line_items:           sections,
+        subtotal:             newSubtotal,
+        tax_amount:           newTax,
+        cgst_amount:          cgst,
+        sgst_amount:          sgst,
+        igst_amount:          igst,
+        total_amount:         newTotal,
+        usage_amount:         (usageSec?.subtotal   ?? 0),
+        service_usage_amount: (serviceSec?.subtotal ?? 0),
+        booking_usage_amount: (bookingSec?.subtotal ?? 0),
+      }).eq("id", existing.id);
+
+      // Mark waived usage_charges in DB for audit trail
+      const waivedAdHocIds = overrides
+        .filter((o) => o.source === "ad_hoc" && o.amount === 0)
+        .map((o) => o.item_id);
+      if (waivedAdHocIds.length > 0) {
+        const nowIsoWaive = new Date().toISOString();
+        await admin.from("usage_charges").update({
+          status: "waived",
+          waive_reason: overrides.find((o) => waivedAdHocIds.includes(o.item_id))?.reason ?? "Waived at PI dispatch",
+          waived_at: nowIsoWaive,
+          waived_by: dbUser.id,
+        }).in("id", waivedAdHocIds);
+      }
+
+      // Refresh total_amount for the zero-amount guard below
+      existing = { ...existing, total_amount: newTotal };
+    }
+  }
+
   if (Number(existing.total_amount) <= 0) {
     return NextResponse.json({ error: "Draft is zero-amount — nothing to bill (charges may all be free quota)" }, { status: 400 });
   }
 
-  // ── 2. Finalize + due_date + audit ─────────────────────────────────────
+  // ── 3. Finalize + due_date + audit ──────────────────────────────────────
   const nowIso = new Date().toISOString();
   const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
   const istNow = new Date(Date.now() + IST_OFFSET_MS);
