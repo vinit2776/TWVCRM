@@ -78,6 +78,26 @@ export async function dispatchTallyInvoice(
       return { ok: true, alreadyDelivered: true };
     }
 
+    // ── IRN/QR self-heal: callers like the reconcile cron pass irn=null because
+    // they don't carry the job context. If the ack is missing IRN data but the
+    // statement's completed job has it, fetch it now. This ensures every delivery
+    // path produces a B2B-compliant PDF regardless of which code path triggers it.
+    if (!ack.irn || !ack.signedQrCode) {
+      const { data: syncJob } = await supabase
+        .from("tally_sync_jobs")
+        .select("tally_irn, tally_signed_qr_code")
+        .eq("billing_statement_id", billingStatementId)
+        .eq("status", "completed")
+        .not("tally_irn", "is", null)
+        .order("completed_at", { ascending: false })
+        .limit(1)
+        .single();
+      if (syncJob) {
+        if (!ack.irn)          ack = { ...ack, irn:          (syncJob as { tally_irn: string | null }).tally_irn };
+        if (!ack.signedQrCode) ack = { ...ack, signedQrCode: (syncJob as { tally_signed_qr_code: string | null }).tally_signed_qr_code };
+      }
+    }
+
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const contract = statement.contract as any;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -152,8 +172,10 @@ export async function dispatchTallyInvoice(
     let irnQrBase64: string | undefined;
     if (ack.signedQrCode) {
       try {
-        irnQrBase64 = await QRCode.toDataURL(ack.signedQrCode, { width: 200, margin: 1, errorCorrectionLevel: "M" });
-      } catch { /* skip — QR is non-blocking */ }
+        // IRP signed QR codes can be 1-3 KB. Use errorCorrectionLevel "L" (lowest
+        // redundancy, highest data capacity ~4296 chars) so long JWT payloads fit.
+        irnQrBase64 = await QRCode.toDataURL(ack.signedQrCode, { width: 200, margin: 1, errorCorrectionLevel: "L" });
+      } catch { /* skip — QR is non-blocking; PDF still has the IRN text */ }
     }
 
     // ── Line items ───────────────────────────────────────────────────────────
