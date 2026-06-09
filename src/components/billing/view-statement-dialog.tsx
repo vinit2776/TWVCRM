@@ -13,7 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 
 import { Skeleton } from "@/components/shared/loading-skeleton";
-import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck, Ban, RotateCcw, AlertTriangle } from "lucide-react";
+import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck, Ban, RotateCcw, AlertTriangle, Trash2 } from "lucide-react";
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
@@ -140,6 +140,11 @@ export function ViewStatementDialog({
   const [retryingTally, setRetryingTally] = useState(false);
   const [showConvertToGst, setShowConvertToGst] = useState(false);
   const [gstModeReady, setGstModeReady] = useState<boolean | null>(null); // null = loading
+
+  // Void / Cancel-Tally state
+  const [showVoidConfirm, setShowVoidConfirm] = useState(false);
+  const [voidReason, setVoidReason] = useState("");
+  const [voidSubmitting, setVoidSubmitting] = useState(false);
 
   // Waive-charge state — tracks which charge row has the waive form open
   const [waivedChargeId, setWaivedChargeId] = useState<string | null>(null);
@@ -400,6 +405,56 @@ export function ViewStatementDialog({
       setRevertingToDraft(false);
     }
   };
+
+  const handleVoidStatement = async () => {
+    if (!statementId || !voidReason.trim()) return;
+    setVoidSubmitting(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/void`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ void_reason: voidReason.trim() }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(json.message || "Statement voided and replacement draft created");
+        setShowVoidConfirm(false);
+        setVoidReason("");
+        onStatusChange();
+        onOpenChange(false);
+        return;
+      }
+      // Tally-issued invoice — auto-route to credit-note cancel
+      if (json.issuance_channel === "tally") {
+        const cancelRes = await fetch(`/api/billing-statements/${statementId}/cancel-tally`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ reason: voidReason.trim() }),
+        });
+        const cancelJson = await cancelRes.json();
+        if (cancelRes.ok) {
+          toast.success(cancelJson.message || "Credit note queued — invoice will cancel once Tally confirms.");
+          setShowVoidConfirm(false);
+          setVoidReason("");
+          onStatusChange();
+          onOpenChange(false);
+        } else {
+          toast.error(cancelJson.error || "Failed to queue the Tally credit note");
+        }
+      } else {
+        toast.error(json.error || "Failed to void statement");
+      }
+    } catch {
+      toast.error("Something went wrong");
+    } finally {
+      setVoidSubmitting(false);
+    }
+  };
+
+  const canVoid =
+    !!statement &&
+    ["finalized", "exported"].includes(statement.status) &&
+    userRole === "admin";
 
   const customerName = statement?.lead
     ? statement.lead.company || `${statement.lead.first_name} ${statement.lead.last_name}`
@@ -939,6 +994,57 @@ export function ViewStatementDialog({
               {statement?.pi_cancelled_at && (
                 <span className="text-xs text-amber-600 font-normal">(Early override)</span>
               )}
+            </div>
+          )}
+          {/* Void / Cancel — admin only, finalized or exported statements */}
+          {canVoid && !showVoidConfirm && (
+            <Button
+              variant="outline"
+              className="border-red-300 text-red-600 hover:bg-red-50"
+              onClick={() => setShowVoidConfirm(true)}
+            >
+              <Trash2 className="mr-2 h-4 w-4" />
+              {statement?.issuance_channel === "tally" ? "Cancel Invoice" : "Void & Re-issue"}
+            </Button>
+          )}
+          {canVoid && showVoidConfirm && (
+            <div className="flex w-full flex-col gap-2 rounded-md border border-red-200 bg-red-50 p-3">
+              <p className="text-sm font-medium text-red-700">
+                {statement?.issuance_channel === "tally"
+                  ? "This will queue a Credit Note in Tally. The invoice voids once Tally confirms."
+                  : "This will void the statement and create a fresh draft for correction."}
+              </p>
+              <Textarea
+                placeholder="Reason for void / cancellation (required)"
+                value={voidReason}
+                onChange={(e) => setVoidReason(e.target.value)}
+                className="text-sm"
+                rows={2}
+              />
+              <div className="flex gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="flex-1"
+                  onClick={() => { setShowVoidConfirm(false); setVoidReason(""); }}
+                  disabled={voidSubmitting}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  className="flex-1 bg-red-600 hover:bg-red-700 text-white"
+                  onClick={handleVoidStatement}
+                  disabled={voidSubmitting || !voidReason.trim()}
+                >
+                  {voidSubmitting ? (
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  ) : (
+                    <Trash2 className="mr-2 h-4 w-4" />
+                  )}
+                  {statement?.issuance_channel === "tally" ? "Confirm Cancel" : "Void & Create Draft"}
+                </Button>
+              </div>
             </div>
           )}
         </DialogFooter>
