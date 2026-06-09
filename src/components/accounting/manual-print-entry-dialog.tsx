@@ -140,6 +140,15 @@ export function ManualPrintEntryDialog({
       .finally(() => setContractsLoading(false));
   }, [open, filterLeadId]);
 
+  // Sync contractId when dialog opens with a pre-selected contract.
+  // useState only captures the initial value at mount — this effect ensures
+  // clicking "Log Print" from a specific row pre-fills the correct contract.
+  useEffect(() => {
+    if (open && defaultContractId) {
+      setContractId(defaultContractId);
+    }
+  }, [open, defaultContractId]);
+
   // Reset form when dialog closes
   useEffect(() => {
     if (!open) {
