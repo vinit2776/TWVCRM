@@ -242,11 +242,16 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     }
     if (data.irnQrBase64) {
       try {
-        const qrSize = 22; // mm — small but scannable
-        doc.addImage(data.irnQrBase64, "PNG", 14, 8, qrSize, qrSize);
+        // Place the QR in the empty centre of the header — between the logo
+        // (right edge ≈ x 66) and the invoice-details text (left edge ≈ x 140).
+        // Centering on the page at pageWidth/2 gives ~29 mm clearance on each side.
+        const qrSize = 20;
+        const qrX = Math.round(pageWidth / 2) - qrSize / 2; // centred on page
+        const qrY = 8;
+        doc.addImage(data.irnQrBase64, "PNG", qrX, qrY, qrSize, qrSize);
         doc.setFontSize(5.5);
         doc.setTextColor(100, 100, 100);
-        doc.text("e-Invoice QR", 14 + qrSize / 2, 8 + qrSize + 2, { align: "center" });
+        doc.text("e-Invoice QR", qrX + qrSize / 2, qrY + qrSize + 2, { align: "center" });
       } catch { /* skip if image fails */ }
     }
   }
