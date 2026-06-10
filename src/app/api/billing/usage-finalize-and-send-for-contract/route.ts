@@ -3,6 +3,7 @@ import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { generateUsageStatements } from "@/lib/billing";
 import { dispatchProforma } from "@/lib/send-proforma";
 import { logAudit } from "@/lib/audit";
+import { calcGst } from "@/lib/tax";
 
 /**
  * POST /api/billing/usage-finalize-and-send-for-contract
@@ -126,12 +127,10 @@ export async function POST(request: NextRequest) {
       // Recalculate statement-level totals
       const newSubtotal = sections.reduce((s: number, sec: { subtotal: number }) => s + (sec.subtotal || 0), 0);
       const taxRate     = Number(stmtFull.tax_percentage || 0);
-      const newTax      = parseFloat((newSubtotal * taxRate / 100).toFixed(2));
-      const isInter     = stmtFull.is_interstate;
-      const cgst        = isInter ? 0 : parseFloat((newTax / 2).toFixed(2));
-      const sgst        = isInter ? 0 : parseFloat((newTax / 2).toFixed(2));
-      const igst        = isInter ? newTax : 0;
-      const newTotal    = parseFloat((newSubtotal + newTax).toFixed(2));
+      // Always intra-state Tamil Nadu — use calcGst (CGST+SGST only, IGST=0)
+      const gst         = calcGst(newSubtotal, taxRate);
+      const { cgst, sgst, igst, grandTotal: newTotal } = gst;
+      const newTax      = gst.taxAmount;
 
       const usageSec   = sections.find((s: { type: string }) => s.type === "ad_hoc_charges"  || s.type === "facility_usage");
       const serviceSec = sections.find((s: { type: string }) => s.type === "service_usage");

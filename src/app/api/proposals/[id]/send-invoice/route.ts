@@ -5,6 +5,7 @@ import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-ge
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { logWhatsAppActivity } from "@/lib/audit";
+import { calcGst } from "@/lib/tax";
 
 /**
  * POST /api/proposals/[id]/send-invoice
@@ -77,18 +78,8 @@ export async function POST(
   const proratedSubtotal = Math.round(subtotal * prorationFactor * 100) / 100;
   const taxPercentage = Number(proposal.tax_percentage || 18);
 
-  const buyerState = (lead?.state || "").toLowerCase().trim();
-  const isInterstate = buyerState !== "" && buyerState !== "tamil nadu" && buyerState !== "tn";
-
-  let cgst = 0, sgst = 0, igst = 0;
-  if (isInterstate) {
-    igst = Math.round(proratedSubtotal * (taxPercentage / 100) * 100) / 100;
-  } else {
-    cgst = Math.round(proratedSubtotal * (taxPercentage / 200) * 100) / 100;
-    sgst = Math.round(proratedSubtotal * (taxPercentage / 200) * 100) / 100;
-  }
-  const taxAmount = cgst + sgst + igst;
-  const totalAmount = proratedSubtotal + taxAmount;
+  // Always intra-state Tamil Nadu — calcGst enforces CGST+SGST only (IGST=0)
+  const { cgst, sgst, igst, taxAmount, grandTotal: totalAmount } = calcGst(proratedSubtotal, taxPercentage);
 
   // ── Invoice number ─────────────────────────────────────────────────────────
   const adminSupabase = createAdminClient();
@@ -275,7 +266,7 @@ export async function POST(
     subtotal: proratedSubtotal,
     cgst, sgst, igst,
     totalAmount,
-    isInterstate,
+    isInterstate: false, // always intra-state Tamil Nadu
     taxPercentage,
     razorpayUrl: razorpayUrl || undefined,
   };
