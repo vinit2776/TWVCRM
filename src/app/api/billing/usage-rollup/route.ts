@@ -69,11 +69,15 @@ export async function GET(req: NextRequest) {
         : "billing_statement_id.is.null",
     );
 
+  // service_usage_records has no `used_at` or `total_amount` columns — the
+  // correct period filter is period_year + period_month, and the billable
+  // amount lives in the `amount` column (ex-GST overage). `description` also
+  // doesn't exist; join service_catalog for the display name.
   const { data: svc } = await admin
     .from("service_usage_records")
-    .select("id, contract_id, service_id, description, total_amount, billing_statement_id, used_at")
-    .gte("used_at", monthStart)
-    .lte("used_at", monthEnd)
+    .select("id, contract_id, service_id, amount, billing_statement_id, notes, service:service_catalog(name)")
+    .eq("period_year", year)
+    .eq("period_month", month)
     .or(
       stmtIds.length > 0
         ? `billing_statement_id.is.null,billing_statement_id.in.(${stmtIds.join(",")})`
@@ -105,7 +109,9 @@ export async function GET(req: NextRequest) {
     bump(c.contract_id as string, { description: c.description || "—", amount: Number(c.total || 0), source: "ad_hoc", item_id: c.id as string });
   }
   for (const s of svc || []) {
-    bump(s.contract_id as string, { description: s.description || "Service usage", amount: Number(s.total_amount || 0), source: "service", item_id: s.service_id as string });
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const svcName = (s as any).service?.name || s.notes || "Service usage";
+    bump(s.contract_id as string, { description: svcName, amount: Number((s as unknown as { amount: number }).amount || 0), source: "service", item_id: s.service_id as string });
   }
 
   // Also surface contracts that already have a usage statement but zero raw
