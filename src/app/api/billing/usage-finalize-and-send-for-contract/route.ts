@@ -170,6 +170,13 @@ export async function POST(request: NextRequest) {
   }
 
   if (Number(existing.total_amount) <= 0) {
+    // If the caller explicitly passed overrides that reduced the total to zero, the charges have
+    // already been marked waived above. Clean up the zero-value draft and return a success so the
+    // UI can close normally. Without overrides this is a free-quota contract — block it.
+    if (overrides.length > 0) {
+      await admin.from("billing_statements").delete().eq("id", existing.id);
+      return NextResponse.json({ ok: true, all_waived: true, statement_id: existing.id });
+    }
     return NextResponse.json({ error: "Draft is zero-amount — nothing to bill (charges may all be free quota)" }, { status: 400 });
   }
 

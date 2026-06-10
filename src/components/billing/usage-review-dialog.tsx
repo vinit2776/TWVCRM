@@ -80,6 +80,7 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
   const [editAmount, setEditAmount] = useState("");
   const [editReason, setEditReason] = useState("");
   const [sending, setSending] = useState(false);
+  const [savingWaiveKey, setSavingWaiveKey] = useState<string | null>(null);
 
   // Local copy of line items — seeded from prop, extended when charges are added
   const [localItems, setLocalItems] = useState<LineItem[]>(row?.line_items ?? []);
@@ -302,10 +303,44 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
     setEditReason(li.override?.reason ?? "");
   };
 
-  const commitEdit = (key: string) => {
+  const commitEdit = async (key: string) => {
     const parsed = parseFloat(editAmount);
     if (isNaN(parsed) || parsed < 0) { toast.error("Enter a valid amount (≥ 0)"); return; }
     if (!editReason.trim()) { toast.error("Reason is required"); return; }
+
+    const [source, item_id] = key.split(/:(.+)/);
+
+    // Persist waive to DB immediately for ad_hoc charges (amount=0 only).
+    // This marks the usage_charge as waived so it's excluded from future PI
+    // generation — the user doesn't need to go through Confirm & Send.
+    if (parsed === 0 && source === "ad_hoc") {
+      setSavingWaiveKey(key);
+      try {
+        const res = await fetch(`/api/usage-charges/${item_id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "waived", waive_reason: editReason.trim() }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Failed to waive charge");
+        // Remove the charge from local list — it's gone from billing permanently
+        setLocalItems((prev) => prev.filter((li) => !(li.source === "ad_hoc" && li.item_id === item_id)));
+        setOverrides((prev) => { const next = new Map(prev); next.delete(key); return next; });
+        toast.success("Charge waived");
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Failed to waive charge");
+        return;
+      } finally {
+        setSavingWaiveKey(null);
+      }
+      setEditing(null);
+      setEditAmount("");
+      setEditReason("");
+      return;
+    }
+
+    // All other cases (adjustments, service overrides) remain transient —
+    // applied to the PI at Confirm & Send time.
     setOverrides((prev) => new Map(prev).set(key, { amount: Math.round(parsed), reason: editReason.trim() }));
     setEditing(null);
     setEditAmount("");
@@ -354,11 +389,15 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed");
 
-      toast.success(
-        json.no_contact
-          ? "Finalized — customer has no contact info; proforma was NOT sent"
-          : `Sent to ${json.emailed_to || "customer"}`,
-      );
+      if (json.all_waived) {
+        toast.success("All charges waived — no invoice sent");
+      } else {
+        toast.success(
+          json.no_contact
+            ? "Finalized — customer has no contact info; proforma was NOT sent"
+            : `Sent to ${json.emailed_to || "customer"}`,
+        );
+      }
       handleOpenChange(false);
       onSuccess();
     } catch (e) {
@@ -375,6 +414,8 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
   const paidItems  = effectiveItems.filter((li) => li.amount > 0 || (li.override !== undefined));
   const freeItems  = effectiveItems.filter((li) => li.amount <= 0 && li.override === undefined);
   const showPrintSection = row.has_print_quota || printExisting;
+  // All chargeable items explicitly waived → no invoice, but still a valid action
+  const allWaived = paidItems.length > 0 && effectiveTotal <= 0 && overrides.size > 0;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -451,11 +492,13 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
                               placeholder="Reason (required)"
                               value={editReason}
                               onChange={(e) => setEditReason(e.target.value)}
-                              onKeyDown={(e) => { if (e.key === "Enter") commitEdit(key); }}
+                              onKeyDown={(e) => { if (e.key === "Enter") void commitEdit(key); }}
                             />
                           </div>
-                          <Button size="sm" className="h-7 px-3" onClick={() => commitEdit(key)}>Save</Button>
-                          <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setEditing(null)}><X className="h-3.5 w-3.5" /></Button>
+                          <Button size="sm" className="h-7 px-3" onClick={() => commitEdit(key)} disabled={savingWaiveKey === key}>
+                            {savingWaiveKey === key ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : "Save"}
+                          </Button>
+                          <Button size="sm" variant="ghost" className="h-7 px-2" onClick={() => setEditing(null)} disabled={savingWaiveKey === key}><X className="h-3.5 w-3.5" /></Button>
                         </div>
                       )}
 
@@ -767,20 +810,39 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
           )}
         </div>
 
+        {allWaived && (
+          <div className="mx-0 rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-center gap-2">
+            <AlertCircle className="h-3.5 w-3.5 shrink-0" />
+            All charges have been waived — no invoice will be sent this month.
+          </div>
+        )}
+
         <DialogFooter className="mt-3 border-t pt-3 gap-2 flex-wrap">
           <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={sending}>Cancel</Button>
-          <Button
-            onClick={confirmAndSend}
-            disabled={sending || effectiveTotal <= 0 || items.length === 0}
-            className={row.billing_mode === "gst_direct" ? "bg-violet-700 hover:bg-violet-800" : "bg-teal-700 hover:bg-teal-800"}
-            title={effectiveTotal <= 0 ? "Nothing to bill after adjustments" : undefined}
-          >
-            {sending
-              ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending…</>
-              : row.billing_mode === "gst_direct"
-                ? <><Send className="h-4 w-4 mr-2" />Confirm &amp; Issue GST Invoice</>
-                : <><Send className="h-4 w-4 mr-2" />Confirm &amp; Send PI</>}
-          </Button>
+          {allWaived ? (
+            <Button
+              onClick={confirmAndSend}
+              disabled={sending}
+              className="bg-amber-600 hover:bg-amber-700"
+            >
+              {sending
+                ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Saving…</>
+                : <><Send className="h-4 w-4 mr-2" />Confirm Waivers (No Invoice)</>}
+            </Button>
+          ) : (
+            <Button
+              onClick={confirmAndSend}
+              disabled={sending || effectiveTotal <= 0 || items.length === 0}
+              className={row.billing_mode === "gst_direct" ? "bg-violet-700 hover:bg-violet-800" : "bg-teal-700 hover:bg-teal-800"}
+              title={effectiveTotal <= 0 ? "Nothing to bill after adjustments" : undefined}
+            >
+              {sending
+                ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending…</>
+                : row.billing_mode === "gst_direct"
+                  ? <><Send className="h-4 w-4 mr-2" />Confirm &amp; Issue GST Invoice</>
+                  : <><Send className="h-4 w-4 mr-2" />Confirm &amp; Send PI</>}
+            </Button>
+          )}
         </DialogFooter>
       </DialogContent>
     </Dialog>
