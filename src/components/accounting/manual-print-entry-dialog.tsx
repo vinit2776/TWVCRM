@@ -61,6 +61,10 @@ interface ExistingEntry {
   quantity_used: number;
   overage_quantity: number;
   amount: number;
+  /** Enriched by the API from service_catalog — lets us match BW vs Colour
+   *  without needing quota rows (contracts with no quota have no rows to
+   *  cross-reference against, which was the original pre-fill bug). */
+  printer_column?: string | null;
 }
 
 interface CatalogRates {
@@ -188,16 +192,13 @@ export function ManualPrintEntryDialog({
           setCatalogRates(existingJson.catalogRates);
         }
 
-        // Pre-fill inputs from existing manual entry for this period
+        // Pre-fill inputs from existing manual entry for this period.
+        // Each record now carries printer_column directly (enriched by the API)
+        // so we match without quota rows — fixes the blank-input bug for
+        // contracts that have no configured quota rows.
         const existingData: ExistingEntry[] = existingJson.data || [];
-        const bwEntry = existingData.find(e => {
-          const q = (quotaJson.data || []).find((qq: ServiceQuota) => qq.service_id === e.service_id);
-          return q?.service?.printer_column === "bw";
-        });
-        const colourEntry = existingData.find(e => {
-          const q = (quotaJson.data || []).find((qq: ServiceQuota) => qq.service_id === e.service_id);
-          return q?.service?.printer_column === "colour";
-        });
+        const bwEntry     = existingData.find(e => e.printer_column === "bw");
+        const colourEntry = existingData.find(e => e.printer_column === "colour");
         setBwUsed(bwEntry ? String(bwEntry.quantity_used) : "");
         setColourUsed(colourEntry ? String(colourEntry.quantity_used) : "");
       })

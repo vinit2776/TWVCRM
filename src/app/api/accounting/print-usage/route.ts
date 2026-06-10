@@ -62,7 +62,7 @@ export async function GET(request: NextRequest) {
     query,
     supabase
       .from("service_catalog")
-      .select("printer_column, default_overage_rate")
+      .select("id, printer_column, default_overage_rate")
       .in("printer_column", ["bw", "colour"])
       .eq("is_active", true),
   ]);
@@ -74,7 +74,16 @@ export async function GET(request: NextRequest) {
     colour: catalogServices?.find(s => s.printer_column === "colour")?.default_overage_rate ?? 0,
   };
 
-  return NextResponse.json({ data: data || [], catalogRates });
+  // Enrich each record with printer_column so the client can match
+  // BW vs Colour without needing quota rows (contracts without quotas
+  // have no quota rows to cross-reference against).
+  const catalogMap = new Map(catalogServices?.map(s => [s.id, s.printer_column]) ?? []);
+  const enrichedData = (data || []).map(rec => ({
+    ...rec,
+    printer_column: catalogMap.get(rec.service_id) ?? null,
+  }));
+
+  return NextResponse.json({ data: enrichedData, catalogRates });
 }
 
 // ── POST ─────────────────────────────────────────────────────────────────────

@@ -35,7 +35,6 @@ import { Loader2, Send, FileDown, ChevronDown, ChevronRight, Search, X, Copy, Ex
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
-import { ManualPrintEntryDialog } from "@/components/accounting/manual-print-entry-dialog";
 import { UsageReviewDialog } from "@/components/billing/usage-review-dialog";
 import { BillingModeTag } from "@/components/billing/billing-mode-tag";
 import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
@@ -110,7 +109,6 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
   const [usageLoading, setUsageLoading] = useState(true);
   const [expandedContract, setExpandedContract] = useState<string | null>(null);
   const [sendingContract, setSendingContract] = useState<string | null>(null);
-  const [printDialogContractId, setPrintDialogContractId] = useState<string | null>(null);
   const [reviewRow, setReviewRow] = useState<UsageRow | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
 
@@ -305,13 +303,6 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
         </div>
       )}
 
-      <ManualPrintEntryDialog
-        open={!!printDialogContractId}
-        onOpenChange={(open) => { if (!open) setPrintDialogContractId(null); }}
-        defaultContractId={printDialogContractId ?? undefined}
-        onSuccess={() => { setPrintDialogContractId(null); loadUsage(); }}
-      />
-
       <UsageReviewDialog
         open={!!reviewRow}
         onOpenChange={(open) => { if (!open) setReviewRow(null); }}
@@ -320,7 +311,7 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
         month={month}
         userRole={userRole ?? null}
         onSuccess={async () => { setReviewRow(null); await loadUsage(); if (onFinalized) await onFinalized(); }}
-        onLogPrint={reviewRow ? () => { setReviewRow(null); setPrintDialogContractId(reviewRow.contract_id); } : undefined}
+        onPrintSaved={loadUsage}
       />
     </div>
   );

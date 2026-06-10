@@ -7,17 +7,22 @@
  * type. Admin / manager can waive (→ ₹0 on PI) or adjust individual items
  * before confirming dispatch. Overrides are transient — applied at confirm time.
  *
+ * Also embeds an inline Print Log section (visible when the contract has print
+ * services configured). This replaces the previous dialog-swap pattern where
+ * clicking "Log Print" would close this dialog and open a separate one.
+ *
  * Waived items appear on the PI at ₹0 with the reason for internal reference.
  */
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Send, X, Pencil, Plus, Printer } from "lucide-react";
+import { Loader2, Send, X, Pencil, Plus, Printer, AlertCircle } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 
@@ -54,8 +59,8 @@ interface Props {
   month: number;
   userRole: string | null;
   onSuccess: () => void;
-  /** Called when user clicks "Log Print" — parent should close this dialog and open ManualPrintEntryDialog */
-  onLogPrint?: () => void;
+  /** Called after print is saved inline — parent can refresh usage rows if needed */
+  onPrintSaved?: () => void | Promise<void>;
 }
 
 const SOURCE_LABELS: Record<string, string> = {
@@ -67,7 +72,7 @@ const canEdit = (role: string | null) => role === "admin" || role === "manager";
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
-export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRole, onSuccess, onLogPrint }: Props) {
+export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRole, onSuccess, onPrintSaved }: Props) {
   // key = `${source}:${item_id}`
   const [overrides, setOverrides] = useState<Map<string, Override>>(new Map());
   // Which item is in "adjust" editing mode
@@ -91,9 +96,30 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
 
   const addTotal = Math.round(addQty * addUnitPrice);
 
+  // ── Print log state ─────────────────────────────────────────────────────────
+  const [printBwUsed, setPrintBwUsed]         = useState("");
+  const [printColourUsed, setPrintColourUsed] = useState("");
+  const [printNotes, setPrintNotes]           = useState("");
+  const [printLoading, setPrintLoading]       = useState(false);
+  const [printSaving, setPrintSaving]         = useState(false);
+  const [printExisting, setPrintExisting]     = useState(false);
+  const [printSaved, setPrintSaved]           = useState(false);
+  const [printBwQuota, setPrintBwQuota]       = useState<number | null>(null);
+  const [printColourQuota, setPrintColourQuota] = useState<number | null>(null);
+  const [printBwRate, setPrintBwRate]         = useState(0);
+  const [printColourRate, setPrintColourRate] = useState(0);
+
+  // ── Print derived values ────────────────────────────────────────────────────
+  const printBwParsed     = parseFloat(printBwUsed)     || 0;
+  const printColourParsed = parseFloat(printColourUsed) || 0;
+  const printBwOverage     = Math.max(0, printBwParsed     - (printBwQuota ?? 0));
+  const printColourOverage = Math.max(0, printColourParsed - (printColourQuota ?? 0));
+  const printBwAmount     = parseFloat((printBwOverage     * printBwRate).toFixed(2));
+  const printColourAmount = parseFloat((printColourOverage * printColourRate).toFixed(2));
+
   const editable = canEdit(userRole);
 
-  // Reset state when dialog opens/closes
+  // ── Reset state when dialog opens/closes ───────────────────────────────────
   const handleOpenChange = (v: boolean) => {
     if (!v) {
       setOverrides(new Map());
@@ -105,9 +131,64 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
       setAddQty(1);
       setAddUnitPrice(0);
       setAddNotes("");
+      // Reset print state
+      setPrintBwUsed("");
+      setPrintColourUsed("");
+      setPrintNotes("");
+      setPrintExisting(false);
+      setPrintSaved(false);
+      setPrintBwQuota(null);
+      setPrintColourQuota(null);
+      setPrintBwRate(0);
+      setPrintColourRate(0);
     }
     onOpenChange(v);
   };
+
+  // ── Fetch existing print data when dialog opens ─────────────────────────────
+  // This pre-fills B&W / Colour inputs if the contract already has a manual
+  // entry for this period. Works for contracts with and without quota rows.
+  useEffect(() => {
+    if (!open || !row) return;
+
+    setPrintLoading(true);
+    Promise.all([
+      fetch(`/api/contracts/${row.contract_id}/quotas`).then(r => r.json()),
+      fetch(`/api/accounting/print-usage?contract_id=${row.contract_id}&period_year=${year}&period_month=${month}`)
+        .then(r => r.json()),
+    ])
+      .then(([quotaJson, existingJson]) => {
+        const allQuotas: Array<{
+          service_id: string;
+          monthly_quota: number;
+          overage_rate: number;
+          service?: { printer_column: string | null };
+        }> = quotaJson.data || [];
+
+        const bwQ  = allQuotas.find(q => q.service?.printer_column === "bw");
+        const colQ = allQuotas.find(q => q.service?.printer_column === "colour");
+
+        const cats = existingJson.catalogRates ?? { bw: 0, colour: 0 };
+        setPrintBwQuota(bwQ?.monthly_quota ?? null);
+        setPrintColourQuota(colQ?.monthly_quota ?? null);
+        setPrintBwRate(bwQ?.overage_rate ?? cats.bw ?? 0);
+        setPrintColourRate(colQ?.overage_rate ?? cats.colour ?? 0);
+
+        // Each record now carries printer_column directly (enriched by the API)
+        // so pre-fill works even for contracts with no quota rows.
+        const data: Array<{ printer_column: string | null; quantity_used: number }> =
+          existingJson.data || [];
+
+        const bwEntry  = data.find(e => e.printer_column === "bw");
+        const colEntry = data.find(e => e.printer_column === "colour");
+        if (bwEntry)  setPrintBwUsed(String(bwEntry.quantity_used));
+        if (colEntry) setPrintColourUsed(String(colEntry.quantity_used));
+        setPrintExisting(data.length > 0);
+      })
+      .catch(() => { /* non-critical — print section still usable */ })
+      .finally(() => setPrintLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, row?.contract_id, year, month]);
 
   // ── Add-charge handler ──────────────────────────────────────────────────────
 
@@ -153,6 +234,42 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
       setSavingCharge(false);
     }
   };
+
+  // ── Save print handler ──────────────────────────────────────────────────────
+
+  const savePrint = useCallback(async () => {
+    if (!row) return;
+    if (printBwParsed === 0 && printColourParsed === 0) {
+      toast.error("Enter at least B&W or Colour page count");
+      return;
+    }
+    setPrintSaving(true);
+    try {
+      const res = await fetch("/api/accounting/print-usage", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contract_id:  row.contract_id,
+          period_year:  year,
+          period_month: month,
+          bw_used:      printBwParsed,
+          colour_used:  printColourParsed,
+          notes:        printNotes.trim() || undefined,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to save");
+
+      toast.success("Print usage saved");
+      setPrintSaved(true);
+      setPrintExisting(true);
+      onPrintSaved?.();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to save print usage");
+    } finally {
+      setPrintSaving(false);
+    }
+  }, [row, year, month, printBwParsed, printColourParsed, printNotes, onPrintSaved]);
 
   // ── Derived totals ──────────────────────────────────────────────────────────
 
@@ -257,6 +374,7 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
 
   const paidItems  = effectiveItems.filter((li) => li.amount > 0 || (li.override !== undefined));
   const freeItems  = effectiveItems.filter((li) => li.amount <= 0 && li.override === undefined);
+  const showPrintSection = row.has_print_quota || printExisting;
 
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -392,8 +510,142 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
             </div>
           )}
 
-          {items.length === 0 && !showAddCharge && (
+          {items.length === 0 && !showAddCharge && !showPrintSection && (
             <p className="text-sm text-muted-foreground text-center py-6">No usage items found for this contract.</p>
+          )}
+
+          {/* ── Inline Print Log section ──────────────────────────────────── */}
+          {/* Shown when the contract has print services configured or already  */}
+          {/* has a manual entry for this period. Pre-filled from the API.      */}
+          {showPrintSection && (
+            <div className="rounded-md border border-amber-200 bg-amber-50/40 p-3 space-y-3">
+              <div className="flex items-center gap-2">
+                <Printer className="h-3.5 w-3.5 text-amber-700" />
+                <p className="text-xs font-semibold text-amber-800">
+                  Print Log
+                </p>
+                {printSaved && (
+                  <Badge className="ml-auto bg-green-50 text-green-700 border-green-200 text-[10px]">Saved ✓</Badge>
+                )}
+                {printExisting && !printSaved && (
+                  <Badge className="ml-auto bg-amber-100 text-amber-700 border-amber-300 text-[10px]">Entry exists</Badge>
+                )}
+              </div>
+
+              {printLoading ? (
+                <div className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Loader2 className="h-3 w-3 animate-spin" /> Loading existing entry…
+                </div>
+              ) : (
+                <>
+                  {printExisting && !printSaved && (
+                    <div className="flex items-start gap-1.5 text-[11px] text-amber-700">
+                      <AlertCircle className="h-3 w-3 mt-0.5 shrink-0" />
+                      <span>Existing entry found — submitting will replace it.</span>
+                    </div>
+                  )}
+
+                  <div className="grid grid-cols-2 gap-3">
+                    {/* B&W */}
+                    <div>
+                      <Label className="text-xs">
+                        B&amp;W Pages
+                        {printBwQuota !== null ? (
+                          <span className="ml-1 font-normal text-muted-foreground">
+                            (quota: {printBwQuota.toLocaleString()})
+                          </span>
+                        ) : printBwRate > 0 ? (
+                          <span className="ml-1 font-normal text-muted-foreground">
+                            ({formatCurrency(printBwRate)}/pg)
+                          </span>
+                        ) : null}
+                      </Label>
+                      <Input
+                        type="number" min="0" step="1" placeholder="0"
+                        value={printBwUsed}
+                        onChange={e => setPrintBwUsed(e.target.value)}
+                        className="mt-1 h-7 text-sm"
+                        disabled={printSaving}
+                      />
+                      {printBwParsed > 0 && printBwRate > 0 && (
+                        <p className="text-[11px] mt-0.5 text-muted-foreground">
+                          {printBwQuota !== null ? (
+                            <span className={printBwOverage > 0 ? "text-red-600 font-medium" : "text-green-700"}>
+                              {printBwOverage > 0
+                                ? `${printBwOverage.toLocaleString()} overage → ${formatCurrency(printBwAmount)}`
+                                : "within quota"}
+                            </span>
+                          ) : (
+                            <span className="text-red-600 font-medium">
+                              {printBwParsed.toLocaleString()} pages → {formatCurrency(printBwAmount)}
+                            </span>
+                          )}
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Colour */}
+                    <div>
+                      <Label className="text-xs">
+                        Colour Pages
+                        {printColourQuota !== null ? (
+                          <span className="ml-1 font-normal text-muted-foreground">
+                            (quota: {printColourQuota.toLocaleString()})
+                          </span>
+                        ) : printColourRate > 0 ? (
+                          <span className="ml-1 font-normal text-muted-foreground">
+                            ({formatCurrency(printColourRate)}/pg)
+                          </span>
+                        ) : null}
+                      </Label>
+                      <Input
+                        type="number" min="0" step="1" placeholder="0"
+                        value={printColourUsed}
+                        onChange={e => setPrintColourUsed(e.target.value)}
+                        className="mt-1 h-7 text-sm"
+                        disabled={printSaving}
+                      />
+                      {printColourParsed > 0 && printColourRate > 0 && (
+                        <p className="text-[11px] mt-0.5 text-muted-foreground">
+                          {printColourQuota !== null ? (
+                            <span className={printColourOverage > 0 ? "text-red-600 font-medium" : "text-green-700"}>
+                              {printColourOverage > 0
+                                ? `${printColourOverage.toLocaleString()} overage → ${formatCurrency(printColourAmount)}`
+                                : "within quota"}
+                            </span>
+                          ) : (
+                            <span className="text-red-600 font-medium">
+                              {printColourParsed.toLocaleString()} pages → {formatCurrency(printColourAmount)}
+                            </span>
+                          )}
+                        </p>
+                      )}
+                    </div>
+                  </div>
+
+                  <Input
+                    placeholder="Notes (optional)"
+                    value={printNotes}
+                    onChange={e => setPrintNotes(e.target.value)}
+                    className="h-7 text-sm"
+                    disabled={printSaving}
+                  />
+
+                  <div className="flex justify-end">
+                    <Button
+                      size="sm"
+                      className="h-7 bg-amber-600 hover:bg-amber-700 text-white"
+                      onClick={savePrint}
+                      disabled={printSaving || (printBwParsed + printColourParsed === 0)}
+                    >
+                      {printSaving
+                        ? <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        : printExisting && !printSaved ? "Update Print" : "Save Print"}
+                    </Button>
+                  </div>
+                </>
+              )}
+            </div>
           )}
 
           {/* Add Charge */}
@@ -516,18 +768,6 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
         </div>
 
         <DialogFooter className="mt-3 border-t pt-3 gap-2 flex-wrap">
-          {/* Log Print — left-side secondary action, only when contract has print quota */}
-          {row.has_print_quota && onLogPrint && (
-            <Button
-              variant="outline"
-              size="sm"
-              className="mr-auto border-amber-400 text-amber-700 hover:bg-amber-50"
-              onClick={() => { handleOpenChange(false); onLogPrint(); }}
-              disabled={sending}
-            >
-              <Printer className="h-3.5 w-3.5 mr-1.5" />Log Print
-            </Button>
-          )}
           <Button variant="outline" onClick={() => handleOpenChange(false)} disabled={sending}>Cancel</Button>
           <Button
             onClick={confirmAndSend}
