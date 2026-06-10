@@ -1402,7 +1402,7 @@ export const PROCUREMENT_APPROVAL_THRESHOLDS = {
   ADMIN_REQUIRED_ABOVE: 25000, // INR — PRs above this amount require admin approval
 };
 
-export const PROCUREMENT_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset"] as const;
+export const PROCUREMENT_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset", "amc"] as const;
 export type ProcurementDepartment = (typeof PROCUREMENT_DEPARTMENTS)[number];
 
 export const PROCUREMENT_DEPARTMENT_LABELS: Record<string, string> = {
@@ -1410,6 +1410,7 @@ export const PROCUREMENT_DEPARTMENT_LABELS: Record<string, string> = {
   maintenance: "Maintenance",
   administration: "Administration",
   asset: "Asset",
+  amc: "AMC",
 };
 
 export const PROCUREMENT_DEPARTMENT_COLORS: Record<string, string> = {
@@ -1417,6 +1418,7 @@ export const PROCUREMENT_DEPARTMENT_COLORS: Record<string, string> = {
   maintenance: "bg-blue-100 text-blue-800",
   administration: "bg-purple-100 text-purple-800",
   asset: "bg-emerald-100 text-emerald-800",
+  amc: "bg-violet-100 text-violet-800",
 };
 
 export const VENDOR_CATEGORIES = ["pantry", "maintenance", "administration", "general"] as const;

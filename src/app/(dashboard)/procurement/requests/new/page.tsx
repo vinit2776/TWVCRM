@@ -22,7 +22,6 @@ import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog"
 import {
   PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS,
   ITEM_UNITS,
-  EXPENDITURE_TYPES, EXPENDITURE_TYPE_LABELS, EXPENDITURE_TYPE_DESCRIPTIONS,
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
 import type { ProcurementItem, Location, ProcurementDepartment, ItemUnit } from "@/types";
@@ -62,7 +61,6 @@ export default function NewPurchaseRequestPage() {
   const { user } = useCurrentUser();
   const [department, setDepartment] = useState<ProcurementDepartment>("pantry");
   const [locationId, setLocationId] = useState<string>("");
-  const [expenditureType, setExpenditureType] = useState<"operational" | "amc">("operational");
   const [amcBudgetCheck, setAmcBudgetCheck] = useState<{
     has_budget: boolean;
     annual_budget: number | null;
@@ -71,19 +69,22 @@ export default function NewPurchaseRequestPage() {
     financial_year: number;
   } | null>(null);
 
-  // AMC is now available for all departments — no reset on department change
+  // expenditure_type is derived automatically from department:
+  // department="amc" → expenditure_type="amc"; everything else → "operational"
+  const expenditureType = department === "amc" ? "amc" : "operational";
+
   const handleDepartmentChange = (v: ProcurementDepartment) => {
     setDepartment(v);
   };
 
-  // Fetch AMC annual budget info whenever AMC type is selected
+  // Fetch AMC annual budget preview whenever AMC department is selected
   useEffect(() => {
-    if (expenditureType !== "amc") { setAmcBudgetCheck(null); return; }
+    if (department !== "amc") { setAmcBudgetCheck(null); return; }
     fetch("/api/procurement/budget/check?department=amc&expenditure_type=amc&amount=0")
       .then((r) => r.json())
       .then((j) => setAmcBudgetCheck(j))
       .catch(() => setAmcBudgetCheck(null));
-  }, [expenditureType]);
+  }, [department]);
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<LineItem[]>([emptyItem()]);
   const [submitting, setSubmitting] = useState(false);
@@ -334,28 +335,8 @@ export default function NewPurchaseRequestPage() {
             </Select>
           </div>
 
-          <div className="space-y-1.5">
-            <Label htmlFor="expenditure-type">Expenditure Type <span className="text-red-500">*</span></Label>
-            <Select
-              value={expenditureType}
-              onValueChange={(v) => setExpenditureType(v as "operational" | "amc")}
-            >
-              <SelectTrigger id="expenditure-type">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                {EXPENDITURE_TYPES.map((t) => (
-                  <SelectItem key={t} value={t}>
-                    {EXPENDITURE_TYPE_LABELS[t]}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-            <p className="text-[11px] text-muted-foreground">{EXPENDITURE_TYPE_DESCRIPTIONS[expenditureType]}</p>
-          </div>
-
-          {/* AMC annual budget preview */}
-          {expenditureType === "amc" && amcBudgetCheck && (
+          {/* AMC annual budget preview — shown when AMC department is selected */}
+          {department === "amc" && amcBudgetCheck && (
             <div className="sm:col-span-2 rounded-lg border bg-purple-50 border-purple-200 px-3 py-2.5 space-y-1">
               {amcBudgetCheck.has_budget ? (
                 <>

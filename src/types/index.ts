@@ -1800,7 +1800,7 @@ export interface AggregatorInvoiceLineItem {
 // Procurement Module
 // ==========================================
 
-export type ProcurementDepartment = "pantry" | "maintenance" | "administration" | "asset";
+export type ProcurementDepartment = "pantry" | "maintenance" | "administration" | "asset" | "amc";
 export type VendorCategory = "pantry" | "maintenance" | "administration" | "general";
 export type ItemUnit = "kg" | "litre" | "packet" | "box" | "piece" | "roll" | "dozen" | "bottle" | "bag" | "set" | "pair" | "month" | "quarter" | "year" | "nos" | "can" | "ton";
 export type PrStatus = "draft" | "submitted" | "approved" | "rejected" | "partially_ordered" | "po_created" | "cancelled";
