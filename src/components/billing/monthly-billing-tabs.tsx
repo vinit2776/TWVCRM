@@ -66,7 +66,6 @@ interface UsageRow {
   customer: string;
   billing_mode?: string | null;
   tax_percentage: number;
-  is_interstate: boolean;
   free_count: number;
   paid_count: number;
   paid_total: number;

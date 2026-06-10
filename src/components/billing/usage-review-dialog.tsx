@@ -41,7 +41,6 @@ export interface UsageReviewRow {
   customer: string;
   billing_mode?: string | null;
   tax_percentage: number;
-  is_interstate: boolean;
   line_items: LineItem[];
   paid_total: number;
   has_print_quota?: boolean;
