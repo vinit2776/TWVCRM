@@ -62,7 +62,7 @@ export async function dispatchTallyInvoice(
         *,
         contract:contracts!billing_statements_contract_id_fkey(
           id, contract_number, title, tax_percentage, location_id,
-          lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile)
+          lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, street, city, zip_code)
         ),
         usage_charges:usage_charges(id, description, quantity, unit_price, total)
       `)
@@ -191,6 +191,7 @@ export async function dispatchTallyInvoice(
       invoiceDate: issueDateYmd,
       isProforma: false,
       buyerName: customerName,
+      buyerAddress: [lead?.street, lead?.city, lead?.state, lead?.zip_code].filter(Boolean).join(", ") || undefined,
       buyerGstin: lead?.gst_number || undefined,
       buyerState: lead?.state || undefined,
       periodStart: statement.period_start as string,

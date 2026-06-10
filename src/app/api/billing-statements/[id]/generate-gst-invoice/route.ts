@@ -51,7 +51,7 @@ export async function POST(
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, title, total_amount, subtotal, tax_percentage,
         start_date, end_date, next_billing_date, billing_cycle, location_id, items,
-        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile)
+        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, street, city, zip_code)
       ),
       usage_charges:usage_charges(id, description, quantity, unit_price, total)
     `)
@@ -181,6 +181,7 @@ export async function POST(
     invoiceDate: new Date().toISOString().slice(0, 10),
     isProforma: false,
     buyerName: lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer",
+    buyerAddress: [lead?.street, lead?.city, lead?.state, lead?.zip_code].filter(Boolean).join(", ") || undefined,
     buyerGstin: lead?.gst_number || undefined,
     buyerState: lead?.state || undefined,
     periodStart: statement.period_start,
