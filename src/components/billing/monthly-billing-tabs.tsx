@@ -216,6 +216,17 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
   // ── Usage: open review dialog ──────────────────────────────────────────
   const openReview = (row: UsageRow) => setReviewRow(row);
 
+  // When usageRows re-fetches (e.g. after the operator saves print charges via
+  // the PrintUsageForm inside the dialog), keep the open reviewRow in sync so
+  // that the dialog's line_items reflect the newly-saved data and the
+  // "Confirm & Send PI" button re-enables correctly.
+  useEffect(() => {
+    if (!reviewRow) return;
+    const updated = usageRows.find((r) => r.contract_id === reviewRow.contract_id);
+    if (updated) setReviewRow(updated);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [usageRows]);
+
   // ── Render ─────────────────────────────────────────────────────────────
   return (
     <div className="space-y-4">
