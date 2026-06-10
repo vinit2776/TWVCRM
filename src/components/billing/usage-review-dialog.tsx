@@ -40,6 +40,8 @@ export interface UsageReviewRow {
   contract_number: string;
   customer: string;
   billing_mode?: string | null;
+  tax_percentage: number;
+  is_interstate: boolean;
   line_items: LineItem[];
   paid_total: number;
   has_print_quota?: boolean;
@@ -788,26 +790,64 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
             </div>
           )}
 
-          {/* Totals summary */}
-          {items.length > 0 && (
-            <div className="rounded-md border bg-muted/30 px-4 py-3 space-y-1 text-sm">
-              <div className="flex justify-between text-muted-foreground">
-                <span>Original total</span>
-                <span>{formatCurrency(originalTotal)}</span>
-              </div>
-              {delta !== 0 && (
-                <div className={`flex justify-between text-xs ${delta < 0 ? "text-red-600" : "text-blue-600"}`}>
-                  <span>Adjustments</span>
-                  <span>{delta < 0 ? "−" : "+"}{formatCurrency(Math.abs(delta))}</span>
+          {/* Totals summary — show full GST breakdown so operator knows exactly what gets sent */}
+          {items.length > 0 && (() => {
+            const taxRate    = row.tax_percentage ?? 18;
+            const taxAmount  = parseFloat((effectiveTotal * taxRate / 100).toFixed(2));
+            const grandTotal = parseFloat((effectiveTotal + taxAmount).toFixed(2));
+            const cgst       = row.is_interstate ? 0 : parseFloat((taxAmount / 2).toFixed(2));
+            const sgst       = row.is_interstate ? 0 : parseFloat((taxAmount / 2).toFixed(2));
+            const igst       = row.is_interstate ? taxAmount : 0;
+
+            return (
+              <div className="rounded-md border bg-muted/30 px-4 py-3 space-y-1.5 text-sm">
+                {delta !== 0 && (
+                  <div className={`flex justify-between text-xs ${delta < 0 ? "text-red-600" : "text-blue-600"}`}>
+                    <span>Original total</span>
+                    <span>{formatCurrency(originalTotal)}</span>
+                  </div>
+                )}
+                {delta !== 0 && (
+                  <div className={`flex justify-between text-xs ${delta < 0 ? "text-red-600" : "text-blue-600"}`}>
+                    <span>Adjustments</span>
+                    <span>{delta < 0 ? "−" : "+"}{formatCurrency(Math.abs(delta))}</span>
+                  </div>
+                )}
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Subtotal (ex-GST)</span>
+                  <span className={effectiveTotal <= 0 ? "text-red-600" : ""}>{formatCurrency(effectiveTotal)}</span>
                 </div>
-              )}
-              <div className="flex justify-between font-semibold border-t pt-1 mt-1">
-                <span>Amount to bill (ex-GST)</span>
-                <span className={effectiveTotal <= 0 ? "text-red-600" : ""}>{formatCurrency(effectiveTotal)}</span>
+                {effectiveTotal > 0 && (
+                  <>
+                    {row.is_interstate ? (
+                      <div className="flex justify-between text-xs text-muted-foreground">
+                        <span>IGST ({taxRate}%)</span>
+                        <span>{formatCurrency(igst)}</span>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="flex justify-between text-xs text-muted-foreground">
+                          <span>CGST ({taxRate / 2}%)</span>
+                          <span>{formatCurrency(cgst)}</span>
+                        </div>
+                        <div className="flex justify-between text-xs text-muted-foreground">
+                          <span>SGST ({taxRate / 2}%)</span>
+                          <span>{formatCurrency(sgst)}</span>
+                        </div>
+                      </>
+                    )}
+                    <div className="flex justify-between font-bold border-t pt-1.5 mt-0.5 text-base">
+                      <span>Total (payment link amount)</span>
+                      <span className="text-teal-700">{formatCurrency(grandTotal)}</span>
+                    </div>
+                  </>
+                )}
+                {effectiveTotal <= 0 && (
+                  <p className="text-xs text-red-600">Nothing to bill — total is ₹0 after adjustments.</p>
+                )}
               </div>
-              <p className="text-[11px] text-muted-foreground">GST will be calculated and added by the system at dispatch.</p>
-            </div>
-          )}
+            );
+          })()}
         </div>
 
         {allWaived && (
