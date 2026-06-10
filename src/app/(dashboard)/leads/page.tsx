@@ -71,6 +71,10 @@ export default function LeadsPage() {
   const pinnedLeads = recentItems.filter((i) => i.type === "lead");
   const pinnedReEnquiries = recentItems.filter((i) => i.type === "activity");
   const hasPinned = pinnedLeads.length > 0 || pinnedReEnquiries.length > 0;
+  const reEnquiryLeadIds = useMemo(
+    () => new Set(pinnedReEnquiries.map((i) => i.leadId)),
+    [pinnedReEnquiries]
+  );
 
   const { data: leads, pagination, loading, refetch } = useLeads({
     page,
@@ -82,14 +86,17 @@ export default function LeadsPage() {
     include_archived: showDisabled,
   });
 
-  // Client-side: sort leads so new form leads appear first within the current page
+  // Client-side: sort leads — new form leads first (0), re-enquiry leads second (1), rest last (2)
   const sortedLeads = useMemo(() => {
     return [...leads].sort((a, b) => {
-      const aPin = isUnreadFormLead(a) ? 0 : 1;
-      const bPin = isUnreadFormLead(b) ? 0 : 1;
-      return aPin - bPin;
+      const priority = (lead: typeof leads[number]) => {
+        if (isUnreadFormLead(lead)) return 0;
+        if (reEnquiryLeadIds.has(lead.id)) return 1;
+        return 2;
+      };
+      return priority(a) - priority(b);
     });
-  }, [leads]);
+  }, [leads, reEnquiryLeadIds]);
 
   const handleSearch = () => {
     setSearch(searchInput);
@@ -360,13 +367,16 @@ export default function LeadsPage() {
             <tbody>
               {sortedLeads.map((lead) => {
                 const isFormLead = isUnreadFormLead(lead);
+                const isReEnquiry = !isFormLead && reEnquiryLeadIds.has(lead.id);
                 return (
                   <tr
                     key={lead.id}
                     className={`border-b cursor-pointer transition-colors
                       ${isFormLead
                         ? "bg-emerald-50/40 hover:bg-emerald-50 dark:bg-emerald-950/10"
-                        : "hover:bg-muted/30"
+                        : isReEnquiry
+                          ? "bg-amber-50/40 hover:bg-amber-50 dark:bg-amber-950/10"
+                          : "hover:bg-muted/30"
                       }${lead.archived_at ? " opacity-60" : ""}`}
                     onClick={() => router.push(`/leads/${lead.id}`)}
                   >
@@ -378,9 +388,15 @@ export default function LeadsPage() {
                             <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
                           </span>
                         )}
+                        {isReEnquiry && (
+                          <span className="relative flex h-2 w-2 shrink-0">
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75" />
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-amber-500" />
+                          </span>
+                        )}
                         <Link
                           href={`/leads/${lead.id}`}
-                          className={`font-medium hover:underline ${isFormLead ? "text-emerald-700" : "text-primary"}`}
+                          className={`font-medium hover:underline ${isFormLead ? "text-emerald-700" : isReEnquiry ? "text-amber-700" : "text-primary"}`}
                           onClick={(e) => e.stopPropagation()}
                         >
                           {lead.first_name} {lead.last_name}
@@ -388,6 +404,11 @@ export default function LeadsPage() {
                         <span className="text-xs font-mono text-muted-foreground">
                           #{lead.lead_number}
                         </span>
+                        {isReEnquiry && (
+                          <span className="shrink-0 text-[10px] font-bold text-amber-700 bg-amber-100 px-1.5 py-0.5 rounded uppercase">
+                            Re-Enq
+                          </span>
+                        )}
                         {/* Followup flag */}
                         {lead._followup?.overdue && (
                           <span title="Overdue follow-up" className="shrink-0">

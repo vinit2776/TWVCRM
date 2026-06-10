@@ -178,12 +178,8 @@ export function useEnquiryNotificationsCore() {
           .limit(10),
       ]);
 
-      // Only show re-enquiries for leads still at "new" status
-      const EARLY_STATUSES = ["new"];
-      const activeReEnquiries = (allReEnquiryActivities ?? []).filter((a) => {
-        const lead = a.lead as unknown as { status: string } | null;
-        return !lead || EARLY_STATUSES.includes(lead.status);
-      });
+      // Show all re-enquiries since lastSeen, regardless of lead status
+      const activeReEnquiries = allReEnquiryActivities ?? [];
 
       // Keep ref in sync so real-time UPDATE handler can check without stale closure
       reEnquiryLeadIdsRef.current = new Set(
@@ -299,19 +295,11 @@ export function useEnquiryNotificationsCore() {
         { event: "UPDATE", schema: "public", table: "leads" },
         (payload) => {
           const lead = payload.new as { id: string; status: string; tags: string[] };
-          const earlyStatuses = new Set(["new"]);
 
           // Remove from new-lead alerts when a form lead's status changes away from "new"
           if (lead.status !== "new" && lead.tags?.some((t) => FORM_TAGS.includes(t))) {
             setRecentItems((prev) => prev.filter((i) => !(i.type === "lead" && i.leadId === lead.id)));
             setNewLeadCount((c) => Math.max(0, c - 1));
-          }
-
-          // Remove from re-enquiry alerts when lead is actioned (status leaves "new")
-          if (!earlyStatuses.has(lead.status) && reEnquiryLeadIdsRef.current.has(lead.id)) {
-            reEnquiryLeadIdsRef.current.delete(lead.id);
-            setRecentItems((prev) => prev.filter((i) => !(i.type === "activity" && i.leadId === lead.id)));
-            setReEnquiryCount((c) => Math.max(0, c - 1));
           }
         }
       )
