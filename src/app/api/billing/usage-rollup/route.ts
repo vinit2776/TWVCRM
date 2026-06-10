@@ -75,7 +75,7 @@ export async function GET(req: NextRequest) {
   // doesn't exist; join service_catalog for the display name.
   const { data: svc } = await admin
     .from("service_usage_records")
-    .select("id, contract_id, service_id, amount, billing_statement_id, notes, service:service_catalog(name)")
+    .select("id, contract_id, service_id, amount, billing_statement_id, notes, service:service_catalog(name, printer_column)")
     .eq("period_year", year)
     .eq("period_month", month)
     .or(
@@ -110,8 +110,11 @@ export async function GET(req: NextRequest) {
   }
   for (const s of svc || []) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const svcName = (s as any).service?.name || s.notes || "Service usage";
-    bump(s.contract_id as string, { description: svcName, amount: Number((s as unknown as { amount: number }).amount || 0), source: "service", item_id: s.service_id as string });
+    const svcInfo = (s as any).service as { name?: string; printer_column?: string | null } | null;
+    let svcDesc = svcInfo?.name || s.notes || "Service usage";
+    if (svcInfo?.printer_column === "bw")     svcDesc = "Print - B/W";
+    if (svcInfo?.printer_column === "colour") svcDesc = "Print - Colour";
+    bump(s.contract_id as string, { description: svcDesc, amount: Number((s as unknown as { amount: number }).amount || 0), source: "service", item_id: s.service_id as string });
   }
 
   // Also surface contracts that already have a usage statement but zero raw

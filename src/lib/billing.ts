@@ -138,6 +138,20 @@ function nextMonth(month: number, year: number): { month: number; year: number }
 }
 
 /**
+ * Build a human-readable description for a service_usage_records line item.
+ * Printer services use their printer_column to produce specific labels.
+ * Other services fall back to their catalog name.
+ */
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function buildServiceDescription(service?: any): string {
+  // Supabase may return the joined row as an object or a single-element array
+  const svc = Array.isArray(service) ? service[0] : service;
+  if (svc?.printer_column === "bw")     return "Print - B/W";
+  if (svc?.printer_column === "colour") return "Print - Colour";
+  return svc?.name || "Service Usage";
+}
+
+/**
  * @deprecated Use generateRentProformas() + generateUsageStatements() instead.
  * This combined generator is kept for the contract-activation hook
  * (src/app/api/contracts/[id]/route.ts) which generates the first statement
@@ -252,7 +266,7 @@ export async function generateMonthlyStatements(
         // Service usage records (printer/service overages) — previously missing!
         supabase
           .from("service_usage_records")
-          .select("id, contract_id, service_id, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount, is_billed")
+          .select("id, contract_id, service_id, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount, is_billed, service:service_catalog(name, printer_column)")
           .in("contract_id", billable)
           .eq("period_year", targetYear)
           .eq("period_month", targetMonth)
@@ -271,7 +285,8 @@ export async function generateMonthlyStatements(
 
   type UsageRow = { id: string; contract_id: string; description: string; quantity: number; unit_price: number; total: number };
   type FacilityRow = { contract_id: string; contract_facility_id: string; quantity_used: number; free_quota_applied: number; billable_quantity: number; unit_price: number; total_charge: number };
-  type ServiceRow = { id: string; contract_id: string; service_id: string; quantity_used: number; quota_snapshot: number; overage_quantity: number; overage_rate_snapshot: number; amount: number; is_billed: boolean };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type ServiceRow = { id: string; contract_id: string; service_id: string; quantity_used: number; quota_snapshot: number; overage_quantity: number; overage_rate_snapshot: number; amount: number; is_billed: boolean; service?: any };
   type BookingRow = { id: string; booking_number: string; contract_id: string; space_id: string; booking_date: string; start_time: string; end_time: string; duration_hours: number; pricing_model: string; hourly_rate: number; total_amount: number; quantity: number; payment_status: string; status: string; space: { name: string }[] | { name: string } | null };
 
   // Index by contract_id for O(1) lookup inside the per-contract loop
@@ -433,6 +448,7 @@ export async function generateMonthlyStatements(
         items: serviceRecords.map((s) => ({
           service_usage_id: s.id,
           service_id: s.service_id,
+          description: buildServiceDescription(s.service),
           quantity_used: Number(s.quantity_used),
           quota: Number(s.quota_snapshot),
           overage: Number(s.overage_quantity),
@@ -1105,7 +1121,7 @@ export async function generateUsageStatements(
 
     supabase
       .from("service_usage_records")
-      .select("id, contract_id, service_id, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount, is_billed")
+      .select("id, contract_id, service_id, quantity_used, quota_snapshot, overage_quantity, overage_rate_snapshot, amount, is_billed, service:service_catalog(name, printer_column)")
       .in("contract_id", billable)
       .eq("period_year", targetYear)
       .eq("period_month", targetMonth)
@@ -1123,7 +1139,8 @@ export async function generateUsageStatements(
 
   type UsageRow = { id: string; contract_id: string; description: string; quantity: number; unit_price: number; total: number };
   type FacilityRow = { contract_id: string; contract_facility_id: string; quantity_used: number; free_quota_applied: number; billable_quantity: number; unit_price: number; total_charge: number };
-  type ServiceRow = { id: string; contract_id: string; service_id: string; overage_quantity: number; overage_rate_snapshot: number; amount: number };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  type ServiceRow = { id: string; contract_id: string; service_id: string; overage_quantity: number; overage_rate_snapshot: number; amount: number; service?: any };
   type BookingRow = { id: string; booking_number: string; contract_id: string; booking_date: string; start_time: string; end_time: string; duration_hours: number; pricing_model: string; total_amount: number; quantity: number; payment_status: string; space: { name: string }[] | { name: string } | null };
 
   const usageByContract    = new Map<string, UsageRow[]>();
@@ -1275,6 +1292,7 @@ export async function generateUsageStatements(
             .filter((s) => Number(s.overage_quantity) > 0)
             .map((s) => ({
               service_id: s.service_id,
+              description: buildServiceDescription(s.service),
               overage: Number(s.overage_quantity), rate: Number(s.overage_rate_snapshot),
               amount: Number(s.amount || 0),
             })),
