@@ -92,8 +92,11 @@ const LEDGER_FIELDS: Array<{ key: string; label: string; placeholder: string }> 
   { key: "sgst",           label: "Output SGST ledger",  placeholder: "e.g. Output SGST" },
   { key: "igst",           label: "Output IGST ledger",  placeholder: "e.g. Output IGST" },
   { key: "round_off",      label: "Round-off ledger",    placeholder: "e.g. Round Off" },
-  { key: "voucher_series", label: "Sales voucher series", placeholder: "e.g. Sales" },
-  { key: "party_suffix",   label: "Party name suffix",    placeholder: "(optional)" },
+  { key: "voucher_series",            label: "Sales voucher series (GST / Series A)",     placeholder: "SDIPL-REG" },
+  { key: "voucher_series_unreg",      label: "Sales voucher series (Non-GST / Series B)", placeholder: "SDIPL-UNREG" },
+  { key: "credit_note_series",        label: "Credit note series (GST / B2B)",            placeholder: "CREDIT NOTE-REG" },
+  { key: "credit_note_series_unreg",  label: "Credit note series (Non-GST / B2C)",        placeholder: "CREDIT NOTE-UNREG" },
+  { key: "party_suffix",              label: "Party name suffix",                          placeholder: "(optional)" },
   { key: "stock_item",     label: "Stock item name",      placeholder: "e.g. Membership Fees" },
 ];
 
