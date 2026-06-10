@@ -507,6 +507,197 @@ function DeptDrilldownSheet({
   );
 }
 
+// ── AMC budget summary type ───────────────────────────────────────────────────
+
+type AmcBudgetSummary = {
+  financial_year: number;
+  annual_budget: number | null;
+  is_active: boolean;
+  notes: string | null;
+  id: string | null;
+  committed: number;
+  provisional: number;
+  utilisation_pct: number | null;
+  is_over_budget: boolean;
+  updater: { full_name: string } | null;
+  updated_at: string | null;
+};
+
+// ── Helper: compute current financial year (April start) ─────────────────────
+
+function getCurrentFY(): number {
+  const now = new Date();
+  const month = now.getMonth() + 1;
+  return month >= 4 ? now.getFullYear() : now.getFullYear() - 1;
+}
+
+function fyLabel(fy: number) {
+  return `FY ${fy}-${String(fy + 1).slice(-2)}`;
+}
+
+// ── AMC Annual Budget Card ────────────────────────────────────────────────────
+
+function AmcBudgetCard({
+  summary,
+  isAdmin,
+  amcEdit,
+  onAmcEditChange,
+  onSave,
+  saving,
+}: {
+  summary: AmcBudgetSummary;
+  isAdmin: boolean;
+  amcEdit: { annual_budget: string; is_active: boolean; notes: string };
+  onAmcEditChange: (patch: Partial<{ annual_budget: string; is_active: boolean; notes: string }>) => void;
+  onSave: () => void;
+  saving: boolean;
+}) {
+  const budgetAmt = parseFloat(amcEdit.annual_budget) || null;
+  const committed = summary.committed;
+  const provisional = summary.provisional;
+
+  const committedPct = budgetAmt ? Math.min((committed / budgetAmt) * 100, 100) : 0;
+  const provisionalPct = budgetAmt ? Math.min((provisional / budgetAmt) * 100, 100 - committedPct) : 0;
+  const isOver = budgetAmt != null && committed > budgetAmt;
+  const remaining = budgetAmt ? Math.max(0, budgetAmt - committed) : null;
+
+  const pctColour = !budgetAmt
+    ? "text-muted-foreground"
+    : isOver
+    ? "text-red-700"
+    : committedPct >= 80
+    ? "text-amber-700"
+    : "text-green-700";
+
+  return (
+    <Card className={`border-purple-200 ${isOver ? "bg-red-50/20 border-red-200" : "bg-purple-50/30"}`}>
+      <CardContent className="pt-4 pb-4 space-y-4">
+        {/* Header row */}
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2">
+            <span className="text-xl">🔧</span>
+            <div>
+              <p className="font-semibold text-sm">AMC Contracts</p>
+              <p className="text-[11px] text-purple-700 font-medium">{fyLabel(summary.financial_year)} · Annual Budget</p>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            {isOver && (
+              <Badge variant="secondary" className="text-[10px] bg-red-100 text-red-700 px-1.5">Over Budget</Badge>
+            )}
+            {!isOver && amcEdit.is_active && budgetAmt && (
+              <Badge variant="secondary" className="text-[10px] bg-purple-100 text-purple-700 px-1.5">Active</Badge>
+            )}
+            {!amcEdit.is_active && (
+              <Badge variant="secondary" className="text-[10px] bg-gray-100 text-gray-500 px-1.5">Inactive</Badge>
+            )}
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-start gap-4">
+          {/* Annual budget input */}
+          <div className="flex-1 min-w-[140px] space-y-1">
+            <Label className="text-xs text-muted-foreground">Annual Budget (₹)</Label>
+            <div className="relative">
+              <IndianRupee className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+              <Input
+                type="number"
+                step="10000"
+                min="0"
+                value={amcEdit.annual_budget}
+                onChange={(e) => onAmcEditChange({ annual_budget: e.target.value })}
+                className="pl-8 h-8 text-sm"
+                placeholder="e.g. 500000"
+                disabled={!isAdmin}
+              />
+            </div>
+          </div>
+
+          {/* Spend breakdown */}
+          <div className="flex-1 min-w-[180px] space-y-1.5">
+            <p className="text-xs text-muted-foreground">FY Utilisation</p>
+
+            {/* Stacked bar: committed (green/red) + provisional (amber) */}
+            {budgetAmt ? (
+              <div className="w-full h-3 rounded-full bg-muted overflow-hidden flex">
+                <div
+                  className={`h-full transition-all ${isOver ? "bg-red-500" : committedPct >= 80 ? "bg-amber-500" : "bg-green-500"}`}
+                  style={{ width: `${committedPct}%` }}
+                />
+                {provisionalPct > 0 && (
+                  <div
+                    className="h-full bg-amber-300 opacity-80"
+                    style={{ width: `${provisionalPct}%` }}
+                  />
+                )}
+              </div>
+            ) : (
+              <div className="w-full h-3 rounded-full border border-dashed border-purple-300 bg-transparent" />
+            )}
+
+            <div className="flex flex-wrap gap-x-4 gap-y-0.5 text-[11px]">
+              <span className={`font-semibold ${pctColour}`}>
+                {formatCurrency(committed)} committed
+                {budgetAmt && <span className="font-normal text-muted-foreground"> / {formatCurrency(budgetAmt)}</span>}
+              </span>
+              {provisional > 0 && (
+                <span className="text-amber-700 font-medium">
+                  + {formatCurrency(provisional)} in pipeline
+                </span>
+              )}
+              {remaining !== null && !isOver && (
+                <span className="text-muted-foreground">{formatCurrency(remaining)} remaining</span>
+              )}
+              {isOver && (
+                <span className="text-red-700 font-medium">
+                  ↑ {formatCurrency(committed - (budgetAmt ?? 0))} over
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Active toggle */}
+          {isAdmin && (
+            <div className="flex flex-col items-center gap-1 pt-1">
+              <Label className="text-xs text-muted-foreground">Active</Label>
+              <Switch
+                checked={amcEdit.is_active}
+                onCheckedChange={(checked) => onAmcEditChange({ is_active: checked })}
+              />
+            </div>
+          )}
+        </div>
+
+        {/* Notes */}
+        {isAdmin && (
+          <Input
+            value={amcEdit.notes}
+            onChange={(e) => onAmcEditChange({ notes: e.target.value })}
+            className="h-7 text-xs text-muted-foreground"
+            placeholder="Optional note (e.g. board approved ₹5L for FY26)"
+          />
+        )}
+
+        {/* Save button + meta */}
+        <div className="flex items-center justify-between gap-2">
+          {summary.updated_at ? (
+            <p className="text-[10px] text-muted-foreground">
+              Last updated {new Date(summary.updated_at).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })}
+              {summary.updater ? ` by ${summary.updater.full_name}` : ""}
+            </p>
+          ) : <span />}
+          {isAdmin && (
+            <Button size="sm" onClick={onSave} disabled={saving} className="gap-1.5 h-7 text-xs">
+              {saving && <Loader2 className="h-3 w-3 animate-spin" />}
+              {saving ? "Saving…" : "Save AMC Budget"}
+            </Button>
+          )}
+        </div>
+      </CardContent>
+    </Card>
+  );
+}
+
 // ── Main component ────────────────────────────────────────────────────────────
 
 export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
@@ -514,26 +705,34 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
   const [year, setYear] = useState(now.getFullYear());
   const [month, setMonth] = useState(now.getMonth() + 1);
   const [rows, setRows] = useState<BudgetRow[]>([]);
+  const [amcSummary, setAmcSummary] = useState<AmcBudgetSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [savingAmc, setSavingAmc] = useState(false);
 
   // Drill-down state
   const [drillDept, setDrillDept] = useState<string | null>(null);
 
-  // Local editable state: keyed by department
+  // Editable state for operational departments
   const [edits, setEdits] = useState<Record<string, { monthly_budget: string; is_active: boolean; notes: string }>>({});
+
+  // Editable state for AMC annual budget
+  const [amcEdit, setAmcEdit] = useState<{ annual_budget: string; is_active: boolean; notes: string }>({
+    annual_budget: "", is_active: false, notes: "",
+  });
 
   const isCurrentMonth = year === now.getFullYear() && month === (now.getMonth() + 1);
   const isAdmin = userRole === "admin";
+  const currentFY = getCurrentFY();
 
-  // eslint-disable-next-line react-hooks/preserve-manual-memoization
   const fetchBudgets = useCallback(async () => {
     setLoading(true);
     const res = await fetch(`/api/procurement/budget?year=${year}&month=${month}`);
     if (res.ok) {
-      const { data } = await res.json();
-      const safeRows: BudgetRow[] = Array.isArray(data) ? data : [];
+      const json = await res.json();
+      const safeRows: BudgetRow[] = Array.isArray(json.data) ? json.data : [];
       setRows(safeRows);
+
       const initial: Record<string, { monthly_budget: string; is_active: boolean; notes: string }> = {};
       for (const row of safeRows) {
         initial[row.department] = {
@@ -543,12 +742,24 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
         };
       }
       setEdits(initial);
+
+      // AMC summary
+      if (json.amc) {
+        const amc: AmcBudgetSummary = json.amc;
+        setAmcSummary(amc);
+        setAmcEdit({
+          annual_budget: amc.annual_budget != null ? String(amc.annual_budget) : "",
+          is_active: amc.is_active,
+          notes: amc.notes ?? "",
+        });
+      }
     }
     setLoading(false);
   }, [year, month]);
 
   useEffect(() => { fetchBudgets(); }, [fetchBudgets]);
 
+  // Save operational department budgets
   const handleSave = async () => {
     setSaving(true);
     const budgets = DEPARTMENTS.map((dept) => ({
@@ -573,6 +784,31 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
     setSaving(false);
   };
 
+  // Save AMC annual budget
+  const handleSaveAmc = async () => {
+    setSavingAmc(true);
+    const res = await fetch("/api/procurement/budget", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        amc: {
+          financial_year: currentFY,
+          annual_budget: amcEdit.annual_budget ? parseFloat(amcEdit.annual_budget) : null,
+          is_active: amcEdit.is_active,
+          notes: amcEdit.notes || null,
+        },
+      }),
+    });
+    const data = await res.json();
+    if (!res.ok) {
+      toast.error(data.error || "Failed to save AMC budget");
+    } else {
+      toast.success("AMC annual budget saved");
+      fetchBudgets();
+    }
+    setSavingAmc(false);
+  };
+
   const utilColour = (pct: number | null, isOver: boolean) => {
     if (pct == null) return "text-muted-foreground";
     if (isOver) return "text-red-700";
@@ -587,19 +823,17 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
     return "bg-green-500";
   };
 
-  // Find the budget row for the drill dept (for passing budgetAmt to sheet)
-  const drillRow = rows.find((r) => r.department === drillDept);
   const drillEdit = drillDept ? edits[drillDept] : undefined;
   const drillBudgetAmt = drillEdit?.monthly_budget ? parseFloat(drillEdit.monthly_budget) : null;
 
   return (
     <div className="space-y-6">
-      {/* Header controls */}
+      {/* ── Operational Department Budgets header ──────────────────────── */}
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h3 className="font-semibold text-base">Department Procurement Budgets</h3>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Set monthly spending limits per department. Click the spend figure to investigate individual MRs.
+            Monthly spending limits per department. Click spend to drill into individual MRs.
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -641,12 +875,13 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
         </div>
       ) : (
         <div className="space-y-3">
+          {/* ── 4 operational department cards ── */}
           {rows.map((row) => {
             const edit = edits[row.department] ?? { monthly_budget: "", is_active: false, notes: "" };
             const budgetAmt = parseFloat(edit.monthly_budget) || null;
             const pct = budgetAmt ? Math.min(Math.round((row.spent_this_month / budgetAmt) * 100), 110) : null;
             const isOver = budgetAmt != null && row.spent_this_month > budgetAmt;
-            const hasSpend = row.spent_this_month > 0 || row.amc_spent_this_month > 0;
+            const hasSpend = row.spent_this_month > 0;
 
             return (
               <Card key={row.department} className={isOver ? "border-red-200 bg-red-50/20" : ""}>
@@ -732,17 +967,6 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
                           {isOver ? `${pct}% — ₹${(row.spent_this_month - (budgetAmt ?? 0)).toLocaleString("en-IN")} over` : `${pct}% used`}
                         </p>
                       )}
-
-                      {/* AMC footnote */}
-                      {row.amc_spent_this_month > 0 && (
-                        <button
-                          className="text-[10px] text-purple-600 hover:underline cursor-pointer"
-                          onClick={() => setDrillDept(row.department)}
-                          title="View AMC requests"
-                        >
-                          + {formatCurrency(row.amc_spent_this_month)} AMC (excluded)
-                        </button>
-                      )}
                     </div>
 
                     {/* Active toggle */}
@@ -787,7 +1011,7 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
             <div className="flex justify-end pt-2">
               <Button onClick={handleSave} disabled={saving} className="gap-2">
                 {saving && <Loader2 className="h-4 w-4 animate-spin" />}
-                {saving ? "Saving…" : "Save All Budgets"}
+                {saving ? "Saving…" : "Save Department Budgets"}
               </Button>
             </div>
           )}
@@ -797,6 +1021,74 @@ export function ProcurementBudgetSettings({ userRole }: { userRole: string }) {
               Budget configuration is admin-only. You are viewing current utilisation.
             </p>
           )}
+
+          {/* ── AMC Annual Budget section ── */}
+          <div className="pt-4 border-t space-y-3">
+            <div>
+              <h3 className="font-semibold text-base">AMC Annual Budget</h3>
+              <p className="text-sm text-muted-foreground mt-0.5">
+                Annual Maintenance Contract budget — covers all departments for the full financial year (Apr–Mar).
+                Spend is committed when an AMC MR is approved; submitted-but-pending MRs show as provisional.
+              </p>
+            </div>
+
+            {amcSummary ? (
+              <AmcBudgetCard
+                summary={amcSummary}
+                isAdmin={isAdmin}
+                amcEdit={amcEdit}
+                onAmcEditChange={(patch) => setAmcEdit((prev) => ({ ...prev, ...patch }))}
+                onSave={handleSaveAmc}
+                saving={savingAmc}
+              />
+            ) : (
+              <Card className="border-purple-200 bg-purple-50/30">
+                <CardContent className="pt-4 pb-4 space-y-3">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xl">🔧</span>
+                    <div>
+                      <p className="font-semibold text-sm">AMC Contracts</p>
+                      <p className="text-[11px] text-purple-700">{fyLabel(currentFY)} · Annual Budget</p>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap items-end gap-4">
+                    <div className="flex-1 min-w-[140px] space-y-1">
+                      <Label className="text-xs text-muted-foreground">Annual Budget (₹)</Label>
+                      <div className="relative">
+                        <IndianRupee className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+                        <Input
+                          type="number"
+                          step="10000"
+                          min="0"
+                          value={amcEdit.annual_budget}
+                          onChange={(e) => setAmcEdit((p) => ({ ...p, annual_budget: e.target.value }))}
+                          className="pl-8 h-8 text-sm"
+                          placeholder="e.g. 500000"
+                          disabled={!isAdmin}
+                        />
+                      </div>
+                    </div>
+                    <div className="flex flex-col items-center gap-1">
+                      <Label className="text-xs text-muted-foreground">Active</Label>
+                      <Switch
+                        checked={amcEdit.is_active}
+                        onCheckedChange={(v) => setAmcEdit((p) => ({ ...p, is_active: v }))}
+                        disabled={!isAdmin}
+                      />
+                    </div>
+                  </div>
+                  {isAdmin && (
+                    <div className="flex justify-end">
+                      <Button size="sm" onClick={handleSaveAmc} disabled={savingAmc} className="gap-1.5 h-7 text-xs">
+                        {savingAmc && <Loader2 className="h-3 w-3 animate-spin" />}
+                        {savingAmc ? "Saving…" : "Save AMC Budget"}
+                      </Button>
+                    </div>
+                  )}
+                </CardContent>
+              </Card>
+            )}
+          </div>
         </div>
       )}
 

@@ -63,12 +63,27 @@ export default function NewPurchaseRequestPage() {
   const [department, setDepartment] = useState<ProcurementDepartment>("pantry");
   const [locationId, setLocationId] = useState<string>("");
   const [expenditureType, setExpenditureType] = useState<"operational" | "amc">("operational");
+  const [amcBudgetCheck, setAmcBudgetCheck] = useState<{
+    has_budget: boolean;
+    annual_budget: number | null;
+    committed_so_far: number;
+    provisional_in_pipeline: number;
+    financial_year: number;
+  } | null>(null);
 
-  // Reset expenditure type to operational whenever department changes away from maintenance
+  // AMC is now available for all departments — no reset on department change
   const handleDepartmentChange = (v: ProcurementDepartment) => {
     setDepartment(v);
-    if (v !== "maintenance") setExpenditureType("operational");
   };
+
+  // Fetch AMC annual budget info whenever AMC type is selected
+  useEffect(() => {
+    if (expenditureType !== "amc") { setAmcBudgetCheck(null); return; }
+    fetch("/api/procurement/budget/check?department=amc&expenditure_type=amc&amount=0")
+      .then((r) => r.json())
+      .then((j) => setAmcBudgetCheck(j))
+      .catch(() => setAmcBudgetCheck(null));
+  }, [expenditureType]);
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<LineItem[]>([emptyItem()]);
   const [submitting, setSubmitting] = useState(false);
@@ -319,25 +334,48 @@ export default function NewPurchaseRequestPage() {
             </Select>
           </div>
 
-          {department === "maintenance" && (
-            <div className="space-y-1.5">
-              <Label htmlFor="expenditure-type">Expenditure Type <span className="text-red-500">*</span></Label>
-              <Select
-                value={expenditureType}
-                onValueChange={(v) => setExpenditureType(v as "operational" | "amc")}
-              >
-                <SelectTrigger id="expenditure-type">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  {EXPENDITURE_TYPES.map((t) => (
-                    <SelectItem key={t} value={t}>
-                      {EXPENDITURE_TYPE_LABELS[t]}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              <p className="text-[11px] text-muted-foreground">{EXPENDITURE_TYPE_DESCRIPTIONS[expenditureType]}</p>
+          <div className="space-y-1.5">
+            <Label htmlFor="expenditure-type">Expenditure Type <span className="text-red-500">*</span></Label>
+            <Select
+              value={expenditureType}
+              onValueChange={(v) => setExpenditureType(v as "operational" | "amc")}
+            >
+              <SelectTrigger id="expenditure-type">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {EXPENDITURE_TYPES.map((t) => (
+                  <SelectItem key={t} value={t}>
+                    {EXPENDITURE_TYPE_LABELS[t]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-muted-foreground">{EXPENDITURE_TYPE_DESCRIPTIONS[expenditureType]}</p>
+          </div>
+
+          {/* AMC annual budget preview */}
+          {expenditureType === "amc" && amcBudgetCheck && (
+            <div className="sm:col-span-2 rounded-lg border bg-purple-50 border-purple-200 px-3 py-2.5 space-y-1">
+              {amcBudgetCheck.has_budget ? (
+                <>
+                  <p className="text-xs font-semibold text-purple-800">
+                    AMC Annual Budget · FY {amcBudgetCheck.financial_year}-{String(amcBudgetCheck.financial_year + 1).slice(-2)}
+                  </p>
+                  <div className="flex flex-wrap gap-3 text-xs text-purple-700">
+                    <span>Budget: <span className="font-semibold">{formatCurrency(amcBudgetCheck.annual_budget ?? 0)}</span></span>
+                    <span>Committed: <span className="font-semibold">{formatCurrency(amcBudgetCheck.committed_so_far)}</span></span>
+                    {amcBudgetCheck.provisional_in_pipeline > 0 && (
+                      <span className="text-amber-700">In pipeline: <span className="font-semibold">{formatCurrency(amcBudgetCheck.provisional_in_pipeline)}</span></span>
+                    )}
+                    <span>Remaining: <span className="font-semibold">
+                      {formatCurrency(Math.max(0, (amcBudgetCheck.annual_budget ?? 0) - amcBudgetCheck.committed_so_far))}
+                    </span></span>
+                  </div>
+                </>
+              ) : (
+                <p className="text-xs text-purple-700">No AMC annual budget configured for this financial year. This request will be marked as provisional.</p>
+              )}
             </div>
           )}
 

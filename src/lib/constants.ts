@@ -1743,8 +1743,8 @@ export const EXPENDITURE_TYPE_LABELS: Record<string, string> = {
 };
 
 export const EXPENDITURE_TYPE_DESCRIPTIONS: Record<string, string> = {
-  operational: "Counts against monthly department budget",
-  amc: "Annual maintenance contract — excluded from monthly budget",
+  operational: "Counts against the monthly department budget",
+  amc: "Annual maintenance contract — counts against the AMC annual budget (all departments share one AMC pool)",
 };
 
 export const EXPENDITURE_TYPE_COLORS: Record<string, string> = {

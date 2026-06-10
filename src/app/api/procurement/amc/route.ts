@@ -1,10 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+function getCurrentFY(date = new Date()): number {
+  const month = date.getMonth() + 1;
+  return month >= 4 ? date.getFullYear() : date.getFullYear() - 1;
+}
+
+function getFYWindow(fyStart: number) {
+  return {
+    fyStart: new Date(fyStart, 3, 1).toISOString(),
+    fyEnd: new Date(fyStart + 1, 2, 31, 23, 59, 59).toISOString(),
+  };
+}
+
 /**
  * GET /api/procurement/amc
- * Returns all service POs linked to AMC material requests.
- * Filters: status, location_id, department
+ * Returns service POs linked to AMC material requests that have at least
+ * one vendor bill with payment_status = 'paid' or 'partially_paid'.
+ * Also returns the current FY AMC budget summary.
  */
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -15,14 +28,10 @@ export async function GET(request: NextRequest) {
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
   const { searchParams } = new URL(request.url);
-  const amcStatus   = searchParams.get("amc_status");   // active|expiring|expired|exhausted|inactive
+  const amcStatus   = searchParams.get("amc_status");
   const locationId  = searchParams.get("location_id");
-  const department  = searchParams.get("department");
 
-  // ── Fetch service POs from AMC material requests ──────────────────────────
-  // AMC POs can be:
-  //  a) Service POs whose linked PR has expenditure_type = 'amc'
-  //  b) Any PO that has amc_start_date set (manually activated)
+  // ── Fetch AMC service POs with vendor bill payment info ──────────────────
   const query = supabase
     .from("purchase_orders")
     .select(`
@@ -34,29 +43,38 @@ export async function GET(request: NextRequest) {
       procurement_vendors(id, name),
       locations(id, name),
       purchase_requests(id, pr_number, department, expenditure_type),
-      purchase_order_items(id, item_name, unit)
+      purchase_order_items(id, item_name, unit),
+      vendor_bills(id, payment_status)
     `)
     .eq("po_type", "service")
     .order("created_at", { ascending: false });
 
-  // Filter to AMC-related POs: either has amc_start_date OR linked PR is AMC
-  // We do a broad fetch and filter in JS to avoid complex PostgREST OR on joined table
   const { data: rows, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Keep only AMC POs
+  // ── Filter to AMC POs with at least one paid/partially_paid bill ─────────
+  // An AMC contract is "live" in the register only once payment has been made.
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  let amcRows = (rows ?? []).filter((r: any) =>
-    r.amc_start_date != null ||
-    r.purchase_requests?.expenditure_type === "amc"
-  );
+  let amcRows = (rows ?? []).filter((r: any) => {
+    const isAmcPo = r.purchase_requests?.expenditure_type === "amc";
+    if (!isAmcPo) return false;
 
-  // Recompute live amc_status for each row (in case DB value is stale)
+    const bills: Array<{ payment_status: string }> = r.vendor_bills ?? [];
+    return bills.some(
+      (b) => b.payment_status === "paid" || b.payment_status === "partially_paid"
+    );
+  });
+
+  // Recompute live amc_status for each row
   const today = new Date();
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   amcRows = amcRows.map((r: any) => {
-    const computed = computeAmcStatus(r.amc_start_date, r.amc_end_date, r.amc_visits_covered, r.amc_visits_used ?? 0, today);
-    return { ...r, amc_status: computed };
+    const computed = computeAmcStatus(
+      r.amc_start_date, r.amc_end_date, r.amc_visits_covered, r.amc_visits_used ?? 0, today
+    );
+    // Strip vendor_bills from the response (internal filter only)
+    const { vendor_bills: _vb, ...rest } = r;
+    return { ...rest, amc_status: computed };
   });
 
   // Apply filters
@@ -68,12 +86,56 @@ export async function GET(request: NextRequest) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     amcRows = amcRows.filter((r: any) => r.location_id === locationId);
   }
-  if (department) {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    amcRows = amcRows.filter((r: any) => r.purchase_requests?.department === department);
+
+  // ── AMC annual budget summary (for budget banner on the page) ────────────
+  const canSeeBudget = ["admin", "manager"].includes(dbUser.role);
+  let budgetSummary = null;
+
+  if (canSeeBudget) {
+    const currentFY = getCurrentFY();
+    const { fyStart, fyEnd } = getFYWindow(currentFY);
+
+    const [{ data: budgetRow }, { data: committed }, { data: provisional }] = await Promise.all([
+      supabase
+        .from("department_budgets")
+        .select("monthly_budget, is_active, notes")
+        .eq("department", "amc")
+        .eq("budget_period", "annual")
+        .eq("financial_year", currentFY)
+        .is("location_id", null)
+        .maybeSingle(),
+      supabase
+        .from("purchase_requests")
+        .select("total_estimated_amount")
+        .eq("expenditure_type", "amc")
+        .gte("created_at", fyStart)
+        .lte("created_at", fyEnd)
+        .in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"]),
+      supabase
+        .from("purchase_requests")
+        .select("total_estimated_amount")
+        .eq("expenditure_type", "amc")
+        .gte("created_at", fyStart)
+        .lte("created_at", fyEnd)
+        .eq("status", "submitted"),
+    ]);
+
+    const annualBudget = budgetRow?.monthly_budget ? Number(budgetRow.monthly_budget) : null;
+    const committedTotal = (committed ?? []).reduce((s, r) => s + Number(r.total_estimated_amount ?? 0), 0);
+    const provisionalTotal = (provisional ?? []).reduce((s, r) => s + Number(r.total_estimated_amount ?? 0), 0);
+
+    budgetSummary = {
+      financial_year: currentFY,
+      annual_budget: annualBudget,
+      is_active: budgetRow?.is_active ?? false,
+      committed: committedTotal,
+      provisional: provisionalTotal,
+      utilisation_pct: annualBudget ? Math.round((committedTotal / annualBudget) * 100) : null,
+      is_over_budget: annualBudget != null && committedTotal > annualBudget,
+    };
   }
 
-  return NextResponse.json({ data: amcRows });
+  return NextResponse.json({ data: amcRows, budget: budgetSummary });
 }
 
 function computeAmcStatus(

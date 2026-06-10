@@ -6,7 +6,7 @@ import Link from "next/link";
 import {
   ClipboardList, Phone, Mail, AlertTriangle, CheckCircle2,
   XCircle, Clock, Loader2, Search, ChevronRight, RefreshCw,
-  CalendarDays, Wrench,
+  CalendarDays, Wrench, IndianRupee, Settings,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -94,9 +94,20 @@ function VisitsBar({ used, covered }: { used: number; covered: number | null }) 
   );
 }
 
+type AmcBudget = {
+  financial_year: number;
+  annual_budget: number | null;
+  is_active: boolean;
+  committed: number;
+  provisional: number;
+  utilisation_pct: number | null;
+  is_over_budget: boolean;
+};
+
 export default function AmcRegisterPage() {
   const router = useRouter();
   const [rows, setRows] = useState<AmcRow[]>([]);
+  const [budget, setBudget] = useState<AmcBudget | null>(null);
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<AmcStatus | "all">("all");
   const [search, setSearch] = useState("");
@@ -107,8 +118,9 @@ export default function AmcRegisterPage() {
       const params = new URLSearchParams();
       if (statusFilter !== "all") params.set("amc_status", statusFilter);
       const res = await fetch(`/api/procurement/amc?${params}`);
-      const data = await res.json();
-      setRows(data.data ?? []);
+      const json = await res.json();
+      setRows(json.data ?? []);
+      if (json.budget) setBudget(json.budget);
     } catch {
       toast.error("Failed to load AMC contracts");
     } finally {
@@ -149,6 +161,74 @@ export default function AmcRegisterPage() {
           Refresh
         </Button>
       </div>
+
+      {/* ── AMC Annual Budget Banner ─────────────────────────────────────── */}
+      {budget && (
+        <div className={`rounded-xl border px-4 py-3 ${budget.is_over_budget ? "border-red-200 bg-red-50" : "border-purple-200 bg-purple-50/50"}`}>
+          <div className="flex items-center justify-between gap-3 mb-2">
+            <div className="flex items-center gap-2">
+              <IndianRupee className="h-4 w-4 text-purple-600 shrink-0" />
+              <span className="font-semibold text-sm text-purple-900">
+                FY {budget.financial_year}-{String(budget.financial_year + 1).slice(-2)} AMC Budget
+              </span>
+              {budget.is_over_budget && (
+                <span className="text-[10px] font-semibold bg-red-100 text-red-700 px-1.5 py-0.5 rounded-full">Over Budget</span>
+              )}
+              {!budget.annual_budget && (
+                <span className="text-[10px] text-purple-600 italic">No annual budget set</span>
+              )}
+            </div>
+            <Link
+              href="/settings?tab=dept-budgets"
+              className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+            >
+              <Settings className="h-3 w-3" /> Configure
+            </Link>
+          </div>
+
+          {/* Progress bar */}
+          {budget.annual_budget && (
+            <div className="w-full h-2.5 rounded-full bg-purple-100 overflow-hidden flex mb-2">
+              <div
+                className={`h-full rounded-full transition-all ${budget.is_over_budget ? "bg-red-500" : (budget.utilisation_pct ?? 0) >= 80 ? "bg-amber-500" : "bg-purple-500"}`}
+                style={{ width: `${Math.min(budget.utilisation_pct ?? 0, 100)}%` }}
+              />
+              {budget.provisional > 0 && (
+                <div
+                  className="h-full bg-amber-300 opacity-80"
+                  style={{ width: `${Math.min((budget.provisional / budget.annual_budget) * 100, 100 - Math.min(budget.utilisation_pct ?? 0, 100))}%` }}
+                />
+              )}
+            </div>
+          )}
+
+          {/* Numbers */}
+          <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-purple-800">
+            <span>
+              Committed: <span className="font-semibold">{formatCurrency(budget.committed)}</span>
+              {budget.annual_budget && (
+                <span className="text-purple-600"> / {formatCurrency(budget.annual_budget)}</span>
+              )}
+            </span>
+            {budget.provisional > 0 && (
+              <span className="text-amber-700">
+                In pipeline: <span className="font-semibold">{formatCurrency(budget.provisional)}</span>
+                <span className="text-[10px] ml-1 opacity-80">(submitted, pending approval)</span>
+              </span>
+            )}
+            {budget.annual_budget && !budget.is_over_budget && (
+              <span>
+                Remaining: <span className="font-semibold">{formatCurrency(Math.max(0, budget.annual_budget - budget.committed))}</span>
+              </span>
+            )}
+            {budget.is_over_budget && budget.annual_budget && (
+              <span className="text-red-700 font-semibold">
+                ↑ {formatCurrency(budget.committed - budget.annual_budget)} over budget
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Status filter chips */}
       <div className="flex items-center gap-2 flex-wrap">

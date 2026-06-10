@@ -8,7 +8,7 @@ import {
   ClipboardList, Package, Receipt, AlertTriangle,
   CheckCircle2, Clock, BarChart3, ArrowRight,
   IndianRupee, ShoppingCart, Truck, AlertCircle,
-  CalendarClock, Users, PieChart, Settings,
+  CalendarClock, Users, PieChart, Settings, Wrench,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -303,6 +303,15 @@ export default function ProcurementDashboard() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [loading, setLoading] = useState(true);
   const [budgetRows, setBudgetRows] = useState<BudgetRow[] | null>(null);
+  const [amcBudget, setAmcBudget] = useState<{
+    financial_year: number;
+    annual_budget: number | null;
+    is_active: boolean;
+    committed: number;
+    provisional: number;
+    utilisation_pct: number | null;
+    is_over_budget: boolean;
+  } | null>(null);
   const [budgetLoading, setBudgetLoading] = useState(false);
 
   const fetchData = () => {
@@ -318,7 +327,10 @@ export default function ProcurementDashboard() {
     setBudgetLoading(true);
     fetch("/api/procurement/budget")
       .then((r) => r.json())
-      .then((j) => { if (j.data) setBudgetRows(j.data); })
+      .then((j) => {
+        if (j.data) setBudgetRows(j.data);
+        if (j.amc) setAmcBudget(j.amc);
+      })
       .finally(() => setBudgetLoading(false));
   };
 
@@ -470,6 +482,121 @@ export default function ProcurementDashboard() {
               </>
             ) : (
               <p className="text-sm text-muted-foreground text-center py-4">Unable to load budget data.</p>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* ── AMC Annual Budget widget (admin/manager only) ──────────────────── */}
+      {canSeePrices && (
+        <Card className={`border-purple-200 ${amcBudget?.is_over_budget ? "border-red-200" : ""}`}>
+          <CardHeader className="pb-3">
+            <div className="flex items-center justify-between">
+              <CardTitle className="text-sm font-medium flex items-center gap-2">
+                <Wrench className="h-4 w-4 text-purple-500" />
+                AMC Contracts ·{" "}
+                {amcBudget
+                  ? `FY ${amcBudget.financial_year}-${String(amcBudget.financial_year + 1).slice(-2)}`
+                  : "Annual Budget"}
+              </CardTitle>
+              <Link
+                href="/procurement/amc"
+                className="text-xs text-muted-foreground hover:text-foreground flex items-center gap-1"
+              >
+                View contracts <ArrowRight className="h-3 w-3" />
+              </Link>
+            </div>
+          </CardHeader>
+          <CardContent>
+            {budgetLoading ? (
+              <div className="space-y-2">
+                <div className="animate-pulse bg-muted rounded-full h-3" />
+                <div className="animate-pulse bg-muted rounded h-3 w-40" />
+              </div>
+            ) : amcBudget ? (
+              <div className="space-y-2">
+                {amcBudget.is_over_budget && (
+                  <div className="flex items-center gap-2 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-sm text-red-800">
+                    <AlertTriangle className="h-4 w-4 shrink-0 text-red-600" />
+                    <span>AMC annual budget exceeded — admin approval required for new AMC requests</span>
+                  </div>
+                )}
+                <div
+                  className="rounded-xl border bg-purple-50/40 hover:bg-purple-50/70 transition-colors cursor-pointer p-3 pt-4"
+                  onClick={() => router.push("/procurement/amc")}
+                >
+                  {/* Dept label row */}
+                  <div className="flex items-center justify-between gap-2 mb-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-base" aria-hidden>🔧</span>
+                      <span className="font-semibold text-sm">AMC Contracts</span>
+                    </div>
+                    <div className="text-xs tabular-nums">
+                      {amcBudget.annual_budget ? (
+                        <>
+                          <span className={`font-semibold ${amcBudget.is_over_budget ? "text-red-700" : (amcBudget.utilisation_pct ?? 0) >= 80 ? "text-amber-700" : "text-green-700"}`}>
+                            {formatCurrency(amcBudget.committed)}
+                          </span>
+                          <span className="text-muted-foreground"> / {formatCurrency(amcBudget.annual_budget)}</span>
+                        </>
+                      ) : (
+                        <span className="text-muted-foreground italic text-[11px]">No budget set</span>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Stacked bar: committed + provisional */}
+                  {amcBudget.annual_budget ? (
+                    <div className="relative h-4 w-full rounded-full bg-gray-100 overflow-hidden flex">
+                      <div
+                        className={`h-full transition-[width] duration-500 ${amcBudget.is_over_budget ? "bg-red-500" : (amcBudget.utilisation_pct ?? 0) >= 80 ? "bg-amber-500" : "bg-purple-500"}`}
+                        style={{ width: `${Math.min(amcBudget.utilisation_pct ?? 0, 100)}%` }}
+                      />
+                      {amcBudget.provisional > 0 && amcBudget.annual_budget && (
+                        <div
+                          className="h-full bg-amber-300 opacity-80"
+                          style={{ width: `${Math.min((amcBudget.provisional / amcBudget.annual_budget) * 100, 100 - Math.min(amcBudget.utilisation_pct ?? 0, 100))}%` }}
+                        />
+                      )}
+                    </div>
+                  ) : (
+                    <div className="h-4 w-full rounded-full border border-dashed border-purple-300" />
+                  )}
+
+                  {/* Stats row */}
+                  <div className="flex items-center justify-between gap-2 mt-2">
+                    <div className="flex items-center gap-2 text-[11px]">
+                      {amcBudget.annual_budget && (
+                        <span className={`font-bold tabular-nums ${amcBudget.is_over_budget ? "text-red-700" : "text-purple-700"}`}>
+                          {amcBudget.utilisation_pct ?? 0}%
+                        </span>
+                      )}
+                      {amcBudget.is_over_budget ? (
+                        <span className="bg-red-100 text-red-700 font-semibold px-1.5 py-0.5 rounded-full text-[10px]">
+                          ↑ {formatCurrency(amcBudget.committed - (amcBudget.annual_budget ?? 0))} over
+                        </span>
+                      ) : !amcBudget.annual_budget ? (
+                        <span className="text-muted-foreground">{formatCurrency(amcBudget.committed)} committed this FY</span>
+                      ) : null}
+                    </div>
+                    <div className="text-[11px] flex items-center gap-3">
+                      {amcBudget.provisional > 0 && (
+                        <span className="text-amber-700 font-medium">+{formatCurrency(amcBudget.provisional)} in pipeline</span>
+                      )}
+                      {amcBudget.annual_budget && !amcBudget.is_over_budget && (
+                        <span className="font-medium text-foreground">
+                          {formatCurrency(Math.max(0, amcBudget.annual_budget - amcBudget.committed))} left
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-sm text-muted-foreground text-center py-2">
+                No AMC budget configured.{" "}
+                <Link href="/settings?tab=dept-budgets" className="underline">Set in Settings</Link>
+              </p>
             )}
           </CardContent>
         </Card>

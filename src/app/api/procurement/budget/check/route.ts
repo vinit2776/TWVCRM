@@ -1,6 +1,18 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 
+function getCurrentFY(date = new Date()): number {
+  const month = date.getMonth() + 1;
+  return month >= 4 ? date.getFullYear() : date.getFullYear() - 1;
+}
+
+function getFYWindow(fyStart: number) {
+  return {
+    fyStart: new Date(fyStart, 3, 1).toISOString(),
+    fyEnd: new Date(fyStart + 1, 2, 31, 23, 59, 59).toISOString(),
+  };
+}
+
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -11,29 +23,91 @@ export async function GET(request: NextRequest) {
 
   const searchParams = request.nextUrl.searchParams;
   const department = searchParams.get("department");
+  const expenditureType = searchParams.get("expenditure_type") ?? "operational";
   const mrAmount = parseFloat(searchParams.get("amount") ?? "0");
 
   if (!department) return NextResponse.json({ error: "department required" }, { status: 400 });
 
+  // ── AMC annual budget check ──────────────────────────────────────────────
+  if (expenditureType === "amc") {
+    const currentFY = getCurrentFY();
+    const { fyStart, fyEnd } = getFYWindow(currentFY);
+
+    const { data: budget } = await supabase
+      .from("department_budgets")
+      .select("monthly_budget, is_active, notes")
+      .eq("department", "amc")
+      .eq("budget_period", "annual")
+      .eq("financial_year", currentFY)
+      .is("location_id", null)
+      .maybeSingle();
+
+    if (!budget || !budget.is_active || !budget.monthly_budget) {
+      return NextResponse.json({ has_budget: false, budget_type: "annual" });
+    }
+
+    const annualBudget = Number(budget.monthly_budget);
+
+    // Committed: approved and beyond
+    const { data: committed } = await supabase
+      .from("purchase_requests")
+      .select("total_estimated_amount")
+      .eq("expenditure_type", "amc")
+      .gte("created_at", fyStart)
+      .lte("created_at", fyEnd)
+      .in("status", ["approved", "partially_ordered", "po_created", "fully_ordered", "closed"]);
+
+    // Provisional: submitted pending approval
+    const { data: provisional } = await supabase
+      .from("purchase_requests")
+      .select("total_estimated_amount")
+      .eq("expenditure_type", "amc")
+      .gte("created_at", fyStart)
+      .lte("created_at", fyEnd)
+      .eq("status", "submitted");
+
+    const committedTotal = (committed ?? []).reduce((s, r) => s + Number(r.total_estimated_amount ?? 0), 0);
+    const provisionalTotal = (provisional ?? []).reduce((s, r) => s + Number(r.total_estimated_amount ?? 0), 0);
+    const projectedTotal = committedTotal + mrAmount;
+    const isOverBudget = projectedTotal > annualBudget;
+    const remainingBudget = Math.max(0, annualBudget - committedTotal);
+
+    return NextResponse.json({
+      has_budget: true,
+      budget_type: "annual",
+      financial_year: currentFY,
+      annual_budget: annualBudget,
+      committed_so_far: committedTotal,
+      provisional_in_pipeline: provisionalTotal,
+      this_mr_amount: mrAmount,
+      projected_committed: projectedTotal,
+      remaining_before_mr: remainingBudget,
+      is_over_budget: isOverBudget,
+      over_by: isOverBudget ? projectedTotal - annualBudget : 0,
+      utilisation_before: Math.round((committedTotal / annualBudget) * 100),
+      utilisation_after: Math.round((projectedTotal / annualBudget) * 100),
+    });
+  }
+
+  // ── Operational monthly budget check (existing logic) ────────────────────
   const now = new Date();
   const monthStart = new Date(now.getFullYear(), now.getMonth(), 1).toISOString();
   const monthEnd = new Date(now.getFullYear(), now.getMonth() + 1, 0, 23, 59, 59).toISOString();
 
-  // Fetch budget for this department
   const { data: budget } = await supabase
     .from("department_budgets")
     .select("monthly_budget, is_active, notes")
     .eq("department", department)
+    .eq("budget_period", "monthly")
     .is("location_id", null)
     .maybeSingle();
 
   if (!budget || !budget.is_active || !budget.monthly_budget) {
-    return NextResponse.json({ has_budget: false });
+    return NextResponse.json({ has_budget: false, budget_type: "monthly" });
   }
 
   const monthlyBudget = Number(budget.monthly_budget);
 
-  // Fetch spend this month (operational only — AMC excluded from budget)
   const { data: mrs } = await supabase
     .from("purchase_requests")
     .select("total_estimated_amount")
@@ -50,6 +124,7 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     has_budget: true,
+    budget_type: "monthly",
     monthly_budget: monthlyBudget,
     spent_so_far: spentSoFar,
     this_mr_amount: mrAmount,
