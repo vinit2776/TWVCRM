@@ -795,9 +795,8 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
             const taxRate    = row.tax_percentage ?? 18;
             const taxAmount  = parseFloat((effectiveTotal * taxRate / 100).toFixed(2));
             const grandTotal = parseFloat((effectiveTotal + taxAmount).toFixed(2));
-            const cgst       = row.is_interstate ? 0 : parseFloat((taxAmount / 2).toFixed(2));
-            const sgst       = row.is_interstate ? 0 : parseFloat((taxAmount / 2).toFixed(2));
-            const igst       = row.is_interstate ? taxAmount : 0;
+            const cgst       = parseFloat((taxAmount / 2).toFixed(2));
+            const sgst       = parseFloat((taxAmount / 2).toFixed(2));
 
             return (
               <div className="rounded-md border bg-muted/30 px-4 py-3 space-y-1.5 text-sm">
@@ -819,23 +818,14 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
                 </div>
                 {effectiveTotal > 0 && (
                   <>
-                    {row.is_interstate ? (
-                      <div className="flex justify-between text-xs text-muted-foreground">
-                        <span>IGST ({taxRate}%)</span>
-                        <span>{formatCurrency(igst)}</span>
-                      </div>
-                    ) : (
-                      <>
-                        <div className="flex justify-between text-xs text-muted-foreground">
-                          <span>CGST ({taxRate / 2}%)</span>
-                          <span>{formatCurrency(cgst)}</span>
-                        </div>
-                        <div className="flex justify-between text-xs text-muted-foreground">
-                          <span>SGST ({taxRate / 2}%)</span>
-                          <span>{formatCurrency(sgst)}</span>
-                        </div>
-                      </>
-                    )}
+                    <div className="flex justify-between text-xs text-muted-foreground">
+                      <span>CGST ({taxRate / 2}%)</span>
+                      <span>{formatCurrency(cgst)}</span>
+                    </div>
+                    <div className="flex justify-between text-xs text-muted-foreground">
+                      <span>SGST ({taxRate / 2}%)</span>
+                      <span>{formatCurrency(sgst)}</span>
+                    </div>
                     <div className="flex justify-between font-bold border-t pt-1.5 mt-0.5 text-base">
                       <span>Total (payment link amount)</span>
                       <span className="text-teal-700">{formatCurrency(grandTotal)}</span>
