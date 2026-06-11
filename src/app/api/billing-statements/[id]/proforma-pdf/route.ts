@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
+import { computeGstAndRounding } from "@/lib/gst-math";
 import QRCode from "qrcode";
 
 export const maxDuration = 30;
@@ -74,10 +75,7 @@ export async function GET(
 
   // Place of supply is always Tamil Nadu — service rendered at TWV premises (always CGST+SGST)
   const isInterstate = false;
-  const igst = 0;
-  const cgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
-  const sgst = Math.round(subtotal * (taxPercentage / 200) * 100) / 100;
-  const totalAmount = subtotal + cgst + sgst;
+  const { cgst, sgst, igst, totalAmount } = computeGstAndRounding(subtotal, taxPercentage);
 
   // Fetch UPI ID
   let upiId: string | undefined;

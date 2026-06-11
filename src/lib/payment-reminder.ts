@@ -207,6 +207,9 @@ function renderEmail(opts: {
    *  The ref label changes and the cancelled PI number is shown for context. */
   gstInvoiceNumber?: string | null;
   cancelledPiNumber?: string | null;
+  /** URL for the 1x1 tracking pixel. When loaded by the email client we mark
+   *  the send row as opened. Omit to skip tracking (non-email channels). */
+  trackingPixelUrl?: string | null;
 }): string {
   const periodLabel = `${fmtDate(opts.periodStart)} – ${fmtDate(opts.periodEnd)}`;
   const d = opts.daysOverdue;
@@ -349,6 +352,8 @@ export async function sendOneReminder(
     }
 
     const isEarlyGst = !!s.pi_cancelled_at && !!s.gst_invoice_number;
+    const trackingId = crypto.randomUUID();
+    const trackingPixelUrl = `${input.appUrl}/api/tracking/email-open?id=${trackingId}`;
 
     const html = renderEmail({
       customerName, stmt: s.statement_number, contractNumber: contract.contract_number,
@@ -363,6 +368,7 @@ export async function sendOneReminder(
       // Early GST override — show invoice number and cancelled PI for continuity
       gstInvoiceNumber: isEarlyGst ? (s.gst_invoice_number as string) : null,
       cancelledPiNumber: isEarlyGst ? s.statement_number : null,
+      trackingPixelUrl,
     });
     try {
       const r = await resend.emails.send({
