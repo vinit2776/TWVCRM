@@ -43,6 +43,17 @@ TWV CRM is the internal operations platform for **The WorkVilla**, a coworking s
 
 **Never claim a feature is done based on local code alone.** The user expects a live browser screenshot proving it works. If it doesn't look right in the browser, investigate and fix before confirming.
 
+### Billing / PDF smoke test (mandatory when touching these files)
+
+Any change to `src/lib/billing.ts`, `src/lib/send-proforma.ts`, `src/lib/pdf-generator.ts`, `src/lib/gst-invoice-generator.ts`, or any route under `src/app/api/billing-statements/` **must** include a manual PDF smoke test before declaring done:
+
+1. Open a contract that has at least one print/service usage entry for the current month.
+2. Trigger "Verify & Send" (or use the manual send button) to generate a proforma.
+3. Open the generated PDF and verify: **Qty × Rate = Amount** for every line item.
+4. Check that Qty is not `1` when the actual usage is more than 1 unit.
+
+The browser UI cannot catch PDF rendering bugs — only the PDF itself can.
+
 ## Commands
 
 ```bash

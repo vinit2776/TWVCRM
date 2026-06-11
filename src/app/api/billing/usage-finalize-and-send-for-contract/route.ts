@@ -221,7 +221,7 @@ export async function POST(request: NextRequest) {
       if (cfServiceIds.length > 0) {
         const { data: cfSvc } = await admin
           .from("service_usage_records")
-          .select("id, service_id, amount, notes, service:service_catalog(name, printer_column)")
+          .select("id, service_id, amount, overage_quantity, overage_rate_snapshot, notes, service:service_catalog(name, printer_column)")
           .in("id", cfServiceIds)
           .eq("contract_id", contractId)
           .eq("is_billed", false);
@@ -239,7 +239,13 @@ export async function POST(request: NextRequest) {
             if (svcInfo?.printer_column === "bw")     desc = "Print - B/W";
             if (svcInfo?.printer_column === "colour") desc = "Print - Colour";
             const amt = Number(s.amount || 0);
-            svcSec.items.push({ service_id: s.service_id, description: desc, amount: amt });
+            svcSec.items.push({
+              service_id: s.service_id,
+              description: desc,
+              qty: Number((s as unknown as { overage_quantity?: number }).overage_quantity || 0),
+              unit_price: Number((s as unknown as { overage_rate_snapshot?: number }).overage_rate_snapshot || 0),
+              amount: amt,
+            });
             svcSec.subtotal = (svcSec.subtotal || 0) + amt;
             cfServiceTotal += amt;
           }

@@ -432,6 +432,8 @@ export async function generateMonthlyStatements(
         label: `Facility Usage — ${monthLabel(targetMonth, targetYear)}`,
         items: facilityRecords.map((f) => ({
           facility_id: f.contract_facility_id,
+          qty: Number(f.billable_quantity),
+          unit_price: Number(f.unit_price),
           quantity_used: Number(f.quantity_used),
           free_quota: Number(f.free_quota_applied),
           billable: Number(f.billable_quantity),
@@ -450,6 +452,8 @@ export async function generateMonthlyStatements(
           service_usage_id: s.id,
           service_id: s.service_id,
           description: buildServiceDescription(s.service),
+          qty: Number(s.overage_quantity),
+          unit_price: Number(s.overage_rate_snapshot),
           quantity_used: Number(s.quantity_used),
           quota: Number(s.quota_snapshot),
           overage: Number(s.overage_quantity),
@@ -1268,7 +1272,10 @@ export async function generateUsageStatements(
             .filter((f) => Number(f.billable_quantity) > 0)
             .map((f) => ({
               facility_id: f.contract_facility_id,
-              billable: Number(f.billable_quantity), rate: Number(f.unit_price),
+              qty: Number(f.billable_quantity),
+              unit_price: Number(f.unit_price),
+              billable: Number(f.billable_quantity),
+              rate: Number(f.unit_price),
               amount: Number(f.total_charge || 0),
             })),
           subtotal: facilitySubtotal,
@@ -1281,7 +1288,10 @@ export async function generateUsageStatements(
             .map((s) => ({
               service_id: s.service_id,
               description: buildServiceDescription(s.service),
-              overage: Number(s.overage_quantity), rate: Number(s.overage_rate_snapshot),
+              qty: Number(s.overage_quantity),
+              unit_price: Number(s.overage_rate_snapshot),
+              overage: Number(s.overage_quantity),
+              rate: Number(s.overage_rate_snapshot),
               amount: Number(s.amount || 0),
             })),
           subtotal: serviceSubtotal,
