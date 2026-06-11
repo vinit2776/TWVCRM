@@ -22,7 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
-import { Loader2, Send, X, Pencil, Plus, Printer, AlertCircle } from "lucide-react";
+import { Loader2, Send, X, Pencil, Plus, Printer, AlertCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
 
@@ -121,6 +121,26 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
 
   const editable = canEdit(userRole);
 
+  // ── Carry-forward state ─────────────────────────────────────────────────────
+  interface CfCharge  { id: string; description: string; amount: number; date: string }
+  interface CfService { id: string; description: string; amount: number; period_year: number; period_month: number }
+  const [cfCharges,  setCfCharges]  = useState<CfCharge[]>([]);
+  const [cfServices, setCfServices] = useState<CfService[]>([]);
+  const [cfLoading,  setCfLoading]  = useState(false);
+  const [cfExpanded, setCfExpanded] = useState(false);
+  // "idle" | "including" | "waiving" | "included" | "waived"
+  const [cfAction, setCfAction] = useState<"idle" | "including" | "waiving" | "included" | "waived">("idle");
+  // IDs the operator chose to include — passed to finalize route
+  const [cfIncludedChargeIds,  setCfIncludedChargeIds]  = useState<string[]>([]);
+  const [cfIncludedServiceIds, setCfIncludedServiceIds] = useState<string[]>([]);
+
+  const cfTotal = [...cfCharges, ...cfServices].reduce((s, i) => s + i.amount, 0);
+  const cfCount = cfCharges.length + cfServices.length;
+
+  function periodLabel(py: number, pm: number) {
+    return new Date(Date.UTC(py, pm - 1, 1)).toLocaleDateString("en-IN", { timeZone: "UTC", month: "short", year: "numeric" });
+  }
+
   // ── Reset state when dialog opens/closes ───────────────────────────────────
   const handleOpenChange = (v: boolean) => {
     if (!v) {
@@ -143,9 +163,31 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
       setPrintColourQuota(null);
       setPrintBwRate(0);
       setPrintColourRate(0);
+      // Reset carry-forward state
+      setCfCharges([]);
+      setCfServices([]);
+      setCfExpanded(false);
+      setCfAction("idle");
+      setCfIncludedChargeIds([]);
+      setCfIncludedServiceIds([]);
     }
     onOpenChange(v);
   };
+
+  // ── Fetch carry-forward pending items when dialog opens ────────────────────
+  useEffect(() => {
+    if (!open || !row) return;
+    setCfLoading(true);
+    fetch(`/api/billing/pending-carryforward?contract_id=${row.contract_id}&year=${year}&month=${month}`)
+      .then(r => r.json())
+      .then(json => {
+        setCfCharges(json.usage_charges || []);
+        setCfServices(json.service_records || []);
+      })
+      .catch(() => { /* non-critical */ })
+      .finally(() => setCfLoading(false));
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, row?.contract_id, year, month]);
 
   // ── Fetch existing print data when dialog opens ─────────────────────────────
   // This pre-fills B&W / Colour inputs if the contract already has a manual
@@ -273,6 +315,46 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
     }
   }, [row, year, month, printBwParsed, printColourParsed, printNotes, onPrintSaved]);
 
+  // ── Carry-forward handlers ──────────────────────────────────────────────────
+
+  const handleCfInclude = () => {
+    setCfIncludedChargeIds(cfCharges.map(c => c.id));
+    setCfIncludedServiceIds(cfServices.map(s => s.id));
+    setCfAction("included");
+    setCfExpanded(false);
+    toast.success(`${cfCount} item${cfCount > 1 ? "s" : ""} will be included in this PI`);
+  };
+
+  const handleCfWaive = async () => {
+    if (!row) return;
+    setCfAction("waiving");
+    try {
+      const calls: Promise<Response>[] = [];
+      for (const c of cfCharges) {
+        calls.push(fetch(`/api/usage-charges/${c.id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ status: "waived", waive_reason: "Carry-forward cleared — waived by admin" }),
+        }));
+      }
+      if (cfServices.length > 0) {
+        calls.push(fetch("/api/billing/waive-carryforward-services", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ service_record_ids: cfServices.map(s => s.id) }),
+        }));
+      }
+      await Promise.all(calls);
+      setCfAction("waived");
+      setCfCharges([]);
+      setCfServices([]);
+      toast.success("Carry-forward items cleared");
+    } catch {
+      toast.error("Failed to waive carry-forward items");
+      setCfAction("idle");
+    }
+  };
+
   // ── Derived totals ──────────────────────────────────────────────────────────
 
   const items = localItems;
@@ -385,6 +467,12 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
           year,
           month,
           overrides: overridePayload,
+          ...(cfAction === "included" && (cfIncludedChargeIds.length > 0 || cfIncludedServiceIds.length > 0) ? {
+            carry_forward: {
+              usage_charge_ids: cfIncludedChargeIds,
+              service_record_ids: cfIncludedServiceIds,
+            },
+          } : {}),
         }),
       });
       const json = await res.json();
@@ -442,6 +530,95 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
         )}
 
         <div className="flex-1 overflow-y-auto space-y-4 pr-1">
+
+          {/* ── Carry-forward alert ─────────────────────────────────────────── */}
+          {cfLoading && (
+            <div className="flex items-center gap-2 text-xs text-muted-foreground py-1">
+              <Loader2 className="h-3 w-3 animate-spin" /> Checking for unbilled items from previous months…
+            </div>
+          )}
+          {!cfLoading && cfCount > 0 && cfAction !== "waived" && cfAction !== "included" && (
+            <div className="rounded-md border border-orange-300 bg-orange-50 p-3 space-y-2">
+              <div className="flex items-start justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <AlertCircle className="h-4 w-4 text-orange-600 shrink-0 mt-0.5" />
+                  <div>
+                    <p className="text-xs font-semibold text-orange-800">
+                      {cfCount} unbilled item{cfCount > 1 ? "s" : ""} from previous months — {formatCurrency(cfTotal)} total
+                    </p>
+                    <p className="text-[11px] text-orange-700 mt-0.5">
+                      Would you like to include them in this PI?
+                    </p>
+                  </div>
+                </div>
+                <button
+                  className="text-orange-500 hover:text-orange-700 shrink-0"
+                  onClick={() => setCfExpanded(v => !v)}
+                >
+                  {cfExpanded ? <ChevronUp className="h-4 w-4" /> : <ChevronDown className="h-4 w-4" />}
+                </button>
+              </div>
+
+              {/* Expandable list */}
+              {cfExpanded && (
+                <div className="rounded border border-orange-200 divide-y divide-orange-100 text-xs bg-white">
+                  {cfCharges.map(c => (
+                    <div key={c.id} className="flex items-center justify-between px-3 py-1.5 gap-2">
+                      <div>
+                        <span className="font-medium">{c.description}</span>
+                        <span className="ml-2 text-muted-foreground">{c.date}</span>
+                        <span className="ml-1.5 text-[10px] border rounded px-1 text-muted-foreground">Ad-hoc</span>
+                      </div>
+                      <span className="font-semibold shrink-0">{formatCurrency(c.amount)}</span>
+                    </div>
+                  ))}
+                  {cfServices.map(s => (
+                    <div key={s.id} className="flex items-center justify-between px-3 py-1.5 gap-2">
+                      <div>
+                        <span className="font-medium">{s.description}</span>
+                        <span className="ml-2 text-muted-foreground">{periodLabel(s.period_year, s.period_month)}</span>
+                        <span className="ml-1.5 text-[10px] border rounded px-1 text-muted-foreground">Service</span>
+                      </div>
+                      <span className="font-semibold shrink-0">{formatCurrency(s.amount)}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="flex items-center gap-2 pt-1">
+                <Button
+                  size="sm"
+                  className="h-7 bg-orange-600 hover:bg-orange-700 text-white text-xs px-3"
+                  onClick={handleCfInclude}
+                  disabled={cfAction === "waiving"}
+                >
+                  Include in this PI
+                </Button>
+                {editable ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    className="h-7 text-xs px-3 border-orange-300 text-orange-700 hover:bg-orange-100"
+                    onClick={handleCfWaive}
+                    disabled={cfAction === "waiving"}
+                  >
+                    {cfAction === "waiving" ? <Loader2 className="h-3 w-3 animate-spin" /> : "Waive & Clear"}
+                  </Button>
+                ) : (
+                  <span className="text-[11px] text-muted-foreground italic">Only admin / manager can waive</span>
+                )}
+                <button className="ml-auto text-[11px] text-muted-foreground hover:text-foreground underline" onClick={() => setCfExpanded(v => !v)}>
+                  {cfExpanded ? "Hide list" : "Show list"}
+                </button>
+              </div>
+            </div>
+          )}
+          {!cfLoading && cfAction === "included" && cfCount > 0 && (
+            <div className="rounded-md border border-green-200 bg-green-50 px-3 py-2 text-xs text-green-800 flex items-center gap-2">
+              <Badge className="bg-green-100 text-green-700 border-green-300 text-[10px]">Carry-forward included</Badge>
+              {cfCount} item{cfCount > 1 ? "s" : ""} ({formatCurrency(cfTotal)}) will be added to this PI
+            </div>
+          )}
 
           {/* Chargeable items */}
           {paidItems.length > 0 && (

@@ -39,9 +39,11 @@ export async function POST(request: NextRequest) {
   }
 
   interface OverrideItem { source: string; item_id: string; amount: number; reason: string }
+  interface CarryForward { usage_charge_ids?: string[]; service_record_ids?: string[] }
   const body = await request.json().catch(() => ({})) as {
     contract_id?: string; year?: number; month?: number; additional_cc?: string[];
     overrides?: OverrideItem[];
+    carry_forward?: CarryForward;
   };
   const contractId = body.contract_id;
   const year  = Number(body.year);
@@ -52,6 +54,8 @@ export async function POST(request: NextRequest) {
   }
   const additionalCc = Array.isArray(body.additional_cc) ? body.additional_cc.filter(Boolean) : [];
   const overrides: OverrideItem[] = Array.isArray(body.overrides) ? body.overrides : [];
+  const cfChargeIds: string[]  = Array.isArray(body.carry_forward?.usage_charge_ids)  ? body.carry_forward!.usage_charge_ids!  : [];
+  const cfServiceIds: string[] = Array.isArray(body.carry_forward?.service_record_ids) ? body.carry_forward!.service_record_ids! : [];
 
   const admin = createAdminClient();
 
@@ -165,6 +169,102 @@ export async function POST(request: NextRequest) {
 
       // Refresh total_amount for the zero-amount guard below
       existing = { ...existing, total_amount: newTotal };
+    }
+  }
+
+  // ── 2b. Attach carry-forward items to the draft statement ─────────────
+  // These are items from previous months the operator chose to include.
+  // We link them to the statement and fold their amounts into the totals.
+  if ((cfChargeIds.length > 0 || cfServiceIds.length > 0) && existing) {
+    const stmtId = existing.id;
+
+    // Fetch current statement line_items + totals
+    const { data: stmtForCf } = await admin
+      .from("billing_statements")
+      .select("line_items, subtotal, tax_percentage, tax_amount, total_amount, cgst_amount, sgst_amount, igst_amount, usage_amount, service_usage_amount")
+      .eq("id", stmtId)
+      .single();
+
+    if (stmtForCf) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const sections: any[] = JSON.parse(JSON.stringify(stmtForCf.line_items || []));
+
+      let cfAdHocTotal = 0;
+      let cfServiceTotal = 0;
+
+      // Fetch and add carry-forward usage_charges
+      if (cfChargeIds.length > 0) {
+        const { data: cfCharges } = await admin
+          .from("usage_charges")
+          .select("id, description, total")
+          .in("id", cfChargeIds)
+          .eq("contract_id", contractId)
+          .is("billing_statement_id", null);
+
+        if (cfCharges && cfCharges.length > 0) {
+          let adHocSec = sections.find((s: { type: string }) => s.type === "ad_hoc_charges");
+          if (!adHocSec) {
+            adHocSec = { type: "ad_hoc_charges", label: "Ad-hoc Charges", items: [], subtotal: 0 };
+            sections.push(adHocSec);
+          }
+          for (const c of cfCharges) {
+            const amt = Number(c.total || 0);
+            adHocSec.items.push({ usage_charge_id: c.id, description: c.description, amount: amt });
+            adHocSec.subtotal = (adHocSec.subtotal || 0) + amt;
+            cfAdHocTotal += amt;
+          }
+          await admin.from("usage_charges").update({ billing_statement_id: stmtId, status: "billed" }).in("id", cfChargeIds);
+        }
+      }
+
+      // Fetch and add carry-forward service_usage_records
+      if (cfServiceIds.length > 0) {
+        const { data: cfSvc } = await admin
+          .from("service_usage_records")
+          .select("id, service_id, amount, notes, service:service_catalog(name, printer_column)")
+          .in("id", cfServiceIds)
+          .eq("contract_id", contractId)
+          .eq("is_billed", false);
+
+        if (cfSvc && cfSvc.length > 0) {
+          let svcSec = sections.find((s: { type: string }) => s.type === "service_usage");
+          if (!svcSec) {
+            svcSec = { type: "service_usage", label: "Service Usage", items: [], subtotal: 0 };
+            sections.push(svcSec);
+          }
+          for (const s of cfSvc) {
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            const svcInfo = (s as any).service as { name?: string; printer_column?: string | null } | null;
+            let desc = svcInfo?.name || (s as { notes?: string }).notes || "Service charge";
+            if (svcInfo?.printer_column === "bw")     desc = "Print - B/W";
+            if (svcInfo?.printer_column === "colour") desc = "Print - Colour";
+            const amt = Number(s.amount || 0);
+            svcSec.items.push({ service_id: s.service_id, description: desc, amount: amt });
+            svcSec.subtotal = (svcSec.subtotal || 0) + amt;
+            cfServiceTotal += amt;
+          }
+          await admin.from("service_usage_records").update({ billing_statement_id: stmtId, is_billed: true }).in("id", cfServiceIds);
+        }
+      }
+
+      if (cfAdHocTotal + cfServiceTotal > 0) {
+        const newSubtotal = Number(stmtForCf.subtotal || 0) + cfAdHocTotal + cfServiceTotal;
+        const taxRate = Number(stmtForCf.tax_percentage || 0);
+        const { calcGst } = await import("@/lib/tax");
+        const gst = calcGst(newSubtotal, taxRate);
+        await admin.from("billing_statements").update({
+          line_items:           sections,
+          subtotal:             newSubtotal,
+          tax_amount:           gst.taxAmount,
+          cgst_amount:          gst.cgst,
+          sgst_amount:          gst.sgst,
+          igst_amount:          gst.igst,
+          total_amount:         gst.grandTotal,
+          usage_amount:         Number(stmtForCf.usage_amount || 0)   + cfAdHocTotal,
+          service_usage_amount: Number(stmtForCf.service_usage_amount || 0) + cfServiceTotal,
+        }).eq("id", stmtId);
+        existing = { ...existing, total_amount: gst.grandTotal };
+      }
     }
   }
 
