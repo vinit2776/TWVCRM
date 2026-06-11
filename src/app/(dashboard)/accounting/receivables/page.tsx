@@ -68,6 +68,10 @@ interface ReceivableRow {
   last_reminder_sent_at: string | null;
   reminder_count: number;
   days_overdue: number | null;
+  status: string;
+  gst_invoice_number: string | null;
+  pi_cancelled_at: string | null;
+  accounted: boolean;
   contract: Contract;
 }
 
