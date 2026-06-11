@@ -422,10 +422,13 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent className="sm:max-w-2xl max-h-[90vh] flex flex-col">
         <DialogHeader>
-          <DialogTitle className="flex items-center gap-2 text-base">
+          <DialogTitle className="flex items-center gap-2 text-base flex-wrap">
             Review Usage &amp; {row.billing_mode === "gst_direct" ? "Send GST Invoice" : "Send PI"}
             <span className="text-muted-foreground font-normal text-sm">
               — {row.contract_number} · {row.customer}
+            </span>
+            <span className="ml-auto text-xs font-semibold bg-amber-100 text-amber-800 border border-amber-300 rounded px-2 py-0.5 whitespace-nowrap">
+              {new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-IN", { timeZone: "UTC", month: "long", year: "numeric" })}
             </span>
           </DialogTitle>
         </DialogHeader>
@@ -566,7 +569,7 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
               <div className="flex items-center gap-2">
                 <Printer className="h-3.5 w-3.5 text-amber-700" />
                 <p className="text-xs font-semibold text-amber-800">
-                  Print Log
+                  Print Log — {new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString("en-IN", { timeZone: "UTC", month: "long", year: "numeric" })}
                 </p>
                 {printSaved && (
                   <Badge className="ml-auto bg-green-50 text-green-700 border-green-200 text-[10px]">Saved ✓</Badge>
