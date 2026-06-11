@@ -218,7 +218,7 @@ export async function dispatchProforma(
         lineItems.push({
           description: label || section.label,
           hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label),
-          qty: Number(item.quantity || item.billable || 1),
+          qty: Number(item.quantity || item.billable || item.overage || 1),
           rate: Number(item.unit_price || item.rate || item.amount || 0),
           amount: Number(item.amount || 0),
         });
