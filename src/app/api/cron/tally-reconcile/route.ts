@@ -5,6 +5,8 @@ import { dispatchTallyInvoice } from "@/lib/tally/dispatch-tally-invoice";
 
 export const maxDuration = 60;
 
+const DEFAULT_IRN_ALARM_HOURS = 24;
+
 /**
  * GET /api/cron/tally-reconcile
  *
@@ -78,7 +80,41 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  await pingCronHealth("tally-reconcile", "ok", { candidates: candidates.length, delivered, failed, dry });
+  // ── IRN aging alert ──────────────────────────────────────────────────────────
+  // B2B invoices stuck in awaiting_irn for longer than tally_irn_alarm_hours are
+  // a sign the IRP is not responding or the bridge lost the IRN callback. Surface
+  // them in the cron response so monitoring can alert on them.
+  const { data: alarmRow } = await admin
+    .from("app_settings")
+    .select("value")
+    .eq("key", "tally_irn_alarm_hours")
+    .maybeSingle();
+  const alarmHours = Number(alarmRow?.value) || DEFAULT_IRN_ALARM_HOURS;
+  const alarmCutoff = new Date(Date.now() - alarmHours * 60 * 60 * 1000).toISOString();
+
+  const { data: stuckIrn } = await admin
+    .from("billing_statements")
+    .select("id, statement_number, tally_invoice_number, tally_synced_at")
+    .eq("lifecycle_stage", "awaiting_irn")
+    .lt("tally_synced_at", alarmCutoff)
+    .order("tally_synced_at", { ascending: true })
+    .limit(20);
+
+  const stuckIrnList = (stuckIrn ?? []).map((s: { id: string; statement_number: string; tally_invoice_number: string | null; tally_synced_at: string | null }) => ({
+    id: s.id,
+    stmt: s.statement_number,
+    invoice: s.tally_invoice_number,
+    synced_at: s.tally_synced_at,
+  }));
+
+  if (stuckIrnList.length > 0) {
+    console.error(`[tally-reconcile] ${stuckIrnList.length} statement(s) stuck in awaiting_irn for >${alarmHours}h`, stuckIrnList);
+  }
+
+  await pingCronHealth("tally-reconcile", "ok", {
+    candidates: candidates.length, delivered, failed, dry,
+    stuck_irn: stuckIrnList.length,
+  });
 
   return NextResponse.json({
     ok: true,
@@ -87,5 +123,6 @@ export async function GET(request: NextRequest) {
     delivered,
     failed,
     results,
+    stuck_irn: stuckIrnList,
   });
 }
