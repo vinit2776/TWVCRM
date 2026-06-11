@@ -102,7 +102,7 @@ export async function GET(request: NextRequest) {
       attempt_count, max_attempts
     `)
     .eq("status", "pending")
-    .lt("attempt_count", BATCH_SIZE)     // don't pick up exhausted jobs
+    .lt("attempt_count", 10)     // generous cap; actual exhaustion is ack-side (attempt_count >= max_attempts)
     .order("created_at", { ascending: true })
     .limit(BATCH_SIZE);
 

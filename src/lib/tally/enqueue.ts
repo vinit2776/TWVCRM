@@ -24,6 +24,11 @@
 import { createAdminClient } from "@/lib/supabase/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
+// Flip to true once the bridge ships postReceiptVoucher (v1.4+).
+// Until then, receipt_voucher jobs accumulate in the DB but will never be
+// processed — suppressing enqueue avoids silent DB bloat.
+const RECEIPT_VOUCHER_ENABLED = false;
+
 /** Cheap check: is CRM GST issuance enabled right now? */
 export async function isCrmGstEnabled(admin: SupabaseClient): Promise<boolean> {
   const { data } = await admin
@@ -212,6 +217,7 @@ export async function enqueueTallyReceiptVoucher(
     tdsSection?: string | null;
   },
 ): Promise<void> {
+  if (!RECEIPT_VOUCHER_ENABLED) return;
   try {
     const admin = createAdminClient();
     if (!(await isTallyIssuanceActive(admin))) return;
@@ -280,6 +286,7 @@ export async function enqueueTallyReceiptVoucher(
  * the party balance clears. Idempotent (one job per payment id).
  */
 export async function enqueueReceiptsForPaidStatement(statementId: string): Promise<void> {
+  if (!RECEIPT_VOUCHER_ENABLED) return;
   try {
     const admin = createAdminClient();
     if (!(await isTallyIssuanceActive(admin))) return;
