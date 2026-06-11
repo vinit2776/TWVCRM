@@ -56,11 +56,13 @@ export async function GET(request: NextRequest) {
       "tally_ledger_rent_income", "tally_ledger_usage_income",
       "tally_ledger_cgst_output", "tally_ledger_sgst_output", "tally_ledger_igst_output",
       "tally_ledger_round_off", "tally_party_ledger_suffix", "tally_voucher_series",
+      "tally_voucher_series_unreg",
       "tally_stock_item", "tally_place_of_supply", "tally_hsn_code",
       "tally_ledger_receipt_account", "tally_receipt_voucher_series",
       "tally_receipt_bill_by_bill", "tally_receipt_account_is_bank",
       "tally_receipt_transaction_type", "tally_receipt_transfer_mode",
-      "tally_credit_note_series", "tally_ledger_tds_receivable",
+      "tally_credit_note_series", "tally_credit_note_series_unreg",
+      "tally_ledger_tds_receivable",
       "tally_auto_create_party_ledger",
       "tally_ledger_income_by_location",   // JSON: { "Kamala Arcade": "Membership Fees-Kamala Arcade", ... }
     ]);
@@ -155,7 +157,10 @@ export async function GET(request: NextRequest) {
     igst:           settingsMap["tally_ledger_igst_output"]  ?? "",
     round_off:      settingsMap["tally_ledger_round_off"]    ?? "",
   };
-  const voucherSeries = settingsMap["tally_voucher_series"] ?? "SDIPL-REG";
+  // Series A (SDIPL-REG)   → GST-registered customers  (leads.gst_number is set)
+  // Series B (SDIPL-UNREG) → non-GST / B2C customers   (leads.gst_number is blank)
+  const voucherSeriesReg   = settingsMap["tally_voucher_series"]        ?? "SDIPL-REG";
+  const voucherSeriesUnreg = settingsMap["tally_voucher_series_unreg"]  ?? "SDIPL-UNREG";
   const partySuffix   = settingsMap["tally_party_ledger_suffix"] ?? "";
   const stockItem     = settingsMap["tally_stock_item"] ?? "Membership Fees";
   const placeOfSupply = settingsMap["tally_place_of_supply"] ?? "Tamil Nadu";
@@ -197,6 +202,10 @@ export async function GET(request: NextRequest) {
     const partyName = (lead.company as string | undefined)?.trim()
       || `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim()
       || "Walk-in Customer";
+    // Route to Series A (REG) or Series B (UNREG) based on GSTIN presence.
+    // This is the single source of truth for the series decision — the bridge
+    // reads voucher_series from the payload and no longer needs to guess.
+    const hasGstin = !!((lead.gst_number as string | null)?.trim());
 
     // Flatten the statement's sectioned line_items into invoice lines
     // (one line per section: label + subtotal). Falls back to a single line.
@@ -239,7 +248,8 @@ export async function GET(request: NextRequest) {
       ledger_cgst:     ledgers.cgst || "CGST Output 9%",
       ledger_sgst:     ledgers.sgst || "SGST Output 9%",
       ledger_round_off: ledgers.round_off || "Round Off",
-      voucher_series:  voucherSeries,
+      voucher_series:  hasGstin ? voucherSeriesReg : voucherSeriesUnreg,
+      is_b2c:          !hasGstin,
       stock_item:      stockItem,
       place_of_supply: placeOfSupply,
       // #2 auto-create: when ON, the bridge creates a missing Sundry Debtor ledger
@@ -302,14 +312,17 @@ export async function GET(request: NextRequest) {
   // A credit note reverses the original sale, so it reuses the same income + tax
   // ledgers, party, stock item and place of supply as the sales voucher, plus the
   // original invoice number as the reference.
-  const creditNoteSeries = settingsMap["tally_credit_note_series"] || "CREDIT NOTE-REG";
+  const creditNoteSeriesReg   = settingsMap["tally_credit_note_series"]        || "CREDIT NOTE-REG";
+  const creditNoteSeriesUnreg = settingsMap["tally_credit_note_series_unreg"]  || "CREDIT NOTE-UNREG";
   for (const job of jobs) {
     if (job.job_type !== "credit_note") continue;
 
     const payload = job.payload as Record<string, unknown>;
-    const partyName = String(payload["party_name"] ?? "").trim() || "Walk-in Customer";
-    const origInv   = String(payload["original_invoice_number"] ?? "");
-    const reason    = String(payload["reason"] ?? "");
+    const partyName  = String(payload["party_name"]  ?? "").trim() || "Walk-in Customer";
+    const origInv    = String(payload["original_invoice_number"] ?? "");
+    const reason     = String(payload["reason"] ?? "");
+    // Use the buyer_gstin already stamped on the payload (from the original sales voucher job).
+    const cnHasGstin = !!((payload["buyer_gstin"] as string | null)?.trim());
 
     const narrationParts = ["TWV CRM Credit Note"];
     if (origInv) narrationParts.push(`Reverses: ${origInv}`);
@@ -324,7 +337,8 @@ export async function GET(request: NextRequest) {
       ledger_sgst:     ledgers.sgst || "SGST Output 9%",
       stock_item:      stockItem,
       place_of_supply: placeOfSupply,
-      voucher_series:  creditNoteSeries,
+      voucher_series:  cnHasGstin ? creditNoteSeriesReg : creditNoteSeriesUnreg,
+      is_b2c:          !cnHasGstin,
       narration:       narrationParts.join(" | "),
     };
   }

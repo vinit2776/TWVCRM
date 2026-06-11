@@ -31,6 +31,9 @@ const SETTING_KEYS = [
   "tally_ledger_round_off",
   "tally_party_ledger_suffix",
   "tally_voucher_series",
+  "tally_voucher_series_unreg",
+  "tally_credit_note_series",
+  "tally_credit_note_series_unreg",
   "tally_irn_alarm_hours",
   // Receipt reverse-sync (CRM payment → Tally Receipt voucher)
   "tally_ledger_receipt_account",
@@ -107,8 +110,11 @@ export async function GET(_request: NextRequest) {
       igst:         s["tally_ledger_igst_output"]  ?? "",
       round_off:    s["tally_ledger_round_off"]    ?? "",
       party_suffix: s["tally_party_ledger_suffix"] ?? "",
-      voucher_series:      s["tally_voucher_series"]              ?? "",
-      stock_item:          s["tally_stock_item"]                  ?? "",
+      voucher_series:       s["tally_voucher_series"]              ?? "",
+      voucher_series_unreg: s["tally_voucher_series_unreg"]        ?? "SDIPL-UNREG",
+      credit_note_series:   s["tally_credit_note_series"]          ?? "CREDIT NOTE-REG",
+      credit_note_series_unreg: s["tally_credit_note_series_unreg"] ?? "CREDIT NOTE-UNREG",
+      stock_item:           s["tally_stock_item"]                  ?? "",
       income_by_location:  s["tally_ledger_income_by_location"]   ?? "",
     },
     receipt: {
@@ -156,8 +162,11 @@ const LEDGER_KEY_MAP: Record<string, string> = {
   igst:         "tally_ledger_igst_output",
   round_off:    "tally_ledger_round_off",
   party_suffix:       "tally_party_ledger_suffix",
-  voucher_series:     "tally_voucher_series",
-  stock_item:         "tally_stock_item",
+  voucher_series:           "tally_voucher_series",
+  voucher_series_unreg:     "tally_voucher_series_unreg",
+  credit_note_series:       "tally_credit_note_series",
+  credit_note_series_unreg: "tally_credit_note_series_unreg",
+  stock_item:               "tally_stock_item",
   income_by_location: "tally_ledger_income_by_location",
 };
 
