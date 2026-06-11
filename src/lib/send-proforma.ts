@@ -294,11 +294,7 @@ export async function dispatchProforma(
     : null;
   const customerName = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Customer";
 
-  const { data: ccUsers } = await adminSupabase
-    .from("users").select("email")
-    .in("role", ["admin", "accounts"])
-    .eq("is_active", true);
-  const ccEmails = (ccUsers || []).map((u: { email: string }) => u.email).filter(Boolean);
+  const BILLING_BCC = "billing@theworkvilla.com";
 
   const paymentOptionsHtml = `
     <h3 style="color:#015E65;font-size:14px;margin:20px 0 10px;">Payment Options</h3>
@@ -347,13 +343,14 @@ export async function dispatchProforma(
 
   if (customerEmail) {
     try {
-      const allCc = [...ccEmails, ...additionalCc].filter(Boolean);
+      const ccList = additionalCc.filter(Boolean);
       await withTimeout(
         resend.emails.send({
           from: EMAIL_FROM,
           replyTo: EMAIL_REPLY_TO,
           to: [customerEmail],
-          cc: allCc.length > 0 ? allCc : undefined,
+          cc: ccList.length > 0 ? ccList : undefined,
+          bcc: BILLING_BCC,
           subject: `Proforma Invoice ${proformaRef} — ${contract.contract_number} — The WorkVilla`,
           html: emailHtml,
           attachments: [{ filename: `Proforma-${proformaRef.replace(/\//g, "-")}.pdf`, content: pdfBuffer, contentType: "application/pdf" }],
@@ -653,8 +650,7 @@ export async function dispatchGstDirect(
   const dueDateStr = new Date(dueDate + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });
   const customerName = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "Customer";
 
-  const { data: ccUsers } = await adminSupabase.from("users").select("email").in("role", ["admin", "accounts"]).eq("is_active", true);
-  const ccEmails = (ccUsers || []).map((u: { email: string }) => u.email).filter(Boolean);
+  const BILLING_BCC = "billing@theworkvilla.com";
 
   const paymentOptionsHtml = `
     <h3 style="color:#015E65;font-size:14px;margin:20px 0 10px;">Payment Options</h3>
@@ -696,13 +692,14 @@ export async function dispatchGstDirect(
   let emailedSuccessfully = false;
   if (customerEmail) {
     try {
-      const allCc = [...ccEmails, ...additionalCc].filter(Boolean);
+      const ccList = additionalCc.filter(Boolean);
       await withTimeout(
         resend.emails.send({
           from: EMAIL_FROM,
           replyTo: EMAIL_REPLY_TO,
           to: [customerEmail],
-          cc: allCc.length > 0 ? allCc : undefined,
+          cc: ccList.length > 0 ? ccList : undefined,
+          bcc: BILLING_BCC,
           subject: `Tax Invoice ${invoiceNumber} — ${contract.contract_number} — The WorkVilla`,
           html: emailHtml,
           attachments: [{ filename: `Invoice-${invoiceNumber.replace(/\//g, "-")}.pdf`, content: pdfBuffer, contentType: "application/pdf" }],

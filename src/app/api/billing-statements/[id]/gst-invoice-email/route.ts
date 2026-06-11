@@ -70,6 +70,7 @@ export async function POST(
     from: EMAIL_FROM,
     replyTo: EMAIL_REPLY_TO,
     to: recipients,
+    bcc: "billing@theworkvilla.com",
     subject: `GST Invoice ${invoiceNum} — ${contract?.contract_number || "Contract"}`,
     html: `
       <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e5e7eb; border-radius: 8px; overflow: hidden;">

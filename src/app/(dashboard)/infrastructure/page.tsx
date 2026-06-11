@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import {
   Database,
   Server,
@@ -17,12 +17,12 @@ import {
   AlertTriangle,
   CheckCircle2,
   Clock,
+  Send,
 } from "lucide-react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Skeleton } from "@/components/shared/loading-skeleton";
-import { formatRelativeDate } from "@/lib/utils";
 
 // ── Types ──
 
@@ -48,11 +48,22 @@ interface InfraData {
   };
   google_workspace: {
     smtp_user: string;
+    smtp_port: number;
     connected: boolean;
     daily_limit: number;
     sent_today: number;
     failed_today: number;
     dashboard_url: string;
+  };
+  resend: {
+    configured: boolean;
+    domain_name: string | null;
+    domain_status: string;
+    sent_today: number;
+    failed_today: number;
+    sent_this_month: number;
+    failed_this_month: number;
+    monthly_limit: number;
   };
 }
 
@@ -62,8 +73,7 @@ function formatBytes(bytes: number): string {
   if (bytes === 0) return "0 B";
   const units = ["B", "KB", "MB", "GB", "TB"];
   const i = Math.floor(Math.log(bytes) / Math.log(1024));
-  const val = bytes / Math.pow(1024, i);
-  return `${val.toFixed(val >= 100 ? 0 : 1)} ${units[i]}`;
+  return `${(bytes / Math.pow(1024, i)).toFixed(i >= 2 ? 1 : 0)} ${units[i]}`;
 }
 
 function getUsageColor(percent: number): string {
@@ -78,14 +88,19 @@ function getUsageTextColor(percent: number): string {
   return "text-emerald-600";
 }
 
-function getStatusDot(percent: number): string {
-  if (percent >= 80) return "bg-red-500";
-  if (percent >= 60) return "bg-amber-500";
-  return "bg-emerald-500";
-}
-
 function formatNumber(n: number): string {
   return new Intl.NumberFormat("en-IN").format(n);
+}
+
+function formatExactTime(iso: string): string {
+  return new Date(iso).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    day: "numeric",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 const TABLE_LABELS: Record<string, string> = {
@@ -155,64 +170,67 @@ function UsageMeter({
   );
 }
 
-// ── Main Page ──
+// ── Cache ──
 
 const CACHE_KEY = "twv_infra_data";
 const CACHE_TTL = 24 * 60 * 60 * 1000; // 24 hours
+
+// ── Main Page ──
 
 export default function InfrastructurePage() {
   const [data, setData] = useState<InfraData | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState("");
+  // ref so fetchData doesn't need `data` as a closure dep (avoids infinite loop)
+  const hasDataRef = useRef(false);
 
   const fetchData = useCallback(async (force = false) => {
-    // Check localStorage cache
     if (!force) {
       try {
         const cached = localStorage.getItem(CACHE_KEY);
         if (cached) {
-          const parsed = JSON.parse(cached);
+          const parsed = JSON.parse(cached) as InfraData;
           if (Date.now() - new Date(parsed.fetched_at).getTime() < CACHE_TTL) {
             setData(parsed);
+            hasDataRef.current = true;
             setLoading(false);
             return;
           }
         }
-      } catch {
-        // Cache read error — fetch fresh
-      }
+      } catch { /* cache read error — fetch fresh */ }
     }
 
-    // On refresh (force=true with existing data), show spinner on button instead of full skeleton
-    if (force && data) {
+    if (force && hasDataRef.current) {
       setRefreshing(true);
     } else {
       setLoading(true);
     }
     setError("");
+
     try {
       const res = await fetch("/api/admin/infrastructure");
       if (!res.ok) {
-        const err = await res.json().catch(() => null);
+        const err = await res.json().catch(() => null) as { error?: string } | null;
         setError(err?.error || "Failed to fetch infrastructure data");
-        setLoading(false);
-        setRefreshing(false);
         return;
       }
-      const json = await res.json();
+      const json = await res.json() as InfraData;
       setData(json);
-      localStorage.setItem(CACHE_KEY, JSON.stringify(json));
+      hasDataRef.current = true;
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(json)); } catch { /* storage full */ }
     } catch {
       setError("Failed to connect to API");
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
-    setLoading(false);
-    setRefreshing(false);
-  }, [data]);
+  }, []); // no state deps — uses ref to avoid infinite loop
 
   useEffect(() => {
     fetchData();
-  }, [fetchData]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   if (loading) {
     return (
@@ -223,9 +241,9 @@ export default function InfrastructurePage() {
             <Skeleton className="h-4 w-96 mt-2" />
           </div>
         </div>
-        <div className="grid gap-4 md:grid-cols-3">
-          {Array.from({ length: 3 }).map((_, i) => (
-            <Skeleton key={i} className="h-32" />
+        <div className="grid gap-4 md:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, i) => (
+            <Skeleton key={i} className="h-40" />
           ))}
         </div>
         <div className="grid gap-4 md:grid-cols-2">
@@ -245,12 +263,8 @@ export default function InfrastructurePage() {
           <CardContent className="flex flex-col items-center justify-center py-12 text-center">
             <AlertTriangle className="h-12 w-12 text-red-500 mb-4" />
             <p className="text-lg font-medium">{error}</p>
-            <p className="text-sm text-muted-foreground mt-1">
-              Only admins can access this page.
-            </p>
-            <Button className="mt-4" onClick={() => fetchData(true)}>
-              Retry
-            </Button>
+            <p className="text-sm text-muted-foreground mt-1">Only admins can access this page.</p>
+            <Button className="mt-4" onClick={() => fetchData(true)}>Retry</Button>
           </CardContent>
         </Card>
       </div>
@@ -260,6 +274,8 @@ export default function InfrastructurePage() {
   if (!data) return null;
 
   const sb = data.supabase;
+  const gw = data.google_workspace;
+  const rs = data.resend;
 
   return (
     <div className="space-y-6">
@@ -269,7 +285,7 @@ export default function InfrastructurePage() {
           <h1 className="text-2xl font-bold">Infrastructure</h1>
           <p className="text-sm text-muted-foreground flex items-center gap-1.5">
             <Clock className="h-3.5 w-3.5" />
-            Last refreshed {formatRelativeDate(data.fetched_at)}
+            Last refreshed {formatExactTime(data.fetched_at)}
           </p>
         </div>
         <Button
@@ -284,7 +300,8 @@ export default function InfrastructurePage() {
       </div>
 
       {/* ── Section 1: Service Overview ── */}
-      <div className="grid gap-4 md:grid-cols-3">
+      <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
+
         {/* Supabase */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
@@ -292,28 +309,22 @@ export default function InfrastructurePage() {
               <Database className="h-4 w-4 text-emerald-600" />
               Supabase
             </CardTitle>
-            <Badge variant="secondary" className="text-xs">
-              {sb.plan}
-            </Badge>
+            <Badge variant="secondary" className="text-xs">{sb.plan}</Badge>
           </CardHeader>
           <CardContent>
-            <div className="flex items-center gap-2">
-              <div className={`h-2.5 w-2.5 rounded-full ${getStatusDot(sb.database.percent)}`} />
-              <span className="text-sm">
-                DB Disk: <strong>{sb.database.percent}%</strong> used
-              </span>
-            </div>
-            <div className="flex items-center gap-2 mt-1">
-              <div className={`h-2.5 w-2.5 rounded-full ${getStatusDot(sb.memory.percent)}`} />
-              <span className="text-sm">
-                Memory: <strong>{sb.memory.percent}%</strong> used
-              </span>
-            </div>
-            <div className="flex items-center gap-2 mt-1">
-              <div className="h-2.5 w-2.5 rounded-full bg-blue-500" />
-              <span className="text-sm">
-                {formatNumber(sb.total_rows)} total rows
-              </span>
+            <div className="space-y-1 text-sm">
+              <div className="flex items-center gap-2">
+                <div className={`h-2 w-2 rounded-full shrink-0 ${sb.database.percent >= 80 ? "bg-red-500" : sb.database.percent >= 60 ? "bg-amber-500" : "bg-emerald-500"}`} />
+                <span>DB Disk: <strong>{sb.database.percent}%</strong></span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className={`h-2 w-2 rounded-full shrink-0 ${sb.memory.percent >= 80 ? "bg-red-500" : sb.memory.percent >= 60 ? "bg-amber-500" : "bg-emerald-500"}`} />
+                <span>Memory: <strong>{sb.memory.percent}%</strong></span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="h-2 w-2 rounded-full bg-blue-500 shrink-0" />
+                <span>{formatNumber(sb.total_rows)} rows</span>
+              </div>
             </div>
             <a
               href={`https://supabase.com/dashboard/project/${sb.project_ref}`}
@@ -330,17 +341,14 @@ export default function InfrastructurePage() {
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
-              <Globe className="h-4 w-4 text-black" />
+              <Globe className="h-4 w-4" />
               Vercel
             </CardTitle>
-            <Badge variant="secondary" className="text-xs">
-              {data.vercel.plan}
-            </Badge>
+            <Badge variant="secondary" className="text-xs">{data.vercel.plan}</Badge>
           </CardHeader>
           <CardContent>
             {data.vercel.has_token ? (
               <div className="space-y-3">
-                {/* Bandwidth */}
                 <div>
                   <div className="flex justify-between text-xs mb-1">
                     <span className="text-muted-foreground">Bandwidth</span>
@@ -350,12 +358,11 @@ export default function InfrastructurePage() {
                   </div>
                   <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
                     <div
-                      className={`h-full rounded-full transition-all ${getUsageColor(Math.round((data.vercel.usage.bandwidth_used_gb / data.vercel.limits.bandwidth_gb) * 100))}`}
+                      className={`h-full rounded-full ${getUsageColor(Math.round((data.vercel.usage.bandwidth_used_gb / data.vercel.limits.bandwidth_gb) * 100))}`}
                       style={{ width: `${Math.min((data.vercel.usage.bandwidth_used_gb / data.vercel.limits.bandwidth_gb) * 100, 100)}%` }}
                     />
                   </div>
                 </div>
-                {/* Build Minutes */}
                 <div>
                   <div className="flex justify-between text-xs mb-1">
                     <span className="text-muted-foreground">Build Minutes</span>
@@ -365,13 +372,13 @@ export default function InfrastructurePage() {
                   </div>
                   <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
                     <div
-                      className={`h-full rounded-full transition-all ${getUsageColor(Math.round((data.vercel.usage.build_minutes_used / data.vercel.limits.build_minutes_per_month) * 100))}`}
+                      className={`h-full rounded-full ${getUsageColor(Math.round((data.vercel.usage.build_minutes_used / data.vercel.limits.build_minutes_per_month) * 100))}`}
                       style={{ width: `${Math.min((data.vercel.usage.build_minutes_used / data.vercel.limits.build_minutes_per_month) * 100, 100)}%` }}
                     />
                   </div>
                 </div>
                 <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>Timeout</span>
+                  <span>Fn timeout</span>
                   <span>{data.vercel.limits.serverless_function_timeout_sec}s</span>
                 </div>
               </div>
@@ -387,10 +394,11 @@ export default function InfrastructurePage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-muted-foreground">Edge Requests</span>
-                  <span>{(data.vercel.limits.edge_requests / 1000000).toFixed(0)}M/mo</span>
+                  <span>{(data.vercel.limits.edge_requests / 1_000_000).toFixed(0)}M/mo</span>
                 </div>
-                <p className="text-xs text-muted-foreground mt-2 italic">
-                  Set VERCEL_TOKEN env var for live usage
+                <p className="text-xs text-amber-600 mt-2 flex items-center gap-1">
+                  <AlertTriangle className="h-3 w-3 shrink-0" />
+                  Set <code className="font-mono">VERCEL_API_TOKEN</code> for live usage
                 </p>
               </div>
             )}
@@ -405,7 +413,7 @@ export default function InfrastructurePage() {
           </CardContent>
         </Card>
 
-        {/* Google Workspace Email */}
+        {/* Google Workspace */}
         <Card>
           <CardHeader className="flex flex-row items-center justify-between pb-2">
             <CardTitle className="text-sm font-medium flex items-center gap-2">
@@ -414,56 +422,127 @@ export default function InfrastructurePage() {
             </CardTitle>
             <Badge
               variant="secondary"
-              className={`text-xs ${data.google_workspace.connected ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}
+              className={`text-xs ${gw.connected ? "bg-emerald-100 text-emerald-700" : "bg-red-100 text-red-700"}`}
             >
-              {data.google_workspace.connected ? "Connected" : "Disconnected"}
+              {gw.connected ? "Connected" : "Disconnected"}
             </Badge>
           </CardHeader>
           <CardContent>
-            <div className="space-y-2 text-sm">
+            <div className="space-y-1 text-sm">
               <div className="flex items-center gap-2">
-                <div className={`h-2.5 w-2.5 rounded-full shrink-0 ${data.google_workspace.connected ? "bg-emerald-500" : "bg-red-500"}`} />
-                <span className="text-muted-foreground truncate">
-                  {data.google_workspace.smtp_user}
-                </span>
+                <div className={`h-2 w-2 rounded-full shrink-0 ${gw.connected ? "bg-emerald-500" : "bg-red-500"}`} />
+                <span className="text-muted-foreground truncate text-xs">{gw.smtp_user}</span>
               </div>
-              <div className="flex justify-between">
+              <div className="flex justify-between text-xs">
                 <span className="text-muted-foreground">Protocol</span>
-                <span className="font-medium">SMTP / TLS 465</span>
+                <span>SMTP port {gw.smtp_port}</span>
               </div>
             </div>
-            {/* Emails sent today */}
             <div className="mt-3">
               <div className="flex justify-between text-xs mb-1">
                 <span className="text-muted-foreground">Sent today</span>
-                <span className={getUsageTextColor(Math.round((data.google_workspace.sent_today / data.google_workspace.daily_limit) * 100))}>
-                  {formatNumber(data.google_workspace.sent_today)} / {formatNumber(data.google_workspace.daily_limit)}
+                <span className={getUsageTextColor(Math.round((gw.sent_today / gw.daily_limit) * 100))}>
+                  {formatNumber(gw.sent_today)} / {formatNumber(gw.daily_limit)}
                 </span>
               </div>
               <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
                 <div
-                  className={`h-full rounded-full transition-all ${getUsageColor(Math.round((data.google_workspace.sent_today / data.google_workspace.daily_limit) * 100))}`}
-                  style={{ width: `${Math.min((data.google_workspace.sent_today / data.google_workspace.daily_limit) * 100, 100)}%` }}
+                  className={`h-full rounded-full ${getUsageColor(Math.round((gw.sent_today / gw.daily_limit) * 100))}`}
+                  style={{ width: `${Math.min((gw.sent_today / gw.daily_limit) * 100, 100)}%` }}
                 />
               </div>
-              {data.google_workspace.failed_today > 0 && (
+              {gw.failed_today > 0 && (
                 <p className="mt-1 text-xs text-amber-600 flex items-center gap-1">
                   <AlertTriangle className="h-3 w-3" />
-                  {data.google_workspace.failed_today} failed send{data.google_workspace.failed_today > 1 ? "s" : ""} today
+                  {gw.failed_today} failed today
                 </p>
               )}
             </div>
-            <div className="mt-3 p-2 rounded-md bg-muted/50 text-xs text-muted-foreground flex items-center gap-1.5">
-              <CheckCircle2 className="h-3.5 w-3.5 text-emerald-500 shrink-0" />
-              OTPs, invoices, proposals, booking confirmations, vouchers, enquiry alerts
-            </div>
             <a
-              href={data.google_workspace.dashboard_url}
+              href={gw.dashboard_url}
               target="_blank"
               rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-2"
+              className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-3"
             >
               Admin Console <ExternalLink className="h-3 w-3" />
+            </a>
+          </CardContent>
+        </Card>
+
+        {/* Resend */}
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between pb-2">
+            <CardTitle className="text-sm font-medium flex items-center gap-2">
+              <Send className="h-4 w-4 text-purple-600" />
+              Resend
+            </CardTitle>
+            <Badge
+              variant="secondary"
+              className={`text-xs ${
+                !rs.configured
+                  ? "bg-muted text-muted-foreground"
+                  : rs.domain_status === "verified"
+                  ? "bg-emerald-100 text-emerald-700"
+                  : "bg-amber-100 text-amber-700"
+              }`}
+            >
+              {!rs.configured ? "Not configured" : rs.domain_status === "verified" ? "Verified" : rs.domain_status}
+            </Badge>
+          </CardHeader>
+          <CardContent>
+            {rs.configured ? (
+              <>
+                <div className="space-y-1 text-sm">
+                  {rs.domain_name && (
+                    <div className="flex items-center gap-2">
+                      <div className={`h-2 w-2 rounded-full shrink-0 ${rs.domain_status === "verified" ? "bg-emerald-500" : "bg-amber-500"}`} />
+                      <span className="text-muted-foreground text-xs truncate">{rs.domain_name}</span>
+                    </div>
+                  )}
+                  <div className="flex justify-between text-xs">
+                    <span className="text-muted-foreground">Role</span>
+                    <span>SMTP fallback</span>
+                  </div>
+                </div>
+                <div className="mt-3 space-y-1.5">
+                  <div>
+                    <div className="flex justify-between text-xs mb-1">
+                      <span className="text-muted-foreground">This month</span>
+                      <span className={getUsageTextColor(Math.round((rs.sent_this_month / rs.monthly_limit) * 100))}>
+                        {formatNumber(rs.sent_this_month)} / {formatNumber(rs.monthly_limit)}
+                      </span>
+                    </div>
+                    <div className="h-2 w-full rounded-full bg-muted overflow-hidden">
+                      <div
+                        className={`h-full rounded-full ${getUsageColor(Math.round((rs.sent_this_month / rs.monthly_limit) * 100))}`}
+                        style={{ width: `${Math.min((rs.sent_this_month / rs.monthly_limit) * 100, 100)}%` }}
+                      />
+                    </div>
+                  </div>
+                  <div className="flex justify-between text-xs text-muted-foreground">
+                    <span>Today</span>
+                    <span>{formatNumber(rs.sent_today)} sent{rs.failed_today > 0 ? `, ${rs.failed_today} failed` : ""}</span>
+                  </div>
+                </div>
+                {rs.failed_this_month > 0 && (
+                  <p className="mt-1 text-xs text-amber-600 flex items-center gap-1">
+                    <AlertTriangle className="h-3 w-3" />
+                    {rs.failed_this_month} failed this month
+                  </p>
+                )}
+              </>
+            ) : (
+              <p className="text-xs text-muted-foreground mt-1">
+                Set <code className="font-mono">RESEND_API_KEY</code> to enable the SMTP fallback transport.
+              </p>
+            )}
+            <a
+              href="https://resend.com/overview"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs text-primary hover:underline mt-3"
+            >
+              Resend Dashboard <ExternalLink className="h-3 w-3" />
             </a>
           </CardContent>
         </Card>
@@ -483,7 +562,6 @@ export default function InfrastructurePage() {
             percent={sb.database.percent}
             icon={HardDrive}
           />
-
           <UsageMeter
             label="Memory"
             used={sb.memory.used_bytes}
@@ -508,9 +586,7 @@ export default function InfrastructurePage() {
               <div className="mt-3 h-2.5 w-full rounded-full bg-muted overflow-hidden">
                 <div
                   className="h-full rounded-full bg-emerald-500 transition-all"
-                  style={{
-                    width: `${Math.max((sb.auth_users.count / sb.auth_users.limit) * 100, 0.5)}%`,
-                  }}
+                  style={{ width: `${Math.max((sb.auth_users.count / sb.auth_users.limit) * 100, 0.5)}%` }}
                 />
               </div>
               <p className="mt-2 text-xs text-muted-foreground">
@@ -557,7 +633,51 @@ export default function InfrastructurePage() {
         </div>
       </div>
 
-      {/* ── Section 3: Database Tables ── */}
+      {/* ── Section 3: Email Summary ── */}
+      <div>
+        <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
+          <Mail className="h-5 w-5 text-blue-600" />
+          Email — This Month
+        </h2>
+        <div className="grid gap-4 md:grid-cols-3">
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Total Sent</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-3xl font-bold">{formatNumber(rs.sent_this_month)}</p>
+              <p className="text-xs text-muted-foreground mt-1">{formatNumber(rs.sent_today)} today</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Failed</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className={`text-3xl font-bold ${rs.failed_this_month > 0 ? "text-amber-600" : "text-emerald-600"}`}>
+                {formatNumber(rs.failed_this_month)}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">{formatNumber(rs.failed_today)} today</p>
+            </CardContent>
+          </Card>
+          <Card>
+            <CardHeader className="pb-2">
+              <CardTitle className="text-sm font-medium text-muted-foreground">Delivery Rate</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <p className="text-3xl font-bold">
+                {rs.sent_this_month + rs.failed_this_month > 0
+                  ? ((rs.sent_this_month / (rs.sent_this_month + rs.failed_this_month)) * 100).toFixed(1)
+                  : "—"}
+                {rs.sent_this_month + rs.failed_this_month > 0 ? "%" : ""}
+              </p>
+              <p className="text-xs text-muted-foreground mt-1">Primary: SMTP · Fallback: Resend</p>
+            </CardContent>
+          </Card>
+        </div>
+      </div>
+
+      {/* ── Section 4: Database Tables ── */}
       <div>
         <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
           <TableProperties className="h-5 w-5" />
@@ -570,23 +690,17 @@ export default function InfrastructurePage() {
                 <thead>
                   <tr className="border-b bg-muted/50">
                     <th className="px-4 py-3 text-left font-medium">Table</th>
-                    <th className="px-4 py-3 text-right font-medium">Row Count</th>
-                    <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">
-                      % of Total
-                    </th>
+                    <th className="px-4 py-3 text-right font-medium">Rows</th>
+                    <th className="px-4 py-3 text-right font-medium hidden sm:table-cell">% of Total</th>
                   </tr>
                 </thead>
                 <tbody>
                   {sb.tables.map((table, i) => {
-                    const pct =
-                      sb.total_rows > 0
-                        ? ((table.row_count / sb.total_rows) * 100).toFixed(1)
-                        : "0";
+                    const pct = sb.total_rows > 0
+                      ? ((table.row_count / sb.total_rows) * 100).toFixed(1)
+                      : "0";
                     return (
-                      <tr
-                        key={table.name}
-                        className={`border-b transition-colors ${i % 2 === 0 ? "" : "bg-muted/20"}`}
-                      >
+                      <tr key={table.name} className={`border-b transition-colors ${i % 2 === 0 ? "" : "bg-muted/20"}`}>
                         <td className="px-4 py-2.5 font-medium">
                           {TABLE_LABELS[table.name] || table.name}
                         </td>
@@ -598,14 +712,10 @@ export default function InfrastructurePage() {
                             <div className="w-20 h-1.5 rounded-full bg-muted overflow-hidden">
                               <div
                                 className="h-full rounded-full bg-primary/60"
-                                style={{
-                                  width: `${Math.min(parseFloat(pct), 100)}%`,
-                                }}
+                                style={{ width: `${Math.min(parseFloat(pct), 100)}%` }}
                               />
                             </div>
-                            <span className="text-xs text-muted-foreground w-12 text-right">
-                              {pct}%
-                            </span>
+                            <span className="text-xs text-muted-foreground w-12 text-right">{pct}%</span>
                           </div>
                         </td>
                       </tr>
@@ -618,10 +728,10 @@ export default function InfrastructurePage() {
         </Card>
       </div>
 
-      {/* ── Footer Note ── */}
+      {/* Footer */}
       <p className="text-xs text-muted-foreground text-center pb-4">
-        Data is cached locally for 24 hours. Click &quot;Refresh&quot; to fetch live metrics.
-        Vercel usage must be checked on their dashboard. Email volume can be viewed in the Google Workspace Admin Console.
+        Cached locally for 24 hours. Hit &quot;Refresh&quot; to fetch live metrics.
+        Email counts are tracked from this app&apos;s send log — not pulled from provider APIs.
       </p>
     </div>
   );

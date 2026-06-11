@@ -49,7 +49,7 @@ export const EMAIL_FROM = `The WorkVilla <${smtpUser || "contact@theworkvilla.co
 /**
  * Reply-to address for all outgoing emails.
  */
-export const EMAIL_REPLY_TO = "space@theworkvilla.com";
+export const EMAIL_REPLY_TO = "billing@theworkvilla.com";
 
 // ─── Helpers ────────────────────────────────────────────────────────────────
 

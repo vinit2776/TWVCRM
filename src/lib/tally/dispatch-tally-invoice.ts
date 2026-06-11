@@ -220,9 +220,6 @@ export async function dispatchTallyInvoice(
 
     // ── Email ────────────────────────────────────────────────────────────────
     const periodLabel = new Date((statement.period_start as string) + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" });
-    const { data: ccUsers } = await supabase.from("users").select("email").in("role", ["admin", "accounts"]).eq("is_active", true);
-    const ccEmails = (ccUsers || []).map((u: { email: string }) => u.email).filter(Boolean);
-
     const emailHtml = buildEmailHtml({
       customerName, periodLabel, invoiceNumber: ack.invoiceNumber,
       contractNumber: contract.contract_number, totalAmount, isPaid,
@@ -237,7 +234,7 @@ export async function dispatchTallyInvoice(
           from: EMAIL_FROM,
           replyTo: EMAIL_REPLY_TO,
           to: [customerEmail],
-          cc: ccEmails.length > 0 ? ccEmails : undefined,
+          bcc: "billing@theworkvilla.com",
           subject: `Tax Invoice ${ack.invoiceNumber} — ${contract.contract_number} — The WorkVilla`,
           html: emailHtml,
           attachments: [{ filename: `Invoice-${ack.invoiceNumber.replace(/\//g, "-")}.pdf`, content: pdfBuffer, contentType: "application/pdf" }],
