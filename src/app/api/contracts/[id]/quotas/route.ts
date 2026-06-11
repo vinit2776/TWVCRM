@@ -83,11 +83,11 @@ export async function POST(
     return NextResponse.json({ error: "Insufficient permissions to manage contract quotas" }, { status: 403 });
   }
 
-  // Active (and beyond) contracts: only admin may change quotas
-  if (dbUser.role !== "admin") {
+  // Active (and beyond) contracts: only admin/manager may change quotas
+  if (!["admin", "manager"].includes(dbUser.role)) {
     const { data: contract } = await supabase.from("contracts").select("status").eq("id", id).single();
     if (contract && (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status)) {
-      return NextResponse.json({ error: "Quotas on an active contract can only be changed by an admin." }, { status: 403 });
+      return NextResponse.json({ error: "Quotas on an active contract can only be changed by an admin or manager." }, { status: 403 });
     }
   }
 

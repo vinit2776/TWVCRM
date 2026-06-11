@@ -923,7 +923,7 @@ export default function ContractDetailPage({
           {contract.status !== "terminated" && contract.status !== "expired" && contract.status !== "rejected" && (() => {
             const isLocked = (CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status);
             const hasQuotaRole = (CONTRACT_QUOTA_ROLES as readonly string[]).includes(userRole || "");
-            const canEdit = hasQuotaRole && (userRole === "admin" || !isLocked);
+            const canEdit = hasQuotaRole && (["admin", "manager"].includes(userRole || "") || !isLocked);
             const quotaReadOnly = !canEdit;
             return (
               <>

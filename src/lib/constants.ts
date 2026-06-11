@@ -303,7 +303,7 @@ export const CONTRACT_QUOTA_LOCKED_STATUSES: readonly ContractStatus[] = [
 ];
 
 // Roles that may ever edit contract quotas/facilities.
-// On locked contracts (active+), only admin is allowed (enforced by API gate).
+// On locked contracts (active+), admin and manager are allowed (enforced by API gate).
 // On draft/sent/accepted contracts, all four roles can configure quotas.
 export const CONTRACT_QUOTA_ROLES = ["admin", "manager", "sales_rep", "accounts"] as const;
 export type ContractQuotaRole = (typeof CONTRACT_QUOTA_ROLES)[number];
