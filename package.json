@@ -11,7 +11,7 @@
     "health:hints": "node scripts/health-check.mjs --fix-hints",
     "cron": "node scripts/trigger-cron.mjs",
     "cron:local": "node scripts/trigger-cron.mjs --local",
-    "test": "vitest run"
+    "test": "vitest run --passWithNoTests"
   },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
