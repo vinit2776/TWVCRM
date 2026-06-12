@@ -1,9 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { logAudit } from "@/lib/audit";
 import { sendPushToProcurementRoles } from "@/lib/push";
 import { z } from "zod";
 import { applyBillFilters, resolveFreeTextIds } from "@/lib/bills-query";
+import { createVendorBill } from "@/lib/vendor-bills";
 
 const createBillSchema = z.object({
   po_id: z.string().uuid().nullish(),
@@ -34,13 +34,6 @@ const createBillSchema = z.object({
   },
 );
 
-function generateBillNumber(count: number): string {
-  const now = new Date();
-  const yy = String(now.getFullYear()).slice(-2);
-  const mm = String(now.getMonth() + 1).padStart(2, "0");
-  const seq = String(count + 1).padStart(3, "0");
-  return `BILL-${yy}${mm}-${seq}`;
-}
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -250,78 +243,34 @@ export async function POST(request: NextRequest) {
     }
   }
 
-  // ── Generate bill number ───────────────────────────────────────────────────
-  const { count: existingCount } = await supabase
-    .from("vendor_bills")
-    .select("*", { count: "exact", head: true });
-
-  const billNumber = generateBillNumber(existingCount ?? 0);
-
+  // ── Create the bill (number generation, insert, PO status update, audit) ───
   const initialPaymentStatus =
     poAdvanceCredit >= parsed.data.total_amount ? "paid" :
     poAdvanceCredit > 0 ? "partially_paid" :
     "unpaid";
 
-  const gstAmount = Math.round((parsed.data.gst_amount ?? 0) * 100) / 100;
-  const baseAmount = parsed.data.total_amount; // total_amount IS the base (pre-GST)
-
-  const { data: bill, error: billError } = await supabase
-    .from("vendor_bills")
-    .insert({
+  let bill: { id: string; bill_number: string };
+  try {
+    bill = await createVendorBill(supabase, {
       po_id: parsed.data.po_id ?? null,
       vendor_id: parsed.data.vendor_id,
       invoice_number: parsed.data.invoice_number ?? null,
       invoice_date: parsed.data.invoice_date,
       due_date: parsed.data.due_date ?? null,
       total_amount: parsed.data.total_amount,
-      gst_rate: 0,
-      gst_amount: gstAmount,
-      base_amount: baseAmount,
+      gst_amount: parsed.data.gst_amount ?? 0,
       notes: parsed.data.notes ?? null,
       invoice_file_url: parsed.data.invoice_file_url ?? null,
       service_report_id: parsed.data.service_report_id ?? null,
-      bill_number: billNumber,
+      replaces_bill_id: parsed.data.replaces_bill_id ?? null,
       amount_paid: poAdvanceCredit,
       payment_status: initialPaymentStatus,
-      approval_status: "pending",
-      replaces_bill_id: parsed.data.replaces_bill_id ?? null,
       created_by: dbUser.id,
-    })
-    .select("id, bill_number")
-    .single();
-
-  if (billError) return NextResponse.json({ error: billError.message }, { status: 500 });
-
-  // ── Update PO status to invoice_received (goods POs only) ─────────────────
-  if (parsed.data.po_id && parsed.data.invoice_file_url) {
-    // Fetch po_type to decide whether to update status
-    const { data: linkedPo } = await supabase
-      .from("purchase_orders")
-      .select("po_type")
-      .eq("id", parsed.data.po_id)
-      .single();
-    if (linkedPo?.po_type !== "service") {
-      await supabase
-        .from("purchase_orders")
-        .update({ status: "invoice_received" })
-        .eq("id", parsed.data.po_id)
-        .not("status", "eq", "cancelled");
-    }
+    });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : "Failed to create bill";
+    return NextResponse.json({ error: msg }, { status: 500 });
   }
-
-  await logAudit(supabase, {
-    entityType: "vendor_bill",
-    entityId: bill.id,
-    action: "create",
-    performedBy: dbUser.id,
-    changes: {
-      bill_number: { old: null, new: bill.bill_number },
-      vendor_id: { old: null, new: parsed.data.vendor_id },
-      po_id: { old: null, new: parsed.data.po_id ?? null },
-      total_amount: { old: null, new: parsed.data.total_amount },
-      invoice_file_uploaded: { old: null, new: !!parsed.data.invoice_file_url },
-    },
-  });
 
   // Notify admins/managers that a new invoice needs approval
   sendPushToProcurementRoles({
