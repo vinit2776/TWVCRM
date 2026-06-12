@@ -12,6 +12,7 @@ import {
   Info,
   MapPin,
   Layers,
+  Zap,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -22,9 +23,11 @@ import { FloorFormDialog } from "@/components/spaces/floor-form-dialog";
 import { SpaceUnitFormDialog } from "@/components/spaces/space-unit-form-dialog";
 import { SpaceAnalyticsPanel } from "@/components/spaces/space-analytics";
 import { LocationFormDialog } from "@/components/locations/location-form-dialog";
+import { ElectricityConfigTab } from "@/components/locations/electricity-config-tab";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import type { Location, LocationFloor, SpaceUnit, SpaceAnalytics } from "@/types";
 
-type Tab = "overview" | "spaces" | "analytics";
+type Tab = "overview" | "spaces" | "analytics" | "electricity";
 
 export default function LocationDetailPage({
   params,
@@ -54,6 +57,10 @@ export default function LocationDetailPage({
   // Analytics
   const [analytics, setAnalytics] = useState<SpaceAnalytics | null>(null);
   const [analyticsLoading, setAnalyticsLoading] = useState(false);
+
+  // Electricity config access
+  const { user } = useCurrentUser();
+  const canEditElectricity = user?.role === "admin" || user?.role === "manager";
 
   // ── Fetchers ─────────────────────────────────────────────────────────────
   const fetchLocation = useCallback(async () => {
@@ -214,7 +221,7 @@ export default function LocationDetailPage({
 
       {/* Tab bar */}
       <div className="flex border-b gap-1">
-        {(["overview", "spaces", "analytics"] as Tab[]).map((t) => (
+        {(["overview", "spaces", "analytics", "electricity"] as Tab[]).map((t) => (
           <button
             key={t}
             onClick={() => setTab(t)}
@@ -227,6 +234,7 @@ export default function LocationDetailPage({
             {t === "overview" && <Info className="inline mr-1.5 h-3.5 w-3.5" />}
             {t === "spaces" && <LayoutGrid className="inline mr-1.5 h-3.5 w-3.5" />}
             {t === "analytics" && <BarChart3 className="inline mr-1.5 h-3.5 w-3.5" />}
+            {t === "electricity" && <Zap className="inline mr-1.5 h-3.5 w-3.5" />}
             {t.charAt(0).toUpperCase() + t.slice(1)}
           </button>
         ))}
@@ -540,6 +548,11 @@ export default function LocationDetailPage({
             <SpaceAnalyticsPanel analytics={analytics} />
           )}
         </div>
+      )}
+
+      {/* ── ELECTRICITY TAB ──────────────────────────────────────────────── */}
+      {tab === "electricity" && (
+        <ElectricityConfigTab locationId={id} canEdit={canEditElectricity} />
       )}
 
       {/* ── Dialogs ───────────────────────────────────────────────────────── */}
