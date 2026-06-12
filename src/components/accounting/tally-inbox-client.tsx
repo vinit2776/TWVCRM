@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import {
   AGING_ESCALATE_HOURS,
@@ -394,7 +394,17 @@ function InboxRowItem({
           <div className={`text-xs ${agingClass}`}>
             {aging < 1 ? "just now" : aging < 24 ? `${aging}h ago` : `${Math.floor(aging / 24)}d ago`}
           </div>
-          <div className="flex items-center gap-1.5 mt-1">
+          <div className="flex items-center gap-1.5 mt-1 flex-wrap justify-end">
+            <a
+              href={`/api/billing-statements/${row.statement_id}/proforma-pdf`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+              title="Open the CRM-generated proforma invoice PDF (original bill)"
+            >
+              <FileDown className="h-3 w-3" />
+              View PI
+            </a>
             {canUpload && (
               <button
                 type="button"
