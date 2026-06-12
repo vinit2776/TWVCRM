@@ -45,7 +45,7 @@ const AckSuccessSchema = z.object({
   job_id:               z.string().uuid(),
   success:              z.literal(true),
   voucher_kind:         z.enum(["sales", "receipt", "credit_note", "party_master"]).default("sales"),
-  tally_voucher_guid:   z.string().min(1),
+  tally_voucher_guid:   z.string().default(""),  // empty for party_master (ledgers have no voucher GUID)
   tally_invoice_number: z.string().default(""),  // empty for party_master (no invoice number)
   tally_irn:            z.string().optional(),       // may be absent if irn_pending=true
   tally_ack_no:         z.string().optional(),
