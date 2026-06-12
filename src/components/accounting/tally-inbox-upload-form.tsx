@@ -164,7 +164,110 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           {lead?.gst_number ? ` · GSTIN ${lead.gst_number}` : " · (no GSTIN on file)"}
           {" · Expected series: "}
           <span className="font-mono">{expectedSeries}</span>
+          {row.irn_required && <span className="ml-2 text-blue-900">· IRN required</span>}
         </div>
+      </div>
+
+      {/* Issuance context: everything accounts needs to re-create the invoice in Tally. */}
+      <div className="rounded border bg-background p-3 text-xs space-y-2">
+        <div className="font-medium text-foreground">Issuance details</div>
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-x-4 gap-y-1.5">
+          <div>
+            <span className="text-muted-foreground">Statement: </span>
+            <span className="font-mono">{row.statement_number ?? "—"}</span>
+          </div>
+          <div>
+            <span className="text-muted-foreground">Contract: </span>
+            <span className="font-mono">{row.contract?.contract_number ?? "—"}</span>
+            {row.contract?.title && <span className="text-muted-foreground"> · {row.contract.title}</span>}
+          </div>
+          {row.period_start && row.period_end && (
+            <div className="md:col-span-2">
+              <span className="text-muted-foreground">Period: </span>
+              {row.period_start} → {row.period_end}
+            </div>
+          )}
+          {row.tax.place_of_supply && (
+            <div>
+              <span className="text-muted-foreground">Place of supply: </span>
+              {row.tax.place_of_supply}
+              {row.tax.is_interstate && <span className="ml-1 text-amber-700">(interstate · IGST)</span>}
+            </div>
+          )}
+          {row.tax.hsn_sac_code && (
+            <div>
+              <span className="text-muted-foreground">HSN/SAC: </span>
+              <span className="font-mono">{row.tax.hsn_sac_code}</span>
+            </div>
+          )}
+        </div>
+
+        {/* Line items */}
+        <div className="border-t pt-2">
+          <div className="text-muted-foreground mb-1">Line items</div>
+          <table className="w-full">
+            <tbody>
+              {row.line_items.fixed_amount > 0 && (
+                <tr><td>Rent</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.fixed_amount)}</td></tr>
+              )}
+              {row.line_items.service_usage_amount > 0 && (
+                <tr><td>Service usage (print, electricity, etc.)</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.service_usage_amount)}</td></tr>
+              )}
+              {row.line_items.booking_usage_amount > 0 && (
+                <tr><td>Booking charges</td><td className="text-right tabular-nums">{formatCurrency(row.line_items.booking_usage_amount)}</td></tr>
+              )}
+              <tr className="border-t">
+                <td className="pt-1 text-muted-foreground">Subtotal</td>
+                <td className="pt-1 text-right tabular-nums">{formatCurrency(row.tax.subtotal)}</td>
+              </tr>
+              {row.tax.is_interstate ? (
+                <tr>
+                  <td className="text-muted-foreground">IGST @ {row.tax.tax_percentage}%</td>
+                  <td className="text-right tabular-nums">{formatCurrency(row.tax.igst_amount ?? row.tax.tax_amount)}</td>
+                </tr>
+              ) : (
+                <>
+                  <tr>
+                    <td className="text-muted-foreground">CGST @ {(row.tax.tax_percentage / 2).toFixed(1)}%</td>
+                    <td className="text-right tabular-nums">{formatCurrency(row.tax.cgst_amount ?? row.tax.tax_amount / 2)}</td>
+                  </tr>
+                  <tr>
+                    <td className="text-muted-foreground">SGST @ {(row.tax.tax_percentage / 2).toFixed(1)}%</td>
+                    <td className="text-right tabular-nums">{formatCurrency(row.tax.sgst_amount ?? row.tax.tax_amount / 2)}</td>
+                  </tr>
+                </>
+              )}
+              <tr className="border-t font-medium">
+                <td className="pt-1">Total</td>
+                <td className="pt-1 text-right tabular-nums">{formatCurrency(row.statement_total_amount)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
+        {/* Payments received */}
+        {row.payments_received.length > 0 && (
+          <div className="border-t pt-2">
+            <div className="text-muted-foreground mb-1">
+              Payments received ({formatCurrency(row.total_paid)} of {formatCurrency(row.statement_total_amount)})
+            </div>
+            <table className="w-full">
+              <tbody>
+                {row.payments_received.map((p) => (
+                  <tr key={p.id}>
+                    <td>
+                      <span className="font-medium">{p.payment_mode}</span>
+                      {p.payment_reference && <span className="text-muted-foreground"> · {p.payment_reference}</span>}
+                      {p.razorpay_payment_id && <span className="text-muted-foreground"> · {p.razorpay_payment_id}</span>}
+                      <span className="text-muted-foreground"> · {p.payment_date}</span>
+                    </td>
+                    <td className="text-right tabular-nums">{formatCurrency(p.amount)}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
       {(extracting || autofillSource) && (

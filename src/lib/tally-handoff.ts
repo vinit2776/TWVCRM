@@ -97,6 +97,38 @@ export interface InboxContract {
   lead: InboxLead | null;
 }
 
+export interface InboxPayment {
+  id: string;
+  amount: number;
+  payment_date: string;
+  payment_mode: string;
+  payment_reference: string | null;
+  razorpay_payment_id: string | null;
+}
+
+export interface InboxTaxBreakup {
+  subtotal: number;
+  tax_percentage: number;
+  tax_amount: number;
+  cgst_amount: number | null;
+  sgst_amount: number | null;
+  igst_amount: number | null;
+  is_interstate: boolean;
+  place_of_supply: string | null;
+  hsn_sac_code: string | null;
+}
+
+export interface InboxLineItemBreakdown {
+  /** statement_type tells us what's expected: 'rent' / 'usage' / 'combined'. */
+  statement_type: "rent" | "usage" | "combined" | null;
+  fixed_amount: number;           // rent portion
+  usage_amount: number;            // total usage (service + booking)
+  service_usage_amount: number;    // print, electricity, etc.
+  booking_usage_amount: number;    // ad-hoc booking charges
+  period_start: string | null;
+  period_end: string | null;
+}
+
 export interface InboxUpload {
   id: string;
   tally_invoice_number: string;
@@ -133,6 +165,16 @@ export interface InboxRow {
   latest_snapshot: InboxSnapshot | null;
   has_discrepancy: boolean;
   discrepancy_reason: string | null;
+
+  // Detail fields (PR #2-followup): help accounts issue the GST invoice in Tally
+  // without having to leave the inbox.
+  irn_required: boolean;             // true iff lead.gst_number is present (A-series)
+  expected_series: "SDIPL-REG" | "SDIPL-UNREG";
+  expected_prefix: string;           // e.g. "SD/A/" or "SD/B/"
+  tax: InboxTaxBreakup;
+  line_items: InboxLineItemBreakdown;
+  payments_received: InboxPayment[]; // empty array if none yet
+  total_paid: number;                // sum of payments_received amounts
 }
 
 export interface InboxStats {

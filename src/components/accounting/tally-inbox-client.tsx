@@ -14,7 +14,6 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import Link from "next/link";
 import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import {
@@ -313,22 +312,66 @@ function InboxRowItem({
             >
               {bucketLabel(row.bucket)}
             </span>
-            <Link
-              href={`/billing/${row.statement_id}`}
-              className="font-medium text-sm hover:underline truncate"
+            <span className="font-medium text-sm truncate">{partyDisplay(row)}</span>
+            {row.contract?.lead?.gst_number && (
+              <span className="text-[11px] font-mono text-muted-foreground" title="Customer GSTIN">
+                {row.contract.lead.gst_number}
+              </span>
+            )}
+            <span
+              className={`text-[11px] px-1.5 py-0.5 rounded ${
+                row.irn_required
+                  ? "bg-blue-50 text-blue-900 border border-blue-200"
+                  : "bg-muted text-muted-foreground border"
+              }`}
+              title={row.irn_required ? "A-series invoice + IRN required" : "B-series invoice, no IRN"}
             >
-              {partyDisplay(row)}
-            </Link>
+              {row.irn_required ? "IRN req." : "no IRN"}
+            </span>
             {row.contract && (
               <span className="text-xs text-muted-foreground truncate">
                 · {row.contract.contract_number}
+                {row.contract.title && ` · ${row.contract.title}`}
               </span>
             )}
           </div>
           <div className="text-xs text-muted-foreground mt-1">
             {row.statement_number ?? "(no number)"} · {HANDOFF_STATE_LABELS[row.handoff_state]}
             {row.contract?.billing_mode === "gst_direct" && " · direct GST"}
+            {row.period_start && row.period_end && (
+              <> · period {row.period_start} → {row.period_end}</>
+            )}
           </div>
+
+          {/* Always-visible compact summary line — line items + tax */}
+          <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
+            {row.line_items.fixed_amount > 0 && (
+              <span>Rent {formatCurrency(row.line_items.fixed_amount)}</span>
+            )}
+            {row.line_items.service_usage_amount > 0 && (
+              <span>Usage {formatCurrency(row.line_items.service_usage_amount)}</span>
+            )}
+            {row.line_items.booking_usage_amount > 0 && (
+              <span>Bookings {formatCurrency(row.line_items.booking_usage_amount)}</span>
+            )}
+            <span>+ GST {row.tax.tax_percentage}% ({formatCurrency(row.tax.tax_amount)})</span>
+          </div>
+
+          {/* Payments received (compact) */}
+          {row.payments_received.length > 0 && (
+            <div className="text-xs mt-1 text-green-800">
+              Paid {formatCurrency(row.total_paid)} via{" "}
+              {row.payments_received.map((p, i) => (
+                <span key={p.id}>
+                  {i > 0 && ", "}
+                  <span className="font-medium">{p.payment_mode}</span>
+                  {p.payment_reference && <span className="text-muted-foreground"> ({p.payment_reference})</span>}
+                  <span className="text-muted-foreground"> on {p.payment_date}</span>
+                </span>
+              ))}
+            </div>
+          )}
+
           {row.has_discrepancy && row.discrepancy_reason && (
             <div className="text-xs text-red-700 mt-1 flex items-start gap-1">
               <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" aria-hidden />
