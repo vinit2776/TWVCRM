@@ -11,6 +11,34 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import type { HandoffState } from "@/lib/tally-handoff";
+import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
+import { formatCurrency } from "@/lib/utils";
+
+/** Where per-event intimations land. EMAIL_REPLY_TO is the canonical accounts inbox. */
+const ACCOUNTS_INBOX_EMAIL = EMAIL_REPLY_TO;
+const INBOX_URL_PATH = "/accounting/inbox";
+
+/** States where accounts has a new task and should be pinged immediately. */
+const INTIMATION_STATES: Partial<Record<HandoffState, { subjectVerb: string; body: string }>> = {
+  pi_paid_awaiting_gst: {
+    subjectVerb: "Payment received — please issue GST invoice in Tally",
+    body:
+      "Customer has paid the proforma invoice. Please create the GST tax invoice " +
+      "in Tally, generate the IRN, and upload the PDF to the inbox.",
+  },
+  direct_gst_requested: {
+    subjectVerb: "New direct GST invoice request",
+    body:
+      "A statement on a direct-GST contract has been finalized. Please create " +
+      "the GST tax invoice in Tally and upload the PDF to the inbox.",
+  },
+  paid_awaiting_receipt_record: {
+    subjectVerb: "Payment received — please record receipt in Tally",
+    body:
+      "Customer has paid a GST invoice. Please record the receipt voucher in Tally; " +
+      "the bridge will verify it automatically on the next sync.",
+  },
+};
 
 /**
  * Reads the `tally_handoff_v2_enabled` feature flag from app_settings.
@@ -72,6 +100,90 @@ export async function setHandoffState(
   // triggered transitions are tracked via billing_statements.updated_at.
   console.info(
     `[tally-handoff] statement=${statementId} state ${previousState ?? "(null)"} → ${newState} trigger=${trigger}`,
+  );
+
+  // Fire-and-forget per-event intimation. Errors are logged but never bubble
+  // up — a flaky SMTP server should not break payment capture or invoice
+  // upload paths.
+  if (INTIMATION_STATES[newState]) {
+    void notifyAccountsOfHandoffTransition(supabase, statementId, newState).catch((err) => {
+      console.error(
+        `[tally-handoff] intimation email failed for statement=${statementId} state=${newState}:`,
+        err instanceof Error ? err.message : String(err),
+      );
+    });
+  }
+}
+
+/**
+ * Sends a one-line intimation email to the accounts inbox when a statement
+ * transitions to a state that needs human attention. Skipped silently if
+ * the target state has no intimation configured.
+ *
+ * Errors are surfaced to the caller (which fires-and-forgets); they never
+ * block the main state-change flow.
+ */
+async function notifyAccountsOfHandoffTransition(
+  supabase: SupabaseClient,
+  statementId: string,
+  newState: HandoffState,
+): Promise<void> {
+  const intimation = INTIMATION_STATES[newState];
+  if (!intimation) return;
+
+  const { data: statementRow } = await supabase
+    .from("billing_statements")
+    .select(`
+      id, statement_number, total_amount,
+      contract:contracts!billing_statements_contract_id_fkey(
+        contract_number,
+        lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
+      )
+    `)
+    .eq("id", statementId)
+    .maybeSingle();
+
+  if (!statementRow) return;
+
+  const statement = statementRow as unknown as {
+    statement_number: string | null;
+    total_amount: number;
+    contract: {
+      contract_number: string | null;
+      lead: { first_name: string | null; last_name: string | null; company: string | null } | null;
+    } | null;
+  };
+
+  const partyName =
+    statement.contract?.lead?.company
+    || [statement.contract?.lead?.first_name, statement.contract?.lead?.last_name].filter(Boolean).join(" ")
+    || "(unnamed customer)";
+
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "https://twv-crm.vercel.app").trim();
+
+  const subject = `[Tally inbox] ${intimation.subjectVerb} — ${partyName}`;
+  const html = `
+    <p>${intimation.body}</p>
+    <table style="border-collapse:collapse;margin:12px 0;font-size:14px;">
+      <tr><td style="padding:4px 12px 4px 0;color:#666;">Customer</td><td><strong>${escapeHtml(partyName)}</strong></td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#666;">Contract</td><td>${escapeHtml(statement.contract?.contract_number ?? "—")}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#666;">Statement</td><td>${escapeHtml(statement.statement_number ?? "—")}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#666;">Amount</td><td><strong>${formatCurrency(Number(statement.total_amount))}</strong></td></tr>
+    </table>
+    <p><a href="${appUrl}${INBOX_URL_PATH}" style="display:inline-block;padding:8px 16px;background:#111;color:#fff;text-decoration:none;border-radius:4px;">Open Tally inbox</a></p>
+  `;
+
+  await resend.emails.send({
+    from: EMAIL_FROM,
+    to: ACCOUNTS_INBOX_EMAIL,
+    subject,
+    html,
+  });
+}
+
+function escapeHtml(s: string): string {
+  return s.replace(/[&<>"']/g, (c) =>
+    ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[c] ?? c,
   );
 }
 
