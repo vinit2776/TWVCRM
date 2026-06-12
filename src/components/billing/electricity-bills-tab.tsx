@@ -157,7 +157,7 @@ function BillPreview({
           </div>
           {result.landlord_gst > 0 && (
             <div className="flex justify-between">
-              <span className="text-muted-foreground">GST ({config.landlord_gst_rate}%)</span>
+              <span className="text-muted-foreground">GST ({Number(config.landlord_gst_rate)}%)</span>
               <span>{formatCurrency(result.landlord_gst)}</span>
             </div>
           )}
@@ -175,7 +175,7 @@ function BillPreview({
         </CardContent>
       </Card>
 
-      {config.reimbursement_enabled && (
+      {Boolean(config.reimbursement_enabled) && (
         <Card className="border-blue-200 bg-blue-50/40">
           <CardHeader className="pb-2 pt-3 px-4">
             <CardTitle className="text-xs font-semibold text-blue-800 uppercase tracking-wide">
