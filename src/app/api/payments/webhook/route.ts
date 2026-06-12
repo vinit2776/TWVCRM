@@ -4,6 +4,7 @@ import crypto from "crypto";
 import { provisionBookingAccess } from "@/lib/provision-booking-access";
 import { getCachedSetting } from "@/lib/app-settings-cache";
 import { enqueueTallyReceiptVoucher } from "@/lib/tally/enqueue";
+import { isHandoffV2Enabled, handleStatementPaid } from "@/lib/tally-handoff-server";
 
 export const dynamic = "force-dynamic";
 
@@ -252,15 +253,23 @@ export async function POST(request: NextRequest) {
         .select("id")
         .single();
 
-      // Reverse-sync to Tally as a receipt voucher (no-op unless this statement's
-      // GST invoice was issued by Tally and sync is active). Fire-and-forget.
-      void enqueueTallyReceiptVoucher(billingStatement.id, {
-        paymentId: insertedPayment?.id || (razorpayPaymentId as string) || paymentLinkId,
-        amount: amountPaid,
-        date: new Date().toISOString().slice(0, 10),
-        mode: "razorpay",
-        reference: razorpayPaymentId || paymentLinkId,
-      });
+      // Handoff v2: when the flag is on, the legacy bridge-writer path and
+      // the CRM-side GST auto-gen are both bypassed. The new flow routes the
+      // statement to the accounts inbox via handoff_state instead. Legacy
+      // path stays for v1 contracts and during the migration window.
+      const v2Enabled = await isHandoffV2Enabled(supabase);
+
+      if (!v2Enabled) {
+        // Reverse-sync to Tally as a receipt voucher (no-op unless this statement's
+        // GST invoice was issued by Tally and sync is active). Fire-and-forget.
+        void enqueueTallyReceiptVoucher(billingStatement.id, {
+          paymentId: insertedPayment?.id || (razorpayPaymentId as string) || paymentLinkId,
+          amount: amountPaid,
+          date: new Date().toISOString().slice(0, 10),
+          mode: "razorpay",
+          reference: razorpayPaymentId || paymentLinkId,
+        });
+      }
 
       // Check if fully paid
       const { data: allPayments } = await supabase
@@ -276,20 +285,27 @@ export async function POST(request: NextRequest) {
         .update({ payment_status: newStatus })
         .eq("id", billingStatement.id);
 
-      // Auto-generate GST invoice when fully paid online
       if (newStatus === "paid") {
-        try {
-          const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
-          fetch(`${appUrl}/api/billing-statements/${billingStatement.id}/generate-gst-invoice`, {
-            method: "POST",
-            headers: {
-              "Content-Type": "application/json",
-              "x-internal-secret": process.env.CRON_SECRET || "",
-            },
-            body: JSON.stringify({ skipAuth: true }),
-          }).catch((err) => console.error("[webhook] GST invoice generation failed:", err));
-        } catch (err) {
-          console.error("[webhook] Could not trigger GST invoice generation:", err);
+        if (v2Enabled) {
+          // v2: set handoff_state based on billing_mode. Accounts handles the
+          // GST issuance / receipt recording from the inbox. No CRM-side gen,
+          // no bridge writer.
+          await handleStatementPaid(supabase, billingStatement.id, "razorpay_payment_link_paid");
+        } else {
+          // Legacy: auto-generate GST invoice when fully paid online.
+          try {
+            const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
+            fetch(`${appUrl}/api/billing-statements/${billingStatement.id}/generate-gst-invoice`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                "x-internal-secret": process.env.CRON_SECRET || "",
+              },
+              body: JSON.stringify({ skipAuth: true }),
+            }).catch((err) => console.error("[webhook] GST invoice generation failed:", err));
+          } catch (err) {
+            console.error("[webhook] Could not trigger GST invoice generation:", err);
+          }
         }
       }
 
