@@ -15,7 +15,7 @@
 
 import { useEffect, useMemo, useState, useCallback } from "react";
 import Link from "next/link";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText } from "lucide-react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2 } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import {
   AGING_ESCALATE_HOURS,
@@ -24,6 +24,7 @@ import {
   type InboxResponse,
   type InboxRow,
 } from "@/lib/tally-handoff";
+import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
 
 type FilterTab = "all" | "gst_to_issue" | "payment_to_record" | "discrepancy";
 
@@ -84,6 +85,9 @@ export function TallyInboxClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<FilterTab>("all");
+  const [expandedId, setExpandedId] = useState<string | null>(null);
+  const [sendingId, setSendingId] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -105,6 +109,28 @@ export function TallyInboxClient() {
 
   useEffect(() => {
     void load();
+  }, [load]);
+
+  const handleSend = useCallback(async (statementId: string) => {
+    setSendingId(statementId);
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/inbox-send`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      await load();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Send failed");
+    } finally {
+      setSendingId(null);
+    }
+  }, [load]);
+
+  const handleUploaded = useCallback(async () => {
+    setExpandedId(null);
+    await load();
   }, [load]);
 
   const visibleRows = useMemo(() => {
@@ -180,11 +206,28 @@ export function TallyInboxClient() {
       ) : visibleRows.length === 0 ? (
         <EmptyState tab={tab} totalOpen={data?.stats.total_open ?? 0} />
       ) : (
-        <ul className="rounded-lg border overflow-hidden divide-y" role="list">
-          {visibleRows.map((row) => (
-            <InboxRowItem key={row.statement_id} row={row} />
-          ))}
-        </ul>
+        <>
+          {actionError && (
+            <div className="rounded-lg border border-red-200 bg-red-50 p-3 text-sm text-red-900 flex items-start gap-2">
+              <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" aria-hidden />
+              <span>{actionError}</span>
+            </div>
+          )}
+          <ul className="rounded-lg border overflow-hidden divide-y" role="list">
+            {visibleRows.map((row) => (
+              <InboxRowItem
+                key={row.statement_id}
+                row={row}
+                expanded={expandedId === row.statement_id}
+                sending={sendingId === row.statement_id}
+                onToggle={() => setExpandedId(expandedId === row.statement_id ? null : row.statement_id)}
+                onSend={() => handleSend(row.statement_id)}
+                onUploaded={handleUploaded}
+                onCancelUpload={() => setExpandedId(null)}
+              />
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );
@@ -222,7 +265,8 @@ function EmptyState({ tab, totalOpen }: { tab: FilterTab; totalOpen: number }) {
         <p className="text-sm font-medium">Inbox is empty</p>
         <p className="text-xs text-muted-foreground mt-1">
           New items appear here when a PI is paid, a direct GST invoice is requested,
-          or a customer pays via Razorpay link. Upload form lands in PR #2c.
+          or a customer pays via Razorpay link. Use the Upload button on each row
+          to attach the Tally invoice, then Save &amp; send.
         </p>
       </div>
     );
@@ -234,13 +278,34 @@ function EmptyState({ tab, totalOpen }: { tab: FilterTab; totalOpen: number }) {
   );
 }
 
-function InboxRowItem({ row }: { row: InboxRow }) {
+function InboxRowItem({
+  row,
+  expanded,
+  sending,
+  onToggle,
+  onSend,
+  onUploaded,
+  onCancelUpload,
+}: {
+  row: InboxRow;
+  expanded: boolean;
+  sending: boolean;
+  onToggle: () => void;
+  onSend: () => void;
+  onUploaded: () => void;
+  onCancelUpload: () => void;
+}) {
   const aging = row.aging_hours;
   const agingClass =
     aging >= AGING_ESCALATE_HOURS ? "text-red-700" : aging >= 24 ? "text-amber-700" : "text-muted-foreground";
+
+  const canUpload =
+    row.handoff_state === "pi_paid_awaiting_gst" || row.handoff_state === "direct_gst_requested";
+  const canSend = row.handoff_state === "ready_to_send" && !row.has_discrepancy;
+
   return (
-    <li className="p-3 md:p-4 hover:bg-muted/30 transition-colors">
-      <div className="flex items-start justify-between gap-3 flex-wrap">
+    <li className="hover:bg-muted/30 transition-colors">
+      <div className="p-3 md:p-4 flex items-start justify-between gap-3 flex-wrap">
         <div className="flex-1 min-w-0">
           <div className="flex items-center gap-2 flex-wrap">
             <span
@@ -270,16 +335,58 @@ function InboxRowItem({ row }: { row: InboxRow }) {
               <span>{row.discrepancy_reason}</span>
             </div>
           )}
+          {row.latest_upload && !canSend && (
+            <div className="text-xs text-muted-foreground mt-1">
+              Upload: <span className="font-mono">{row.latest_upload.tally_invoice_number}</span>
+              {row.latest_upload.name_check_status === "pending" && (
+                <span className="text-amber-700 ml-1">· name check pending</span>
+              )}
+            </div>
+          )}
         </div>
-        <div className="text-right">
+        <div className="text-right flex flex-col items-end gap-1.5">
           <div className="font-medium tabular-nums text-sm">
             {formatCurrency(row.statement_total_amount)}
           </div>
-          <div className={`text-xs mt-0.5 ${agingClass}`}>
+          <div className={`text-xs ${agingClass}`}>
             {aging < 1 ? "just now" : aging < 24 ? `${aging}h ago` : `${Math.floor(aging / 24)}d ago`}
+          </div>
+          <div className="flex items-center gap-1.5 mt-1">
+            {canUpload && (
+              <button
+                type="button"
+                onClick={onToggle}
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+                aria-expanded={expanded}
+              >
+                {expanded ? (
+                  <><ChevronUp className="h-3 w-3" /> Close</>
+                ) : (
+                  <><Upload className="h-3 w-3" /> Upload <ChevronDown className="h-3 w-3" /></>
+                )}
+              </button>
+            )}
+            {canSend && (
+              <button
+                type="button"
+                onClick={onSend}
+                disabled={sending}
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-foreground text-background hover:opacity-90 disabled:opacity-50"
+              >
+                {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                {sending ? "Sending…" : "Save & send"}
+              </button>
+            )}
           </div>
         </div>
       </div>
+      {expanded && canUpload && (
+        <TallyInboxUploadForm
+          row={row}
+          onUploaded={onUploaded}
+          onCancel={onCancelUpload}
+        />
+      )}
     </li>
   );
 }

@@ -572,6 +572,7 @@ export async function generateMonthlyStatements(
 
 import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
 import { createAdminClient } from "@/lib/supabase/server";
+import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 
 /** Create or fetch the accounting period row for a given month/year. */
 async function ensureAccountingPeriod(
@@ -924,9 +925,23 @@ export async function generateRentProformas(
         const gstDueDate = new Date(Date.UTC(py, pm - 1, pd + 7)).toISOString().slice(0, 10);
         await adminSupabase.from("billing_statements").update({ due_date: gstDueDate }).eq("id", stmtId);
       }
-      const dispatchResult = isGstDirect
-        ? await dispatchGstDirect(adminSupabase, stmtId, null, [])
-        : await dispatchProforma(adminSupabase, stmtId, null, []);
+
+      // Handoff v2 hook: when the flag is on and the contract is gst_direct,
+      // skip the legacy CRM dispatch — accounts will issue the invoice in
+      // Tally and upload it from /accounting/inbox. PI flow continues to
+      // dispatch normally; PI handoff_state is set at payment-capture time.
+      const handoff = await handleStatementFinalized(
+        adminSupabase,
+        stmtId,
+        (contract.billing_mode as "proforma_first" | "gst_direct" | null) ?? null,
+        "monthly_billing_cron",
+      );
+
+      const dispatchResult = handoff.skipLegacyDispatch
+        ? { success: true, noContact: false, emailedTo: null, razorpayLinkUrl: null }
+        : isGstDirect
+          ? await dispatchGstDirect(adminSupabase, stmtId, null, [])
+          : await dispatchProforma(adminSupabase, stmtId, null, []);
 
       if (dispatchResult.noContact) {
         result.noContact.push(contractNumber);
