@@ -91,22 +91,35 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
   }
 
-  // Validate GSTIN guard — warn the bridge if the wrong company is open
+  // Validate GSTIN guard — warn the bridge if the wrong company is open.
+  // Also fetch the published bridge-update target (self-update, bridge v1.3.12+).
   const { data: settings } = await supabase
     .from("app_settings")
-    .select("value")
-    .eq("key", "tally_company_gstin")
-    .single();
+    .select("key, value")
+    .in("key", ["tally_company_gstin", "tally_bridge_target_version", "tally_bridge_update_sha256"]);
 
-  const expectedGstin = settings?.value ?? "";
+  const settingsMap = Object.fromEntries(
+    (settings ?? []).map((s: { key: string; value: string }) => [s.key, s.value])
+  );
+
+  const expectedGstin = settingsMap["tally_company_gstin"] ?? "";
   const gstinMismatch =
     expectedGstin &&
     data.tally_company_gstin &&
     data.tally_company_gstin !== expectedGstin;
 
+  // Self-update: tell the bridge a newer version is published. The bridge
+  // compares against its own VERSION and downloads via GET /api/tally/update-package.
+  const targetVersion = (settingsMap["tally_bridge_target_version"] ?? "").trim();
+  const updateSha256  = (settingsMap["tally_bridge_update_sha256"] ?? "").trim();
+  const update = targetVersion && updateSha256 && targetVersion !== (data.version ?? "")
+    ? { target_version: targetVersion, sha256: updateSha256 }
+    : null;
+
   return NextResponse.json({
     ok: true,
     gstin_mismatch: gstinMismatch ?? false,
+    update,
     // Bridge should surface a tray warning + refuse to post if this is true
     ...(gstinMismatch && {
       warning: `Wrong company open. Expected GSTIN ${expectedGstin}, got ${data.tally_company_gstin}. Bridge will not post until the correct company is loaded.`,
