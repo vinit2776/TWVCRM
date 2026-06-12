@@ -6,6 +6,7 @@ import {
   INBOX_OPEN_STATES,
   isInboxRole,
   type HandoffState,
+  type InboxPayment,
   type InboxResponse,
   type InboxRow,
   type InboxSnapshot,
@@ -52,6 +53,11 @@ export async function GET(_req: NextRequest) {
     .select(`
       id, statement_number, period_start, period_end,
       total_amount, payment_status, handoff_state, updated_at,
+      statement_type, fixed_amount, usage_amount,
+      service_usage_amount, booking_usage_amount,
+      subtotal, tax_percentage, tax_amount,
+      cgst_amount, sgst_amount, igst_amount,
+      is_interstate, place_of_supply, hsn_sac_code,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, title, billing_mode,
         lead:leads!contracts_lead_id_fkey(
@@ -77,6 +83,20 @@ export async function GET(_req: NextRequest) {
     payment_status: string;
     handoff_state: HandoffState;
     updated_at: string;
+    statement_type: "rent" | "usage" | "combined" | null;
+    fixed_amount: number | null;
+    usage_amount: number | null;
+    service_usage_amount: number | null;
+    booking_usage_amount: number | null;
+    subtotal: number | null;
+    tax_percentage: number | null;
+    tax_amount: number | null;
+    cgst_amount: number | null;
+    sgst_amount: number | null;
+    igst_amount: number | null;
+    is_interstate: boolean | null;
+    place_of_supply: string | null;
+    hsn_sac_code: string | null;
     contract: {
       id: string;
       contract_number: string;
@@ -158,6 +178,30 @@ export async function GET(_req: NextRequest) {
     .maybeSingle();
   const lastSyncedAt = (lastSyncRow?.last_synced_at as string | undefined) ?? null;
 
+  // Side query 4: payments per statement. Accounts needs the payment details
+  // (amount, mode, ref, date) when issuing the GST invoice in Tally.
+  const paymentsByStatement = new Map<string, InboxPayment[]>();
+  if (statementIds.length > 0) {
+    const { data: payments } = await supabase
+      .from("billing_payments")
+      .select("id, billing_statement_id, amount, payment_date, payment_mode, payment_reference, razorpay_payment_id")
+      .in("billing_statement_id", statementIds)
+      .order("payment_date", { ascending: false });
+    for (const p of payments || []) {
+      const sid = (p as { billing_statement_id: string }).billing_statement_id;
+      const list = paymentsByStatement.get(sid) ?? [];
+      list.push({
+        id: p.id as string,
+        amount: Number(p.amount),
+        payment_date: p.payment_date as string,
+        payment_mode: p.payment_mode as string,
+        payment_reference: (p.payment_reference as string | null) ?? null,
+        razorpay_payment_id: (p.razorpay_payment_id as string | null) ?? null,
+      });
+      paymentsByStatement.set(sid, list);
+    }
+  }
+
   const now = Date.now();
   const rows: InboxRow[] = statementList.map((s) => {
     const upload = uploadByStatement.get(s.id) ?? null;
@@ -180,6 +224,10 @@ export async function GET(_req: NextRequest) {
     const stateChangedAt = s.updated_at;
     const agingHours = Math.max(0, Math.round((now - Date.parse(stateChangedAt)) / 3_600_000));
     const bucket = bucketFor(s.handoff_state, hasDiscrepancy) ?? "in_flight";
+
+    const customerHasGstin = !!s.contract?.lead?.gst_number;
+    const payments = paymentsByStatement.get(s.id) ?? [];
+    const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
 
     return {
       statement_id: s.id,
@@ -205,6 +253,32 @@ export async function GET(_req: NextRequest) {
       latest_snapshot: snapshot,
       has_discrepancy: hasDiscrepancy,
       discrepancy_reason: discrepancyReason,
+      // New detail fields
+      irn_required: customerHasGstin,
+      expected_series: customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG",
+      expected_prefix: customerHasGstin ? "SD/A/" : "SD/B/",
+      tax: {
+        subtotal: Number(s.subtotal ?? 0),
+        tax_percentage: Number(s.tax_percentage ?? 18),
+        tax_amount: Number(s.tax_amount ?? 0),
+        cgst_amount: s.cgst_amount == null ? null : Number(s.cgst_amount),
+        sgst_amount: s.sgst_amount == null ? null : Number(s.sgst_amount),
+        igst_amount: s.igst_amount == null ? null : Number(s.igst_amount),
+        is_interstate: !!s.is_interstate,
+        place_of_supply: s.place_of_supply,
+        hsn_sac_code: s.hsn_sac_code,
+      },
+      line_items: {
+        statement_type: s.statement_type,
+        fixed_amount: Number(s.fixed_amount ?? 0),
+        usage_amount: Number(s.usage_amount ?? 0),
+        service_usage_amount: Number(s.service_usage_amount ?? 0),
+        booking_usage_amount: Number(s.booking_usage_amount ?? 0),
+        period_start: s.period_start,
+        period_end: s.period_end,
+      },
+      payments_received: payments,
+      total_paid: totalPaid,
     };
   });
 
