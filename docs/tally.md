@@ -1,13 +1,30 @@
 # Tally Bridge — Operational Reference
 
-**Last updated:** 2026-06-11  
-**Current sync state:** PAUSED (`tally_sync_enabled = false`)  
-**Latest bridge version:** v1.3.10  
+**Last updated:** 2026-06-12  
+**Current sync state:** LIVE (`tally_sync_enabled = true`)  
+**Latest bridge version:** v1.3.12 (comprehensive bug-fix release — see changelog below)  
 **Bridge agent token:** `TALLY_AGENT_TOKEN = twv-tally-bridge-2026`
 
-For the full design rationale see `tally-integration-design.md`.  
-For the step-by-step go-live runbook see `tally-go-live-runbook.md`.  
+> **Bridge update policy:** the Tally server is at a remote location — every bridge
+> update needs an on-site visit. Batch ALL bridge fixes into one release and review
+> the whole bridge codebase before shipping. Prefer CRM-side fixes (free Vercel
+> deploys) over bridge-side fixes wherever possible.
+
 This document covers: bridge capabilities, correct flows, known issues, and manual correction procedures.
+
+---
+
+## Document map
+
+| File | Last updated | Purpose |
+|---|---|---|
+| **`tally.md`** ← you are here | **2026-06-11** | Operational reference — current state, known issues, manual corrections |
+| `tally-integration-status.md` | 2026-06-04 | Build status hand-off — what's built, what's verified, what PRs exist |
+| `tally-go-live-runbook.md` | 2026-06-04 | Step-by-step go-live runbook — follow this when flipping the switch |
+| `tally-billing-redesign.md` | 2026-06-03 | Billing UI redesign design doc (Tally-era billing page) |
+| `tally-integration-design.md` | 2026-06-02 | Original integration design and architecture rationale |
+
+**Reading order:** start with `tally-integration-design.md` for background, then `tally-integration-status.md` for where things stand, then `tally-go-live-runbook.md` when ready to go live. This file is the day-to-day reference once live.
 
 ---
 
@@ -20,7 +37,20 @@ This document covers: bridge capabilities, correct flows, known issues, and manu
 | IRN read-back | ✅ Built | v1.1.x | Bridge polls Tally for IRN; second ack triggers delivery |
 | Receipt voucher (payment → Tally) | ✅ Verified | v1.3.1 | Verified vs real 80-receipt Tally export |
 | Credit note (cancel/void reversal) | ✅ Verified | v1.3.1 | Verified vs real `CN/A/26-27/1` |
-| Party master (auto-create ledger) | ⚠️ Partial | — | `auto_create_ledger` flag exists; bridge creates missing Sundry Debtor ledger when ON |
+| Party master (auto-create ledger) | ✅ Live | v1.3.11 | CRM enqueues `party_master` before sales_voucher; bridge handles the job type + inline auto-create on sales AND receipt vouchers when `tally_auto_create_party_ledger=true` |
+
+### v1.3.12 changelog (2026-06-12) — comprehensive fix release
+
+Found via full-bridge audit after the `&`-in-ledger-name bug. All in one release to avoid repeat on-site visits:
+
+1. **XML entity decoding** (`unescapeXml`) applied everywhere Tally export values are compared or returned: `ledgerExists`, `extractAllCompanyNames` (company names with `&` would block ALL syncing), `getIrnMap` (IRN matching), `getVoucherByMasterId`, `findExistingVoucher` (idempotency). Root cause of the "Mayur Kumar M & CO" failure.
+2. **Retryable-error classification fixed**: "Tally request timed out" did not match the old `"timeout"` substring check — every Tally timeout became a permanent failure. Now a regex covering timed out/ETIMEDOUT/ECONNREFUSED/ECONNRESET/EHOSTUNREACH/fetch failed/socket hang up/could not read back.
+3. **Voucher read-back retry**: after creating a voucher, the Day Book read-back now retries 3×2s (Tally commit lag caused the vchid 32758/32759 "could not read back" failures); the error is also now retryable — on retry, check-before-create recovers by REMOTEID without duplicating.
+4. **Local-time dates**: invoice/credit/receipt dates used `toISOString()` (UTC) — between 00:00–05:30 IST they'd be dated yesterday (wrong GST month; wrong FY on Apr 1). Now local date.
+5. **party_master handler**: new job type — creates Sundry Debtor ledger, acks with `voucher_kind=party_master`; verifies via `ledgerExists` when Tally reports created=0.
+6. **Receipt auto-create**: receipt_voucher jobs auto-create missing party ledger (same setting as sales).
+7. **GSTIN validation**: non-empty but <15-char GSTIN now fails loud instead of posting B2B-without-IRN.
+8. **Robustness**: failure-acks wrapped in try/catch (no contradictory acks), IRN-ack failures don't abort the batch, 30s CRM fetch timeout, unhandledRejection/uncaughtException guards, credit-note dup-check before ledger check, bank_allocation field guards, health page HTML escaping, dup-recovery ack now sends GST-inclusive total.
 
 **Receipt voucher flag:** `RECEIPT_VOUCHER_ENABLED` in `src/lib/tally/enqueue.ts` is currently `false` (conservative hold from a stale comment). **Flip to `true` as part of go-live** — bridge v1.3.1+ fully supports it.
 
@@ -63,7 +93,7 @@ Bridge acks  POST /api/tally/ack
 | `sales_voucher` | `routeGstGenerationToTally()` at GST generation | Posts sales voucher to Tally | Invoice number + IRN mirrored; `dispatchTallyInvoice` fired |
 | `receipt_voucher` | Payment recorded on a Tally-issued invoice | Posts receipt voucher to Tally | `billing_payments.tally_receipt_number` mirrored |
 | `credit_note` | `enqueueTallyCreditNote()` when voiding a Tally-issued invoice | Posts credit note reversing the original | Statement voided; usage charges freed |
-| `party_master` | Reserved (not yet triggered by CRM code) | Creates/updates Sundry Debtor ledger | Not implemented |
+| `party_master` | Enqueued before each `sales_voucher` (and on retry of missing-ledger failures) | Creates/updates Sundry Debtor ledger | v1.3.11+ — acks `voucher_kind=party_master`; on success the ack handler re-queues any failed sales_voucher for the same statement |
 
 ---
 
