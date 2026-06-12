@@ -72,6 +72,7 @@ const ProposalPaymentsTab    = dynamic(() => import("@/components/accounting/pro
 const ExportSummaryDialog    = dynamic(() => import("@/components/accounting/export-summary-dialog").then(m => m.ExportSummaryDialog),       { ssr: false });
 const RefundsTab             = dynamic(() => import("@/components/billing/refunds-tab").then(m => m.RefundsTab),                              { ssr: false, loading: () => <TabLoading label="Refunds" /> });
 const RetainedPaymentsTab    = dynamic(() => import("@/components/billing/retained-payments-tab").then(m => m.RetainedPaymentsTab),           { ssr: false, loading: () => <TabLoading label="Retained Payments" /> });
+const ElectricityBillsTab   = dynamic(() => import("@/components/billing/electricity-bills-tab").then(m => m.ElectricityBillsTab),             { ssr: false, loading: () => <TabLoading label="Electricity" /> });
 
 function TabLoading({ label }: { label: string }) {
   return (
@@ -347,7 +348,7 @@ export default function BillingPage() {
   const SECTION_TABS = {
     receivables: ["proposals", "usage-charges"],
     collections: ["walkin", "cash", "refunds"],
-    invoicing:   ["statements", "gst", "retained-payments"],
+    invoicing:   ["statements", "gst", "retained-payments", "electricity"],
   } as const;
   type Section = keyof typeof SECTION_TABS;
   const sectionForTab = (tab: string): Section => {
@@ -961,6 +962,7 @@ export default function BillingPage() {
                 </TabsTrigger>
                 <TabsTrigger value="gst">GST Invoices</TabsTrigger>
                 <TabsTrigger value="retained-payments">Retained Payments</TabsTrigger>
+                <TabsTrigger value="electricity">Electricity</TabsTrigger>
               </>
             )}
           </TabsList>
@@ -1065,6 +1067,11 @@ export default function BillingPage() {
         {/* ── Retained Payments (under Invoicing) ───────────────────────── */}
         <TabsContent value="retained-payments" className="space-y-4 mt-4">
           <RetainedPaymentsTab />
+        </TabsContent>
+
+        {/* ── Electricity Bills (under Invoicing) ───────────────────────── */}
+        <TabsContent value="electricity" className="mt-4">
+          <ElectricityBillsTab />
         </TabsContent>
 
         {/* ── Usage Charges ─────────────────────────────────────────────── */}
