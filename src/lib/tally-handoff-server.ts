@@ -132,3 +132,40 @@ export async function handleStatementPaid(
     `[tally-handoff] handleStatementPaid: statement ${statementId} has unknown billing_mode (${billingMode}); skipping`,
   );
 }
+
+/**
+ * Called when a statement is auto-finalized by the monthly billing cron.
+ *
+ * For `gst_direct` contracts under v2, this is the entry point into the
+ * accounts inbox: the statement is ready, no PI was sent, the customer
+ * is waiting for a GST invoice that accounts has to create in Tally.
+ *
+ * Returns a flag the caller can use to decide whether to skip the legacy
+ * CRM-side dispatch (dispatchGstDirect):
+ *   - v2 ON + gst_direct: handoff_state = 'direct_gst_requested',
+ *     skipLegacyDispatch = true (accounts owns the invoice now)
+ *   - v2 ON + proforma_first: PR #2c handles state at payment time;
+ *     the legacy proforma dispatch (PI) still runs.
+ *     skipLegacyDispatch = false
+ *   - v2 OFF: no-op. skipLegacyDispatch = false (legacy behaviour).
+ */
+export async function handleStatementFinalized(
+  supabase: SupabaseClient,
+  statementId: string,
+  billingMode: "proforma_first" | "gst_direct" | null | undefined,
+  trigger: string,
+): Promise<{ skipLegacyDispatch: boolean }> {
+  const v2Enabled = await isHandoffV2Enabled(supabase);
+  if (!v2Enabled) {
+    return { skipLegacyDispatch: false };
+  }
+
+  if (billingMode === "gst_direct") {
+    await setHandoffState(supabase, statementId, "direct_gst_requested", trigger);
+    return { skipLegacyDispatch: true };
+  }
+
+  // proforma_first or unknown: the PI dispatch (legacy) still runs; handoff
+  // state will be written at payment-capture time by handleStatementPaid.
+  return { skipLegacyDispatch: false };
+}
