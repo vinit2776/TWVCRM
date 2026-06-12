@@ -12,9 +12,9 @@
  */
 
 import { useMemo, useState } from "react";
-import { Upload, Loader2, AlertCircle } from "lucide-react";
+import { Upload, Loader2, AlertCircle, Sparkles } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
-import type { InboxRow } from "@/lib/tally-handoff";
+import type { InboxRow, ExtractResponse, AutofillSource } from "@/lib/tally-handoff";
 
 interface Props {
   row: InboxRow;
@@ -38,6 +38,54 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   const [nameMatches, setNameMatches] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [extracting, setExtracting] = useState(false);
+  const [autofillSource, setAutofillSource] = useState<AutofillSource | null>(null);
+  const [bridgeMatched, setBridgeMatched] = useState(false);
+  const [autofilledFields, setAutofilledFields] = useState<Set<string>>(new Set());
+
+  async function runAutofill(file: File) {
+    setExtracting(true);
+    setAutofillSource(null);
+    setBridgeMatched(false);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/billing-statements/${row.statement_id}/extract-gst-invoice`, {
+        method: "POST",
+        body: fd,
+      });
+      if (!res.ok) {
+        // Autofill failure is non-fatal — accounts can still type manually.
+        setAutofillSource("manual");
+        return;
+      }
+      const data = (await res.json()) as ExtractResponse;
+      const filled = new Set<string>();
+      if (data.fields.invoice_number) {
+        setInvoiceNumber(data.fields.invoice_number);
+        filled.add("invoice_number");
+      }
+      if (data.fields.irn) {
+        setIrn(data.fields.irn);
+        filled.add("irn");
+      }
+      if (data.fields.invoice_date) {
+        setInvoiceDate(data.fields.invoice_date);
+        filled.add("invoice_date");
+      }
+      if (data.fields.invoice_amount != null) {
+        setInvoiceAmount(String(data.fields.invoice_amount));
+        filled.add("invoice_amount");
+      }
+      setAutofilledFields(filled);
+      setAutofillSource(data.source);
+      setBridgeMatched(data.bridge_match);
+    } catch {
+      setAutofillSource("manual");
+    } finally {
+      setExtracting(false);
+    }
+  }
 
   // ── Client-side validation (mirrors server's hard-blocks) ─────────────────
   const validation = useMemo(() => {
@@ -84,7 +132,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           invoice_date: invoiceDate,
           invoice_amount: Number(invoiceAmount),
           party_name_matches_contract: nameMatches,
-          autofill_source: "manual",
+          autofill_source: autofillSource ?? "manual",
           qr_payload: null,
           nic_signature_verified: false,
         }),
@@ -118,6 +166,37 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           <span className="font-mono">{expectedSeries}</span>
         </div>
       </div>
+
+      {(extracting || autofillSource) && (
+        <div
+          className={`text-xs rounded border p-2 flex items-start gap-1.5 ${
+            extracting
+              ? "bg-muted/50 border-muted-foreground/20 text-muted-foreground"
+              : autofillSource === "manual"
+                ? "bg-amber-50 border-amber-200 text-amber-900"
+                : "bg-blue-50 border-blue-200 text-blue-900"
+          }`}
+        >
+          {extracting ? (
+            <>
+              <Loader2 className="h-3.5 w-3.5 mt-0.5 flex-shrink-0 animate-spin" aria-hidden />
+              <span>Reading PDF…</span>
+            </>
+          ) : (
+            <>
+              <Sparkles className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" aria-hidden />
+              <span>
+                {autofillSource === "pdf_text" && `Autofilled ${autofilledFields.size} field${autofilledFields.size === 1 ? "" : "s"} from PDF text.`}
+                {autofillSource === "bridge_match" && "Matched against Tally voucher list."}
+                {autofillSource === "manual" && "Could not auto-extract. Please fill the fields manually."}
+                {bridgeMatched && " ✓ Bridge-verified in Tally."}
+                {" "}
+                <span className="text-muted-foreground">Review each value carefully before saving.</span>
+              </span>
+            </>
+          )}
+        </div>
+      )}
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
         <label className="text-xs">
@@ -187,7 +266,13 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
         <input
           type="file"
           accept="application/pdf,image/jpeg,image/png"
-          onChange={(e) => setPdfFile(e.target.files?.[0] ?? null)}
+          onChange={(e) => {
+            const f = e.target.files?.[0] ?? null;
+            setPdfFile(f);
+            if (f && f.type === "application/pdf") {
+              void runAutofill(f);
+            }
+          }}
           className="block w-full text-xs file:mr-3 file:px-3 file:py-1.5 file:border file:rounded file:bg-background file:text-sm hover:file:bg-muted"
         />
         {pdfFile && (
