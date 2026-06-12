@@ -156,7 +156,7 @@ export async function routeGstGenerationToTally(statementId: string): Promise<bo
         await admin.from("tally_sync_jobs").insert({
           job_type:             "party_master",
           billing_statement_id: statementId,
-          idempotency_key:      `party_master:${leadId}`,
+          idempotency_key:      `party_master:${statementId}`,
           status:               "pending",
           payload: {
             lead_id:    leadId,

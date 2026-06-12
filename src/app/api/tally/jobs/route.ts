@@ -121,7 +121,7 @@ export async function POST(request: NextRequest) {
         await admin.from("tally_sync_jobs").insert({
           job_type:             "party_master",
           billing_statement_id: job.billing_statement_id,
-          idempotency_key:      `party_master:${leadId}`,
+          idempotency_key:      `party_master:${job.billing_statement_id}`,
           status:               "pending",
           payload: {
             lead_id:    leadId,
