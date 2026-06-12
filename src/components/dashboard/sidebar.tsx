@@ -57,6 +57,7 @@ import {
   FileSpreadsheet,
   BadgeIndianRupee,
   Flame,
+  Inbox,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useUiStore } from "@/stores/ui-store";
@@ -112,6 +113,7 @@ const navSections: NavSection[] = [
       { href: "/billing",    label: "Billing", icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/accounting/receivables", label: "Receivables (AR)",  icon: IndianRupee, roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/accounting", label: "Acc Payables",             icon: Calculator,  roles: [...LEGACY_ROLES, "accounts"] },
+      { href: "/accounting/inbox", label: "Tally Inbox",         icon: Inbox,       roles: ["admin", "manager", "accounts", "office_admin"] },
       { href: "/finance/gateway-activity", label: "Gateway Activity",   icon: Landmark,    roles: ["admin", "accounts", "viewer"] },
       { href: "/petty-cash",               label: "Petty Cash",          icon: Wallet,      roles: null },
     ],
