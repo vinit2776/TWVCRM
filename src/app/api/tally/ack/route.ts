@@ -44,9 +44,9 @@ import { dispatchTallyInvoice } from "@/lib/tally/dispatch-tally-invoice";
 const AckSuccessSchema = z.object({
   job_id:               z.string().uuid(),
   success:              z.literal(true),
-  voucher_kind:         z.enum(["sales", "receipt", "credit_note"]).default("sales"),
+  voucher_kind:         z.enum(["sales", "receipt", "credit_note", "party_master"]).default("sales"),
   tally_voucher_guid:   z.string().min(1),
-  tally_invoice_number: z.string().min(1),
+  tally_invoice_number: z.string().default(""),  // empty for party_master (no invoice number)
   tally_irn:            z.string().optional(),       // may be absent if irn_pending=true
   tally_ack_no:         z.string().optional(),
   tally_ack_date:       z.string().optional(),
@@ -103,6 +103,37 @@ export async function POST(request: NextRequest) {
   // Idempotency: already completed → return success silently
   if (job.status === "completed") {
     return NextResponse.json({ ok: true, idempotent: true });
+  }
+
+  // ── PARTY-MASTER ACK (Sundry Debtor ledger created/confirmed in Tally) ────────
+  // No invoice is produced — just mark the job done and re-queue any sales_voucher
+  // jobs for the same statement that failed with "missing ledger" so they run next poll.
+  if (data.success && (job.job_type === "party_master" || data.voucher_kind === "party_master")) {
+    const now = new Date().toISOString();
+
+    await supabase.from("tally_sync_jobs").update({
+      status:               "completed",
+      tally_voucher_guid:   data.tally_voucher_guid,
+      tally_invoice_number: data.tally_invoice_number || null,
+      completed_at:         now,
+    }).eq("id", data.job_id);
+
+    // Re-queue any failed sales_voucher for the same statement so the bridge
+    // picks it up on the next poll (ledger now guaranteed to exist).
+    if (job.billing_statement_id) {
+      await supabase.from("tally_sync_jobs").update({
+        status:          "pending",
+        attempt_count:   0,
+        last_error:      null,
+        claimed_at:      null,
+        lease_expires_at: null,
+      })
+        .eq("billing_statement_id", job.billing_statement_id)
+        .eq("job_type", "sales_voucher")
+        .eq("status", "failed");
+    }
+
+    return NextResponse.json({ ok: true, voucher_kind: "party_master" });
   }
 
   // ── RECEIPT-VOUCHER ACK ─────────────────────────────────────────────────────

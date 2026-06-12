@@ -128,6 +128,51 @@ export async function routeGstGenerationToTally(statementId: string): Promise<bo
       })
       .eq("id", statementId);
 
+    // Enqueue party_master job before the sales_voucher (idempotent — one per lead).
+    // This ensures the Sundry Debtor ledger exists in Tally before the voucher is posted.
+    // Processed first because it gets an earlier created_at; 23505 = already exists = fine.
+    try {
+      const { data: stmtLead } = await admin
+        .from("billing_statements")
+        .select(`contract:contracts!billing_statements_contract_id_fkey(
+          lead_id,
+          lead:leads!contracts_lead_id_fkey(
+            company, first_name, last_name, gst_number, state, street, city, zip_code
+          )
+        )`)
+        .eq("id", statementId)
+        .single();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const leadId   = (stmtLead as any)?.contract?.lead_id as string | undefined;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const leadData = (stmtLead as any)?.contract?.lead;
+
+      if (leadId && leadData) {
+        const pmName = (leadData.company as string | undefined)?.trim()
+          || `${leadData.first_name ?? ""} ${leadData.last_name ?? ""}`.trim()
+          || "Customer";
+
+        await admin.from("tally_sync_jobs").insert({
+          job_type:             "party_master",
+          billing_statement_id: statementId,
+          idempotency_key:      `party_master:${leadId}`,
+          status:               "pending",
+          payload: {
+            lead_id:    leadId,
+            party_name: pmName,
+            gst_number: (leadData.gst_number as string | null) ?? null,
+            state:      (leadData.state     as string | null) ?? null,
+            street:     (leadData.street    as string | null) ?? null,
+            city:       (leadData.city      as string | null) ?? null,
+            zip_code:   (leadData.zip_code  as string | null) ?? null,
+          },
+        });
+      }
+    } catch {
+      // best-effort — a missing party_master never blocks invoice creation
+    }
+
     // Enqueue the sales-voucher job (idempotent — one per statement).
     const { error } = await admin.from("tally_sync_jobs").insert({
       job_type:             "sales_voucher",

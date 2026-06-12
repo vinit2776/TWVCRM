@@ -308,6 +308,20 @@ export async function GET(request: NextRequest) {
     };
   }
 
+  // Enrich party-master jobs — tell the bridge the exact ledger name + Tally group.
+  // The bridge creates (or confirms) the Sundry Debtor ledger before the sales_voucher runs.
+  for (const job of jobs) {
+    if (job.job_type !== "party_master") continue;
+    const payload = job.payload as Record<string, unknown>;
+    const partyName = String(payload["party_name"] ?? "").trim() || "Customer";
+    job.payload = {
+      ...payload,
+      party_ledger:    partySuffix ? `${partyName}${partySuffix}` : partyName,
+      group:           "Sundry Debtors",
+      opening_balance: 0,
+    };
+  }
+
   // Enrich credit-note jobs (CRM-first cancel: reverse a Tally-issued invoice).
   // A credit note reverses the original sale, so it reuses the same income + tax
   // ledgers, party, stock item and place of supply as the sales voucher, plus the

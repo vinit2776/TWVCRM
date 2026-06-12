@@ -82,12 +82,61 @@ export async function POST(request: NextRequest) {
   // Only failed jobs can be retried. Reset to pending, clear lease + error,
   // reset attempt_count so it gets a fresh set of retries.
   const { data: job } = await admin
-    .from("tally_sync_jobs").select("id, status, billing_statement_id")
+    .from("tally_sync_jobs").select("id, status, job_type, last_error, billing_statement_id")
     .eq("id", parsed.data.job_id).single();
 
   if (!job) return NextResponse.json({ error: "Job not found" }, { status: 404 });
   if (job.status !== "failed") {
     return NextResponse.json({ error: `Only failed jobs can be retried (this one is '${job.status}')` }, { status: 400 });
+  }
+
+  // For sales_voucher jobs that failed with "missing ledger", enqueue a party_master first.
+  // The party_master (earlier created_at) is processed before the re-queued sales_voucher;
+  // on party_master ack success the ack handler re-queues any still-failed sales_voucher.
+  const lastError: string = (job.last_error as string | null) ?? "";
+  if (job.job_type === "sales_voucher" && job.billing_statement_id && lastError.includes("does not exist in Tally")) {
+    try {
+      const { data: stmtLead } = await admin
+        .from("billing_statements")
+        .select(`contract:contracts!billing_statements_contract_id_fkey(
+          lead_id,
+          lead:leads!contracts_lead_id_fkey(
+            company, first_name, last_name, gst_number, state, street, city, zip_code
+          )
+        )`)
+        .eq("id", job.billing_statement_id)
+        .single();
+
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const leadId   = (stmtLead as any)?.contract?.lead_id as string | undefined;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const leadData = (stmtLead as any)?.contract?.lead;
+
+      if (leadId && leadData) {
+        const pmName = (leadData.company as string | undefined)?.trim()
+          || `${leadData.first_name ?? ""} ${leadData.last_name ?? ""}`.trim()
+          || "Customer";
+
+        // 23505 = already queued/completed for this lead = fine (idempotent)
+        await admin.from("tally_sync_jobs").insert({
+          job_type:             "party_master",
+          billing_statement_id: job.billing_statement_id,
+          idempotency_key:      `party_master:${leadId}`,
+          status:               "pending",
+          payload: {
+            lead_id:    leadId,
+            party_name: pmName,
+            gst_number: (leadData.gst_number as string | null) ?? null,
+            state:      (leadData.state     as string | null) ?? null,
+            street:     (leadData.street    as string | null) ?? null,
+            city:       (leadData.city      as string | null) ?? null,
+            zip_code:   (leadData.zip_code  as string | null) ?? null,
+          },
+        });
+      }
+    } catch {
+      // best-effort — proceed with retry even if party_master enqueue fails
+    }
   }
 
   await admin.from("tally_sync_jobs").update({
