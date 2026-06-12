@@ -2057,3 +2057,32 @@ export const TN_PT_SLABS = [
   { maxGross: Infinity, pt: 1250, label: "Above ₹75,000" },
 ] as const;
 
+// ==========================================
+// Electricity Sub-Billing
+// ==========================================
+
+export const ELECTRICITY_BILL_STATUSES = ["draft", "invoiced", "revised"] as const;
+
+export const ELECTRICITY_BILL_STATUS_LABELS: Record<string, string> = {
+  draft: "Draft",
+  invoiced: "Invoiced",
+  revised: "Revised",
+};
+
+export const ELECTRICITY_BILL_STATUS_COLORS: Record<string, string> = {
+  draft: "bg-gray-100 text-gray-800",
+  invoiced: "bg-green-100 text-green-800",
+  revised: "bg-yellow-100 text-yellow-800",
+};
+
+export const ELECTRICITY_LINE_TYPE_LABELS: Record<string, string> = {
+  utility: "Utility (TNEB)",
+  generator: "Generator (DG)",
+  other: "Other Charges",
+};
+
+export const ELECTRICITY_MARKUP_TYPE_LABELS: Record<string, string> = {
+  per_unit: "₹ per unit",
+  percent: "% on utility rate",
+};
+
