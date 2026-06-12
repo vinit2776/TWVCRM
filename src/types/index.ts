@@ -553,6 +553,8 @@ export interface Contract {
   created_by?: string;
   created_at: string;
   updated_at: string;
+  // Electricity sub-billing overrides (stores overrides only; falls back to location config)
+  electricity_settings?: ContractElectricitySettings | null;
 }
 
 export interface BillingPayment {
@@ -713,7 +715,7 @@ export interface BillingStatement {
   // Accounting head (receivables classification)
   primary_head?: string | null;
   // Auto-proforma split: 'combined' (legacy), 'rent' (auto-dispatched), 'usage' (admin review)
-  statement_type?: 'combined' | 'rent' | 'usage' | null;
+  statement_type?: 'combined' | 'rent' | 'usage' | 'electricity' | null;
   // Proforma tracking
   proforma_sent_at?: string | null;
   proforma_sent_by?: string | null;
@@ -3329,5 +3331,97 @@ export interface PayrollSlip {
   override_note: string | null;
   created_at: string;
   updated_at: string;
+}
+
+// ============================================================
+// Electricity Sub-Billing
+// ============================================================
+
+export type ElectricityBillStatus = 'draft' | 'invoiced' | 'revised';
+export type ElectricityLineType = 'utility' | 'generator' | 'other';
+export type ElectricityMarkupType = 'per_unit' | 'percent';
+
+export interface LocationElectricityConfig {
+  id: string;
+  location_id: string;
+  enabled: boolean;
+  reimbursement_enabled: boolean;
+  landlord_vendor_id: string | null;
+  landlord_utility_pct: number;
+  landlord_generator_pct: number;
+  landlord_generator_rate: number;
+  bill_due_day_of_month: number;
+  landlord_gst_applicable: boolean;
+  landlord_gst_rate: number | null;
+  tds_section: string | null;
+  tds_rate: number | null;
+  customer_utility_pct: number;
+  customer_generator_pct: number;
+  markup_type: ElectricityMarkupType;
+  markup_value: number;
+  customer_generator_rate: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ElectricityBillLine {
+  id: string;
+  electricity_bill_id: string;
+  line_type: ElectricityLineType;
+  meter_label: string | null;
+  units: number | null;
+  rate: number | null;
+  amount: number;
+  label: string | null;
+  sort_order: number;
+  created_at: string;
+}
+
+export interface ElectricityBill {
+  id: string;
+  location_id: string;
+  contract_id: string | null;
+  bill_month: number;
+  bill_year: number;
+  landlord_bill_number: string | null;
+  landlord_bill_date: string | null;
+  landlord_total_amount: number;
+  attachment_path: string | null;
+  reimbursement_enabled: boolean;
+  landlord_utility_pct: number;
+  landlord_generator_pct: number;
+  customer_utility_pct: number | null;
+  customer_generator_pct: number | null;
+  customer_units_billed: number | null;
+  customer_units_overridden: boolean;
+  customer_markup_type: ElectricityMarkupType | null;
+  customer_markup_value: number | null;
+  customer_utility_rate: number | null;
+  customer_generator_rate: number | null;
+  customer_subtotal: number | null;
+  customer_cgst: number | null;
+  customer_sgst: number | null;
+  customer_total: number | null;
+  customer_round_off: number | null;
+  gst_rate: number;
+  status: ElectricityBillStatus;
+  vendor_bill_id: string | null;
+  billing_statement_id: string | null;
+  revised_from_id: string | null;
+  created_by: string;
+  confirmed_by: string | null;
+  confirmed_at: string | null;
+  created_at: string;
+  updated_at: string;
+  lines?: ElectricityBillLine[];
+}
+
+export interface ContractElectricitySettings {
+  customer_utility_pct?: number;
+  customer_generator_pct?: number;
+  markup_type?: ElectricityMarkupType;
+  markup_value?: number;
+  customer_generator_rate?: number;
+  gst_rate?: number;
 }
 
