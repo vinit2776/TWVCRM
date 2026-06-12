@@ -148,3 +148,29 @@ export interface InboxResponse {
   rows: InboxRow[];
   last_synced_at: string | null;
 }
+
+// -----------------------------------------------------------------------------
+// Autofill (PR #4) — shared between the extract endpoint, server helper,
+// and the upload form's prefill flow.
+// -----------------------------------------------------------------------------
+
+export type AutofillSource = "qr" | "pdf_text" | "bridge_match" | "manual";
+
+/** Subset of the upload form's fields that can be auto-extracted. */
+export interface ExtractedFields {
+  invoice_number?: string;
+  series?: "SDIPL-REG" | "SDIPL-UNREG";
+  irn?: string;
+  party_gstin?: string;
+  invoice_date?: string; // YYYY-MM-DD
+  invoice_amount?: number;
+}
+
+export interface ExtractResponse {
+  source: AutofillSource;
+  fields: ExtractedFields;
+  /** First 200 chars of extracted text; helps accounts debug a bad parse. */
+  raw_text_snippet: string | null;
+  /** True iff a tally_voucher_snapshots row matched the extracted number. */
+  bridge_match: boolean;
+}
