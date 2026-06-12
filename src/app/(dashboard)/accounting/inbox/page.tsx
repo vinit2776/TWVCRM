@@ -1,8 +1,8 @@
 import { redirect } from "next/navigation";
 import { createClient } from "@/lib/supabase/server";
 import { Inbox } from "lucide-react";
-
-const ALLOWED_ROLES = ["accounts", "admin", "office_admin", "manager"] as const;
+import { isInboxRole } from "@/lib/tally-handoff";
+import { TallyInboxClient } from "@/components/accounting/tally-inbox-client";
 
 export const dynamic = "force-dynamic";
 
@@ -18,8 +18,7 @@ export default async function TallyInboxPage() {
     .eq("auth_id", user.id)
     .maybeSingle();
 
-  const role = profile?.role as string | undefined;
-  if (!role || !ALLOWED_ROLES.includes(role as typeof ALLOWED_ROLES[number])) {
+  if (!isInboxRole(profile?.role)) {
     redirect("/dashboard");
   }
 
@@ -54,12 +53,7 @@ export default async function TallyInboxPage() {
           </p>
         </div>
       ) : (
-        <div className="rounded-lg border border-dashed border-muted-foreground/30 bg-muted/20 p-8 text-center text-sm text-muted-foreground">
-          <p>
-            Worklist UI lands in the next PR. This page is currently a stub —
-            routing, role gating, and the feature flag are wired and working.
-          </p>
-        </div>
+        <TallyInboxClient />
       )}
     </div>
   );
