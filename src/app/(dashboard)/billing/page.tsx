@@ -72,7 +72,7 @@ const ProposalPaymentsTab    = dynamic(() => import("@/components/accounting/pro
 const ExportSummaryDialog    = dynamic(() => import("@/components/accounting/export-summary-dialog").then(m => m.ExportSummaryDialog),       { ssr: false });
 const RefundsTab             = dynamic(() => import("@/components/billing/refunds-tab").then(m => m.RefundsTab),                              { ssr: false, loading: () => <TabLoading label="Refunds" /> });
 const RetainedPaymentsTab    = dynamic(() => import("@/components/billing/retained-payments-tab").then(m => m.RetainedPaymentsTab),           { ssr: false, loading: () => <TabLoading label="Retained Payments" /> });
-const ElectricityBillsTab   = dynamic(() => import("@/components/billing/electricity-bills-tab").then(m => m.ElectricityBillsTab),             { ssr: false, loading: () => <TabLoading label="Electricity" /> });
+const ElectricityBillsTab    = dynamic(() => import("@/components/billing/electricity-bills-tab").then(m => m.ElectricityBillsTab),             { ssr: false, loading: () => <TabLoading label="Electricity" /> });
 
 function TabLoading({ label }: { label: string }) {
   return (
@@ -443,21 +443,9 @@ export default function BillingPage() {
   const [rpNotes, setRpNotes]         = useState("");
   const [rpSubmitting, setRpSubmitting] = useState(false);
   // TDS deduction on this payment (declared explicitly, never inferred).
-  const [rpTdsEnabled, setRpTdsEnabled]           = useState(false);
-  const [rpTdsMode, setRpTdsMode]                 = useState<"confirmed" | "expected">("confirmed");
-  const [rpTdsSection, setRpTdsSection]           = useState("194I");
-  const [rpTdsAmount, setRpTdsAmount]             = useState("");
-  const [rpTdsExpectedAmount, setRpTdsExpectedAmount] = useState("");
-  const [rpTdsQuarter, setRpTdsQuarter]           = useState<string>(() => {
-    const m = now.getMonth() + 1;
-    if (m >= 4 && m <= 6) return "Q1";
-    if (m >= 7 && m <= 9) return "Q2";
-    if (m >= 10 && m <= 12) return "Q3";
-    return "Q4";
-  });
-  const [rpTdsFyYear, setRpTdsFyYear]             = useState<number>(
-    now.getMonth() >= 3 ? now.getFullYear() : now.getFullYear() - 1
-  );
+  const [rpTdsEnabled, setRpTdsEnabled]   = useState(false);
+  const [rpTdsSection, setRpTdsSection]   = useState("194I");
+  const [rpTdsAmount, setRpTdsAmount]     = useState("");
 
   // ── Void Statement dialog ────────────────────────────────────────────────
   const [voidDialogOpen, setVoidDialogOpen]       = useState(false);
@@ -628,44 +616,31 @@ export default function BillingPage() {
   };
 
   const handleRecordPayment = async () => {
-    if (!recordPaymentStatementId) return;
-
-    const cashAmt = Number(rpAmount) || 0;
-    const isConfirmedTds = rpTdsEnabled && rpTdsMode === "confirmed";
-    const isExpectedTds  = rpTdsEnabled && rpTdsMode === "expected";
-    const tdsAmt = isConfirmedTds ? Math.max(0, Number(rpTdsAmount) || 0) : 0;
-    const tdsExpectedAmt = isExpectedTds ? Math.max(0, Number(rpTdsExpectedAmount) || 0) : 0;
-
-    if (isConfirmedTds && tdsAmt > 0) {
-      if (cashAmt < 0) { toast.error("Amount cannot be negative"); return; }
-    } else {
-      if (cashAmt <= 0) { toast.error("Amount must be positive"); return; }
+    if (!recordPaymentStatementId || !rpAmount || Number(rpAmount) <= 0) {
+      toast.error("Amount must be positive");
+      return;
     }
-    if (isConfirmedTds && tdsAmt <= 0) {
+    const tdsAmt = rpTdsEnabled ? Math.max(0, Number(rpTdsAmount) || 0) : 0;
+    if (rpTdsEnabled && tdsAmt <= 0) {
       toast.error("Enter the TDS amount deducted by the client");
       return;
     }
-    if (isConfirmedTds && !rpTdsSection) {
+    if (rpTdsEnabled && !rpTdsSection) {
       toast.error("Select the TDS section");
       return;
     }
-
     setRpSubmitting(true);
     const res = await fetch(`/api/billing-statements/${recordPaymentStatementId}/payment`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        amount: cashAmt,
+        amount: Number(rpAmount),
         payment_date: rpDate,
         payment_mode: rpMode,
         payment_reference: rpReference.trim() || undefined,
         notes: rpNotes.trim() || undefined,
-        tds_amount:          isConfirmedTds ? tdsAmt : 0,
-        tds_section:         isConfirmedTds ? rpTdsSection : null,
-        tds_quarter:         rpTdsEnabled ? rpTdsQuarter : null,
-        tds_fy_year:         rpTdsEnabled ? rpTdsFyYear : null,
-        tds_expected:        isExpectedTds,
-        tds_expected_amount: isExpectedTds ? tdsExpectedAmt : 0,
+        tds_amount:   tdsAmt,
+        tds_section:  rpTdsEnabled ? rpTdsSection : null,
       }),
     });
     setRpSubmitting(false);
@@ -678,7 +653,7 @@ export default function BillingPage() {
       );
       setRecordPaymentDialogOpen(false);
       setRpAmount(""); setRpReference(""); setRpNotes("");
-      setRpTdsEnabled(false); setRpTdsMode("confirmed"); setRpTdsAmount(""); setRpTdsExpectedAmount(""); setRpTdsSection("194I");
+      setRpTdsEnabled(false); setRpTdsAmount(""); setRpTdsSection("194I");
       fetchStatements();
       fetchData();
     } else {
@@ -1094,11 +1069,6 @@ export default function BillingPage() {
           <RetainedPaymentsTab />
         </TabsContent>
 
-        {/* ── Electricity Bills (under Invoicing) ───────────────────────── */}
-        <TabsContent value="electricity" className="mt-4">
-          <ElectricityBillsTab />
-        </TabsContent>
-
         {/* ── Usage Charges ─────────────────────────────────────────────── */}
         <TabsContent value="usage-charges" className="space-y-4 mt-4">
           <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -1302,6 +1272,11 @@ export default function BillingPage() {
           )}
         </TabsContent>
 
+        {/* ── Electricity Bills ─────────────────────────────────────────── */}
+        <TabsContent value="electricity" className="mt-4">
+          <ElectricityBillsTab />
+        </TabsContent>
+
         {/* ── Billing Statements (Merged view: contract accordions + booking-only statements) ── */}
         <TabsContent value="statements" className="space-y-6 mt-4">
           {/* ── NEW: Monthly Billing Tabs (Rent | Usage) with month picker ────
@@ -1336,10 +1311,7 @@ export default function BillingPage() {
 
       <Dialog open={recordPaymentDialogOpen} onOpenChange={(open) => {
         setRecordPaymentDialogOpen(open);
-        if (!open) {
-          setRpTdsEnabled(false); setRpTdsMode("confirmed");
-          setRpTdsAmount(""); setRpTdsExpectedAmount(""); setRpTdsSection("194I");
-        }
+        if (!open) { setRpTdsEnabled(false); setRpTdsAmount(""); setRpTdsSection("194I"); }
       }}>
         <DialogContent>
           <DialogHeader>
@@ -1386,153 +1358,71 @@ export default function BillingPage() {
               <Textarea value={rpNotes} onChange={(e) => setRpNotes(e.target.value)} placeholder="Additional notes…" rows={2} />
             </div>
 
-            {/* ── TDS block ──────────────────────────────────────────── */}
+            {/* ── TDS deduction block ──────────────────────────────────── */}
             <div className="rounded-lg border border-border">
               <button
                 type="button"
                 className="w-full flex items-center justify-between px-3 py-2.5 text-sm hover:bg-muted/30 rounded-lg transition-colors"
-                onClick={() => { setRpTdsEnabled((v) => !v); if (!rpTdsEnabled) { setRpTdsAmount(""); setRpTdsExpectedAmount(""); } }}
+                onClick={() => { setRpTdsEnabled((v) => !v); if (!rpTdsEnabled) setRpTdsAmount(""); }}
               >
                 <span className="flex items-center gap-2 font-medium">
                   <span className={`w-4 h-4 rounded border flex items-center justify-center text-xs ${rpTdsEnabled ? "bg-teal-600 border-teal-600 text-white" : "border-gray-400"}`}>
                     {rpTdsEnabled ? "✓" : ""}
                   </span>
-                  TDS involved in this payment
+                  Client deducted TDS on this payment
                 </span>
                 <span className="text-xs text-muted-foreground">TDS on income</span>
               </button>
 
               {rpTdsEnabled && (
-                <div className="px-3 pb-3 pt-2 space-y-3 border-t">
-                  {/* Mode toggle */}
-                  <div className="flex rounded-md border overflow-hidden text-xs">
-                    <button
-                      type="button"
-                      onClick={() => setRpTdsMode("confirmed")}
-                      className={`flex-1 py-1.5 font-medium transition-colors ${rpTdsMode === "confirmed" ? "bg-teal-600 text-white" : "text-muted-foreground hover:bg-muted/40"}`}
-                    >
-                      TDS confirmed (cert received)
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => setRpTdsMode("expected")}
-                      className={`flex-1 py-1.5 font-medium transition-colors border-l ${rpTdsMode === "expected" ? "bg-amber-500 text-white" : "text-muted-foreground hover:bg-muted/40"}`}
-                    >
-                      TDS expected (cert pending)
-                    </button>
+                <div className="px-3 pb-3 pt-1 space-y-3 border-t">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="space-y-1">
+                      <Label className="text-xs">TDS section *</Label>
+                      <Select value={rpTdsSection} onValueChange={setRpTdsSection}>
+                        <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
+                        <SelectContent>
+                          {TDS_CLIENT_SECTIONS.map((s) => (
+                            <SelectItem key={s.code} value={s.code} className="text-xs">
+                              <span className="font-mono font-medium">{s.label}</span>
+                              <span className="text-muted-foreground ml-1.5">— {s.description}</span>
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                    <div className="space-y-1">
+                      <Label className="text-xs">TDS amount (₹) *</Label>
+                      <Input
+                        type="number"
+                        min={0.01}
+                        step="any"
+                        value={rpTdsAmount}
+                        onChange={(e) => setRpTdsAmount(e.target.value)}
+                        placeholder="e.g. 1500"
+                        className="h-9 text-xs"
+                      />
+                    </div>
                   </div>
-
-                  {rpTdsMode === "confirmed" && (
-                    <>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <Label className="text-xs">TDS section *</Label>
-                          <Select value={rpTdsSection} onValueChange={setRpTdsSection}>
-                            <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              {TDS_CLIENT_SECTIONS.map((s) => (
-                                <SelectItem key={s.code} value={s.code} className="text-xs">
-                                  <span className="font-mono font-medium">{s.label}</span>
-                                  <span className="text-muted-foreground ml-1.5">— {s.description}</span>
-                                </SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-xs">TDS amount (₹) *</Label>
-                          <Input
-                            type="number" min={0.01} step="any"
-                            value={rpTdsAmount} onChange={(e) => setRpTdsAmount(e.target.value)}
-                            placeholder="e.g. 1500" className="h-9 text-xs"
-                          />
-                        </div>
-                      </div>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <Label className="text-xs">Quarter *</Label>
-                          <Select value={rpTdsQuarter} onValueChange={setRpTdsQuarter}>
-                            <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="Q1" className="text-xs">Q1 (Apr–Jun)</SelectItem>
-                              <SelectItem value="Q2" className="text-xs">Q2 (Jul–Sep)</SelectItem>
-                              <SelectItem value="Q3" className="text-xs">Q3 (Oct–Dec)</SelectItem>
-                              <SelectItem value="Q4" className="text-xs">Q4 (Jan–Mar)</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-xs">FY year *</Label>
-                          <Select value={String(rpTdsFyYear)} onValueChange={(v) => setRpTdsFyYear(Number(v))}>
-                            <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              {[rpTdsFyYear - 1, rpTdsFyYear, rpTdsFyYear + 1].map((y) => (
-                                <SelectItem key={y} value={String(y)} className="text-xs">FY {y}–{String(y + 1).slice(2)}</SelectItem>
-                              ))}
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-                      {parseFloat(rpTdsAmount || "0") > 0 && (
-                        <div className={`rounded px-2.5 py-1.5 text-xs font-medium ${
-                          recordPaymentBalance !== null &&
-                          Math.abs((parseFloat(rpAmount || "0") + parseFloat(rpTdsAmount || "0")) - recordPaymentBalance) < 1
-                            ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
-                            : "bg-blue-50 text-blue-800 border border-blue-200"
-                        }`}>
-                          Cash {formatCurrency(parseFloat(rpAmount || "0"))} + TDS {formatCurrency(parseFloat(rpTdsAmount || "0"))}
-                          {" = "}{formatCurrency(parseFloat(rpAmount || "0") + parseFloat(rpTdsAmount || "0"))}
-                          {recordPaymentBalance !== null &&
-                            Math.abs((parseFloat(rpAmount || "0") + parseFloat(rpTdsAmount || "0")) - recordPaymentBalance) < 1
-                            ? " ✓ settles invoice" : ""}
-                        </div>
-                      )}
-                      <p className="text-[11px] text-muted-foreground">
-                        For a TDS-only catch-up entry (cert arrived after short pay), set amount to ₹0.
-                      </p>
-                    </>
+                  {/* Live settlement preview */}
+                  {parseFloat(rpTdsAmount || "0") > 0 && (
+                    <div className={`rounded px-2.5 py-1.5 text-xs font-medium ${
+                      recordPaymentBalance !== null &&
+                      Math.abs((parseFloat(rpAmount || "0") + parseFloat(rpTdsAmount || "0")) - recordPaymentBalance) < 1
+                        ? "bg-emerald-50 text-emerald-800 border border-emerald-200"
+                        : "bg-blue-50 text-blue-800 border border-blue-200"
+                    }`}>
+                      Cash {formatCurrency(parseFloat(rpAmount || "0"))} + TDS {formatCurrency(parseFloat(rpTdsAmount || "0"))}
+                      {" = "}{formatCurrency(parseFloat(rpAmount || "0") + parseFloat(rpTdsAmount || "0"))}
+                      {recordPaymentBalance !== null &&
+                        Math.abs((parseFloat(rpAmount || "0") + parseFloat(rpTdsAmount || "0")) - recordPaymentBalance) < 1
+                        ? " ✓ settles invoice"
+                        : ""}
+                    </div>
                   )}
-
-                  {rpTdsMode === "expected" && (
-                    <>
-                      <div className="grid grid-cols-2 gap-3">
-                        <div className="space-y-1">
-                          <Label className="text-xs">Expected TDS (₹)</Label>
-                          <Input
-                            type="number" min={0} step="any"
-                            value={rpTdsExpectedAmount} onChange={(e) => setRpTdsExpectedAmount(e.target.value)}
-                            placeholder="e.g. 1000" className="h-9 text-xs"
-                          />
-                        </div>
-                        <div className="space-y-1">
-                          <Label className="text-xs">Quarter</Label>
-                          <Select value={rpTdsQuarter} onValueChange={setRpTdsQuarter}>
-                            <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                            <SelectContent>
-                              <SelectItem value="Q1" className="text-xs">Q1 (Apr–Jun)</SelectItem>
-                              <SelectItem value="Q2" className="text-xs">Q2 (Jul–Sep)</SelectItem>
-                              <SelectItem value="Q3" className="text-xs">Q3 (Oct–Dec)</SelectItem>
-                              <SelectItem value="Q4" className="text-xs">Q4 (Jan–Mar)</SelectItem>
-                            </SelectContent>
-                          </Select>
-                        </div>
-                      </div>
-                      <div className="space-y-1">
-                        <Label className="text-xs">FY year</Label>
-                        <Select value={String(rpTdsFyYear)} onValueChange={(v) => setRpTdsFyYear(Number(v))}>
-                          <SelectTrigger className="h-9 text-xs"><SelectValue /></SelectTrigger>
-                          <SelectContent>
-                            {[rpTdsFyYear - 1, rpTdsFyYear, rpTdsFyYear + 1].map((y) => (
-                              <SelectItem key={y} value={String(y)} className="text-xs">FY {y}–{String(y + 1).slice(2)}</SelectItem>
-                            ))}
-                          </SelectContent>
-                        </Select>
-                      </div>
-                      <div className="rounded px-2.5 py-1.5 text-xs bg-amber-50 text-amber-800 border border-amber-200">
-                        Balance stays outstanding. When the TDS cert arrives, record a new payment with amount ₹0 + TDS confirmed.
-                      </div>
-                    </>
-                  )}
+                  <p className="text-[11px] text-muted-foreground">
+                    Invoice settles as: cash received + TDS deducted = invoice total. Tally receipt splits bank + TDS ledger + party.
+                  </p>
                 </div>
               )}
             </div>
