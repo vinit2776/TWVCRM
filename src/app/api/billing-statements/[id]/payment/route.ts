@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { enqueueTallyReceiptVoucher } from "@/lib/tally/enqueue";
+import { isHandoffV2Enabled, handleStatementPaid } from "@/lib/tally-handoff-server";
 
 /**
  * GET /api/billing-statements/[id]/payment — list payments for a statement
@@ -83,19 +84,27 @@ export async function POST(
 
   if (insertErr) return NextResponse.json({ error: insertErr.message }, { status: 500 });
 
-  // Reverse-sync the payment to Tally as a receipt voucher (closes the loop so
-  // Tally's books reflect the offline payment). No-op unless this statement's GST
-  // invoice was issued by Tally and sync is active. Fire-and-forget. TDS, when
-  // declared, splits the Tally receipt: bank (net) + TDS ledger + party (gross).
-  void enqueueTallyReceiptVoucher(id, {
-    paymentId:  payment.id,
-    amount:     Number(amount),
-    tdsAmount,
-    tdsSection: tdsSection,
-    date:       payment_date,
-    mode:       payment_mode,
-    reference:  payment_reference || null,
-  });
+  // Handoff v2: when the flag is on, the legacy bridge receipt-voucher
+  // enqueue is bypassed. Accounts records the receipt in Tally directly,
+  // and the read-only bridge verifies it on the next sync.
+  const v2Enabled = await isHandoffV2Enabled(supabase);
+
+  if (!v2Enabled) {
+    // Legacy: reverse-sync the payment to Tally as a receipt voucher (closes the
+    // loop so Tally's books reflect the offline payment). No-op unless this
+    // statement's GST invoice was issued by Tally and sync is active.
+    // Fire-and-forget. TDS, when declared, splits the Tally receipt:
+    // bank (net) + TDS ledger + party (gross).
+    void enqueueTallyReceiptVoucher(id, {
+      paymentId:  payment.id,
+      amount:     Number(amount),
+      tdsAmount,
+      tdsSection: tdsSection,
+      date:       payment_date,
+      mode:       payment_mode,
+      reference:  payment_reference || null,
+    });
+  }
 
   // Check if fully paid. TDS counts toward settlement: cash + TDS = invoice.
   const { data: allPayments } = await supabase
@@ -120,23 +129,26 @@ export async function POST(
       .eq("id", id);
   }
 
-  // When an offline payment brings the statement to fully paid, auto-fire the
-  // GST tax invoice generation — same behaviour as the Razorpay webhook. Saves
-  // accounts the extra "Generate GST Invoice" click and prevents the
-  // proforma-paid-but-no-tax-invoice limbo state.
+  // When an offline payment brings the statement to fully paid:
+  // - Legacy: auto-fire the GST tax invoice generation (CRM-side).
+  // - v2: route to the accounts inbox via handoff_state; no CRM-side gen.
   if (newPaymentStatus === "paid" && statement.payment_status !== "paid") {
-    try {
-      const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
-      fetch(`${appUrl}/api/billing-statements/${id}/generate-gst-invoice`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "x-internal-secret": process.env.CRON_SECRET || "",
-        },
-        body: JSON.stringify({ skipAuth: true }),
-      }).catch((err) => console.error("[payment] GST invoice auto-gen failed:", err));
-    } catch (err) {
-      console.error("[payment] Could not trigger GST invoice generation:", err);
+    if (v2Enabled) {
+      await handleStatementPaid(supabase, id, "manual_payment_entry");
+    } else {
+      try {
+        const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
+        fetch(`${appUrl}/api/billing-statements/${id}/generate-gst-invoice`, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "x-internal-secret": process.env.CRON_SECRET || "",
+          },
+          body: JSON.stringify({ skipAuth: true }),
+        }).catch((err) => console.error("[payment] GST invoice auto-gen failed:", err));
+      } catch (err) {
+        console.error("[payment] Could not trigger GST invoice generation:", err);
+      }
     }
   }
 
