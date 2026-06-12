@@ -105,6 +105,10 @@ export async function GET(request: NextRequest) {
     `)
     .eq("status", "pending")
     .lt("attempt_count", 10)     // generous cap; actual exhaustion is ack-side (attempt_count >= max_attempts)
+    // party_master before vouchers within a batch (alphabetical: credit_note,
+    // party_master, receipt_voucher, sales_voucher) — a ledger upsert must land
+    // before the voucher that depends on it, regardless of enqueue order.
+    .order("job_type", { ascending: true })
     .order("created_at", { ascending: true })
     .limit(BATCH_SIZE);
 
@@ -315,13 +319,39 @@ export async function GET(request: NextRequest) {
   }
 
   // Enrich party-master jobs — tell the bridge the exact ledger name + Tally group.
-  // The bridge creates (or confirms) the Sundry Debtor ledger before the sales_voucher runs.
+  // The bridge upserts the Sundry Debtor ledger before the sales_voucher runs.
+  // GST data is re-read from the LEAD at dispatch time (not enqueue time) so a
+  // GSTIN added after the job was queued still reaches the ledger.
   for (const job of jobs) {
     if (job.job_type !== "party_master") continue;
     const payload = job.payload as Record<string, unknown>;
-    const partyName = String(payload["party_name"] ?? "").trim() || "Customer";
+    let partyName = String(payload["party_name"] ?? "").trim() || "Customer";
+
+    const leadId = String(payload["lead_id"] ?? "");
+    if (leadId) {
+      const { data: lead } = await supabase
+        .from("leads")
+        .select("company, first_name, last_name, gst_number, state, street, city, zip_code")
+        .eq("id", leadId)
+        .single();
+      if (lead) {
+        partyName = (lead.company as string | null)?.trim()
+          || `${lead.first_name ?? ""} ${lead.last_name ?? ""}`.trim()
+          || partyName;
+        job.payload = {
+          ...payload,
+          party_name: partyName,
+          gst_number: (lead.gst_number as string | null) ?? null,
+          state:      (lead.state as string | null) ?? null,
+          street:     (lead.street as string | null) ?? null,
+          city:       (lead.city as string | null) ?? null,
+          zip_code:   (lead.zip_code as string | null) ?? null,
+        };
+      }
+    }
+
     job.payload = {
-      ...payload,
+      ...(job.payload as Record<string, unknown>),
       party_ledger:    partySuffix ? `${partyName}${partySuffix}` : partyName,
       group:           "Sundry Debtors",
       opening_balance: 0,

@@ -90,11 +90,27 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `Only failed jobs can be retried (this one is '${job.status}')` }, { status: 400 });
   }
 
-  // For sales_voucher jobs that failed with "missing ledger", enqueue a party_master first.
-  // The party_master (earlier created_at) is processed before the re-queued sales_voucher;
-  // on party_master ack success the ack handler re-queues any still-failed sales_voucher.
-  const lastError: string = (job.last_error as string | null) ?? "";
-  if (job.job_type === "sales_voucher" && job.billing_statement_id && lastError.includes("does not exist in Tally")) {
+  // For ANY failed sales_voucher retry, (re-)run the party_master first so the
+  // customer's Tally ledger is upserted with the lead's CURRENT GST data
+  // (bridge v1.3.13+ alters existing ledgers). /pending serves party_master
+  // before sales_voucher within a batch, and the party_master ack re-queues a
+  // still-failed sales_voucher — so ordering holds across batches too.
+  if (job.job_type === "sales_voucher" && job.billing_statement_id) {
+    // Reset an already-run party_master for this statement back to pending —
+    // it re-fetches lead data at dispatch time and upserts the ledger.
+    await admin.from("tally_sync_jobs").update({
+      status: "pending",
+      attempt_count: 0,
+      last_error: null,
+      claimed_at: null,
+      lease_expires_at: null,
+      claimed_by: null,
+      completed_at: null,
+    })
+      .eq("billing_statement_id", job.billing_statement_id)
+      .eq("job_type", "party_master")
+      .in("status", ["completed", "failed"]);
+
     try {
       const { data: stmtLead } = await admin
         .from("billing_statements")

@@ -40,6 +40,9 @@ const HeartbeatSchema = z.object({
   failed_count:         z.number().int().min(0).default(0),
   last_sync_at:         z.string().nullable().optional(),
   last_error:           z.string().nullable().optional(),
+  // Remote diagnostics (bridge v1.3.13+): e.g. the Tally voucher-type list,
+  // refreshed hourly. Stored in app_settings for inspection from the CRM.
+  diag:                 z.object({ voucher_types: z.array(z.string()).max(500) }).optional(),
 });
 
 function authGuard(request: NextRequest): boolean {
@@ -89,6 +92,14 @@ export async function POST(request: NextRequest) {
   if (error) {
     console.error("[tally/heartbeat] upsert error:", error.message);
     return NextResponse.json({ error: "Internal error" }, { status: 500 });
+  }
+
+  // Persist diagnostics (best-effort) — readable via app_settings 'tally_bridge_diag'
+  if (data.diag) {
+    await supabase.from("app_settings").upsert(
+      { key: "tally_bridge_diag", value: JSON.stringify({ ...data.diag, at: new Date().toISOString() }).slice(0, 20000) },
+      { onConflict: "key" }
+    );
   }
 
   // Validate GSTIN guard — warn the bridge if the wrong company is open.
