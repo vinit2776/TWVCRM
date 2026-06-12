@@ -269,7 +269,7 @@ export async function enqueueTallyReceiptVoucher(
 
     const { data: stmt } = await admin
       .from("billing_statements")
-      .select("id, issuance_channel, tally_invoice_number, tally_voucher_guid, contract:contracts!billing_statements_contract_id_fkey(lead:leads!contracts_lead_id_fkey(company, first_name, last_name))")
+      .select("id, issuance_channel, tally_invoice_number, tally_voucher_guid, contract:contracts!billing_statements_contract_id_fkey(lead:leads!contracts_lead_id_fkey(company, first_name, last_name, gst_number, state, street, city, zip_code))")
       .eq("id", statementId)
       .single();
 
@@ -304,6 +304,9 @@ export async function enqueueTallyReceiptVoucher(
         tally_voucher_guid:   s.tally_voucher_guid ?? null,
         payment_id:           payment.paymentId,   // so the ack can mirror back onto billing_payments
         party_name:           partyName,
+        buyer_gstin:          (lead?.gst_number as string | null) ?? "",
+        buyer_state:          (lead?.state as string | null) ?? "",
+        buyer_address:        [lead?.street, lead?.city, lead?.zip_code].filter(Boolean).join(", "),
         amount:               payment.amount,      // net cash received
         tds_amount:           tdsAmt,              // customer's TDS deduction (0 = none)
         tds_section:          tdsSec,              // e.g. "194I_b" — for reference/audit

@@ -305,6 +305,12 @@ export async function GET(request: NextRequest) {
         ? { transaction_type: txnTypeDefault, transfer_mode: transferModeDefault, reference: ref }
         : null,
       narration:       narrationParts.join(" | "),
+      // Auto-create party ledger in Tally if missing (same setting as sales_voucher).
+      auto_create_ledger: settingsMap["tally_auto_create_party_ledger"] === "true",
+      // GST / address fields needed by ensurePartyLedger when auto-creating.
+      buyer_gstin:     String(payload["buyer_gstin"] ?? ""),
+      buyer_state:     String(payload["buyer_state"]  ?? ""),
+      buyer_address:   String(payload["buyer_address"] ?? ""),
     };
   }
 
