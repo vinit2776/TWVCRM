@@ -815,7 +815,8 @@ export type AuditEntityType =
   | "leave_policy"
   | "payroll_run"
   | "payroll_slip"
-  | "unifi_voucher";
+  | "unifi_voucher"
+  | "electricity_bill";
 
 export interface AuditLog {
   id: string;
