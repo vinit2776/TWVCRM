@@ -28,9 +28,11 @@ const B2_PREFIX = "tally-bridge";
 const MAX_ZIP_BYTES = 20 * 1024 * 1024; // bridge zips are ~50KB; 20MB is a generous cap
 
 function getS3Client() {
+  // Same shape as the proven db-backup client: B2_ENDPOINT has no scheme,
+  // and B2's S3-compatible API wants the bucket's real region.
   return new S3Client({
-    endpoint: process.env.B2_ENDPOINT,
-    region: "auto",
+    endpoint: `https://${process.env.B2_ENDPOINT}`,
+    region: "us-east-005",
     credentials: {
       accessKeyId: process.env.B2_KEY_ID!,
       secretAccessKey: process.env.B2_APPLICATION_KEY!,
