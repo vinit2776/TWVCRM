@@ -19,6 +19,7 @@ import { getCachedSettings } from "@/lib/app-settings-cache";
 import { routeGstGenerationToTally, isCrmGstEnabled } from "@/lib/tally/enqueue";
 import QRCode from "qrcode";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
+import { resolveLineItemQty, resolveLineItemRate } from "@/lib/billing-pdf-utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
 
 /** Per-call timeout (ms) for outbound HTTP and the Resend SDK send. A single
@@ -215,15 +216,11 @@ export async function dispatchProforma(
         if (section.type === "booking_usage" && item.date) {
           label = [String(item.date), item.space ? String(item.space) : "", item.time ? String(item.time) : "", item.duration ? String(item.duration) : ""].filter(Boolean).join(" · ");
         }
-        const resolvedQty = item.qty ?? item.quantity ?? item.billable ?? item.overage;
-        if (resolvedQty == null) {
-          console.warn("[send-proforma] line item missing qty field — defaulting to 1:", JSON.stringify(item));
-        }
         lineItems.push({
           description: label || section.label,
           hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label),
-          qty: Number(resolvedQty ?? 1),
-          rate: Number(item.unit_price || item.rate || item.amount || 0),
+          qty: resolveLineItemQty(item, "send-proforma"),
+          rate: resolveLineItemRate(item),
           amount: Number(item.amount || 0),
         });
       }
@@ -599,11 +596,7 @@ export async function dispatchGstDirect(
         if (section.type === "booking_usage" && item.date) {
           label = [String(item.date), item.space ? String(item.space) : "", item.time ? String(item.time) : "", item.duration ? String(item.duration) : ""].filter(Boolean).join(" · ");
         }
-        const resolvedQty2 = item.qty ?? item.quantity ?? item.billable ?? item.overage;
-        if (resolvedQty2 == null) {
-          console.warn("[gst-direct] line item missing qty field — defaulting to 1:", JSON.stringify(item));
-        }
-        lineItems.push({ description: label || section.label, hsnSac: "997212", qty: Number(resolvedQty2 ?? 1), rate: Number(item.unit_price || item.rate || item.amount || 0), amount: Number(item.amount || 0) });
+        lineItems.push({ description: label || section.label, hsnSac: "997212", qty: resolveLineItemQty(item, "gst-direct"), rate: resolveLineItemRate(item), amount: Number(item.amount || 0) });
       }
     }
   } else {

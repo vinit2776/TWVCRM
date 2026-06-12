@@ -4,6 +4,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
+import { resolveLineItemQty, resolveLineItemRate } from "@/lib/billing-pdf-utils";
 import { logAudit } from "@/lib/audit";
 import { routeGstGenerationToTally, isCrmGstEnabled } from "@/lib/tally/enqueue";
 import QRCode from "qrcode";
@@ -332,13 +333,11 @@ export async function POST(
         if (section.type === "booking_usage" && item.date) {
           label = [String(item.date), item.space ? String(item.space) : "", item.time ? String(item.time) : "", item.duration ? String(item.duration) : ""].filter(Boolean).join(" · ");
         }
-        const resolvedQty = item.qty ?? item.quantity ?? item.billable ?? item.overage;
-        if (resolvedQty == null) console.warn("[convert-to-gst-early] line item missing qty field — defaulting to 1:", JSON.stringify(item));
         lineItems.push({
           description: label || section.label,
           hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label),
-          qty: Number(resolvedQty ?? 1),
-          rate: Number(item.unit_price || item.rate || item.amount || 0),
+          qty: resolveLineItemQty(item, "convert-to-gst-early"),
+          rate: resolveLineItemRate(item),
           amount: Number(item.amount || 0),
         });
       }

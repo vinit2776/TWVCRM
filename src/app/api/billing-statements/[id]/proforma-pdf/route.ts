@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
+import { resolveLineItemQty, resolveLineItemRate } from "@/lib/billing-pdf-utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
 import QRCode from "qrcode";
 
@@ -98,13 +99,11 @@ export async function GET(
         if (section.type === "booking_usage" && item.date) {
           label = [String(item.date), item.space ? String(item.space) : "", item.time ? String(item.time) : "", item.duration ? String(item.duration) : ""].filter(Boolean).join(" · ");
         }
-        const resolvedQty = item.qty ?? item.quantity ?? item.billable ?? item.overage;
-        if (resolvedQty == null) console.warn("[proforma-pdf] line item missing qty field — defaulting to 1:", JSON.stringify(item));
         lineItems.push({
           description: label || section.label,
           hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label),
-          qty: Number(resolvedQty ?? 1),
-          rate: Number(item.unit_price || item.rate || item.amount || 0),
+          qty: resolveLineItemQty(item, "proforma-pdf"),
+          rate: resolveLineItemRate(item),
           amount: Number(item.amount || 0),
         });
       }

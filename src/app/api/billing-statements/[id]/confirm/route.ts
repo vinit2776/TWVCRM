@@ -6,6 +6,7 @@ import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { logAudit } from "@/lib/audit";
 import { messaging, dltSms } from "@/lib/whatsapp";
 import { computeGstAndRounding } from "@/lib/gst-math";
+import { resolveLineItemQty, resolveLineItemRate } from "@/lib/billing-pdf-utils";
 
 /**
  * POST /api/billing-statements/[id]/confirm
@@ -188,13 +189,11 @@ export async function POST(
           ? detailParts.join(" · ")
           : String(desc);
 
-        const resolvedQty = item.qty ?? item.quantity ?? item.billable ?? item.overage;
-        if (resolvedQty == null) console.warn("[confirm] line item missing qty field — defaulting to 1:", JSON.stringify(item));
         lineItems.push({
           description: label || section.label,
           hsnSac: "997212",
-          qty: Number(resolvedQty ?? 1),
-          rate: Number(item.unit_price || item.rate || item.amount || 0),
+          qty: resolveLineItemQty(item, "confirm"),
+          rate: resolveLineItemRate(item),
           amount: Number(item.amount || 0),
         });
       }
