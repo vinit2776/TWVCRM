@@ -302,135 +302,163 @@ function InboxRowItem({
     row.handoff_state === "pi_paid_awaiting_gst" || row.handoff_state === "direct_gst_requested";
   const canSend = row.handoff_state === "ready_to_send" && !row.has_discrepancy;
 
+  // Tally bridge match status — derived from latest_snapshot + has_discrepancy.
+  // Bridge v2 isn't deployed yet, so most rows will be "not synced".
+  const bridgeStatus: { label: string; cls: string; title: string } = (() => {
+    if (row.has_discrepancy) {
+      return {
+        label: "Tally: drift",
+        cls: "bg-red-50 text-red-900 border-red-200",
+        title: "Tally voucher exists but its amount differs from the CRM statement",
+      };
+    }
+    if (row.latest_snapshot && row.latest_snapshot.match_confidence === "exact") {
+      return {
+        label: "Tally: matched",
+        cls: "bg-green-50 text-green-900 border-green-200",
+        title: "Voucher seen in Tally and matched to this statement",
+      };
+    }
+    if (row.latest_snapshot) {
+      return {
+        label: "Tally: partial",
+        cls: "bg-amber-50 text-amber-900 border-amber-200",
+        title: `Snapshot match confidence: ${row.latest_snapshot.match_confidence ?? "unmatched"}`,
+      };
+    }
+    return {
+      label: "Tally: not synced",
+      cls: "bg-muted text-muted-foreground border-border",
+      title: "No voucher in tally_voucher_snapshots for this statement yet",
+    };
+  })();
+
   return (
     <li className="hover:bg-muted/30 transition-colors">
-      <div className="p-3 md:p-4 flex items-start justify-between gap-3 flex-wrap">
-        <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 flex-wrap">
-            <span
-              className={`text-xs px-2 py-0.5 rounded-full border ${bucketBadgeClass(row.bucket, row.has_discrepancy)}`}
-            >
-              {bucketLabel(row.bucket)}
-            </span>
-            <span className="font-medium text-sm truncate">{partyDisplay(row)}</span>
-            {row.contract?.lead?.gst_number && (
-              <span className="text-[11px] font-mono text-muted-foreground" title="Customer GSTIN">
-                {row.contract.lead.gst_number}
-              </span>
-            )}
-            <span
-              className={`text-[11px] px-1.5 py-0.5 rounded ${
-                row.irn_required
-                  ? "bg-blue-50 text-blue-900 border border-blue-200"
-                  : "bg-muted text-muted-foreground border"
-              }`}
-              title={row.irn_required ? "A-series invoice + IRN required" : "B-series invoice, no IRN"}
-            >
-              {row.irn_required ? "IRN req." : "no IRN"}
-            </span>
-            {row.contract && (
-              <span className="text-xs text-muted-foreground truncate">
-                · {row.contract.contract_number}
-                {row.contract.title && ` · ${row.contract.title}`}
-              </span>
-            )}
-          </div>
-          <div className="text-xs text-muted-foreground mt-1">
-            {row.statement_number ?? "(no number)"} · {HANDOFF_STATE_LABELS[row.handoff_state]}
-            {row.contract?.billing_mode === "gst_direct" && " · direct GST"}
-            {row.period_start && row.period_end && (
-              <> · period {row.period_start} → {row.period_end}</>
-            )}
-          </div>
-
-          {/* Always-visible compact summary line — line items + tax */}
-          <div className="text-xs text-muted-foreground mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-            {row.line_items.fixed_amount > 0 && (
-              <span>Rent {formatCurrency(row.line_items.fixed_amount)}</span>
-            )}
-            {row.line_items.service_usage_amount > 0 && (
-              <span>Usage {formatCurrency(row.line_items.service_usage_amount)}</span>
-            )}
-            {row.line_items.booking_usage_amount > 0 && (
-              <span>Bookings {formatCurrency(row.line_items.booking_usage_amount)}</span>
-            )}
-            <span>+ GST {row.tax.tax_percentage}% ({formatCurrency(row.tax.tax_amount)})</span>
-          </div>
-
-          {/* Payments received (compact) */}
-          {row.payments_received.length > 0 && (
-            <div className="text-xs mt-1 text-green-800">
-              Paid {formatCurrency(row.total_paid)} via{" "}
-              {row.payments_received.map((p, i) => (
-                <span key={p.id}>
-                  {i > 0 && ", "}
-                  <span className="font-medium">{p.payment_mode}</span>
-                  {p.payment_reference && <span className="text-muted-foreground"> ({p.payment_reference})</span>}
-                  <span className="text-muted-foreground"> on {p.payment_date}</span>
-                </span>
-              ))}
-            </div>
-          )}
-
-          {row.has_discrepancy && row.discrepancy_reason && (
-            <div className="text-xs text-red-700 mt-1 flex items-start gap-1">
-              <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" aria-hidden />
-              <span>{row.discrepancy_reason}</span>
-            </div>
-          )}
-          {row.latest_upload && !canSend && (
-            <div className="text-xs text-muted-foreground mt-1">
-              Upload: <span className="font-mono">{row.latest_upload.tally_invoice_number}</span>
-              {row.latest_upload.name_check_status === "pending" && (
-                <span className="text-amber-700 ml-1">· name check pending</span>
-              )}
-            </div>
-          )}
+      <div className="p-3 md:p-4 grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 items-start">
+        {/* ── Line 1 ── primary identity */}
+        <div className="min-w-0 flex items-baseline gap-2 flex-wrap">
+          <span
+            className={`text-[11px] px-2 py-0.5 rounded-full border flex-shrink-0 ${bucketBadgeClass(row.bucket, row.has_discrepancy)}`}
+          >
+            {bucketLabel(row.bucket)}
+          </span>
+          <span className="font-medium text-sm truncate">{partyDisplay(row)}</span>
         </div>
-        <div className="text-right flex flex-col items-end gap-1.5">
+        <div className="text-right">
           <div className="font-medium tabular-nums text-sm">
             {formatCurrency(row.statement_total_amount)}
           </div>
-          <div className={`text-xs ${agingClass}`}>
-            {aging < 1 ? "just now" : aging < 24 ? `${aging}h ago` : `${Math.floor(aging / 24)}d ago`}
-          </div>
-          <div className="flex items-center gap-1.5 mt-1 flex-wrap justify-end">
-            <a
-              href={`/api/billing-statements/${row.statement_id}/proforma-pdf`}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
-              title="Open the CRM-generated proforma invoice PDF (original bill)"
-            >
-              <FileDown className="h-3 w-3" />
-              View PI
-            </a>
-            {canUpload && (
-              <button
-                type="button"
-                onClick={onToggle}
-                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
-                aria-expanded={expanded}
-              >
-                {expanded ? (
-                  <><ChevronUp className="h-3 w-3" /> Close</>
-                ) : (
-                  <><Upload className="h-3 w-3" /> Upload <ChevronDown className="h-3 w-3" /></>
+        </div>
+
+        {/* ── Line 2 ── meta: contract / statement / state / aging */}
+        <div className="min-w-0 text-xs text-muted-foreground truncate">
+          {row.contract && (
+            <>
+              <span className="font-mono">{row.contract.contract_number}</span>
+              {row.contract.title && <span> · {row.contract.title}</span>}
+              <span> · </span>
+            </>
+          )}
+          <span className="font-mono">{row.statement_number ?? "(no number)"}</span>
+          <span> · {HANDOFF_STATE_LABELS[row.handoff_state]}</span>
+          {row.contract?.billing_mode === "gst_direct" && <span> · direct GST</span>}
+        </div>
+        <div className={`text-xs ${agingClass} text-right`}>
+          {aging < 1 ? "just now" : aging < 24 ? `${aging}h ago` : `${Math.floor(aging / 24)}d ago`}
+        </div>
+
+        {/* ── Line 3 ── pills: GSTIN · IRN req · Tally · period */}
+        <div className="col-span-2 flex items-center gap-1.5 flex-wrap text-[11px]">
+          {row.contract?.lead?.gst_number ? (
+            <span className="font-mono px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground" title="Customer GSTIN">
+              {row.contract.lead.gst_number}
+            </span>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground">
+              no GSTIN
+            </span>
+          )}
+          <span
+            className={`px-1.5 py-0.5 rounded border ${
+              row.irn_required
+                ? "bg-blue-50 text-blue-900 border-blue-200"
+                : "bg-muted/60 text-muted-foreground border-transparent"
+            }`}
+            title={row.irn_required ? "A-series invoice + IRN required" : "B-series invoice, no IRN"}
+          >
+            {row.irn_required ? "IRN required" : "no IRN"}
+          </span>
+          <span
+            className={`px-1.5 py-0.5 rounded border ${bridgeStatus.cls}`}
+            title={bridgeStatus.title}
+          >
+            {bridgeStatus.label}
+          </span>
+          {row.period_start && row.period_end && (
+            <span className="text-muted-foreground">
+              {row.period_start} → {row.period_end}
+            </span>
+          )}
+        </div>
+
+        {/* ── Discrepancy or upload-pending banner (only when present) ── */}
+        {(row.has_discrepancy || (row.latest_upload && !canSend)) && (
+          <div className="col-span-2">
+            {row.has_discrepancy && row.discrepancy_reason && (
+              <div className="text-xs text-red-700 flex items-start gap-1">
+                <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" aria-hidden />
+                <span>{row.discrepancy_reason}</span>
+              </div>
+            )}
+            {row.latest_upload && !canSend && (
+              <div className="text-xs text-muted-foreground">
+                Upload: <span className="font-mono">{row.latest_upload.tally_invoice_number}</span>
+                {row.latest_upload.name_check_status === "pending" && (
+                  <span className="text-amber-700 ml-1">· name check pending</span>
                 )}
-              </button>
-            )}
-            {canSend && (
-              <button
-                type="button"
-                onClick={onSend}
-                disabled={sending}
-                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-foreground text-background hover:opacity-90 disabled:opacity-50"
-              >
-                {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-                {sending ? "Sending…" : "Save & send"}
-              </button>
+              </div>
             )}
           </div>
+        )}
+
+        {/* ── Actions row ── */}
+        <div className="col-span-2 flex items-center gap-1.5 flex-wrap justify-end pt-1">
+          <a
+            href={`/api/billing-statements/${row.statement_id}/proforma-pdf`}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+            title="Open the CRM-generated proforma invoice PDF (original bill)"
+          >
+            <FileDown className="h-3 w-3" />
+            View PI
+          </a>
+          {canUpload && (
+            <button
+              type="button"
+              onClick={onToggle}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+              aria-expanded={expanded}
+            >
+              {expanded ? (
+                <><ChevronUp className="h-3 w-3" /> Close</>
+              ) : (
+                <><Upload className="h-3 w-3" /> Upload <ChevronDown className="h-3 w-3" /></>
+              )}
+            </button>
+          )}
+          {canSend && (
+            <button
+              type="button"
+              onClick={onSend}
+              disabled={sending}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-foreground text-background hover:opacity-90 disabled:opacity-50"
+            >
+              {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+              {sending ? "Sending…" : "Save & send"}
+            </button>
+          )}
         </div>
       </div>
       {expanded && canUpload && (
