@@ -30,7 +30,7 @@ ALTER TABLE location_electricity_config
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS contract_electricity_config (
-  id                        UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id                        UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   contract_id               UUID NOT NULL UNIQUE REFERENCES contracts(id) ON DELETE CASCADE,
   location_id               UUID NOT NULL REFERENCES locations(id),
 

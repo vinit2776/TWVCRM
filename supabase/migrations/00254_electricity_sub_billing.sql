@@ -30,7 +30,7 @@
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS location_electricity_config (
-  id                          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   location_id                 UUID NOT NULL UNIQUE REFERENCES locations(id) ON DELETE CASCADE,
 
   -- Master switch
@@ -95,7 +95,7 @@ CREATE POLICY "Authenticated users can update location_electricity_config"
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS electricity_bills (
-  id                          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id                          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   location_id                 UUID NOT NULL REFERENCES locations(id),
   -- Nullable: null when reimbursement_enabled = false (vendor-bill-only path)
   contract_id                 UUID REFERENCES contracts(id),
@@ -177,7 +177,7 @@ CREATE POLICY "Authenticated users can update electricity_bills"
 -- ============================================================
 
 CREATE TABLE IF NOT EXISTS electricity_bill_lines (
-  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  id                    UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   electricity_bill_id   UUID NOT NULL REFERENCES electricity_bills(id) ON DELETE CASCADE,
 
   -- 'utility' and 'generator' have units+rate; 'other' has label+amount only
