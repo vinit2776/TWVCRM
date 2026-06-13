@@ -966,6 +966,154 @@ export class TallyClient {
     // "Unknown Request" style failures have no <CREATED> and are caught by the
     // count check in postSalesVoucher.
   }
+
+  // ─────────────────────────────────────────────────────────────────────────
+  // Read-only snapshot helpers (added in bridge 1.4.0).
+  //
+  // These read VOUCHER and LEDGER blocks from Tally for the handoff-v2 sync
+  // pull (POSTs to /api/tally/sync-pull on the CRM). Purely additive — they
+  // share the existing exportDayBook + post primitives and never mutate
+  // anything in Tally.
+  // ─────────────────────────────────────────────────────────────────────────
+
+  /**
+   * Lists every voucher from the Day Book in a date range with the fields
+   * the CRM's sync-pull endpoint expects. Used by SnapshotPoller.
+   *
+   * Returns sales, receipt, and credit-note vouchers in one pass; the
+   * caller filters by voucher_kind based on Tally's VOUCHERTYPENAME.
+   */
+  async listVouchersForSnapshot(fromDate: string, toDate: string): Promise<Array<{
+    voucher_master_id: string;
+    voucher_kind: "sales" | "receipt" | "credit_note" | null;
+    voucher_series: string | null;
+    invoice_number: string | null;
+    party_name: string | null;
+    party_gstin: string | null;
+    voucher_date: string | null;
+    voucher_amount: number | null;
+    irn: string | null;
+    against_voucher: string | null;
+    custom_fields: Record<string, string>;
+  }>> {
+    const xml = await this.exportDayBook(fromDate, toDate);
+    const out: Array<{
+      voucher_master_id: string;
+      voucher_kind: "sales" | "receipt" | "credit_note" | null;
+      voucher_series: string | null;
+      invoice_number: string | null;
+      party_name: string | null;
+      party_gstin: string | null;
+      voucher_date: string | null;
+      voucher_amount: number | null;
+      irn: string | null;
+      against_voucher: string | null;
+      custom_fields: Record<string, string>;
+    }> = [];
+
+    for (const m of xml.matchAll(/<VOUCHER\b[\s\S]*?<\/VOUCHER>/gi)) {
+      const block = m[0];
+      const masterId = firstTag(block, "MASTERID").trim();
+      if (!masterId) continue;
+
+      const typeName = firstTag(block, "VOUCHERTYPENAME").toLowerCase();
+      const kind: "sales" | "receipt" | "credit_note" | null =
+        typeName.includes("credit note") ? "credit_note"
+        : typeName.includes("receipt") ? "receipt"
+        : typeName.includes("sales") || typeName.includes("invoice") ? "sales"
+        : null;
+
+      const amtRaw = firstTag(block, "AMOUNT")
+        || firstTag(block, "INVOICETOTAL")
+        || firstTag(block, "GROSSAMOUNT");
+      const amount = amtRaw ? Number(amtRaw.replace(/[^\d.-]/g, "")) : NaN;
+
+      const rawDate = firstTag(block, "DATE").trim();
+      // Tally dates are YYYYMMDD; convert to ISO.
+      const isoDate = /^\d{8}$/.test(rawDate)
+        ? `${rawDate.slice(0, 4)}-${rawDate.slice(4, 6)}-${rawDate.slice(6, 8)}`
+        : null;
+
+      // Receipt-specific: which sales voucher this receipt clears.
+      const againstVoucher =
+        firstTag(block, "BILLALLOCATIONS.LIST")
+        // Fallback: look at any BILLNAME field inside the block
+        || (block.match(/<BILLNAME>([\s\S]*?)<\/BILLNAME>/i)?.[1]?.trim() ?? "");
+
+      // Custom fields — narration, voucher class, etc. Bridge captures
+      // liberally; CRM decides what to surface.
+      const customFields: Record<string, string> = {};
+      const narration = firstTag(block, "NARRATION");
+      if (narration) customFields.narration = narration;
+      const voucherClass = firstTag(block, "CLASSNAME");
+      if (voucherClass) customFields.voucher_class = voucherClass;
+      const costCentre = firstTag(block, "COSTCENTRENAME");
+      if (costCentre) customFields.cost_centre = costCentre;
+
+      out.push({
+        voucher_master_id: masterId,
+        voucher_kind:      kind,
+        voucher_series:    firstTag(block, "VOUCHERTYPENAME") || null,
+        invoice_number:    firstTag(block, "VOUCHERNUMBER") || null,
+        party_name:        firstTag(block, "PARTYLEDGERNAME") || firstTag(block, "PARTYNAME") || null,
+        party_gstin:       firstTag(block, "PARTYGSTIN") || firstTag(block, "CONSIGNEEGSTIN") || null,
+        voucher_date:      isoDate,
+        voucher_amount:    Number.isFinite(amount) ? Math.abs(amount) : null,
+        irn:               firstTag(block, "IRN") || null,
+        against_voucher:   againstVoucher || null,
+        custom_fields:     customFields,
+      });
+    }
+
+    return out;
+  }
+
+  /**
+   * Lists all Sundry Debtor ledgers (customer parties) with their GSTIN.
+   * Used by SnapshotPoller for the party_master snapshot.
+   */
+  async listSundryDebtors(): Promise<Array<{ ledger_name: string; gstin: string | null; address: string | null }>> {
+    const xml = `<ENVELOPE>
+  <HEADER>
+    <VERSION>1</VERSION>
+    <TALLYREQUEST>Export</TALLYREQUEST>
+    <TYPE>Collection</TYPE>
+    <ID>List of Ledgers</ID>
+  </HEADER>
+  <BODY>
+    <DESC>
+      <STATICVARIABLES>
+        <SVEXPORTFORMAT>$$SysName:XML</SVEXPORTFORMAT>
+        <SVCURRENTCOMPANY>${escapeXml(this.targetCompany)}</SVCURRENTCOMPANY>
+      </STATICVARIABLES>
+      <TDL>
+        <TDLMESSAGE>
+          <COLLECTION NAME="List of Ledgers" ISMODIFY="No">
+            <TYPE>Ledger</TYPE>
+            <FILTER>SundryDebtorsOnly</FILTER>
+            <FETCH>NAME, PARTYGSTIN, MAILINGNAME, LEDSTATEADDRESS</FETCH>
+          </COLLECTION>
+          <SYSTEM TYPE="Formulae" NAME="SundryDebtorsOnly">$Parent = "Sundry Debtors"</SYSTEM>
+        </TDLMESSAGE>
+      </TDL>
+    </DESC>
+  </BODY>
+</ENVELOPE>`;
+    const res = await this.post(xml);
+    const out: Array<{ ledger_name: string; gstin: string | null; address: string | null }> = [];
+
+    for (const m of res.matchAll(/<LEDGER\b[^>]*?\bNAME="([^"]*)"[\s\S]*?<\/LEDGER>/gi)) {
+      const block = m[0];
+      const name = collapse(m[1]);
+      if (!name) continue;
+      out.push({
+        ledger_name: name,
+        gstin:       firstTag(block, "PARTYGSTIN") || null,
+        address:     firstTag(block, "LEDSTATEADDRESS") || null,
+      });
+    }
+    return out;
+  }
 }
 
 function round2(n: number): number {

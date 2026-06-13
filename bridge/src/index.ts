@@ -13,6 +13,7 @@ import { setLogDir, log } from "./logger";
 import { CrmClient, HeartbeatPayload } from "./crm-client";
 import { TallyClient } from "./tally-client";
 import { Poller } from "./poller";
+import { SnapshotPoller } from "./snapshot-poller";
 import { startHealthServer } from "./health-server";
 import { healthState } from "./health-state";
 import { VERSION } from "./version";
@@ -66,12 +67,22 @@ async function main(): Promise<void> {
   await sendHeartbeat();
   setInterval(() => { void sendHeartbeat(); }, config.heartbeat_interval_ms);
 
-  // 5. Polling loop
+  // 5. Polling loop (writer jobs — legacy bridge-writer flow)
   log.info("Starting polling loop…");
   // Fire immediately
   await poller.poll();
 
   setInterval(() => { void poller.poll(); }, config.poll_interval_ms);
+
+  // 6. Snapshot poller (read-only sync-pull, added in 1.4.0).
+  // Runs alongside the writer poller. Does NOT mutate Tally.
+  // Wrapped in try/catch so a failure here can't break the writer loop.
+  try {
+    const snapshotPoller = new SnapshotPoller({ crm, tally, config });
+    snapshotPoller.start();
+  } catch (err) {
+    log.warn(`Snapshot poller failed to start (writer poller unaffected): ${err instanceof Error ? err.message : String(err)}`);
+  }
 
   log.info("Bridge running. Status page: http://localhost:" + config.status_port);
 }

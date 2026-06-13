@@ -137,4 +137,36 @@ export class CrmClient {
       return { gstin_mismatch: false };
     }
   }
+
+  /**
+   * Posts a snapshot batch to the read-only sync-pull endpoint. Bridge 1.4.0+
+   * — additive, never mutates Tally. The CRM uses these snapshots for the
+   *   handoff_v2 inbox's Tally bridge verification badges and receipt
+   *   auto-complete (handoff_state → 'complete' when a matched receipt is
+   *   seen in Tally).
+   */
+  async postSyncPull(payload: {
+    sync_batch_id: string;
+    company_name: string;
+    vouchers: Array<{
+      voucher_master_id: string;
+      voucher_kind: "sales" | "receipt" | "credit_note";
+      voucher_series: string | null;
+      invoice_number: string | null;
+      party_name: string | null;
+      party_gstin: string | null;
+      voucher_date: string | null;
+      voucher_amount: number | null;
+      irn: string | null;
+      against_voucher: string | null;
+      custom_fields: Record<string, string>;
+    }>;
+    parties: Array<{ ledger_name: string; gstin: string | null; address: string | null }>;
+  }, detectedCompany: string): Promise<{ accepted: number; matched: number; unmatched: number; auto_completed: number }> {
+    return this.fetch<{ accepted: number; matched: number; unmatched: number; auto_completed: number }>(
+      "/api/tally/sync-pull",
+      { method: "POST", body: JSON.stringify(payload) },
+      { "x-tally-company": detectedCompany },
+    );
+  }
 }
