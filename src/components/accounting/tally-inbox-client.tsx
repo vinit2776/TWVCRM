@@ -131,6 +131,25 @@ export function TallyInboxClient() {
     return () => clearTimeout(handle);
   }, [searchInput]);
 
+  // Honor ?focus=<statement_id> from the URL — used by deep links from
+  // other surfaces (View in Tally Inbox button on contract / billing
+  // dialog). Scrolls the row into view + briefly highlights it; does NOT
+  // auto-expand the upload form (per design Decision #1).
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const focusId = new URLSearchParams(window.location.search).get("focus");
+    if (!focusId) return;
+    // Wait a tick for rows to render after the initial fetch
+    const handle = setTimeout(() => {
+      const el = document.querySelector<HTMLElement>(`[data-statement-id="${CSS.escape(focusId)}"]`);
+      if (!el) return;
+      el.scrollIntoView({ behavior: "smooth", block: "center" });
+      el.classList.add("ring-2", "ring-blue-400", "ring-offset-2", "transition-shadow");
+      setTimeout(() => el.classList.remove("ring-2", "ring-blue-400", "ring-offset-2"), 2400);
+    }, 400);
+    return () => clearTimeout(handle);
+  }, [data]);
+
   const handleSend = useCallback(async (statementId: string) => {
     setSendingId(statementId);
     setActionError(null);
@@ -418,7 +437,10 @@ function InboxRowItem({
   })();
 
   return (
-    <li className="hover:bg-muted/30 transition-colors">
+    <li
+      className="hover:bg-muted/30 transition-colors rounded"
+      data-statement-id={row.statement_id}
+    >
       <div className="p-3 md:p-4 grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 items-start">
         {/* ── Line 1 ── primary identity */}
         <div className="min-w-0 flex items-baseline gap-2 flex-wrap">
@@ -445,7 +467,7 @@ function InboxRowItem({
             </>
           )}
           <span className="font-mono">{row.statement_number ?? "(no number)"}</span>
-          <span> · {HANDOFF_STATE_LABELS[row.handoff_state]}</span>
+          <span> · {row.handoff_state ? HANDOFF_STATE_LABELS[row.handoff_state] : "Draft"}</span>
           {row.contract?.billing_mode === "gst_direct" && <span> · direct GST</span>}
         </div>
         <div className={`text-xs ${agingClass} text-right`}>

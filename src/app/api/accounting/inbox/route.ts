@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import {
   AGING_ESCALATE_HOURS,
   bucketFor,
+  HANDOFF_STATE_LABELS,
   INBOX_OPEN_STATES,
   isInboxRole,
   type HandoffState,
@@ -11,6 +12,7 @@ import {
   type InboxRow,
   type InboxSnapshot,
   type InboxUpload,
+  type TimelineEvent,
 } from "@/lib/tally-handoff";
 
 /**
@@ -48,10 +50,22 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Query params: tab=open|closed, q=<search text>
+  // Query params:
+  //   tab=open|closed (default open)
+  //   q=<search text>
+  //   id=<statement_id> — single-row mode; bypasses the open/closed filter and
+  //     returns just that one statement regardless of handoff_state. Used by
+  //     ViewStatementDialog / contract page / billing list when they want
+  //     lifecycle info for one specific row.
+  //   include=timeline — when set, the row carries a timeline_events[] array
+  //     synthesized from billing_payments, gst_invoice_uploads, audit_trail,
+  //     and billing_statements milestone columns. Only honored with ?id=.
   const url = new URL(req.url);
   const tab = url.searchParams.get("tab") === "closed" ? "closed" : "open";
   const q = (url.searchParams.get("q") ?? "").trim();
+  const singleId = (url.searchParams.get("id") ?? "").trim() || null;
+  const includeTimeline =
+    !!singleId && (url.searchParams.get("include") ?? "").split(",").includes("timeline");
 
   // Pull statements by tab. We select the columns the UI needs plus
   // contract → lead via the standard FK joins (same pattern as receivables).
@@ -60,6 +74,8 @@ export async function GET(req: NextRequest) {
     .select(`
       id, statement_number, period_start, period_end,
       total_amount, payment_status, handoff_state, updated_at,
+      created_at, proforma_sent_at, tally_delivered_at,
+      voided_at, void_reason,
       statement_type, fixed_amount, usage_amount,
       service_usage_amount, booking_usage_amount,
       subtotal, tax_percentage, tax_amount,
@@ -74,8 +90,16 @@ export async function GET(req: NextRequest) {
       )
     `);
 
-  if (tab === "closed") {
-    query = query.eq("handoff_state", "complete")
+  if (singleId) {
+    // Single-row mode: return exactly that statement regardless of state.
+    // Used by lifecycle-badge / quick-actions / timeline lookups from
+    // surfaces outside the inbox (contract page, billing dialog, etc.).
+    query = query.eq("id", singleId).limit(1);
+  } else if (tab === "closed") {
+    // Closed tab includes complete AND voided statements (voided rows are
+    // archived business; user wants them findable here with a red border).
+    query = query
+      .or("handoff_state.eq.complete,voided_at.not.is.null")
       .order("updated_at", { ascending: false })
       .limit(CLOSED_PAGE_SIZE);
   } else {
@@ -116,6 +140,11 @@ export async function GET(req: NextRequest) {
     hsn_sac_code: string | null;
     gst_invoice_number: string | null;
     tally_invoice_number: string | null;
+    created_at: string;
+    proforma_sent_at: string | null;
+    tally_delivered_at: string | null;
+    voided_at: string | null;
+    void_reason: string | null;
     contract: {
       id: string;
       contract_number: string;
@@ -166,7 +195,7 @@ export async function GET(req: NextRequest) {
 
   const noIds = statementIds.length === 0;
 
-  const [uploadsRes, snapshotsRes, lastSyncRes, paymentsRes] = await Promise.all([
+  const [uploadsRes, snapshotsRes, lastSyncRes, paymentsRes, auditRes, allUploadsRes] = await Promise.all([
     noIds ? Promise.resolve({ data: null }) : supabase
       .from("gst_invoice_uploads")
       .select("id, billing_statement_id, tally_invoice_number, tally_invoice_series, irn, invoice_amount, uploaded_at, name_check_status, autofill_source, superseded_by")
@@ -189,6 +218,19 @@ export async function GET(req: NextRequest) {
       .select("id, billing_statement_id, amount, payment_date, payment_mode, payment_reference, razorpay_payment_id")
       .in("billing_statement_id", statementIds)
       .order("payment_date", { ascending: false }),
+    // Only fetched in single-row mode with ?include=timeline.
+    !includeTimeline || noIds ? Promise.resolve({ data: null }) : supabase
+      .from("audit_trail")
+      .select("action, changes, performed_by, created_at")
+      .eq("entity_type", "billing_statement")
+      .eq("entity_id", statementIds[0])
+      .order("created_at", { ascending: true }),
+    // All uploads (including superseded) for the timeline.
+    !includeTimeline || noIds ? Promise.resolve({ data: null }) : supabase
+      .from("gst_invoice_uploads")
+      .select("id, tally_invoice_number, uploaded_at, uploaded_by, superseded_by")
+      .eq("billing_statement_id", statementIds[0])
+      .order("uploaded_at", { ascending: true }),
   ]);
 
   // Latest gst_invoice_upload per statement (most recent non-superseded).
@@ -270,6 +312,30 @@ export async function GET(req: NextRequest) {
     const customerHasGstin = !!s.contract?.lead?.gst_number;
     const payments = paymentsByStatement.get(s.id) ?? [];
     const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
+    const isVoided = !!s.voided_at;
+
+    // Timeline events (only when single-row mode + include=timeline).
+    // Synthesized from heterogeneous sources, sorted chronologically.
+    let timelineEvents: TimelineEvent[] | undefined;
+    if (includeTimeline && s.id === singleId) {
+      timelineEvents = buildTimelineEvents({
+        statement: s,
+        payments,
+        uploads: (allUploadsRes.data || []) as Array<{
+          id: string;
+          tally_invoice_number: string;
+          uploaded_at: string;
+          uploaded_by: string | null;
+          superseded_by: string | null;
+        }>,
+        auditEntries: (auditRes.data || []) as Array<{
+          action: string;
+          changes: Record<string, unknown> | null;
+          performed_by: string | null;
+          created_at: string;
+        }>,
+      });
+    }
 
     return {
       statement_id: s.id,
@@ -282,6 +348,10 @@ export async function GET(req: NextRequest) {
       bucket,
       aging_hours: agingHours,
       state_changed_at: stateChangedAt,
+      is_voided: isVoided,
+      voided_at: s.voided_at,
+      void_reason: s.void_reason,
+      ...(timelineEvents ? { timeline_events: timelineEvents } : {}),
       contract: s.contract
         ? {
             id: s.contract.id,
@@ -343,4 +413,134 @@ export async function GET(req: NextRequest) {
   };
 
   return NextResponse.json(response);
+}
+
+/**
+ * Synthesizes a chronological timeline of milestone events for one statement.
+ *
+ * Sources, in declared order (sort happens after collection):
+ *   - billing_statements.created_at        → statement_created
+ *   - billing_statements.proforma_sent_at  → pi_sent
+ *   - billing_payments rows                → payment_received (one per row)
+ *   - gst_invoice_uploads rows             → gst_uploaded (one per row)
+ *   - billing_statements.tally_delivered_at → gst_sent
+ *   - audit_trail rows with changes.handoff_state → state_changed
+ *   - billing_statements.voided_at         → voided
+ */
+function buildTimelineEvents(args: {
+  statement: {
+    id: string;
+    created_at: string;
+    proforma_sent_at: string | null;
+    tally_delivered_at: string | null;
+    voided_at: string | null;
+    void_reason: string | null;
+    statement_number: string | null;
+    total_amount: number;
+  };
+  payments: InboxPayment[];
+  uploads: Array<{
+    id: string;
+    tally_invoice_number: string;
+    uploaded_at: string;
+    uploaded_by: string | null;
+    superseded_by: string | null;
+  }>;
+  auditEntries: Array<{
+    action: string;
+    changes: Record<string, unknown> | null;
+    performed_by: string | null;
+    created_at: string;
+  }>;
+}): TimelineEvent[] {
+  const events: TimelineEvent[] = [];
+
+  events.push({
+    kind: "statement_created",
+    at: args.statement.created_at,
+    label: `Statement ${args.statement.statement_number ?? ""} created`.trim(),
+    details: { total_amount: args.statement.total_amount },
+  });
+
+  if (args.statement.proforma_sent_at) {
+    events.push({
+      kind: "pi_sent",
+      at: args.statement.proforma_sent_at,
+      label: "Proforma invoice sent to customer",
+      details: {},
+    });
+  }
+
+  for (const p of args.payments) {
+    const refSuffix = p.payment_reference ? ` · ${p.payment_reference}` : "";
+    events.push({
+      kind: "payment_received",
+      at: p.payment_date,
+      label: `Payment received: ₹${p.amount.toLocaleString("en-IN")} via ${p.payment_mode}${refSuffix}`,
+      details: {
+        amount: p.amount,
+        mode: p.payment_mode,
+        reference: p.payment_reference,
+        razorpay_payment_id: p.razorpay_payment_id,
+      },
+    });
+  }
+
+  for (const u of args.uploads) {
+    const supersededNote = u.superseded_by ? " (superseded)" : "";
+    events.push({
+      kind: "gst_uploaded",
+      at: u.uploaded_at,
+      label: `GST invoice uploaded: ${u.tally_invoice_number}${supersededNote}`,
+      details: {
+        upload_id: u.id,
+        invoice_number: u.tally_invoice_number,
+        superseded: !!u.superseded_by,
+        uploaded_by: u.uploaded_by,
+      },
+    });
+  }
+
+  if (args.statement.tally_delivered_at) {
+    events.push({
+      kind: "gst_sent",
+      at: args.statement.tally_delivered_at,
+      label: "GST invoice sent to customer",
+      details: {},
+    });
+  }
+
+  // State changes from audit_trail — only include rows that actually
+  // recorded a handoff_state transition. Skips noise like other field edits.
+  for (const a of args.auditEntries) {
+    const c = a.changes as { handoff_state?: { old: string | null; new: string }; trigger?: string } | null;
+    if (!c?.handoff_state) continue;
+    const fromLabel = c.handoff_state.old
+      ? (HANDOFF_STATE_LABELS[c.handoff_state.old as HandoffState] ?? c.handoff_state.old)
+      : "(initial)";
+    const toLabel = HANDOFF_STATE_LABELS[c.handoff_state.new as HandoffState] ?? c.handoff_state.new;
+    events.push({
+      kind: "state_changed",
+      at: a.created_at,
+      label: `State: ${fromLabel} → ${toLabel}`,
+      details: {
+        from: c.handoff_state.old,
+        to: c.handoff_state.new,
+        trigger: c.trigger,
+        performed_by: a.performed_by,
+      },
+    });
+  }
+
+  if (args.statement.voided_at) {
+    events.push({
+      kind: "voided",
+      at: args.statement.voided_at,
+      label: `Statement voided${args.statement.void_reason ? ` — ${args.statement.void_reason}` : ""}`,
+      details: { void_reason: args.statement.void_reason },
+    });
+  }
+
+  events.sort((a, b) => Date.parse(a.at) - Date.parse(b.at));
+  return events;
 }

@@ -149,6 +149,22 @@ export interface InboxSnapshot {
   last_synced_at: string;
 }
 
+export type TimelineEventKind =
+  | "statement_created"
+  | "pi_sent"
+  | "payment_received"
+  | "gst_uploaded"
+  | "gst_sent"
+  | "state_changed"
+  | "voided";
+
+export interface TimelineEvent {
+  kind: TimelineEventKind;
+  at: string; // ISO timestamp
+  label: string; // human-readable one-line summary
+  details: Record<string, unknown>; // structured context (amount, mode, etc.)
+}
+
 export interface InboxRow {
   statement_id: string;
   statement_number: string | null;
@@ -156,15 +172,20 @@ export interface InboxRow {
   period_start: string | null;
   period_end: string | null;
   payment_status: string;
-  handoff_state: HandoffState;
+  handoff_state: HandoffState | null;
   bucket: HandoffBucket;
   aging_hours: number;
   state_changed_at: string;
+  is_voided: boolean;
+  voided_at: string | null;
+  void_reason: string | null;
   contract: InboxContract | null;
   latest_upload: InboxUpload | null;
   latest_snapshot: InboxSnapshot | null;
   has_discrepancy: boolean;
   discrepancy_reason: string | null;
+  /** Present only when the request specified `?include=timeline`. */
+  timeline_events?: TimelineEvent[];
 
   // Detail fields (PR #2-followup): help accounts issue the GST invoice in Tally
   // without having to leave the inbox.

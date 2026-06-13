@@ -95,12 +95,32 @@ export async function setHandoffState(
     return;
   }
 
-  // Lightweight server log. Deeper audit (audit_trail row with performer)
-  // lives in PR #2d when accounts actions drive the transitions; system-
-  // triggered transitions are tracked via billing_statements.updated_at.
+  // Lightweight server log alongside the audit entry below.
   console.info(
     `[tally-handoff] statement=${statementId} state ${previousState ?? "(null)"} → ${newState} trigger=${trigger}`,
   );
+
+  // Audit log — drives the StatementTimeline component (PR A of lifecycle
+  // visibility). performed_by is null for system-triggered transitions
+  // (webhook, cron, bridge sync); the trigger string identifies which
+  // pathway fired the change.
+  await supabase.from("audit_trail").insert({
+    entity_type: "billing_statement",
+    entity_id: statementId,
+    action: "update",
+    performed_by: null,
+    changes: {
+      handoff_state: { old: previousState, new: newState },
+      trigger,
+    },
+  }).then(({ error: auditErr }) => {
+    if (auditErr) {
+      console.error(
+        `[tally-handoff] audit_trail insert failed for statement=${statementId}:`,
+        auditErr.message,
+      );
+    }
+  });
 
   // Fire-and-forget per-event intimation. Errors are logged but never bubble
   // up — a flaky SMTP server should not break payment capture or invoice
