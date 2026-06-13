@@ -1,14 +1,23 @@
 # Tally Bridge — Operational Reference
 
-**Last updated:** 2026-06-12  
-**Current sync state:** LIVE (`tally_sync_enabled = true`)  
-**Latest bridge version:** v1.3.12 (comprehensive bug-fix release — see changelog below)  
+**Last updated:** 2026-06-14
+**Current sync state:** LIVE (`tally_sync_enabled = true`) + Handoff v2 LIVE (`tally_handoff_v2_enabled = true`)
+**Latest bridge version:** v1.4.0 (additive read-only sync-pull poster — see v1.4.0 changelog below)
 **Bridge agent token:** `TALLY_AGENT_TOKEN = twv-tally-bridge-2026`
 
-> **Bridge update policy:** the Tally server is at a remote location — every bridge
-> update needs an on-site visit. Batch ALL bridge fixes into one release and review
-> the whole bridge codebase before shipping. Prefer CRM-side fixes (free Vercel
-> deploys) over bridge-side fixes wherever possible.
+> **Bridge update policy:** the bridge has remote self-update capability via
+> Admin → Tally Sync → Update Bridge. Publish a new zip; the bridge picks it up on
+> the next heartbeat (~60s) and self-updates between poll cycles. The old "batch
+> every fix into one on-site release" policy now applies only to changes risky
+> enough to break the heartbeat (and thus lock out the remote-update mechanism).
+> Additive read-only changes like v1.4.0 ship safely via remote update.
+
+> **Companion docs:** the Handoff v2 redesign that replaces the writer-first GST
+> issuance flow with a human-mediated `/accounting/inbox` workflow lives in
+> [`tally-handoff-redesign.md`](./tally-handoff-redesign.md). The bridge v1.4.0
+> read-only sync-pull is the bridge-side half of that redesign. The writer-side
+> bridge code (sales_voucher / receipt_voucher / credit_note / party_master) is
+> still live and byte-identical to v1.3.12; v1.4.0 only ADDS the snapshot poller.
 
 This document covers: bridge capabilities, correct flows, known issues, and manual correction procedures.
 
@@ -18,13 +27,14 @@ This document covers: bridge capabilities, correct flows, known issues, and manu
 
 | File | Last updated | Purpose |
 |---|---|---|
-| **`tally.md`** ← you are here | **2026-06-11** | Operational reference — current state, known issues, manual corrections |
+| **`tally.md`** ← you are here | **2026-06-14** | Operational reference — current state, known issues, manual corrections |
+| `tally-handoff-redesign.md` | 2026-06-12 | **Handoff v2 design** — human-mediated `/accounting/inbox` flow, read-only bridge sync, v2 state model. The current direction of travel. |
 | `tally-integration-status.md` | 2026-06-04 | Build status hand-off — what's built, what's verified, what PRs exist |
 | `tally-go-live-runbook.md` | 2026-06-04 | Step-by-step go-live runbook — follow this when flipping the switch |
-| `tally-billing-redesign.md` | 2026-06-03 | Billing UI redesign design doc (Tally-era billing page) |
+| `tally-billing-redesign.md` | 2026-06-03 | **SUPERSEDED** by `tally-handoff-redesign.md` (kept for history only) |
 | `tally-integration-design.md` | 2026-06-02 | Original integration design and architecture rationale |
 
-**Reading order:** start with `tally-integration-design.md` for background, then `tally-integration-status.md` for where things stand, then `tally-go-live-runbook.md` when ready to go live. This file is the day-to-day reference once live.
+**Reading order:** start with `tally-integration-design.md` for original rationale, then `tally-handoff-redesign.md` for the current v2 direction, then this file for day-to-day operations. `tally-billing-redesign.md` is historical only.
 
 ---
 
@@ -38,6 +48,42 @@ This document covers: bridge capabilities, correct flows, known issues, and manu
 | Receipt voucher (payment → Tally) | ✅ Verified | v1.3.1 | Verified vs real 80-receipt Tally export |
 | Credit note (cancel/void reversal) | ✅ Verified | v1.3.1 | Verified vs real `CN/A/26-27/1` |
 | Party master (auto-create ledger) | ✅ Live | v1.3.11 | CRM enqueues `party_master` before sales_voucher; bridge handles the job type + inline auto-create on sales AND receipt vouchers when `tally_auto_create_party_ledger=true` |
+| Snapshot pull (read-only verification) | ✅ Live | v1.4.0 | Snapshot poller reads voucher list + Sundry Debtor party master and POSTs to `/api/tally/sync-pull` every 30 min during business hours. Drives the Handoff v2 inbox's `Tally: matched / drift / not synced` pills and receipt auto-complete. **Additive — does not mutate Tally.** |
+
+### v1.4.0 changelog (2026-06-14) — additive read-only sync-pull poster
+
+Path B of the Handoff v2 redesign (see `tally-handoff-redesign.md`). Pure additive
+change: writer paths are byte-identical to v1.3.12. Adds a new `SnapshotPoller`
+running alongside the writer poller.
+
+1. **`listVouchersForSnapshot(fromDate, toDate)`** — new TallyClient method that
+   reads Day Book vouchers and parses each VOUCHER block into a snapshot row.
+   Classifies kind by VOUCHERTYPENAME (sales / receipt / credit_note). Captures
+   narration, voucher class, cost centre as `custom_fields`.
+2. **`listSundryDebtors()`** — reads all Sundry Debtor ledgers with GSTIN +
+   mailing address. Non-fatal on older Tally versions without TDL support.
+3. **`crmClient.postSyncPull(payload, detectedCompany)`** — POSTs the batch to
+   `/api/tally/sync-pull` with the `x-tally-company` header for the company guard.
+4. **`SnapshotPoller`** — runs every 30 min (configurable) during 09:00–20:00 IST
+   business hours. Outside hours: sleeps. Re-entrant: skips a tick if the prior
+   one is still in flight. Date window: 2 months (catches backdated receipts +
+   FY boundaries).
+5. **Isolation** — the snapshot poller is started in a try/catch in `index.ts`;
+   if it ever crashes during start, the writer poller, heartbeat, and IRN-back
+   polling are explicitly unaffected.
+6. **Release artifact:** `twv-tally-bridge-v1.4.0.zip` (1.2 MB, self-contained
+   with `node_modules`). SHA-256 captured in the bridge PR.
+
+**Deploy path (Monday remote publish, no on-site visit):**
+- Admin → Tally Sync → Update Bridge → upload zip with `version=1.4.0`
+- Bridge heartbeat picks up the new version → self-updates between polls
+- Watch the bridge log for `[snapshot] starting — interval 30min, business hours 9-20 IST`
+- After first cycle (≤30 min): inbox `Tally` pills flip from gray `Tally: not synced`
+  to green `Tally: matched` for statements with matching vouchers in Tally
+
+**Rollback path:** Admin → Tally Sync → Update Bridge → Revert → publishes the
+prior v1.3.12 zip. Bridge picks it up on next heartbeat. Writer side keeps working
+either way; only the new inbox verification badges go silent.
 
 ### v1.3.12 changelog (2026-06-12) — comprehensive fix release
 
