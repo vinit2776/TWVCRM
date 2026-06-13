@@ -205,7 +205,11 @@ export async function POST(
     })
     .eq("id", statement.id);
 
-  const nextState = isReceipt ? "gst_sent" : "gst_sent_awaiting_payment";
+  // PI receipt flow → the customer already paid, the GST invoice is just for
+  // their records, accounts has applied the receipt to the new voucher.
+  // There's nothing left to do, so close the row immediately.
+  // Direct GST flow → still awaiting customer payment + receipt entry.
+  const nextState = isReceipt ? "complete" : "gst_sent_awaiting_payment";
   await setHandoffState(supabase, statement.id, nextState, "inbox_save_and_send");
 
   return NextResponse.json({

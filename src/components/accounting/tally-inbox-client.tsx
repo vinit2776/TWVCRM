@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown } from "lucide-react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import {
   AGING_ESCALATE_HOURS,
@@ -25,13 +25,14 @@ import {
 } from "@/lib/tally-handoff";
 import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
 
-type FilterTab = "all" | "gst_to_issue" | "payment_to_record" | "discrepancy";
+type FilterTab = "all" | "gst_to_issue" | "payment_to_record" | "discrepancy" | "closed";
 
 const FILTER_TABS: { key: FilterTab; label: string }[] = [
   { key: "all", label: "All open" },
   { key: "gst_to_issue", label: "GST to issue" },
   { key: "payment_to_record", label: "Payments" },
   { key: "discrepancy", label: "Discrepancies" },
+  { key: "closed", label: "Closed" },
 ];
 
 function partyDisplay(row: InboxRow): string {
@@ -84,15 +85,22 @@ export function TallyInboxClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<FilterTab>("all");
+  const [searchInput, setSearchInput] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
+  const [closingId, setClosingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
-  const load = useCallback(async () => {
+  const load = useCallback(async (opts?: { tab?: FilterTab; q?: string }) => {
     setLoading(true);
     setError(null);
     try {
-      const res = await fetch("/api/accounting/inbox", { cache: "no-store" });
+      const apiTab = (opts?.tab ?? tab) === "closed" ? "closed" : "open";
+      const params = new URLSearchParams({ tab: apiTab });
+      const qTerm = opts?.q ?? searchTerm;
+      if (qTerm) params.set("q", qTerm);
+      const res = await fetch(`/api/accounting/inbox?${params}`, { cache: "no-store" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${res.status}`);
@@ -104,11 +112,24 @@ export function TallyInboxClient() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [tab, searchTerm]);
 
   useEffect(() => {
     void load();
-  }, [load]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // Refetch when tab or search term changes
+  useEffect(() => {
+    void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tab, searchTerm]);
+
+  // Debounce typed search input → searchTerm
+  useEffect(() => {
+    const handle = setTimeout(() => setSearchTerm(searchInput), 300);
+    return () => clearTimeout(handle);
+  }, [searchInput]);
 
   const handleSend = useCallback(async (statementId: string) => {
     setSendingId(statementId);
@@ -132,9 +153,26 @@ export function TallyInboxClient() {
     await load();
   }, [load]);
 
+  const handleClose = useCallback(async (statementId: string) => {
+    setClosingId(statementId);
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/inbox-complete`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      await load();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Close failed");
+    } finally {
+      setClosingId(null);
+    }
+  }, [load]);
+
   const visibleRows = useMemo(() => {
     if (!data) return [];
-    if (tab === "all") return data.rows;
+    if (tab === "all" || tab === "closed") return data.rows;
     if (tab === "discrepancy") return data.rows.filter((r) => r.has_discrepancy);
     return data.rows.filter((r) => r.bucket === tab && !r.has_discrepancy);
   }, [data, tab]);
@@ -166,30 +204,64 @@ export function TallyInboxClient() {
         <StatCard label={`Aging > ${AGING_ESCALATE_HOURS}h`} value={data?.stats.aging_over_48h ?? 0} icon={Clock} variant="warning" />
       </div>
 
-      {/* Filter tabs */}
-      <div className="border-b flex gap-1">
+      {/* Filter tabs + search */}
+      <div className="border-b flex items-center gap-1 flex-wrap">
         {FILTER_TABS.map((t) => {
+          // Counts are tab-aware: open tabs reflect the OPEN summary; the
+          // Closed tab can't sensibly show a global count, so it shows the
+          // page-size result only when we're on it.
           const count =
             t.key === "all" ? data?.stats.total_open
             : t.key === "gst_to_issue" ? data?.stats.gst_to_issue
             : t.key === "payment_to_record" ? data?.stats.payments_to_record
-            : data?.stats.discrepancies;
+            : t.key === "discrepancy" ? data?.stats.discrepancies
+            : t.key === "closed" && tab === "closed" ? data?.rows.length
+            : undefined;
           const active = tab === t.key;
           return (
             <button
               key={t.key}
               type="button"
-              onClick={() => setTab(t.key)}
+              onClick={() => {
+                setTab(t.key);
+                // Clear search when switching tabs so context is preserved
+                // (open-tab vs closed-tab search use the same input).
+              }}
               className={`px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
                 active
                   ? "border-foreground font-medium text-foreground"
                   : "border-transparent text-muted-foreground hover:text-foreground"
               }`}
             >
-              {t.label} <span className="text-xs text-muted-foreground">({count ?? 0})</span>
+              {t.label}
+              {count !== undefined && (
+                <span className="text-xs text-muted-foreground ml-1">({count})</span>
+              )}
             </button>
           );
         })}
+
+        {/* Search — visible on all tabs but most useful on Closed */}
+        <div className="ml-auto relative">
+          <Search className="h-3.5 w-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-muted-foreground" aria-hidden />
+          <input
+            type="text"
+            value={searchInput}
+            onChange={(e) => setSearchInput(e.target.value)}
+            placeholder="Search customer, invoice #, GSTIN…"
+            className="text-xs rounded-md border pl-7 pr-7 py-1.5 w-64 focus:outline-none focus:ring-1 focus:ring-foreground/20"
+          />
+          {searchInput && (
+            <button
+              type="button"
+              onClick={() => setSearchInput("")}
+              className="absolute right-2 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+              aria-label="Clear search"
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
       </div>
 
       {/* Worklist */}
@@ -219,8 +291,10 @@ export function TallyInboxClient() {
                 row={row}
                 expanded={expandedId === row.statement_id}
                 sending={sendingId === row.statement_id}
+                closing={closingId === row.statement_id}
                 onToggle={() => setExpandedId(expandedId === row.statement_id ? null : row.statement_id)}
                 onSend={() => handleSend(row.statement_id)}
+                onClose={() => handleClose(row.statement_id)}
                 onUploaded={handleUploaded}
                 onCancelUpload={() => setExpandedId(null)}
               />
@@ -281,16 +355,20 @@ function InboxRowItem({
   row,
   expanded,
   sending,
+  closing,
   onToggle,
   onSend,
+  onClose,
   onUploaded,
   onCancelUpload,
 }: {
   row: InboxRow;
   expanded: boolean;
   sending: boolean;
+  closing: boolean;
   onToggle: () => void;
   onSend: () => void;
+  onClose: () => void;
   onUploaded: () => void;
   onCancelUpload: () => void;
 }) {
@@ -301,6 +379,12 @@ function InboxRowItem({
   const canUpload =
     row.handoff_state === "pi_paid_awaiting_gst" || row.handoff_state === "direct_gst_requested";
   const canSend = row.handoff_state === "ready_to_send" && !row.has_discrepancy;
+  const canMarkDone =
+    row.handoff_state === "gst_sent"
+    || row.handoff_state === "gst_sent_awaiting_payment"
+    || row.handoff_state === "paid_awaiting_receipt_record";
+  const hasUpload = row.latest_upload !== null;
+  const isClosed = row.handoff_state === "complete";
 
   // Tally bridge match status — derived from latest_snapshot + has_discrepancy.
   // Bridge v2 isn't deployed yet, so most rows will be "not synced".
@@ -434,7 +518,19 @@ function InboxRowItem({
             <FileDown className="h-3 w-3" />
             View PI
           </a>
-          {canUpload && (
+          {hasUpload && (
+            <a
+              href={`/api/billing-statements/${row.statement_id}/gst-invoice-pdf`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+              title="Open the GST tax invoice PDF uploaded by accounts"
+            >
+              <FileCheck className="h-3 w-3" />
+              View GST
+            </a>
+          )}
+          {canUpload && !isClosed && (
             <button
               type="button"
               onClick={onToggle}
@@ -457,6 +553,18 @@ function InboxRowItem({
             >
               {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
               {sending ? "Sending…" : "Save & send"}
+            </button>
+          )}
+          {canMarkDone && (
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={closing}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted disabled:opacity-50"
+              title="Mark this row as done so it drops off the open inbox"
+            >
+              {closing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+              {closing ? "Closing…" : "Mark as done"}
             </button>
           )}
         </div>

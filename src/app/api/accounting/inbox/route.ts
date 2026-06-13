@@ -28,7 +28,9 @@ import {
  */
 export const dynamic = "force-dynamic";
 
-export async function GET(_req: NextRequest) {
+const CLOSED_PAGE_SIZE = 200; // cap closed-archive queries; UI paginates as needed
+
+export async function GET(req: NextRequest) {
   const supabase = await createClient();
 
   const { data: { user } } = await supabase.auth.getUser();
@@ -46,9 +48,14 @@ export async function GET(_req: NextRequest) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  // Pull open inbox items. We select the columns the UI needs plus
+  // Query params: tab=open|closed, q=<search text>
+  const url = new URL(req.url);
+  const tab = url.searchParams.get("tab") === "closed" ? "closed" : "open";
+  const q = (url.searchParams.get("q") ?? "").trim();
+
+  // Pull statements by tab. We select the columns the UI needs plus
   // contract → lead via the standard FK joins (same pattern as receivables).
-  const { data: statements, error } = await supabase
+  let query = supabase
     .from("billing_statements")
     .select(`
       id, statement_number, period_start, period_end,
@@ -58,15 +65,25 @@ export async function GET(_req: NextRequest) {
       subtotal, tax_percentage, tax_amount,
       cgst_amount, sgst_amount, igst_amount,
       is_interstate, place_of_supply, hsn_sac_code,
+      gst_invoice_number, tally_invoice_number,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, title, billing_mode,
         lead:leads!contracts_lead_id_fkey(
           id, first_name, last_name, company, email, phone, gst_number
         )
       )
-    `)
-    .in("handoff_state", INBOX_OPEN_STATES as readonly string[])
-    .order("updated_at", { ascending: true });
+    `);
+
+  if (tab === "closed") {
+    query = query.eq("handoff_state", "complete")
+      .order("updated_at", { ascending: false })
+      .limit(CLOSED_PAGE_SIZE);
+  } else {
+    query = query.in("handoff_state", INBOX_OPEN_STATES as readonly string[])
+      .order("updated_at", { ascending: true });
+  }
+
+  const { data: statements, error } = await query;
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
@@ -97,6 +114,8 @@ export async function GET(_req: NextRequest) {
     is_interstate: boolean | null;
     place_of_supply: string | null;
     hsn_sac_code: string | null;
+    gst_invoice_number: string | null;
+    tally_invoice_number: string | null;
     contract: {
       id: string;
       contract_number: string;
@@ -114,7 +133,30 @@ export async function GET(_req: NextRequest) {
     } | null;
   }>;
 
-  const statementIds = statementList.map((s) => s.id);
+  // JS post-filter for search. The result set is already capped (closed=200,
+  // open=unbounded but realistically small). Doing this in JS keeps the
+  // search flexible across joined fields (customer name, GSTIN) without
+  // fighting PostgREST's nested-OR syntax.
+  const filtered = q
+    ? statementList.filter((s) => {
+        const lc = q.toLowerCase();
+        const haystack: string[] = [
+          s.statement_number ?? "",
+          s.gst_invoice_number ?? "",
+          s.tally_invoice_number ?? "",
+          s.contract?.contract_number ?? "",
+          s.contract?.title ?? "",
+          s.contract?.lead?.gst_number ?? "",
+          s.contract?.lead?.company ?? "",
+          s.contract?.lead?.first_name ?? "",
+          s.contract?.lead?.last_name ?? "",
+          s.contract?.lead?.email ?? "",
+        ];
+        return haystack.some((h) => h.toLowerCase().includes(lc));
+      })
+    : statementList;
+
+  const statementIds = filtered.map((s) => s.id);
 
   // PERF: the four side queries below used to await sequentially, adding
   // 4× the slowest single round-trip to the API response time. They have
@@ -203,7 +245,7 @@ export async function GET(_req: NextRequest) {
   }
 
   const now = Date.now();
-  const rows: InboxRow[] = statementList.map((s) => {
+  const rows: InboxRow[] = filtered.map((s) => {
     const upload = uploadByStatement.get(s.id) ?? null;
     const snapshot = snapshotByStatement.get(s.id) ?? null;
 
