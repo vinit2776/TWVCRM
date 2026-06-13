@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { toast } from "sonner";
-import { Zap, Save } from "lucide-react";
+import { Zap, Save, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
@@ -16,18 +16,25 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+
 interface Vendor { id: string; name: string }
+
+interface Allocation {
+  utility_allocated: number;
+  generator_allocated: number;
+  contract_count: number;
+}
 
 interface Props {
   locationId: string;
-  /** admin or manager only — others see read-only view */
   canEdit: boolean;
 }
 
 const DEFAULTS = {
   enabled: false,
-  reimbursement_enabled: true,
+  service_number: null as string | null,
   landlord_vendor_id: null as string | null,
+  landlord_utility_rate: 0,
   landlord_utility_pct: 90,
   landlord_generator_pct: 10,
   landlord_generator_rate: 30,
@@ -36,17 +43,13 @@ const DEFAULTS = {
   landlord_gst_rate: 18 as number | null,
   tds_section: null as string | null,
   tds_rate: null as number | null,
-  customer_utility_pct: 80,
-  customer_generator_pct: 20,
-  markup_type: "per_unit" as "per_unit" | "percent",
-  markup_value: 0,
-  customer_generator_rate: 30,
 };
 
 export function ElectricityConfigTab({ locationId, canEdit }: Props) {
   const [config, setConfig] = useState<Record<string, unknown> | null>(null);
   const [form, setForm] = useState(DEFAULTS);
   const [vendors, setVendors] = useState<Vendor[]>([]);
+  const [allocation, setAllocation] = useState<Allocation | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -58,12 +61,14 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
     ]);
     if (cfgRes.ok) {
       const json = await cfgRes.json();
+      setAllocation(json.allocation ?? null);
       if (json.data) {
         setConfig(json.data);
         setForm({
           enabled: json.data.enabled,
-          reimbursement_enabled: json.data.reimbursement_enabled,
+          service_number: json.data.service_number ?? null,
           landlord_vendor_id: json.data.landlord_vendor_id,
+          landlord_utility_rate: json.data.landlord_utility_rate ?? 0,
           landlord_utility_pct: json.data.landlord_utility_pct,
           landlord_generator_pct: json.data.landlord_generator_pct,
           landlord_generator_rate: json.data.landlord_generator_rate,
@@ -72,11 +77,6 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
           landlord_gst_rate: json.data.landlord_gst_rate,
           tds_section: json.data.tds_section,
           tds_rate: json.data.tds_rate,
-          customer_utility_pct: json.data.customer_utility_pct,
-          customer_generator_pct: json.data.customer_generator_pct,
-          markup_type: json.data.markup_type,
-          markup_value: json.data.markup_value,
-          customer_generator_rate: json.data.customer_generator_rate,
         });
       }
     }
@@ -89,11 +89,8 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
 
   useEffect(() => { fetchConfig(); }, [fetchConfig]);
 
-  // Keep split percentages in sync: changing utility auto-updates generator
   const setLandlordUtility = (v: number) =>
     setForm((f) => ({ ...f, landlord_utility_pct: v, landlord_generator_pct: Math.max(0, 100 - v) }));
-  const setCustomerUtility = (v: number) =>
-    setForm((f) => ({ ...f, customer_utility_pct: v, customer_generator_pct: Math.max(0, 100 - v) }));
 
   const handleSave = async () => {
     setSaving(true);
@@ -142,7 +139,7 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
             <div>
               <p className="text-sm font-medium">Enable EB billing</p>
               <p className="text-xs text-muted-foreground">
-                Activates landlord bill capture and customer re-billing for this location
+                Activates landlord bill capture and per-contract customer re-billing
               </p>
             </div>
             <Switch
@@ -151,31 +148,72 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
               disabled={readOnly}
             />
           </div>
-          <Separator />
-          <div className="flex items-center justify-between">
-            <div>
-              <p className="text-sm font-medium">Reimbursement enabled</p>
-              <p className="text-xs text-muted-foreground">
-                On: customer invoice generated. Off: vendor bill only (no customer statement).
-              </p>
-            </div>
-            <Switch
-              checked={form.reimbursement_enabled}
-              onCheckedChange={(v) => setForm((f) => ({ ...f, reimbursement_enabled: v }))}
-              disabled={readOnly}
-            />
-          </div>
         </CardContent>
       </Card>
 
-      {/* Landlord side */}
+      {/* Allocation summary (read-only) */}
+      {allocation && allocation.contract_count > 0 && (
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Allocation Summary</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-2">
+            <p className="text-xs text-muted-foreground">
+              Across {allocation.contract_count} active contract{allocation.contract_count !== 1 ? "s" : ""} mapped to this location.
+            </p>
+            <div className="grid grid-cols-2 gap-4 text-sm">
+              <div>
+                <p className="font-medium">Grid (Utility)</p>
+                <p className="text-muted-foreground">{allocation.utility_allocated.toFixed(1)}% allocated</p>
+                {allocation.utility_allocated > 100 && (
+                  <p className="text-xs text-destructive flex items-center gap-1">
+                    <AlertTriangle className="h-3 w-3" /> Over-allocated
+                  </p>
+                )}
+                {allocation.utility_allocated < 100 && (
+                  <p className="text-xs text-amber-600">
+                    {(100 - allocation.utility_allocated).toFixed(1)}% unallocated (TWV absorbs)
+                  </p>
+                )}
+              </div>
+              <div>
+                <p className="font-medium">DG (Generator)</p>
+                <p className="text-muted-foreground">{allocation.generator_allocated.toFixed(1)}% allocated</p>
+                {allocation.generator_allocated > 100 && (
+                  <p className="text-xs text-destructive flex items-center gap-1">
+                    <AlertTriangle className="h-3 w-3" /> Over-allocated
+                  </p>
+                )}
+                {allocation.generator_allocated < 100 && (
+                  <p className="text-xs text-amber-600">
+                    {(100 - allocation.generator_allocated).toFixed(1)}% unallocated (TWV absorbs)
+                  </p>
+                )}
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Meter */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Landlord / Payable Side</CardTitle>
+          <CardTitle className="text-base">Meter</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            {/* Landlord vendor */}
+            <div className="space-y-1 md:col-span-2">
+              <Label>Service Number</Label>
+              <Input
+                placeholder="e.g. MSEB-MH04-1234567890"
+                value={form.service_number ?? ""}
+                onChange={(e) => setForm((f) => ({ ...f, service_number: e.target.value || null }))}
+                disabled={readOnly}
+              />
+              <p className="text-xs text-muted-foreground">
+                Utility meter account number — used for audit trail and future meter readings
+              </p>
+            </div>
             <div className="space-y-1 md:col-span-2">
               <Label>Landlord Vendor</Label>
               <Select
@@ -194,19 +232,61 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
                 </SelectContent>
               </Select>
             </div>
-
-            {/* Landlord splits */}
             <div className="space-y-1">
-              <Label>Utility split % (landlord)</Label>
+              <Label>Bill due day of month</Label>
+              <Input
+                type="number" min={1} max={28}
+                value={form.bill_due_day_of_month}
+                onChange={(e) => setForm((f) => ({ ...f, bill_due_day_of_month: parseInt(e.target.value) || 15 }))}
+                disabled={readOnly}
+              />
+              <p className="text-xs text-muted-foreground">Nag fires from this day in M+1 if no bill captured</p>
+            </div>
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Landlord tariff */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="text-base">Landlord Tariff</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          <p className="text-xs text-muted-foreground">
+            Rates the landlord charges TWV. These are shown as reference on the bill entry form.
+            Customer rates are set per contract.
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+            <div className="space-y-1">
+              <Label>Grid / Utility rate (₹/unit)</Label>
+              <Input
+                type="number" min={0} step={0.01}
+                value={form.landlord_utility_rate}
+                onChange={(e) => setForm((f) => ({ ...f, landlord_utility_rate: parseFloat(e.target.value) || 0 }))}
+                disabled={readOnly}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>DG / Generator rate (₹/unit)</Label>
+              <Input
+                type="number" min={0} step={0.01}
+                value={form.landlord_generator_rate}
+                onChange={(e) => setForm((f) => ({ ...f, landlord_generator_rate: parseFloat(e.target.value) || 0 }))}
+                disabled={readOnly}
+              />
+            </div>
+            <div className="space-y-1">
+              <Label>Utility split % (landlord bill)</Label>
               <Input
                 type="number" min={0} max={100} step={0.01}
                 value={form.landlord_utility_pct}
                 onChange={(e) => setLandlordUtility(parseFloat(e.target.value) || 0)}
                 disabled={readOnly}
               />
+              <p className="text-xs text-muted-foreground">% of bill amount that is grid units</p>
             </div>
             <div className="space-y-1">
-              <Label>Generator split % (landlord)</Label>
+              <Label>Generator split % (landlord bill)</Label>
               <Input
                 type="number" min={0} max={100} step={0.01}
                 value={form.landlord_generator_pct}
@@ -216,28 +296,6 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
               {Math.abs(form.landlord_utility_pct + form.landlord_generator_pct - 100) > 0.01 && (
                 <p className="text-xs text-destructive">Must sum to 100%</p>
               )}
-            </div>
-
-            <div className="space-y-1">
-              <Label>Generator rate (₹/unit)</Label>
-              <Input
-                type="number" min={0} step={0.01}
-                value={form.landlord_generator_rate}
-                onChange={(e) => setForm((f) => ({ ...f, landlord_generator_rate: parseFloat(e.target.value) || 0 }))}
-                disabled={readOnly}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label>Bill due day of month</Label>
-              <Input
-                type="number" min={1} max={28}
-                value={form.bill_due_day_of_month}
-                onChange={(e) => setForm((f) => ({ ...f, bill_due_day_of_month: parseInt(e.target.value) || 15 }))}
-                disabled={readOnly}
-              />
-              <p className="text-xs text-muted-foreground">
-                Nag fires from this day in M+1 if no bill captured
-              </p>
             </div>
           </div>
 
@@ -254,7 +312,7 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
             </div>
             {form.landlord_gst_applicable && (
               <div className="space-y-1">
-                <Label>Landlord GST rate %</Label>
+                <Label>GST rate %</Label>
                 <Input
                   type="number" min={0} max={28} step={0.01}
                   value={form.landlord_gst_rate ?? 18}
@@ -280,78 +338,6 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
                 onChange={(e) => setForm((f) => ({ ...f, tds_rate: parseFloat(e.target.value) || null }))}
                 disabled={readOnly}
               />
-            </div>
-          </div>
-        </CardContent>
-      </Card>
-
-      {/* Customer-side defaults */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Customer / Receivable Side — Defaults</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-xs text-muted-foreground">
-            These are defaults. Each contract can override them in its electricity settings.
-          </p>
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <Label>Utility split % (customer)</Label>
-              <Input
-                type="number" min={0} max={100} step={0.01}
-                value={form.customer_utility_pct}
-                onChange={(e) => setCustomerUtility(parseFloat(e.target.value) || 0)}
-                disabled={readOnly}
-              />
-            </div>
-            <div className="space-y-1">
-              <Label>Generator split % (customer)</Label>
-              <Input
-                type="number" min={0} max={100} step={0.01}
-                value={form.customer_generator_pct}
-                onChange={(e) => setForm((f) => ({ ...f, customer_generator_pct: parseFloat(e.target.value) || 0 }))}
-                disabled={readOnly}
-              />
-              {Math.abs(form.customer_utility_pct + form.customer_generator_pct - 100) > 0.01 && (
-                <p className="text-xs text-destructive">Must sum to 100%</p>
-              )}
-            </div>
-
-            <div className="space-y-1">
-              <Label>Markup type</Label>
-              <Select
-                value={form.markup_type}
-                onValueChange={(v) => setForm((f) => ({ ...f, markup_type: v as "per_unit" | "percent" }))}
-                disabled={readOnly}
-              >
-                <SelectTrigger>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="per_unit">₹ per unit (added to utility rate)</SelectItem>
-                  <SelectItem value="percent">% on landlord utility rate</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            <div className="space-y-1">
-              <Label>Markup value</Label>
-              <Input
-                type="number" min={0} step={0.01}
-                value={form.markup_value}
-                onChange={(e) => setForm((f) => ({ ...f, markup_value: parseFloat(e.target.value) || 0 }))}
-                disabled={readOnly}
-              />
-            </div>
-
-            <div className="space-y-1">
-              <Label>Customer generator rate (₹/unit)</Label>
-              <Input
-                type="number" min={0} step={0.01}
-                value={form.customer_generator_rate}
-                onChange={(e) => setForm((f) => ({ ...f, customer_generator_rate: parseFloat(e.target.value) || 0 }))}
-                disabled={readOnly}
-              />
-              <p className="text-xs text-muted-foreground">Independent of landlord DG rate</p>
             </div>
           </div>
         </CardContent>

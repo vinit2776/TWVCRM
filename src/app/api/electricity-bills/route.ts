@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
-import { computeElectricityBill } from "@/lib/electricity";
 import { createVendorBill } from "@/lib/vendor-bills";
 
 const lineSchema = z.object({
@@ -39,6 +38,8 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const locationId = searchParams.get("location_id");
+  const contractId = searchParams.get("contract_id");
+  const billSide = searchParams.get("bill_side");
   const month = searchParams.get("month");
   const year = searchParams.get("year");
   const status = searchParams.get("status");
@@ -49,12 +50,15 @@ export async function GET(request: NextRequest) {
       *,
       electricity_bill_lines(*),
       locations(id, name, code),
+      contracts(id, client_name),
       created_by_user:users!electricity_bills_created_by_fkey(id, full_name),
       confirmed_by_user:users!electricity_bills_confirmed_by_fkey(id, full_name)
     `)
     .order("created_at", { ascending: false });
 
   if (locationId) query = query.eq("location_id", locationId);
+  if (contractId) query = query.eq("contract_id", contractId);
+  if (billSide) query = query.eq("bill_side", billSide);
   if (month) query = query.eq("bill_month", parseInt(month));
   if (year) query = query.eq("bill_year", parseInt(year));
   if (status) query = query.eq("status", status);
@@ -103,11 +107,12 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Electricity billing is not enabled for this location." }, { status: 422 });
   }
 
-  // ── Idempotency: block duplicate active bill ──────────────────────────────
+  // ── Idempotency: block duplicate active landlord bill ─────────────────────
   const { count: existing } = await supabase
     .from("electricity_bills")
     .select("*", { count: "exact", head: true })
     .eq("location_id", location_id)
+    .eq("bill_side", "landlord")
     .eq("bill_month", bill_month)
     .eq("bill_year", bill_year)
     .neq("status", "revised");
@@ -119,38 +124,18 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // ── Compute ───────────────────────────────────────────────────────────────
-  const computeLines = lines
-    .filter((l) => l.line_type !== "other")
-    .map((l) => ({
-      line_type: l.line_type as "utility" | "generator",
-      units: l.units ?? 0,
-      landlord_rate: l.rate ?? 0,
-    }));
+  // ── Compute landlord total from bill lines ────────────────────────────────
+  const landlordTotal = lines.reduce((s, l) => {
+    if (l.line_type === "other") return s + (l.amount ?? 0);
+    return s + (l.units ?? 0) * (l.rate ?? 0);
+  }, 0);
 
-  const computeConfig = {
-    reimbursement_enabled: config.reimbursement_enabled as boolean,
-    customer_markup_type: config.markup_type as "per_unit" | "percent",
-    customer_markup_per_unit: config.markup_type === "per_unit" ? Number(config.markup_value) : 0,
-    customer_markup_percent: config.markup_type === "percent" ? Number(config.markup_value) : 0,
-    landlord_gst_rate: config.landlord_gst_applicable ? Number(config.landlord_gst_rate ?? 0) : 0,
-    landlord_tds_rate: Number(config.tds_rate ?? 0),
-  };
-
-  // 'other' lines are fixed-amount: add them directly to landlord_total
-  const otherLinesTotal = lines
-    .filter((l) => l.line_type === "other")
-    .reduce((s, l) => s + (l.amount ?? 0), 0);
-
-  const result = computeElectricityBill(computeConfig, computeLines);
-
-  const landlordTotal = result.landlord_subtotal + otherLinesTotal;
-
-  // ── Insert electricity_bills ──────────────────────────────────────────────
+  // ── Insert electricity_bills (landlord side) ──────────────────────────────
   const { data: bill, error: billError } = await supabase
     .from("electricity_bills")
     .insert({
       location_id,
+      bill_side: "landlord",
       bill_month,
       bill_year,
       landlord_bill_number: landlord_bill_number ?? null,
@@ -159,15 +144,6 @@ export async function POST(request: NextRequest) {
       reimbursement_enabled: config.reimbursement_enabled,
       landlord_utility_pct: config.landlord_utility_pct,
       landlord_generator_pct: config.landlord_generator_pct,
-      customer_utility_pct: config.customer_utility_pct,
-      customer_generator_pct: config.customer_generator_pct,
-      customer_markup_type: config.markup_type,
-      customer_markup_value: config.markup_value,
-      customer_subtotal: config.reimbursement_enabled ? result.customer_subtotal : null,
-      customer_cgst: config.reimbursement_enabled ? result.customer_gst.cgst : null,
-      customer_sgst: config.reimbursement_enabled ? result.customer_gst.sgst : null,
-      customer_total: config.reimbursement_enabled ? result.customer_total : null,
-      customer_round_off: config.reimbursement_enabled ? result.customer_gst.roundOff : null,
       gst_rate: 18,
       status: "draft",
       created_by: dbUser.id,
@@ -178,19 +154,16 @@ export async function POST(request: NextRequest) {
   if (billError) return NextResponse.json({ error: billError.message }, { status: 500 });
 
   // ── Insert lines ──────────────────────────────────────────────────────────
-  const lineInserts = lines.map((l, i) => {
-    const computed = result.lines.find((cl) => cl.line_type === l.line_type);
-    return {
-      electricity_bill_id: bill.id,
-      line_type: l.line_type,
-      meter_label: l.meter_label ?? null,
-      label: l.label ?? null,
-      units: l.line_type !== "other" ? (l.units ?? null) : null,
-      rate: l.line_type !== "other" ? (l.rate ?? null) : null,
-      amount: l.line_type === "other" ? (l.amount ?? 0) : (computed?.landlord_amount ?? 0),
-      sort_order: l.sort_order ?? i,
-    };
-  });
+  const lineInserts = lines.map((l, i) => ({
+    electricity_bill_id: bill.id,
+    line_type: l.line_type,
+    meter_label: l.meter_label ?? null,
+    label: l.label ?? null,
+    units: l.line_type !== "other" ? (l.units ?? null) : null,
+    rate: l.line_type !== "other" ? (l.rate ?? null) : null,
+    amount: l.line_type === "other" ? (l.amount ?? 0) : (l.units ?? 0) * (l.rate ?? 0),
+    sort_order: l.sort_order ?? i,
+  }));
 
   const { error: linesError } = await supabase
     .from("electricity_bill_lines")
@@ -216,7 +189,7 @@ export async function POST(request: NextRequest) {
         invoice_date: landlord_bill_date ?? today,
         due_date: dueDate,
         total_amount: landlordTotal,
-        gst_amount: result.landlord_gst,
+        gst_amount: config.landlord_gst_applicable ? landlordTotal * (Number(config.landlord_gst_rate ?? 0) / 100) : 0,
         notes: notes ?? null,
         electricity_bill_id: bill.id,
         created_by: dbUser.id,
@@ -243,7 +216,6 @@ export async function POST(request: NextRequest) {
       bill_month: { old: null, new: bill_month },
       bill_year: { old: null, new: bill_year },
       landlord_total: { old: null, new: landlordTotal },
-      customer_total: { old: null, new: config.reimbursement_enabled ? result.customer_total : null },
       vendor_bill_id: { old: null, new: vendorBillId },
     },
   });

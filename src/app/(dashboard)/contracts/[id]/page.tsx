@@ -37,6 +37,7 @@ import { ContractFacilitiesSection } from "@/components/contracts/contract-facil
 import { ContractQuotasSection } from "@/components/contracts/contract-quotas-section";
 import { ContractAddonsSection } from "@/components/contracts/contract-addons-section";
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
+import { ContractElectricityTab } from "@/components/contracts/contract-electricity-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
 import { ContractDepositSection } from "@/components/contracts/contract-deposit-section";
 import { ContractInvoicesSection } from "@/components/contracts/contract-invoices-section";
@@ -953,6 +954,13 @@ export default function ContractDetailPage({
 
           {/* Door Access Logs */}
           <ContractAccessLogsSection contractId={id} />
+
+          {/* Electricity Billing Config */}
+          <ContractElectricityTab
+            contractId={id}
+            contractGstRate={contract.tax_percentage ?? 18}
+            canEdit={["admin", "manager"].includes(userRole ?? "")}
+          />
 
           {/* Notes */}
           {contract.notes && (

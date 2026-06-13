@@ -4,22 +4,14 @@ import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 
 const upsertSchema = z.object({
+  location_id: z.string().uuid(),
   enabled: z.boolean(),
-  service_number: z.string().nullable(),
-  landlord_vendor_id: z.string().uuid().nullable(),
-  landlord_utility_rate: z.number().min(0),
-  landlord_utility_pct: z.number().min(0).max(100),
-  landlord_generator_pct: z.number().min(0).max(100),
-  landlord_generator_rate: z.number().min(0),
-  bill_due_day_of_month: z.number().int().min(1).max(28),
-  landlord_gst_applicable: z.boolean(),
-  landlord_gst_rate: z.number().min(0).nullable(),
-  tds_section: z.string().nullable(),
-  tds_rate: z.number().min(0).nullable(),
-}).refine(
-  (d) => Math.abs(d.landlord_utility_pct + d.landlord_generator_pct - 100) < 0.01,
-  { message: "Landlord split percentages must sum to 100", path: ["landlord_generator_pct"] }
-);
+  utility_ratio: z.number().min(0).max(100),
+  generator_ratio: z.number().min(0).max(100),
+  customer_utility_rate: z.number().min(0),
+  customer_generator_rate: z.number().min(0),
+  customer_gst_rate: z.number().min(0).max(28),
+});
 
 export async function GET(
   _request: NextRequest,
@@ -30,36 +22,35 @@ export async function GET(
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
-  const { data: config, error } = await supabase
-    .from("location_electricity_config")
-    .select("*")
-    .eq("location_id", id)
+  const { data, error } = await supabase
+    .from("contract_electricity_config")
+    .select(`
+      *,
+      locations(id, name, code),
+      location_electricity_config:locations!inner(
+        electricity_config:location_electricity_config(
+          service_number, landlord_utility_rate, landlord_generator_rate,
+          enabled, bill_due_day_of_month
+        )
+      )
+    `)
+    .eq("contract_id", id)
     .maybeSingle();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
-  // Fetch allocation summary: sum of ratios per contract mapped to this location
-  const { data: contractConfigs } = await supabase
-    .from("contract_electricity_config")
-    .select("utility_ratio, generator_ratio, enabled, contract_id, contracts(status)")
-    .eq("location_id", id)
-    .eq("enabled", true);
+  // Also return location config so UI can show landlord tariff for reference
+  let locationConfig = null;
+  if (data?.location_id) {
+    const { data: lc } = await supabase
+      .from("location_electricity_config")
+      .select("service_number, landlord_utility_rate, landlord_generator_rate, enabled, landlord_utility_pct, landlord_generator_pct")
+      .eq("location_id", data.location_id)
+      .maybeSingle();
+    locationConfig = lc;
+  }
 
-  const enabledConfigs = (contractConfigs ?? []).filter(
-    (c) => c.enabled && ["active", "renewal"].includes((c.contracts as unknown as { status: string } | null)?.status ?? "")
-  );
-
-  const utilityAllocated = enabledConfigs.reduce((s, c) => s + (c.utility_ratio ?? 0), 0);
-  const generatorAllocated = enabledConfigs.reduce((s, c) => s + (c.generator_ratio ?? 0), 0);
-
-  return NextResponse.json({
-    data: config,
-    allocation: {
-      utility_allocated: utilityAllocated,
-      generator_allocated: generatorAllocated,
-      contract_count: enabledConfigs.length,
-    },
-  });
+  return NextResponse.json({ data, locationConfig });
 }
 
 export async function PUT(
@@ -88,22 +79,36 @@ export async function PUT(
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
-  const { data: existing } = await supabase
+  // Verify the location has electricity enabled
+  const { data: locConfig } = await supabase
     .from("location_electricity_config")
+    .select("enabled")
+    .eq("location_id", parsed.data.location_id)
+    .maybeSingle();
+
+  if (!locConfig?.enabled) {
+    return NextResponse.json(
+      { error: "Electricity billing is not enabled for the selected location. Enable it under Locations → Electricity tab first." },
+      { status: 422 }
+    );
+  }
+
+  const { data: existing } = await supabase
+    .from("contract_electricity_config")
     .select("*")
-    .eq("location_id", id)
+    .eq("contract_id", id)
     .maybeSingle();
 
   const { data, error } = await supabase
-    .from("location_electricity_config")
-    .upsert({ location_id: id, ...parsed.data }, { onConflict: "location_id" })
+    .from("contract_electricity_config")
+    .upsert({ contract_id: id, ...parsed.data }, { onConflict: "contract_id" })
     .select()
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   await logAudit(supabase, {
-    entityType: "location_electricity_config",
+    entityType: "electricity_bill",
     entityId: data.id,
     action: existing ? "update" : "create",
     performedBy: dbUser.id,
@@ -113,7 +118,7 @@ export async function PUT(
             .filter(([k, v]) => (existing as Record<string, unknown>)[k] !== v)
             .map(([k, v]) => [k, { old: (existing as Record<string, unknown>)[k], new: v }])
         )
-      : { location_id: { old: null, new: id } },
+      : { contract_id: { old: null, new: id } },
   });
 
   return NextResponse.json({ data });
