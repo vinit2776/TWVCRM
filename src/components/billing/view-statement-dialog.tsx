@@ -22,6 +22,8 @@ import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-s
 import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
 import { BillingModeTag } from "@/components/billing/billing-mode-tag";
 import { ConvertToGstEarlyDialog } from "@/components/billing/convert-to-gst-early-dialog";
+import { StatementLifecyclePanel } from "@/components/accounting/statement-lifecycle";
+import { StatementTimeline } from "@/components/accounting/statement-timeline";
 
 interface UsageCharge {
   id: string;
@@ -584,6 +586,22 @@ export function ViewStatementDialog({
           </div>
         ) : statement ? (
           <div className="space-y-5">
+            {/* Universal handoff lifecycle (visible on every statement,
+                regardless of tally_handoff_v2 state — the panel reads from
+                /api/accounting/inbox?id=… and gracefully degrades). */}
+            <StatementLifecyclePanel statementId={statement.id} />
+
+            {/* Collapsible chronological history — fetches timeline events
+                only when the user expands the disclosure. */}
+            <details className="rounded border bg-background -mt-2">
+              <summary className="cursor-pointer select-none px-3 py-2 text-xs font-medium text-muted-foreground hover:text-foreground">
+                Show timeline
+              </summary>
+              <div className="px-3 pb-3">
+                <StatementTimeline statementId={statement.id} maxHeight="280px" />
+              </div>
+            </details>
+
             {/* Tally state (only for Tally-issued statements; renders null otherwise) */}
             <TallyStatusBadge
               variant="full"
