@@ -35,6 +35,7 @@ import { Loader2, Send, FileDown, ChevronDown, ChevronRight, Search, X, Copy, Ex
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
+import { StatementLifecycleBadge } from "@/components/accounting/statement-lifecycle";
 import { UsageReviewDialog } from "@/components/billing/usage-review-dialog";
 import { BillingModeTag } from "@/components/billing/billing-mode-tag";
 import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
@@ -366,6 +367,7 @@ function RentTable({ rows, loading, opsLabel, onViewStatement }: { rows: RentStm
                 <th className="px-4 py-3 text-left">Status</th>
                 <th className="px-4 py-3 text-left">Due</th>
                 <th className="px-4 py-3 text-right">Amount</th>
+                <th className="px-4 py-3 text-left">Lifecycle</th>
                 <th className="px-4 py-3"></th>
               </tr>
             </thead>
@@ -410,6 +412,12 @@ function RentTable({ rows, loading, opsLabel, onViewStatement }: { rows: RentStm
                     </td>
                     <td className="px-4 py-3 text-xs whitespace-nowrap text-muted-foreground">{s.due_date ? formatDate(s.due_date) : "—"}</td>
                     <td className="px-4 py-3 text-right whitespace-nowrap font-semibold">{formatCurrency(s.total_amount)}</td>
+                    {/* Tally handoff v2 lifecycle badge. Self-fetches via the
+                        shared 30s SWR cache so multiple badges in the same
+                        page batch into one request per statement. */}
+                    <td className="px-4 py-3 whitespace-nowrap">
+                      <StatementLifecycleBadge statementId={s.id} compact />
+                    </td>
                     <td className="px-4 py-3 whitespace-nowrap text-right">
                       <div className="flex items-center justify-end gap-1.5">
                         {(s.reminder_count ?? 0) > 0 && (
