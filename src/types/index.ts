@@ -3348,7 +3348,9 @@ export interface LocationElectricityConfig {
   location_id: string;
   enabled: boolean;
   reimbursement_enabled: boolean;
+  service_number: string | null;
   landlord_vendor_id: string | null;
+  landlord_utility_rate: number;
   landlord_utility_pct: number;
   landlord_generator_pct: number;
   landlord_generator_rate: number;
@@ -3357,6 +3359,7 @@ export interface LocationElectricityConfig {
   landlord_gst_rate: number | null;
   tds_section: string | null;
   tds_rate: number | null;
+  // Deprecated: customer settings moved to contract_electricity_config
   customer_utility_pct: number;
   customer_generator_pct: number;
   markup_type: ElectricityMarkupType;
@@ -3383,6 +3386,8 @@ export interface ElectricityBill {
   id: string;
   location_id: string;
   contract_id: string | null;
+  bill_side: "landlord" | "customer";
+  landlord_bill_id: string | null;
   bill_month: number;
   bill_year: number;
   landlord_bill_number: string | null;
@@ -3425,5 +3430,19 @@ export interface ContractElectricitySettings {
   markup_value?: number;
   customer_generator_rate?: number;
   gst_rate?: number;
+}
+
+export interface ContractElectricityConfig {
+  id: string;
+  contract_id: string;
+  location_id: string;
+  enabled: boolean;
+  utility_ratio: number;
+  generator_ratio: number;
+  customer_utility_rate: number;
+  customer_generator_rate: number;
+  customer_gst_rate: number;
+  created_at: string;
+  updated_at: string;
 }
 
