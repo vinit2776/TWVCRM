@@ -116,90 +116,90 @@ export async function GET(_req: NextRequest) {
 
   const statementIds = statementList.map((s) => s.id);
 
-  // Side query 1: latest gst_invoice_upload per statement (if any).
-  // Uploads can be superseded (re-upload); we want the most recent un-superseded one.
-  const uploadByStatement = new Map<string, InboxUpload>();
-  if (statementIds.length > 0) {
-    const { data: uploads } = await supabase
+  // PERF: the four side queries below used to await sequentially, adding
+  // 4× the slowest single round-trip to the API response time. They have
+  // no dependencies on each other, so we fan them out via Promise.all.
+  // Combined with the 00256 index on billing_payments.billing_statement_id,
+  // this should bring inbox load from "noticeably slow" to "snappy."
+
+  const noIds = statementIds.length === 0;
+
+  const [uploadsRes, snapshotsRes, lastSyncRes, paymentsRes] = await Promise.all([
+    noIds ? Promise.resolve({ data: null }) : supabase
       .from("gst_invoice_uploads")
       .select("id, billing_statement_id, tally_invoice_number, tally_invoice_series, irn, invoice_amount, uploaded_at, name_check_status, autofill_source, superseded_by")
       .in("billing_statement_id", statementIds)
       .is("superseded_by", null)
-      .order("uploaded_at", { ascending: false });
-
-    for (const u of uploads || []) {
-      const sid = (u as { billing_statement_id: string }).billing_statement_id;
-      if (!uploadByStatement.has(sid)) {
-        uploadByStatement.set(sid, {
-          id: u.id as string,
-          tally_invoice_number: u.tally_invoice_number as string,
-          tally_invoice_series: u.tally_invoice_series as "SDIPL-REG" | "SDIPL-UNREG",
-          irn: (u.irn as string | null) ?? null,
-          invoice_amount: Number(u.invoice_amount),
-          uploaded_at: u.uploaded_at as string,
-          name_check_status: u.name_check_status as "pending" | "approved" | "overridden",
-          autofill_source: u.autofill_source as "qr" | "pdf_text" | "bridge_match" | "manual",
-        });
-      }
-    }
-  }
-
-  // Side query 2: latest matched tally_voucher_snapshot per statement.
-  // Bridge v2 isn't deployed yet, so this typically returns empty.
-  const snapshotByStatement = new Map<string, InboxSnapshot>();
-  if (statementIds.length > 0) {
-    const { data: snapshots } = await supabase
+      .order("uploaded_at", { ascending: false }),
+    noIds ? Promise.resolve({ data: null }) : supabase
       .from("tally_voucher_snapshots")
       .select("voucher_master_id, matched_statement_id, invoice_number, voucher_amount, irn, match_confidence, last_synced_at")
       .in("matched_statement_id", statementIds)
-      .order("last_synced_at", { ascending: false });
-
-    for (const s of snapshots || []) {
-      const sid = (s as { matched_statement_id: string }).matched_statement_id;
-      if (sid && !snapshotByStatement.has(sid)) {
-        snapshotByStatement.set(sid, {
-          voucher_master_id: s.voucher_master_id as string,
-          invoice_number: (s.invoice_number as string | null) ?? null,
-          voucher_amount: s.voucher_amount == null ? null : Number(s.voucher_amount),
-          irn: (s.irn as string | null) ?? null,
-          match_confidence: (s.match_confidence as "exact" | "probable" | "unmatched" | null) ?? null,
-          last_synced_at: s.last_synced_at as string,
-        });
-      }
-    }
-  }
-
-  // Side query 3: last bridge sync timestamp (any voucher), independent of match.
-  const { data: lastSyncRow } = await supabase
-    .from("tally_voucher_snapshots")
-    .select("last_synced_at")
-    .order("last_synced_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  const lastSyncedAt = (lastSyncRow?.last_synced_at as string | undefined) ?? null;
-
-  // Side query 4: payments per statement. Accounts needs the payment details
-  // (amount, mode, ref, date) when issuing the GST invoice in Tally.
-  const paymentsByStatement = new Map<string, InboxPayment[]>();
-  if (statementIds.length > 0) {
-    const { data: payments } = await supabase
+      .order("last_synced_at", { ascending: false }),
+    supabase
+      .from("tally_voucher_snapshots")
+      .select("last_synced_at")
+      .order("last_synced_at", { ascending: false })
+      .limit(1)
+      .maybeSingle(),
+    noIds ? Promise.resolve({ data: null }) : supabase
       .from("billing_payments")
       .select("id, billing_statement_id, amount, payment_date, payment_mode, payment_reference, razorpay_payment_id")
       .in("billing_statement_id", statementIds)
-      .order("payment_date", { ascending: false });
-    for (const p of payments || []) {
-      const sid = (p as { billing_statement_id: string }).billing_statement_id;
-      const list = paymentsByStatement.get(sid) ?? [];
-      list.push({
-        id: p.id as string,
-        amount: Number(p.amount),
-        payment_date: p.payment_date as string,
-        payment_mode: p.payment_mode as string,
-        payment_reference: (p.payment_reference as string | null) ?? null,
-        razorpay_payment_id: (p.razorpay_payment_id as string | null) ?? null,
+      .order("payment_date", { ascending: false }),
+  ]);
+
+  // Latest gst_invoice_upload per statement (most recent non-superseded).
+  const uploadByStatement = new Map<string, InboxUpload>();
+  for (const u of uploadsRes.data || []) {
+    const sid = (u as { billing_statement_id: string }).billing_statement_id;
+    if (!uploadByStatement.has(sid)) {
+      uploadByStatement.set(sid, {
+        id: u.id as string,
+        tally_invoice_number: u.tally_invoice_number as string,
+        tally_invoice_series: u.tally_invoice_series as "SDIPL-REG" | "SDIPL-UNREG",
+        irn: (u.irn as string | null) ?? null,
+        invoice_amount: Number(u.invoice_amount),
+        uploaded_at: u.uploaded_at as string,
+        name_check_status: u.name_check_status as "pending" | "approved" | "overridden",
+        autofill_source: u.autofill_source as "qr" | "pdf_text" | "bridge_match" | "manual",
       });
-      paymentsByStatement.set(sid, list);
     }
+  }
+
+  // Latest matched tally_voucher_snapshot per statement.
+  const snapshotByStatement = new Map<string, InboxSnapshot>();
+  for (const s of snapshotsRes.data || []) {
+    const sid = (s as { matched_statement_id: string }).matched_statement_id;
+    if (sid && !snapshotByStatement.has(sid)) {
+      snapshotByStatement.set(sid, {
+        voucher_master_id: s.voucher_master_id as string,
+        invoice_number: (s.invoice_number as string | null) ?? null,
+        voucher_amount: s.voucher_amount == null ? null : Number(s.voucher_amount),
+        irn: (s.irn as string | null) ?? null,
+        match_confidence: (s.match_confidence as "exact" | "probable" | "unmatched" | null) ?? null,
+        last_synced_at: s.last_synced_at as string,
+      });
+    }
+  }
+
+  // Last bridge sync (any voucher).
+  const lastSyncedAt = ((lastSyncRes as { data: { last_synced_at: string } | null }).data?.last_synced_at) ?? null;
+
+  // Payments per statement.
+  const paymentsByStatement = new Map<string, InboxPayment[]>();
+  for (const p of paymentsRes.data || []) {
+    const sid = (p as { billing_statement_id: string }).billing_statement_id;
+    const list = paymentsByStatement.get(sid) ?? [];
+    list.push({
+      id: p.id as string,
+      amount: Number(p.amount),
+      payment_date: p.payment_date as string,
+      payment_mode: p.payment_mode as string,
+      payment_reference: (p.payment_reference as string | null) ?? null,
+      razorpay_payment_id: (p.razorpay_payment_id as string | null) ?? null,
+    });
+    paymentsByStatement.set(sid, list);
   }
 
   const now = Date.now();
