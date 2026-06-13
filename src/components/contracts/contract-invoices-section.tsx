@@ -8,6 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Loader2, ExternalLink, FileText, Receipt, FileCheck, Zap } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
+import { StatementLifecycleBadge, StatementQuickActions } from "@/components/accounting/statement-lifecycle";
 
 interface Statement {
   id: string;
@@ -182,7 +183,8 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
                   <th className="text-right font-medium pb-2 pr-4">Amount</th>
                   <th className="text-left font-medium pb-2 pr-4">Status</th>
                   <th className="text-left font-medium pb-2 pr-4">Payment</th>
-                  <th className="text-left font-medium pb-2">GST Invoice</th>
+                  <th className="text-left font-medium pb-2 pr-4">GST Invoice</th>
+                  <th className="text-left font-medium pb-2">Tally Lifecycle</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -222,7 +224,7 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
                         <span className="text-xs text-muted-foreground">—</span>
                       )}
                     </td>
-                    <td className="py-2.5">
+                    <td className="py-2.5 pr-4">
                       {s.gst_invoice_number ? (
                         <div className="flex items-center gap-1.5">
                           <span className="font-mono text-xs text-green-700">{s.gst_invoice_number}</span>
@@ -239,6 +241,16 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
                           {s.payment_status === "paid" ? "Generating…" : "Issued on payment"}
                         </span>
                       )}
+                    </td>
+                    {/* Tally lifecycle: handoff_state badge + quick-action buttons.
+                        Each component self-fetches /api/accounting/inbox?id=… via a
+                        shared 30s SWR cache, so badges + actions in the same row
+                        share one request. */}
+                    <td className="py-2.5">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <StatementLifecycleBadge statementId={s.id} compact />
+                        <StatementQuickActions statementId={s.id} compact />
+                      </div>
                     </td>
                   </tr>
                 ))}
