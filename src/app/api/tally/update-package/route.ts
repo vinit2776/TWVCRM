@@ -87,7 +87,8 @@ export async function POST(request: NextRequest) {
   const key = `${B2_PREFIX}/twv-tally-bridge-v${version}.zip`;
 
   // Same bucket as db-backup — keeps B2 application-key scope consistent.
-  const bucket = process.env.B2_BUCKET || "twvcrmbackups";
+  // Trim because Vercel env values often arrive with a trailing newline.
+  const bucket = (process.env.B2_BUCKET || "twvcrmbackups").trim();
   try {
     await getS3Client().send(new PutObjectCommand({
       Bucket: bucket,
