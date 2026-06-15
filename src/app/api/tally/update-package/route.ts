@@ -30,12 +30,18 @@ const MAX_ZIP_BYTES = 20 * 1024 * 1024; // bridge zips are ~50KB; 20MB is a gene
 function getS3Client() {
   // Same shape as the proven db-backup client: B2_ENDPOINT has no scheme,
   // and B2's S3-compatible API wants the bucket's real region.
+  // Trim env values — a stray \n or \r in any of these makes the AWS SDK
+  // emit an Authorization header with invalid characters and Node's
+  // undici rejects it before the request even leaves the process.
+  const endpoint = (process.env.B2_ENDPOINT ?? "").trim();
+  const keyId = (process.env.B2_KEY_ID ?? "").trim();
+  const appKey = (process.env.B2_APPLICATION_KEY ?? "").trim();
   return new S3Client({
-    endpoint: `https://${process.env.B2_ENDPOINT}`,
+    endpoint: `https://${endpoint}`,
     region: "us-east-005",
     credentials: {
-      accessKeyId: process.env.B2_KEY_ID!,
-      secretAccessKey: process.env.B2_APPLICATION_KEY!,
+      accessKeyId: keyId,
+      secretAccessKey: appKey,
     },
   });
 }
