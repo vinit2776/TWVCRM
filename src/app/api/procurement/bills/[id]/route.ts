@@ -43,7 +43,8 @@ const patchBillSchema = z.discriminatedUnion("action", [
     approved_amount: z.number().positive().nullish(),
     approved_amount_note: z.string().nullish(),
     batch_type: z.enum(["immediate", "15th", "25th"]),
-    gst_amount: z.number().min(0, "GST amount must be 0 or greater"),
+    /** Optional at approval — accounts can set later via update_gst, but it is mandatory before payment. */
+    gst_amount: z.number().min(0, "GST amount must be 0 or greater").optional(),
     gst_zero_confirmed: z.boolean().optional(),
   }),
   z.object({
@@ -190,6 +191,15 @@ export async function PATCH(
         return NextResponse.json({ error: "This bill is already fully paid" }, { status: 422 });
       }
 
+      // Mandatory GST gate: bill must have GST set (or explicit zero-GST confirmation) before any payment.
+      // Approval no longer requires GST — it is captured here by accounts using the inline GST setter.
+      if (!bill.gst_set_at) {
+        return NextResponse.json(
+          { error: "GST amount has not been set on this bill. Enter the GST from the vendor's invoice (or confirm zero-GST) before recording payment." },
+          { status: 422 }
+        );
+      }
+
       // total_amount = base (pre-GST). gst_amount is additive on top.
       // Approved ceiling = approved base + GST. This will exceed total_amount — that is correct.
       const gstAmount = Number(bill.gst_amount ?? 0);
@@ -316,23 +326,27 @@ export async function PATCH(
 
       const batchDate = computeBatchDate(parsed.data.batch_type);
 
-      // total_amount = base (pre-GST). gst_amount is entered directly by approver.
+      // total_amount = base (pre-GST). gst_amount is OPTIONAL at approval — accounts can set it
+      // later via update_gst before recording payment.
       const totalAmt = Number(bill.total_amount); // this IS the base
-      const approveGstAmount = Math.round((parsed.data.gst_amount ?? 0) * 100) / 100;
-      const maxAllowedGst = Math.round(totalAmt * 0.28 * 100) / 100;
-      if (approveGstAmount > maxAllowedGst) {
-        return NextResponse.json(
-          { error: `GST amount (₹${approveGstAmount.toLocaleString("en-IN")}) exceeds the maximum allowed (28% of ₹${totalAmt.toLocaleString("en-IN")} = ₹${maxAllowedGst.toLocaleString("en-IN")}). Please verify the invoice.` },
-          { status: 422 },
-        );
-      }
+      const gstProvided = parsed.data.gst_amount !== undefined;
+      const approveGstAmount = gstProvided ? Math.round((parsed.data.gst_amount ?? 0) * 100) / 100 : null;
 
-      // Zero-GST at approval must be explicitly confirmed
-      if (approveGstAmount === 0 && !parsed.data.gst_zero_confirmed) {
-        return NextResponse.json(
-          { error: "Please confirm that this bill has no GST before approving." },
-          { status: 422 },
-        );
+      if (approveGstAmount !== null) {
+        const maxAllowedGst = Math.round(totalAmt * 0.28 * 100) / 100;
+        if (approveGstAmount > maxAllowedGst) {
+          return NextResponse.json(
+            { error: `GST amount (₹${approveGstAmount.toLocaleString("en-IN")}) exceeds the maximum allowed (28% of ₹${totalAmt.toLocaleString("en-IN")} = ₹${maxAllowedGst.toLocaleString("en-IN")}). Please verify the invoice.` },
+            { status: 422 },
+          );
+        }
+        // Zero-GST at approval (when GST is being set here) must be explicitly confirmed
+        if (approveGstAmount === 0 && !parsed.data.gst_zero_confirmed) {
+          return NextResponse.json(
+            { error: "Please confirm that this bill has no GST before approving." },
+            { status: 422 },
+          );
+        }
       }
 
       const approveNow = new Date().toISOString();
@@ -349,13 +363,19 @@ export async function PATCH(
         payment_batch_date: toISODateString(batchDate),
         payment_batch_assigned_by: dbUser.id,
         payment_batch_assigned_at: approveNow,
-        gst_rate: 0,
-        gst_amount: approveGstAmount,
         base_amount: totalAmt,
-        gst_set_by: dbUser.id,
-        gst_set_at: approveNow,
-        gst_zero_confirmed: approveGstAmount === 0,
-        gst_zero_confirmed_by: approveGstAmount === 0 ? dbUser.id : null,
+        // Only stamp GST fields if approver actually entered a value.
+        // Otherwise leave them null — accounts must set GST before recording payment.
+        ...(approveGstAmount !== null
+          ? {
+              gst_rate: 0,
+              gst_amount: approveGstAmount,
+              gst_set_by: dbUser.id,
+              gst_set_at: approveNow,
+              gst_zero_confirmed: approveGstAmount === 0,
+              gst_zero_confirmed_by: approveGstAmount === 0 ? dbUser.id : null,
+            }
+          : {}),
       };
 
       // For goods POs: advance status to invoice_approved
