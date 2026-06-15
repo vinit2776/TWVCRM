@@ -501,14 +501,20 @@ export function Sidebar() {
 
         {/* Help — pinned at bottom, always visible */}
         <div className="shrink-0 border-t border-sidebar-accent px-3 py-3">
-          {/* Build identifier — helps spot stale cached versions */}
+          {/* Build identifier — helps spot stale cached versions.
+              Format: "v0.<commit-count>.0 · <sha7>" with build date as tooltip. */}
           {(() => {
-            const sha = process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7);
+            const version = process.env.NEXT_PUBLIC_APP_VERSION;
+            const sha =
+              process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ||
+              process.env.NEXT_PUBLIC_GIT_SHA ||
+              undefined;
             const date = process.env.NEXT_PUBLIC_BUILD_DATE;
-            if (!sha && !date) return null;
-            const label = [date, sha].filter(Boolean).join(" · ");
+            if (!version && !sha) return null;
+            const label = [version, sha].filter(Boolean).join(" · ");
+            const tooltip = ["Build:", label, date && `(${date})`].filter(Boolean).join(" ");
             return (
-              <p className="px-3 pb-2 text-[10px] text-sidebar-foreground/35 select-none" title={`Build: ${label}`}>
+              <p className="px-3 pb-2 text-[10px] text-sidebar-foreground/35 select-none" title={tooltip}>
                 {label}
               </p>
             );
