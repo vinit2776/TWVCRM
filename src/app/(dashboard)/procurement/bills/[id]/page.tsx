@@ -7,7 +7,7 @@ import Link from "next/link";
 import {
   ChevronLeft, Loader2, Truck, FileText, Calendar, CreditCard, Package, ExternalLink,
   CheckCircle2, XCircle, Clock, Send, Activity, CheckCircle,
-  ClipboardList, ChevronDown, ChevronUp, FilePlus, AlertTriangle,
+  ClipboardList, ChevronDown, ChevronUp, FilePlus, AlertTriangle, RefreshCcw,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -211,6 +211,11 @@ export default function VendorBillDetailPage() {
   const [rejectDialog, setRejectDialog] = useState(false);
   const [rejectLoading, setRejectLoading] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
+
+  // Edit-amount-and-resubmit dialog (rejected bills only)
+  const [resubmitDialog, setResubmitDialog] = useState(false);
+  const [resubmitAmount, setResubmitAmount] = useState<string>("");
+  const [resubmitLoading, setResubmitLoading] = useState(false);
 
   // Resend confirmation dialog
   const [resendDialog, setResendDialog] = useState(false);
@@ -758,6 +763,20 @@ export default function VendorBillDetailPage() {
                     </span>
                   </div>
                 )}
+                {/* Resubmit affordance — typical use case: original amount was GST-inclusive. */}
+                <div className="pl-[26px] pt-1">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => {
+                      setResubmitAmount(String(bill.total_amount ?? ""));
+                      setResubmitDialog(true);
+                    }}
+                  >
+                    <RefreshCcw className="h-3.5 w-3.5 mr-1.5" />
+                    Edit amount & resubmit
+                  </Button>
+                </div>
               </div>
             )}
           </CardContent>
@@ -1708,6 +1727,73 @@ export default function VendorBillDetailPage() {
             <Button onClick={handleFixDueDate} disabled={fixDueDateLoading || !fixDueDateValue || fixDueDateValue < today}>
               {fixDueDateLoading && <Loader2 className="h-4 w-4 mr-2 animate-spin" />}
               Update &amp; Retry Approval
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit amount & resubmit — rejected bills only. Pre-GST base only. */}
+      <Dialog open={resubmitDialog} onOpenChange={setResubmitDialog}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Edit amount & resubmit</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2 text-sm">
+            <p className="text-xs text-muted-foreground">
+              Correct the invoice amount and push this bill back into the approval queue. Enter the
+              <strong> base (pre-GST) amount</strong> only — GST is captured separately later by Accounts.
+            </p>
+            <div className="space-y-1.5">
+              <Label htmlFor="resubmit-amount">Corrected Amount (₹) <span className="text-red-500">*</span></Label>
+              <Input
+                id="resubmit-amount"
+                type="number"
+                min="0.01"
+                step="0.01"
+                placeholder="0.00 (excl. GST)"
+                value={resubmitAmount}
+                onChange={(e) => setResubmitAmount(e.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Was: {formatCurrency(Number(bill.total_amount ?? 0))}
+              </p>
+            </div>
+            <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
+              Any previously-captured GST on this bill will be cleared — it will need to be re-entered before payment.
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setResubmitDialog(false)} disabled={resubmitLoading}>
+              Cancel
+            </Button>
+            <Button
+              className="bg-green-600 hover:bg-green-700"
+              disabled={resubmitLoading}
+              onClick={async () => {
+                const amt = parseFloat(resubmitAmount);
+                if (!resubmitAmount || isNaN(amt) || amt <= 0) {
+                  toast.error("Enter a valid amount greater than zero");
+                  return;
+                }
+                setResubmitLoading(true);
+                try {
+                  const res = await fetch(`/api/procurement/bills/${id}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "update_amount_and_resubmit", total_amount: amt }),
+                  });
+                  const json = await res.json();
+                  if (!res.ok) { toast.error(json.error || "Resubmit failed"); return; }
+                  toast.success("Amount updated — bill is back in the approval queue");
+                  setResubmitDialog(false);
+                  await fetchAll();
+                } finally {
+                  setResubmitLoading(false);
+                }
+              }}
+            >
+              {resubmitLoading && <Loader2 className="h-4 w-4 mr-1 animate-spin" />}
+              Save & resubmit
             </Button>
           </DialogFooter>
         </DialogContent>

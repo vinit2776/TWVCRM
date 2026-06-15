@@ -19,6 +19,19 @@ const patchPrSchema = z.discriminatedUnion("action", [
   }),
   z.object({
     action: z.literal("resubmit"),
+    /**
+     * Optional price-only edits applied before resubmitting. Item identity (item_id,
+     * quantity, unit, notes) is locked — only `estimated_price` can change. Used to
+     * correct GST-inclusive prices that triggered the rejection in the first place.
+     */
+    line_items: z
+      .array(
+        z.object({
+          id: z.string().uuid(),
+          estimated_price: z.number().min(0, "Price cannot be negative"),
+        })
+      )
+      .optional(),
   }),
 ]);
 
@@ -300,15 +313,60 @@ export async function PATCH(
       if (pr.status !== "rejected") {
         return NextResponse.json({ error: "Only rejected PRs can be resubmitted" }, { status: 422 });
       }
-      if (pr.requested_by !== dbUser.id) {
-        return NextResponse.json({ error: "Only the requester can resubmit this PR" }, { status: 403 });
+      // Any procurement role can edit + resubmit a rejected MR (no requester-only gate).
+      // Apply price-only edits to line items if provided.
+      const priceEdits = parsed.data.line_items ?? [];
+      if (priceEdits.length > 0) {
+        // Validate edits target items actually belonging to this PR.
+        const { data: existingItems } = await supabase
+          .from("purchase_request_items")
+          .select("id, quantity")
+          .eq("pr_id", id);
+        const itemsById = new Map((existingItems ?? []).map((it) => [it.id as string, it]));
+        for (const edit of priceEdits) {
+          if (!itemsById.has(edit.id)) {
+            return NextResponse.json(
+              { error: `Line item ${edit.id} does not belong to this MR` },
+              { status: 422 }
+            );
+          }
+        }
+        // Apply: update each row's estimated_price + recompute its total_estimated.
+        for (const edit of priceEdits) {
+          const qty = Number(itemsById.get(edit.id)!.quantity ?? 0);
+          const price = Math.round(edit.estimated_price * 100) / 100;
+          await supabase
+            .from("purchase_request_items")
+            .update({
+              estimated_price: price,
+              total_estimated: Math.round(price * qty * 100) / 100,
+            })
+            .eq("id", edit.id);
+        }
+        // Re-derive the parent's total_estimated_amount from the freshly-saved item rows.
+        const { data: refreshedItems } = await supabase
+          .from("purchase_request_items")
+          .select("total_estimated")
+          .eq("pr_id", id);
+        const newTotal = (refreshedItems ?? []).reduce(
+          (sum, row) => sum + Number(row.total_estimated ?? 0),
+          0
+        );
+        updatePayload = {
+          status: "submitted",
+          rejection_reason: null,
+          approved_by: null,
+          approved_at: null,
+          total_estimated_amount: Math.round(newTotal * 100) / 100,
+        };
+      } else {
+        updatePayload = {
+          status: "submitted",
+          rejection_reason: null,
+          approved_by: null,
+          approved_at: null,
+        };
       }
-      updatePayload = {
-        status: "submitted",
-        rejection_reason: null,
-        approved_by: null,
-        approved_at: null,
-      };
       break;
     }
   }

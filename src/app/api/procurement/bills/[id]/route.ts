@@ -91,6 +91,15 @@ const patchBillSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("sign_cheque"),
   }),
+  z.object({
+    /**
+     * Lets a rejected bill have its (pre-GST) total_amount corrected and pushed back
+     * into the approval queue. Common case: amount was entered GST-inclusive and the
+     * admin rejected — instead of recreating, edit the amount and resubmit.
+     */
+    action: z.literal("update_amount_and_resubmit"),
+    total_amount: z.number().positive("Amount must be greater than zero"),
+  }),
 ]);
 
 export async function GET(
@@ -764,6 +773,75 @@ export async function PATCH(
           ? `Cheque marked as signed (${siblingsUpdated + 1} bills on this cheque updated)`
           : "Cheque marked as signed",
       });
+    }
+
+    case "update_amount_and_resubmit": {
+      // Lets a rejected bill have its (pre-GST) total_amount corrected and routed back
+      // to approval. Any procurement role can do this (no requester-only gate).
+      if (bill.approval_status !== "rejected") {
+        return NextResponse.json(
+          { error: "Only rejected bills can be edited and resubmitted" },
+          { status: 422 }
+        );
+      }
+      const newTotal = Math.round(parsed.data.total_amount * 100) / 100;
+
+      // Re-validate against PO ceiling (mirrors creation rule). Skip when there is no PO.
+      if (bill.po_id) {
+        const { data: linkedPo } = await supabase
+          .from("purchase_orders")
+          .select("po_type, total_amount, unit_cost_per_cycle")
+          .eq("id", bill.po_id)
+          .single();
+        if (linkedPo) {
+          const ceiling = linkedPo.po_type === "service" && linkedPo.unit_cost_per_cycle
+            ? Number(linkedPo.unit_cost_per_cycle)
+            : Number(linkedPo.total_amount ?? 0);
+          if (ceiling > 0 && newTotal > ceiling) {
+            return NextResponse.json(
+              {
+                error: `Corrected amount (₹${newTotal.toLocaleString("en-IN")}) cannot exceed the ${linkedPo.po_type === "service" ? "cycle cost" : "PO value"} (₹${ceiling.toLocaleString("en-IN")})`,
+              },
+              { status: 422 }
+            );
+          }
+        }
+      }
+
+      // Clear stale GST fields — the previously-set GST (if any) was relative to the
+      // wrong amount, so it must be re-captured. The new approval flow allows GST to
+      // be set later by Accounts, so leaving these null is the right default.
+      updatePayload = {
+        total_amount: newTotal,
+        approval_status: "pending",
+        approved_by: null,
+        approved_at: null,
+        approval_code: null,
+        approved_amount: null,
+        approved_amount_note: null,
+        rejection_reason: null,
+        rejection_outcome: null,
+        payment_batch_type: null,
+        payment_batch_date: null,
+        payment_batch_assigned_by: null,
+        payment_batch_assigned_at: null,
+        base_amount: newTotal,
+        gst_rate: null,
+        gst_amount: null,
+        gst_set_by: null,
+        gst_set_at: null,
+        gst_zero_confirmed: null,
+        gst_zero_confirmed_by: null,
+      };
+
+      sendPushToProcurementRoles({
+        title: "Bill amount corrected — needs re-approval",
+        body: `${bill.bill_number}: ₹${Number(bill.total_amount).toLocaleString("en-IN")} → ₹${newTotal.toLocaleString("en-IN")}`,
+        url: `/procurement/bills/${id}`,
+        tag: `bill-approval-${id}`,
+      }).catch((err) => console.error("[push] resubmit notification failed:", err));
+
+      break;
     }
   }
 
