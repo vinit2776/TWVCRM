@@ -280,7 +280,7 @@ export default function VendorBillDetailPage() {
     }
   };
 
-  const handleApprove = async () => {
+  const handleApprove = async (forceAckBlankGst = false) => {
     if (!bill) return;
     if (!batchType) {
       toast.error("Select a payment batch schedule before approving");
@@ -299,7 +299,7 @@ export default function VendorBillDetailPage() {
       }
     }
     // Soft nudge: if GST is blank, ask the approver to confirm Accounts will set it later.
-    if (gstVal === null && !approveBlankGstAck) {
+    if (gstVal === null && !approveBlankGstAck && !forceAckBlankGst) {
       setApproveBlankGstConfirm(true);
       return;
     }
@@ -1493,7 +1493,7 @@ export default function VendorBillDetailPage() {
             <Button variant="outline" onClick={() => { setApproveDialog(false); setApproveBlankGstAck(false); }}>Cancel</Button>
             <Button
               className="bg-green-600 hover:bg-green-700"
-              onClick={handleApprove}
+              onClick={() => handleApprove()}
               disabled={approveLoading}
             >
               {approveLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
@@ -1527,8 +1527,8 @@ export default function VendorBillDetailPage() {
               onClick={() => {
                 setApproveBlankGstAck(true);
                 setApproveBlankGstConfirm(false);
-                // Re-trigger approve on next tick so the ack flag is read.
-                setTimeout(() => { void handleApprove(); }, 0);
+                // Bypass the stale-closure problem: tell handleApprove explicitly to skip the gate.
+                setTimeout(() => { void handleApprove(true); }, 0);
               }}
             >
               Continue — Accounts will set GST
