@@ -97,6 +97,7 @@ export async function POST(request: NextRequest) {
     { key: "tally_bridge_target_version", value: version },
     { key: "tally_bridge_update_sha256", value: sha256 },
     { key: "tally_bridge_update_key", value: key },
+    { key: "tally_bridge_update_published_at", value: new Date().toISOString() },
   ];
   for (const s of settings) {
     await admin.from("app_settings").upsert(s, { onConflict: "key" });

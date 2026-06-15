@@ -28,6 +28,7 @@ import {
   CheckCircle2, AlertTriangle, WifiOff, RefreshCw, Lock, Unlock,
   ChevronLeft, ChevronRight, Clock, Pause, Play, FileText, Building2,
 } from "lucide-react";
+import { PublishBridgeCard } from "@/components/admin/publish-bridge-card";
 import { formatDateTime } from "@/lib/utils";
 import { toast } from "sonner";
 
@@ -203,6 +204,9 @@ export default function TallySyncPage() {
           <RefreshCw className="h-4 w-4 mr-1" /> Refresh
         </Button>
       </div>
+
+      {/* ── Publish Bridge Update ─────────────────────────────────────────── */}
+      <PublishBridgeCard />
 
       {/* ── GST Invoice Mode ──────────────────────────────────────────────── */}
       <Card>
