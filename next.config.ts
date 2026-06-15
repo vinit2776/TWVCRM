@@ -1,5 +1,40 @@
 import type { NextConfig } from "next";
 import path from "path";
+import { execSync } from "child_process";
+
+/**
+ * Human-friendly app version computed at build time.
+ *
+ * Scheme: v0.<commit-count>.0 — auto-bumps every merge to main, no manual
+ * version-file edits. Falls back to "v0.0.0-dev" if git isn't available
+ * (e.g. a Docker build from a tarball with no .git folder).
+ *
+ * Vercel keeps .git during build, so this works on both local and prod.
+ */
+function computeAppVersion(): string {
+  try {
+    const count = execSync("git rev-list --count HEAD", { encoding: "utf-8" }).trim();
+    if (count && /^\d+$/.test(count)) return `v0.${count}.0`;
+  } catch {
+    /* fall through */
+  }
+  return "v0.0.0-dev";
+}
+
+/**
+ * Short git SHA for the current HEAD. On Vercel, `NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA`
+ * is also auto-injected — the sidebar prefers that one. This fallback gives the
+ * local dev server a SHA too so the footer doesn't look half-empty.
+ */
+function computeShortSha(): string {
+  try {
+    const sha = execSync("git rev-parse --short=7 HEAD", { encoding: "utf-8" }).trim();
+    if (/^[0-9a-f]{7}$/.test(sha)) return sha;
+  } catch {
+    /* fall through */
+  }
+  return "";
+}
 
 const nextConfig: NextConfig = {
   turbopack: {
@@ -28,6 +63,11 @@ const nextConfig: NextConfig = {
       year: "numeric",
       timeZone: "Asia/Kolkata",
     }),
+    // Auto-bumped semver — increments on every commit to main.
+    NEXT_PUBLIC_APP_VERSION: computeAppVersion(),
+    // Local-build fallback for the short SHA. On Vercel,
+    // NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA is auto-injected and is preferred.
+    NEXT_PUBLIC_GIT_SHA: computeShortSha(),
   },
 };
 
