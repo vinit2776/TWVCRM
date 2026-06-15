@@ -91,6 +91,10 @@ export default function NewPurchaseRequestPage() {
   const [savingDraft, setSavingDraft] = useState(false);
   const [showPriceWarning, setShowPriceWarning] = useState(false);
   const [missingPriceItems, setMissingPriceItems] = useState<string[]>([]);
+  // Pre-GST confirm gate — appears on submit when any item has a price entered.
+  // Acks (per session) that the user has read it; after first confirm, suppress for repeat submits.
+  const [showPreGstConfirm, setShowPreGstConfirm] = useState(false);
+  const [preGstAcked, setPreGstAcked] = useState(false);
   const userRole = user?.role ?? "";
   const canSeePrices = ["admin", "manager"].includes(userRole);
 
@@ -279,6 +283,12 @@ export default function NewPurchaseRequestPage() {
     if (noPriceItems.length > 0) {
       setMissingPriceItems(noPriceItems);
       setShowPriceWarning(true);
+      return;
+    }
+    // Pre-GST gate: if any item has a price entered, confirm it's pre-GST. Common mistake.
+    const hasPricedItems = items.some((li) => li.estimated_price && parseFloat(li.estimated_price) > 0);
+    if (hasPricedItems && !preGstAcked) {
+      setShowPreGstConfirm(true);
       return;
     }
     doSubmit();
@@ -514,7 +524,8 @@ export default function NewPurchaseRequestPage() {
                 {(canSeePrices || li.isCustom) && (
                   <div className="space-y-1">
                     <Label className="text-xs">
-                      Est. Price per Unit (₹)
+                      Est. Price per Unit (₹){" "}
+                      <span className="text-amber-700 font-normal">— pre-GST only</span>
                       {!li.isCustom && li.catalog_standard_price != null && (
                         <span className="ml-1 text-muted-foreground font-normal">
                           — max {formatCurrency(li.catalog_standard_price)}
@@ -526,7 +537,7 @@ export default function NewPurchaseRequestPage() {
                       min="0"
                       max={!li.isCustom && li.catalog_standard_price != null ? li.catalog_standard_price : undefined}
                       step="0.01"
-                      placeholder="0.00"
+                      placeholder="0.00 (excl. GST)"
                       value={li.estimated_price}
                       className={isPriceOverCeiling(li) ? "border-red-400 focus-visible:ring-red-400" : ""}
                       onChange={(e) => updateItem(li.id, "estimated_price", e.target.value)}
@@ -727,6 +738,42 @@ export default function NewPurchaseRequestPage() {
               onClick={() => { setShowPriceWarning(false); doSubmit(); }}
             >
               Submit without prices
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Pre-GST confirm — soft alert before submit reminding user prices must exclude GST */}
+      <Dialog open={showPreGstConfirm} onOpenChange={setShowPreGstConfirm}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2 text-amber-700">
+              <AlertTriangle className="h-5 w-5 text-amber-500" />
+              Confirm prices are pre-GST
+            </DialogTitle>
+            <DialogDescription>
+              Please confirm that every estimated price you entered is the <strong>base amount excluding GST</strong>.
+              GST is captured separately when the vendor invoice is recorded — entering GST-inclusive prices here inflates
+              budgets and PO ceilings.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="flex-col sm:flex-row gap-2">
+            <Button
+              variant="outline"
+              className="w-full sm:w-auto"
+              onClick={() => setShowPreGstConfirm(false)}
+            >
+              Go back and check
+            </Button>
+            <Button
+              className="w-full sm:w-auto bg-green-600 hover:bg-green-700"
+              onClick={() => {
+                setPreGstAcked(true);
+                setShowPreGstConfirm(false);
+                setTimeout(() => { void doSubmit(); }, 0);
+              }}
+            >
+              Yes, all prices are pre-GST
             </Button>
           </DialogFooter>
         </DialogContent>

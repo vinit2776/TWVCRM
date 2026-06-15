@@ -43,7 +43,8 @@ const patchBillSchema = z.discriminatedUnion("action", [
     approved_amount: z.number().positive().nullish(),
     approved_amount_note: z.string().nullish(),
     batch_type: z.enum(["immediate", "15th", "25th"]),
-    gst_amount: z.number().min(0, "GST amount must be 0 or greater"),
+    /** Optional at approval — accounts can set later via update_gst, but it is mandatory before payment. */
+    gst_amount: z.number().min(0, "GST amount must be 0 or greater").optional(),
     gst_zero_confirmed: z.boolean().optional(),
   }),
   z.object({
@@ -89,6 +90,15 @@ const patchBillSchema = z.discriminatedUnion("action", [
   }),
   z.object({
     action: z.literal("sign_cheque"),
+  }),
+  z.object({
+    /**
+     * Lets a rejected bill have its (pre-GST) total_amount corrected and pushed back
+     * into the approval queue. Common case: amount was entered GST-inclusive and the
+     * admin rejected — instead of recreating, edit the amount and resubmit.
+     */
+    action: z.literal("update_amount_and_resubmit"),
+    total_amount: z.number().positive("Amount must be greater than zero"),
   }),
 ]);
 
@@ -188,6 +198,15 @@ export async function PATCH(
 
       if (bill.payment_status === "paid") {
         return NextResponse.json({ error: "This bill is already fully paid" }, { status: 422 });
+      }
+
+      // Mandatory GST gate: bill must have GST set (or explicit zero-GST confirmation) before any payment.
+      // Approval no longer requires GST — it is captured here by accounts using the inline GST setter.
+      if (!bill.gst_set_at) {
+        return NextResponse.json(
+          { error: "GST amount has not been set on this bill. Enter the GST from the vendor's invoice (or confirm zero-GST) before recording payment." },
+          { status: 422 }
+        );
       }
 
       // total_amount = base (pre-GST). gst_amount is additive on top.
@@ -316,23 +335,27 @@ export async function PATCH(
 
       const batchDate = computeBatchDate(parsed.data.batch_type);
 
-      // total_amount = base (pre-GST). gst_amount is entered directly by approver.
+      // total_amount = base (pre-GST). gst_amount is OPTIONAL at approval — accounts can set it
+      // later via update_gst before recording payment.
       const totalAmt = Number(bill.total_amount); // this IS the base
-      const approveGstAmount = Math.round((parsed.data.gst_amount ?? 0) * 100) / 100;
-      const maxAllowedGst = Math.round(totalAmt * 0.28 * 100) / 100;
-      if (approveGstAmount > maxAllowedGst) {
-        return NextResponse.json(
-          { error: `GST amount (₹${approveGstAmount.toLocaleString("en-IN")}) exceeds the maximum allowed (28% of ₹${totalAmt.toLocaleString("en-IN")} = ₹${maxAllowedGst.toLocaleString("en-IN")}). Please verify the invoice.` },
-          { status: 422 },
-        );
-      }
+      const gstProvided = parsed.data.gst_amount !== undefined;
+      const approveGstAmount = gstProvided ? Math.round((parsed.data.gst_amount ?? 0) * 100) / 100 : null;
 
-      // Zero-GST at approval must be explicitly confirmed
-      if (approveGstAmount === 0 && !parsed.data.gst_zero_confirmed) {
-        return NextResponse.json(
-          { error: "Please confirm that this bill has no GST before approving." },
-          { status: 422 },
-        );
+      if (approveGstAmount !== null) {
+        const maxAllowedGst = Math.round(totalAmt * 0.28 * 100) / 100;
+        if (approveGstAmount > maxAllowedGst) {
+          return NextResponse.json(
+            { error: `GST amount (₹${approveGstAmount.toLocaleString("en-IN")}) exceeds the maximum allowed (28% of ₹${totalAmt.toLocaleString("en-IN")} = ₹${maxAllowedGst.toLocaleString("en-IN")}). Please verify the invoice.` },
+            { status: 422 },
+          );
+        }
+        // Zero-GST at approval (when GST is being set here) must be explicitly confirmed
+        if (approveGstAmount === 0 && !parsed.data.gst_zero_confirmed) {
+          return NextResponse.json(
+            { error: "Please confirm that this bill has no GST before approving." },
+            { status: 422 },
+          );
+        }
       }
 
       const approveNow = new Date().toISOString();
@@ -349,13 +372,19 @@ export async function PATCH(
         payment_batch_date: toISODateString(batchDate),
         payment_batch_assigned_by: dbUser.id,
         payment_batch_assigned_at: approveNow,
-        gst_rate: 0,
-        gst_amount: approveGstAmount,
         base_amount: totalAmt,
-        gst_set_by: dbUser.id,
-        gst_set_at: approveNow,
-        gst_zero_confirmed: approveGstAmount === 0,
-        gst_zero_confirmed_by: approveGstAmount === 0 ? dbUser.id : null,
+        // Only stamp GST fields if approver actually entered a value.
+        // Otherwise leave them null — accounts must set GST before recording payment.
+        ...(approveGstAmount !== null
+          ? {
+              gst_rate: 0,
+              gst_amount: approveGstAmount,
+              gst_set_by: dbUser.id,
+              gst_set_at: approveNow,
+              gst_zero_confirmed: approveGstAmount === 0,
+              gst_zero_confirmed_by: approveGstAmount === 0 ? dbUser.id : null,
+            }
+          : {}),
       };
 
       // For goods POs: advance status to invoice_approved
@@ -744,6 +773,75 @@ export async function PATCH(
           ? `Cheque marked as signed (${siblingsUpdated + 1} bills on this cheque updated)`
           : "Cheque marked as signed",
       });
+    }
+
+    case "update_amount_and_resubmit": {
+      // Lets a rejected bill have its (pre-GST) total_amount corrected and routed back
+      // to approval. Any procurement role can do this (no requester-only gate).
+      if (bill.approval_status !== "rejected") {
+        return NextResponse.json(
+          { error: "Only rejected bills can be edited and resubmitted" },
+          { status: 422 }
+        );
+      }
+      const newTotal = Math.round(parsed.data.total_amount * 100) / 100;
+
+      // Re-validate against PO ceiling (mirrors creation rule). Skip when there is no PO.
+      if (bill.po_id) {
+        const { data: linkedPo } = await supabase
+          .from("purchase_orders")
+          .select("po_type, total_amount, unit_cost_per_cycle")
+          .eq("id", bill.po_id)
+          .single();
+        if (linkedPo) {
+          const ceiling = linkedPo.po_type === "service" && linkedPo.unit_cost_per_cycle
+            ? Number(linkedPo.unit_cost_per_cycle)
+            : Number(linkedPo.total_amount ?? 0);
+          if (ceiling > 0 && newTotal > ceiling) {
+            return NextResponse.json(
+              {
+                error: `Corrected amount (₹${newTotal.toLocaleString("en-IN")}) cannot exceed the ${linkedPo.po_type === "service" ? "cycle cost" : "PO value"} (₹${ceiling.toLocaleString("en-IN")})`,
+              },
+              { status: 422 }
+            );
+          }
+        }
+      }
+
+      // Clear stale GST fields — the previously-set GST (if any) was relative to the
+      // wrong amount, so it must be re-captured. The new approval flow allows GST to
+      // be set later by Accounts, so leaving these null is the right default.
+      updatePayload = {
+        total_amount: newTotal,
+        approval_status: "pending",
+        approved_by: null,
+        approved_at: null,
+        approval_code: null,
+        approved_amount: null,
+        approved_amount_note: null,
+        rejection_reason: null,
+        rejection_outcome: null,
+        payment_batch_type: null,
+        payment_batch_date: null,
+        payment_batch_assigned_by: null,
+        payment_batch_assigned_at: null,
+        base_amount: newTotal,
+        gst_rate: null,
+        gst_amount: null,
+        gst_set_by: null,
+        gst_set_at: null,
+        gst_zero_confirmed: null,
+        gst_zero_confirmed_by: null,
+      };
+
+      sendPushToProcurementRoles({
+        title: "Bill amount corrected — needs re-approval",
+        body: `${bill.bill_number}: ₹${Number(bill.total_amount).toLocaleString("en-IN")} → ₹${newTotal.toLocaleString("en-IN")}`,
+        url: `/procurement/bills/${id}`,
+        tag: `bill-approval-${id}`,
+      }).catch((err) => console.error("[push] resubmit notification failed:", err));
+
+      break;
     }
   }
 

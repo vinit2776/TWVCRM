@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog";
 import {
@@ -194,6 +195,10 @@ export default function PurchaseRequestDetailPage() {
   // Dialog state
   const [actionDialog, setActionDialog] = useState<ActionType | null>(null);
   const [rejectionReason, setRejectionReason] = useState("");
+  // Edit-prices-and-resubmit (only available on rejected MRs)
+  const [editPricesOpen, setEditPricesOpen] = useState(false);
+  // Keyed by line item id → string (so empty input is preserved)
+  const [priceEdits, setPriceEdits] = useState<Record<string, string>>({});
 
   // Lifecycle state
   const [lifecycle, setLifecycle] = useState<LifecycleData | null>(null);
@@ -407,11 +412,19 @@ export default function PurchaseRequestDetailPage() {
             <Button
               size="sm"
               variant="outline"
-              onClick={() => performAction("resubmit")}
+              onClick={() => {
+                // Seed the editor with current prices so the user only changes what's wrong.
+                const seed: Record<string, string> = {};
+                for (const it of pr.purchase_request_items ?? []) {
+                  seed[it.id] = it.estimated_price != null ? String(it.estimated_price) : "";
+                }
+                setPriceEdits(seed);
+                setEditPricesOpen(true);
+              }}
               disabled={actionLoading}
             >
               {actionLoading ? <Loader2 className="h-4 w-4 animate-spin mr-1" /> : <RefreshCcw className="h-4 w-4 mr-1" />}
-              Resubmit
+              Edit prices & resubmit
             </Button>
           )}
           {["draft", "submitted"].includes(pr.status) && (
@@ -1195,6 +1208,97 @@ export default function PurchaseRequestDetailPage() {
             >
               {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Yes, Cancel
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit prices & resubmit — rejected MRs only. Price-only edits; item identity locked. */}
+      <Dialog open={editPricesOpen} onOpenChange={setEditPricesOpen}>
+        <DialogContent className="max-w-2xl">
+          <DialogHeader>
+            <DialogTitle>Edit prices & resubmit</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-1">
+            <p className="text-xs text-muted-foreground">
+              Fix any line item prices below (enter <strong>pre-GST amounts only</strong>) and resubmit.
+              Item, quantity, and unit cannot be changed here — if those are wrong, cancel the request and create a new one.
+            </p>
+            <div className="rounded-md border overflow-hidden">
+              <table className="w-full text-sm">
+                <thead className="bg-muted/50">
+                  <tr className="text-left">
+                    <th className="px-3 py-2 font-medium">Item</th>
+                    <th className="px-3 py-2 font-medium text-right">Qty</th>
+                    <th className="px-3 py-2 font-medium">Unit</th>
+                    <th className="px-3 py-2 font-medium text-right w-40">Price per Unit (₹)</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {(pr.purchase_request_items ?? []).map((it) => (
+                    <tr key={it.id} className="border-t">
+                      <td className="px-3 py-2">{it.item_name}</td>
+                      <td className="px-3 py-2 text-right">{it.quantity}</td>
+                      <td className="px-3 py-2 text-muted-foreground">{it.unit}</td>
+                      <td className="px-3 py-2">
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="pre-GST"
+                          value={priceEdits[it.id] ?? ""}
+                          onChange={(e) =>
+                            setPriceEdits((prev) => ({ ...prev, [it.id]: e.target.value }))
+                          }
+                          className="h-8 text-sm text-right"
+                        />
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditPricesOpen(false)} disabled={actionLoading}>
+              Cancel
+            </Button>
+            <Button
+              onClick={async () => {
+                // Build line_items payload — only send items whose price actually changed,
+                // and validate each.
+                const edits: { id: string; estimated_price: number }[] = [];
+                for (const it of pr.purchase_request_items ?? []) {
+                  const raw = priceEdits[it.id];
+                  if (raw === undefined || raw === "") continue;
+                  const n = parseFloat(raw);
+                  if (isNaN(n) || n < 0) {
+                    toast.error(`Invalid price on "${it.item_name}"`);
+                    return;
+                  }
+                  if (Number(it.estimated_price ?? 0) !== n) edits.push({ id: it.id, estimated_price: n });
+                }
+                setActionLoading(true);
+                try {
+                  const res = await fetch(`/api/procurement/requests/${id}`, {
+                    method: "PATCH",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ action: "resubmit", line_items: edits }),
+                  });
+                  const json = await res.json();
+                  if (!res.ok) { toast.error(json.error || "Resubmit failed"); return; }
+                  toast.success(edits.length > 0 ? "Prices updated & resubmitted" : "Request resubmitted");
+                  setEditPricesOpen(false);
+                  await fetchPr();
+                } finally {
+                  setActionLoading(false);
+                }
+              }}
+              disabled={actionLoading}
+              className="bg-green-600 hover:bg-green-700"
+            >
+              {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              Save & resubmit
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -333,6 +333,11 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   }, [fetchChain]);
 
   async function openPaymentDialog() {
+    // GST must be set on the bill before any payment is recorded.
+    if (bill && !bill.gst_set_at) {
+      toast.error("Enter the GST amount from the vendor's invoice (or confirm zero-GST) before recording payment");
+      return;
+    }
     // Block if the user has typed a GST value but not clicked Apply
     if (hasUnappliedGst) {
       toast.error("GST amount entered but not applied — click \"Apply\" to save it before recording payment");
