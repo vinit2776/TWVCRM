@@ -80,16 +80,19 @@ export async function POST(request: NextRequest) {
   const sha256 = createHash("sha256").update(bytes).digest("hex");
   const key = `${B2_PREFIX}/twv-tally-bridge-v${version}.zip`;
 
+  // Same bucket as db-backup — keeps B2 application-key scope consistent.
+  const bucket = process.env.B2_BUCKET || "twvcrmbackups";
   try {
     await getS3Client().send(new PutObjectCommand({
-      Bucket: process.env.B2_BUCKET,
+      Bucket: bucket,
       Key: key,
       Body: bytes,
       ContentType: "application/zip",
     }));
   } catch (err) {
     console.error("[tally/update-package] B2 upload failed:", err);
-    return NextResponse.json({ error: "Storage upload failed" }, { status: 502 });
+    const detail = err instanceof Error ? err.message : String(err);
+    return NextResponse.json({ error: `Storage upload failed: ${detail}` }, { status: 502 });
   }
 
   const admin = createAdminClient();
@@ -132,7 +135,7 @@ export async function GET(request: NextRequest) {
 
   try {
     const obj = await getS3Client().send(new GetObjectCommand({
-      Bucket: process.env.B2_BUCKET,
+      Bucket: process.env.B2_BUCKET || "twvcrmbackups",
       Key: key,
     }));
     const bytes = Buffer.from(await obj.Body!.transformToByteArray());
