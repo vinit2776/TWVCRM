@@ -21,6 +21,10 @@ const patchPoSchema = z.discriminatedUnion("action", [
   z.object({
     action: z.literal("process_advance"),
     advance_payment_date: z.string().min(1, "Payment date is required"),
+    /** UTR / cheque number — required so the recorded payment is traceable. */
+    advance_payment_reference: z.string().min(1, "Payment reference (UTR / cheque #) is required"),
+    /** Bank rail used to pay the vendor — same enum as bill payments. */
+    advance_payment_mode: z.enum(["neft", "rtgs", "imps", "bank_transfer", "cheque", "cash"]),
   }),
   z.object({
     action: z.literal("update_amc_details"),
@@ -268,14 +272,27 @@ export async function PATCH(
       if (po.advance_status !== "pending") {
         return NextResponse.json({ error: "Only POs with a pending advance can be processed" }, { status: 422 });
       }
-      if (!["admin", "manager"].includes(dbUser.role)) {
-        return NextResponse.json({ error: "Only managers and admins can process advance payments" }, { status: 403 });
+      // PO advances are now released by Finance (same roles that record bill
+      // payments). Bank modes for accounts/admin; cash allowed for office_admin
+      // (petty cash) and admin only.
+      const mode = parsed.data.advance_payment_mode;
+      const isBankMode = ["neft", "rtgs", "imps", "bank_transfer", "cheque"].includes(mode);
+      if (!["admin", "accounts", "office_admin"].includes(dbUser.role)) {
+        return NextResponse.json({ error: "Only Accounts, Office Admin or Admin can release PO advances" }, { status: 403 });
+      }
+      if (dbUser.role === "accounts" && !isBankMode) {
+        return NextResponse.json({ error: "Accounts team can only record bank payments (NEFT, RTGS, IMPS, Bank Transfer, Cheque)" }, { status: 403 });
+      }
+      if (dbUser.role === "office_admin" && mode !== "cash") {
+        return NextResponse.json({ error: "Petty cash payments only — bank payments must be processed by the Accounts team" }, { status: 403 });
       }
       updatePayload = {
         advance_status: "processed",
         advance_processed_by: dbUser.id,
         advance_processed_at: new Date().toISOString(),
         advance_payment_date: parsed.data.advance_payment_date,
+        advance_payment_mode: mode,
+        advance_payment_reference: parsed.data.advance_payment_reference,
       };
       break;
     }

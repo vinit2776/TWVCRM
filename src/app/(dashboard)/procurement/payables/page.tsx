@@ -290,45 +290,12 @@ export default function PayablesPage() {
         </div>
       )}
 
-      {/* ── Top-level tabs: Bills / Advances ───────────────────────────── */}
-      <div className="flex gap-1 border-b">
-        <button
-          className={cn(
-            "px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
-            activeTab === "bills"
-              ? "border-primary text-primary"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          )}
-          onClick={() => setActiveTab("bills")}
-        >
-          Bills
-          {bills.length > 0 && (
-            <span className="ml-2 rounded-full bg-primary/10 text-primary px-1.5 py-0.5 text-xs font-medium">
-              {bills.length}
-            </span>
-          )}
-        </button>
-        <button
-          className={cn(
-            "px-4 py-2.5 text-sm font-medium border-b-2 -mb-px transition-colors",
-            activeTab === "advances"
-              ? "border-orange-500 text-orange-700"
-              : "border-transparent text-muted-foreground hover:text-foreground"
-          )}
-          onClick={() => setActiveTab("advances")}
-        >
-          Pending Advances
-          {advancesTotal > 0 && (
-            <span className="ml-2 rounded-full bg-orange-100 text-orange-800 px-1.5 py-0.5 text-xs font-medium">
-              {advancesTotal}
-            </span>
-          )}
-        </button>
-      </div>
+      {/* PO advances are now released by Finance from Acc Payables — they
+          no longer live on this page. The Bills section below is the only
+          content; the tab strip was removed in feat/po-advance-through-finance. */}
 
-      {/* ── BILLS TAB ────────────────────────────────────────────────────── */}
-      {activeTab === "bills" && (
-        <>
+      {/* ── BILLS ───────────────────────────────────────────────────────── */}
+      <>
           {/* Summary cards */}
           {!loadingBills && bills.length > 0 && (
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
@@ -647,9 +614,11 @@ export default function PayablesPage() {
             </div>
           )}
         </>
-      )}
 
-      {/* ── ADVANCES TAB ─────────────────────────────────────────────────── */}
+      {/* ── ADVANCES TAB (REMOVED — released by Finance from Acc Payables).
+          activeTab is always 'bills' now (the tab strip is gone), so this
+          block never renders. Kept dead-code to minimise diff footprint
+          while the new flow is being adopted; delete in a follow-up. */}
       {activeTab === "advances" && (
         <>
           {!loadingAdvances && pendingAdvances.length > 0 && (

@@ -100,6 +100,20 @@ type VendorBillItem = {
   }>;
 };
 
+type PendingAdvance = {
+  id: string;
+  po_number: string;
+  advance_amount: number;
+  advance_payment_mode: string | null;
+  payment_terms: string | null;
+  created_at: string;
+  status: string;
+  vendor_id: string;
+  procurement_vendors: { id: string; name: string; contact_email?: string | null } | null;
+  purchase_requests: { id: string; pr_number: string } | null;
+  proforma: { file_name: string; file_path: string; amount: number; signed_url: string | null } | null;
+};
+
 type TdsSection = {
   code: string; description: string;
   rate_individual: number; rate_company: number;
@@ -255,6 +269,42 @@ export default function AccountingPage() {
   const [tagExpType, setTagExpType] = useState<string>("");
   const [tagSubmitting, setTagSubmitting] = useState(false);
 
+  async function handleProcessAdvance() {
+    if (!processingAdvance) return;
+    if (!advanceForm.payment_reference.trim()) {
+      toast.error("Payment reference (UTR / cheque #) is required");
+      return;
+    }
+    setAdvanceSubmitting(true);
+    try {
+      const res = await fetch(`/api/procurement/orders/${processingAdvance.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "process_advance",
+          advance_payment_date: advanceForm.payment_date,
+          advance_payment_mode: advanceForm.payment_mode,
+          advance_payment_reference: advanceForm.payment_reference.trim(),
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Failed to release advance");
+        return;
+      }
+      toast.success(`Advance released for ${processingAdvance.po_number}`);
+      setProcessingAdvance(null);
+      setAdvanceForm({
+        payment_mode: "neft",
+        payment_reference: "",
+        payment_date: new Date().toISOString().split("T")[0],
+      });
+      await fetchPendingAdvances();
+    } finally {
+      setAdvanceSubmitting(false);
+    }
+  }
+
   async function handleTagSubmit() {
     if (!tagDialogBillId) return;
     setTagSubmitting(true);
@@ -304,11 +354,38 @@ export default function AccountingPage() {
     }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Pending PO advances (released by Finance, same queue as bills) ────────
+  const [pendingAdvances, setPendingAdvances] = useState<PendingAdvance[]>([]);
+  const [advancesLoading, setAdvancesLoading] = useState(false);
+  const [processingAdvance, setProcessingAdvance] = useState<PendingAdvance | null>(null);
+  const [advanceForm, setAdvanceForm] = useState({
+    payment_mode: "neft" as "neft" | "rtgs" | "imps" | "bank_transfer" | "cheque" | "cash",
+    payment_reference: "",
+    payment_date: new Date().toISOString().split("T")[0],
+  });
+  const [advanceSubmitting, setAdvanceSubmitting] = useState(false);
+
+  const fetchPendingAdvances = useCallback(async () => {
+    setAdvancesLoading(true);
+    try {
+      const res = await fetch("/api/accounting/po-advances-pending");
+      if (res.ok) {
+        const { data } = await res.json();
+        setPendingAdvances(data ?? []);
+      }
+    } finally {
+      setAdvancesLoading(false);
+    }
+  }, []);
+
   // Fire when filter VALUES change — stringify guards against reference churn.
   const filtersKey = useMemo(() => filtersToParams(filters).toString(), [filters]);
   useEffect(() => {
-    if (activeTab === "vendor-payments") fetchVendorBills();
-  }, [activeTab, filtersKey, fetchVendorBills]);
+    if (activeTab === "vendor-payments") {
+      fetchVendorBills();
+      fetchPendingAdvances();
+    }
+  }, [activeTab, filtersKey, fetchVendorBills, fetchPendingAdvances]);
 
   // Vendor-email audit count for the dashboard widget
   useEffect(() => {
@@ -580,6 +657,106 @@ export default function AccountingPage() {
                   </button>
                 )}
               </div>
+
+              {/* ── Pending PO advances — queued for Finance to release ────────
+                  Advances bypass the bill-approval flow but still need a UTR.
+                  Surfaced here so Finance processes them in one place. */}
+              {(advancesLoading || pendingAdvances.length > 0) && (
+                <div className="rounded-lg border border-purple-200 bg-purple-50/40 overflow-hidden">
+                  <div className="px-4 py-2.5 border-b border-purple-200 bg-purple-100/50 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="inline-flex items-center gap-1 text-[11px] font-semibold uppercase tracking-wide text-purple-800">
+                        <span className="inline-block w-1.5 h-1.5 rounded-full bg-purple-600" />
+                        PO Advances · Pending Release
+                      </span>
+                      {!advancesLoading && pendingAdvances.length > 0 && (
+                        <span className="text-xs text-purple-700">
+                          {pendingAdvances.length} · {formatCurrency(pendingAdvances.reduce((s, a) => s + Number(a.advance_amount ?? 0), 0))}
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[11px] text-purple-700">
+                      Released here, not in Procurement
+                    </span>
+                  </div>
+                  {advancesLoading ? (
+                    <div className="p-4 text-xs text-purple-700">Loading…</div>
+                  ) : (
+                    <table className="w-full text-sm">
+                      <thead className="text-[11px] uppercase tracking-wide text-purple-800 bg-purple-50">
+                        <tr>
+                          <th className="px-4 py-2 text-left font-medium">PO</th>
+                          <th className="px-4 py-2 text-left font-medium">Vendor</th>
+                          <th className="px-4 py-2 text-right font-medium">Advance</th>
+                          <th className="px-4 py-2 text-left font-medium hidden md:table-cell">Proforma</th>
+                          <th className="px-4 py-2 text-left font-medium hidden lg:table-cell">Terms</th>
+                          <th className="px-4 py-2 text-right font-medium">Action</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {pendingAdvances.map((adv) => (
+                          <tr key={adv.id} className="border-t border-purple-100 hover:bg-purple-50">
+                            <td className="px-4 py-2.5 font-mono text-xs">
+                              <Link href={`/procurement/orders/${adv.id}`} className="text-purple-800 hover:underline">
+                                {adv.po_number}
+                              </Link>
+                              <div className="text-[10px] text-purple-600">
+                                Raised {formatDate(adv.created_at)}
+                              </div>
+                            </td>
+                            <td className="px-4 py-2.5">
+                              <p className="font-medium">{adv.procurement_vendors?.name ?? "—"}</p>
+                              {adv.purchase_requests?.pr_number && (
+                                <p className="text-[10px] text-muted-foreground font-mono">{adv.purchase_requests.pr_number}</p>
+                              )}
+                            </td>
+                            <td className="px-4 py-2.5 text-right font-semibold text-purple-800">
+                              {formatCurrency(adv.advance_amount)}
+                            </td>
+                            <td className="px-4 py-2.5 hidden md:table-cell">
+                              {adv.proforma?.signed_url ? (
+                                <a
+                                  href={adv.proforma.signed_url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1 text-xs text-purple-800 hover:underline"
+                                >
+                                  <FileText className="h-3.5 w-3.5" />
+                                  View
+                                </a>
+                              ) : (
+                                <span className="text-[11px] text-muted-foreground italic">No proforma attached</span>
+                              )}
+                            </td>
+                            <td className="px-4 py-2.5 hidden lg:table-cell text-xs text-muted-foreground italic max-w-[280px] truncate">
+                              {adv.payment_terms ?? "—"}
+                            </td>
+                            <td className="px-4 py-2.5 text-right">
+                              {canRecordPayment ? (
+                                <button
+                                  onClick={() => {
+                                    setProcessingAdvance(adv);
+                                    setAdvanceForm({
+                                      payment_mode: "neft",
+                                      payment_reference: "",
+                                      payment_date: new Date().toISOString().split("T")[0],
+                                    });
+                                  }}
+                                  className="inline-flex items-center gap-1 rounded-md bg-purple-600 hover:bg-purple-700 text-white text-xs font-medium px-3 py-1.5"
+                                >
+                                  Release advance
+                                </button>
+                              ) : (
+                                <span className="text-[11px] text-muted-foreground">View only</span>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  )}
+                </div>
+              )}
 
               {/* Cash-flow batch buckets */}
               {allPendingBills.length > 0 && (() => {
@@ -1763,6 +1940,101 @@ export default function AccountingPage() {
             >
               {tagSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
               Save Classification
+            </button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Release PO Advance dialog ─────────────────────────────────────── */}
+      <Dialog open={!!processingAdvance} onOpenChange={(o) => { if (!o && !advanceSubmitting) setProcessingAdvance(null); }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Release advance — {processingAdvance?.po_number}</DialogTitle>
+          </DialogHeader>
+          {processingAdvance && (
+            <div className="space-y-4 py-2 text-sm">
+              <div className="rounded-md bg-muted/40 p-3 space-y-1">
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Vendor</span>
+                  <span className="font-medium">{processingAdvance.procurement_vendors?.name ?? "—"}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-muted-foreground">Advance amount</span>
+                  <span className="font-semibold text-purple-800">{formatCurrency(processingAdvance.advance_amount)}</span>
+                </div>
+                {processingAdvance.payment_terms && (
+                  <div className="text-[11px] text-muted-foreground italic pt-1">
+                    Terms: &ldquo;{processingAdvance.payment_terms}&rdquo;
+                  </div>
+                )}
+                {processingAdvance.proforma?.signed_url && (
+                  <a
+                    href={processingAdvance.proforma.signed_url}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="inline-flex items-center gap-1 text-xs text-purple-700 hover:underline pt-1"
+                  >
+                    <FileText className="h-3.5 w-3.5" />
+                    View proforma ({processingAdvance.proforma.file_name})
+                  </a>
+                )}
+              </div>
+
+              <div className="space-y-1">
+                <Label>Payment mode <span className="text-red-500">*</span></Label>
+                <select
+                  value={advanceForm.payment_mode}
+                  onChange={(e) => setAdvanceForm({ ...advanceForm, payment_mode: e.target.value as typeof advanceForm.payment_mode })}
+                  className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                >
+                  <option value="neft">NEFT</option>
+                  <option value="rtgs">RTGS</option>
+                  <option value="imps">IMPS</option>
+                  <option value="bank_transfer">Bank Transfer</option>
+                  <option value="cheque">Cheque</option>
+                  {(currentUserRole === "admin" || currentUserRole === "office_admin") && (
+                    <option value="cash">Cash / Petty Cash</option>
+                  )}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <Label>Reference / UTR / Cheque # <span className="text-red-500">*</span></Label>
+                <Input
+                  value={advanceForm.payment_reference}
+                  onChange={(e) => setAdvanceForm({ ...advanceForm, payment_reference: e.target.value })}
+                  placeholder="e.g. UTR123456789"
+                />
+              </div>
+
+              <div className="space-y-1">
+                <Label>Payment date</Label>
+                <Input
+                  type="date"
+                  value={advanceForm.payment_date}
+                  onChange={(e) => setAdvanceForm({ ...advanceForm, payment_date: e.target.value })}
+                />
+              </div>
+
+              <p className="text-[11px] text-purple-700 bg-purple-50 border border-purple-200 rounded px-3 py-2">
+                Confirms that <strong>{formatCurrency(processingAdvance.advance_amount)}</strong> has been transferred to the vendor. The PO will move to <em>advance processed</em>, and the linked bill (when uploaded) will auto-credit this amount.
+              </p>
+            </div>
+          )}
+          <DialogFooter>
+            <button
+              onClick={() => setProcessingAdvance(null)}
+              disabled={advanceSubmitting}
+              className="px-3 py-1.5 text-sm rounded-md border hover:bg-muted/50 disabled:opacity-50"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={handleProcessAdvance}
+              disabled={advanceSubmitting || !advanceForm.payment_reference.trim()}
+              className="px-3 py-1.5 text-sm rounded-md bg-purple-600 hover:bg-purple-700 text-white font-medium disabled:opacity-50"
+            >
+              {advanceSubmitting ? "Releasing…" : "Confirm & release"}
             </button>
           </DialogFooter>
         </DialogContent>
