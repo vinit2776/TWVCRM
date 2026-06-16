@@ -46,10 +46,10 @@ BEGIN
   IF v_bill_id IS NOT NULL THEN
     UPDATE vendor_bills
     SET amount_paid    = GREATEST(0, amount_paid - v_advance),
-        payment_status = CASE
+        payment_status = (CASE
           WHEN GREATEST(0, amount_paid - v_advance) <= 0 THEN 'unpaid'
           ELSE 'partially_paid'
-        END
+        END)::bill_payment_status
     WHERE id = v_bill_id
       -- guard: only reset if there are no actual recorded payments
       AND NOT EXISTS (
