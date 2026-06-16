@@ -809,8 +809,9 @@ export async function PATCH(
       }
 
       // Clear stale GST fields — the previously-set GST (if any) was relative to the
-      // wrong amount, so it must be re-captured. The new approval flow allows GST to
-      // be set later by Accounts, so leaving these null is the right default.
+      // wrong amount, so it must be re-captured. The "not yet set" sentinel is
+      // gst_set_at IS NULL; numeric gst columns are NOT NULL with default 0 in the
+      // DB, so we reset them to 0 (not null) to avoid a constraint violation.
       updatePayload = {
         total_amount: newTotal,
         approval_status: "pending",
@@ -826,11 +827,11 @@ export async function PATCH(
         payment_batch_assigned_by: null,
         payment_batch_assigned_at: null,
         base_amount: newTotal,
-        gst_rate: null,
-        gst_amount: null,
+        gst_rate: 0,
+        gst_amount: 0,
         gst_set_by: null,
         gst_set_at: null,
-        gst_zero_confirmed: null,
+        gst_zero_confirmed: false,
         gst_zero_confirmed_by: null,
       };
 
