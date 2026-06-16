@@ -1932,6 +1932,23 @@ export interface PurchaseRequest {
   requester?: { id: string; full_name?: string; email?: string } | null;
   approver?: { id: string; full_name?: string; email?: string } | null;
   purchase_request_items?: PurchaseRequestItem[];
+  material_request_quotations?: MaterialRequestQuotation[];
+}
+
+export interface MaterialRequestQuotation {
+  id: string;
+  pr_id: string;
+  vendor_name: string;
+  amount: number;
+  file_path: string;
+  file_name: string;
+  file_mime_type: string;
+  notes?: string | null;
+  uploaded_by?: string | null;
+  created_at: string;
+  // Joined / computed
+  uploader?: { id: string; full_name?: string; email?: string } | null;
+  signed_url?: string;
 }
 
 export interface PurchaseOrderItem {
@@ -2106,7 +2123,7 @@ export interface VendorBill {
   updated_at: string;
   // Joined fields
   procurement_vendors?: Pick<ProcurementVendor, "id" | "name"> | null;
-  purchase_orders?: (Pick<PurchaseOrder, "id" | "po_number" | "po_type"> & {
+  purchase_orders?: (Pick<PurchaseOrder, "id" | "po_number" | "po_type" | "expected_delivery_date"> & {
     purchase_requests?: { department: string; expenditure_type: string } | null;
   }) | null;
   approver?: { id: string; full_name?: string } | null;

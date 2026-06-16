@@ -13,6 +13,7 @@ import {
   BILL_APPROVAL_STATUS_LABELS, BILL_APPROVAL_STATUS_COLORS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency, cn } from "@/lib/utils";
+import { poValidity, PO_VALIDITY_CLASS } from "@/lib/approval-display";
 import { BillSearchBar, filtersToParams, parseBillFilters, type BillFilters } from "@/components/procurement/bill-search-bar";
 import type { VendorBill } from "@/types";
 
@@ -112,7 +113,7 @@ function VendorBillsPageInner() {
           onClick={() => handleQuickFilter("pending_approval")}
           className={quickFilter !== "pending_approval" ? "border-yellow-200 text-yellow-800 hover:bg-yellow-50" : "bg-yellow-600 hover:bg-yellow-700"}
         >
-          Pending Approval
+          Pending Payment Approval
         </Button>
         <Button
           variant={quickFilter === "ready_for_payment" ? "default" : "outline"}
@@ -129,7 +130,7 @@ function VendorBillsPageInner() {
       ) : bills.length === 0 ? (
         <EmptyState
           icon={Receipt}
-          title={quickFilter === "pending_approval" ? "No bills pending approval" : quickFilter === "ready_for_payment" ? "No bills ready for payment" : "No vendor bills"}
+          title={quickFilter === "pending_approval" ? "No bills pending payment approval" : quickFilter === "ready_for_payment" ? "No bills ready for payment" : "No vendor bills"}
           description={quickFilter === "all" ? "Record your first vendor bill to start tracking payments." : "No bills match the current filter."}
           actionLabel={quickFilter === "all" ? "New Bill" : undefined}
           onAction={quickFilter === "all" ? () => router.push("/procurement/bills/new") : undefined}
@@ -176,13 +177,23 @@ function VendorBillsPageInner() {
                   </td>
                   <td className="px-4 py-3 hidden md:table-cell text-muted-foreground font-mono text-xs">
                     {bill.purchase_orders ? (
-                      <Link
-                        href={`/procurement/orders/${bill.purchase_orders.id}`}
-                        className="text-primary hover:underline"
-                        onClick={(e) => e.stopPropagation()}
-                      >
-                        {bill.purchase_orders.po_number}
-                      </Link>
+                      <div className="flex items-center gap-1.5">
+                        <Link
+                          href={`/procurement/orders/${bill.purchase_orders.id}`}
+                          className="text-primary hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {bill.purchase_orders.po_number}
+                        </Link>
+                        {(() => {
+                          const v = poValidity(bill.purchase_orders.expected_delivery_date);
+                          return v && bill.payment_status !== "paid" ? (
+                            <Badge variant="outline" className={`text-[10px] ${PO_VALIDITY_CLASS[v.tone]}`}>
+                              {v.label}
+                            </Badge>
+                          ) : null;
+                        })()}
+                      </div>
                     ) : "—"}
                   </td>
                   <td className="px-4 py-3 hidden lg:table-cell text-muted-foreground">

@@ -13,6 +13,11 @@ import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
 import { toast } from "sonner";
+import { emitApprovalChanged, onApprovalChanged } from "@/lib/approval-events";
+import { formatCurrency } from "@/lib/utils";
+import { poValidity, PO_VALIDITY_CLASS, waitingSince } from "@/lib/approval-display";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Receipt } from "lucide-react";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -36,6 +41,17 @@ interface ApprovalRequest {
   expires_at: string | null;
   requester?: { id: string; full_name: string; email: string; role: string } | null;
   actor?: { id: string; full_name: string } | null;
+}
+
+interface PendingBill {
+  id: string;
+  bill_number: string;
+  total_amount: number;
+  created_at: string;
+  due_date: string | null;
+  notes: string | null;
+  procurement_vendors: { name: string } | null;
+  purchase_orders: { id: string; po_number: string; expected_delivery_date: string | null } | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -114,6 +130,7 @@ function CompRequestRow({
         return;
       }
       toast.success(json.message || `Request ${action}d`);
+      emitApprovalChanged();
       onActed();
     } finally {
       setActing(false);
@@ -239,6 +256,156 @@ function CompRequestRow({
 }
 
 // ---------------------------------------------------------------------------
+// Vendor bill row
+// ---------------------------------------------------------------------------
+
+function VendorBillRow({
+  bill,
+  canAct,
+  selected,
+  onToggleSelect,
+  onActed,
+}: {
+  bill: PendingBill;
+  canAct: boolean;
+  selected: boolean;
+  onToggleSelect: (id: string, checked: boolean) => void;
+  onActed: () => void;
+}) {
+  const [acting, setActing] = useState(false);
+  const [rejecting, setRejecting] = useState(false);
+  const [rejectionReason, setRejectionReason] = useState("");
+
+  const validity = poValidity(bill.purchase_orders?.expected_delivery_date);
+  const waiting = waitingSince(bill.created_at);
+
+  const handleAction = async (action: "approve" | "reject") => {
+    if (action === "reject" && !rejectionReason.trim()) {
+      toast.error("Please provide a rejection reason");
+      return;
+    }
+    setActing(true);
+    try {
+      const res = await fetch(`/api/procurement/bills/${bill.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action,
+          ...(action === "reject" ? { rejection_reason: rejectionReason.trim() } : {}),
+        }),
+      });
+      if (!res.ok) {
+        const json = await res.json().catch(() => null);
+        toast.error(json?.error || `Failed to ${action} bill`);
+        return;
+      }
+      toast.success(action === "approve" ? `${bill.bill_number} approved` : `${bill.bill_number} rejected`);
+      emitApprovalChanged();
+      onActed();
+    } finally {
+      setActing(false);
+    }
+  };
+
+  return (
+    <div className="border border-border rounded-lg p-4 space-y-3 hover:bg-muted/10 transition-colors">
+      <div className="flex items-start justify-between gap-3">
+        <div className="flex items-start gap-2">
+          {canAct && (
+            <Checkbox
+              checked={selected}
+              onCheckedChange={(c) => onToggleSelect(bill.id, !!c)}
+              aria-label={`Select ${bill.bill_number}`}
+              className="mt-1"
+            />
+          )}
+          <Receipt className="h-4 w-4 text-purple-600 shrink-0 mt-0.5" />
+          <div>
+            <Link
+              href={`/procurement/bills/${bill.id}`}
+              className="font-medium text-sm hover:underline"
+            >
+              {bill.bill_number}
+            </Link>
+            <p className="text-xs text-muted-foreground">
+              {bill.procurement_vendors?.name || "Unknown vendor"}
+              {bill.purchase_orders?.po_number && ` · PO ${bill.purchase_orders.po_number}`}
+            </p>
+          </div>
+        </div>
+        <div className="flex flex-col items-end gap-1">
+          <span className="font-semibold text-sm">{formatCurrency(bill.total_amount)}</span>
+          {waiting && <span className="text-[10px] text-amber-700">{waiting}</span>}
+        </div>
+      </div>
+
+      {validity && (
+        <div className="flex items-center gap-2">
+          <Badge variant="outline" className={`text-[10px] ${PO_VALIDITY_CLASS[validity.tone]}`}>
+            {validity.label}
+          </Badge>
+        </div>
+      )}
+
+      {canAct && (
+        <div className="space-y-2">
+          {rejecting && (
+            <Input
+              autoFocus
+              placeholder="Reason for rejection (required)"
+              value={rejectionReason}
+              onChange={(e) => setRejectionReason(e.target.value)}
+              className="h-8 text-xs"
+            />
+          )}
+          <div className="flex gap-2">
+            {!rejecting ? (
+              <>
+                <Button
+                  size="sm"
+                  className="flex-1 h-8 text-xs bg-emerald-600 hover:bg-emerald-700"
+                  disabled={acting}
+                  onClick={() => handleAction("approve")}
+                >
+                  {acting ? <Loader2 className="h-3 w-3 animate-spin" /> : (<><CheckCircle2 className="h-3 w-3 mr-1" />Approve</>)}
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="flex-1 h-8 text-xs text-destructive hover:text-destructive"
+                  onClick={() => { setRejecting(true); setRejectionReason(""); }}
+                >
+                  <XCircle className="h-3 w-3 mr-1" />Reject
+                </Button>
+              </>
+            ) : (
+              <>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="flex-1 h-8 text-xs"
+                  onClick={() => { setRejecting(false); setRejectionReason(""); }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  size="sm"
+                  className="flex-1 h-8 text-xs bg-destructive hover:bg-destructive/90"
+                  disabled={acting}
+                  onClick={() => handleAction("reject")}
+                >
+                  {acting ? <Loader2 className="h-3 w-3 animate-spin" /> : "Confirm Reject"}
+                </Button>
+              </>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Page
 // ---------------------------------------------------------------------------
 
@@ -248,10 +415,14 @@ export default function ApprovalsPage() {
   const userId = user?.id ?? null;
   const [requests, setRequests]     = useState<ApprovalRequest[]>([]);
   const [history, setHistory]       = useState<ApprovalRequest[]>([]);
+  const [pendingBills, setPendingBills] = useState<PendingBill[]>([]);
+  const [selectedBillIds, setSelectedBillIds] = useState<Set<string>>(new Set());
+  const [bulkApproving, setBulkApproving] = useState(false);
   const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const isApprover = userRole === "admin" || userRole === "manager";
+  const canActOnBills = userRole === "admin";
 
   const fetchData = useCallback(async () => {
     try {
@@ -266,6 +437,17 @@ export default function ApprovalsPage() {
             ? all.filter(r => r.approval_type === "comp_request")
             : all.filter(r => r.approval_type === "comp_request" && r.requested_by === userId)
         );
+      }
+
+      // Fetch pending vendor bills (only admins/managers see them — admins can act)
+      if (isApprover) {
+        const billsRes = await fetch("/api/procurement/bills?approval_status=pending&limit=50");
+        if (billsRes.ok) {
+          const json = await billsRes.json();
+          setPendingBills((json.data || []) as PendingBill[]);
+        }
+      } else {
+        setPendingBills([]);
       }
 
       // Fetch recent resolved (last 30 days)
@@ -290,10 +472,56 @@ export default function ApprovalsPage() {
     if (!userLoading && userRole !== null) fetchData();
   }, [userLoading, userRole, fetchData]);
 
+  // Listen for approval mutations from elsewhere in the app so this page
+  // stays in sync without the user clicking refresh.
+  useEffect(() => {
+    return onApprovalChanged(() => { fetchData(); });
+  }, [fetchData]);
+
   const handleRefresh = async () => {
     setRefreshing(true);
     await fetchData();
     setRefreshing(false);
+  };
+
+  const toggleBillSelected = (id: string, checked: boolean) => {
+    setSelectedBillIds(prev => {
+      const next = new Set(prev);
+      if (checked) next.add(id); else next.delete(id);
+      return next;
+    });
+  };
+
+  const toggleAllBills = (checked: boolean) => {
+    setSelectedBillIds(checked ? new Set(pendingBills.map(b => b.id)) : new Set());
+  };
+
+  const handleBulkApprove = async () => {
+    if (selectedBillIds.size === 0) return;
+    setBulkApproving(true);
+    const ids = Array.from(selectedBillIds);
+    const results = await Promise.allSettled(
+      ids.map(id =>
+        fetch(`/api/procurement/bills/${id}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "approve" }),
+        }).then(async r => {
+          if (!r.ok) {
+            const json = await r.json().catch(() => null);
+            throw new Error(json?.error || `Failed`);
+          }
+        })
+      )
+    );
+    const ok = results.filter(r => r.status === "fulfilled").length;
+    const failed = results.length - ok;
+    if (ok > 0) toast.success(`${ok} bill${ok === 1 ? "" : "s"} approved`);
+    if (failed > 0) toast.error(`${failed} failed — open them individually to see why`);
+    setSelectedBillIds(new Set());
+    emitApprovalChanged();
+    await fetchData();
+    setBulkApproving(false);
   };
 
   return (
@@ -326,9 +554,9 @@ export default function ApprovalsPage() {
           <TabsList className="w-full">
             <TabsTrigger value="pending" className="flex-1">
               Pending
-              {requests.length > 0 && (
+              {(requests.length + pendingBills.length) > 0 && (
                 <Badge className="ml-2 text-[10px] bg-amber-100 text-amber-700 hover:bg-amber-100 border border-amber-200">
-                  {requests.length}
+                  {requests.length + pendingBills.length}
                 </Badge>
               )}
             </TabsTrigger>
@@ -341,8 +569,8 @@ export default function ApprovalsPage() {
           </TabsList>
 
           {/* Pending tab */}
-          <TabsContent value="pending" className="mt-4 space-y-3">
-            {requests.length === 0 ? (
+          <TabsContent value="pending" className="mt-4 space-y-6">
+            {requests.length === 0 && pendingBills.length === 0 ? (
               <Card>
                 <CardContent className="py-12 text-center">
                   <CheckCircle2 className="h-10 w-10 text-green-400 mx-auto mb-3" />
@@ -351,14 +579,74 @@ export default function ApprovalsPage() {
                 </CardContent>
               </Card>
             ) : (
-              requests.map(req => (
-                <CompRequestRow
-                  key={req.id}
-                  req={req}
-                  canAct={isApprover}
-                  onActed={fetchData}
-                />
-              ))
+              <>
+                {/* Vendor Bills section */}
+                {pendingBills.length > 0 && (
+                  <section className="space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <Receipt className="h-4 w-4 text-purple-600" />
+                        <h2 className="text-sm font-semibold">
+                          Vendor Bills <span className="text-muted-foreground font-normal">({pendingBills.length})</span>
+                        </h2>
+                      </div>
+                      {canActOnBills && (
+                        <div className="flex items-center gap-2">
+                          <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
+                            <Checkbox
+                              checked={pendingBills.length > 0 && selectedBillIds.size === pendingBills.length}
+                              onCheckedChange={(c) => toggleAllBills(!!c)}
+                            />
+                            Select all
+                          </label>
+                          <Button
+                            size="sm"
+                            className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700"
+                            disabled={selectedBillIds.size === 0 || bulkApproving}
+                            onClick={handleBulkApprove}
+                          >
+                            {bulkApproving ? (
+                              <Loader2 className="h-3 w-3 animate-spin" />
+                            ) : (
+                              <><CheckCircle2 className="h-3 w-3 mr-1" />Approve {selectedBillIds.size > 0 ? `${selectedBillIds.size} selected` : "Selected"}</>
+                            )}
+                          </Button>
+                        </div>
+                      )}
+                    </div>
+                    {pendingBills.map(bill => (
+                      <VendorBillRow
+                        key={bill.id}
+                        bill={bill}
+                        canAct={canActOnBills}
+                        selected={selectedBillIds.has(bill.id)}
+                        onToggleSelect={toggleBillSelected}
+                        onActed={fetchData}
+                      />
+                    ))}
+                  </section>
+                )}
+
+                {/* Comp Requests section */}
+                {requests.length > 0 && (
+                  <section className="space-y-3">
+                    <div className="flex items-center gap-2">
+                      <Gift className="h-4 w-4 text-emerald-600" />
+                      <h2 className="text-sm font-semibold">
+                        Comp Requests <span className="text-muted-foreground font-normal">({requests.length})</span>
+                      </h2>
+                    </div>
+                    {requests.map(req => (
+                      <CompRequestRow
+                        key={req.id}
+                        req={req}
+                        canAct={isApprover}
+                        onActed={fetchData}
+                      />
+                    ))}
+                  </section>
+                )}
+              </>
             )}
           </TabsContent>
 

@@ -1526,8 +1526,8 @@ export const BILL_APPROVAL_STATUSES = ["pending", "approved", "rejected"] as con
 export type BillApprovalStatus = (typeof BILL_APPROVAL_STATUSES)[number];
 
 export const BILL_APPROVAL_STATUS_LABELS: Record<string, string> = {
-  pending: "Pending Approval",
-  approved: "Approved",
+  pending: "Pending Payment Approval",
+  approved: "Approved for Payment",
   rejected: "Rejected",
 };
 

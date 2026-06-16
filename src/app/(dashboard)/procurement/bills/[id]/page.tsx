@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
+import { emitApprovalChanged } from "@/lib/approval-events";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -29,6 +30,7 @@ import {
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { computeBatchDate, formatBatchDate } from "@/lib/payment-batch";
+import { poValidity, PO_VALIDITY_CLASS, staleBannerFor } from "@/lib/approval-display";
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
 import type { VendorBill, PaymentBatchType } from "@/types";
 
@@ -63,6 +65,7 @@ type ChainData = {
   po: {
     id: string; po_number: string; status: string; po_type: string;
     created_at: string; total_ordered_amount: number | null;
+    expected_delivery_date: string | null;
     orderer: { id: string; full_name: string } | null;
     purchase_order_items?: Array<{ id: string; item_name: string; quantity_ordered: number; unit: string }>;
   } | null;
@@ -341,6 +344,7 @@ export default function VendorBillDetailPage() {
       setBatchType("");
       setApproveGstAmount("");
       setApproveBlankGstAck(false);
+      emitApprovalChanged();
       await fetchAll();
     } finally {
       setApproveLoading(false);
@@ -382,6 +386,7 @@ export default function VendorBillDetailPage() {
       const json = await res.json();
       if (!res.ok) { toast.error(json.error || "Failed"); return; }
       toast.success("Full balance approved for payment");
+      emitApprovalChanged();
       await fetchAll();
     } finally {
       setApproveLoading(false);
@@ -412,6 +417,7 @@ export default function VendorBillDetailPage() {
       }
       toast.success(json.message || "Invoice rejected");
       setRejectDialog(false);
+      emitApprovalChanged();
       if (json.data === null) {
         navigated = true;
         router.push("/procurement/bills");
@@ -640,6 +646,19 @@ export default function VendorBillDetailPage() {
         />
       )}
 
+      {/* Stale-PO banner — warns approvers that the underlying PO is old */}
+      {(() => {
+        if (bill.approval_status !== "pending") return null;
+        const msg = staleBannerFor(chain?.po?.expected_delivery_date);
+        if (!msg) return null;
+        return (
+          <div className="rounded-lg border border-amber-300 bg-amber-50 px-4 py-3 flex items-start gap-2.5">
+            <AlertTriangle className="h-4 w-4 text-amber-700 mt-0.5 shrink-0" />
+            <p className="text-xs text-amber-900">{msg}</p>
+          </div>
+        );
+      })()}
+
       {/* Details grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         <Card>
@@ -858,7 +877,7 @@ export default function VendorBillDetailPage() {
                   </span>
                 </div>
                 <div className="flex justify-between text-sm">
-                  <span className="text-amber-700 font-medium">Pending Approval</span>
+                  <span className="text-amber-700 font-medium">Pending Payment Approval</span>
                   <span className="font-medium text-amber-700">
                     {formatCurrency(Number(bill.total_amount) - Number(bill.approved_amount))}
                   </span>
@@ -1064,7 +1083,17 @@ export default function VendorBillDetailPage() {
                 </div>
                 <div className="flex-1 min-w-0">
                   <div className="flex items-center justify-between gap-2">
-                    <span className="text-xs font-semibold text-purple-800 uppercase tracking-wide">Purchase Order</span>
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-semibold text-purple-800 uppercase tracking-wide">Purchase Order</span>
+                      {(() => {
+                        const v = poValidity(chain.po.expected_delivery_date);
+                        return v && bill.payment_status !== "paid" ? (
+                          <Badge variant="outline" className={`text-[10px] ${PO_VALIDITY_CLASS[v.tone]}`}>
+                            {v.label}
+                          </Badge>
+                        ) : null;
+                      })()}
+                    </div>
                     <Link
                       href={`/procurement/orders/${chain.po.id}`}
                       target="_blank"
