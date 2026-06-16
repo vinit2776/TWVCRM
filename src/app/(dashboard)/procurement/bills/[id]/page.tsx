@@ -9,6 +9,7 @@ import {
   ChevronLeft, Loader2, Truck, FileText, Calendar, CreditCard, Package, ExternalLink,
   CheckCircle2, XCircle, Clock, Send, Activity, CheckCircle,
   ClipboardList, ChevronDown, ChevronUp, FilePlus, AlertTriangle, RefreshCcw,
+  AlertCircle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -27,6 +28,7 @@ import {
   REJECTION_OUTCOME_LABELS, PO_ADVANCE_PAYMENT_MODE_LABELS,
   PROCUREMENT_DEPARTMENT_LABELS,
   PAYMENT_BATCH_TYPE_LABELS,
+  PARTIAL_APPROVAL_REASONS, PARTIAL_APPROVAL_REASON_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { computeBatchDate, formatBatchDate } from "@/lib/payment-batch";
@@ -202,6 +204,7 @@ export default function VendorBillDetailPage() {
   const [approveType, setApproveType] = useState<"full" | "partial">("full");
   const [approveAmount, setApproveAmount] = useState("");
   const [approveNote, setApproveNote] = useState("");
+  const [approveReason, setApproveReason] = useState("");
   const [batchType, setBatchType] = useState<PaymentBatchType | "">("");
   const [approveGstAmount, setApproveGstAmount] = useState<string>("");
   // Soft-nudge dialog state — appears once when approver clicks Approve with GST blank.
@@ -319,8 +322,19 @@ export default function VendorBillDetailPage() {
         setApproveLoading(false);
         return;
       }
+      if (!approveReason) {
+        toast.error("Select a reason for the partial approval");
+        setApproveLoading(false);
+        return;
+      }
+      if (!approveNote.trim()) {
+        toast.error("Add a short note explaining the partial approval");
+        setApproveLoading(false);
+        return;
+      }
       body.approved_amount = amt;
-      body.approved_amount_note = approveNote.trim() || null;
+      body.approved_amount_note = approveNote.trim();
+      body.approved_amount_reason = approveReason;
     }
     try {
       const res = await fetch(`/api/procurement/bills/${id}`, {
@@ -344,6 +358,9 @@ export default function VendorBillDetailPage() {
       setBatchType("");
       setApproveGstAmount("");
       setApproveBlankGstAck(false);
+      setApproveReason("");
+      setApproveAmount("");
+      setApproveNote("");
       emitApprovalChanged();
       await fetchAll();
     } finally {
@@ -644,6 +661,34 @@ export default function VendorBillDetailPage() {
           vendorName={chain.vendor.name}
           onEmailSaved={() => fetchAll()}
         />
+      )}
+
+      {/* Partial-approval banner — visible at the top of the bill so anyone
+          opening it (including the Accounts team) immediately understands the
+          ceiling, the reason, and who approved it. */}
+      {bill.approval_status === "approved" &&
+        bill.approved_amount !== null &&
+        bill.approved_amount !== undefined &&
+        Number(bill.approved_amount) < Number(bill.total_amount) - 0.01 && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 space-y-1.5">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-amber-700 flex-shrink-0" />
+            <p className="text-sm font-semibold text-amber-900">
+              Partially approved: {formatCurrency(Number(bill.approved_amount))} of {formatCurrency(Number(bill.total_amount))}
+              {" "}— balance held: {formatCurrency(Number(bill.total_amount) - Number(bill.approved_amount))}
+            </p>
+          </div>
+          <p className="text-xs text-amber-800 pl-6">
+            <strong>Reason:</strong>{" "}
+            {bill.approved_amount_reason
+              ? (PARTIAL_APPROVAL_REASON_LABELS[bill.approved_amount_reason] ?? bill.approved_amount_reason)
+              : <span className="italic">not recorded (approved before this field existed)</span>}
+            {bill.approver?.full_name ? ` · approved by ${bill.approver.full_name}` : ""}
+          </p>
+          {bill.approved_amount_note && (
+            <p className="text-xs text-amber-700 pl-6 italic">&ldquo;{bill.approved_amount_note}&rdquo;</p>
+          )}
+        </div>
       )}
 
       {/* Stale-PO banner — warns approvers that the underlying PO is old */}
@@ -1504,16 +1549,29 @@ export default function VendorBillDetailPage() {
                   )}
                 </div>
                 <div className="space-y-1.5">
-                  <Label>Reason (optional)</Label>
+                  <Label>Reason for partial approval <span className="text-red-500">*</span></Label>
+                  <select
+                    value={approveReason}
+                    onChange={(e) => setApproveReason(e.target.value)}
+                    className="w-full h-9 rounded-md border border-input bg-background px-3 text-sm"
+                  >
+                    <option value="">Select a reason…</option>
+                    {PARTIAL_APPROVAL_REASONS.map((r) => (
+                      <option key={r.code} value={r.code}>{r.label}</option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Note for Accounts <span className="text-red-500">*</span></Label>
                   <Textarea
-                    placeholder="e.g. partial approval pending receipt verification..."
+                    placeholder="What exactly is being withheld and what unblocks the balance? (visible to Accounts)"
                     value={approveNote}
                     onChange={(e) => setApproveNote(e.target.value)}
                     rows={2}
                   />
                 </div>
                 <div className="p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-800">
-                  Accounts team can only record payment up to the approved amount. The balance will remain pending until fully approved.
+                  Accounts can only record payment up to the approved amount. The reason + note above will be shown to them when they record the payment, and to anyone investigating later.
                 </div>
               </>
             )}

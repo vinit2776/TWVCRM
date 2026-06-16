@@ -12,6 +12,36 @@ export const TDS_CLIENT_SECTIONS: { code: string; label: string; description: st
   { code: "194H",  label: "194H",  description: "Commission" },
 ];
 
+// ─── Vendor bill partial approval / partial payment reasons ──────────────────
+// Used in /procurement/bills/[id] (admin partial approval dialog) and
+// /accounting/vendor-payments/[id] (partial payment dialog) to force a
+// structured reason when the amount is less than what would otherwise apply.
+
+export const PARTIAL_APPROVAL_REASONS = [
+  { code: "pending_delivery",   label: "Pending delivery / receipt verification" },
+  { code: "qc_hold",            label: "Quality / acceptance pending" },
+  { code: "invoice_discrepancy",label: "Invoice discrepancy with PO / GRN" },
+  { code: "retention",          label: "Retention / hold-back per contract" },
+  { code: "advance_adjustment", label: "Adjust against advance paid" },
+  { code: "other",              label: "Other (see note)" },
+] as const;
+
+export const PARTIAL_APPROVAL_REASON_LABELS: Record<string, string> =
+  PARTIAL_APPROVAL_REASONS.reduce((acc, r) => ({ ...acc, [r.code]: r.label }), {});
+
+export const PARTIAL_PAYMENT_REASONS = [
+  { code: "cashflow_hold",      label: "Cashflow — paying balance later" },
+  { code: "retention",          label: "Retention / hold-back per contract" },
+  { code: "dispute_pending",    label: "Dispute / shortfall under discussion" },
+  { code: "awaiting_docs",      label: "Awaiting supporting documents" },
+  { code: "tds_adjustment",     label: "TDS / statutory adjustment" },
+  { code: "advance_adjustment", label: "Adjust against advance paid" },
+  { code: "other",              label: "Other (see note)" },
+] as const;
+
+export const PARTIAL_PAYMENT_REASON_LABELS: Record<string, string> =
+  PARTIAL_PAYMENT_REASONS.reduce((acc, r) => ({ ...acc, [r.code]: r.label }), {});
+
 export const LOST_REASONS = [
   "budget",
   "timing",

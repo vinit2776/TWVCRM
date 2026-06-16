@@ -27,7 +27,11 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
-import { PROCUREMENT_DEPARTMENT_LABELS } from "@/lib/constants";
+import {
+  PROCUREMENT_DEPARTMENT_LABELS,
+  PARTIAL_PAYMENT_REASONS, PARTIAL_PAYMENT_REASON_LABELS,
+  PARTIAL_APPROVAL_REASON_LABELS,
+} from "@/lib/constants";
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
 import { FinanceGuideCard } from "@/components/finance/finance-guide-card";
 
@@ -55,6 +59,7 @@ type ChainData = {
     approved_at: string | null; approval_code: string | null;
     approved_amount: number | null;
     approved_amount_note: string | null;
+    approved_amount_reason: string | null;
     gst_rate: number | null;
     gst_amount: number | null;
     gst_set_by: string | null;
@@ -81,6 +86,7 @@ type ChainData = {
       id: string; amount: number; payment_mode: string;
       payment_reference: string | null; payment_date: string;
       notes: string | null;
+      partial_reason: string | null;
       recorder: { id: string; full_name: string } | null;
     }>;
   };
@@ -101,6 +107,11 @@ type ChainData = {
     notes: string | null;
     payment_terms: string | null;
     terms_and_conditions: string | null;
+    advance_amount: number | null;
+    advance_status: string | null;
+    advance_payment_mode: string | null;
+    advance_payment_reference: string | null;
+    advance_payment_date: string | null;
     location: { id: string; name: string } | null;
     orderer: { id: string; full_name: string } | null;
     purchase_request_items?: unknown;
@@ -250,6 +261,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const [payRef, setPayRef] = useState("");
   const [payDate, setPayDate] = useState(new Date().toISOString().split("T")[0]);
   const [payNote, setPayNote] = useState("");
+  const [partialReason, setPartialReason] = useState("");
   const [paying, setPaying] = useState(false);
 
   // Payment dialog + send confirmation toggle + resend dialog
@@ -473,6 +485,14 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       toast.error(`Amount exceeds approved outstanding balance of ${formatCurrency(approvedOutstanding)}`);
       return;
     }
+    // Partial-payment clarity gate: if accounts is settling less than the full
+    // approved outstanding, force a categorical reason. The same field appears
+    // in audit and in the payment history so we can answer "why partial?" later.
+    const isPartial = Number(payAmount) < approvedOutstanding - 0.01;
+    if (isPartial && !partialReason) {
+      toast.error("Select a reason for the partial payment");
+      return;
+    }
     if (tdsEnabled) {
       if (!tdsSectionCode) { toast.error("Select a TDS section"); return; }
       if (!tdsBaseAmount || Number(tdsBaseAmount) <= 0) { toast.error("Enter the pre-GST base amount for TDS"); return; }
@@ -505,6 +525,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           payment_reference: payRef || null,
           payment_date: payDate || null,
           notes: payNote || null,
+          partial_reason: partialReason || null,
           tds: tdsPayload,
         }),
       });
@@ -513,6 +534,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       toast.success("Payment recorded successfully");
       setPaymentDialog(false);
       setPayNote("");
+      setPartialReason("");
 
       if (sendConfirmation) {
         const emailRes = await fetch(`/api/procurement/bills/${id}/payment-email`, {
@@ -645,6 +667,67 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
 
   return (
     <div className="p-4 md:p-6 space-y-5 max-w-4xl mx-auto">
+
+      {/* Partial-approval banner — top of page so Accounts knows the ceiling
+          + the reason BEFORE they open the payment dialog. */}
+      {bill && bill.approved_amount !== null && Number(bill.approved_amount) < Number(bill.total_amount) - 0.01 && (
+        <div className="rounded-md border border-amber-300 bg-amber-50 px-4 py-3 space-y-1.5">
+          <div className="flex items-center gap-2">
+            <AlertCircle className="h-4 w-4 text-amber-700 flex-shrink-0" />
+            <p className="text-sm font-semibold text-amber-900">
+              Partially approved: {formatCurrency(Number(bill.approved_amount))} of {formatCurrency(Number(bill.total_amount))}
+              {" "}— balance held: {formatCurrency(Number(bill.total_amount) - Number(bill.approved_amount))}
+            </p>
+          </div>
+          <p className="text-xs text-amber-800 pl-6">
+            <strong>Reason:</strong>{" "}
+            {bill.approved_amount_reason
+              ? (PARTIAL_APPROVAL_REASON_LABELS[bill.approved_amount_reason] ?? bill.approved_amount_reason)
+              : <span className="italic">not recorded (approved before this field existed)</span>}
+            {bill.approver?.full_name ? ` · approved by ${bill.approver.full_name}` : ""}
+          </p>
+          {bill.approved_amount_note && (
+            <p className="text-xs text-amber-700 pl-6 italic">&ldquo;{bill.approved_amount_note}&rdquo;</p>
+          )}
+          <p className="text-[11px] text-amber-700 pl-6">
+            You can only record payment up to the approved ceiling. If you also pay less than the approved outstanding, the system will ask why.
+          </p>
+        </div>
+      )}
+
+      {/* PO-advance source banner — when an advance was paid against the PO
+          BEFORE the invoice was uploaded, the bill is born "partially paid"
+          with no vendor_bill_payments row. Without this banner the partial
+          state looks unexplained — Accounts ends up checking the PO to figure
+          out who paid what. This shows it inline + links to the source PO. */}
+      {bill && chain?.po
+        && chain.po.advance_status === "processed"
+        && Number(chain.po.advance_amount ?? 0) > 0
+        && Number(bill.amount_paid ?? 0) > 0 && (
+        <div className="rounded-md border border-purple-300 bg-purple-50 px-4 py-3 space-y-1">
+          <div className="flex items-center gap-2">
+            <CreditCard className="h-4 w-4 text-purple-700 flex-shrink-0" />
+            <p className="text-sm font-semibold text-purple-900">
+              {formatCurrency(Math.min(Number(chain.po.advance_amount), Number(bill.amount_paid)))} pre-credited from PO advance
+              {" "}— balance to pay: {formatCurrency(outstanding)}
+            </p>
+          </div>
+          <p className="text-xs text-purple-800 pl-6">
+            Paid against{" "}
+            <Link href={`/procurement/orders/${chain.po.id}`} className="font-mono text-purple-900 underline hover:no-underline">
+              {chain.po.po_number}
+            </Link>
+            {" "}on{" "}
+            {chain.po.advance_payment_date ? formatDate(chain.po.advance_payment_date) : "—"}
+            {chain.po.advance_payment_mode ? ` via ${chain.po.advance_payment_mode.replace(/_/g, " ")}` : ""}
+            {chain.po.advance_payment_reference ? ` · Ref ${chain.po.advance_payment_reference}` : ""}
+            {chain.po.payment_terms ? ` · Terms: “${chain.po.payment_terms}”` : ""}
+          </p>
+          <p className="text-[11px] text-purple-700 pl-6">
+            This was processed in Procurement → Payables, not here. Record only the remaining balance below.
+          </p>
+        </div>
+      )}
 
       {/* First-time guide — shown only to accounts role on first visit */}
       {userRole === "accounts" && (
@@ -1440,12 +1523,40 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 <Label>Payment Date</Label>
                 <Input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
               </div>
+              {(() => {
+                const willBePartial = Number(payAmount) > 0 && Number(payAmount) < approvedOutstanding - 0.01;
+                if (!willBePartial) return null;
+                const shortBy = approvedOutstanding - Number(payAmount);
+                return (
+                  <div className="col-span-2 space-y-1.5 rounded-lg border border-amber-300 bg-amber-50/70 p-3">
+                    <p className="text-xs font-medium text-amber-900">
+                      You&apos;re paying <strong>{formatCurrency(Number(payAmount))}</strong> of <strong>{formatCurrency(approvedOutstanding)}</strong> approved outstanding — short by <strong>{formatCurrency(shortBy)}</strong>.
+                    </p>
+                    <Label className="text-amber-900">
+                      Reason for partial payment <span className="text-red-500">*</span>
+                    </Label>
+                    <select
+                      value={partialReason}
+                      onChange={(e) => setPartialReason(e.target.value)}
+                      className="w-full h-9 rounded-md border border-amber-300 bg-white px-3 text-sm"
+                    >
+                      <option value="">Select a reason…</option>
+                      {PARTIAL_PAYMENT_REASONS.map((r) => (
+                        <option key={r.code} value={r.code}>{r.label}</option>
+                      ))}
+                    </select>
+                    <p className="text-[11px] text-amber-700">
+                      Stored with this payment so anyone investigating later can see why the full approved amount wasn&apos;t released.
+                    </p>
+                  </div>
+                );
+              })()}
               <div className="space-y-1 col-span-2">
                 <Label>Note / Reason (optional)</Label>
                 <Input
                   value={payNote}
                   onChange={(e) => setPayNote(e.target.value)}
-                  placeholder="e.g. partial payment — balance on hold pending document verification"
+                  placeholder="Free-text detail (e.g. UTR not yet shared, document missing, etc.)"
                 />
               </div>
             </div>
@@ -1694,8 +1805,13 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
         </DialogContent>
       </Dialog>
 
-      {/* Payment History */}
-      {chain && (chain.bill.vendor_bill_payments ?? []).length > 0 && (
+      {/* Payment History — also shown when a PO advance was pre-credited at bill
+          creation, so a "partially paid" bill with no payment rows (the
+          BILL-2606-069 case) still tells the full story. */}
+      {chain && (
+        (chain.bill.vendor_bill_payments ?? []).length > 0 ||
+        (chain.po?.advance_status === "processed" && Number(chain.po?.advance_amount ?? 0) > 0)
+      ) && (
         <Card>
           <CardHeader className="pb-2">
             <CardTitle className="text-base flex items-center gap-2">
@@ -1716,6 +1832,38 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 </tr>
               </thead>
               <tbody>
+                {chain.po?.advance_status === "processed" && Number(chain.po?.advance_amount ?? 0) > 0 && (
+                  <tr className="border-b bg-purple-50/60">
+                    <td className="px-4 py-2.5 text-xs">
+                      {chain.po.advance_payment_date ? formatDate(chain.po.advance_payment_date) : "—"}
+                    </td>
+                    <td className="px-4 py-2.5 text-right font-semibold text-purple-700">
+                      {formatCurrency(Number(chain.po.advance_amount))}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground hidden sm:table-cell capitalize">
+                      {chain.po.advance_payment_mode ? chain.po.advance_payment_mode.replace(/_/g, " ") : "—"}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs font-mono text-muted-foreground hidden md:table-cell">
+                      {chain.po.advance_payment_reference ?? "—"}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground hidden lg:table-cell">
+                      <Link
+                        href={`/procurement/orders/${chain.po.id}`}
+                        className="text-purple-700 hover:underline font-mono"
+                      >
+                        {chain.po.po_number}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-muted-foreground">
+                      <span className="inline-block mr-1 px-1.5 py-0.5 rounded bg-purple-100 text-purple-800 not-italic font-medium">
+                        PO advance
+                      </span>
+                      <span className="italic">
+                        {chain.po.payment_terms ? `“${chain.po.payment_terms}”` : "Pre-credited at bill creation from PO advance"}
+                      </span>
+                    </td>
+                  </tr>
+                )}
                 {(chain.bill.vendor_bill_payments ?? [])
                   .sort((a, b) => new Date(a.payment_date).getTime() - new Date(b.payment_date).getTime())
                   .map((pmt, idx) => (
@@ -1734,7 +1882,15 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                         {pmt.recorder?.full_name ?? "—"}
                       </td>
                       <td className="px-4 py-2.5 text-xs text-muted-foreground italic">
-                        {pmt.notes ?? "—"}
+                        {pmt.partial_reason && (
+                          <span
+                            className="inline-block mr-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 not-italic font-medium"
+                            title={pmt.notes ?? ""}
+                          >
+                            {PARTIAL_PAYMENT_REASON_LABELS[pmt.partial_reason] ?? pmt.partial_reason}
+                          </span>
+                        )}
+                        {pmt.notes ?? (pmt.partial_reason ? "" : "—")}
                       </td>
                     </tr>
                   ))}
