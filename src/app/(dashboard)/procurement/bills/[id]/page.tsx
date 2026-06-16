@@ -31,6 +31,7 @@ import {
   PARTIAL_APPROVAL_REASONS, PARTIAL_APPROVAL_REASON_LABELS,
 } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { summarizeAuditEvent, AUDIT_TONE_DOT, AUDIT_TONE_TEXT } from "@/lib/audit-labels";
 import { computeBatchDate, formatBatchDate } from "@/lib/payment-batch";
 import { poValidity, PO_VALIDITY_CLASS, staleBannerFor } from "@/lib/approval-display";
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
@@ -136,10 +137,13 @@ function AuditEntry({
   const hasChanges = Object.keys(changes).length > 0;
   const entityLabel = ENTITY_TYPE_LABELS[row.entity_type] ?? row.entity_type;
 
-  let dotColor = "bg-gray-300";
-  if (row.entity_id === billId) dotColor = "bg-blue-400";
-  else if (row.entity_id === poId) dotColor = "bg-purple-400";
-  else if (row.entity_id === mrId) dotColor = "bg-orange-400";
+  // Same human-label pipeline as the Acc Payables audit timeline.
+  const summary = summarizeAuditEvent(row);
+  const dotColor = AUDIT_TONE_DOT[summary.tone];
+  const headingColor = AUDIT_TONE_TEXT[summary.tone];
+  let sourceHint: string | null = null;
+  if (row.entity_id === poId) sourceHint = "from PO";
+  else if (row.entity_id === mrId) sourceHint = "from MR";
 
   return (
     <div className="flex gap-3">
@@ -150,8 +154,11 @@ function AuditEntry({
       <div className="pb-4 flex-1 min-w-0">
         <div className="flex items-start justify-between gap-2">
           <div>
-            <span className="text-sm font-medium">{AUDIT_ACTION_LABELS[row.action] ?? row.action}</span>
+            <span className={`text-sm font-medium ${headingColor}`}>{summary.label}</span>
             <span className="text-xs text-muted-foreground ml-2 bg-muted px-1.5 py-0.5 rounded">{entityLabel}</span>
+            {sourceHint && (
+              <span className="text-[10px] text-muted-foreground ml-1.5 italic">{sourceHint}</span>
+            )}
           </div>
           <span className="text-xs text-muted-foreground shrink-0 mt-0.5">
             {new Date(row.created_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
@@ -159,6 +166,12 @@ function AuditEntry({
         </div>
         <p className="text-xs text-muted-foreground mt-0.5">
           {row.performer?.full_name ?? "System"}
+          {summary.detail && (
+            <>
+              {" · "}
+              <span className={`font-medium ${headingColor}`}>{summary.detail}</span>
+            </>
+          )}
         </p>
         {hasChanges && (
           <button

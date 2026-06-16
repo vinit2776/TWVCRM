@@ -27,6 +27,7 @@ import {
 import { Separator } from "@/components/ui/separator";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { summarizeAuditEvent, AUDIT_TONE_DOT, AUDIT_TONE_TEXT } from "@/lib/audit-labels";
 import {
   PROCUREMENT_DEPARTMENT_LABELS,
   PARTIAL_PAYMENT_REASONS, PARTIAL_PAYMENT_REASON_LABELS,
@@ -178,11 +179,17 @@ function AuditEntry({ row, billId, poId, mrId }: { row: AuditRow; billId: string
   const hasChanges = Object.keys(row.changes ?? {}).length > 0;
   const entityLabel = ENTITY_TYPE_LABELS[row.entity_type] ?? row.entity_type;
 
-  let dotColor = "bg-gray-300";
-  if (row.action === "email_sent") dotColor = "bg-teal-400";
-  else if (row.entity_id === billId) dotColor = "bg-blue-400";
-  else if (row.entity_id === poId) dotColor = "bg-purple-400";
-  else if (row.entity_id === mrId) dotColor = "bg-orange-400";
+  // Map the raw {action, changes} into a human label + tone. Falls back to
+  // the legacy "Updated" generic if no rule matches.
+  const summary = summarizeAuditEvent(row);
+  const dotColor = AUDIT_TONE_DOT[summary.tone];
+  const headingColor = AUDIT_TONE_TEXT[summary.tone];
+
+  // Source-entity hint (D): tiny badge next to the entity chip so a viewer
+  // can tell PO events from bill events at a glance even after grouping.
+  let sourceHint: string | null = null;
+  if (row.entity_id === poId) sourceHint = "from PO";
+  else if (row.entity_id === mrId) sourceHint = "from MR";
 
   return (
     <div className="flex gap-3">
@@ -193,8 +200,11 @@ function AuditEntry({ row, billId, poId, mrId }: { row: AuditRow; billId: string
       <div className="pb-4 flex-1 min-w-0">
         <div className="flex items-start justify-between gap-2">
           <div>
-            <span className="text-sm font-medium">{AUDIT_ACTION_LABELS[row.action] ?? row.action}</span>
+            <span className={`text-sm font-medium ${headingColor}`}>{summary.label}</span>
             <span className="text-xs text-muted-foreground ml-2 bg-muted px-1.5 py-0.5 rounded">{entityLabel}</span>
+            {sourceHint && (
+              <span className="text-[10px] text-muted-foreground ml-1.5 italic">{sourceHint}</span>
+            )}
           </div>
           <span className="text-xs text-muted-foreground shrink-0 mt-0.5">
             {new Date(row.created_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}
@@ -202,6 +212,12 @@ function AuditEntry({ row, billId, poId, mrId }: { row: AuditRow; billId: string
         </div>
         <p className="text-xs text-muted-foreground mt-0.5">
           {row.performer?.full_name ?? "System"}
+          {summary.detail && (
+            <>
+              {" · "}
+              <span className={`font-medium ${headingColor}`}>{summary.detail}</span>
+            </>
+          )}
         </p>
         {/* Email sent — show To/CC inline without expand */}
         {row.action === "email_sent" && (
