@@ -25,7 +25,7 @@ export async function GET(
       approver:users!vendor_bills_approved_by_fkey(id, full_name),
       gst_setter:users!vendor_bills_gst_set_by_fkey(id, full_name),
       gst_zero_confirmer:users!vendor_bills_gst_zero_confirmed_by_fkey(id, full_name),
-      vendor_bill_payments(id, amount, payment_mode, payment_reference, payment_date, notes, created_at, recorder:users!vendor_bill_payments_recorded_by_fkey(id, full_name))
+      vendor_bill_payments(*, recorder:users!vendor_bill_payments_recorded_by_fkey(id, full_name))
     `)
     .eq("id", id)
     .single();
@@ -52,6 +52,8 @@ export async function GET(
         id, po_number, status, po_type, created_at, total_ordered_amount,
         expected_delivery_date, actual_delivery_date, notes,
         payment_terms, terms_and_conditions,
+        advance_amount, advance_status, advance_payment_mode,
+        advance_payment_reference, advance_payment_date,
         location:locations!purchase_orders_location_id_fkey(id, name),
         orderer:users!purchase_orders_ordered_by_fkey(id, full_name),
         purchase_requests(

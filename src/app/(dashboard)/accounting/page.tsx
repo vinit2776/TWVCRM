@@ -50,6 +50,7 @@ import {
   PROCUREMENT_DEPARTMENT_COLORS,
   EXPENDITURE_TYPE_LABELS,
   PROCUREMENT_DEPARTMENTS,
+  PARTIAL_APPROVAL_REASON_LABELS,
 } from "@/lib/constants";
 
 type VendorBillItem = {
@@ -67,6 +68,7 @@ type VendorBillItem = {
   approval_status: string;
   approved_amount: number | null;
   approved_amount_note: string | null;
+  approved_amount_reason: string | null;
   approved_by: string | null;
   approved_at: string | null;
   approval_code: string | null;
@@ -971,7 +973,20 @@ export default function AccountingPage() {
                                     <span className="text-[10px] font-medium bg-red-100 text-red-800 px-1.5 py-0.5 rounded-full w-fit">Unpaid</span>
                                   )}
                                   {isPartialApproval && (
-                                    <span className="text-[10px] font-medium bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded-full w-fit">Part Approved</span>
+                                    <span
+                                      className="text-[10px] font-medium bg-yellow-100 text-yellow-800 px-1.5 py-0.5 rounded-full w-fit cursor-help"
+                                      title={
+                                        [
+                                          bill.approved_amount_reason
+                                            ? (PARTIAL_APPROVAL_REASON_LABELS[bill.approved_amount_reason] ?? bill.approved_amount_reason)
+                                            : "Reason not recorded",
+                                          bill.approved_amount_note ?? "",
+                                          bill.approver?.full_name ? `Approved by ${bill.approver.full_name}` : "",
+                                        ].filter(Boolean).join(" — ")
+                                      }
+                                    >
+                                      Part Approved
+                                    </span>
                                   )}
                                   {isOverdue && (
                                     <span className="text-[10px] font-medium bg-red-50 text-red-700 px-1.5 py-0.5 rounded-full w-fit">Overdue</span>

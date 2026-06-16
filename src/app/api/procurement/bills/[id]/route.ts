@@ -36,12 +36,16 @@ const patchBillSchema = z.discriminatedUnion("action", [
     payment_reference: z.string().nullish(),
     payment_date: z.string().nullish(),
     notes: z.string().nullish(),
+    /** Required when the payment is less than the approved outstanding (partial). */
+    partial_reason: z.string().nullish(),
     tds: tdsSchema.nullish(),
   }),
   z.object({
     action: z.literal("approve"),
     approved_amount: z.number().positive().nullish(),
     approved_amount_note: z.string().nullish(),
+    /** Required when approved_amount < total_amount (partial approval). */
+    approved_amount_reason: z.string().nullish(),
     batch_type: z.enum(["immediate", "15th", "25th"]),
     /** Optional at approval — accounts can set later via update_gst, but it is mandatory before payment. */
     gst_amount: z.number().min(0, "GST amount must be 0 or greater").optional(),
@@ -165,6 +169,11 @@ export async function PATCH(
   }
 
   let updatePayload: Record<string, unknown> = {};
+  // Extra audit-trail entries that don't come from the vendor_bills row diff
+  // (e.g. partial_reason lives on vendor_bill_payments, but we want it
+  // surfaced on the bill's audit timeline so investigators don't have to
+  // join two tables to understand why a partial payment was recorded).
+  const extraAuditChanges: Record<string, { old: unknown; new: unknown }> = {};
 
   switch (parsed.data.action) {
     case "record_payment": {
@@ -228,6 +237,19 @@ export async function PATCH(
         );
       }
 
+      // Partial-payment clarity: if accounts is paying less than the full approved
+      // outstanding, force them to pick a structured reason. Free-text detail can
+      // still go in `notes`. Without this we lose the WHY at the only point where
+      // the partial decision is being made.
+      const isPartialPayment = parsed.data.amount < remainingApproved - 0.01;
+      const partialReason = parsed.data.partial_reason?.trim() || null;
+      if (isPartialPayment && !partialReason) {
+        return NextResponse.json(
+          { error: `You are recording ₹${parsed.data.amount.toFixed(2)} of ₹${remainingApproved.toFixed(2)} outstanding. Select a reason for the partial payment.` },
+          { status: 422 }
+        );
+      }
+
       const newAmountPaid = alreadyPaid + parsed.data.amount;
       // Mark as paid when approved ceiling (base + GST) is fully settled
       const paymentStatus =
@@ -250,6 +272,7 @@ export async function PATCH(
           payment_reference: parsed.data.payment_reference ?? null,
           payment_date: paymentDate,
           notes: parsed.data.notes ?? null,
+          partial_reason: partialReason,
           recorded_by: dbUser.id,
         })
         .select("id")
@@ -281,6 +304,12 @@ export async function PATCH(
         payment_reference: parsed.data.payment_reference ?? null,
         payment_date: paymentDate,
       };
+      if (isPartialPayment) {
+        extraAuditChanges.partial_payment_reason = { old: null, new: partialReason };
+        if (parsed.data.notes?.trim()) {
+          extraAuditChanges.partial_payment_note = { old: null, new: parsed.data.notes.trim() };
+        }
+      }
       break;
     }
 
@@ -322,6 +351,26 @@ export async function PATCH(
         }
         if (approvedAmt <= 0) {
           return NextResponse.json({ error: "Approved amount must be greater than zero" }, { status: 422 });
+        }
+        // Partial approval clarity: require a structured reason + a note explaining WHY
+        // the approver chose to release less than the full invoice value. Without this
+        // the downstream Accounts team has no context for the smaller ceiling.
+        const isPartial = approvedAmt < Number(bill.total_amount) - 0.01;
+        if (isPartial) {
+          const reason = parsed.data.approved_amount_reason?.trim() ?? "";
+          const note = parsed.data.approved_amount_note?.trim() ?? "";
+          if (!reason) {
+            return NextResponse.json(
+              { error: "Select a reason for the partial approval." },
+              { status: 422 }
+            );
+          }
+          if (!note) {
+            return NextResponse.json(
+              { error: "Add a short note explaining the partial approval (visible to Accounts)." },
+              { status: 422 }
+            );
+          }
         }
       }
 
@@ -366,6 +415,7 @@ export async function PATCH(
         approval_code: billApprovalCode,
         approved_amount: approvedAmt ?? totalAmt,
         approved_amount_note: parsed.data.approved_amount_note ?? null,
+        approved_amount_reason: isPartialApproval ? (parsed.data.approved_amount_reason ?? null) : null,
         rejection_reason: null,
         rejection_outcome: null,
         payment_batch_type: parsed.data.batch_type,
@@ -860,7 +910,10 @@ export async function PATCH(
     entityId: id,
     action: "update",
     performedBy: dbUser.id,
-    changes: diffChanges(bill as Record<string, unknown>, { ...bill, ...updatePayload } as Record<string, unknown>),
+    changes: {
+      ...diffChanges(bill as Record<string, unknown>, { ...bill, ...updatePayload } as Record<string, unknown>),
+      ...extraAuditChanges,
+    },
   });
 
   return NextResponse.json({ data: updated });

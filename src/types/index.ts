@@ -2103,6 +2103,7 @@ export interface VendorBill {
   approval_code?: string;
   approved_amount?: number | null;
   approved_amount_note?: string | null;
+  approved_amount_reason?: string | null;
   gst_rate?: number | null;
   gst_amount?: number | null;
   base_amount?: number | null;
@@ -2132,6 +2133,7 @@ export interface VendorBill {
     id: string; amount: number; payment_mode: string;
     payment_reference: string | null; payment_date: string;
     notes: string | null;
+    partial_reason: string | null;
     recorder: { id: string; full_name: string } | null;
   }>;
 }
