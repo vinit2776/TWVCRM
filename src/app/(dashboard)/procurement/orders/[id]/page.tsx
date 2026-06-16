@@ -160,7 +160,7 @@ function buildTimeline(
       ts: bill.created_at,
       type: "invoice",
       title: `Invoice — ${bill.bill_number}`,
-      subtitle: `${formatCurrency(bill.total_amount)}${bill.approval_status === "approved" ? " · Approved" : bill.approval_status === "rejected" ? " · Rejected" : " · Pending Approval"}${bill.creator?.full_name ? ` · by ${bill.creator.full_name}` : ""}`,
+      subtitle: `${formatCurrency(bill.total_amount)}${bill.approval_status === "approved" ? " · Approved for Payment" : bill.approval_status === "rejected" ? " · Rejected" : " · Pending Payment Approval"}${bill.creator?.full_name ? ` · by ${bill.creator.full_name}` : ""}`,
       fileUrl: bill.invoice_file_url,
       fileLabel: "View Invoice",
     });

@@ -56,7 +56,7 @@ export async function GET(request: NextRequest) {
     .from("vendor_bills")
     .select(
       `*, procurement_vendors(id, name, contact_email, gstin),
-       purchase_orders(id, po_number, po_type, purchase_requests(department, expenditure_type)),
+       purchase_orders(id, po_number, po_type, expected_delivery_date, purchase_requests(department, expenditure_type)),
        approver:users!vendor_bills_approved_by_fkey(id, full_name),
        vendor_bill_payments(id, payment_reference)`,
       { count: "exact" }
@@ -274,8 +274,8 @@ export async function POST(request: NextRequest) {
 
   // Notify admins/managers that a new invoice needs approval
   sendPushToProcurementRoles({
-    title: "Invoice Pending Approval",
-    body: `${bill.bill_number} — ₹${parsed.data.total_amount.toLocaleString("en-IN")} requires approval`,
+    title: "Invoice Pending Payment Approval",
+    body: `${bill.bill_number} — ₹${parsed.data.total_amount.toLocaleString("en-IN")} requires payment approval`,
     url: `/procurement/bills/${bill.id}`,
     tag: `bill-approval-${bill.id}`,
   }).catch((err) => console.error("[push] new bill notification failed:", err));

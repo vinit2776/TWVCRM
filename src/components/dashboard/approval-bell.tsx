@@ -16,6 +16,8 @@ import { Input } from "@/components/ui/input";
 import { formatCurrency } from "@/lib/utils";
 import { toast } from "sonner";
 import { buildShareableMessage, fmtDuration } from "@/lib/unifi-share";
+import { emitApprovalChanged, onApprovalChanged } from "@/lib/approval-events";
+import { poValidity, PO_VALIDITY_CLASS, waitingSince } from "@/lib/approval-display";
 
 function timeAgo(iso: string): string {
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -59,7 +61,7 @@ interface PendingBill {
   due_date: string | null;
   notes: string | null;
   procurement_vendors: { name: string } | null;
-  purchase_orders: { po_number: string } | null;
+  purchase_orders: { po_number: string; expected_delivery_date: string | null } | null;
 }
 
 const APPROVAL_TYPE_LABELS: Record<string, string> = {
@@ -104,14 +106,30 @@ export function ApprovalBell() {
 
   useEffect(() => {
     fetchApprovals();
-    // No polling interval — data refreshes on mount and each time the bell is opened.
-    // This avoids background DB hits every 60s across all open sessions.
+    // No polling interval — data refreshes on mount, each time the bell is
+    // opened, and whenever any other surface in the app emits an
+    // approval:changed event (see src/lib/approval-events.ts).
   }, [fetchApprovals]);
 
   // Refresh whenever the dropdown opens so the list is always up-to-date.
+  // When the dropdown closes, drop any locally-approved voucher rows that the
+  // user didn't dismiss — otherwise they reappear stale on next open before
+  // the network fetch returns.
   useEffect(() => {
-    if (open) fetchApprovals();
+    if (open) {
+      fetchApprovals();
+    } else {
+      setApprovals(prev => prev.filter(a => a.status !== "approved"));
+      setIssuedVouchers({});
+    }
   }, [open, fetchApprovals]);
+
+  // Refresh when any other surface (bill detail page, vendor-payments page,
+  // /approvals page) records an approve/reject.
+  useEffect(() => {
+    const unsub = onApprovalChanged(() => { fetchApprovals(); });
+    return unsub;
+  }, [fetchApprovals]);
 
   const pendingCount = approvals.length + pendingBills.length;
 
@@ -126,6 +144,7 @@ export function ApprovalBell() {
       if (res.ok) {
         toast.success(action === "approve" ? `${bill.bill_number} approved` : `${bill.bill_number} rejected`);
         setPendingBills(prev => prev.filter(b => b.id !== bill.id));
+        emitApprovalChanged();
       } else {
         const err = await res.json().catch(() => null);
         toast.error(err?.error || `Failed to ${action} bill`);
@@ -168,6 +187,7 @@ export function ApprovalBell() {
         }
         setRejectingId(null);
         setRejectionReason("");
+        emitApprovalChanged();
       } else {
         const err = await res.json().catch(() => null);
         toast.error(err?.error || `Failed to ${action}`);
@@ -194,10 +214,17 @@ export function ApprovalBell() {
   // Visible for admin and manager
   if (userRole && !["admin", "manager"].includes(userRole)) return null;
 
+  const billsCount = pendingBills.length;
+  const requestsCount = approvals.length;
+  const tooltipParts: string[] = [];
+  if (billsCount > 0) tooltipParts.push(`${billsCount} vendor bill${billsCount === 1 ? "" : "s"}`);
+  if (requestsCount > 0) tooltipParts.push(`${requestsCount} other request${requestsCount === 1 ? "" : "s"}`);
+  const tooltipTitle = tooltipParts.length > 0 ? `Pending: ${tooltipParts.join(" · ")}` : "Pending Approvals";
+
   return (
     <DropdownMenu open={open} onOpenChange={setOpen}>
       <DropdownMenuTrigger asChild>
-        <Button variant="ghost" size="icon" className="relative" title="Pending Approvals">
+        <Button variant="ghost" size="icon" className="relative" title={tooltipTitle}>
           <ClipboardCheck className="h-4 w-4" />
           {pendingCount > 0 && (
             <span className="absolute -top-0.5 -right-0.5 flex h-4 w-4 items-center justify-center rounded-full bg-purple-600 text-[10px] font-bold text-white ring-2 ring-background">
@@ -208,10 +235,17 @@ export function ApprovalBell() {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="w-[400px] p-0">
         <div className="flex items-center justify-between border-b px-4 py-2.5">
-          <p className="text-sm font-semibold flex items-center gap-1.5">
-            <ClipboardCheck className="h-3.5 w-3.5 text-purple-600" />
-            Pending Approvals
-          </p>
+          <div>
+            <p className="text-sm font-semibold flex items-center gap-1.5">
+              <ClipboardCheck className="h-3.5 w-3.5 text-purple-600" />
+              Pending Approvals
+            </p>
+            {pendingCount > 0 && (
+              <p className="text-[10px] text-muted-foreground mt-0.5">
+                {tooltipParts.join(" · ")}
+              </p>
+            )}
+          </div>
           <div className="flex items-center gap-1">
             <Button
               variant="ghost" size="sm" className="h-6 text-xs"
@@ -549,19 +583,27 @@ export function ApprovalBell() {
                   Vendor Bills
                 </div>
               )}
-              {pendingBills.map((bill) => (
+              {pendingBills.map((bill) => {
+                const validity = poValidity(bill.purchase_orders?.expected_delivery_date);
+                const waiting = waitingSince(bill.created_at);
+                return (
                 <div
                   key={bill.id}
                   className="border-b last:border-b-0 px-4 py-3 space-y-2 hover:bg-muted/30 transition-colors"
                 >
                   <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-1.5">
+                    <div className="flex items-center gap-1.5 flex-wrap">
                       <Receipt className="h-3.5 w-3.5 text-orange-500 shrink-0" />
                       <Badge variant="secondary" className="text-[10px] px-1.5 py-0 bg-orange-100 text-orange-800">
                         Vendor Bill
                       </Badge>
+                      {validity && (
+                        <Badge variant="outline" className={`text-[10px] px-1.5 py-0 ${PO_VALIDITY_CLASS[validity.tone]}`}>
+                          {validity.label}
+                        </Badge>
+                      )}
                     </div>
-                    <span className="text-[10px] text-muted-foreground shrink-0">{timeAgo(bill.created_at)}</span>
+                    <span className="text-[10px] text-amber-700 shrink-0 font-medium">{waiting || timeAgo(bill.created_at)}</span>
                   </div>
 
                   <div className="text-xs text-muted-foreground space-y-0.5">
@@ -607,7 +649,8 @@ export function ApprovalBell() {
                     </div>
                   </div>
                 </div>
-              ))}
+                );
+              })}
             </>
           )}
         </div>
