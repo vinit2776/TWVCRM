@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
-import { createClient } from "@/lib/supabase/server";
+import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { Inbox } from "lucide-react";
 import { isInboxRole } from "@/lib/tally-handoff";
 import { TallyInboxClient } from "@/components/accounting/tally-inbox-client";
@@ -22,7 +22,8 @@ export default async function TallyInboxPage() {
     redirect("/dashboard");
   }
 
-  const { data: flagRow } = await supabase
+  const admin = createAdminClient();
+  const { data: flagRow } = await admin
     .from("app_settings")
     .select("value")
     .eq("key", "tally_handoff_v2_enabled")
