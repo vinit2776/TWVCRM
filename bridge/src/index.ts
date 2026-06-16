@@ -17,6 +17,7 @@ import { SnapshotPoller } from "./snapshot-poller";
 import { startHealthServer } from "./health-server";
 import { healthState } from "./health-state";
 import { VERSION } from "./version";
+import { maybeApplyUpdate } from "./updater";
 
 async function main(): Promise<void> {
   // 1. Load + validate config
@@ -60,6 +61,12 @@ async function main(): Promise<void> {
     const result = await crm.heartbeat(payload);
     if (result.gstin_mismatch && result.warning) {
       log.warn(result.warning);
+    }
+    // Self-update: if CRM advertises a newer target, download + apply.
+    // maybeApplyUpdate spawns a detached PS updater and exits this process
+    // when it commits to an update; otherwise it's a no-op.
+    if (result.update) {
+      await maybeApplyUpdate(crm, result.update, VERSION);
     }
   };
 

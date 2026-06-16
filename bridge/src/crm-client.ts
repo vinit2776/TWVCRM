@@ -125,10 +125,18 @@ export class CrmClient {
     });
   }
 
-  /** Send heartbeat. Returns whether the GSTIN on Tally matches expected. */
-  async heartbeat(payload: HeartbeatPayload): Promise<{ gstin_mismatch: boolean; warning?: string }> {
+  /** Send heartbeat. Returns mismatch warning + optional self-update target. */
+  async heartbeat(payload: HeartbeatPayload): Promise<{
+    gstin_mismatch: boolean;
+    warning?: string;
+    update?: { target_version: string; sha256: string } | null;
+  }> {
     try {
-      return await this.fetch<{ gstin_mismatch: boolean; warning?: string }>(
+      return await this.fetch<{
+        gstin_mismatch: boolean;
+        warning?: string;
+        update?: { target_version: string; sha256: string } | null;
+      }>(
         "/api/tally/heartbeat",
         { method: "POST", body: JSON.stringify(payload) }
       );
@@ -136,6 +144,23 @@ export class CrmClient {
       log.warn(`Heartbeat failed: ${String(err)}`);
       return { gstin_mismatch: false };
     }
+  }
+
+  /**
+   * Download the published bridge update zip. Uses the same agent token as
+   * /pending. Returns raw bytes — the caller verifies the SHA-256.
+   */
+  async downloadUpdatePackage(): Promise<Buffer> {
+    const url = `${this.baseUrl}/api/tally/update-package`;
+    const res = await fetch(url, {
+      method:  "GET",
+      headers: { "Authorization": `Bearer ${this.token}` },
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`CRM GET /api/tally/update-package → ${res.status}: ${body}`);
+    }
+    return Buffer.from(await res.arrayBuffer());
   }
 
   /**
