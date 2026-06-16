@@ -3,7 +3,7 @@
 import { useState, useEffect } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import { useRouter } from "next/navigation";
-import { Plus, Trash2, ChevronLeft, Search, Package, PenLine, AlertTriangle } from "lucide-react";
+import { Plus, Trash2, ChevronLeft, Search, Package, PenLine, AlertTriangle, FileUp, Paperclip } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -87,6 +87,14 @@ export default function NewPurchaseRequestPage() {
   }, [department]);
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<LineItem[]>([emptyItem()]);
+  // Quotations: staged in client memory until the MR is created, then uploaded.
+  const [quotations, setQuotations] = useState<Array<{
+    id: string;
+    vendor_name: string;
+    amount: string;
+    notes: string;
+    file: File | null;
+  }>>([]);
   const [submitting, setSubmitting] = useState(false);
   const [savingDraft, setSavingDraft] = useState(false);
   const [showPriceWarning, setShowPriceWarning] = useState(false);
@@ -197,6 +205,70 @@ export default function NewPurchaseRequestPage() {
     return parseFloat(li.estimated_price) > li.catalog_standard_price;
   };
 
+  const validQuotations = quotations.filter(
+    (q) => q.file && q.vendor_name.trim() && q.amount && !isNaN(parseFloat(q.amount))
+  );
+
+  const addQuotation = () => {
+    setQuotations((prev) => [
+      ...prev,
+      { id: generateLocalId(), vendor_name: "", amount: "", notes: "", file: null },
+    ]);
+  };
+
+  const updateQuotation = (
+    localId: string,
+    field: "vendor_name" | "amount" | "notes",
+    value: string,
+  ) => {
+    setQuotations((prev) =>
+      prev.map((q) => (q.id === localId ? { ...q, [field]: value } : q))
+    );
+  };
+
+  const setQuotationFile = (localId: string, file: File | null) => {
+    if (file && file.size > 50 * 1024 * 1024) {
+      toast.error("File too large (max 50 MB)");
+      return;
+    }
+    setQuotations((prev) =>
+      prev.map((q) => (q.id === localId ? { ...q, file } : q))
+    );
+  };
+
+  const removeQuotation = (localId: string) => {
+    setQuotations((prev) => prev.filter((q) => q.id !== localId));
+  };
+
+  // Upload each staged quotation against the freshly-created MR.
+  // Returns the number that succeeded.
+  const uploadQuotationsFor = async (prId: string): Promise<number> => {
+    let ok = 0;
+    for (const q of validQuotations) {
+      if (!q.file) continue;
+      const fd = new FormData();
+      fd.append("file", q.file);
+      fd.append("vendor_name", q.vendor_name.trim());
+      fd.append("amount", q.amount);
+      if (q.notes.trim()) fd.append("notes", q.notes.trim());
+      try {
+        const res = await fetch(`/api/procurement/requests/${prId}/quotations`, {
+          method: "POST",
+          body: fd,
+        });
+        if (res.ok) ok++;
+        else {
+          const j = await res.json().catch(() => ({}));
+          toast.error(`Failed to upload quotation from ${q.vendor_name}: ${j.error ?? res.statusText}`);
+        }
+      } catch (err) {
+        toast.error(`Failed to upload quotation from ${q.vendor_name}`);
+        console.error(err);
+      }
+    }
+    return ok;
+  };
+
   const validate = (): string | null => {
     for (const li of items) {
       if (!li.isCustom && !li.item_id) return "Please select all catalog items from the catalog, or use the Custom Item option for unlisted items";
@@ -237,8 +309,13 @@ export default function NewPurchaseRequestPage() {
   const handleSaveDraft = async () => {
     const err = validate();
     if (err) { toast.error(err); return; }
+    if (validQuotations.length < 1) {
+      toast.error("At least one vendor quotation / estimate must be attached before saving");
+      return;
+    }
     setSavingDraft(true);
     try {
+      // Always create as draft first so we can attach quotations against the new id.
       const res = await fetch("/api/procurement/requests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -246,6 +323,9 @@ export default function NewPurchaseRequestPage() {
       });
       const json = await res.json();
       if (!res.ok) { toast.error(json.error || "Failed to save draft"); return; }
+      if (validQuotations.length > 0) {
+        await uploadQuotationsFor(json.data.id);
+      }
       toast.success(`Draft saved — ${json.data.pr_number}`);
       submitCatalogSuggestions(items);
       router.push(`/procurement/requests/${json.data.id}`);
@@ -255,18 +335,52 @@ export default function NewPurchaseRequestPage() {
   };
 
   const doSubmit = async () => {
+    if (validQuotations.length < 1) {
+      toast.error("At least one quotation / estimate must be attached before submitting");
+      return;
+    }
     setSubmitting(true);
     try {
+      // 1. Create the MR as draft so we have an id to attach quotations to.
       const res = await fetch("/api/procurement/requests", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(buildPayload(true)),
+        body: JSON.stringify(buildPayload(false)),
       });
       const json = await res.json();
-      if (!res.ok) { toast.error(json.error || "Failed to submit request"); return; }
+      if (!res.ok) { toast.error(json.error || "Failed to create request"); return; }
+      const prId: string = json.data.id;
+
+      // 2. Upload quotations.
+      const uploaded = await uploadQuotationsFor(prId);
+      if (uploaded < 1) {
+        toast.error(
+          "Could not upload any quotations — MR saved as draft. Open it and upload supporting files before submitting."
+        );
+        submitCatalogSuggestions(items);
+        router.push(`/procurement/requests/${prId}`);
+        return;
+      }
+
+      // 3. Now flip status → submitted.
+      const submitRes = await fetch(`/api/procurement/requests/${prId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action: "submit" }),
+      });
+      const submitJson = await submitRes.json();
+      if (!submitRes.ok) {
+        toast.error(
+          `Quotations attached but submission failed: ${submitJson.error ?? submitRes.statusText}. Open the MR and submit manually.`
+        );
+        submitCatalogSuggestions(items);
+        router.push(`/procurement/requests/${prId}`);
+        return;
+      }
+
       toast.success(`Request submitted — ${json.data.pr_number}`);
       submitCatalogSuggestions(items);
-      router.push(`/procurement/requests/${json.data.id}`);
+      router.push(`/procurement/requests/${prId}`);
     } finally {
       setSubmitting(false);
     }
@@ -612,6 +726,126 @@ export default function NewPurchaseRequestPage() {
         </CardContent>
       </Card>
 
+      {/* Quotations / Estimates — mandatory before submit */}
+      <Card>
+        <CardHeader className="flex flex-row items-center justify-between pb-3">
+          <div>
+            <CardTitle className="text-base">
+              Vendor Quotations / Estimates <span className="text-red-500">*</span>
+            </CardTitle>
+            <p className="text-xs text-muted-foreground mt-1">
+              Required — attach at least one vendor quotation, estimate, or bill so the approver
+              has context. PDF / JPG / PNG / WEBP / HEIC (max 50 MB each).
+            </p>
+          </div>
+          <Button variant="outline" size="sm" onClick={addQuotation}>
+            <Plus className="h-4 w-4 mr-1" /> Add Quotation
+          </Button>
+        </CardHeader>
+        <CardContent className="space-y-3">
+          {quotations.length === 0 && (
+            <div className="rounded-lg border-2 border-dashed border-amber-300 bg-amber-50/40 px-4 py-6 text-center">
+              <Paperclip className="h-5 w-5 text-amber-500 mx-auto mb-2" />
+              <p className="text-sm font-medium text-amber-800">
+                No quotations attached yet
+              </p>
+              <p className="text-xs text-amber-700 mt-1">
+                You can&apos;t save or submit this request until at least one estimate is uploaded.
+              </p>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-3 border-amber-300"
+                onClick={addQuotation}
+              >
+                <Plus className="h-4 w-4 mr-1" /> Add the first quotation
+              </Button>
+            </div>
+          )}
+          {quotations.map((q, idx) => (
+            <div key={q.id} className="border rounded-lg p-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <span className="text-sm font-medium text-muted-foreground">
+                  Quotation {idx + 1}
+                </span>
+                <Button
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-destructive hover:text-destructive"
+                  onClick={() => removeQuotation(q.id)}
+                >
+                  <Trash2 className="h-4 w-4" />
+                </Button>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1">
+                  <Label className="text-xs">
+                    Vendor Name <span className="text-red-500">*</span>
+                  </Label>
+                  <Input
+                    placeholder="e.g. ABC Suppliers Pvt Ltd"
+                    value={q.vendor_name}
+                    onChange={(e) => updateQuotation(q.id, "vendor_name", e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label className="text-xs">
+                    Quoted Amount (₹){" "}
+                    <span className="text-amber-700 font-normal">— incl. taxes is fine</span>{" "}
+                    <span className="text-red-500">*</span>
+                  </Label>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="0.01"
+                    placeholder="0.00"
+                    value={q.amount}
+                    onChange={(e) => updateQuotation(q.id, "amount", e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1 sm:col-span-2">
+                  <Label className="text-xs">
+                    File <span className="text-red-500">*</span>
+                  </Label>
+                  <div className="flex items-center gap-2">
+                    <Input
+                      type="file"
+                      accept="application/pdf,image/jpeg,image/png,image/webp,image/heic,image/heif"
+                      onChange={(e) =>
+                        setQuotationFile(q.id, e.target.files?.[0] ?? null)
+                      }
+                    />
+                  </div>
+                  {q.file && (
+                    <p className="text-xs text-muted-foreground">
+                      <FileUp className="inline h-3 w-3 mr-1" />
+                      {q.file.name} · {(q.file.size / 1024).toFixed(0)} KB
+                    </p>
+                  )}
+                </div>
+                <div className="space-y-1 sm:col-span-2">
+                  <Label className="text-xs">
+                    Notes <span className="text-muted-foreground">(optional)</span>
+                  </Label>
+                  <Input
+                    placeholder="Discount, validity, lead time…"
+                    value={q.notes}
+                    onChange={(e) => updateQuotation(q.id, "notes", e.target.value)}
+                  />
+                </div>
+              </div>
+            </div>
+          ))}
+          {quotations.length > 0 && (
+            <p className="text-xs text-muted-foreground">
+              {validQuotations.length} of {quotations.length} quotation
+              {quotations.length === 1 ? "" : "s"} ready to upload.
+              {validQuotations.length === 0 && " Each needs a vendor, amount, and file."}
+            </p>
+          )}
+        </CardContent>
+      </Card>
+
       {/* Summary & Actions */}
       <Card>
         <CardContent className="pt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
@@ -631,13 +865,23 @@ export default function NewPurchaseRequestPage() {
             <Button
               variant="outline"
               onClick={handleSaveDraft}
-              disabled={savingDraft || submitting}
+              disabled={savingDraft || submitting || validQuotations.length < 1}
+              title={
+                validQuotations.length < 1
+                  ? "Attach at least one quotation / estimate before saving"
+                  : undefined
+              }
             >
               {savingDraft ? "Saving..." : "Save as Draft"}
             </Button>
             <Button
               onClick={handleSubmit}
-              disabled={submitting || savingDraft}
+              disabled={submitting || savingDraft || validQuotations.length < 1}
+              title={
+                validQuotations.length < 1
+                  ? "Attach at least one quotation / estimate before submitting"
+                  : undefined
+              }
             >
               {submitting ? "Submitting..." : "Submit for Approval"}
             </Button>

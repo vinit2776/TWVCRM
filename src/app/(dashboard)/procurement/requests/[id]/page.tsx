@@ -20,6 +20,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog";
+import { MaterialRequestQuotations } from "@/components/procurement/material-request-quotations";
 import {
   PR_STATUS_LABELS, PR_STATUS_COLORS,
   PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_COLORS,
@@ -622,6 +623,9 @@ export default function PurchaseRequestDetailPage() {
           </Card>
         )}
       </div>
+
+      {/* Vendor Quotations / Estimates */}
+      <MaterialRequestQuotations prId={pr.id} prStatus={pr.status} />
 
       {/* Line Items */}
       <Card>

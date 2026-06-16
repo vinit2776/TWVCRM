@@ -74,7 +74,7 @@ export async function GET(
     supabase
       .from("purchase_requests")
       .select(
-        `*, locations(id, name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email), purchase_request_items(*, procurement_items(id, name, department, unit, description, gst_rate))`
+        `*, locations(id, name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email), purchase_request_items(*, procurement_items(id, name, department, unit, description, gst_rate)), material_request_quotations(id, vendor_name, amount, file_name, file_mime_type, notes, created_at, uploaded_by)`
       )
       .eq("id", id)
       .single(),
@@ -161,6 +161,21 @@ export async function PATCH(
     case "approve": {
       if (pr.status !== "submitted") {
         return NextResponse.json({ error: "Only submitted PRs can be approved" }, { status: 422 });
+      }
+      // Quotation gate: at least one vendor quotation must be attached before approval.
+      const { count: quotationCount } = await supabase
+        .from("material_request_quotations")
+        .select("*", { count: "exact", head: true })
+        .eq("pr_id", id);
+      if (!quotationCount || quotationCount < 1) {
+        return NextResponse.json(
+          {
+            error:
+              "At least one vendor quotation / estimate must be attached before this MR can be approved. Ask the requester to upload supporting documents.",
+            quotations_required: true,
+          },
+          { status: 422 }
+        );
       }
       const requiresAdmin = pr.total_estimated_amount > approvalThreshold;
       if (requiresAdmin && dbUser.role !== "admin") {
