@@ -105,9 +105,13 @@ function parseAmount(s: string): number | null {
  * decides whether to fall back to bridge match or accept partial autofill.
  */
 export async function extractFromPdf(pdfBuffer: Buffer): Promise<PdfExtractResult> {
-  // pdf-parse is CJS and reads a magic-byte sample file at module load; we
-  // require it lazily so a missing fixture doesn't crash module init.
-  const { default: pdfParse } = (await import("pdf-parse")) as unknown as {
+  // pdf-parse's index.js has a debug-mode path that calls
+  // fs.readFileSync('./test/data/05-versions-space.pdf') relative to CWD.
+  // In Next.js (webpack/Turbopack), module.parent is unset so isDebugMode=true
+  // and the readFileSync throws ENOENT before any parsing occurs.
+  // Importing the inner lib directly bypasses that broken entry point entirely.
+  // @ts-expect-error — no type declarations for pdf-parse sub-path export
+  const { default: pdfParse } = (await import("pdf-parse/lib/pdf-parse.js")) as unknown as {
     default: (buf: Buffer) => Promise<{ text: string }>;
   };
 
