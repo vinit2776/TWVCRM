@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { extractFromPdf } from "@/lib/tally-pdf-extract";
 import { isHandoffV2Enabled } from "@/lib/tally-handoff-server";
 import { isInboxRole, type ExtractResponse } from "@/lib/tally-handoff";
@@ -47,7 +47,8 @@ export async function POST(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  if (!(await isHandoffV2Enabled(supabase))) {
+  const adminClient = await createAdminClient();
+  if (!(await isHandoffV2Enabled(adminClient))) {
     return NextResponse.json({ error: "Tally handoff v2 is not enabled" }, { status: 409 });
   }
 

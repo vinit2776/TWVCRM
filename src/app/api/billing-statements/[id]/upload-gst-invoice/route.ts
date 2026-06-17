@@ -67,7 +67,8 @@ export async function POST(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  if (!(await isHandoffV2Enabled(supabase))) {
+  const adminClient = await createAdminClient();
+  if (!(await isHandoffV2Enabled(adminClient))) {
     return NextResponse.json(
       { error: "Tally handoff v2 is not enabled. Enable the feature flag first." },
       { status: 409 },
