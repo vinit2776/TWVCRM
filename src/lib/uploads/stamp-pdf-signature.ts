@@ -1,12 +1,11 @@
 // Server-side utility: overlays the company signature image and seal onto the
 // last page of a Tally GST invoice PDF.
 //
-// The stamp is anchored to the "For Sree Design Infrastructure Pvt Ltd" text
-// that Tally already prints — we find that text's coordinates via pdf-parse,
-// then draw the signature image immediately below it and the seal beside it.
-// No text or lines are drawn by us; Tally already handles those.
+// Strategy: find "Authorised Signatory" text that Tally already prints, then
+// place the signature image just ABOVE it (inside the signatory box). The seal
+// sits to the right of the signature. No text or lines are drawn by us.
 //
-// If text detection fails a hardcoded bottom-right fallback is used.
+// If text detection fails a hardcoded position is used as fallback.
 // Any pdf-lib error returns the original buffer unchanged.
 
 import { PDFDocument } from "pdf-lib";
@@ -15,29 +14,30 @@ import { COMPANY_SIGNATURE_BASE64 } from "@/lib/signature-data";
 
 const MM = 2.8346; // 1 mm in points
 
-// pdf-parse internal page item shape
 interface PdfItem {
   str: string;
   transform: number[]; // [scaleX, skewY, skewX, scaleY, x, y]
 }
 
-/** Finds the bottom-left coordinate of the "For Sree Design…" label in the PDF. */
-async function findSignatoryAnchor(
-  buffer: Buffer,
-): Promise<{ x: number; y: number } | null> {
-  const SEARCH = [
+interface TextAnchors {
+  authSignatory: { x: number; y: number } | null;
+  companyName: { x: number; y: number } | null;
+}
+
+async function findTextAnchors(buffer: Buffer): Promise<TextAnchors> {
+  const AUTH_TERMS = ["authorised signatory", "authorized signatory"];
+  const COMPANY_TERMS = [
     "for sree design infrastructure pvt ltd",
     "for sree design infrastructure",
     "sree design infrastructure pvt",
     "sree design infrastructure",
   ];
 
-  let anchor: { x: number; y: number } | null = null;
+  const result: TextAnchors = { authSignatory: null, companyName: null };
 
   try {
-    // Dynamic import: pdf-parse reads a test file at module load time which
-    // crashes the Next.js build when imported statically (same pattern used
-    // by tally-pdf-extract.ts).
+    // Dynamic import avoids pdf-parse reading its test fixture at module load
+    // time, which crashes the Next.js build (same pattern as tally-pdf-extract.ts).
     const { default: pdfParse } = (await import("pdf-parse")) as unknown as {
       default: (buf: Buffer, opts: Record<string, unknown>) => Promise<unknown>;
     };
@@ -47,18 +47,21 @@ async function findSignatoryAnchor(
         const content = await pageData.getTextContent() as { items: PdfItem[] };
         for (const item of content.items) {
           const text = item.str.toLowerCase().trim();
-          if (SEARCH.some((s) => text.includes(s))) {
-            anchor = { x: item.transform[4], y: item.transform[5] };
+          if (AUTH_TERMS.some((t) => text.includes(t))) {
+            result.authSignatory = { x: item.transform[4], y: item.transform[5] };
+          }
+          if (COMPANY_TERMS.some((t) => text.includes(t))) {
+            result.companyName = { x: item.transform[4], y: item.transform[5] };
           }
         }
         return "";
       },
     });
   } catch {
-    // non-fatal — fall through to null
+    // non-fatal
   }
 
-  return anchor;
+  return result;
 }
 
 export async function stampSignatureOnPdf(buffer: Buffer): Promise<Buffer> {
@@ -69,40 +72,40 @@ export async function stampSignatureOnPdf(buffer: Buffer): Promise<Buffer> {
     const { width } = page.getSize();
 
     const sigImage = await pdfDoc.embedPng(
-      Buffer.from(
-        COMPANY_SIGNATURE_BASE64.replace(/^data:image\/png;base64,/, ""),
-        "base64",
-      ),
+      Buffer.from(COMPANY_SIGNATURE_BASE64.replace(/^data:image\/png;base64,/, ""), "base64"),
     );
     const sealImage = await pdfDoc.embedPng(
-      Buffer.from(
-        COMPANY_SEAL_BASE64.replace(/^data:image\/png;base64,/, ""), "base64",
-      ),
+      Buffer.from(COMPANY_SEAL_BASE64.replace(/^data:image\/png;base64,/, ""), "base64"),
     );
 
-    // Scale signature image to 20mm tall, preserve aspect ratio
     const sigH = 20 * MM;
     const sigDims = sigImage.size();
     const sigW = sigH * (sigDims.width / sigDims.height);
 
-    // Try to locate the "For Sree Design…" text printed by Tally
-    const anchor = await findSignatoryAnchor(buffer);
+    const anchors = await findTextAnchors(buffer);
 
     let xLeft: number;
-    let ySigTop: number; // top of signature image (y=0 at page bottom)
+    let ySigBottom: number;
 
-    if (anchor) {
-      // Place signature immediately below the detected text.
-      // anchor.y is the text baseline; subtract a 1 mm gap then the image height.
-      xLeft = anchor.x;
-      ySigTop = anchor.y - 1 * MM;
+    if (anchors.authSignatory) {
+      // Primary: place signature directly above "Authorised Signatory".
+      // authSignatory.y is the text baseline (y=0 at page bottom in PDF coords).
+      // We add 3mm gap above the baseline to clear the text ascenders.
+      const auth = anchors.authSignatory;
+      ySigBottom = auth.y + 3 * MM;
+      // X: align with the company name if found, otherwise match auth signatory x
+      xLeft = anchors.companyName?.x ?? auth.x;
+    } else if (anchors.companyName) {
+      // Fallback: place signature just below the company name text.
+      const co = anchors.companyName;
+      xLeft = co.x;
+      // co.y is company name baseline; signature top sits 1mm below it
+      ySigBottom = co.y - 1 * MM - sigH;
     } else {
-      // Fallback: bottom-right corner, 14 mm from right, 46 mm from bottom
+      // Last resort: fixed position in the bottom-right signatory area
       xLeft = width - 14 * MM - 80 * MM;
-      ySigTop = 46 * MM;
+      ySigBottom = 55 * MM; // ~55mm from page bottom
     }
-
-    const ySigBottom = ySigTop - sigH;
 
     page.drawImage(sigImage, {
       x: xLeft,
@@ -111,7 +114,7 @@ export async function stampSignatureOnPdf(buffer: Buffer): Promise<Buffer> {
       height: sigH,
     });
 
-    // Seal: r=12mm, placed to the right of the signature, vertically centred on it
+    // Seal: r=12mm, to the right of the signature, vertically centred on it
     const sealR = 12 * MM;
     const sealCx = xLeft + sigW + 4 * MM + sealR;
     const sealCy = ySigBottom + sigH / 2;
