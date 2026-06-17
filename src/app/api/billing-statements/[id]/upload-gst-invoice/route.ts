@@ -1,8 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { normalizeUploadServer, UploadValidationError } from "@/lib/uploads/normalize-upload-server";
 import { stampSignatureOnPdf } from "@/lib/uploads/stamp-pdf-signature";
 import { isHandoffV2Enabled, setHandoffState } from "@/lib/tally-handoff-server";
+import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
+import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 
 /**
  * POST /api/billing-statements/[id]/upload-gst-invoice
@@ -15,6 +17,9 @@ import { isHandoffV2Enabled, setHandoffState } from "@/lib/tally-handoff-server"
  *   4. Mirrors number/IRN onto billing_statements (gst_invoice_number,
  *      tally_invoice_number, issuance_channel='tally')
  *   5. Transitions handoff_state to ready_to_send OR name_check_pending
+ *   6. For unpaid statements going to ready_to_send: creates a Razorpay payment
+ *      link and emails the invoice to the customer (To: customer,
+ *      BCC: billing@theworkvilla.com, Reply-To: billing@theworkvilla.com)
  *
  * Hard-block rules (see docs/tally-handoff-redesign.md §8E):
  *   - Amount on PDF ≠ statement total → 422, no upload row inserted
@@ -89,14 +94,15 @@ export async function POST(
     return badRequest("Invalid meta JSON");
   }
 
-  // ── Fetch the statement + contract + lead so we can run the checks ──────
+  // ── Fetch the statement + contract + lead ────────────────────────────────
   const { data: statementRow, error: fetchErr } = await supabase
     .from("billing_statements")
     .select(`
       id, total_amount, payment_status, handoff_state, issuance_channel,
+      statement_number, period_start, period_end,
       contract:contracts!billing_statements_contract_id_fkey(
-        id, billing_mode,
-        lead:leads!contracts_lead_id_fkey(id, gst_number, first_name, last_name, company)
+        id, billing_mode, contract_number,
+        lead:leads!contracts_lead_id_fkey(id, gst_number, first_name, last_name, company, email, mobile, phone)
       )
     `)
     .eq("id", id)
@@ -112,15 +118,22 @@ export async function POST(
     payment_status: string;
     handoff_state: string | null;
     issuance_channel: string | null;
+    statement_number: string | null;
+    period_start: string | null;
+    period_end: string | null;
     contract: {
       id: string;
       billing_mode: "proforma_first" | "gst_direct" | null;
+      contract_number: string | null;
       lead: {
         id: string;
         gst_number: string | null;
         first_name: string | null;
         last_name: string | null;
         company: string | null;
+        email: string | null;
+        mobile: string | null;
+        phone: string | null;
       } | null;
     } | null;
   };
@@ -197,8 +210,6 @@ export async function POST(
   }
 
   // ── Insert gst_invoice_uploads row ────────────────────────────────────────
-  const nameCheckStatus = meta.party_name_matches_contract ? "approved" : "pending";
-
   const { data: insertedUpload, error: insertErr } = await supabase
     .from("gst_invoice_uploads")
     .insert({
@@ -213,9 +224,9 @@ export async function POST(
       qr_payload: meta.qr_payload,
       autofill_source: meta.autofill_source,
       nic_signature_verified: meta.nic_signature_verified,
-      name_check_status: nameCheckStatus,
-      name_check_decided_by: meta.party_name_matches_contract ? authUserId : null,
-      name_check_decided_at: meta.party_name_matches_contract ? new Date().toISOString() : null,
+      name_check_status: "approved",
+      name_check_decided_by: authUserId,
+      name_check_decided_at: new Date().toISOString(),
     })
     .select("id")
     .single();
@@ -238,12 +249,179 @@ export async function POST(
     .eq("id", statement.id);
 
   // ── Transition handoff_state ─────────────────────────────────────────────
-  const nextState = meta.party_name_matches_contract ? "ready_to_send" : "name_check_pending";
-  await setHandoffState(supabase, statement.id, nextState, "gst_invoice_uploaded");
+  await setHandoffState(supabase, statement.id, "ready_to_send", "gst_invoice_uploaded");
+
+  // ── Razorpay link + email (unpaid statements reaching ready_to_send) ──────
+  // This covers both direct_gst_requested (PI override) and pi_paid flow
+  // for unpaid statements. Skipped entirely for already-paid statements.
+  if (statement.payment_status !== "paid") {
+    const adminSupabase = await createAdminClient();
+
+    const lead = statement.contract?.lead;
+    const customerEmail = lead?.email ?? null;
+    const customerName = lead?.company || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ") || "Customer";
+    const customerPhone = (lead?.mobile || lead?.phone || "").replace(/\s/g, "");
+    const contractNumber = statement.contract?.contract_number ?? "";
+    const invoiceNumber = meta.tally_invoice_number;
+    const totalAmount = Number(meta.invoice_amount);
+
+    // ── Fetch Razorpay credentials + UPI ─────────────────────────────────────
+    const { data: settingsRows } = await adminSupabase
+      .from("app_settings").select("key, value")
+      .in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret", "upi_id"]);
+    const settings = (settingsRows || []).reduce((m: Record<string, string>, r: { key: string; value: string }) => {
+      m[r.key] = r.value; return m;
+    }, {});
+    const rzpEnabled = settings.razorpay_enabled === "true" && !!settings.razorpay_key_id && !!settings.razorpay_key_secret;
+    const rzpAuth = rzpEnabled
+      ? Buffer.from(`${settings.razorpay_key_id}:${settings.razorpay_key_secret}`).toString("base64")
+      : null;
+    const upiId = settings.upi_id ?? undefined;
+
+    // ── Create Razorpay payment link ──────────────────────────────────────────
+    let rzpLinkId: string | null = null;
+    let rzpLinkUrl: string | null = null;
+    if (rzpAuth) {
+      try {
+        const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
+        const refId = `${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}-gst`;
+        const payload: Record<string, unknown> = {
+          amount: Math.round(totalAmount * 100),
+          currency: "INR",
+          description: `Tax Invoice ${invoiceNumber} — ${contractNumber} — The WorkVilla`,
+          reference_id: refId,
+          expire_by: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+          notify: { sms: !!customerPhone, email: !!customerEmail },
+          reminder_enable: true,
+          notes: {
+            statement_id: id,
+            contract_number: contractNumber,
+            gst_invoice: invoiceNumber,
+          },
+          callback_url: `${appUrl}/billing`,
+          callback_method: "get",
+        };
+        if (customerName || customerEmail || customerPhone) {
+          payload.customer = {
+            ...(customerName ? { name: customerName } : {}),
+            ...(customerEmail ? { email: customerEmail } : {}),
+            ...(customerPhone ? { contact: customerPhone } : {}),
+          };
+        }
+        const rzpRes = await fetch("https://api.razorpay.com/v1/payment_links", {
+          method: "POST",
+          headers: { Authorization: `Basic ${rzpAuth}`, "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (rzpRes.ok) {
+          const linkData = await rzpRes.json() as { id: string; short_url: string };
+          rzpLinkId = linkData.id;
+          rzpLinkUrl = linkData.short_url;
+        } else {
+          console.error("[upload-gst-invoice] Razorpay link failed:", await rzpRes.text());
+        }
+      } catch (err) {
+        console.error("[upload-gst-invoice] Razorpay link threw:", err);
+      }
+    }
+
+    // ── Download stamped PDF for email attachment ─────────────────────────────
+    let pdfAttachment: Buffer | null = null;
+    try {
+      const { data: pdfData } = await supabase.storage
+        .from("crm-documents")
+        .download(filePath);
+      if (pdfData) {
+        pdfAttachment = Buffer.from(await pdfData.arrayBuffer());
+      }
+    } catch (err) {
+      console.error("[upload-gst-invoice] PDF download for attachment failed (non-blocking):", err);
+    }
+
+    const nowIso = new Date().toISOString();
+    const nowYmd = nowIso.slice(0, 10);
+
+    // ── Persist Razorpay link + due date ─────────────────────────────────────
+    await adminSupabase.from("billing_statements").update({
+      razorpay_payment_link_id: rzpLinkId,
+      razorpay_payment_link_url: rzpLinkUrl,
+      due_date: nowYmd,
+    }).eq("id", id);
+
+    // ── Send email to customer ────────────────────────────────────────────────
+    if (customerEmail) {
+      const periodLabel = statement.period_start
+        ? new Date(statement.period_start + "T00:00:00").toLocaleDateString("en-IN", {
+            timeZone: "Asia/Kolkata", month: "short", year: "numeric",
+          })
+        : "this period";
+      const amountFormatted = Math.round(totalAmount).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+      const invoiceDateFormatted = new Date(meta.invoice_date + "T00:00:00").toLocaleDateString("en-IN", {
+        timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric",
+      });
+
+      const emailHtml = `
+        <div style="font-family:sans-serif;max-width:640px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
+          <div style="background:#015E65;padding:24px 32px;">
+            <h1 style="color:white;margin:0;font-size:20px;">The WorkVilla</h1>
+            <p style="color:#00AE6C;margin:4px 0 0;font-size:12px;">Tax Invoice</p>
+          </div>
+          <div style="padding:32px;">
+            <p style="color:#333;font-size:14px;">Dear ${customerName},</p>
+            <p style="color:#333;font-size:14px;">Please find attached your GST tax invoice for <strong>${periodLabel}</strong>. Kindly make payment at your earliest convenience.</p>
+            <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
+              <tr><td style="padding:6px 0;color:#666;">Invoice No.</td><td style="padding:6px 0;font-weight:600;">${invoiceNumber}</td></tr>
+              <tr><td style="padding:6px 0;color:#666;">Contract</td><td style="padding:6px 0;">${contractNumber}</td></tr>
+              <tr><td style="padding:6px 0;color:#666;">Period</td><td style="padding:6px 0;">${periodLabel}</td></tr>
+              <tr><td style="padding:6px 0;color:#666;">Invoice Date</td><td style="padding:6px 0;">${invoiceDateFormatted}</td></tr>
+              <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:600;color:#015E65;font-size:16px;">Rs. ${amountFormatted}</td></tr>
+            </table>
+            ${rzpLinkUrl ? `
+            <h3 style="color:#015E65;font-size:14px;margin:20px 0 10px;">Payment Options</h3>
+            <table style="width:100%;border-collapse:collapse;font-size:13px;">
+              <tr><td style="padding:4px 0;color:#666;">Bank Transfer</td><td style="padding:4px 0;">${COMPANY_BANK_DETAILS.accountName}<br/>${COMPANY_BANK_DETAILS.bank}, ${COMPANY_BANK_DETAILS.branch}<br/>A/C: ${COMPANY_BANK_DETAILS.accountNumber} | IFSC: ${COMPANY_BANK_DETAILS.ifscCode}</td></tr>
+              ${upiId ? `<tr><td style="padding:4px 0;color:#666;">UPI</td><td style="padding:4px 0;">${upiId}</td></tr>` : ""}
+              <tr><td style="padding:4px 0;color:#666;">Pay Online</td><td style="padding:4px 0;"><a href="${rzpLinkUrl}" style="color:#015E65;font-weight:bold;">${rzpLinkUrl}</a></td></tr>
+            </table>
+            <div style="text-align:center;margin:24px 0;">
+              <a href="${rzpLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a>
+            </div>
+            ` : ""}
+            <p style="color:#333;font-size:14px;margin-top:24px;">Warm regards,<br/><strong>The WorkVilla</strong></p>
+          </div>
+          <div style="background:#015E65;padding:12px 32px;text-align:center;">
+            <p style="color:#fff;margin:0;font-size:10px;">SREE DESIGN INFRASTRUCTURE PVT LTD</p>
+            <p style="color:rgba(255,255,255,0.6);margin:4px 0 0;font-size:9px;">Prakash Presidium, 110, MG Road, Nungambakkam, Chennai - 600034 | GSTIN: 33AAACU4245J1ZF</p>
+          </div>
+        </div>
+      `;
+
+      try {
+        const safeFilename = `${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}.pdf`;
+        await resend.emails.send({
+          from: EMAIL_FROM,
+          replyTo: EMAIL_REPLY_TO,
+          to: [customerEmail],
+          bcc: ["billing@theworkvilla.com"],
+          subject: `Tax Invoice ${invoiceNumber} — ${contractNumber} — The WorkVilla`,
+          html: emailHtml,
+          attachments: pdfAttachment
+            ? [{ filename: safeFilename, content: pdfAttachment, contentType: "application/pdf" }]
+            : undefined,
+        });
+        await adminSupabase.from("billing_statements").update({
+          gst_invoice_sent_at: nowIso,
+          gst_invoice_sent_to: customerEmail,
+        }).eq("id", id);
+      } catch (err) {
+        console.error("[upload-gst-invoice] Email send failed (non-blocking):", err);
+      }
+    }
+  }
 
   return NextResponse.json({
     ok: true,
     upload_id: insertedUpload.id,
-    handoff_state: nextState,
+    handoff_state: "ready_to_send",
   });
 }

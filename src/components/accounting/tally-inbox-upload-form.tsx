@@ -35,7 +35,6 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().slice(0, 10));
   const [invoiceAmount, setInvoiceAmount] = useState(String(row.statement_total_amount));
   const [pdfFile, setPdfFile] = useState<File | null>(null);
-  const [nameMatches, setNameMatches] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
@@ -159,7 +158,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           irn: customerHasGstin ? irn.trim() : null,
           invoice_date: invoiceDate,
           invoice_amount: Number(invoiceAmount),
-          party_name_matches_contract: nameMatches,
+          party_name_matches_contract: true,
           autofill_source: autofillSource ?? "manual",
           qr_payload: null,
           nic_signature_verified: false,
@@ -426,23 +425,6 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
             )}
           </span>
         )}
-      </label>
-
-      <label className="flex items-start gap-2 text-xs cursor-pointer p-2 rounded border bg-background">
-        <input
-          type="checkbox"
-          checked={nameMatches}
-          onChange={(e) => setNameMatches(e.target.checked)}
-          className="mt-0.5"
-        />
-        <span>
-          <span className="font-medium">Party name on the invoice matches the contract party</span>
-          <span className="block text-muted-foreground mt-0.5">
-            Contract party: <span className="font-medium">{partyName}</span>.
-            Check this only after verifying the PDF. If unchecked, the upload still
-            saves but Save &amp; send stays blocked until an admin resolves the name check.
-          </span>
-        </span>
       </label>
 
       {validation.length > 0 && (
