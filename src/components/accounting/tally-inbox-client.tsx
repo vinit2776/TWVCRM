@@ -90,16 +90,20 @@ export function TallyInboxClient() {
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
+  const [resendingId, setResendingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [closedPage, setClosedPage] = useState(1);
 
-  const load = useCallback(async (opts?: { tab?: FilterTab; q?: string }) => {
+  const load = useCallback(async (opts?: { tab?: FilterTab; q?: string; page?: number }) => {
     setLoading(true);
     setError(null);
     try {
-      const apiTab = (opts?.tab ?? tab) === "closed" ? "closed" : "open";
+      const activeTab = opts?.tab ?? tab;
+      const apiTab = activeTab === "closed" ? "closed" : "open";
       const params = new URLSearchParams({ tab: apiTab });
       const qTerm = opts?.q ?? searchTerm;
       if (qTerm) params.set("q", qTerm);
+      if (apiTab === "closed") params.set("page", String(opts?.page ?? closedPage));
       const res = await fetch(`/api/accounting/inbox?${params}`, { cache: "no-store" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
@@ -112,7 +116,7 @@ export function TallyInboxClient() {
     } finally {
       setLoading(false);
     }
-  }, [tab, searchTerm]);
+  }, [tab, searchTerm, closedPage]);
 
   useEffect(() => {
     void load();
@@ -189,6 +193,20 @@ export function TallyInboxClient() {
     }
   }, [load]);
 
+  const handleResend = useCallback(async (statementId: string) => {
+    setResendingId(statementId);
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/resend-gst-invoice`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Resend failed");
+    } finally {
+      setResendingId(null);
+    }
+  }, []);
+
   const visibleRows = useMemo(() => {
     if (!data) return [];
     if (tab === "all" || tab === "closed") return data.rows;
@@ -243,8 +261,7 @@ export function TallyInboxClient() {
               type="button"
               onClick={() => {
                 setTab(t.key);
-                // Clear search when switching tabs so context is preserved
-                // (open-tab vs closed-tab search use the same input).
+                setClosedPage(1);
               }}
               className={`px-3 py-2 text-sm border-b-2 -mb-px transition-colors ${
                 active
@@ -311,15 +328,48 @@ export function TallyInboxClient() {
                 expanded={expandedId === row.statement_id}
                 sending={sendingId === row.statement_id}
                 closing={closingId === row.statement_id}
+                resending={resendingId === row.statement_id}
                 onToggle={() => setExpandedId(expandedId === row.statement_id ? null : row.statement_id)}
                 onSend={() => handleSend(row.statement_id)}
                 onClose={() => handleClose(row.statement_id)}
+                onResend={() => handleResend(row.statement_id)}
                 onUploaded={handleUploaded}
                 onCancelUpload={() => setExpandedId(null)}
                 onGstinUpdated={() => void load()}
               />
             ))}
           </ul>
+          {tab === "closed" && (
+            <div className="flex items-center justify-between pt-2 text-xs text-muted-foreground">
+              <span>Page {closedPage} · {visibleRows.length} records</span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  disabled={closedPage === 1 || loading}
+                  onClick={() => {
+                    const p = closedPage - 1;
+                    setClosedPage(p);
+                    void load({ page: p });
+                  }}
+                  className="px-2 py-1 rounded border hover:bg-muted disabled:opacity-40"
+                >
+                  ← Prev
+                </button>
+                <button
+                  type="button"
+                  disabled={!data?.has_more || loading}
+                  onClick={() => {
+                    const p = closedPage + 1;
+                    setClosedPage(p);
+                    void load({ page: p });
+                  }}
+                  className="px-2 py-1 rounded border hover:bg-muted disabled:opacity-40"
+                >
+                  Next →
+                </button>
+              </div>
+            </div>
+          )}
         </>
       )}
     </div>
@@ -487,9 +537,11 @@ function InboxRowItem({
   expanded,
   sending,
   closing,
+  resending,
   onToggle,
   onSend,
   onClose,
+  onResend,
   onUploaded,
   onCancelUpload,
   onGstinUpdated,
@@ -498,9 +550,11 @@ function InboxRowItem({
   expanded: boolean;
   sending: boolean;
   closing: boolean;
+  resending: boolean;
   onToggle: () => void;
   onSend: () => void;
   onClose: () => void;
+  onResend: () => void;
   onUploaded: () => void;
   onCancelUpload: () => void;
   onGstinUpdated: () => void;
@@ -776,6 +830,18 @@ function InboxRowItem({
             >
               {closing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
               {closing ? "Closing…" : "Mark as done"}
+            </button>
+          )}
+          {isClosed && row.latest_upload && (
+            <button
+              type="button"
+              onClick={onResend}
+              disabled={resending}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted disabled:opacity-50"
+              title="Resend the GST invoice email to the customer"
+            >
+              {resending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+              {resending ? "Sending…" : "Resend email"}
             </button>
           )}
         </div>

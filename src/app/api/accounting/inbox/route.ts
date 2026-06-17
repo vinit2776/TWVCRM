@@ -30,7 +30,7 @@ import {
  */
 export const dynamic = "force-dynamic";
 
-const CLOSED_PAGE_SIZE = 200; // cap closed-archive queries; UI paginates as needed
+const CLOSED_PAGE_SIZE = 50;
 
 export async function GET(req: NextRequest) {
   const supabase = await createClient();
@@ -64,6 +64,7 @@ export async function GET(req: NextRequest) {
   const tab = url.searchParams.get("tab") === "closed" ? "closed" : "open";
   const q = (url.searchParams.get("q") ?? "").trim();
   const singleId = (url.searchParams.get("id") ?? "").trim() || null;
+  const page = Math.max(1, parseInt(url.searchParams.get("page") ?? "1", 10));
   const includeTimeline =
     !!singleId && (url.searchParams.get("include") ?? "").split(",").includes("timeline");
 
@@ -96,12 +97,10 @@ export async function GET(req: NextRequest) {
     // surfaces outside the inbox (contract page, billing dialog, etc.).
     query = query.eq("id", singleId).limit(1);
   } else if (tab === "closed") {
-    // Closed tab includes complete AND voided statements (voided rows are
-    // archived business; user wants them findable here with a red border).
     query = query
       .or("handoff_state.eq.complete,voided_at.not.is.null")
       .order("updated_at", { ascending: false })
-      .limit(CLOSED_PAGE_SIZE);
+      .range((page - 1) * CLOSED_PAGE_SIZE, page * CLOSED_PAGE_SIZE);
   } else {
     query = query.in("handoff_state", INBOX_OPEN_STATES as readonly string[])
       .order("updated_at", { ascending: true });
@@ -412,7 +411,19 @@ export async function GET(req: NextRequest) {
     stats,
     rows,
     last_synced_at: lastSyncedAt,
+    ...(tab === "closed" && !singleId ? {
+      has_more: rows.length > CLOSED_PAGE_SIZE,
+      total_closed: undefined,
+    } : {}),
   };
+
+  // Trim the extra sentinel row used to detect has_more
+  if (tab === "closed" && !singleId && response.rows.length > CLOSED_PAGE_SIZE) {
+    response.rows = response.rows.slice(0, CLOSED_PAGE_SIZE);
+    response.has_more = true;
+  } else if (tab === "closed" && !singleId) {
+    response.has_more = false;
+  }
 
   return NextResponse.json(response);
 }

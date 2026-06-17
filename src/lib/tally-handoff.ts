@@ -213,6 +213,9 @@ export interface InboxResponse {
   stats: InboxStats;
   rows: InboxRow[];
   last_synced_at: string | null;
+  /** Closed-tab pagination */
+  has_more?: boolean;
+  total_closed?: number;
 }
 
 // -----------------------------------------------------------------------------
