@@ -91,6 +91,7 @@ export function TallyInboxClient() {
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
   const [resendingId, setResendingId] = useState<string | null>(null);
+  const [sentConfirmedId, setSentConfirmedId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [closedPage, setClosedPage] = useState(1);
 
@@ -196,16 +197,19 @@ export function TallyInboxClient() {
   const handleResend = useCallback(async (statementId: string) => {
     setResendingId(statementId);
     setActionError(null);
+    setSentConfirmedId(null);
     try {
       const res = await fetch(`/api/billing-statements/${statementId}/resend-gst-invoice`, { method: "POST" });
       const body = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setSentConfirmedId(statementId);
+      await load();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Resend failed");
     } finally {
       setResendingId(null);
     }
-  }, []);
+  }, [load]);
 
   const visibleRows = useMemo(() => {
     if (!data) return [];
@@ -329,6 +333,7 @@ export function TallyInboxClient() {
                 sending={sendingId === row.statement_id}
                 closing={closingId === row.statement_id}
                 resending={resendingId === row.statement_id}
+                sentConfirmed={sentConfirmedId === row.statement_id}
                 onToggle={() => setExpandedId(expandedId === row.statement_id ? null : row.statement_id)}
                 onSend={() => handleSend(row.statement_id)}
                 onClose={() => handleClose(row.statement_id)}
@@ -532,12 +537,17 @@ function InboxRowLifecycleTracker({ row }: { row: InboxRow }) {
 
 const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
 
+function formatSentAt(iso: string): string {
+  return new Date(iso).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" });
+}
+
 function InboxRowItem({
   row,
   expanded,
   sending,
   closing,
   resending,
+  sentConfirmed,
   onToggle,
   onSend,
   onClose,
@@ -551,6 +561,7 @@ function InboxRowItem({
   sending: boolean;
   closing: boolean;
   resending: boolean;
+  sentConfirmed: boolean;
   onToggle: () => void;
   onSend: () => void;
   onClose: () => void;
@@ -833,16 +844,27 @@ function InboxRowItem({
             </button>
           )}
           {isClosed && row.latest_upload && (
-            <button
-              type="button"
-              onClick={onResend}
-              disabled={resending}
-              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted disabled:opacity-50"
-              title="Resend the GST invoice email to the customer"
-            >
-              {resending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-              {resending ? "Sending…" : "Resend email"}
-            </button>
+            <div className="flex flex-col items-end gap-0.5">
+              <button
+                type="button"
+                onClick={onResend}
+                disabled={resending}
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted disabled:opacity-50"
+                title="Resend the GST invoice email to the customer"
+              >
+                {resending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                {resending ? "Sending…" : "Resend email"}
+              </button>
+              {sentConfirmed ? (
+                <span className="text-[10px] text-green-700 flex items-center gap-0.5">
+                  <Check className="h-3 w-3" /> Sent successfully
+                </span>
+              ) : row.gst_invoice_sent_at ? (
+                <span className="text-[10px] text-muted-foreground">
+                  Last sent: {formatSentAt(row.gst_invoice_sent_at)}
+                </span>
+              ) : null}
+            </div>
           )}
         </div>
       </div>

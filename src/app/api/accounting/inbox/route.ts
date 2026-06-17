@@ -82,7 +82,7 @@ export async function GET(req: NextRequest) {
       subtotal, tax_percentage, tax_amount,
       cgst_amount, sgst_amount, igst_amount,
       is_interstate, place_of_supply, hsn_sac_code,
-      gst_invoice_number, tally_invoice_number,
+      gst_invoice_number, tally_invoice_number, gst_invoice_sent_at,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, title, billing_mode,
         lead:leads!contracts_lead_id_fkey(
@@ -139,6 +139,7 @@ export async function GET(req: NextRequest) {
     hsn_sac_code: string | null;
     gst_invoice_number: string | null;
     tally_invoice_number: string | null;
+    gst_invoice_sent_at: string | null;
     created_at: string;
     proforma_sent_at: string | null;
     tally_delivered_at: string | null;
@@ -392,6 +393,7 @@ export async function GET(req: NextRequest) {
       },
       payments_received: payments,
       total_paid: totalPaid,
+      gst_invoice_sent_at: s.gst_invoice_sent_at ?? null,
     };
   });
 

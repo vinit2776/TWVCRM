@@ -199,6 +199,8 @@ export interface InboxRow {
   line_items: InboxLineItemBreakdown;
   payments_received: InboxPayment[]; // empty array if none yet
   total_paid: number;                // sum of payments_received amounts
+  /** ISO timestamp of the last time the GST invoice email was successfully sent. */
+  gst_invoice_sent_at: string | null;
 }
 
 export interface InboxStats {
