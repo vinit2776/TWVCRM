@@ -1264,9 +1264,7 @@ export function ViewStatementDialog({
           {statement?.status === "finalized" && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.payment_status !== "paid" && userRole && ["admin", "manager"].includes(userRole) && (
             <Button
               variant="outline"
-              className="border-amber-400 text-amber-700 hover:bg-amber-50 disabled:opacity-50 disabled:cursor-not-allowed"
-              disabled={gstModeReady === false}
-              title={gstModeReady === false ? "GST invoicing is on standby — activate CRM GST or Tally Sync from Admin → Tally Sync" : undefined}
+              className="border-amber-400 text-amber-700 hover:bg-amber-50"
               onClick={() => setShowConvertToGst(true)}
             >
               <AlertTriangle className="mr-2 h-4 w-4" />
