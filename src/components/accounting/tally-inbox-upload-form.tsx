@@ -38,6 +38,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   const [submitting, setSubmitting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
+  const [emailWarning, setEmailWarning] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [autofillSource, setAutofillSource] = useState<AutofillSource | null>(null);
   const [bridgeMatched, setBridgeMatched] = useState(false);
@@ -173,6 +174,13 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${res.status}`);
+      }
+
+      const body = await res.json().catch(() => ({}));
+      if (body.email_warning) {
+        setEmailWarning(body.email_warning);
+        setSubmitting(false);
+        return;
       }
 
       onUploaded();
@@ -442,6 +450,16 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
         <div className="text-xs text-red-900 bg-red-50 border border-red-200 rounded p-2 flex items-start gap-1">
           <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" aria-hidden />
           <span>{serverError}</span>
+        </div>
+      )}
+
+      {emailWarning && (
+        <div className="text-xs text-amber-900 bg-amber-50 border border-amber-200 rounded p-2 flex items-start gap-1.5">
+          <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" aria-hidden />
+          <span>
+            <span className="font-semibold block">Invoice uploaded but email failed to send.</span>
+            {emailWarning}
+          </span>
         </div>
       )}
 

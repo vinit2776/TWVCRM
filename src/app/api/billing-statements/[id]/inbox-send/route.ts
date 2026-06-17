@@ -190,6 +190,13 @@ export async function POST(
   });
 
   if (result.error) {
+    await supabase.from("audit_trail").insert({
+      entity_type: "billing_statement",
+      entity_id: id,
+      action: "email_failed",
+      performed_by: null,
+      changes: { error: result.error.message, recipient: recipientEmail, trigger: "inbox_send" },
+    });
     return NextResponse.json(
       { error: `Email delivery failed: ${result.error.message}` },
       { status: 500 },

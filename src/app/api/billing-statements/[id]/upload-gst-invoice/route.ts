@@ -399,29 +399,44 @@ export async function POST(
         </div>
       `;
 
+      let emailWarning: string | null = null;
       try {
         const safeFilename = `${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}.pdf`;
-        await resend.emails.send({
+        const sendResult = await resend.emails.send({
           from: EMAIL_FROM,
           replyTo: EMAIL_REPLY_TO,
           to: [customerEmail],
-          bcc: ["billing@theworkvilla.com"],
+          bcc: [EMAIL_REPLY_TO],
           subject: `Tax Invoice ${invoiceNumber} — ${contractNumber} — The WorkVilla`,
           html: emailHtml,
           attachments: pdfAttachment
             ? [{ filename: safeFilename, content: pdfAttachment, contentType: "application/pdf" }]
             : undefined,
         });
+        if (sendResult.error) throw new Error(sendResult.error.message);
         await adminSupabase.from("billing_statements").update({
           gst_invoice_sent_at: nowIso,
           gst_invoice_sent_to: customerEmail,
         }).eq("id", id);
-        // Advance handoff state so the inbox tracker shows "Link + Email Sent"
-        // and the Save & send button no longer appears.
         await setHandoffState(adminSupabase, id, "gst_sent_awaiting_payment", "gst_invoice_email_sent");
       } catch (err) {
-        console.error("[upload-gst-invoice] Email send failed (non-blocking):", err);
+        const errMsg = err instanceof Error ? err.message : String(err);
+        emailWarning = `Email delivery failed: ${errMsg}. Invoice uploaded — use Save & send from the inbox to retry.`;
+        await adminSupabase.from("audit_trail").insert({
+          entity_type: "billing_statement",
+          entity_id: id,
+          action: "email_failed",
+          performed_by: null,
+          changes: { error: errMsg, recipient: customerEmail, trigger: "upload_gst_invoice" },
+        });
       }
+
+      return NextResponse.json({
+        ok: true,
+        upload_id: insertedUpload.id,
+        handoff_state: emailWarning ? "ready_to_send" : "gst_sent_awaiting_payment",
+        email_warning: emailWarning ?? undefined,
+      });
     }
   }
 
