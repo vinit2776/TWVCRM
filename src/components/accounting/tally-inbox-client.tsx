@@ -14,7 +14,7 @@
  */
 
 import { useEffect, useMemo, useState, useCallback } from "react";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X } from "lucide-react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import {
   AGING_ESCALATE_HOURS,
@@ -316,6 +316,7 @@ export function TallyInboxClient() {
                 onClose={() => handleClose(row.statement_id)}
                 onUploaded={handleUploaded}
                 onCancelUpload={() => setExpandedId(null)}
+                onGstinUpdated={() => void load()}
               />
             ))}
           </ul>
@@ -370,6 +371,8 @@ function EmptyState({ tab, totalOpen }: { tab: FilterTab; totalOpen: number }) {
   );
 }
 
+const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
+
 function InboxRowItem({
   row,
   expanded,
@@ -380,6 +383,7 @@ function InboxRowItem({
   onClose,
   onUploaded,
   onCancelUpload,
+  onGstinUpdated,
 }: {
   row: InboxRow;
   expanded: boolean;
@@ -390,7 +394,43 @@ function InboxRowItem({
   onClose: () => void;
   onUploaded: () => void;
   onCancelUpload: () => void;
+  onGstinUpdated: () => void;
 }) {
+  const [gstinEditing, setGstinEditing] = useState(false);
+  const [gstinInput, setGstinInput] = useState("");
+  const [gstinSaving, setGstinSaving] = useState(false);
+  const [gstinError, setGstinError] = useState<string | null>(null);
+
+  const handleGstinSave = async () => {
+    const val = gstinInput.trim().toUpperCase();
+    if (!GSTIN_RE.test(val)) {
+      setGstinError("Invalid GSTIN format (e.g. 29AABCU9603R1ZX)");
+      return;
+    }
+    const leadId = row.contract?.lead?.id;
+    if (!leadId) return;
+    setGstinSaving(true);
+    setGstinError(null);
+    try {
+      const res = await fetch(`/api/leads/${leadId}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gst_number: val }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      setGstinEditing(false);
+      setGstinInput("");
+      onGstinUpdated();
+    } catch (e) {
+      setGstinError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setGstinSaving(false);
+    }
+  };
+
   const aging = row.aging_hours;
   const agingClass =
     aging >= AGING_ESCALATE_HOURS ? "text-red-700" : aging >= 24 ? "text-amber-700" : "text-muted-foreground";
@@ -480,10 +520,47 @@ function InboxRowItem({
             <span className="font-mono px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground" title="Customer GSTIN">
               {row.contract.lead.gst_number}
             </span>
-          ) : (
-            <span className="px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground">
-              no GSTIN
+          ) : gstinEditing ? (
+            <span className="flex items-center gap-1 flex-wrap">
+              <input
+                autoFocus
+                type="text"
+                value={gstinInput}
+                onChange={(e) => { setGstinInput(e.target.value.toUpperCase()); setGstinError(null); }}
+                onKeyDown={(e) => { if (e.key === "Enter") void handleGstinSave(); if (e.key === "Escape") { setGstinEditing(false); setGstinInput(""); setGstinError(null); } }}
+                placeholder="29AABCU9603R1ZX"
+                maxLength={15}
+                className="font-mono text-[11px] px-1.5 py-0.5 rounded border focus:outline-none focus:ring-1 focus:ring-foreground/30 w-36 uppercase"
+              />
+              <button
+                type="button"
+                onClick={() => void handleGstinSave()}
+                disabled={gstinSaving}
+                className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded bg-foreground text-background disabled:opacity-50"
+              >
+                {gstinSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={() => { setGstinEditing(false); setGstinInput(""); setGstinError(null); }}
+                className="text-[11px] px-1.5 py-0.5 rounded border hover:bg-muted"
+              >
+                Cancel
+              </button>
+              {gstinError && <span className="text-red-600 text-[11px]">{gstinError}</span>}
             </span>
+          ) : (
+            <button
+              type="button"
+              onClick={() => row.contract?.lead?.id && setGstinEditing(true)}
+              disabled={!row.contract?.lead?.id}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed"
+              title="GSTIN missing — click to add"
+            >
+              <Pencil className="h-2.5 w-2.5" />
+              no GSTIN
+            </button>
           )}
           <span
             className={`px-1.5 py-0.5 rounded border ${
