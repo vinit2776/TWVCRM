@@ -10,7 +10,6 @@
 // Any pdf-lib error returns the original buffer unchanged.
 
 import { PDFDocument } from "pdf-lib";
-import pdfParse from "pdf-parse";
 import { COMPANY_SEAL_BASE64 } from "@/lib/seal-data";
 import { COMPANY_SIGNATURE_BASE64 } from "@/lib/signature-data";
 
@@ -36,6 +35,12 @@ async function findSignatoryAnchor(
   let anchor: { x: number; y: number } | null = null;
 
   try {
+    // Dynamic import: pdf-parse reads a test file at module load time which
+    // crashes the Next.js build when imported statically (same pattern used
+    // by tally-pdf-extract.ts).
+    const { default: pdfParse } = (await import("pdf-parse")) as unknown as {
+      default: (buf: Buffer, opts: Record<string, unknown>) => Promise<unknown>;
+    };
     await pdfParse(buffer, {
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       pagerender: async (pageData: any) => {
