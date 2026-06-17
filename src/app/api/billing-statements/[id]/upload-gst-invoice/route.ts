@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { normalizeUploadServer, UploadValidationError } from "@/lib/uploads/normalize-upload-server";
+import { stampSignatureOnPdf } from "@/lib/uploads/stamp-pdf-signature";
 import { isHandoffV2Enabled, setHandoffState } from "@/lib/tally-handoff-server";
 
 /**
@@ -56,6 +57,7 @@ export async function POST(
     .eq("auth_id", user.id)
     .maybeSingle();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 404 });
+  const authUserId = user.id;
   if (!["accounts", "admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
@@ -178,6 +180,10 @@ export async function POST(
     throw err;
   }
 
+  if (normalized.mimeType === "application/pdf") {
+    normalized.buffer = await stampSignatureOnPdf(normalized.buffer);
+  }
+
   const timestamp = Date.now();
   const safeNumber = meta.tally_invoice_number.replace(/[^\w-]/g, "_");
   const filePath = `tally-handoff/${statement.contract?.id ?? "unknown"}/${timestamp}-${safeNumber}.${normalized.ext}`;
@@ -197,7 +203,7 @@ export async function POST(
     .from("gst_invoice_uploads")
     .insert({
       billing_statement_id: statement.id,
-      uploaded_by: dbUser.id,
+      uploaded_by: authUserId,
       tally_invoice_number: meta.tally_invoice_number,
       tally_invoice_series: meta.tally_invoice_series,
       irn: meta.irn,
@@ -208,7 +214,7 @@ export async function POST(
       autofill_source: meta.autofill_source,
       nic_signature_verified: meta.nic_signature_verified,
       name_check_status: nameCheckStatus,
-      name_check_decided_by: meta.party_name_matches_contract ? dbUser.id : null,
+      name_check_decided_by: meta.party_name_matches_contract ? authUserId : null,
       name_check_decided_at: meta.party_name_matches_contract ? new Date().toISOString() : null,
     })
     .select("id")

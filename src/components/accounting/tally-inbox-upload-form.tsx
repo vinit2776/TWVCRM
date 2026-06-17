@@ -12,7 +12,7 @@
  */
 
 import { useMemo, useState } from "react";
-import { Upload, Loader2, AlertCircle, Sparkles } from "lucide-react";
+import { Upload, Loader2, AlertCircle, Sparkles, Eye } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import type { InboxRow, ExtractResponse, AutofillSource } from "@/lib/tally-handoff";
 
@@ -37,6 +37,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [nameMatches, setNameMatches] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  const [previewing, setPreviewing] = useState(false);
   const [serverError, setServerError] = useState<string | null>(null);
   const [extracting, setExtracting] = useState(false);
   const [autofillSource, setAutofillSource] = useState<AutofillSource | null>(null);
@@ -113,6 +114,33 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount]);
 
   const canSubmit = validation.length === 0 && !submitting;
+
+  async function handlePreview() {
+    if (!pdfFile) return;
+    setPreviewing(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", pdfFile);
+      const res = await fetch(
+        `/api/billing-statements/${row.statement_id}/preview-gst-stamp`,
+        { method: "POST", body: fd },
+      );
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        setServerError(body.error || `Preview failed (HTTP ${res.status})`);
+        return;
+      }
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      window.open(url, "_blank", "noopener,noreferrer");
+      // Revoke after a short delay to allow the tab to load the blob.
+      setTimeout(() => URL.revokeObjectURL(url), 60_000);
+    } catch {
+      setServerError("Preview failed — check your connection and try again.");
+    } finally {
+      setPreviewing(false);
+    }
+  }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -379,8 +407,23 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           className="block w-full text-xs file:mr-3 file:px-3 file:py-1.5 file:border file:rounded file:bg-background file:text-sm hover:file:bg-muted"
         />
         {pdfFile && (
-          <span className="text-xs text-muted-foreground mt-1 block">
-            Selected: {pdfFile.name} ({Math.round(pdfFile.size / 1024)} KB)
+          <span className="mt-1 flex items-center gap-2">
+            <span className="text-xs text-muted-foreground">
+              {pdfFile.name} ({Math.round(pdfFile.size / 1024)} KB)
+            </span>
+            {pdfFile.type === "application/pdf" && (
+              <button
+                type="button"
+                onClick={() => void handlePreview()}
+                disabled={previewing || submitting}
+                className="inline-flex items-center gap-1 text-xs px-2 py-0.5 rounded border hover:bg-muted disabled:opacity-50"
+              >
+                {previewing
+                  ? <Loader2 className="h-3 w-3 animate-spin" />
+                  : <Eye className="h-3 w-3" />}
+                {previewing ? "Generating…" : "Preview stamped"}
+              </button>
+            )}
           </span>
         )}
       </label>
