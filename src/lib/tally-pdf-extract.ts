@@ -31,7 +31,6 @@ export interface PdfExtractResult {
  *   Amount:         "Total Invoice Value" line followed by the number
  */
 const INVOICE_NUMBER_REGEX = /SD\/(?:A|B)\/\d{2}-\d{2}\/\d+/i;
-const IRN_REGEX = /\b([a-f0-9]{64})\b/i;
 const GSTIN_REGEX = /\b(\d{2}[A-Z]{5}\d{4}[A-Z]\d[A-Z\d]{2})\b/;
 const DATE_DDMMMYYYY = /\b(\d{1,2})[-\s]*(Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)[a-z]*[-\s]*(\d{4})\b/i;
 const DATE_DDMMYYYY = /\b(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})\b/;
@@ -40,6 +39,37 @@ const MONTH_INDEX: Record<string, number> = {
   jan: 0, feb: 1, mar: 2, apr: 3, may: 4, jun: 5,
   jul: 6, aug: 7, sep: 8, oct: 9, nov: 10, dec: 11,
 };
+
+/**
+ * Extract a 64-char IRN from PDF text.
+ *
+ * Tally PDFs surface the IRN in a few different ways depending on the version
+ * and template:
+ *   1. "IRN: <64-char hex>" on one line
+ *   2. "IRN" label on one line, hex value on the next (column-based layout)
+ *   3. Hex value spread over two lines due to column width limits (e.g. 32+32)
+ *   4. Standalone 64-char hex string elsewhere in the page
+ *
+ * We try each strategy in order and return the first confident match.
+ */
+function findIrn(text: string): string | null {
+  // Strategy 1: "IRN" label with optional colon/space, then hex (same or next line).
+  // Captures up to 140 chars after the label to handle whitespace-split values.
+  const labelMatch = text.match(/\bIRN\b[\s:]*([a-f0-9][\s\S]{60,138})/i);
+  if (labelMatch) {
+    const candidate = labelMatch[1].replace(/\s+/g, "").slice(0, 64);
+    if (candidate.length === 64 && /^[a-f0-9]{64}$/i.test(candidate)) {
+      return candidate.toLowerCase();
+    }
+  }
+
+  // Strategy 2: Standalone 64-char hex not adjacent to more hex chars.
+  // Negative lookbehind/ahead ensures we don't clip a longer string.
+  const exactMatch = text.match(/(?<![a-f0-9])([a-f0-9]{64})(?![a-f0-9])/i);
+  if (exactMatch) return exactMatch[1].toLowerCase();
+
+  return null;
+}
 
 function parseDdMmmYyyy(s: string): string | null {
   const m = s.match(DATE_DDMMMYYYY);
@@ -107,8 +137,7 @@ export async function extractFromPdf(pdfBuffer: Buffer): Promise<PdfExtractResul
     ? invoiceNumber.startsWith("SD/A/") ? "SDIPL-REG" : "SDIPL-UNREG"
     : null;
 
-  const irnMatch = text.match(IRN_REGEX);
-  const irn = irnMatch ? irnMatch[1].toLowerCase() : null;
+  const irn = findIrn(text);
 
   const gstinMatch = text.match(GSTIN_REGEX);
   const partyGstin = gstinMatch ? gstinMatch[1] : null;

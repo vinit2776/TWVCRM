@@ -23,7 +23,7 @@ import { COMPANY_BANK_DETAILS } from "@/lib/constants";
  *
  * Hard-block rules (see docs/tally-handoff-redesign.md §8E):
  *   - Amount on PDF ≠ statement total → 422, no upload row inserted
- *   - A-series upload without IRN → 422
+ *   - A-series upload with wrong-length IRN → 422 (IRN itself is optional)
  *   - B-series upload with IRN → 422
  *   - Customer has GSTIN but B-series uploaded → 422
  *   - Customer has no GSTIN but A-series uploaded → 422
@@ -161,8 +161,10 @@ export async function POST(
   }
 
   if (meta.tally_invoice_series === "SDIPL-REG") {
-    if (!meta.irn || meta.irn.length !== 64) {
-      return badRequest("A-series invoices require a 64-character IRN.");
+    // IRN is optional (autofill may fail for system-generated PDFs where IRN
+    // is only embedded in the QR code). If present, it must be 64 chars.
+    if (meta.irn && meta.irn.length !== 64) {
+      return badRequest("IRN must be exactly 64 characters if provided.");
     }
   } else {
     if (meta.irn) {

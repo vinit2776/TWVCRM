@@ -94,8 +94,8 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
     if (invoiceNumber && !invoiceNumber.startsWith(expectedPrefix)) {
       errors.push(`Invoice number must start with "${expectedPrefix}" for this customer.`);
     }
-    if (customerHasGstin && irn.trim().length !== 64) {
-      errors.push("A-series (GST customer) requires a 64-character IRN.");
+    if (customerHasGstin && irn.trim().length > 0 && irn.trim().length !== 64) {
+      errors.push("IRN must be exactly 64 characters if provided.");
     }
     if (!customerHasGstin && irn.trim().length > 0) {
       errors.push("B-series (non-GST customer) must NOT have an IRN.");
@@ -347,7 +347,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           <span className="block mb-1 text-muted-foreground">
             IRN
             {customerHasGstin ? (
-              <span className="text-red-600">* (64 chars)</span>
+              <span className="ml-1">(optional · 64 chars · autofilled when detected)</span>
             ) : (
               <span className="ml-1">(not applicable for non-GST customer)</span>
             )}
