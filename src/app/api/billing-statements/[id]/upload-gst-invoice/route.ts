@@ -95,6 +95,9 @@ export async function POST(
     return badRequest("Invalid meta JSON");
   }
 
+  // Normalise: empty-string IRN must become null so the DB CHECK passes.
+  if (!meta.irn?.trim()) meta.irn = null;
+
   // ── Fetch the statement + contract + lead ────────────────────────────────
   const { data: statementRow, error: fetchErr } = await supabase
     .from("billing_statements")
