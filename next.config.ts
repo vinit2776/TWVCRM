@@ -2,35 +2,12 @@ import type { NextConfig } from "next";
 import path from "path";
 import { execSync } from "child_process";
 
-/**
- * Human-friendly app version computed at build time.
- *
- * Scheme: v0.<commit-count>.0 — auto-bumps every merge to main, no manual
- * version-file edits. Falls back to "v0.0.0-dev" if git isn't available
- * (e.g. a Docker build from a tarball with no .git folder).
- *
- * Vercel keeps .git during build, so this works on both local and prod.
- */
+// Source of truth for the app version — bump with `npm version patch|minor|major`.
+// eslint-disable-next-line @typescript-eslint/no-require-imports
+const { version: pkgVersion } = require("./package.json") as { version: string };
+
 function computeAppVersion(): string {
-  // Prefer the Vercel-injected build env: VERCEL_GIT_PULL_REQUEST_ID isn't reliable,
-  // but VERCEL_GIT_COMMIT_REF (branch) + the commit SHA give us a stable identifier.
-  // The commit count is unreliable on Vercel because of their shallow clone (~10 commits
-  // by default), so on Vercel we use the short SHA as the version suffix.
-  const onVercel = !!process.env.VERCEL;
-  if (onVercel) {
-    const sha =
-      process.env.VERCEL_GIT_COMMIT_SHA?.slice(0, 7) ||
-      process.env.NEXT_PUBLIC_VERCEL_GIT_COMMIT_SHA?.slice(0, 7);
-    return sha ? `v0-${sha}` : "v0.0.0-prod";
-  }
-  // Local / non-Vercel builds: real commit count works fine.
-  try {
-    const count = execSync("git rev-list --count HEAD", { encoding: "utf-8" }).trim();
-    if (count && /^\d+$/.test(count)) return `v0.${count}.0`;
-  } catch {
-    /* fall through */
-  }
-  return "v0.0.0-dev";
+  return `v${pkgVersion}`;
 }
 
 /**

@@ -501,8 +501,7 @@ export function Sidebar() {
 
         {/* Help — pinned at bottom, always visible */}
         <div className="shrink-0 border-t border-sidebar-accent px-3 py-3">
-          {/* Build identifier — helps spot stale cached versions.
-              Format: "v0.<commit-count>.0 · <sha7>" with build date as tooltip. */}
+          {/* Version badge — semver driven by package.json, sha + date in tooltip. */}
           {(() => {
             const version = process.env.NEXT_PUBLIC_APP_VERSION;
             const sha =
@@ -510,12 +509,11 @@ export function Sidebar() {
               process.env.NEXT_PUBLIC_GIT_SHA ||
               undefined;
             const date = process.env.NEXT_PUBLIC_BUILD_DATE;
-            if (!version && !sha) return null;
-            const label = [version, sha].filter(Boolean).join(" · ");
-            const tooltip = ["Build:", label, date && `(${date})`].filter(Boolean).join(" ");
+            if (!version) return null;
+            const tooltip = [sha && `commit ${sha}`, date && `built ${date}`].filter(Boolean).join(" · ");
             return (
-              <p className="px-3 pb-2 text-[10px] text-sidebar-foreground/35 select-none" title={tooltip}>
-                {label}
+              <p className="px-3 pb-2 text-[10px] text-sidebar-foreground/35 select-none" title={tooltip || undefined}>
+                {version}
               </p>
             );
           })()}
