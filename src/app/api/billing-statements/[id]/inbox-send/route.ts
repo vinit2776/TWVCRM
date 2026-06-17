@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { formatCurrency } from "@/lib/utils";
 import {
@@ -49,7 +49,8 @@ export async function POST(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  if (!(await isHandoffV2Enabled(supabase))) {
+  const adminClient = await createAdminClient();
+  if (!(await isHandoffV2Enabled(adminClient))) {
     return NextResponse.json({ error: "Tally handoff v2 is not enabled" }, { status: 409 });
   }
 
@@ -181,6 +182,7 @@ export async function POST(
   const result = await resend.emails.send({
     from: EMAIL_FROM,
     to: recipientEmail,
+    bcc: [EMAIL_REPLY_TO],
     replyTo: EMAIL_REPLY_TO,
     subject,
     html,
