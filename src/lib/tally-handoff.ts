@@ -179,6 +179,9 @@ export interface InboxRow {
   is_voided: boolean;
   voided_at: string | null;
   void_reason: string | null;
+  /** True when the proforma was cancelled via the early-GST override. Distinguishes
+   *  the override path from the normal proforma_first path at terminal states. */
+  pi_was_cancelled: boolean;
   contract: InboxContract | null;
   latest_upload: InboxUpload | null;
   latest_snapshot: InboxSnapshot | null;

@@ -413,6 +413,9 @@ export async function POST(
           gst_invoice_sent_at: nowIso,
           gst_invoice_sent_to: customerEmail,
         }).eq("id", id);
+        // Advance handoff state so the inbox tracker shows "Link + Email Sent"
+        // and the Save & send button no longer appears.
+        await setHandoffState(adminSupabase, id, "gst_sent_awaiting_payment", "gst_invoice_email_sent");
       } catch (err) {
         console.error("[upload-gst-invoice] Email send failed (non-blocking):", err);
       }

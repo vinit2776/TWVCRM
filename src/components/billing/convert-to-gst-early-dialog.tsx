@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { AlertTriangle, FileCheck, Loader2, X } from "lucide-react";
+import { AlertTriangle, FileCheck, Inbox, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +14,6 @@ import {
 } from "@/components/ui/dialog";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 
 interface ConvertToGstEarlyDialogProps {
@@ -43,7 +42,6 @@ export function ConvertToGstEarlyDialog({
   onSuccess,
 }: ConvertToGstEarlyDialogProps) {
   const [reason, setReason] = useState("");
-  const [sendEmail, setSendEmail] = useState(true);
   const [loading, setLoading] = useState(false);
 
   const amountFormatted = Math.round(totalAmount).toLocaleString("en-IN", { maximumFractionDigits: 0 });
@@ -60,24 +58,21 @@ export function ConvertToGstEarlyDialog({
       const res = await fetch(`/api/billing-statements/${statementId}/convert-to-gst-early`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ reason: reason.trim(), sendEmail }),
+        body: JSON.stringify({ reason: reason.trim() }),
       });
-      const json = await res.json() as { success?: boolean; invoiceNumber?: string; error?: string; emailedTo?: string };
+      const json = await res.json() as { success?: boolean; queuedToInbox?: boolean; error?: string };
 
       if (!res.ok) {
-        toast.error(json.error || "Failed to issue early GST invoice");
+        toast.error(json.error || "Failed to queue GST invoice request");
         return;
       }
 
       toast.success(
-        sendEmail && json.emailedTo
-          ? `Tax Invoice ${json.invoiceNumber} issued and emailed to ${json.emailedTo}`
-          : `Tax Invoice ${json.invoiceNumber} issued. Email skipped — send manually if needed.`,
-        { duration: 6000 }
+        "Queued to Tally inbox — accounts will issue the GST invoice and email it to the customer.",
+        { duration: 6000 },
       );
       onOpenChange(false);
       setReason("");
-      setSendEmail(true);
       onSuccess();
     } catch {
       toast.error("Network error — please try again");
@@ -95,8 +90,8 @@ export function ConvertToGstEarlyDialog({
             Issue GST Invoice — Override Proforma
           </DialogTitle>
           <DialogDescription>
-            This action cancels the proforma and issues a formal tax invoice immediately,
-            before payment is received.
+            This action cancels the proforma and queues the statement to the Tally inbox
+            so accounts can issue the GST invoice before payment is received.
           </DialogDescription>
         </DialogHeader>
 
@@ -112,13 +107,14 @@ export function ConvertToGstEarlyDialog({
           {hasExistingPaymentLink && (
             <div className="flex items-start gap-2">
               <X className="h-4 w-4 text-destructive mt-0.5 shrink-0" />
-              <span>The existing payment link will be cancelled on Razorpay</span>
+              <span>The existing Razorpay payment link will be cancelled</span>
             </div>
           )}
           <div className="flex items-start gap-2">
-            <FileCheck className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
+            <Inbox className="h-4 w-4 text-blue-600 mt-0.5 shrink-0" />
             <span>
-              A Tax Invoice will be generated for{" "}
+              Statement queued to <strong>Tally inbox</strong> — accounts will create the GST
+              invoice in Tally for{" "}
               <strong>
                 {customerName} — {periodLabel} — ₹{amountFormatted}
               </strong>
@@ -127,20 +123,8 @@ export function ConvertToGstEarlyDialog({
           <div className="flex items-start gap-2">
             <FileCheck className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
             <span>
-              Invoice date = <strong>today</strong> · Due date = <strong>immediate</strong>
-            </span>
-          </div>
-          {hasExistingPaymentLink && (
-            <div className="flex items-start gap-2">
-              <FileCheck className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
-              <span>A new payment link will be created referencing the Tax Invoice</span>
-            </div>
-          )}
-          <div className="flex items-start gap-2">
-            <FileCheck className="h-4 w-4 text-green-600 mt-0.5 shrink-0" />
-            <span>
-              All future reminders will reference the Tax Invoice, with a note about the
-              cancelled proforma so the customer has continuity
+              Once uploaded, a new payment link will be created and the invoice emailed to{" "}
+              <strong>{customerEmail || "the customer"}</strong>
             </span>
           </div>
         </div>
@@ -166,26 +150,6 @@ export function ConvertToGstEarlyDialog({
           </p>
         </div>
 
-        {/* Send email toggle */}
-        <div className="flex items-center justify-between rounded-lg border p-3">
-          <div className="space-y-0.5">
-            <Label htmlFor="send-email-toggle" className="cursor-pointer">
-              Email Tax Invoice to customer
-            </Label>
-            <p className="text-xs text-muted-foreground">
-              {customerEmail
-                ? `Will send to ${customerEmail} with the invoice PDF attached`
-                : "No email on file — toggle has no effect"}
-            </p>
-          </div>
-          <Switch
-            id="send-email-toggle"
-            checked={sendEmail}
-            onCheckedChange={setSendEmail}
-            disabled={loading || !customerEmail}
-          />
-        </div>
-
         {/* Irreversibility warning */}
         <div className="rounded-md bg-amber-50 border border-amber-200 px-3 py-2 text-xs text-amber-800">
           <strong>This cannot be undone.</strong> A GST invoice, once issued, is a legal
@@ -206,7 +170,7 @@ export function ConvertToGstEarlyDialog({
             ) : (
               <FileCheck className="mr-2 h-4 w-4" />
             )}
-            Confirm &amp; Issue Tax Invoice
+            Confirm &amp; Queue to Tally Inbox
           </Button>
         </DialogFooter>
       </DialogContent>

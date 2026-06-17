@@ -13,7 +13,7 @@
  * underlying statement detail page.
  */
 
-import { useEffect, useMemo, useState, useCallback } from "react";
+import { Fragment, useEffect, useMemo, useState, useCallback } from "react";
 import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import {
@@ -371,6 +371,115 @@ function EmptyState({ tab, totalOpen }: { tab: FilterTab; totalOpen: number }) {
   );
 }
 
+// ── Lifecycle tracker ──────────────────────────────────────────────────────
+
+type StepStatus = "done" | "current" | "pending";
+
+interface TrackerStep {
+  label: string;
+  status: StepStatus;
+}
+
+function buildSteps(labels: string[], doneFlags: boolean[]): TrackerStep[] {
+  return labels.map((label, i) => {
+    if (doneFlags[i]) return { label, status: "done" };
+    if (i === 0 || doneFlags[i - 1]) return { label, status: "current" };
+    return { label, status: "pending" };
+  });
+}
+
+function InboxRowLifecycleTracker({ row }: { row: InboxRow }) {
+  const state = row.handoff_state;
+  const paid = row.payment_status === "paid";
+  const isComplete = state === "complete";
+  const billingMode = row.contract?.billing_mode;
+
+  const inStates = (...ss: string[]) => !!state && ss.includes(state);
+
+  let steps: TrackerStep[];
+
+  if (billingMode === "gst_direct") {
+    // Flow 3: GST Direct — customer was never sent a proforma; GST invoice + payment link together
+    const gstReady  = inStates("ready_to_send", "gst_sent", "gst_sent_awaiting_payment", "paid_awaiting_receipt_record", "complete");
+    const linkSent  = inStates("gst_sent", "gst_sent_awaiting_payment", "paid_awaiting_receipt_record", "complete") || paid;
+    const pmtDone   = paid || inStates("paid_awaiting_receipt_record", "complete");
+    steps = buildSteps(
+      ["GST\nRequested", "GST in\nTally", "Invoice +\nLink Sent", "Payment\nReceived", "Done"],
+      [true, gstReady, linkSent, pmtDone, isComplete],
+    );
+  } else if (row.pi_was_cancelled) {
+    // Flow 2: Override — PI was cancelled early so GST invoice is issued before payment
+    const gstReady  = inStates("ready_to_send", "gst_sent_awaiting_payment", "paid_awaiting_receipt_record", "complete");
+    const emailSent = inStates("gst_sent_awaiting_payment", "paid_awaiting_receipt_record", "complete");
+    const pmtDone   = paid || inStates("paid_awaiting_receipt_record", "complete");
+    steps = buildSteps(
+      ["PI\nCancelled", "GST in\nTally", "Link +\nEmail Sent", "Payment\nReceived", "Done"],
+      [true, gstReady, emailSent, pmtDone, isComplete],
+    );
+  } else {
+    // Flow 1: PI-first — payment received before GST invoice is uploaded
+    const pmtDone      = paid || inStates("pi_paid_awaiting_gst", "name_check_pending", "ready_to_send", "gst_sent", "paid_awaiting_receipt_record", "complete");
+    const gstReady     = inStates("ready_to_send", "gst_sent", "paid_awaiting_receipt_record", "complete");
+    const invoiceSent  = inStates("gst_sent", "paid_awaiting_receipt_record", "complete");
+    steps = buildSteps(
+      ["PI\nSent", "Payment\nReceived", "GST in\nTally", "Invoice\nSent", "Done"],
+      [true, pmtDone, gstReady, invoiceSent, isComplete],
+    );
+  }
+
+  const flowLabel =
+    billingMode === "gst_direct"
+      ? "GST Direct"
+      : row.pi_was_cancelled
+      ? "Override"
+      : "PI-first";
+
+  return (
+    <div className="col-span-2 pt-2 pb-0.5">
+      <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">
+        {flowLabel}
+      </div>
+      <div className="flex items-start">
+        {steps.map((step, i) => (
+          <Fragment key={step.label}>
+            <div className="flex flex-col items-center" style={{ minWidth: 52 }}>
+              <div
+                className={`h-5 w-5 rounded-full flex items-center justify-center border-2 text-[10px] font-semibold ${
+                  step.status === "done"
+                    ? "bg-green-500 border-green-500 text-white"
+                    : step.status === "current"
+                    ? "bg-blue-500 border-blue-500 text-white"
+                    : "border-gray-200 bg-white text-gray-300"
+                }`}
+              >
+                {step.status === "done" ? <CheckCircle2 className="h-3 w-3" /> : String(i + 1)}
+              </div>
+              <div
+                className={`text-[10px] mt-0.5 text-center leading-tight whitespace-pre-line ${
+                  step.status === "done"
+                    ? "text-green-700"
+                    : step.status === "current"
+                    ? "text-blue-700 font-medium"
+                    : "text-muted-foreground opacity-50"
+                }`}
+              >
+                {step.label}
+              </div>
+            </div>
+            {i < steps.length - 1 && (
+              <div
+                className={`flex-1 h-0.5 mt-2.5 rounded-full ${
+                  step.status === "done" ? "bg-green-300" : "bg-gray-100"
+                }`}
+              />
+            )}
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 const GSTIN_RE = /^[0-9]{2}[A-Z]{5}[0-9]{4}[A-Z]{1}[1-9A-Z]{1}Z[0-9A-Z]{1}$/;
 
 function InboxRowItem({
@@ -584,6 +693,9 @@ function InboxRowItem({
             </span>
           )}
         </div>
+
+        {/* ── Lifecycle tracker ── */}
+        <InboxRowLifecycleTracker row={row} />
 
         {/* ── Discrepancy or upload-pending banner (only when present) ── */}
         {(row.has_discrepancy || (row.latest_upload && !canSend)) && (
