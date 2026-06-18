@@ -27,9 +27,13 @@ import {
   CalendarDays,
   MapPin,
   Loader2,
+  AlertCircle,
+  Plus,
+  X,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import Link from "next/link";
+import { Label } from "@/components/ui/label";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -54,6 +58,22 @@ interface EmployeeRow {
 interface Location {
   id: string;
   name: string;
+}
+
+interface AttendanceCorrection {
+  id: string;
+  employee_id: string;
+  correction_date: string;
+  correction_type: string;
+  corrected_time: string;
+  reason: string | null;
+  status: string;
+  employee?: { full_name: string };
+}
+
+interface Employee {
+  id: string;
+  full_name: string;
 }
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
@@ -107,6 +127,20 @@ export default function AttendancePage() {
   // Detail drawer
   const [detail, setDetail] = useState<{ emp: EmployeeRow; date: string; day: DayEntry } | null>(null);
 
+  // Corrections panel
+  const [correctionsOpen, setCorrectionsOpen] = useState(false);
+  const [corrections, setCorrections] = useState<AttendanceCorrection[]>([]);
+  const [loadingCorrections, setLoadingCorrections] = useState(false);
+  const [allEmployees, setAllEmployees] = useState<Employee[]>([]);
+  const [corrForm, setCorrForm] = useState({
+    employee_id: "",
+    correction_date: today.toISOString().slice(0, 10),
+    correction_type: "add_out",
+    corrected_time: "",
+    reason: "",
+  });
+  const [submittingCorr, setSubmittingCorr] = useState(false);
+
   const dates = useMemo(() => monthDates(year, month), [year, month]);
   const monthLabel = useMemo(() =>
     new Date(year, month, 1).toLocaleString("en-IN", { month: "long", year: "numeric" }),
@@ -134,10 +168,29 @@ export default function AttendancePage() {
     }
   }, [dates, locationFilter, deptFilter]);
 
+  const loadCorrections = useCallback(async () => {
+    setLoadingCorrections(true);
+    const { data } = await supabase
+      .from("attendance_corrections")
+      .select("*, employee:employees!attendance_corrections_employee_id_fkey(full_name)")
+      .order("created_at", { ascending: false })
+      .limit(100);
+    setCorrections((data ?? []) as AttendanceCorrection[]);
+    setLoadingCorrections(false);
+  }, [supabase]);
+
   useEffect(() => {
     supabase.from("locations").select("id, name").order("name").then(({ data }) => {
       setLocations(data ?? []);
     });
+    supabase
+      .from("employees")
+      .select("id, full_name")
+      .eq("is_active", true)
+      .order("full_name")
+      .then(({ data }) => {
+        setAllEmployees((data ?? []) as Employee[]);
+      });
     supabase
       .from("employees")
       .select("department")
@@ -149,6 +202,39 @@ export default function AttendancePage() {
       });
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  async function submitCorrection() {
+    if (!corrForm.employee_id || !corrForm.corrected_time) {
+      toast.error("Employee and corrected time are required");
+      return;
+    }
+    setSubmittingCorr(true);
+    // Build a proper ISO timestamp from date + time input (IST → UTC)
+    const istDateTime = new Date(`${corrForm.correction_date}T${corrForm.corrected_time}:00+05:30`);
+    const { error } = await supabase.from("attendance_corrections").insert({
+      employee_id: corrForm.employee_id,
+      correction_date: corrForm.correction_date,
+      correction_type: corrForm.correction_type,
+      corrected_time: istDateTime.toISOString(),
+      reason: corrForm.reason || null,
+      status: "pending",
+    });
+    setSubmittingCorr(false);
+    if (error) { toast.error("Failed to submit correction"); return; }
+    toast.success("Correction submitted — pending HR review");
+    setCorrForm(f => ({ ...f, employee_id: "", corrected_time: "", reason: "" }));
+    loadCorrections();
+  }
+
+  async function updateCorrectionStatus(id: string, status: "approved" | "rejected") {
+    const { error } = await supabase
+      .from("attendance_corrections")
+      .update({ status, reviewed_at: new Date().toISOString() })
+      .eq("id", id);
+    if (error) { toast.error("Failed to update"); return; }
+    toast.success(`Correction ${status}`);
+    loadCorrections();
+  }
 
   useEffect(() => { load(); }, [load]);
 
@@ -229,6 +315,14 @@ export default function AttendancePage() {
           <p className="text-sm text-muted-foreground mt-0.5">{monthLabel} · {workingDays} working days</p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => { setCorrectionsOpen(true); loadCorrections(); }}
+          >
+            <AlertCircle className="h-4 w-4 mr-2" />
+            Corrections
+          </Button>
           <Link href="/admin/employees">
             <Button variant="outline" size="sm">
               <Users className="h-4 w-4 mr-2" />
@@ -399,6 +493,155 @@ export default function AttendancePage() {
         <span className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-muted/60 inline-block" /> Weekend</span>
         <span className="text-muted-foreground/60">Click a present cell for details</span>
       </div>
+
+      {/* Corrections panel */}
+      {correctionsOpen && (
+        <div
+          className="fixed inset-0 z-50 bg-black/30 flex items-start justify-end"
+          onClick={() => setCorrectionsOpen(false)}
+        >
+          <div
+            className="w-full max-w-lg h-full bg-background border-l shadow-xl flex flex-col overflow-hidden"
+            onClick={e => e.stopPropagation()}
+          >
+            {/* Panel header */}
+            <div className="flex items-center justify-between p-4 border-b flex-none">
+              <div>
+                <h2 className="font-semibold">Attendance Corrections</h2>
+                <p className="text-xs text-muted-foreground mt-0.5">Submit and review attendance corrections</p>
+              </div>
+              <Button variant="ghost" size="icon" onClick={() => setCorrectionsOpen(false)}>
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto">
+              {/* Submit form */}
+              <div className="p-4 border-b bg-muted/20">
+                <p className="text-sm font-medium mb-3 flex items-center gap-1.5">
+                  <Plus className="h-3.5 w-3.5" /> New Correction
+                </p>
+                <div className="space-y-3">
+                  <div>
+                    <Label className="text-xs">Employee</Label>
+                    <Select value={corrForm.employee_id} onValueChange={v => setCorrForm(f => ({ ...f, employee_id: v }))}>
+                      <SelectTrigger className="h-8 text-sm">
+                        <SelectValue placeholder="Select employee" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {allEmployees.map(e => (
+                          <SelectItem key={e.id} value={e.id}>{e.full_name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <Label className="text-xs">Date</Label>
+                      <Input
+                        type="date"
+                        className="h-8 text-sm"
+                        value={corrForm.correction_date}
+                        onChange={e => setCorrForm(f => ({ ...f, correction_date: e.target.value }))}
+                      />
+                    </div>
+                    <div>
+                      <Label className="text-xs">Type</Label>
+                      <Select value={corrForm.correction_type} onValueChange={v => setCorrForm(f => ({ ...f, correction_type: v }))}>
+                        <SelectTrigger className="h-8 text-sm">
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="add_in">Add check-in</SelectItem>
+                          <SelectItem value="add_out">Add check-out</SelectItem>
+                          <SelectItem value="override_time">Override time</SelectItem>
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <div>
+                    <Label className="text-xs">Corrected Time (IST)</Label>
+                    <Input
+                      type="time"
+                      className="h-8 text-sm"
+                      value={corrForm.corrected_time}
+                      onChange={e => setCorrForm(f => ({ ...f, corrected_time: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <Label className="text-xs">Reason</Label>
+                    <Input
+                      placeholder="Brief reason for correction"
+                      className="h-8 text-sm"
+                      value={corrForm.reason}
+                      onChange={e => setCorrForm(f => ({ ...f, reason: e.target.value }))}
+                    />
+                  </div>
+                  <Button size="sm" className="w-full" onClick={submitCorrection} disabled={submittingCorr}>
+                    {submittingCorr ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
+                    Submit Correction
+                  </Button>
+                </div>
+              </div>
+
+              {/* Pending / recent list */}
+              <div className="p-4">
+                <p className="text-sm font-medium mb-3">Recent Corrections</p>
+                {loadingCorrections ? (
+                  <div className="flex justify-center py-8">
+                    <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                  </div>
+                ) : corrections.length === 0 ? (
+                  <p className="text-sm text-muted-foreground text-center py-8">No corrections yet</p>
+                ) : (
+                  <div className="space-y-2">
+                    {corrections.map(c => (
+                      <div key={c.id} className="border rounded-lg p-3 text-sm">
+                        <div className="flex items-start justify-between gap-2">
+                          <div className="min-w-0">
+                            <p className="font-medium truncate">{c.employee?.full_name ?? "—"}</p>
+                            <p className="text-xs text-muted-foreground">
+                              {formatDate(c.correction_date)} · {c.correction_type.replace(/_/g, " ")}
+                            </p>
+                            {c.reason && <p className="text-xs text-muted-foreground mt-0.5 italic">{c.reason}</p>}
+                          </div>
+                          <div className="flex items-center gap-1 shrink-0">
+                            {c.status === "pending" && (
+                              <>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-6 text-xs px-2 text-green-700 border-green-300"
+                                  onClick={() => updateCorrectionStatus(c.id, "approved")}
+                                >Approve</Button>
+                                <Button
+                                  size="sm"
+                                  variant="outline"
+                                  className="h-6 text-xs px-2 text-red-600 border-red-300"
+                                  onClick={() => updateCorrectionStatus(c.id, "rejected")}
+                                >Reject</Button>
+                              </>
+                            )}
+                            {c.status !== "pending" && (
+                              <span className={`text-xs font-medium px-2 py-0.5 rounded-full border ${
+                                c.status === "approved" ? "bg-green-50 text-green-700 border-green-200" :
+                                c.status === "applied"  ? "bg-blue-50 text-blue-700 border-blue-200" :
+                                "bg-red-50 text-red-600 border-red-200"
+                              }`}>
+                                {c.status}
+                              </span>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Detail drawer */}
       {detail && (

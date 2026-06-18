@@ -15,15 +15,31 @@ import {
 } from "@/components/ui/dialog";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
-import { Search, Plus, Pencil, Loader2, IndianRupee, Info } from "lucide-react";
-import { formatCurrency } from "@/lib/utils";
+import { Search, Pencil, Loader2, IndianRupee, Info, History, Building2, X } from "lucide-react";
+import { formatCurrency, formatDate } from "@/lib/utils";
 import { monthlyGross, calculatePT } from "@/lib/payroll";
 import type { Employee, SalaryDefinition } from "@/types";
+import { createClient } from "@/lib/supabase/client";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 interface EmployeeWithSalary extends Employee {
   employee_salary_definitions: SalaryDefinition[] | null;
+}
+
+interface SalaryHistoryRow {
+  id: string;
+  effective_from: string;
+  effective_to: string;
+  basic: number;
+  hra: number;
+  da: number;
+  special_allowance: number;
+  lta_annual: number;
+  mobile_reimbursement: number;
+  other_reimbursements: number;
+  tds_monthly_amount: number;
+  captured_at: string;
 }
 
 const EMPTY_FORM = {
@@ -43,16 +59,31 @@ const EMPTY_FORM = {
   esi_applicable: false,
 };
 
+const EMPTY_BANK = {
+  bank_account_number: "",
+  bank_ifsc: "",
+  bank_name: "",
+  bank_account_holder_name: "",
+};
+
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function PayrollEmployeesPage() {
+  const supabase = createClient();
   const [employees, setEmployees] = useState<EmployeeWithSalary[]>([]);
   const [loading, setLoading] = useState(true);
   const [search, setSearch] = useState("");
   const [dialogOpen, setDialogOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [form, setForm] = useState(EMPTY_FORM);
+  const [bankForm, setBankForm] = useState(EMPTY_BANK);
+  const [savingBank, setSavingBank] = useState(false);
   const [selectedEmp, setSelectedEmp] = useState<EmployeeWithSalary | null>(null);
+
+  // Salary history panel
+  const [historyEmp, setHistoryEmp] = useState<EmployeeWithSalary | null>(null);
+  const [history, setHistory] = useState<SalaryHistoryRow[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(false);
 
   const loadEmployees = useCallback(async () => {
     setLoading(true);
@@ -105,7 +136,49 @@ export default function PayrollEmployeesPage() {
         }
       : { ...EMPTY_FORM, employee_id: emp.id }
     );
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const e = emp as any;
+    setBankForm({
+      bank_account_number: e.bank_account_number ?? "",
+      bank_ifsc: e.bank_ifsc ?? "",
+      bank_name: e.bank_name ?? "",
+      bank_account_holder_name: e.bank_account_holder_name ?? "",
+    });
     setDialogOpen(true);
+  }
+
+  async function handleSaveBank() {
+    if (!selectedEmp) return;
+    setSavingBank(true);
+    try {
+      const { error } = await supabase
+        .from("employees")
+        .update({
+          bank_account_number: bankForm.bank_account_number || null,
+          bank_ifsc: bankForm.bank_ifsc || null,
+          bank_name: bankForm.bank_name || null,
+          bank_account_holder_name: bankForm.bank_account_holder_name || null,
+        })
+        .eq("id", selectedEmp.id);
+      if (error) throw error;
+      toast.success("Bank account saved");
+    } catch {
+      toast.error("Failed to save bank account");
+    } finally {
+      setSavingBank(false);
+    }
+  }
+
+  async function openHistory(emp: EmployeeWithSalary) {
+    setHistoryEmp(emp);
+    setLoadingHistory(true);
+    const { data } = await supabase
+      .from("employee_salary_definition_history")
+      .select("*")
+      .eq("employee_id", emp.id)
+      .order("effective_from", { ascending: false });
+    setHistory((data ?? []) as SalaryHistoryRow[]);
+    setLoadingHistory(false);
   }
 
   async function handleSave() {
@@ -229,10 +302,17 @@ export default function PayrollEmployeesPage() {
                       }
                     </td>
                     <td className="px-4 py-3">
-                      <Button variant="ghost" size="sm" onClick={() => openEdit(emp)}>
-                        <Pencil className="h-3.5 w-3.5 mr-1" />
-                        {hasDef(emp) ? "Edit" : "Setup"}
-                      </Button>
+                      <div className="flex items-center gap-1">
+                        <Button variant="ghost" size="sm" onClick={() => openEdit(emp)}>
+                          <Pencil className="h-3.5 w-3.5 mr-1" />
+                          {hasDef(emp) ? "Edit" : "Setup"}
+                        </Button>
+                        {hasDef(emp) && (
+                          <Button variant="ghost" size="icon" className="h-8 w-8" title="Salary history" onClick={() => openHistory(emp)}>
+                            <History className="h-3.5 w-3.5 text-muted-foreground" />
+                          </Button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 );
@@ -349,6 +429,57 @@ export default function PayrollEmployeesPage() {
               </div>
             </div>
 
+            {/* Bank account */}
+            <div>
+              <p className="text-sm font-semibold text-muted-foreground uppercase tracking-wide mb-3 flex items-center gap-2">
+                <Building2 className="h-3.5 w-3.5" /> Bank Account (for salary transfer)
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Account Number</Label>
+                  <Input
+                    placeholder="Account number"
+                    value={bankForm.bank_account_number}
+                    onChange={e => setBankForm(f => ({ ...f, bank_account_number: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>IFSC Code</Label>
+                  <Input
+                    placeholder="SBIN0001234"
+                    value={bankForm.bank_ifsc}
+                    onChange={e => setBankForm(f => ({ ...f, bank_ifsc: e.target.value.toUpperCase() }))}
+                  />
+                </div>
+                <div>
+                  <Label>Bank Name</Label>
+                  <Input
+                    placeholder="State Bank of India"
+                    value={bankForm.bank_name}
+                    onChange={e => setBankForm(f => ({ ...f, bank_name: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <Label>Account Holder Name</Label>
+                  <Input
+                    placeholder="As per bank records"
+                    value={bankForm.bank_account_holder_name}
+                    onChange={e => setBankForm(f => ({ ...f, bank_account_holder_name: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <Button
+                variant="outline"
+                size="sm"
+                className="mt-2"
+                onClick={handleSaveBank}
+                disabled={savingBank}
+              >
+                {savingBank ? <Loader2 className="h-3.5 w-3.5 animate-spin mr-1" /> : null}
+                Save Bank Details
+              </Button>
+            </div>
+
             {/* Live preview */}
             {form.basic > 0 && (
               <div className="bg-muted/40 rounded-lg p-4 text-sm space-y-1.5">
@@ -384,6 +515,68 @@ export default function PayrollEmployeesPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Salary history panel */}
+      {historyEmp && (
+        <div
+          className="fixed inset-0 z-50 bg-black/30 flex items-end sm:items-center justify-center p-4"
+          onClick={() => setHistoryEmp(null)}
+        >
+          <Card className="w-full max-w-2xl max-h-[80vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+            <CardHeader className="pb-3 flex-none border-b">
+              <div className="flex items-center justify-between">
+                <div>
+                  <CardTitle className="text-base flex items-center gap-2">
+                    <History className="h-4 w-4" />
+                    Salary Revision History — {historyEmp.full_name}
+                  </CardTitle>
+                  <p className="text-xs text-muted-foreground mt-0.5">Each row is a historical salary period captured before the next revision</p>
+                </div>
+                <Button variant="ghost" size="icon" onClick={() => setHistoryEmp(null)}><X className="h-4 w-4" /></Button>
+              </div>
+            </CardHeader>
+            <CardContent className="overflow-y-auto flex-1 p-0">
+              {loadingHistory ? (
+                <div className="flex items-center justify-center py-10">
+                  <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+                </div>
+              ) : history.length === 0 ? (
+                <div className="text-center py-10 text-muted-foreground text-sm">No revision history yet — history is captured on the next salary update.</div>
+              ) : (
+                <table className="w-full text-sm">
+                  <thead className="bg-muted/40 sticky top-0">
+                    <tr>
+                      <th className="text-left px-4 py-2.5 font-medium">Period</th>
+                      <th className="text-right px-4 py-2.5 font-medium">Basic</th>
+                      <th className="text-right px-4 py-2.5 font-medium hidden sm:table-cell">Gross</th>
+                      <th className="text-right px-4 py-2.5 font-medium hidden md:table-cell">TDS</th>
+                      <th className="text-right px-4 py-2.5 font-medium text-muted-foreground text-xs">Captured</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y">
+                    {history.map(h => {
+                      const g = (h.basic ?? 0) + (h.hra ?? 0) + (h.da ?? 0) + (h.special_allowance ?? 0) + (h.mobile_reimbursement ?? 0) + (h.other_reimbursements ?? 0);
+                      return (
+                        <tr key={h.id} className="hover:bg-muted/20">
+                          <td className="px-4 py-3">
+                            <span className="font-medium">{formatDate(h.effective_from)}</span>
+                            <span className="text-muted-foreground mx-1">→</span>
+                            <span className="text-muted-foreground">{formatDate(h.effective_to)}</span>
+                          </td>
+                          <td className="px-4 py-3 text-right font-mono">{formatCurrency(h.basic)}</td>
+                          <td className="px-4 py-3 text-right font-mono hidden sm:table-cell">{formatCurrency(g)}</td>
+                          <td className="px-4 py-3 text-right font-mono hidden md:table-cell text-muted-foreground">{h.tds_monthly_amount > 0 ? formatCurrency(h.tds_monthly_amount) : "—"}</td>
+                          <td className="px-4 py-3 text-right text-xs text-muted-foreground">{formatDate(h.captured_at)}</td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </CardContent>
+          </Card>
+        </div>
+      )}
     </div>
   );
 }
