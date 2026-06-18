@@ -901,5 +901,70 @@ export const dltSms = {
   },
 };
 
+// ── HR template wrappers ──────────────────────────────────────────────────────
+// These require MSG91 WhatsApp templates to be created in the MSG91 dashboard
+// and approved by Meta before they will deliver.
+//
+// twv_payslip_dispatch — Document header
+//   Category: UTILITY | Language: en
+//   Header: DOCUMENT (payslip PDF)
+//   Body: "Hi {{1}}, your salary slip for {{2}} is ready. Net pay: Rs.{{3}}. Please find the PDF attached. — The Work Villa"
+//   Footer: "This is a computer-generated payslip."
+//   Variables (3): employee name, month (e.g. "June 2025"), net pay amount
+//
+// twv_leave_status — Text template
+//   Category: UTILITY | Language: en
+//   Body: "Hi {{1}}, your {{2}} leave request from {{3}} to {{4}} has been {{5}}. {{6}} — The Work Villa"
+//   Variables (6): employee name, leave type (CL/SL/LOP), from date, to date, status (approved/rejected), review note or "No additional comments."
+
+export const hrMessaging = {
+  /**
+   * Dispatch payslip PDF to an employee via WhatsApp.
+   * Requires template twv_payslip_dispatch (Document header, Meta-approved).
+   * Falls back to Resend email if phone is null or WhatsApp fails.
+   */
+  payslipDispatch(
+    to: string,
+    employeeName: string,
+    monthLabel: string,
+    netPay: string,
+    pdfUrl: string,
+    slipId: string
+  ) {
+    return sendWhatsAppDocument({
+      to,
+      template: "twv_payslip_dispatch",
+      documentUrl: pdfUrl,
+      documentFilename: `Payslip-${monthLabel.replace(" ", "-")}.pdf`,
+      params: [employeeName, monthLabel, netPay],
+      entityType: "payroll_slip",
+      entityId: slipId,
+    });
+  },
+
+  /**
+   * Notify employee of leave request outcome (approved/rejected).
+   * Requires template twv_leave_status (Text, Meta-approved).
+   */
+  leaveStatus(
+    to: string,
+    employeeName: string,
+    leaveType: string,
+    fromDate: string,
+    toDate: string,
+    status: "approved" | "rejected",
+    reviewNote: string,
+    leaveRequestId: string
+  ) {
+    return sendWhatsApp({
+      to,
+      template: "twv_leave_status",
+      params: [employeeName, leaveType.toUpperCase(), fromDate, toDate, status, reviewNote || "No additional comments."],
+      entityType: "leave_request",
+      entityId: leaveRequestId,
+    });
+  },
+};
+
 // Keep the old `whatsapp` export alias for any future call sites
 export const whatsapp = messaging;
