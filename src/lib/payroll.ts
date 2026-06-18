@@ -40,35 +40,57 @@ export function calculatePT(monthlyGross: number): number {
 // ── Working day helpers ───────────────────────────────────────────────────────
 
 /**
- * Count Mon–Sat days (excludes Sundays) in a given month.
- * TWV treats Saturday as a working day; adjust if policy changes.
+ * Count Mon–Sat days in a month, excluding Sundays and public holidays.
+ * Public holidays are mandatory paid days under TN Shops & Establishments Act 1947 —
+ * an employee absent on a public holiday must NOT be counted as LOP.
+ *
+ * @param holidays - array of holiday dates for this month (or empty to skip).
+ *                   Default is empty so existing callers remain unaffected.
  */
-export function workingDaysInMonth(year: number, month: number): number {
+export function workingDaysInMonth(year: number, month: number, holidays: Date[] = []): number {
   // month is 0-indexed (JS Date convention)
   const daysInMonth = new Date(year, month + 1, 0).getDate();
+  const holidaySet = new Set(
+    holidays
+      .filter(h => h.getFullYear() === year && h.getMonth() === month)
+      .map(h => h.getDate()),
+  );
   let count = 0;
   for (let d = 1; d <= daysInMonth; d++) {
     const day = new Date(year, month, d).getDay();
-    if (day !== 0) count++; // 0 = Sunday
+    if (day !== 0 && !holidaySet.has(d)) count++; // 0 = Sunday
   }
   return count;
 }
 
 /**
  * Count weekday (Mon–Sat) days that fall within [from, to] inclusive
- * AND within the target [year, month]. Used for leave day counting.
+ * AND within the target [year, month], excluding public holidays.
+ * Used for leave day counting and LOP computation.
  */
-export function countWeekdaysInRange(from: Date, to: Date, year: number, month: number): number {
+export function countWeekdaysInRange(
+  from: Date,
+  to: Date,
+  year: number,
+  month: number,
+  holidays: Date[] = [],
+): number {
   const monthStart = new Date(year, month, 1);
   const monthEnd = new Date(year, month + 1, 0);
   const start = from < monthStart ? monthStart : from;
   const end = to > monthEnd ? monthEnd : to;
   if (start > end) return 0;
 
+  const holidaySet = new Set(
+    holidays
+      .filter(h => h.getFullYear() === year && h.getMonth() === month)
+      .map(h => h.getDate()),
+  );
+
   let count = 0;
   const cur = new Date(start);
   while (cur <= end) {
-    if (cur.getDay() !== 0) count++;
+    if (cur.getDay() !== 0 && !holidaySet.has(cur.getDate())) count++;
     cur.setDate(cur.getDate() + 1);
   }
   return count;
@@ -246,7 +268,17 @@ export async function generatePayrollRun(
   const runMonth = `${year}-${String(month + 1).padStart(2, "0")}-01`;
   const monthStart = runMonth;
   const monthEnd = `${year}-${String(month + 1).padStart(2, "0")}-${new Date(year, month + 1, 0).getDate()}`;
-  const wDays = workingDaysInMonth(year, month);
+
+  // Fetch public holidays for this month (location_id IS NULL = applies to all locations)
+  const { data: holidayRows } = await admin
+    .from("public_holidays")
+    .select("holiday_date")
+    .gte("holiday_date", monthStart)
+    .lte("holiday_date", monthEnd)
+    .is("location_id", null);
+  const holidays = (holidayRows ?? []).map(h => new Date(h.holiday_date));
+
+  const wDays = workingDaysInMonth(year, month, holidays);
 
   // 1. Upsert the payroll_run header
   const { data: run, error: runErr } = await admin
@@ -306,6 +338,7 @@ export async function generatePayrollRun(
         new Date(lr.to_date),
         year,
         month,
+        holidays,
       );
       if (lr.leave_type === "cl") existing.cl += daysInMonth;
       else if (lr.leave_type === "sl") existing.sl += daysInMonth;

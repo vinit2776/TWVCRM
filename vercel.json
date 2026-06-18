@@ -95,6 +95,10 @@
     {
       "path": "/api/cron/electricity-nag",
       "schedule": "30 3 7 * *"
+    },
+    {
+      "path": "/api/cron/missing-checkout",
+      "schedule": "0 15 * * *"
     }
   ],
   "headers": [
