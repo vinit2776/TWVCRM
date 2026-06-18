@@ -817,7 +817,8 @@ export type AuditEntityType =
   | "payroll_slip"
   | "unifi_voucher"
   | "electricity_bill"
-  | "location_electricity_config";
+  | "location_electricity_config"
+  | "asset_document";
 
 export interface AuditLog {
   id: string;
@@ -2005,6 +2006,24 @@ export interface PoBillSummary {
 
 export type PoAdvanceStatus = "not_required" | "pending" | "processed";
 
+export type AssetDocumentTier = "commercial" | "operational";
+
+export interface AssetDocument {
+  id: string;
+  asset_id: string;
+  tier: AssetDocumentTier;
+  label: string;
+  file_url: string;
+  file_name?: string | null;
+  file_size?: number | null;
+  mime_type?: string | null;
+  notes?: string | null;
+  uploaded_by?: string | null;
+  created_at: string;
+  updated_at: string;
+  uploader?: { id: string; full_name: string } | null;
+}
+
 export type AmcStatus = "inactive" | "active" | "expiring" | "exhausted" | "expired";
 export type AmcEventType = "breakdown" | "preventive" | "remote_support" | "annual_service";
 
@@ -2609,7 +2628,16 @@ export type FacilityRootCause =
   | "other";
 export type FacilityReportedVia = "walk_in" | "phone" | "whatsapp" | "email" | "self_service" | "proactive" | "feedback";
 export type FacilityAssetStatus = "active" | "maintenance" | "retired";
+export type FacilityLifecycleStage = "procured" | "installed" | "testing_commissioning" | "operational" | "under_amc" | "decommissioned";
 export type FacilityAttachmentPhase = "report" | "progress" | "resolution";
+
+export interface CategoryCustomField {
+  key: string;
+  label: string;
+  type: "text" | "number" | "select" | "date" | "boolean";
+  required?: boolean;
+  options?: string[];
+}
 
 export interface FacilityAssetCategory {
   id: string;
@@ -2624,6 +2652,7 @@ export interface FacilityAssetCategory {
   default_sla_low_hrs: number;
   sort_order: number;
   is_active: boolean;
+  custom_field_schema?: CategoryCustomField[] | null;
   created_at: string;
   updated_at: string;
 }
@@ -2649,6 +2678,12 @@ export interface FacilityAsset {
   warranty_expiry?: string | null;
   vendor?: string | null;
   status: FacilityAssetStatus;
+  lifecycle_stage?: FacilityLifecycleStage | null;
+  installation_date?: string | null;
+  commissioned_at?: string | null;
+  commissioned_by?: string | null;
+  custom_field_values?: Record<string, unknown> | null;
+  procurement_po_id?: string | null;
   location_notes?: string | null;
   notes?: string | null;
   sort_order: number;
@@ -2660,6 +2695,23 @@ export interface FacilityAsset {
   open_issue_count?: number;
   total_issue_count?: number;
   last_issue_at?: string | null;
+}
+
+export type FacilityAssetEventType =
+  | "maintenance" | "inspection" | "fault_observed" | "part_replaced"
+  | "cleaning" | "installation" | "relocation" | "other";
+
+export interface FacilityAssetEvent {
+  id: string;
+  asset_id: string;
+  event_type: FacilityAssetEventType;
+  note: string | null;
+  photo_urls: string[];
+  logged_by: string | null;
+  logger?: { id: string; full_name: string } | null;
+  issue_id?: string | null;
+  issue?: { id: string; issue_number: string; title: string; status: string } | null;
+  created_at: string;
 }
 
 export interface FacilityIssueAttachment {

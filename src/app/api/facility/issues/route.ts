@@ -101,7 +101,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Title is required" }, { status: 400 });
   }
   if (!location_id) return NextResponse.json({ error: "location_id is required" }, { status: 400 });
-  if (!category_id) return NextResponse.json({ error: "category_id is required" }, { status: 400 });
   if (!VALID_PRIORITY.includes(priority)) {
     return NextResponse.json({ error: `Invalid priority. Use one of: ${VALID_PRIORITY.join(", ")}` }, { status: 400 });
   }
@@ -109,18 +108,25 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: `Invalid reported_via` }, { status: 400 });
   }
 
-  // Look up category for SLA computation
-  const { data: category, error: catErr } = await supabase
-    .from("facility_asset_categories")
-    .select("id, scope, default_sla_critical_hrs, default_sla_high_hrs, default_sla_medium_hrs, default_sla_low_hrs")
-    .eq("id", category_id)
-    .single();
-  if (catErr || !category) {
-    return NextResponse.json({ error: "Category not found" }, { status: 404 });
+  // Look up category for SLA computation (optional — reporters may only pick scope)
+  let slaSource: Parameters<typeof computeSlaTarget>[0] = {
+    default_sla_critical_hrs: 0, default_sla_high_hrs: 0,
+    default_sla_medium_hrs: 0, default_sla_low_hrs: 0,
+  };
+  if (category_id) {
+    const { data: category, error: catErr } = await supabase
+      .from("facility_asset_categories")
+      .select("id, scope, default_sla_critical_hrs, default_sla_high_hrs, default_sla_medium_hrs, default_sla_low_hrs")
+      .eq("id", category_id)
+      .single();
+    if (catErr || !category) {
+      return NextResponse.json({ error: "Category not found" }, { status: 404 });
+    }
+    slaSource = category;
   }
 
   const issueNumber = await generateIssueNumber(supabase, scope as FacilityScope);
-  const slaTargetAt = computeSlaTarget(category, priority);
+  const slaTargetAt = computeSlaTarget(slaSource, priority);
 
   // Auto-assign IT-scoped issues to the primary IT contact
   let autoAssignee: { id: string; full_name: string } | null = null;
@@ -134,7 +140,7 @@ export async function POST(request: NextRequest) {
     .insert({
       issue_number: issueNumber,
       scope,
-      category_id,
+      category_id: category_id || null,
       location_id,
       floor_id: floor_id || null,
       space_unit_id: space_unit_id || null,
