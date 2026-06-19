@@ -38,10 +38,13 @@ function withTimeout<T>(p: Promise<T>, ms: number, label: string): Promise<T> {
  * so payment on the new link auto-marks the statement paid exactly as before.
  */
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const additionalCc: string[] = Array.isArray(body.cc) ? (body.cc as string[]).filter(Boolean) : [];
+
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -213,7 +216,7 @@ export async function POST(
   // ── proforma_first: dispatchProforma sees the stored new link and reuses it.
   // It regenerates the PI PDF with the fresh QR code and re-emails the customer.
   if (billingMode !== "gst_direct" || !stmt.gst_invoice_number) {
-    const result = await dispatchProforma(admin, id, dbUser.id);
+    const result = await dispatchProforma(admin, id, dbUser.id, additionalCc);
     if (!result.success) {
       return NextResponse.json(
         { error: result.error || "Payment link created but email dispatch failed" },
@@ -309,6 +312,7 @@ export async function POST(
         from: EMAIL_FROM,
         replyTo: EMAIL_REPLY_TO,
         to: [customerEmail],
+        cc: additionalCc.length > 0 ? additionalCc : undefined,
         bcc: "billing@theworkvilla.com",
         subject: `Updated Payment Link — Invoice ${invoiceNum} — ${contractNumber} — The WorkVilla`,
         html: emailHtml,

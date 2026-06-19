@@ -30,7 +30,7 @@ import {
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
-import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, Eye } from "lucide-react";
+import { Loader2, IndianRupee, Mail, Phone, ExternalLink, Send, FileDown, Search, Bell, History, Download, LayoutList, BarChart2, Eye, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
@@ -148,6 +148,7 @@ export default function AccountsReceivablePage() {
   const [resendRow, setResendRow] = useState<ReceivableRow | null>(null);
   const [resendCc, setResendCc] = useState("");
   const [resendSubmitting, setResendSubmitting] = useState(false);
+  const [resendNewLink, setResendNewLink] = useState(false);
 
   // History drawer state
   const [historyRow, setHistoryRow] = useState<ReceivableRow | null>(null);
@@ -313,6 +314,7 @@ export default function AccountsReceivablePage() {
   const openResendDialog = (row: ReceivableRow) => {
     setResendRow(row);
     setResendCc("");
+    setResendNewLink(false);
   };
 
   const submitResend = async () => {
@@ -320,6 +322,29 @@ export default function AccountsReceivablePage() {
     setResendSubmitting(true);
     const ccList = resendCc.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
     const hasGst = !!resendRow.gst_invoice_number;
+
+    // New-link path: cancel old link, create fresh one, resend invoice
+    if (!hasGst && resendNewLink) {
+      try {
+        const res = await fetch(`/api/billing-statements/${resendRow.id}/reissue-payment-link`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ cc: ccList.length > 0 ? ccList : undefined }),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.error || "Failed");
+        const sentTo = json.emailedTo || "";
+        toast.success(`Fresh payment link created and resent${sentTo ? ` to ${sentTo}` : ""}${ccList.length > 0 ? ` (CC: ${ccList.join(", ")})` : ""}`);
+        setResendRow(null);
+        await load();
+      } catch (e) {
+        toast.error(e instanceof Error ? e.message : "Failed to re-issue payment link");
+      } finally {
+        setResendSubmitting(false);
+      }
+      return;
+    }
+
     const endpoint = hasGst
       ? `/api/billing-statements/${resendRow.id}/resend-gst-invoice`
       : `/api/billing-statements/${resendRow.id}/send-proforma`;
@@ -684,6 +709,38 @@ export default function AccountsReceivablePage() {
                 <span className="text-muted-foreground">To: </span>
                 <span className="font-medium">{resendRow.contract.lead?.email || "No email on file"}</span>
               </div>
+              {/* Payment link renewal option — only for proforma statements with an existing link */}
+              {!resendRow.gst_invoice_number && !!resendRow.razorpay_payment_link_url && (
+                <div className="rounded-md border border-blue-200 bg-blue-50 p-3 space-y-2">
+                  <p className="text-xs font-medium text-blue-800">Payment link</p>
+                  <div className="flex flex-col gap-1.5">
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        className="mt-0.5"
+                        checked={!resendNewLink}
+                        onChange={() => setResendNewLink(false)}
+                      />
+                      <span className="text-sm text-blue-900">
+                        <span className="font-medium">Keep existing link</span>
+                        <span className="text-blue-600 text-xs block">Resend the same payment link already sent</span>
+                      </span>
+                    </label>
+                    <label className="flex items-start gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        className="mt-0.5"
+                        checked={resendNewLink}
+                        onChange={() => setResendNewLink(true)}
+                      />
+                      <span className="text-sm text-blue-900">
+                        <span className="font-medium">Generate fresh payment link</span>
+                        <span className="text-blue-600 text-xs block">Cancel the old link · create a new 15-day link · resend invoice with new QR code</span>
+                      </span>
+                    </label>
+                  </div>
+                </div>
+              )}
               <div>
                 <Label>CC (optional)</Label>
                 <Input
@@ -698,7 +755,12 @@ export default function AccountsReceivablePage() {
           <DialogFooter>
             <Button variant="ghost" onClick={() => setResendRow(null)} disabled={resendSubmitting}>Cancel</Button>
             <Button onClick={submitResend} disabled={resendSubmitting || !resendRow?.contract.lead?.email}>
-              {resendSubmitting ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending…</> : <><Send className="h-4 w-4 mr-2" />Send</>}
+              {resendSubmitting
+                ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending…</>
+                : resendNewLink && !resendRow?.gst_invoice_number
+                  ? <><RotateCcw className="h-4 w-4 mr-2" />Resend with New Link</>
+                  : <><Send className="h-4 w-4 mr-2" />Send</>
+              }
             </Button>
           </DialogFooter>
         </DialogContent>
