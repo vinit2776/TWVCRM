@@ -456,7 +456,7 @@ export async function GET(request: NextRequest) {
   <!-- CTA -->
   <div style="padding:24px 32px;text-align:center;border-top:1px solid #f3f4f6;margin-top:20px;">
     <p style="color:#6b7280;font-size:13px;margin:0 0 14px;">Review all outstanding invoices and log payments or send manual reminders from the Receivables page.</p>
-    <a href="${APP_URL}/billing" style="display:inline-block;background:#015E65;color:#fff;text-decoration:none;padding:10px 24px;border-radius:6px;font-size:13px;font-weight:600;">Open Receivables →</a>
+    <a href="${APP_URL}/accounting/receivables" style="display:inline-block;background:#015E65;color:#fff;text-decoration:none;padding:10px 24px;border-radius:6px;font-size:13px;font-weight:600;">Open Receivables →</a>
   </div>
 
   <!-- Footer -->
