@@ -169,37 +169,41 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
   return (
     <div className="p-4 md:p-6 max-w-5xl mx-auto space-y-4">
       {/* Header */}
-      <div className="flex items-center gap-2">
-        <Button variant="ghost" size="icon" onClick={() => router.back()}>
-          <ArrowLeft className="h-4 w-4" />
-        </Button>
-        <div className="min-w-0 flex-1">
-          <div className="flex items-center gap-2 flex-wrap">
-            <code className="text-xs font-mono">{asset.asset_code}</code>
-            <span className={cn(
-              "text-[10px] px-1.5 py-0.5 rounded-full ring-1",
-              asset.status === "active" && "bg-emerald-50 text-emerald-700 ring-emerald-200",
-              asset.status === "maintenance" && "bg-amber-50 text-amber-700 ring-amber-200",
-              asset.status === "retired" && "bg-slate-100 text-slate-600 ring-slate-200",
-            )}>{asset.status}</span>
-            {asset.lifecycle_stage && (
+      <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+        <div className="flex items-center gap-2 min-w-0">
+          <Button variant="ghost" size="icon" className="shrink-0" onClick={() => router.back()}>
+            <ArrowLeft className="h-4 w-4" />
+          </Button>
+          <div className="min-w-0 flex-1">
+            <div className="flex items-center gap-2 flex-wrap">
+              <code className="text-xs font-mono">{asset.asset_code}</code>
               <span className={cn(
                 "text-[10px] px-1.5 py-0.5 rounded-full ring-1",
-                LIFECYCLE_LABELS[asset.lifecycle_stage]?.color || "bg-slate-50 text-slate-600 ring-slate-200",
-              )}>{LIFECYCLE_LABELS[asset.lifecycle_stage]?.label || asset.lifecycle_stage}</span>
-            )}
+                asset.status === "active" && "bg-emerald-50 text-emerald-700 ring-emerald-200",
+                asset.status === "maintenance" && "bg-amber-50 text-amber-700 ring-amber-200",
+                asset.status === "retired" && "bg-slate-100 text-slate-600 ring-slate-200",
+              )}>{asset.status}</span>
+              {asset.lifecycle_stage && (
+                <span className={cn(
+                  "text-[10px] px-1.5 py-0.5 rounded-full ring-1",
+                  LIFECYCLE_LABELS[asset.lifecycle_stage]?.color || "bg-slate-50 text-slate-600 ring-slate-200",
+                )}>{LIFECYCLE_LABELS[asset.lifecycle_stage]?.label || asset.lifecycle_stage}</span>
+              )}
+            </div>
+            <h1 className="text-base md:text-lg font-semibold mt-0.5">{asset.name}</h1>
           </div>
-          <h1 className="text-base md:text-lg font-semibold mt-0.5">{asset.name}</h1>
         </div>
-        <Button size="sm" onClick={() => setEventDialogOpen(true)}>
-          <Plus className="h-4 w-4 mr-1" /> Log Event
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => window.open(`/facility/assets/${id}/print`, "_blank")}>
-          <Printer className="h-4 w-4 mr-1" /> Print QR
-        </Button>
-        <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
-          <Pencil className="h-4 w-4 mr-1" /> Edit
-        </Button>
+        <div className="flex items-center gap-2 pl-10 sm:pl-0 sm:ml-auto shrink-0">
+          <Button size="sm" onClick={() => setEventDialogOpen(true)}>
+            <Plus className="h-4 w-4 mr-1" /> Log Event
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => window.open(`/facility/assets/${id}/print`, "_blank")}>
+            <Printer className="h-4 w-4 mr-1" /> Print QR
+          </Button>
+          <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
+            <Pencil className="h-4 w-4 mr-1" /> Edit
+          </Button>
+        </div>
       </div>
 
       {/* Tabs */}
