@@ -68,6 +68,7 @@ function NewServicePOForm() {
   const isAmcFromUrl = searchParams.get("amc") === "1";
   const [isAmc, setIsAmc] = useState(isAmcFromUrl);
   const [amcExpanded, setAmcExpanded] = useState(isAmcFromUrl);
+  const [amcCoverageType, setAmcCoverageType] = useState<"comprehensive" | "labour_only">("comprehensive");
   const [amcStartDate, setAmcStartDate] = useState("");
   const [amcEndDate, setAmcEndDate] = useState("");
   const [amcUnlimited, setAmcUnlimited] = useState(false);
@@ -76,6 +77,18 @@ function NewServicePOForm() {
   const [amcHelpline, setAmcHelpline] = useState("");
   const [amcContactEmail, setAmcContactEmail] = useState("");
   const [linkedAssetId, setLinkedAssetId] = useState("");
+
+  // When AMC start date changes, auto-fill end date to start + 1 year
+  function handleAmcStartDateChange(val: string) {
+    setAmcStartDate(val);
+    setServiceStartDate(val);
+    if (val && !amcEndDate) {
+      const d = new Date(val);
+      d.setFullYear(d.getFullYear() + 1);
+      d.setDate(d.getDate() - 1);
+      setAmcEndDate(d.toISOString().split("T")[0]);
+    }
+  }
 
   const fetchVendors = useCallback(async () => {
     const res = await fetch("/api/procurement/vendors?limit=100");
@@ -142,16 +155,12 @@ function NewServicePOForm() {
       }
     }
 
-    // AMC warning (non-blocking)
-    if (isAmc && (!amcStartDate || (!amcContactName && !amcHelpline))) {
-      // Show warning but allow user to still submit after confirmation
-      const proceed = window.confirm(
-        "⚠ AMC details are incomplete.\n\n" +
-        (!amcStartDate ? "• Contract start date is not set\n" : "") +
-        (!amcContactName && !amcHelpline ? "• No AMC contact details provided\n" : "") +
-        "\nProceed anyway? (You can add these details later from the PO page.)"
-      );
-      if (!proceed) return;
+    // AMC hard validation — start date is now in Schedule & Cost
+    if (isAmc && !amcStartDate) {
+      toast.error("Contract start date is required for AMC"); return;
+    }
+    if (isAmc && !amcEndDate) {
+      toast.error("Contract end date is required for AMC"); return;
     }
 
     setSaving(true);
@@ -165,9 +174,9 @@ function NewServicePOForm() {
           location_id: locationId || undefined,
           service_item_name: serviceItemName.trim(),
           item_id: itemId || undefined,
-          service_start_date: serviceStartDate,
-          billing_cycle: billingCycle,
-          cycle_count: cycleCountNum,
+          service_start_date: isAmc ? amcStartDate : serviceStartDate,
+          billing_cycle: isAmc ? "yearly" : billingCycle,
+          cycle_count: isAmc ? 1 : cycleCountNum,
           unit_cost_per_cycle: unitCostNum,
           gst_rate: gstRateNum,
           notes: notes.trim() || undefined,
@@ -186,6 +195,7 @@ function NewServicePOForm() {
             amc_helpline_number: amcHelpline || undefined,
             amc_contact_email: amcContactEmail || undefined,
             linked_asset_id: linkedAssetId || undefined,
+            amc_coverage_type: amcCoverageType,
           } : {}),
         }),
       });
@@ -233,26 +243,72 @@ function NewServicePOForm() {
               </Select>
             </div>
 
-            <div className="space-y-1.5">
-              <Label>Service Item *</Label>
-              <Select value={itemId} onValueChange={(v) => { setItemId(v === "_custom" ? "" : v); setCustomName(""); }}>
-                <SelectTrigger><SelectValue placeholder="Select from catalog or type below" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="_custom">— Enter custom name —</SelectItem>
-                  {serviceItems.map((i) => (
-                    <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-              {!itemId && (
-                <Input
-                  placeholder="e.g. Generator Maintenance, Security Service..."
-                  value={customName}
-                  onChange={(e) => setCustomName(e.target.value)}
-                  className="mt-1.5"
-                />
-              )}
-            </div>
+            {isAmc ? (
+              <>
+                {/* AMC mode: coverage type + plain description, no catalog */}
+                <div className="space-y-1.5">
+                  <Label>Coverage Type *</Label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setAmcCoverageType("comprehensive")}
+                      className={`rounded-lg border-2 px-4 py-3 text-left transition-colors ${
+                        amcCoverageType === "comprehensive"
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-primary/50"
+                      }`}
+                    >
+                      <p className="text-sm font-semibold">Comprehensive</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Parts + Labour covered</p>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAmcCoverageType("labour_only")}
+                      className={`rounded-lg border-2 px-4 py-3 text-left transition-colors ${
+                        amcCoverageType === "labour_only"
+                          ? "border-primary bg-primary/5"
+                          : "border-border hover:border-primary/50"
+                      }`}
+                    >
+                      <p className="text-sm font-semibold">Labour Only</p>
+                      <p className="text-xs text-muted-foreground mt-0.5">Service only, parts excluded</p>
+                    </button>
+                  </div>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Service Description *</Label>
+                  <Input
+                    placeholder="e.g. Annual Maintenance Contract — Dell Laser Printer"
+                    value={customName}
+                    onChange={(e) => setCustomName(e.target.value)}
+                  />
+                  <p className="text-xs text-muted-foreground">Describe the service being contracted.</p>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="space-y-1.5">
+                  <Label>Service Item *</Label>
+                  <Select value={itemId} onValueChange={(v) => { setItemId(v === "_custom" ? "" : v); setCustomName(""); }}>
+                    <SelectTrigger><SelectValue placeholder="Select from catalog or type below" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_custom">— Enter custom name —</SelectItem>
+                      {serviceItems.map((i) => (
+                        <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {!itemId && (
+                    <Input
+                      placeholder="e.g. Generator Maintenance, Security Service..."
+                      value={customName}
+                      onChange={(e) => setCustomName(e.target.value)}
+                      className="mt-1.5"
+                    />
+                  )}
+                </div>
+              </>
+            )}
 
             <div className="space-y-1.5">
               <Label>Location</Label>
@@ -275,85 +331,144 @@ function NewServicePOForm() {
             <CardTitle className="text-base">Schedule &amp; Cost</CardTitle>
           </CardHeader>
           <CardContent className="space-y-4">
-            <div className="grid grid-cols-2 gap-4">
-              <div className="space-y-1.5">
-                <Label>Service Start Date *</Label>
-                <Input
-                  type="date"
-                  value={serviceStartDate}
-                  onChange={(e) => setServiceStartDate(e.target.value)}
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Billing Cycle *</Label>
-                <Select value={billingCycle} onValueChange={setBillingCycle}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
-                  <SelectContent>
-                    {SERVICE_PO_BILLING_CYCLES.map((c) => (
-                      <SelectItem key={c} value={c}>{BILLING_CYCLE_LABELS[c]}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-              </div>
-              <div className="space-y-1.5">
-                <Label>Number of Cycles *</Label>
-                <Input
-                  type="number"
-                  min="1"
-                  value={cycleCount}
-                  onChange={(e) => setCycleCount(e.target.value)}
-                  placeholder="e.g. 12"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>Cost per Cycle (₹) *</Label>
-                <Input
-                  type="number"
-                  min="0.01"
-                  step="0.01"
-                  value={unitCost}
-                  onChange={(e) => setUnitCost(e.target.value)}
-                  placeholder="0.00"
-                />
-              </div>
-              <div className="space-y-1.5">
-                <Label>GST Rate</Label>
-                <Select value={gstRate} onValueChange={setGstRate}>
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="0">0% (Exempt)</SelectItem>
-                    <SelectItem value="5">5%</SelectItem>
-                    <SelectItem value="12">12%</SelectItem>
-                    <SelectItem value="18">18%</SelectItem>
-                    <SelectItem value="28">28%</SelectItem>
-                  </SelectContent>
-                </Select>
-              </div>
-            </div>
-
-            {totalAmount > 0 && (
-              <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2.5 text-sm text-blue-800 space-y-1">
-                <div className="flex justify-between">
-                  <span>Subtotal ({cycleCountNum} × {formatCurrency(unitCostNum)})</span>
-                  <strong>{formatCurrency(totalAmount)}</strong>
-                </div>
-                {gstRateNum > 0 && (
-                  <div className="flex justify-between text-blue-700">
-                    <span>GST @{gstRateNum}%</span>
-                    <span>{formatCurrency(gstAmount)}</span>
+            {isAmc ? (
+              /* ── AMC mode: annual contract period + lump sum ── */
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label>Contract Start Date *</Label>
+                    <Input
+                      type="date"
+                      value={amcStartDate}
+                      onChange={(e) => handleAmcStartDateChange(e.target.value)}
+                    />
                   </div>
-                )}
-                <div className="flex justify-between border-t border-blue-200 pt-1 font-semibold">
-                  <span>Total{gstRateNum > 0 ? " (incl. GST)" : ""}</span>
-                  <span>{formatCurrency(totalWithGst)}</span>
+                  <div className="space-y-1.5">
+                    <Label>Contract End Date *</Label>
+                    <Input
+                      type="date"
+                      value={amcEndDate}
+                      min={amcStartDate || undefined}
+                      onChange={(e) => setAmcEndDate(e.target.value)}
+                    />
+                    <p className="text-xs text-muted-foreground">Auto-filled to 1 year — adjust if needed.</p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label>Annual Contract Value (₹) *</Label>
+                    <Input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={unitCost}
+                      onChange={(e) => setUnitCost(e.target.value)}
+                      placeholder="0.00"
+                    />
+                    <p className="text-xs text-muted-foreground">Total amount payable to vendor per year.</p>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>GST Rate</Label>
+                    <Select value={gstRate} onValueChange={setGstRate}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="0">0% (Exempt)</SelectItem>
+                        <SelectItem value="5">5%</SelectItem>
+                        <SelectItem value="12">12%</SelectItem>
+                        <SelectItem value="18">18%</SelectItem>
+                        <SelectItem value="28">28%</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              /* ── Standard recurring service ── */
+              <div className="grid grid-cols-2 gap-4">
+                <div className="space-y-1.5">
+                  <Label>Service Start Date *</Label>
+                  <Input
+                    type="date"
+                    value={serviceStartDate}
+                    onChange={(e) => setServiceStartDate(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Billing Cycle *</Label>
+                  <Select value={billingCycle} onValueChange={setBillingCycle}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      {SERVICE_PO_BILLING_CYCLES.map((c) => (
+                        <SelectItem key={c} value={c}>{BILLING_CYCLE_LABELS[c]}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Number of Cycles *</Label>
+                  <Input
+                    type="number"
+                    min="1"
+                    value={cycleCount}
+                    onChange={(e) => setCycleCount(e.target.value)}
+                    placeholder="e.g. 12"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Cost per Cycle (₹) *</Label>
+                  <Input
+                    type="number"
+                    min="0.01"
+                    step="0.01"
+                    value={unitCost}
+                    onChange={(e) => setUnitCost(e.target.value)}
+                    placeholder="0.00"
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>GST Rate</Label>
+                  <Select value={gstRate} onValueChange={setGstRate}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="0">0% (Exempt)</SelectItem>
+                      <SelectItem value="5">5%</SelectItem>
+                      <SelectItem value="12">12%</SelectItem>
+                      <SelectItem value="18">18%</SelectItem>
+                      <SelectItem value="28">28%</SelectItem>
+                    </SelectContent>
+                  </Select>
                 </div>
               </div>
             )}
 
-            {/* Cycle schedule preview */}
-            {cycleSchedule.length > 0 && (
+            {unitCostNum > 0 && (
+              <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2.5 text-sm text-blue-800 space-y-1">
+                {isAmc ? (
+                  <div className="flex justify-between">
+                    <span>Annual Contract Value</span>
+                    <strong>{formatCurrency(unitCostNum)}</strong>
+                  </div>
+                ) : (
+                  <div className="flex justify-between">
+                    <span>Subtotal ({cycleCountNum} × {formatCurrency(unitCostNum)})</span>
+                    <strong>{formatCurrency(totalAmount)}</strong>
+                  </div>
+                )}
+                {gstRateNum > 0 && (
+                  <div className="flex justify-between text-blue-700">
+                    <span>GST @{gstRateNum}%</span>
+                    <span>{formatCurrency(isAmc ? Math.round(unitCostNum * gstRateNum) / 100 : gstAmount)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between border-t border-blue-200 pt-1 font-semibold">
+                  <span>Total{gstRateNum > 0 ? " (incl. GST)" : ""}</span>
+                  <span>{formatCurrency(isAmc ? unitCostNum + Math.round(unitCostNum * gstRateNum) / 100 : totalWithGst)}</span>
+                </div>
+              </div>
+            )}
+
+            {/* Cycle schedule preview — only for non-AMC recurring services */}
+            {!isAmc && cycleSchedule.length > 0 && (
               <div>
                 <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
                   <Info className="h-3 w-3" /> Expected cycle schedule (first {cycleSchedule.length} of {cycleCountNum})
@@ -414,16 +529,16 @@ function NewServicePOForm() {
         </Card>
 
         {/* AMC Contract Details */}
-        <Card className={isAmc ? "border-blue-200" : ""}>
+        <Card className={isAmc ? "border-primary/30" : ""}>
           <CardHeader
             className="flex flex-row items-center justify-between pb-3 cursor-pointer select-none"
             onClick={() => setAmcExpanded((v) => !v)}
           >
             <div className="flex items-center gap-2">
-              <Wrench className={`h-4 w-4 ${isAmc ? "text-blue-600" : "text-muted-foreground"}`} />
+              <Wrench className={`h-4 w-4 ${isAmc ? "text-primary" : "text-muted-foreground"}`} />
               <CardTitle className="text-base">AMC Contract</CardTitle>
-              {isAmc && <span className="text-xs text-blue-600 font-medium bg-blue-50 px-2 py-0.5 rounded-full">Enabled</span>}
-              {!isAmc && <span className="text-xs text-muted-foreground">(optional — for AMC / maintenance contracts)</span>}
+              {isAmc && <span className="text-xs text-primary font-medium bg-primary/8 px-2 py-0.5 rounded-full">Enabled</span>}
+              {!isAmc && <span className="text-xs text-muted-foreground">(optional — tick to enable)</span>}
             </div>
             {amcExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
           </CardHeader>
@@ -445,47 +560,42 @@ function NewServicePOForm() {
 
               {isAmc && (
                 <div className="space-y-4 pt-2 border-t">
-                  {/* Warning if incomplete */}
-                  {(!amcStartDate || (!amcContactName && !amcHelpline)) && (
+                  {/* Warning if contact missing */}
+                  {(!amcContactName && !amcHelpline) && (
                     <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
                       <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-amber-600" />
-                      <span>
-                        Complete AMC details before issuing the PO.
-                        {!amcStartDate && " Start date is missing."}
-                        {!amcContactName && !amcHelpline && " Contact details are missing."}
-                        {" "}You can still save now and update later.
-                      </span>
+                      <span>Add at least one contact detail (name or helpline number) before issuing the PO. You can save now and update later.</span>
                     </div>
                   )}
 
-                  {/* Contract period */}
-                  <div className="grid grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label>Contract Start Date</Label>
-                      <Input
-                        type="date"
-                        value={amcStartDate}
-                        onChange={(e) => setAmcStartDate(e.target.value)}
-                      />
-                    </div>
-                    <div className="space-y-1.5">
-                      <Label>Contract End Date</Label>
-                      <Input
-                        type="date"
-                        value={amcEndDate}
-                        onChange={(e) => setAmcEndDate(e.target.value)}
-                      />
-                    </div>
+                  {/* Asset covered */}
+                  <div className="space-y-1.5">
+                    <Label>Asset Covered by this AMC</Label>
+                    <Select
+                      value={linkedAssetId || "_none"}
+                      onValueChange={(v) => setLinkedAssetId(v === "_none" ? "" : v)}
+                    >
+                      <SelectTrigger><SelectValue placeholder="Select asset (optional)" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none">— No specific asset —</SelectItem>
+                        {assets.map((a) => (
+                          <SelectItem key={a.id} value={a.id}>
+                            {a.name}{a.asset_code ? ` (${a.asset_code})` : ""}{a.location ? ` — ${(a.location as { name: string }).name}` : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">Link this AMC to the specific asset it covers.</p>
                   </div>
 
                   {/* Visits covered */}
                   <div className="space-y-1.5">
-                    <Label>Visits / Calls Covered</Label>
+                    <Label>Service Visits / Calls Covered</Label>
                     <div className="flex items-center gap-3">
                       <Input
                         type="number"
                         min={1}
-                        placeholder="e.g. 12"
+                        placeholder="e.g. 4"
                         value={amcUnlimited ? "" : amcVisitsCovered}
                         onChange={(e) => setAmcVisitsCovered(e.target.value)}
                         disabled={amcUnlimited}
@@ -504,27 +614,7 @@ function NewServicePOForm() {
                         Unlimited
                       </label>
                     </div>
-                    <p className="text-xs text-muted-foreground">How many visits / support calls does this AMC cover in total?</p>
-                  </div>
-
-                  {/* Linked asset */}
-                  <div className="space-y-1.5">
-                    <Label>Asset Covered by this AMC</Label>
-                    <Select
-                      value={linkedAssetId || "_none"}
-                      onValueChange={(v) => setLinkedAssetId(v === "_none" ? "" : v)}
-                    >
-                      <SelectTrigger><SelectValue placeholder="Select asset (optional)" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="_none">— No specific asset —</SelectItem>
-                        {assets.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            {a.name}{a.asset_code ? ` (${a.asset_code})` : ""}{a.location ? ` — ${(a.location as { name: string }).name}` : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">Link this AMC to the asset it covers, if applicable.</p>
+                    <p className="text-xs text-muted-foreground">Total number of service visits / support calls included in this AMC.</p>
                   </div>
 
                   {/* Contact details */}
