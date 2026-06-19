@@ -15,10 +15,12 @@ import { formatCurrency } from "@/lib/utils";
 export const dynamic = "force-dynamic";
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
+  const body = await request.json().catch(() => ({})) as Record<string, unknown>;
+  const additionalCc: string[] = Array.isArray(body.cc) ? (body.cc as string[]).filter(Boolean) : [];
   const supabase = await createClient();
 
   const { data: { user } } = await supabase.auth.getUser();
@@ -126,6 +128,7 @@ export async function POST(
   const sendResult = await resend.emails.send({
     from: EMAIL_FROM,
     to: recipientEmail,
+    cc: additionalCc.length > 0 ? additionalCc : undefined,
     bcc: [EMAIL_REPLY_TO],
     replyTo: EMAIL_REPLY_TO,
     subject,
@@ -156,7 +159,7 @@ export async function POST(
     entity_id: id,
     action: "email_resent",
     performed_by: null,
-    changes: { recipient: recipientEmail, invoice_number: invoiceNumber, trigger: "resend_gst_invoice" },
+    changes: { recipient: recipientEmail, cc: additionalCc.length > 0 ? additionalCc : undefined, invoice_number: invoiceNumber, trigger: "resend_gst_invoice" },
   });
 
   return NextResponse.json({ ok: true, emailed_to: recipientEmail });

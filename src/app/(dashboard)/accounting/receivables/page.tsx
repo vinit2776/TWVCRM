@@ -144,6 +144,11 @@ export default function AccountsReceivablePage() {
   const [resending, setResending] = useState<string | null>(null);
   const [remindingId, setRemindingId] = useState<string | null>(null);
 
+  // Resend dialog state
+  const [resendRow, setResendRow] = useState<ReceivableRow | null>(null);
+  const [resendCc, setResendCc] = useState("");
+  const [resendSubmitting, setResendSubmitting] = useState(false);
+
   // History drawer state
   const [historyRow, setHistoryRow] = useState<ReceivableRow | null>(null);
   const [historyItems, setHistoryItems] = useState<Array<{
@@ -305,22 +310,35 @@ export default function AccountsReceivablePage() {
     window.location.href = "/api/accounting/receivables/export";
   };
 
-  const resendProforma = async (row: ReceivableRow) => {
-    setResending(row.id);
+  const openResendDialog = (row: ReceivableRow) => {
+    setResendRow(row);
+    setResendCc("");
+  };
+
+  const submitResend = async () => {
+    if (!resendRow) return;
+    setResendSubmitting(true);
+    const ccList = resendCc.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+    const hasGst = !!resendRow.gst_invoice_number;
+    const endpoint = hasGst
+      ? `/api/billing-statements/${resendRow.id}/resend-gst-invoice`
+      : `/api/billing-statements/${resendRow.id}/send-proforma`;
     try {
-      const res = await fetch(`/api/billing-statements/${row.id}/send-proforma`, {
+      const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ cc: ccList.length > 0 ? ccList : undefined }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed");
-      toast.success(`Proforma resent${json.emailedTo ? ` to ${json.emailedTo}` : ""}`);
+      const sentTo = json.emailedTo || json.emailed_to || "";
+      toast.success(`${hasGst ? "GST invoice" : "Proforma"} resent${sentTo ? ` to ${sentTo}` : ""}${ccList.length > 0 ? ` (CC: ${ccList.join(", ")})` : ""}`);
+      setResendRow(null);
       await load();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to resend");
     } finally {
-      setResending(null);
+      setResendSubmitting(false);
     }
   };
 
@@ -571,8 +589,8 @@ export default function AccountsReceivablePage() {
                             <Button size="sm" variant="ghost" onClick={() => openHistory(r)} title="View reminder history">
                               <History className="h-3.5 w-3.5" />
                             </Button>
-                            <Button size="sm" variant="ghost" onClick={() => resendProforma(r)} disabled={resending === r.id} title="Resend full proforma email (with PDF attached)">
-                              {resending === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                            <Button size="sm" variant="ghost" onClick={() => openResendDialog(r)} title={r.gst_invoice_number ? "Resend GST invoice" : "Resend proforma email"}>
+                              <Send className="h-3.5 w-3.5" />
                             </Button>
                             {r.razorpay_payment_link_url && (
                               <a href={r.razorpay_payment_link_url} target="_blank" rel="noreferrer" className="p-1 text-muted-foreground hover:text-teal-700" title="Open Razorpay link">
@@ -642,6 +660,46 @@ export default function AccountsReceivablePage() {
           )}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setHistoryRow(null)}>Close</Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={!!resendRow} onOpenChange={(o) => !o && setResendRow(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>
+              Resend {resendRow?.gst_invoice_number ? "GST Invoice" : "Proforma"} — {resendRow?.statement_number}
+            </DialogTitle>
+          </DialogHeader>
+          {resendRow && (
+            <div className="space-y-3">
+              <div className="text-sm text-muted-foreground">
+                {resendRow.contract.contract_number} · {customerName(resendRow.contract.lead)}<br />
+                Amount: <strong className="text-teal-700">{formatCurrency(resendRow.total_amount)}</strong>
+                {resendRow.gst_invoice_number && (
+                  <><br />GST Invoice: <strong>{resendRow.gst_invoice_number}</strong></>
+                )}
+              </div>
+              <div className="rounded-md bg-gray-50 p-3 text-sm">
+                <span className="text-muted-foreground">To: </span>
+                <span className="font-medium">{resendRow.contract.lead?.email || "No email on file"}</span>
+              </div>
+              <div>
+                <Label>CC (optional)</Label>
+                <Input
+                  value={resendCc}
+                  onChange={(e) => setResendCc(e.target.value)}
+                  placeholder="e.g. accounts@company.com, manager@company.com"
+                />
+                <p className="text-xs text-muted-foreground mt-1">Separate multiple addresses with commas</p>
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setResendRow(null)} disabled={resendSubmitting}>Cancel</Button>
+            <Button onClick={submitResend} disabled={resendSubmitting || !resendRow?.contract.lead?.email}>
+              {resendSubmitting ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending…</> : <><Send className="h-4 w-4 mr-2" />Send</>}
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
