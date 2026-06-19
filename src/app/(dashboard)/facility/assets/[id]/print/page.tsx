@@ -1,6 +1,6 @@
 "use client";
 
-import { use, useEffect, useState } from "react";
+import { use, useEffect, useRef, useState } from "react";
 import QRCode from "qrcode";
 import Link from "next/link";
 import { ArrowLeft, Printer } from "lucide-react";
@@ -18,6 +18,7 @@ export default function AssetQRPrintPage({ params }: { params: Promise<{ id: str
   const [copies, setCopies] = useState(1);
   const [startFrom, setStartFrom] = useState(1); // 1-indexed label position to start printing
   const [qrDataUrl, setQrDataUrl] = useState("");
+  const printAreaRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     fetch(`/api/facility/assets/${id}`)
@@ -32,6 +33,28 @@ export default function AssetQRPrintPage({ params }: { params: Promise<{ id: str
       .then(setQrDataUrl);
   }, [asset, id]);
 
+  const handlePrint = () => {
+    const area = printAreaRef.current;
+    if (!area) return;
+    const origin = window.location.origin;
+    // Make relative image URLs absolute so they resolve in the isolated window
+    const html = area.innerHTML.replace(/src="\/([^"]+)"/g, `src="${origin}/$1"`);
+    const pw = window.open("", "_blank", "width=900,height=1200");
+    if (!pw) return;
+    pw.document.write(
+      `<!DOCTYPE html><html><head><meta charset="utf-8"><style>
+        *{box-sizing:border-box;margin:0;padding:0;}
+        body{background:white;}
+        @page{margin:0;size:A4 portrait;}
+        @media print{body{print-color-adjust:exact;-webkit-print-color-adjust:exact;}}
+      </style></head><body>${html}</body></html>`
+    );
+    pw.document.close();
+    pw.focus();
+    pw.addEventListener("afterprint", () => pw.close());
+    setTimeout(() => { pw.print(); }, 600);
+  };
+
   if (!asset) return <div className="p-8 text-sm text-muted-foreground">Loading…</div>;
 
   const locationLine = [asset.location?.name, asset.floor?.name].filter(Boolean).join(" · ");
@@ -42,17 +65,6 @@ export default function AssetQRPrintPage({ params }: { params: Promise<{ id: str
 
   return (
     <>
-      <style>{`
-        @media print {
-          @page { margin: 0; size: A4 portrait; }
-          aside, header, nav, [data-print-hide] { display: none !important; }
-          html, body { overflow: visible !important; background: white !important; }
-          body > div { overflow: visible !important; display: block !important; height: auto !important; }
-          body > div > div { overflow: visible !important; display: block !important; height: auto !important; }
-          main { overflow: visible !important; height: auto !important; padding: 0 !important; }
-        }
-      `}</style>
-
       {/* Controls bar */}
       <div data-print-hide className="flex items-center gap-2 px-4 h-14 border-b bg-background flex-wrap">
         <Link href={`/facility/assets/${id}`}>
@@ -104,7 +116,7 @@ export default function AssetQRPrintPage({ params }: { params: Promise<{ id: str
           </>
         )}
 
-        <Button size="sm" className="ml-auto" onClick={() => window.print()}>
+        <Button size="sm" className="ml-auto" onClick={handlePrint}>
           <Printer className="h-4 w-4 mr-1.5" /> Print
         </Button>
       </div>
@@ -117,7 +129,7 @@ export default function AssetQRPrintPage({ params }: { params: Promise<{ id: str
       </div>
 
       {/* ── PRINT AREA ──────────────────────────────────────────────── */}
-      <div style={{ background: layout !== "single" ? "white" : "#f0f0f0", display: "flex", justifyContent: "center", padding: layout !== "single" ? 0 : 24 }}>
+      <div ref={printAreaRef} style={{ background: layout !== "single" ? "white" : "#f0f0f0", display: "flex", justifyContent: "center", padding: layout !== "single" ? 0 : 24 }}>
 
         {/* SINGLE LARGE */}
         {layout === "single" && (
