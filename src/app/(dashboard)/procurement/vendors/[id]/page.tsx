@@ -8,7 +8,7 @@ import {
   ArrowLeft, Pencil, ShieldCheck, ShieldOff, Upload,
   Building2, CreditCard, FileText,
   Banknote, Check, Tag, ExternalLink,
-  BarChart2, AlertCircle, ShoppingCart, ChevronRight, ChevronDown,
+  BarChart2, AlertCircle, AlertTriangle, ShoppingCart, ChevronRight, ChevronDown,
   FolderOpen, Trash2, Eye, Plus, BookOpen,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
@@ -249,8 +249,10 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   const [catDocsFetched, setCatDocsFetched] = useState(false);
   const [catUploadOpen, setCatUploadOpen] = useState(false);
   const [catUploading, setCatUploading] = useState(false);
+  const [catUploadIdx, setCatUploadIdx] = useState(0);
   const [catUploadCategory, setCatUploadCategory] = useState<string>("price_list");
   const [catUploadNotes, setCatUploadNotes] = useState("");
+  const [catPendingFiles, setCatPendingFiles] = useState<File[]>([]);
   const catFileRef = useRef<HTMLInputElement>(null);
   const [catFilter, setCatFilter] = useState<string>("all");
 
@@ -333,31 +335,38 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
     setCatDocsFetched(true);
   }, [id]);
 
-  async function handleCatUpload(file: File) {
+  async function handleCatUpload(files: File[]) {
+    if (files.length === 0) return;
     setCatUploading(true);
-    const fd = new FormData();
-    fd.append("file", file);
-    fd.append("category", catUploadCategory);
-    if (catUploadNotes.trim()) fd.append("notes", catUploadNotes.trim());
-    const res = await fetch(`/api/procurement/vendors/${id}/catalogue-docs`, {
-      method: "POST",
-      body: fd,
-    });
-    if (res.ok) {
-      const { data } = await res.json();
-      const msg = data.compressed
-        ? `Uploaded & compressed (${data.original_size_kb} KB → ${data.final_size_kb} KB)`
-        : `Uploaded (${data.final_size_kb} KB)`;
-      toast.success(msg);
+    let successCount = 0;
+    for (let i = 0; i < files.length; i++) {
+      setCatUploadIdx(i + 1);
+      const file = files[i];
+      const fd = new FormData();
+      fd.append("file", file);
+      fd.append("category", catUploadCategory);
+      if (catUploadNotes.trim()) fd.append("notes", catUploadNotes.trim());
+      const res = await fetch(`/api/procurement/vendors/${id}/catalogue-docs`, {
+        method: "POST",
+        body: fd,
+      });
+      if (res.ok) {
+        successCount++;
+      } else {
+        const err = await res.json().catch(() => null);
+        toast.error(`${file.name}: ${err?.error || "Upload failed"}`);
+      }
+    }
+    if (successCount > 0) {
+      toast.success(`${successCount} file${successCount > 1 ? "s" : ""} uploaded`);
       setCatUploadOpen(false);
       setCatUploadNotes("");
       setCatUploadCategory("price_list");
+      setCatPendingFiles([]);
       fetchCatDocs();
-    } else {
-      const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Upload failed");
     }
     setCatUploading(false);
+    setCatUploadIdx(0);
   }
 
   async function handleCatView(docId: string) {
@@ -903,10 +912,10 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
           </Card>
 
           {/* Upload Dialog */}
-          <Dialog open={catUploadOpen} onOpenChange={setCatUploadOpen}>
+          <Dialog open={catUploadOpen} onOpenChange={(open) => { setCatUploadOpen(open); if (!open) setCatPendingFiles([]); }}>
             <DialogContent className="max-w-md">
               <DialogHeader>
-                <DialogTitle>Upload Document</DialogTitle>
+                <DialogTitle>Upload Documents</DialogTitle>
               </DialogHeader>
               <div className="space-y-4 py-2">
                 <div className="space-y-1">
@@ -931,34 +940,65 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                   />
                 </div>
                 <div className="space-y-1">
-                  <Label>File *</Label>
+                  <Label>Files *</Label>
                   <div
                     className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-colors"
                     onClick={() => catFileRef.current?.click()}
                   >
                     <Upload className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
-                    <p className="text-sm text-muted-foreground">Click to select a file</p>
-                    <p className="text-xs text-muted-foreground mt-1">PDF, JPEG, PNG, WEBP (max 50 MB)</p>
+                    <p className="text-sm text-muted-foreground">Click to select one or more files</p>
+                    <p className="text-xs text-muted-foreground mt-1">PDF, JPEG, PNG, WEBP (max 50 MB each)</p>
                   </div>
                   <input
                     ref={catFileRef}
                     type="file"
+                    multiple
                     className="hidden"
                     accept=".pdf,.jpg,.jpeg,.png,.webp"
                     onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      if (f) handleCatUpload(f);
+                      const files = Array.from(e.target.files ?? []);
+                      if (files.length > 0) setCatPendingFiles(files);
                       e.target.value = "";
                     }}
                   />
+                  {catPendingFiles.length > 0 && (() => {
+                    const existingNames = new Set(catDocs.map(d => d.file_name));
+                    const duplicates = catPendingFiles.filter(f => existingNames.has(f.name));
+                    return (
+                      <div className="mt-2 space-y-1.5">
+                        {duplicates.length > 0 && (
+                          <div className="flex items-start gap-2 rounded-md bg-yellow-50 border border-yellow-200 px-3 py-2 text-xs text-yellow-800">
+                            <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                            <span>{duplicates.length === 1 ? `"${duplicates[0].name}" already exists` : `${duplicates.length} files already exist`} for this vendor. They will be uploaded as additional copies.</span>
+                          </div>
+                        )}
+                        {catPendingFiles.map((f, i) => (
+                          <div key={i} className="flex items-center justify-between rounded bg-muted/50 px-2 py-1 text-xs">
+                            <span className="truncate max-w-[260px]">{f.name}</span>
+                            <div className="flex items-center gap-1.5 ml-2 shrink-0">
+                              {existingNames.has(f.name) && <Badge variant="outline" className="text-yellow-700 border-yellow-300 text-[10px] px-1">duplicate</Badge>}
+                              <span className="text-muted-foreground">{(f.size / 1024).toFixed(0)} KB</span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
                 </div>
               </div>
               <DialogFooter>
                 <Button variant="outline" onClick={() => setCatUploadOpen(false)} disabled={catUploading}>
                   Cancel
                 </Button>
-                <Button onClick={() => catFileRef.current?.click()} disabled={catUploading}>
-                  {catUploading ? "Uploading…" : "Select & Upload"}
+                <Button
+                  onClick={() => catPendingFiles.length > 0 ? handleCatUpload(catPendingFiles) : catFileRef.current?.click()}
+                  disabled={catUploading}
+                >
+                  {catUploading
+                    ? `Uploading ${catUploadIdx} of ${catPendingFiles.length}…`
+                    : catPendingFiles.length > 0
+                      ? `Upload ${catPendingFiles.length} file${catPendingFiles.length > 1 ? "s" : ""}`
+                      : "Select Files"}
                 </Button>
               </DialogFooter>
             </DialogContent>
