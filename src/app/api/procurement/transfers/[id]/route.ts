@@ -271,6 +271,62 @@ export async function PATCH(
         return NextResponse.json({ error: "Only dispatched transfers can be received" }, { status: 422 });
       }
 
+      // Check if destination has an active billing policy
+      const { data: billingPolicy } = await supabase
+        .from("transfer_billing_policies")
+        .select("id, is_billable, contract_id, service_charge_pct")
+        .eq("location_id", transfer.to_location_id)
+        .eq("is_billable", true)
+        .maybeSingle();
+
+      if (billingPolicy) {
+        // ── BILLABLE RECEIVE — delegate to atomic RPC ──────────────────────
+        const rpcItems = parsed.data.items.map((ri) => ({
+          transfer_item_id: ri.transfer_item_id,
+          quantity_received: ri.quantity_received,
+        }));
+
+        const { data: rpcResult, error: rpcError } = await supabase.rpc(
+          "receive_billable_transfer",
+          {
+            p_transfer_id: id,
+            p_received_by: dbUser.id,
+            p_items: rpcItems,
+          }
+        );
+
+        if (rpcError) {
+          return NextResponse.json({ error: rpcError.message }, { status: 500 });
+        }
+
+        await logAudit(supabase, {
+          entityType: "stock_transfer",
+          entityId: id,
+          action: "update",
+          performedBy: dbUser.id,
+          changes: {
+            status: { old: "dispatched", new: rpcResult.status },
+            billing_status: { old: "pending", new: "billed" },
+            usage_charge_id: { old: null, new: rpcResult.usage_charge_id },
+          },
+        });
+
+        return NextResponse.json({
+          data: {
+            id,
+            status: rpcResult.status,
+            billing_status: "billed",
+            usage_charge_id: rpcResult.usage_charge_id,
+            billing_summary: {
+              base_value: rpcResult.base_value,
+              service_charge: rpcResult.service_charge,
+              subtotal: rpcResult.subtotal,
+            },
+          },
+        });
+      }
+
+      // ── NON-BILLABLE RECEIVE — add stock to destination ────────────────────
       const receiveItems = parsed.data.items;
       let allMatch = true;
 
@@ -280,7 +336,6 @@ export async function PATCH(
           return NextResponse.json({ error: `Transfer item ${ri.transfer_item_id} not found` }, { status: 422 });
         }
 
-        // Update quantity received on the transfer item
         const { error: updateItemError } = await supabase
           .from("stock_transfer_items")
           .update({ quantity_received: ri.quantity_received })
@@ -288,15 +343,14 @@ export async function PATCH(
 
         if (updateItemError) return NextResponse.json({ error: updateItemError.message }, { status: 500 });
 
-        // Add stock to destination location
         if (transferItem.item_id && ri.quantity_received > 0) {
-          const { error: rpcError } = await supabase.rpc("upsert_location_stock", {
+          const { error: stockError } = await supabase.rpc("upsert_location_stock", {
             p_location_id: transfer.to_location_id,
             p_item_id: transferItem.item_id,
             p_quantity_delta: ri.quantity_received,
           });
-          if (rpcError) {
-            return NextResponse.json({ error: `Failed to add stock for "${transferItem.item_name}": ${rpcError.message}` }, { status: 500 });
+          if (stockError) {
+            return NextResponse.json({ error: `Failed to add stock for "${transferItem.item_name}": ${stockError.message}` }, { status: 500 });
           }
         }
 

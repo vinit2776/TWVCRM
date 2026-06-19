@@ -818,7 +818,9 @@ export type AuditEntityType =
   | "unifi_voucher"
   | "electricity_bill"
   | "location_electricity_config"
-  | "asset_document";
+  | "asset_document"
+  | "user_location"
+  | "transfer_billing_policy";
 
 export interface AuditLog {
   id: string;
