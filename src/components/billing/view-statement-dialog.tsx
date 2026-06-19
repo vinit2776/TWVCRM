@@ -182,6 +182,9 @@ export function ViewStatementDialog({
   // Resend GST email state
   const [resendingGstEmail, setResendingGstEmail] = useState(false);
 
+  // Re-issue payment link state
+  const [reissuingLink, setReissuingLink] = useState(false);
+
   // Void / Cancel-Tally state
   const [showVoidConfirm, setShowVoidConfirm] = useState(false);
   const [voidReason, setVoidReason] = useState("");
@@ -565,6 +568,31 @@ export function ViewStatementDialog({
       toast.error(e instanceof Error ? e.message : "Failed to resend GST email");
     } finally {
       setResendingGstEmail(false);
+    }
+  };
+
+  const handleReissuePaymentLink = async () => {
+    if (!statementId) return;
+    setReissuingLink(true);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/reissue-payment-link`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to re-issue payment link");
+      toast.success(
+        json.emailedTo
+          ? `Fresh payment link created and resent to ${json.emailedTo}`
+          : "Fresh payment link created (no email on file — copy the link manually)",
+      );
+      onStatusChange();
+      const refreshed = await fetch(`/api/billing-statements/${statementId}`);
+      if (refreshed.ok) { const j = await refreshed.json(); setStatement(j.data || null); }
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : "Failed to re-issue payment link");
+    } finally {
+      setReissuingLink(false);
     }
   };
 
@@ -1230,6 +1258,19 @@ export function ViewStatementDialog({
             <Button onClick={handleSendProforma} disabled={sendingProforma} variant={statement?.proforma_sent_at ? "outline" : "default"}>
               {sendingProforma ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
               {statement?.proforma_sent_at ? "Resend Proforma" : "Send Proforma + Payment Link"}
+            </Button>
+          )}
+          {/* Re-issue Payment Link — expired link scenario */}
+          {(statement?.status === "finalized" || statement?.status === "exported") && statement?.payment_status !== "paid" && !!statement?.razorpay_payment_link_url && !statement?.voided_at && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
+            <Button
+              variant="outline"
+              className="border-orange-300 text-orange-700 hover:bg-orange-50"
+              onClick={handleReissuePaymentLink}
+              disabled={reissuingLink}
+              title="Cancel the existing payment link and create a fresh one with a new expiry, then resend to the customer"
+            >
+              {reissuingLink ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
+              Re-issue Payment Link
             </Button>
           )}
           {/* Send Reminder — finalized/exported, not yet paid, proforma already sent, not voided */}
