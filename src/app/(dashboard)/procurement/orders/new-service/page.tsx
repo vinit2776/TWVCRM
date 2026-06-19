@@ -76,6 +76,10 @@ function NewServicePOForm() {
   const [amcContactName, setAmcContactName] = useState("");
   const [amcHelpline, setAmcHelpline] = useState("");
   const [amcContactEmail, setAmcContactEmail] = useState("");
+  const [amcEscalationName, setAmcEscalationName] = useState("");
+  const [amcEscalationPhone, setAmcEscalationPhone] = useState("");
+  const [amcEscalation2Name, setAmcEscalation2Name] = useState("");
+  const [amcEscalation2Phone, setAmcEscalation2Phone] = useState("");
   const [linkedAssetId, setLinkedAssetId] = useState("");
 
   function handleAmcStartDateChange(val: string) {
@@ -197,6 +201,10 @@ function NewServicePOForm() {
             amc_contact_name: amcContactName || undefined,
             amc_helpline_number: amcHelpline || undefined,
             amc_contact_email: amcContactEmail || undefined,
+            amc_escalation_name: amcEscalationName || undefined,
+            amc_escalation_phone: amcEscalationPhone || undefined,
+            amc_escalation2_name: amcEscalation2Name || undefined,
+            amc_escalation2_phone: amcEscalation2Phone || undefined,
             linked_asset_id: linkedAssetId || undefined,
             amc_coverage_type: amcCoverageType,
           } : {}),
@@ -465,31 +473,83 @@ function NewServicePOForm() {
                       </label>
                     </div>
                   </div>
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                    <div className="space-y-1.5">
-                      <Label>AMC Contact Name</Label>
-                      <Input
-                        placeholder="e.g. Rajesh Kumar"
-                        value={amcContactName}
-                        onChange={(e) => setAmcContactName(e.target.value)}
-                      />
+                  {/* L1 — Primary contact */}
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">L1 — Primary Contact</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label>Name</Label>
+                        <Input
+                          placeholder="e.g. Rajesh Kumar"
+                          value={amcContactName}
+                          onChange={(e) => setAmcContactName(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Phone / Helpline</Label>
+                        <Input
+                          placeholder="+91 98400 12345"
+                          value={amcHelpline}
+                          onChange={(e) => setAmcHelpline(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5 sm:col-span-2">
+                        <Label>Email</Label>
+                        <Input
+                          type="email"
+                          placeholder="amc@vendor.com"
+                          value={amcContactEmail}
+                          onChange={(e) => setAmcContactEmail(e.target.value)}
+                        />
+                      </div>
                     </div>
-                    <div className="space-y-1.5">
-                      <Label>Helpline / Support Number</Label>
-                      <Input
-                        placeholder="+91 98400 12345"
-                        value={amcHelpline}
-                        onChange={(e) => setAmcHelpline(e.target.value)}
-                      />
+                  </div>
+
+                  {/* L2 — Escalation contact */}
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">L2 — Escalation Contact</p>
+                    <p className="text-xs text-muted-foreground mb-2">Call if L1 is unreachable or unresponsive.</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label>Name</Label>
+                        <Input
+                          placeholder="e.g. Suresh Manager"
+                          value={amcEscalationName}
+                          onChange={(e) => setAmcEscalationName(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Phone</Label>
+                        <Input
+                          placeholder="+91 98400 99999"
+                          value={amcEscalationPhone}
+                          onChange={(e) => setAmcEscalationPhone(e.target.value)}
+                        />
+                      </div>
                     </div>
-                    <div className="space-y-1.5 sm:col-span-2">
-                      <Label>AMC Contact Email</Label>
-                      <Input
-                        type="email"
-                        placeholder="amc@vendor.com"
-                        value={amcContactEmail}
-                        onChange={(e) => setAmcContactEmail(e.target.value)}
-                      />
+                  </div>
+
+                  {/* L3 — Second escalation */}
+                  <div>
+                    <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-2">L3 — Second Escalation</p>
+                    <p className="text-xs text-muted-foreground mb-2">Senior point of contact when L2 is also unavailable.</p>
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label>Name</Label>
+                        <Input
+                          placeholder="e.g. Priya Director"
+                          value={amcEscalation2Name}
+                          onChange={(e) => setAmcEscalation2Name(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label>Phone</Label>
+                        <Input
+                          placeholder="+91 98400 77777"
+                          value={amcEscalation2Phone}
+                          onChange={(e) => setAmcEscalation2Phone(e.target.value)}
+                        />
+                      </div>
                     </div>
                   </div>
                 </CardContent>
