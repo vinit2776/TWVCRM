@@ -28,6 +28,8 @@ All seven scopes are fully enabled — the wizard presents scope buttons (IT, HV
 | `/facility/issues/[id]` | `src/app/(dashboard)/facility/issues/[id]/page.tsx` | All authenticated | Issue detail: description, photos, timeline, sidebar, status transitions |
 | `/facility/assets` | `src/app/(dashboard)/facility/assets/page.tsx` | All authenticated | Equipment inventory grouped by location |
 | `/facility/assets/[id]` | `src/app/(dashboard)/facility/assets/[id]/page.tsx` | All authenticated | Asset detail with full issue history |
+| `/facility/assets/[id]/print` | `src/app/(dashboard)/facility/assets/[id]/print/page.tsx` | All authenticated | Print QR code sheet — Avery 21-up (63.5×38mm), 9-up cut, or single large label |
+| `/asset/[code]` | `src/app/asset/[code]/page.tsx` | **Public (no auth)** | QR scan landing page — shows asset info; if logged-in staff, redirects to dashboard detail; provides issue report and service upload forms |
 | `/facility/my-issues` | `src/app/(dashboard)/facility/my-issues/page.tsx` | All authenticated | Technician home — tabs: Open / In Progress / Resolved Today; sticky mobile FAB |
 | `/facility/team-kpi` | `src/app/(dashboard)/facility/team-kpi/page.tsx` | All authenticated (primarily managers) | Per-technician performance table with CSV export |
 
@@ -43,6 +45,8 @@ All pages are `"use client"` components that fetch from the API routes below.
 - `src/app/(dashboard)/facility/issues/[id]/page.tsx` — issue detail
 - `src/app/(dashboard)/facility/assets/page.tsx` — asset list
 - `src/app/(dashboard)/facility/assets/[id]/page.tsx` — asset detail
+- `src/app/(dashboard)/facility/assets/[id]/print/page.tsx` — print QR code (Avery/sheet/single layouts; uses `qrcode` npm package)
+- `src/app/asset/[code]/page.tsx` — **public** QR scan landing (outside dashboard layout, no auth required)
 - `src/app/(dashboard)/facility/my-issues/page.tsx` — technician view
 - `src/app/(dashboard)/facility/team-kpi/page.tsx` — KPI table
 
@@ -64,7 +68,11 @@ All pages are `"use client"` components that fetch from the API routes below.
 - `GET/PUT/DELETE /api/facility/assets/[id]` — `src/app/api/facility/assets/[id]/route.ts`
 - `GET/POST /api/facility/assets/[id]/events` — `src/app/api/facility/assets/[id]/events/route.ts` (asset event log with issue linking)
 - `GET/POST/DELETE /api/facility/assets/[id]/documents` — `src/app/api/facility/assets/[id]/documents/route.ts` (two-tier document management)
+- `GET/POST /api/facility/assets/[id]/amc` — `src/app/api/facility/assets/[id]/amc/route.ts` (AMC summary + service event history for an asset)
 - `GET/POST /api/facility/checklist-templates` — `src/app/api/facility/checklist-templates/route.ts` (per-category checklists)
+- `GET /api/public/asset/[code]` — `src/app/api/public/asset/[code]/route.ts` (unauthenticated asset lookup by asset code; also checks for active AMC)
+- `POST /api/public/asset/[code]/report` — `src/app/api/public/asset/[code]/report/route.ts` (unauthenticated issue report submitted from QR scan page)
+- `POST /api/public/asset/[code]/service/upload` — `src/app/api/public/asset/[code]/service/upload/route.ts` (vendor service sheet upload via public QR scan)
 - `GET/POST /api/facility/categories` — `src/app/api/facility/categories/route.ts`
 - `GET/PUT/DELETE /api/facility/categories/[id]` — `src/app/api/facility/categories/[id]/route.ts`
 - `GET /api/facility/assignees` — `src/app/api/facility/assignees/route.ts`
@@ -172,8 +180,8 @@ Append-only event log per asset. Each event records a maintenance action, inspec
 | `asset_id` | UUID FK `facility_assets(id) ON DELETE CASCADE` | |
 | `event_type` | VARCHAR(60) NOT NULL | See valid types below |
 | `note` | TEXT | nullable |
-| `photo_urls` | TEXT[] DEFAULT `{}` | array of signed URLs |
-| `logged_by` | UUID | Supabase auth UID of the user who logged the event |
+| `photo_urls` | JSONB DEFAULT `[]` | array of signed URLs (stored as JSONB, not TEXT[]) |
+| `logged_by` | UUID → `auth.users(id)` | Supabase auth UID of the user who logged the event |
 | `issue_id` | UUID FK `facility_issues(id) ON DELETE SET NULL` | nullable — links event to an issue (migration 00278) |
 | `created_at` | TIMESTAMPTZ DEFAULT NOW() | |
 
@@ -948,6 +956,43 @@ Assets support document uploads with access tiers:
 
 ---
 
+## QR Code & Public Asset Access
+
+Each asset has a unique `asset_code` (e.g. `AND-UDM-001`). A QR code encoding `https://twv-crm.vercel.app/asset/{code}` can be printed and affixed to the physical device.
+
+### Print QR Page (`/facility/assets/[id]/print`)
+
+- **Access:** Any authenticated user; opened by clicking "Print QR Code" on the asset detail page
+- **URL generated:** `${window.location.origin}/asset/${asset.asset_code}` — uses `qrcode` npm package client-side
+- **Layout options** (selectable before printing):
+  - **Avery 21-up** (63.5×38mm labels — fits standard Avery L7160 / equivalent sheets)
+  - **9-up cut sheet** (3×3 grid, A4/letter, cut with scissors)
+  - **Single large** (full-page single label for server racks / panels)
+- Print CSS hides the controls bar; only labels render on paper.
+
+### Public QR Scan Landing (`/asset/[code]`)
+
+Outside the `(dashboard)` layout — no authentication required. Served at `/asset/[code]`.
+
+**Auth behaviour:**
+- If the scanning user is logged in as a staff member → redirect immediately to `/facility/assets/{id}` (the full dashboard detail)
+- If unauthenticated → show the public card
+
+**Public card shows:**
+- Asset name, code, location, floor, category, status badge
+- Two action cards (conditionally shown):
+  - **Service Upload** (shown only if `has_active_amc: true`): vendor uploads a service sheet after a visit → `POST /api/public/asset/[code]/service/upload`
+  - **Report an Issue**: anyone can submit a fault report → `POST /api/public/asset/[code]/report` (creates a `facility_issue` with `reported_via: "self_service"`)
+
+**API used by the public page:**
+- `GET /api/public/asset/[code]` — returns `{ id, name, asset_code, status, location_name, floor_name, category_name, category_scope, has_active_amc }`. Uses `createAdminClient()` (no auth cookie needed). AMC check: queries `purchase_orders` where `linked_asset_id = asset.id AND po_type = 'service' AND amc_status IN ('active', 'expiring')`.
+- `POST /api/public/asset/[code]/report` — creates a facility issue. Required body: `title`. Optional: `description`, `reporter_name`, `reporter_email`, `reporter_phone`. Uses `createAdminClient()`.
+- `POST /api/public/asset/[code]/service/upload` — uploads a service document for a vendor visit. Stores in `amc_event_attachments` with `uploaded_by_vendor: true`. Accepts `multipart/form-data`. Body: `file` (required), `vendor_name` (optional), `notes` (optional). Uses `createAdminClient()`.
+
+**Gotcha — these are unauthenticated endpoints.** They use `createAdminClient()` and bypass RLS. They are intentionally open for QR scan use-cases (no login friction for vendors or members). Do not expand their scope beyond the specific operations listed above.
+
+---
+
 ## Non-IT Category Seeding (Migration 00276)
 
 All seven scopes now have seeded categories with scope-specific SLA defaults:
@@ -970,8 +1015,11 @@ All seven scopes now have seeded categories with scope-specific SLA defaults:
 |---|---|
 | `00270_facility_assets_lifecycle.sql` | Lifecycle stage enum, custom fields, AC category seed, FMS role in RLS |
 | `00271_amc_asset_bridge.sql` | Bridge table linking assets to AMC contracts |
-| `00272_asset_documents.sql` | Two-tier document storage for assets |
+| `00272_asset_documents.sql` | Two-tier document storage for assets (`asset_documents` table) |
 | `00273_checklists_visit_quality.sql` | Checklist templates and per-visit checklist items |
-| `00276_seed_non_it_categories.sql` | Seed categories for all non-IT scopes |
+| `00274_amc_service_tokens.sql` | `amc_service_tokens` table (time-limited vendor QR links); `amc_event_attachments` table; `vendor_notes`/`vendor_submitted_at`/`service_token_id` added to `amc_service_events` |
+| `00275_amc_attachments_nullable_event.sql` | Allow `amc_event_attachments.event_id` to be NULL (vendor uploads via QR before event is created); add `notes` column |
+| `00276_seed_non_it_categories.sql` | Seed categories for all non-IT scopes (HVAC, Plumbing, Electrical, Housekeeping, Security, Other) |
+| `00277_facility_asset_events.sql` | Create `facility_asset_events` table — append-only event log per asset |
 | `00278_asset_events_add_issue_id.sql` | Add `issue_id` FK to asset events for issue linking |
-| `00279_facility_issues_category_nullable.sql` | Make `category_id` nullable — scope-first reporting |
+| `00279_facility_issues_category_nullable.sql` | Make `category_id` nullable on `facility_issues` — scope-first reporting |
