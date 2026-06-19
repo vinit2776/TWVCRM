@@ -184,6 +184,7 @@ export function ViewStatementDialog({
 
   // Re-issue payment link state
   const [reissuingLink, setReissuingLink] = useState(false);
+  const [showResendChoice, setShowResendChoice] = useState(false);
 
   // Void / Cancel-Tally state
   const [showVoidConfirm, setShowVoidConfirm] = useState(false);
@@ -320,6 +321,7 @@ export function ViewStatementDialog({
 
   const handleSendProforma = async () => {
     if (!statementId) return;
+    setShowResendChoice(false);
     setSendingProforma(true);
     try {
       const res = await fetch(`/api/billing-statements/${statementId}/send-proforma`, {
@@ -573,6 +575,7 @@ export function ViewStatementDialog({
 
   const handleReissuePaymentLink = async () => {
     if (!statementId) return;
+    setShowResendChoice(false);
     setReissuingLink(true);
     try {
       const res = await fetch(`/api/billing-statements/${statementId}/reissue-payment-link`, {
@@ -583,7 +586,7 @@ export function ViewStatementDialog({
       if (!res.ok) throw new Error(json.error || "Failed to re-issue payment link");
       toast.success(
         json.emailedTo
-          ? `Fresh payment link created and resent to ${json.emailedTo}`
+          ? `Fresh payment link sent to ${json.emailedTo}`
           : "Fresh payment link created (no email on file — copy the link manually)",
       );
       onStatusChange();
@@ -1253,25 +1256,61 @@ export function ViewStatementDialog({
               Finalize
             </Button>
           )}
-          {/* Finalized: Send proforma (or resend) — only when PI not yet cancelled */}
-          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
-            <Button onClick={handleSendProforma} disabled={sendingProforma} variant={statement?.proforma_sent_at ? "outline" : "default"}>
-              {sendingProforma ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+          {/* Finalized: Send / Resend proforma — only when PI not yet cancelled */}
+          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && userRole && ["admin", "manager", "accounts"].includes(userRole) && !showResendChoice && (
+            <Button
+              onClick={() => {
+                // First send: go directly. Resend: offer link-renewal choice.
+                if (statement?.proforma_sent_at && statement?.razorpay_payment_link_url && statement?.payment_status !== "paid") {
+                  setShowResendChoice(true);
+                } else {
+                  handleSendProforma();
+                }
+              }}
+              disabled={sendingProforma || reissuingLink}
+              variant={statement?.proforma_sent_at ? "outline" : "default"}
+            >
+              {(sendingProforma || reissuingLink) ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
               {statement?.proforma_sent_at ? "Resend Proforma" : "Send Proforma + Payment Link"}
             </Button>
           )}
-          {/* Re-issue Payment Link — expired link scenario */}
-          {(statement?.status === "finalized" || statement?.status === "exported") && statement?.payment_status !== "paid" && !!statement?.razorpay_payment_link_url && !statement?.voided_at && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
-            <Button
-              variant="outline"
-              className="border-orange-300 text-orange-700 hover:bg-orange-50"
-              onClick={handleReissuePaymentLink}
-              disabled={reissuingLink}
-              title="Cancel the existing payment link and create a fresh one with a new expiry, then resend to the customer"
-            >
-              {reissuingLink ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <RotateCcw className="mr-2 h-4 w-4" />}
-              Re-issue Payment Link
-            </Button>
+          {/* Inline resend-choice panel — appears when Resend Proforma is clicked and a link already exists */}
+          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && showResendChoice && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
+            <div className="flex w-full flex-col gap-2 rounded-md border border-blue-200 bg-blue-50 p-3">
+              <p className="text-sm font-medium text-blue-800">
+                A payment link was previously sent. How would you like to resend?
+              </p>
+              <p className="text-xs text-blue-600">
+                If the customer&apos;s link has expired, generate a fresh one — it cancels the old link and emails a new invoice with a new 15-day payment link.
+              </p>
+              <div className="flex gap-2 pt-1">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="flex-1 border-slate-300 text-slate-700 hover:bg-slate-100"
+                  onClick={handleSendProforma}
+                  disabled={sendingProforma || reissuingLink}
+                >
+                  {sendingProforma ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Send className="mr-1 h-3 w-3" />}
+                  Resend with existing link
+                </Button>
+                <Button
+                  size="sm"
+                  className="flex-1 bg-blue-700 hover:bg-blue-800 text-white"
+                  onClick={handleReissuePaymentLink}
+                  disabled={sendingProforma || reissuingLink}
+                >
+                  {reissuingLink ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <RotateCcw className="mr-1 h-3 w-3" />}
+                  Resend with new payment link
+                </Button>
+              </div>
+              <button
+                className="text-xs text-blue-500 hover:underline text-left"
+                onClick={() => setShowResendChoice(false)}
+              >
+                Cancel
+              </button>
+            </div>
           )}
           {/* Send Reminder — finalized/exported, not yet paid, proforma already sent, not voided */}
           {(statement?.status === "finalized" || statement?.status === "exported") && statement?.payment_status !== "paid" && !!statement?.proforma_sent_at && !statement?.voided_at && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
