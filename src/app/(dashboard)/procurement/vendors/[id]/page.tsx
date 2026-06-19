@@ -9,6 +9,7 @@ import {
   Building2, CreditCard, FileText,
   Banknote, Check, Tag, ExternalLink,
   BarChart2, AlertCircle, ShoppingCart, ChevronRight, ChevronDown,
+  FolderOpen, Trash2, Eye, Plus, BookOpen,
 } from "lucide-react";
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
@@ -229,6 +230,30 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
   const [drillMonth, setDrillMonth] = useState<MonthBucket | null>(null);
   const [poFilter, setPoFilter] = useState<string>("all");
 
+  // Catalogue & Docs
+  type CatalogueDoc = {
+    id: string;
+    vendor_id: string;
+    category: string;
+    file_name: string;
+    file_path: string;
+    file_size_bytes: number | null;
+    file_mime_type: string | null;
+    notes: string | null;
+    uploaded_by: string | null;
+    created_at: string;
+    uploader: { full_name: string } | null;
+  };
+  const [catDocs, setCatDocs] = useState<CatalogueDoc[]>([]);
+  const [catDocsLoading, setCatDocsLoading] = useState(false);
+  const [catDocsFetched, setCatDocsFetched] = useState(false);
+  const [catUploadOpen, setCatUploadOpen] = useState(false);
+  const [catUploading, setCatUploading] = useState(false);
+  const [catUploadCategory, setCatUploadCategory] = useState<string>("price_list");
+  const [catUploadNotes, setCatUploadNotes] = useState("");
+  const catFileRef = useRef<HTMLInputElement>(null);
+  const [catFilter, setCatFilter] = useState<string>("all");
+
   const emptyForm = {
     name: "", category: "general" as VendorCategory,
     contact_name: "", contact_phone: "", contact_email: "",
@@ -297,6 +322,68 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
     }
   }, [id, insights, insightsLoading]);
 
+  const fetchCatDocs = useCallback(async () => {
+    setCatDocsLoading(true);
+    const res = await fetch(`/api/procurement/vendors/${id}/catalogue-docs`);
+    if (res.ok) {
+      const { data } = await res.json();
+      setCatDocs(data ?? []);
+    }
+    setCatDocsLoading(false);
+    setCatDocsFetched(true);
+  }, [id]);
+
+  async function handleCatUpload(file: File) {
+    setCatUploading(true);
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("category", catUploadCategory);
+    if (catUploadNotes.trim()) fd.append("notes", catUploadNotes.trim());
+    const res = await fetch(`/api/procurement/vendors/${id}/catalogue-docs`, {
+      method: "POST",
+      body: fd,
+    });
+    if (res.ok) {
+      const { data } = await res.json();
+      const msg = data.compressed
+        ? `Uploaded & compressed (${data.original_size_kb} KB → ${data.final_size_kb} KB)`
+        : `Uploaded (${data.final_size_kb} KB)`;
+      toast.success(msg);
+      setCatUploadOpen(false);
+      setCatUploadNotes("");
+      setCatUploadCategory("price_list");
+      fetchCatDocs();
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Upload failed");
+    }
+    setCatUploading(false);
+  }
+
+  async function handleCatView(docId: string) {
+    const res = await fetch(`/api/procurement/vendors/${id}/catalogue-docs?viewDocId=${docId}`);
+    if (res.ok) {
+      const { data } = await res.json();
+      window.open(data.signedUrl, "_blank");
+    } else {
+      toast.error("Could not generate view link");
+    }
+  }
+
+  async function handleCatDelete(docId: string, fileName: string) {
+    if (!confirm(`Delete "${fileName}"? This cannot be undone.`)) return;
+    const res = await fetch(`/api/procurement/vendors/${id}/catalogue-docs?docId=${docId}`, {
+      method: "DELETE",
+    });
+    if (res.ok) {
+      toast.success("Document deleted");
+      setCatDocs((prev) => prev.filter((d) => d.id !== docId));
+    } else {
+      const err = await res.json().catch(() => null);
+      toast.error(err?.error || "Delete failed");
+    }
+  }
+
   // Trigger lazy-loads when tab changes (more reliable than onClick on each trigger)
   useEffect(() => {
     if ((activeTab === "po-analytics" || activeTab === "activity") && !insights && !insightsLoading) {
@@ -304,6 +391,9 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
     }
     if (activeTab === "prices" && prices.length === 0 && !pricesLoading) {
       fetchPrices();
+    }
+    if (activeTab === "catalogues" && !catDocsFetched && !catDocsLoading) {
+      fetchCatDocs();
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [activeTab]);
@@ -446,6 +536,12 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
                 <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{uploaded}/5</Badge>
               ) : null;
             })()}
+          </TabsTrigger>
+          <TabsTrigger value="catalogues">
+            Catalogues &amp; Docs
+            {catDocs.length > 0 && (
+              <Badge variant="secondary" className="ml-1.5 text-xs px-1.5 py-0">{catDocs.length}</Badge>
+            )}
           </TabsTrigger>
           <TabsTrigger value="prices">
             Price History
@@ -650,6 +746,223 @@ export default function VendorDetailPage({ params }: { params: Promise<{ id: str
               ))}
             </CardContent>
           </Card>
+        </TabsContent>
+
+        {/* Catalogues & Docs Tab */}
+        <TabsContent value="catalogues" className="mt-4">
+          <Card>
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between flex-wrap gap-2">
+                <CardTitle className="text-base flex items-center gap-2">
+                  <FolderOpen className="h-4 w-4" /> Catalogues &amp; Documents
+                  {catDocs.length > 0 && (
+                    <span className="text-sm font-normal text-muted-foreground">
+                      ({catDocs.length} file{catDocs.length !== 1 ? "s" : ""})
+                    </span>
+                  )}
+                </CardTitle>
+                <div className="flex items-center gap-2">
+                  {catDocs.length > 0 && (
+                    <div className="flex gap-1 flex-wrap">
+                      {[
+                        { value: "all", label: "All" },
+                        { value: "price_list", label: "Price Lists" },
+                        { value: "catalogue", label: "Catalogues" },
+                        { value: "quotation", label: "Quotations" },
+                        { value: "other", label: "Other" },
+                      ].map((f) => {
+                        const count = f.value === "all" ? catDocs.length : catDocs.filter((d) => d.category === f.value).length;
+                        if (f.value !== "all" && count === 0) return null;
+                        return (
+                          <button
+                            key={f.value}
+                            onClick={() => setCatFilter(f.value)}
+                            className={`text-[11px] px-2 py-1 rounded-full border transition-colors ${catFilter === f.value ? "bg-primary text-primary-foreground border-primary" : "border-border hover:bg-muted"}`}
+                          >
+                            {f.label} ({count})
+                          </button>
+                        );
+                      })}
+                    </div>
+                  )}
+                  {!isReadOnly && (
+                    <Button size="sm" onClick={() => setCatUploadOpen(true)}>
+                      <Plus className="h-4 w-4 mr-1" /> Upload
+                    </Button>
+                  )}
+                </div>
+              </div>
+            </CardHeader>
+            <CardContent>
+              {catDocsLoading ? (
+                <div className="space-y-2">
+                  {[1, 2, 3].map((i) => (
+                    <div key={i} className="h-12 bg-muted animate-pulse rounded" />
+                  ))}
+                </div>
+              ) : catDocs.length === 0 ? (
+                <div className="py-10 text-center">
+                  <BookOpen className="h-8 w-8 text-muted-foreground mx-auto mb-2" />
+                  <p className="text-sm text-muted-foreground">No catalogues or documents uploaded yet.</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    Upload price lists, product catalogues, quotations, or any reference documents.
+                  </p>
+                  {!isReadOnly && (
+                    <Button variant="outline" size="sm" className="mt-4" onClick={() => setCatUploadOpen(true)}>
+                      <Upload className="h-3.5 w-3.5 mr-1.5" /> Upload First Document
+                    </Button>
+                  )}
+                </div>
+              ) : (
+                <div className="rounded-md border overflow-x-auto">
+                  <table className="w-full text-sm">
+                    <thead>
+                      <tr className="border-b bg-muted/50">
+                        <th className="px-4 py-2.5 text-left font-medium">Document</th>
+                        <th className="px-4 py-2.5 text-left font-medium hidden sm:table-cell">Category</th>
+                        <th className="px-4 py-2.5 text-left font-medium hidden md:table-cell">Notes</th>
+                        <th className="px-4 py-2.5 text-left font-medium hidden lg:table-cell">Uploaded By</th>
+                        <th className="px-4 py-2.5 text-left font-medium">Date</th>
+                        <th className="px-4 py-2.5 text-right font-medium">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {(catFilter === "all" ? catDocs : catDocs.filter((d) => d.category === catFilter)).map((doc) => (
+                        <tr key={doc.id} className="border-b last:border-0 hover:bg-muted/20">
+                          <td className="px-4 py-2.5">
+                            <div className="flex items-center gap-2">
+                              <FileText className="h-4 w-4 text-muted-foreground shrink-0" />
+                              <div>
+                                <p className="font-medium text-sm truncate max-w-[200px]">{doc.file_name}</p>
+                                {doc.file_size_bytes && (
+                                  <p className="text-[10px] text-muted-foreground">
+                                    {doc.file_size_bytes < 1024 * 1024
+                                      ? `${Math.round(doc.file_size_bytes / 1024)} KB`
+                                      : `${(doc.file_size_bytes / (1024 * 1024)).toFixed(1)} MB`}
+                                  </p>
+                                )}
+                              </div>
+                            </div>
+                          </td>
+                          <td className="px-4 py-2.5 hidden sm:table-cell">
+                            <Badge variant="secondary" className={
+                              doc.category === "price_list" ? "bg-blue-50 text-blue-700 border-blue-200" :
+                              doc.category === "catalogue" ? "bg-purple-50 text-purple-700 border-purple-200" :
+                              doc.category === "quotation" ? "bg-green-50 text-green-700 border-green-200" :
+                              "bg-gray-100 text-gray-700"
+                            }>
+                              {doc.category === "price_list" ? "Price List" :
+                               doc.category === "catalogue" ? "Catalogue" :
+                               doc.category === "quotation" ? "Quotation" : "Other"}
+                            </Badge>
+                          </td>
+                          <td className="px-4 py-2.5 hidden md:table-cell">
+                            {doc.notes ? (
+                              <p className="text-xs text-muted-foreground truncate max-w-[180px]">{doc.notes}</p>
+                            ) : (
+                              <span className="text-xs text-muted-foreground">—</span>
+                            )}
+                          </td>
+                          <td className="px-4 py-2.5 hidden lg:table-cell text-xs text-muted-foreground">
+                            {doc.uploader?.full_name ?? "—"}
+                          </td>
+                          <td className="px-4 py-2.5 text-xs text-muted-foreground tabular-nums">
+                            {formatDate(doc.created_at)}
+                          </td>
+                          <td className="px-4 py-2.5 text-right">
+                            <div className="flex items-center justify-end gap-1">
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                className="h-7 text-xs"
+                                onClick={() => handleCatView(doc.id)}
+                              >
+                                <Eye className="h-3 w-3 mr-1" /> View
+                              </Button>
+                              {!isReadOnly && userRole && ["admin", "manager"].includes(userRole) && (
+                                <Button
+                                  type="button"
+                                  size="sm"
+                                  variant="ghost"
+                                  className="h-7 text-xs text-red-500 hover:text-red-700 hover:bg-red-50"
+                                  onClick={() => handleCatDelete(doc.id, doc.file_name)}
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </Button>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Upload Dialog */}
+          <Dialog open={catUploadOpen} onOpenChange={setCatUploadOpen}>
+            <DialogContent className="max-w-md">
+              <DialogHeader>
+                <DialogTitle>Upload Document</DialogTitle>
+              </DialogHeader>
+              <div className="space-y-4 py-2">
+                <div className="space-y-1">
+                  <Label>Category *</Label>
+                  <Select value={catUploadCategory} onValueChange={setCatUploadCategory}>
+                    <SelectTrigger><SelectValue /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="price_list">Price List</SelectItem>
+                      <SelectItem value="catalogue">Catalogue</SelectItem>
+                      <SelectItem value="quotation">Quotation</SelectItem>
+                      <SelectItem value="other">Other</SelectItem>
+                    </SelectContent>
+                  </Select>
+                </div>
+                <div className="space-y-1">
+                  <Label>Notes (optional)</Label>
+                  <Textarea
+                    value={catUploadNotes}
+                    onChange={(e) => setCatUploadNotes(e.target.value)}
+                    rows={2}
+                    placeholder="e.g. Q2 2026 revised rates, valid until Sep 2026"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <Label>File *</Label>
+                  <div
+                    className="border-2 border-dashed rounded-lg p-6 text-center cursor-pointer hover:border-primary/50 hover:bg-muted/30 transition-colors"
+                    onClick={() => catFileRef.current?.click()}
+                  >
+                    <Upload className="h-6 w-6 text-muted-foreground mx-auto mb-2" />
+                    <p className="text-sm text-muted-foreground">Click to select a file</p>
+                    <p className="text-xs text-muted-foreground mt-1">PDF, JPEG, PNG, WEBP (max 50 MB)</p>
+                  </div>
+                  <input
+                    ref={catFileRef}
+                    type="file"
+                    className="hidden"
+                    accept=".pdf,.jpg,.jpeg,.png,.webp"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) handleCatUpload(f);
+                      e.target.value = "";
+                    }}
+                  />
+                </div>
+              </div>
+              <DialogFooter>
+                <Button variant="outline" onClick={() => setCatUploadOpen(false)} disabled={catUploading}>
+                  Cancel
+                </Button>
+                <Button onClick={() => catFileRef.current?.click()} disabled={catUploading}>
+                  {catUploading ? "Uploading…" : "Select & Upload"}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
         </TabsContent>
 
         {/* Price History Tab */}
