@@ -18,7 +18,7 @@ import {
   PO_ADVANCE_PAYMENT_MODE_LABELS,
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
-import type { ProcurementVendor, ProcurementItem, FacilityAsset } from "@/types";
+import type { ProcurementVendor, FacilityAsset } from "@/types";
 
 function addMonths(dateStr: string, months: number): string {
   const d = new Date(dateStr);
@@ -40,11 +40,9 @@ function NewServicePOForm() {
   const [saving, setSaving] = useState(false);
 
   const [vendors, setVendors] = useState<ProcurementVendor[]>([]);
-  const [serviceItems, setServiceItems] = useState<ProcurementItem[]>([]);
   const [assets, setAssets] = useState<FacilityAsset[]>([]);
 
   const [vendorId, setVendorId] = useState("");
-  const [itemId, setItemId] = useState("");
   const [customName, setCustomName] = useState("");
   const [locationId, setLocationId] = useState("");
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
@@ -106,11 +104,6 @@ function NewServicePOForm() {
     if (res.ok) { const j = await res.json(); setVendors(j.data ?? []); }
   }, []);
 
-  const fetchServiceItems = useCallback(async () => {
-    const res = await fetch("/api/procurement/items?item_type=service&include_inactive=false");
-    if (res.ok) { const j = await res.json(); setServiceItems(j.data ?? []); }
-  }, []);
-
   const fetchLocations = useCallback(async () => {
     const res = await fetch("/api/locations");
     if (res.ok) { const j = await res.json(); setLocations(j.data ?? []); }
@@ -123,13 +116,11 @@ function NewServicePOForm() {
 
   useEffect(() => {
     fetchVendors();
-    fetchServiceItems();
     fetchLocations();
     fetchAssets();
-  }, [fetchVendors, fetchServiceItems, fetchLocations, fetchAssets]);
+  }, [fetchVendors, fetchLocations, fetchAssets]);
 
-  const selectedItem = serviceItems.find((i) => i.id === itemId);
-  const serviceItemName = selectedItem?.name ?? customName;
+  const serviceItemName = customName;
   const cycleCountNum = parseInt(cycleCount) || 0;
   const unitCostNum = parseFloat(unitCost) || 0;
   const gstRateNum = parseFloat(gstRate) || 0;
@@ -187,7 +178,6 @@ function NewServicePOForm() {
           vendor_id: vendorId,
           location_id: locationId || undefined,
           service_item_name: serviceItemName.trim(),
-          item_id: itemId || undefined,
           service_start_date: isAmc ? amcStartDate : serviceStartDate,
           billing_cycle: isAmc ? "yearly" : billingCycle,
           cycle_count: isAmc ? 1 : cycleCountNum,
@@ -560,24 +550,12 @@ function NewServicePOForm() {
                 </div>
 
                 <div className="space-y-1.5">
-                  <Label>Service Item *</Label>
-                  <Select value={itemId} onValueChange={(v) => { setItemId(v === "_custom" ? "" : v); setCustomName(""); }}>
-                    <SelectTrigger><SelectValue placeholder="Select from catalog or type below" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="_custom">— Enter custom name —</SelectItem>
-                      {serviceItems.map((i) => (
-                        <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                  {!itemId && (
-                    <Input
-                      placeholder="e.g. Generator Maintenance, Security Service..."
-                      value={customName}
-                      onChange={(e) => setCustomName(e.target.value)}
-                      className="mt-1.5"
-                    />
-                  )}
+                  <Label>Service Description *</Label>
+                  <Input
+                    placeholder="e.g. Generator Maintenance, Security Service..."
+                    value={customName}
+                    onChange={(e) => setCustomName(e.target.value)}
+                  />
                 </div>
 
                 <div className="space-y-1.5">
