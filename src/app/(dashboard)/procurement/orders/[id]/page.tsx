@@ -1811,11 +1811,11 @@ export default function PurchaseOrderDetailPage() {
           if (dcFileRef.current) dcFileRef.current.value = "";
         }}
       >
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-w-lg max-h-[90vh] flex flex-col">
           <DialogHeader>
             <DialogTitle>Record Delivery — {po?.po_number}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4 py-2">
+          <div className="space-y-4 py-2 overflow-y-auto flex-1 min-h-0">
             {/* DC Number + Date */}
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-1.5">
