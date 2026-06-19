@@ -67,7 +67,7 @@ export default function LoginPage() {
               <Label htmlFor="password">Password</Label>
               <Link
                 href="/forgot-password"
-                className="text-xs text-primary hover:underline"
+                className="text-xs text-primary hover:underline py-2 inline-block"
               >
                 Forgot password?
               </Link>
