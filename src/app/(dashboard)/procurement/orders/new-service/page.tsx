@@ -11,6 +11,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { SearchableSelect } from "@/components/ui/searchable-select";
 import { toast } from "sonner";
 import {
   SERVICE_PO_BILLING_CYCLES, BILLING_CYCLE_LABELS, BILLING_CYCLE_MONTHS,
@@ -278,20 +279,17 @@ function NewServicePOForm() {
               <CardContent className="space-y-4">
                 <div className="space-y-1.5">
                   <Label>Asset being covered *</Label>
-                  <Select
-                    value={linkedAssetId || "_none"}
-                    onValueChange={(v) => handleAssetSelect(v === "_none" ? "" : v)}
-                  >
-                    <SelectTrigger><SelectValue placeholder="Select asset" /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="_none">— Select an asset —</SelectItem>
-                      {assets.map((a) => (
-                        <SelectItem key={a.id} value={a.id}>
-                          {a.name}{a.asset_code ? ` (${a.asset_code})` : ""}{a.location ? ` — ${(a.location as { name: string }).name}` : ""}
-                        </SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <SearchableSelect
+                    options={assets.map((a) => ({
+                      value: a.id,
+                      label: `${a.name}${a.asset_code ? ` (${a.asset_code})` : ""}${a.location ? ` — ${(a.location as { name: string }).name}` : ""}`,
+                    }))}
+                    value={linkedAssetId}
+                    onValueChange={handleAssetSelect}
+                    placeholder="Select asset"
+                    searchPlaceholder="Search assets..."
+                    emptyMessage="No assets found."
+                  />
                   <p className="text-xs text-muted-foreground">The asset this AMC will cover.</p>
                 </div>
 
@@ -345,14 +343,14 @@ function NewServicePOForm() {
               <CardContent>
                 <div className="space-y-1.5">
                   <Label>Vendor *</Label>
-                  <Select value={vendorId} onValueChange={setVendorId}>
-                    <SelectTrigger><SelectValue placeholder="Select vendor" /></SelectTrigger>
-                    <SelectContent>
-                      {vendors.map((v) => (
-                        <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <SearchableSelect
+                    options={vendors.map((v) => ({ value: v.id, label: v.name }))}
+                    value={vendorId}
+                    onValueChange={setVendorId}
+                    placeholder="Select vendor"
+                    searchPlaceholder="Search vendors..."
+                    emptyMessage="No vendors found."
+                  />
                 </div>
               </CardContent>
             </Card>
@@ -551,14 +549,14 @@ function NewServicePOForm() {
               <CardContent className="space-y-4">
                 <div className="space-y-1.5">
                   <Label>Vendor *</Label>
-                  <Select value={vendorId} onValueChange={setVendorId}>
-                    <SelectTrigger><SelectValue placeholder="Select vendor" /></SelectTrigger>
-                    <SelectContent>
-                      {vendors.map((v) => (
-                        <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
+                  <SearchableSelect
+                    options={vendors.map((v) => ({ value: v.id, label: v.name }))}
+                    value={vendorId}
+                    onValueChange={setVendorId}
+                    placeholder="Select vendor"
+                    searchPlaceholder="Search vendors..."
+                    emptyMessage="No vendors found."
+                  />
                 </div>
 
                 <div className="space-y-1.5">
