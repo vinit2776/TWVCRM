@@ -45,7 +45,7 @@ export default function AssetQRPrintPage({ params }: { params: Promise<{ id: str
       <style>{`
         @media print {
           @page { margin: 0; size: A4 portrait; }
-          aside, header, [data-print-hide] { display: none !important; }
+          aside, header, nav, [data-print-hide] { display: none !important; }
           html, body { overflow: visible !important; background: white !important; }
           body > div { overflow: visible !important; display: block !important; height: auto !important; }
           body > div > div { overflow: visible !important; display: block !important; height: auto !important; }
