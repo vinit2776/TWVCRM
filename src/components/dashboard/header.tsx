@@ -97,7 +97,7 @@ export function Header() {
                 )}
               </div>
               <Avatar className="h-8 w-8">
-                <AvatarFallback className="text-xs">
+                <AvatarFallback className="text-xs bg-primary text-primary-foreground">
                   {getInitials(userName || "U")}
                 </AvatarFallback>
               </Avatar>
