@@ -17,7 +17,7 @@ import {
   PO_ADVANCE_PAYMENT_MODE_LABELS,
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
-import type { ProcurementVendor, ProcurementItem } from "@/types";
+import type { ProcurementVendor, ProcurementItem, FacilityAsset } from "@/types";
 
 function addMonths(dateStr: string, months: number): string {
   const d = new Date(dateStr);
@@ -40,6 +40,7 @@ function NewServicePOForm() {
 
   const [vendors, setVendors] = useState<ProcurementVendor[]>([]);
   const [serviceItems, setServiceItems] = useState<ProcurementItem[]>([]);
+  const [assets, setAssets] = useState<FacilityAsset[]>([]);
 
   const [vendorId, setVendorId] = useState("");
   const [itemId, setItemId] = useState("");
@@ -74,6 +75,7 @@ function NewServicePOForm() {
   const [amcContactName, setAmcContactName] = useState("");
   const [amcHelpline, setAmcHelpline] = useState("");
   const [amcContactEmail, setAmcContactEmail] = useState("");
+  const [linkedAssetId, setLinkedAssetId] = useState("");
 
   const fetchVendors = useCallback(async () => {
     const res = await fetch("/api/procurement/vendors?limit=100");
@@ -90,11 +92,17 @@ function NewServicePOForm() {
     if (res.ok) { const j = await res.json(); setLocations(j.data ?? []); }
   }, []);
 
+  const fetchAssets = useCallback(async () => {
+    const res = await fetch("/api/facility/assets?status=active");
+    if (res.ok) { const j = await res.json(); setAssets(j.data ?? []); }
+  }, []);
+
   useEffect(() => {
     fetchVendors();
     fetchServiceItems();
     fetchLocations();
-  }, [fetchVendors, fetchServiceItems, fetchLocations]);
+    fetchAssets();
+  }, [fetchVendors, fetchServiceItems, fetchLocations, fetchAssets]);
 
   const selectedItem = serviceItems.find((i) => i.id === itemId);
   const serviceItemName = selectedItem?.name ?? customName;
@@ -177,6 +185,7 @@ function NewServicePOForm() {
             amc_contact_name: amcContactName || undefined,
             amc_helpline_number: amcHelpline || undefined,
             amc_contact_email: amcContactEmail || undefined,
+            linked_asset_id: linkedAssetId || undefined,
           } : {}),
         }),
       });
@@ -496,6 +505,26 @@ function NewServicePOForm() {
                       </label>
                     </div>
                     <p className="text-xs text-muted-foreground">How many visits / support calls does this AMC cover in total?</p>
+                  </div>
+
+                  {/* Linked asset */}
+                  <div className="space-y-1.5">
+                    <Label>Asset Covered by this AMC</Label>
+                    <Select
+                      value={linkedAssetId || "_none"}
+                      onValueChange={(v) => setLinkedAssetId(v === "_none" ? "" : v)}
+                    >
+                      <SelectTrigger><SelectValue placeholder="Select asset (optional)" /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="_none">— No specific asset —</SelectItem>
+                        {assets.map((a) => (
+                          <SelectItem key={a.id} value={a.id}>
+                            {a.name}{a.asset_code ? ` (${a.asset_code})` : ""}{a.location ? ` — ${(a.location as { name: string }).name}` : ""}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <p className="text-xs text-muted-foreground">Link this AMC to the asset it covers, if applicable.</p>
                   </div>
 
                   {/* Contact details */}

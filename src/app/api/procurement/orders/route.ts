@@ -65,6 +65,7 @@ const createServicePoSchema = z.object({
   amc_contact_name: z.string().nullish(),
   amc_helpline_number: z.string().nullish(),
   amc_contact_email: z.string().email().nullish().or(z.literal("").transform(() => null)),
+  linked_asset_id: z.string().uuid().nullish(),
 }).merge(advancePaymentSchema);
 
 function generatePoNumber(count: number): string {
@@ -353,6 +354,7 @@ export async function POST(request: NextRequest) {
         amc_helpline_number: parsed.data.amc_helpline_number ?? null,
         amc_contact_email: parsed.data.amc_contact_email ?? null,
         amc_status: amcStatus,
+        linked_asset_id: parsed.data.linked_asset_id ?? null,
         advance_status: hasAdvance ? "pending" : "not_required",
       })
       .select("id, po_number")

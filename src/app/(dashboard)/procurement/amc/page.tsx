@@ -6,7 +6,8 @@ import Link from "next/link";
 import {
   ClipboardList, Phone, Mail, AlertTriangle, CheckCircle2,
   XCircle, Clock, Loader2, Search, ChevronRight, RefreshCw,
-  CalendarDays, Wrench, IndianRupee, Settings,
+  CalendarDays, Wrench, IndianRupee, Settings, ChevronDown, ChevronUp,
+  Zap, ShieldCheck, Headphones, Star, User,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -16,6 +17,18 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import type { AmcStatus } from "@/types";
+
+interface ServiceEvent {
+  id: string;
+  event_number: number;
+  event_type: "breakdown" | "preventive" | "remote_support" | "annual_service";
+  event_date: string;
+  technician_name: string | null;
+  issue_description: string;
+  resolution_notes: string | null;
+  is_confirmed: boolean;
+  logger: { id: string; full_name: string } | null;
+}
 
 interface AmcRow {
   id: string;
@@ -37,6 +50,27 @@ interface AmcRow {
   purchase_order_items: Array<{ id: string; item_name: string; unit: string }>;
   linked_asset: { id: string; name: string; asset_code: string } | null;
 }
+
+const EVENT_TYPE_LABEL: Record<ServiceEvent["event_type"], string> = {
+  breakdown:      "Breakdown",
+  preventive:     "Preventive",
+  remote_support: "Remote Support",
+  annual_service: "Annual Service",
+};
+
+const EVENT_TYPE_BADGE: Record<ServiceEvent["event_type"], string> = {
+  breakdown:      "bg-red-100 text-red-700",
+  preventive:     "bg-green-100 text-green-700",
+  remote_support: "bg-blue-100 text-blue-700",
+  annual_service: "bg-purple-100 text-purple-700",
+};
+
+const EVENT_TYPE_ICON: Record<ServiceEvent["event_type"], React.ReactNode> = {
+  breakdown:      <Zap className="h-3 w-3" />,
+  preventive:     <ShieldCheck className="h-3 w-3" />,
+  remote_support: <Headphones className="h-3 w-3" />,
+  annual_service: <Star className="h-3 w-3" />,
+};
 
 const AMC_STATUS_LABELS: Record<AmcStatus, string> = {
   inactive: "Inactive",
@@ -112,6 +146,29 @@ export default function AmcRegisterPage() {
   const [loading, setLoading] = useState(true);
   const [statusFilter, setStatusFilter] = useState<AmcStatus | "all">("all");
   const [search, setSearch] = useState("");
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [eventsCache, setEventsCache] = useState<Map<string, ServiceEvent[]>>(new Map());
+  const [eventsLoading, setEventsLoading] = useState<Set<string>>(new Set());
+
+  const toggleEvents = useCallback(async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (expandedIds.has(id)) {
+      setExpandedIds((prev) => { const n = new Set(prev); n.delete(id); return n; });
+      return;
+    }
+    setExpandedIds((prev) => new Set(prev).add(id));
+    if (eventsCache.has(id)) return;
+    setEventsLoading((prev) => new Set(prev).add(id));
+    try {
+      const res = await fetch(`/api/procurement/amc/${id}/events`);
+      const json = await res.json();
+      setEventsCache((prev) => new Map(prev).set(id, json.data ?? []));
+    } catch {
+      toast.error("Failed to load events");
+    } finally {
+      setEventsLoading((prev) => { const n = new Set(prev); n.delete(id); return n; });
+    }
+  }, [expandedIds, eventsCache]);
 
   const fetchAmc = useCallback(async () => {
     setLoading(true);
@@ -415,17 +472,79 @@ export default function AmcRegisterPage() {
                   )}
                 </div>
 
-                {/* Footer: view detail link */}
+                {/* Footer: toggle events + view detail link */}
                 <div className="border-t px-4 py-2 flex items-center justify-between text-xs text-muted-foreground">
-                  <span>
+                  <button
+                    className="flex items-center gap-1.5 hover:text-foreground transition-colors"
+                    onClick={(e) => toggleEvents(row.id, e)}
+                  >
+                    {eventsLoading.has(row.id) ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : expandedIds.has(row.id) ? (
+                      <ChevronUp className="h-3.5 w-3.5" />
+                    ) : (
+                      <ChevronDown className="h-3.5 w-3.5" />
+                    )}
                     {row.amc_visits_used > 0
-                      ? `${row.amc_visits_used} service event${row.amc_visits_used !== 1 ? "s" : ""} logged`
-                      : "No service events yet"}
-                  </span>
-                  <span className="flex items-center gap-1 text-primary font-medium">
+                      ? `${row.amc_visits_used} event${row.amc_visits_used !== 1 ? "s" : ""} logged`
+                      : "No events yet"}
+                  </button>
+                  <Link
+                    href={`/procurement/orders/${row.id}`}
+                    className="flex items-center gap-1 text-primary font-medium hover:underline"
+                    onClick={(e) => e.stopPropagation()}
+                  >
                     View & Log Events <ChevronRight className="h-3.5 w-3.5" />
-                  </span>
+                  </Link>
                 </div>
+
+                {/* Expandable events panel */}
+                {expandedIds.has(row.id) && (
+                  <div className="border-t bg-muted/30 px-4 py-3" onClick={(e) => e.stopPropagation()}>
+                    {eventsLoading.has(row.id) ? (
+                      <div className="flex items-center justify-center py-4">
+                        <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+                      </div>
+                    ) : (eventsCache.get(row.id) ?? []).length === 0 ? (
+                      <p className="text-xs text-muted-foreground text-center py-3">
+                        No events logged for this AMC yet.
+                      </p>
+                    ) : (
+                      <div className="space-y-2">
+                        {(eventsCache.get(row.id) ?? []).map((ev) => (
+                          <div key={ev.id} className="flex items-start gap-3 text-xs">
+                            {/* type badge */}
+                            <span className={`inline-flex items-center gap-1 shrink-0 px-1.5 py-0.5 rounded font-medium ${EVENT_TYPE_BADGE[ev.event_type]}`}>
+                              {EVENT_TYPE_ICON[ev.event_type]}
+                              {EVENT_TYPE_LABEL[ev.event_type]}
+                            </span>
+                            {/* date */}
+                            <span className="shrink-0 text-muted-foreground pt-0.5">{formatDate(ev.event_date)}</span>
+                            {/* description */}
+                            <div className="flex-1 min-w-0">
+                              <p className="text-foreground line-clamp-1">{ev.issue_description}</p>
+                              {ev.resolution_notes && (
+                                <p className="text-muted-foreground line-clamp-1 mt-0.5">↳ {ev.resolution_notes}</p>
+                              )}
+                            </div>
+                            {/* technician / logger */}
+                            <span className="shrink-0 flex items-center gap-1 text-muted-foreground pt-0.5">
+                              <User className="h-3 w-3" />
+                              {ev.technician_name ?? ev.logger?.full_name ?? "—"}
+                            </span>
+                            {/* confirmed badge */}
+                            {ev.is_confirmed && (
+                              <span className="shrink-0 inline-flex items-center gap-0.5 text-green-600 pt-0.5">
+                                <CheckCircle2 className="h-3 w-3" />
+                                Confirmed
+                              </span>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             );
           })}
