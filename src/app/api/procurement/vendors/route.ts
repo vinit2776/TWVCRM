@@ -41,7 +41,10 @@ export async function GET(request: NextRequest) {
 
   if (!includeInactive) query = query.eq("is_active", true);
   if (category) query = query.eq("category", category);
-  if (search?.trim()) query = query.ilike("name", `%${search.trim()}%`);
+  if (search?.trim()) {
+    const term = search.trim();
+    query = query.or(`name.ilike.%${term}%,contact_name.ilike.%${term}%`);
+  }
 
   const { data, error, count } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
