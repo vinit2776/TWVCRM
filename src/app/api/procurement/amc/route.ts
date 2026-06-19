@@ -44,7 +44,8 @@ export async function GET(request: NextRequest) {
       locations(id, name),
       purchase_requests(id, pr_number, department, expenditure_type),
       purchase_order_items(id, item_name, unit),
-      vendor_bills(id, payment_status)
+      vendor_bills(id, payment_status),
+      linked_asset:facility_assets!purchase_orders_linked_asset_id_fkey(id, name, asset_code)
     `)
     .eq("po_type", "service")
     .order("created_at", { ascending: false });

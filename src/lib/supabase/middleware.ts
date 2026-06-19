@@ -17,7 +17,8 @@ export async function updateSession(request: NextRequest) {
     pathname.startsWith("/feedback") ||
     pathname.startsWith("/pay") ||
     pathname.startsWith("/verify") ||
-    pathname === "/offline";
+    pathname === "/offline" ||
+    pathname.startsWith("/asset");
 
   if (isApiRoute || isPublicRoute) {
     // Still need to return the supabaseResponse so cookie mutations propagate

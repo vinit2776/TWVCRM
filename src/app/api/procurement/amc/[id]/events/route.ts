@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 
@@ -11,6 +11,7 @@ const createEventSchema = z.object({
   resolution_notes: z.string().optional(),
   next_scheduled_date: z.string().optional(),
   report_file_url: z.string().url().optional().or(z.literal("")),
+  asset_id: z.string().uuid().optional().nullable(),
 });
 
 /**
@@ -43,7 +44,10 @@ export async function GET(
     .from("amc_service_events")
     .select(`
       *,
-      logger:users!amc_service_events_logged_by_fkey(id, full_name)
+      logger:users!amc_service_events_logged_by_fkey(id, full_name),
+      confirmer:users!amc_service_events_confirmed_by_fkey(id, full_name),
+      asset:facility_assets!amc_service_events_asset_id_fkey(id, name, asset_code),
+      checklist:amc_event_checklist_items(id, checked)
     `)
     .eq("po_id", poId)
     .order("event_number", { ascending: false });
@@ -112,12 +116,48 @@ export async function POST(
       resolution_notes: parsed.data.resolution_notes ?? null,
       next_scheduled_date: parsed.data.next_scheduled_date ?? null,
       report_file_url: parsed.data.report_file_url || null,
+      asset_id: parsed.data.asset_id || null,
       logged_by: dbUser.id,
     })
     .select("id, event_number")
     .single();
 
   if (insertError) return NextResponse.json({ error: insertError.message }, { status: 500 });
+
+  // Seed checklist from templates if the linked asset has a category
+  if (parsed.data.asset_id) {
+    try {
+      const admin = createAdminClient();
+      const { data: asset } = await admin
+        .from("facility_assets")
+        .select("category_id")
+        .eq("id", parsed.data.asset_id)
+        .single();
+
+      if (asset?.category_id) {
+        const { data: templates } = await admin
+          .from("facility_checklist_templates")
+          .select("label, sort_order")
+          .eq("category_id", asset.category_id)
+          .eq("is_active", true)
+          .or(`event_type.is.null,event_type.eq.${parsed.data.event_type}`)
+          .order("sort_order", { ascending: true });
+
+        if (templates && templates.length > 0) {
+          await admin.from("amc_event_checklist_items").insert(
+            templates.map(t => ({
+              event_id: event.id,
+              label: t.label,
+              checked: false,
+              is_custom: false,
+            }))
+          );
+        }
+      }
+    } catch {
+      // Non-blocking — checklist seeding failure shouldn't block event creation
+    }
+  }
 
   // Increment visits_used on the PO
   const newVisitsUsed = visitsUsed + 1;

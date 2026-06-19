@@ -35,6 +35,7 @@ interface AmcRow {
   locations: { id: string; name: string } | null;
   purchase_requests: { id: string; pr_number: string; department: string; expenditure_type: string } | null;
   purchase_order_items: Array<{ id: string; item_name: string; unit: string }>;
+  linked_asset: { id: string; name: string; asset_code: string } | null;
 }
 
 const AMC_STATUS_LABELS: Record<AmcStatus, string> = {
@@ -337,6 +338,19 @@ export default function AmcRegisterPage() {
                           <>
                             <span>·</span>
                             <span className="capitalize">{row.purchase_requests.department}</span>
+                          </>
+                        )}
+                        {row.linked_asset && (
+                          <>
+                            <span>·</span>
+                            <Link
+                              href={`/facility/assets/${row.linked_asset.id}`}
+                              className="inline-flex items-center gap-1 text-primary hover:underline"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <span className="font-mono">{row.linked_asset.asset_code}</span>
+                              <span>{row.linked_asset.name}</span>
+                            </Link>
                           </>
                         )}
                       </div>

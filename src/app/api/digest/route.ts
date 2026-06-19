@@ -63,13 +63,19 @@ export async function GET(request: Request) {
     fetchMetricsRange(supabase, weekStart, todayIST),
   ]);
 
+  // Yesterday in IST
+  const yesterdayDate = new Date(todayDate.getTime() - 86400000);
+  const yesterdayIST = yesterdayDate.toISOString().slice(0, 10);
+
   // Today-only: location breakdown, attention items, portfolio snapshot, extended data
-  const [locations, attention, portfolio, extended, receivables] = await Promise.all([
+  const [locations, attention, portfolio, extended, receivables, yesterday, yesterdayLocations] = await Promise.all([
     fetchLocationBreakdown(supabase, todayIST),
     fetchAttentionItems(supabase, todayIST),
     fetchPortfolio(supabase),
     fetchExtended(supabase, todayIST),
     fetchReceivablesAging(supabase, todayIST),
+    fetchMetrics(supabase, yesterdayIST),
+    fetchLocationBreakdown(supabase, yesterdayIST),
   ]);
 
   // Build and send email
@@ -81,7 +87,7 @@ export async function GET(request: Request) {
     year: "numeric",
   });
 
-  const html = buildDigestHtml(dateLabel, todayIST, weekStart, today, lw, ly, wtd, locations, attention, portfolio, extended, receivables);
+  const html = buildDigestHtml(dateLabel, todayIST, weekStart, yesterday, yesterdayIST, yesterdayLocations, today, lw, ly, wtd, locations, attention, portfolio, extended, receivables);
 
   let sent = 0;
   for (const email of recipients) {
@@ -845,12 +851,15 @@ function buildReceivablesAgingHtml(aging: ReceivablesAging): string {
       </div>`
     : "";
 
+  const viewLink = `<a href="https://twv-crm.vercel.app/billing" style="font-size:11px;color:#015E65;text-decoration:none;font-weight:600;">View Open Receivables →</a>`;
+
   // If no finalized statements at all, just show the pending banner with no aging table
   if (aging.count === 0) {
     return `
       <div style="border:1px solid #fef08a;border-radius:8px;overflow:hidden;margin-bottom:24px;">
-        <div style="background:#fefce8;padding:12px 16px;border-bottom:1px solid #fef08a;">
+        <div style="background:#fefce8;padding:12px 16px;border-bottom:1px solid #fef08a;display:flex;justify-content:space-between;align-items:center;">
           <span style="font-size:12px;font-weight:700;color:#713f12;text-transform:uppercase;letter-spacing:0.5px;">Receivables</span>
+          ${viewLink}
         </div>
         ${pendingHtml}
       </div>`;
@@ -880,6 +889,10 @@ function buildReceivablesAgingHtml(aging: ReceivablesAging): string {
           ${agingCell("Critical", "90+ days", aging.d90plus, aging.d90plus.count > 0 ? "#fff5f5" : "#fafafa", aging.d90plus.count > 0 ? "#c53030" : "#aaa", aging.d90plus.count > 0 ? "#feb2b2" : "#e5e7eb", true)}
         </tr>
       </table>
+      <!-- Footer link -->
+      <div style="background:#f9fafb;padding:10px 16px;border-top:1px solid ${headerBorder};text-align:right;">
+        ${viewLink}
+      </div>
     </div>`;
 }
 
@@ -909,6 +922,9 @@ function buildDigestHtml(
   dateLabel: string,
   todayIST: string,
   weekStart: string,
+  yesterday: Metrics,
+  yesterdayIST: string,
+  yesterdayLocations: LocationRow[],
   today: Metrics,
   lw: Metrics,
   ly: Metrics,
@@ -920,6 +936,34 @@ function buildDigestHtml(
   receivables: ReceivablesAging
 ): string {
   const revenueToday = today.collections + today.bookingRevenue;
+  const revenueYesterday = yesterday.collections + yesterday.bookingRevenue;
+
+  // ── Yesterday's Collections ───────────────────────────────────────────────
+  const yesterdayLabel = new Date(yesterdayIST + "T00:00:00").toLocaleDateString("en-IN", {
+    timeZone: "Asia/Kolkata", weekday: "short", day: "numeric", month: "short",
+  });
+  const activeYesterdayLocations = yesterdayLocations.filter(l => l.collections > 0 || l.bookings > 0);
+  const yesterdayHtml = `
+    <div style="background:#f0faf5;border:1px solid #d1fae5;border-radius:8px;padding:14px 18px;margin-bottom:24px;">
+      <p style="margin:0 0 10px;font-size:11px;font-weight:700;color:#015E65;text-transform:uppercase;letter-spacing:0.4px;">
+        Yesterday's Collections &nbsp;·&nbsp; ${yesterdayLabel}
+      </p>
+      <table style="width:100%;border-collapse:collapse;">
+        <tr>
+          <td style="padding:0 12px 0 0;">
+            <p style="margin:0;font-size:22px;font-weight:700;color:#015E65;">${revenueYesterday > 0 ? rupees(revenueYesterday) : "—"}</p>
+            <p style="margin:2px 0 0;font-size:10px;color:#888;">Total (contract ${rupees(yesterday.collections)} + bookings ${rupees(yesterday.bookingRevenue)})</p>
+          </td>
+          ${activeYesterdayLocations.length > 0 ? `
+          <td style="padding-left:16px;border-left:1px solid #d1fae5;">
+            ${activeYesterdayLocations.map(l => `
+              <span style="display:inline-block;margin:2px 8px 2px 0;font-size:12px;color:#015E65;">
+                <strong>${l.name}</strong> ${rupees(l.collections)}
+              </span>`).join("")}
+          </td>` : ""}
+        </tr>
+      </table>
+    </div>`;
 
   // ── KPI row ──────────────────────────────────────────────────────────────
   const stuckCount = extended.stuckProposals.length + extended.stuckNegotiations.length;
@@ -1152,6 +1196,9 @@ function buildDigestHtml(
   </div>
 
   <div style="padding:28px 32px;">
+
+    <!-- Yesterday's Collections -->
+    ${yesterdayHtml}
 
     <!-- KPI Snapshot -->
     ${kpiHtml}

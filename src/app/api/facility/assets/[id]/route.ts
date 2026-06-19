@@ -58,6 +58,8 @@ export async function PUT(
     "floor_id", "space_unit_id", "category_id", "name", "asset_code",
     "make", "model", "serial_number", "mac_address", "ip_address",
     "purchase_date", "warranty_expiry", "vendor", "status",
+    "lifecycle_stage", "installation_date", "commissioned_at", "commissioned_by",
+    "custom_field_values", "procurement_po_id",
     "location_notes", "notes", "sort_order",
   ];
   for (const f of allowed) if (f in body) updates[f] = body[f];

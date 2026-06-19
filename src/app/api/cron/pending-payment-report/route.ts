@@ -95,6 +95,38 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ skipped: "No active admin/manager/accounts users found" });
   }
 
+  // ── 1b. Yesterday's collections ───────────────────────────────────────────────
+  const yesterdayIST = new Date(new Date(todayIST + "T00:00:00Z").getTime() - 86_400_000)
+    .toISOString().slice(0, 10);
+
+  const { data: yesterdayPayments } = await admin
+    .from("contract_payments")
+    .select(`
+      amount, payment_date, payment_mode, reference_number,
+      contract:contracts!contract_payments_contract_id_fkey(
+        contract_number,
+        lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
+      )
+    `)
+    .eq("status", "verified")
+    .eq("payment_date", yesterdayIST)
+    .order("amount", { ascending: false });
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const ydayRows = (yesterdayPayments || []).map((p: any) => {
+    const lead = p.contract?.lead;
+    const name = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "—";
+    return {
+      customerName: name,
+      company: lead?.company || null,
+      contractNumber: p.contract?.contract_number || "—",
+      amount: Number(p.amount || 0),
+      mode: p.payment_mode || "—",
+      reference: p.reference_number || null,
+    };
+  });
+  const ydayTotal = ydayRows.reduce((s: number, r: { amount: number }) => s + r.amount, 0);
+
   // ── 2. Unpaid statements ─────────────────────────────────────────────────────
   const { data: statements, error: stmtErr } = await admin
     .from("billing_statements")
@@ -345,6 +377,41 @@ export async function GET(request: NextRequest) {
     </div>` : ""}
   </div>
 
+  <!-- Yesterday's collections -->
+  ${ydayRows.length > 0 ? `
+  <div style="padding:20px 32px;border-bottom:1px solid #f3f4f6;">
+    <h2 style="font-size:13px;font-weight:700;color:#065f46;margin:0 0 4px;text-transform:uppercase;letter-spacing:.5px;">
+      ✅ Collected Yesterday · ${fmtDate(yesterdayIST)}
+    </h2>
+    <p style="font-size:20px;font-weight:800;color:#015E65;margin:0 0 12px;">${fmtCurrency(ydayTotal)}</p>
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <tr style="background:#f0fdf4;">
+        <th style="padding:8px 12px;text-align:left;font-size:11px;color:#065f46;font-weight:600;text-transform:uppercase;">Customer</th>
+        <th style="padding:8px 12px;text-align:left;font-size:11px;color:#065f46;font-weight:600;text-transform:uppercase;">Contract</th>
+        <th style="padding:8px 12px;text-align:right;font-size:11px;color:#065f46;font-weight:600;text-transform:uppercase;">Amount</th>
+        <th style="padding:8px 12px;text-align:left;font-size:11px;color:#065f46;font-weight:600;text-transform:uppercase;">Mode</th>
+      </tr>
+      ${ydayRows.map((r: { customerName: string; company: string | null; contractNumber: string; amount: number; mode: string; reference: string | null }) => `
+      <tr style="border-bottom:1px solid #ecfdf5;">
+        <td style="padding:8px 12px;color:#111827;">
+          <div style="font-weight:600;">${r.customerName}</div>
+          ${r.company ? `<div style="color:#6b7280;font-size:11px;">${r.company}</div>` : ""}
+        </td>
+        <td style="padding:8px 12px;color:#374151;">${r.contractNumber}</td>
+        <td style="padding:8px 12px;text-align:right;font-weight:600;color:#065f46;">${fmtCurrency(r.amount)}</td>
+        <td style="padding:8px 12px;color:#6b7280;">${r.mode}${r.reference ? ` · ${r.reference}` : ""}</td>
+      </tr>`).join("")}
+      <tr style="background:#f0fdf4;">
+        <td colspan="2" style="padding:8px 12px;font-weight:600;color:#065f46;font-size:12px;">Total Collected</td>
+        <td style="padding:8px 12px;text-align:right;font-weight:700;color:#065f46;font-size:13px;">${fmtCurrency(ydayTotal)}</td>
+        <td></td>
+      </tr>
+    </table>
+  </div>` : `
+  <div style="padding:16px 32px;border-bottom:1px solid #f3f4f6;background:#f9fafb;">
+    <p style="font-size:13px;color:#6b7280;margin:0;">No collections recorded yesterday (${fmtDate(yesterdayIST)})</p>
+  </div>`}
+
   <!-- Aging breakdown -->
   <div style="padding:20px 32px;border-bottom:1px solid #f3f4f6;">
     <h2 style="font-size:13px;font-weight:700;color:#374151;margin:0 0 12px;text-transform:uppercase;letter-spacing:.5px;">Aging Breakdown</h2>
@@ -389,7 +456,7 @@ export async function GET(request: NextRequest) {
   <!-- CTA -->
   <div style="padding:24px 32px;text-align:center;border-top:1px solid #f3f4f6;margin-top:20px;">
     <p style="color:#6b7280;font-size:13px;margin:0 0 14px;">Review all outstanding invoices and log payments or send manual reminders from the Receivables page.</p>
-    <a href="${APP_URL}/accounting?tab=receivables" style="display:inline-block;background:#015E65;color:#fff;text-decoration:none;padding:10px 24px;border-radius:6px;font-size:13px;font-weight:600;">Open Receivables →</a>
+    <a href="${APP_URL}/billing" style="display:inline-block;background:#015E65;color:#fff;text-decoration:none;padding:10px 24px;border-radius:6px;font-size:13px;font-weight:600;">Open Receivables →</a>
   </div>
 
   <!-- Footer -->

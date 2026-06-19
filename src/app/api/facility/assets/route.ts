@@ -83,6 +83,8 @@ export async function POST(request: NextRequest) {
     location_id, floor_id, space_unit_id, category_id,
     name, asset_code, make, model, serial_number, mac_address, ip_address,
     purchase_date, warranty_expiry, vendor, status = "active",
+    lifecycle_stage = "operational", installation_date,
+    custom_field_values, procurement_po_id,
     location_notes, notes, sort_order = 0,
   } = body;
 
@@ -105,6 +107,10 @@ export async function POST(request: NextRequest) {
       warranty_expiry: warranty_expiry || null,
       vendor: vendor || null,
       status,
+      lifecycle_stage: lifecycle_stage || "operational",
+      installation_date: installation_date || null,
+      custom_field_values: custom_field_values || {},
+      procurement_po_id: procurement_po_id || null,
       location_notes: location_notes || null,
       notes: notes || null,
       sort_order: Number(sort_order),

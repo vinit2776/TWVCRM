@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { Loader2, Paperclip, X, FileText, AlertTriangle } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,18 +26,21 @@ const EVENT_TYPE_LABELS: Record<AmcEventType, string> = {
 const ACCEPTED_FILE_TYPES = ["application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024;
 
+interface AssetOption { id: string; name: string; asset_code: string }
+
 interface Props {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   poId: string;
-  eventNumber: number;         // next event number (for the dialog title)
-  visitsCovered: number | null;// null = unlimited
+  eventNumber: number;
+  visitsCovered: number | null;
   visitsUsed: number;
+  defaultAssetId?: string | null;
   onSuccess: () => void;
 }
 
 export function AmcEventDialog({
-  open, onOpenChange, poId, eventNumber, visitsCovered, visitsUsed, onSuccess
+  open, onOpenChange, poId, eventNumber, visitsCovered, visitsUsed, defaultAssetId, onSuccess
 }: Props) {
   const [eventType, setEventType] = useState<AmcEventType>("breakdown");
   const [eventDate, setEventDate] = useState(new Date().toISOString().split("T")[0]);
@@ -45,9 +48,19 @@ export function AmcEventDialog({
   const [issueDescription, setIssueDescription] = useState("");
   const [resolutionNotes, setResolutionNotes] = useState("");
   const [nextScheduledDate, setNextScheduledDate] = useState("");
+  const [assetId, setAssetId] = useState<string>(defaultAssetId || "");
+  const [assets, setAssets] = useState<AssetOption[]>([]);
   const [reportFile, setReportFile] = useState<File | null>(null);
   const [uploading, setUploading] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (!open) return;
+    fetch("/api/facility/assets?status=active")
+      .then((r) => r.json())
+      .then((j) => setAssets((j.data || []).map((a: AssetOption) => ({ id: a.id, name: a.name, asset_code: a.asset_code }))));
+    setAssetId(defaultAssetId || "");
+  }, [open, defaultAssetId]);
 
   const atLimit = visitsCovered !== null && visitsUsed >= visitsCovered;
 
@@ -58,6 +71,7 @@ export function AmcEventDialog({
     setIssueDescription("");
     setResolutionNotes("");
     setNextScheduledDate("");
+    setAssetId(defaultAssetId || "");
     setReportFile(null);
   }
 
@@ -96,6 +110,7 @@ export function AmcEventDialog({
           resolution_notes: resolutionNotes || undefined,
           next_scheduled_date: nextScheduledDate || undefined,
           report_file_url: reportFileUrl,
+          asset_id: assetId || null,
         }),
       });
 
@@ -161,6 +176,23 @@ export function AmcEventDialog({
               </SelectContent>
             </Select>
           </div>
+
+          {/* Asset */}
+          {assets.length > 0 && (
+            <div className="space-y-1.5">
+              <Label>Asset</Label>
+              <select
+                value={assetId}
+                onChange={(e) => setAssetId(e.target.value)}
+                className="w-full h-9 px-2 rounded-md border bg-background text-sm"
+              >
+                <option value="">— No specific asset —</option>
+                {assets.map((a) => (
+                  <option key={a.id} value={a.id}>{a.asset_code} — {a.name}</option>
+                ))}
+              </select>
+            </div>
+          )}
 
           {/* Date + Technician */}
           <div className="grid grid-cols-2 gap-3">

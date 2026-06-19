@@ -1,11 +1,6 @@
 "use client";
 
-/**
- * Add / edit a facility asset (UDM, switch, AP, etc.) at a location.
- * Compact single-screen dialog — no wizard needed because the data is short.
- */
-
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
@@ -14,10 +9,19 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
-import type { FacilityAsset, FacilityAssetCategory } from "@/types";
+import type { FacilityAsset, FacilityAssetCategory, FacilityLifecycleStage, CategoryCustomField } from "@/types";
 
 interface Location { id: string; name: string }
 interface Floor { id: string; name: string; floor_number?: number | null }
+
+const LIFECYCLE_OPTIONS: { value: FacilityLifecycleStage; label: string }[] = [
+  { value: "procured", label: "Procured" },
+  { value: "installed", label: "Installed" },
+  { value: "testing_commissioning", label: "Testing & Commissioning" },
+  { value: "operational", label: "Operational" },
+  { value: "under_amc", label: "Under AMC" },
+  { value: "decommissioned", label: "Decommissioned" },
+];
 
 interface Props {
   open: boolean;
@@ -40,15 +44,28 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
     make: "", model: "", serial_number: "", mac_address: "", ip_address: "",
     purchase_date: "", warranty_expiry: "", vendor: "",
     status: "active" as "active" | "maintenance" | "retired",
+    lifecycle_stage: "operational" as FacilityLifecycleStage,
+    installation_date: "",
     location_notes: "", notes: "",
   });
+  const [customValues, setCustomValues] = useState<Record<string, unknown>>({});
   const [busy, setBusy] = useState(false);
+
+  const selectedCategory = useMemo(
+    () => categories.find((c) => c.id === form.category_id),
+    [categories, form.category_id],
+  );
+
+  const customFields: CategoryCustomField[] = useMemo(
+    () => (selectedCategory?.custom_field_schema as CategoryCustomField[] | undefined) || [],
+    [selectedCategory],
+  );
 
   useEffect(() => {
     if (!open) return;
     Promise.all([
       fetch("/api/locations?is_active=true").then((r) => r.json()),
-      fetch("/api/facility/categories?scope=it").then((r) => r.json()),
+      fetch("/api/facility/categories").then((r) => r.json()),
     ]).then(([loc, cat]) => {
       setLocations(loc.data || []);
       setCategories(cat.data || []);
@@ -68,9 +85,12 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       warranty_expiry: asset?.warranty_expiry?.slice(0, 10) || "",
       vendor: asset?.vendor || "",
       status: (asset?.status || "active") as "active" | "maintenance" | "retired",
+      lifecycle_stage: (asset?.lifecycle_stage || "operational") as FacilityLifecycleStage,
+      installation_date: asset?.installation_date?.slice(0, 10) || "",
       location_notes: asset?.location_notes || "",
       notes: asset?.notes || "",
     });
+    setCustomValues((asset?.custom_field_values as Record<string, unknown>) || {});
   }, [open, asset, defaultLocationId]);
 
   useEffect(() => {
@@ -80,7 +100,6 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       .then((j) => setFloors(j.data || []));
   }, [form.location_id]);
 
-  // Auto-suggest asset code when category + location chosen
   useEffect(() => {
     if (isEdit || form.asset_code) return;
     if (!form.category_id || !form.location_id) return;
@@ -97,6 +116,12 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       toast.error("Location, category, name and asset code are required");
       return;
     }
+    for (const f of customFields) {
+      if (f.required && !customValues[f.key]) {
+        toast.error(`${f.label} is required`);
+        return;
+      }
+    }
     setBusy(true);
     try {
       const url = isEdit ? `/api/facility/assets/${asset!.id}` : "/api/facility/assets";
@@ -108,6 +133,8 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
           ...form,
           purchase_date: form.purchase_date || null,
           warranty_expiry: form.warranty_expiry || null,
+          installation_date: form.installation_date || null,
+          custom_field_values: customValues,
         }),
       });
       const json = await res.json();
@@ -127,9 +154,10 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       <DialogContent className="max-w-lg">
         <DialogHeader>
           <DialogTitle>{isEdit ? "Edit asset" : "Add asset"}</DialogTitle>
-          <DialogDescription>Track this device so issues can be linked to it for analytics.</DialogDescription>
+          <DialogDescription>Register a facility asset so issues and AMC visits can be tracked against it.</DialogDescription>
         </DialogHeader>
-        <div className="space-y-3 max-h-[65vh] overflow-y-auto">
+        <div className="space-y-3 max-h-[65vh] overflow-y-auto pr-1">
+          {/* Location + Floor */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className="text-xs">Location *</Label>
@@ -156,22 +184,33 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
             </div>
           </div>
 
+          {/* Category — grouped by scope */}
           <div>
             <Label className="text-xs">Category *</Label>
             <select
               value={form.category_id}
-              onChange={(e) => setForm({ ...form, category_id: e.target.value })}
+              onChange={(e) => { setForm({ ...form, category_id: e.target.value }); setCustomValues({}); }}
               className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm"
             >
               <option value="">— Select —</option>
-              {categories.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+              {Object.entries(
+                categories.reduce<Record<string, FacilityAssetCategory[]>>((acc, c) => {
+                  (acc[c.scope] ||= []).push(c);
+                  return acc;
+                }, {}),
+              ).map(([scope, cats]) => (
+                <optgroup key={scope} label={scope.toUpperCase()}>
+                  {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </optgroup>
+              ))}
             </select>
           </div>
 
+          {/* Name + Code */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
             <div>
               <Label className="text-xs">Name *</Label>
-              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. UDM-Pro Andheri Main" className="mt-1" />
+              <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Split AC Conference Room" className="mt-1" />
             </div>
             <div>
               <Label className="text-xs">Asset code *</Label>
@@ -179,6 +218,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
             </div>
           </div>
 
+          {/* Make + Model */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs">Make</Label>
@@ -190,6 +230,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
             </div>
           </div>
 
+          {/* Serial + MAC */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs">Serial number</Label>
@@ -201,6 +242,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
             </div>
           </div>
 
+          {/* IP + Vendor */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs">IP address</Label>
@@ -212,6 +254,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
             </div>
           </div>
 
+          {/* Purchase + Warranty */}
           <div className="grid grid-cols-2 gap-3">
             <div>
               <Label className="text-xs">Purchase date</Label>
@@ -223,6 +266,25 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
             </div>
           </div>
 
+          {/* Installation date + Lifecycle */}
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <Label className="text-xs">Installation date</Label>
+              <Input type="date" value={form.installation_date} onChange={(e) => setForm({ ...form, installation_date: e.target.value })} className="mt-1" />
+            </div>
+            <div>
+              <Label className="text-xs">Lifecycle stage</Label>
+              <select
+                value={form.lifecycle_stage}
+                onChange={(e) => setForm({ ...form, lifecycle_stage: e.target.value as FacilityLifecycleStage })}
+                className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm"
+              >
+                {LIFECYCLE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
+              </select>
+            </div>
+          </div>
+
+          {/* Status */}
           <div>
             <Label className="text-xs">Status</Label>
             <select
@@ -235,6 +297,43 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
               <option value="retired">Retired</option>
             </select>
           </div>
+
+          {/* Category-specific custom fields */}
+          {customFields.length > 0 && (
+            <div className="border-t pt-3 space-y-2.5">
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                {selectedCategory?.name} details
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                {customFields.map((f) => (
+                  <div key={f.key}>
+                    <Label className="text-xs">{f.label}{f.required ? " *" : ""}</Label>
+                    {f.type === "select" ? (
+                      <select
+                        value={String(customValues[f.key] || "")}
+                        onChange={(e) => setCustomValues({ ...customValues, [f.key]: e.target.value })}
+                        className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm"
+                      >
+                        <option value="">— Select —</option>
+                        {f.options?.map((o) => <option key={o} value={o}>{o}</option>)}
+                      </select>
+                    ) : (
+                      <Input
+                        type={f.type === "number" ? "number" : f.type === "date" ? "date" : "text"}
+                        step={f.type === "number" ? "any" : undefined}
+                        value={String(customValues[f.key] ?? "")}
+                        onChange={(e) => setCustomValues({
+                          ...customValues,
+                          [f.key]: f.type === "number" ? (e.target.value ? Number(e.target.value) : "") : e.target.value,
+                        })}
+                        className="mt-1"
+                      />
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
 
           <div>
             <Label className="text-xs">Physical location notes</Label>
