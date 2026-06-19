@@ -257,6 +257,7 @@ Razorpay keys are stored in the `app_settings` DB table, not env vars.
 - [ ] No `console.log` debug statements left behind
 - [ ] No commented-out code
 - [ ] No secrets in the diff (`git diff` and look)
+- [ ] `git status` — no `??` untracked files that belong to this feature. Untracked files are served by the local dev server but **never deployed by Vercel** — they will 404 in production.
 
 ### Before merging
 
