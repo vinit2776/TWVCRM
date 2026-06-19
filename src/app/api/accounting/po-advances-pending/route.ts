@@ -37,8 +37,7 @@ export async function GET() {
     `)
     .eq("advance_status", "pending")
     .gt("advance_amount", 0)
-    .neq("status", "pending")    // only after manager approval (mark_ordered)
-    .neq("status", "cancelled")  // never show rejected POs
+    .eq("advance_approval_status", "approved")  // only after admin approval
     .order("created_at", { ascending: true });
 
   if (error) {

@@ -2071,6 +2071,7 @@ export interface PurchaseOrder {
   advance_payment_reference?: string | null;
   advance_notes?: string | null;
   advance_status?: PoAdvanceStatus;
+  advance_approval_status?: "pending_review" | "approved" | "rejected" | null;
   advance_processed_by?: string | null;
   advance_processed_at?: string | null;
   advance_payment_date?: string | null;

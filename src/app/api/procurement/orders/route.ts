@@ -367,6 +367,7 @@ export async function POST(request: NextRequest) {
         amc_escalation2_name: parsed.data.amc_escalation2_name ?? null,
         amc_escalation2_phone: parsed.data.amc_escalation2_phone ?? null,
         advance_status: hasAdvance ? "pending" : "not_required",
+        advance_approval_status: hasAdvance ? "pending_review" : null,
       })
       .select("id, po_number")
       .single();
@@ -514,6 +515,7 @@ export async function POST(request: NextRequest) {
       advance_payment_reference: parsed.data.advance_payment_reference ?? null,
       advance_notes: parsed.data.advance_notes ?? null,
       advance_status: hasAdvance ? "pending" : "not_required",
+      advance_approval_status: hasAdvance ? "pending_review" : null,
     })
     .select("id, po_number")
     .single();

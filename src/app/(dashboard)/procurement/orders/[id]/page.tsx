@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useRef } from "react";
+import { useCurrentUser } from "@/providers/current-user-provider";
 import { useParams, useRouter } from "next/navigation";
 import Link from "next/link";
 import {
@@ -47,6 +48,8 @@ type ActionType =
   | "add_invoice"
   | "reject_delivery"
   | "process_advance"
+  | "approve_advance"
+  | "reject_advance"
   | "email_po";
 
 // ─── Timeline helper ─────────────────────────────────────────────────────────
@@ -271,6 +274,8 @@ function FileDropzone({
 export default function PurchaseOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
+  const { user } = useCurrentUser();
+  const currentUserRole = user?.role ?? null;
 
   const [po, setPo] = useState<PurchaseOrder | null>(null);
   const [loading, setLoading] = useState(true);
@@ -438,6 +443,8 @@ export default function PurchaseOrderDetailPage() {
         cancel: "Order cancelled",
         partial_cancel: "Order partially cancelled — remaining qty released back to PR",
         process_advance: "Advance payment marked as processed",
+        approve_advance: "Advance payment approved — accounts can now process payment",
+        reject_advance: "Advance payment rejected",
       };
       toast.success(msgs[action] ?? "Done");
       setActionDialog(null);
@@ -1384,18 +1391,41 @@ export default function PurchaseOrderDetailPage() {
               <p className="text-sm text-muted-foreground">{po.advance_notes}</p>
             )}
             {po.advance_status === "pending" && (
-              <div className="pt-1">
-                <Button
-                  size="sm"
-                  className="bg-orange-600 hover:bg-orange-700"
-                  onClick={() => {
-                    setAdvancePaymentDate(today);
-                    setActionDialog("process_advance");
-                  }}
-                  disabled={actionLoading}
-                >
-                  <CheckCircle2 className="h-4 w-4 mr-1.5" /> Process Advance Payment
-                </Button>
+              <div className="pt-1 flex flex-wrap gap-2">
+                {po.advance_approval_status === "pending_review" && currentUserRole === "admin" && (
+                  <>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-red-600 border-red-200 hover:bg-red-50"
+                      onClick={() => setActionDialog("reject_advance")}
+                      disabled={actionLoading}
+                    >
+                      <XCircle className="h-4 w-4 mr-1" /> Reject Advance
+                    </Button>
+                    <Button
+                      size="sm"
+                      className="bg-green-600 hover:bg-green-700"
+                      onClick={() => setActionDialog("approve_advance")}
+                      disabled={actionLoading}
+                    >
+                      <CheckCircle2 className="h-4 w-4 mr-1" /> Approve Advance
+                    </Button>
+                  </>
+                )}
+                {po.advance_approval_status === "approved" && (
+                  <Button
+                    size="sm"
+                    className="bg-orange-600 hover:bg-orange-700"
+                    onClick={() => {
+                      setAdvancePaymentDate(today);
+                      setActionDialog("process_advance");
+                    }}
+                    disabled={actionLoading}
+                  >
+                    <CheckCircle2 className="h-4 w-4 mr-1.5" /> Process Advance Payment
+                  </Button>
+                )}
               </div>
             )}
           </CardContent>
@@ -1793,6 +1823,54 @@ export default function PurchaseOrderDetailPage() {
             >
               {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               Mark as Ordered
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Approve Advance dialog ───────────────────────────────────────── */}
+      <Dialog open={actionDialog === "approve_advance"} onOpenChange={() => setActionDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Approve Advance Payment</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground py-2">
+            Approve the advance of <strong>{formatCurrency(po.advance_amount ?? 0)}</strong> for <strong>{po.po_number}</strong>?
+            Accounts will be able to process this payment once approved.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setActionDialog(null)}>Cancel</Button>
+            <Button
+              className="bg-green-600 hover:bg-green-700"
+              onClick={() => performAction("approve_advance")}
+              disabled={actionLoading}
+            >
+              {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              <CheckCircle2 className="h-4 w-4 mr-1" /> Approve
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Reject Advance dialog ────────────────────────────────────────── */}
+      <Dialog open={actionDialog === "reject_advance"} onOpenChange={() => setActionDialog(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Reject Advance Payment</DialogTitle>
+          </DialogHeader>
+          <p className="text-sm text-muted-foreground py-2">
+            Reject the advance of <strong>{formatCurrency(po.advance_amount ?? 0)}</strong> for <strong>{po.po_number}</strong>?
+            This advance will not appear in Acc Payables.
+          </p>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setActionDialog(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={() => performAction("reject_advance")}
+              disabled={actionLoading}
+            >
+              {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              <XCircle className="h-4 w-4 mr-1" /> Reject Advance
             </Button>
           </DialogFooter>
         </DialogContent>

@@ -26,6 +26,8 @@ const patchPoSchema = z.discriminatedUnion("action", [
     /** Bank rail used to pay the vendor — same enum as bill payments. */
     advance_payment_mode: z.enum(["neft", "rtgs", "imps", "bank_transfer", "cheque", "cash"]),
   }),
+  z.object({ action: z.literal("approve_advance") }),
+  z.object({ action: z.literal("reject_advance") }),
   z.object({
     action: z.literal("update_amc_details"),
     amc_start_date: z.string().nullable().optional(),
@@ -268,9 +270,34 @@ export async function PATCH(
       break;
     }
 
+    case "approve_advance": {
+      if (dbUser.role !== "admin") {
+        return NextResponse.json({ error: "Only admin can approve advance payments" }, { status: 403 });
+      }
+      if (po.advance_approval_status !== "pending_review") {
+        return NextResponse.json({ error: "Advance is not pending review" }, { status: 422 });
+      }
+      updatePayload = { advance_approval_status: "approved" };
+      break;
+    }
+
+    case "reject_advance": {
+      if (dbUser.role !== "admin") {
+        return NextResponse.json({ error: "Only admin can reject advance payments" }, { status: 403 });
+      }
+      if (po.advance_approval_status !== "pending_review") {
+        return NextResponse.json({ error: "Advance is not pending review" }, { status: 422 });
+      }
+      updatePayload = { advance_approval_status: "rejected" };
+      break;
+    }
+
     case "process_advance": {
       if (po.advance_status !== "pending") {
         return NextResponse.json({ error: "Only POs with a pending advance can be processed" }, { status: 422 });
+      }
+      if (po.advance_approval_status !== "approved") {
+        return NextResponse.json({ error: "Advance must be approved by admin before it can be processed" }, { status: 422 });
       }
       // PO advances are now released by Finance (same roles that record bill
       // payments). Bank modes for accounts/admin; cash allowed for office_admin
