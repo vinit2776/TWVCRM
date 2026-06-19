@@ -64,10 +64,11 @@ function NewServicePOForm() {
   const [advanceReference, setAdvanceReference] = useState("");
   const [advanceNotes, setAdvanceNotes] = useState("");
 
-  // AMC fields — pre-expand if URL param ?amc=1
+  // AMC fields — pre-activate if URL param ?amc=1
   const isAmcFromUrl = searchParams.get("amc") === "1";
   const [isAmc, setIsAmc] = useState(isAmcFromUrl);
-  const [amcExpanded, setAmcExpanded] = useState(isAmcFromUrl);
+  const [amcContactExpanded, setAmcContactExpanded] = useState(true);
+  const [termsExpanded, setTermsExpanded] = useState(false);
   const [amcCoverageType, setAmcCoverageType] = useState<"comprehensive" | "labour_only">("comprehensive");
   const [amcStartDate, setAmcStartDate] = useState("");
   const [amcEndDate, setAmcEndDate] = useState("");
@@ -78,7 +79,6 @@ function NewServicePOForm() {
   const [amcContactEmail, setAmcContactEmail] = useState("");
   const [linkedAssetId, setLinkedAssetId] = useState("");
 
-  // When AMC start date changes, auto-fill end date to start + 1 year
   function handleAmcStartDateChange(val: string) {
     setAmcStartDate(val);
     setServiceStartDate(val);
@@ -87,6 +87,16 @@ function NewServicePOForm() {
       d.setFullYear(d.getFullYear() + 1);
       d.setDate(d.getDate() - 1);
       setAmcEndDate(d.toISOString().split("T")[0]);
+    }
+  }
+
+  function handleAssetSelect(assetId: string) {
+    setLinkedAssetId(assetId);
+    if (assetId) {
+      const asset = assets.find((a) => a.id === assetId);
+      if (asset && !customName) {
+        setCustomName(`Annual Maintenance Contract — ${asset.name}`);
+      }
     }
   }
 
@@ -125,8 +135,9 @@ function NewServicePOForm() {
   const totalAmount = cycleCountNum * unitCostNum;
   const gstAmount = Math.round(totalAmount * gstRateNum) / 100;
   const totalWithGst = totalAmount + gstAmount;
+  const amcGstAmount = Math.round(unitCostNum * gstRateNum) / 100;
+  const amcTotalWithGst = unitCostNum + amcGstAmount;
 
-  // Build cycle schedule preview
   const cycleSchedule = (() => {
     if (!serviceStartDate || !billingCycle || cycleCountNum <= 0) return [];
     const months = BILLING_CYCLE_MONTHS[billingCycle] ?? 1;
@@ -141,26 +152,28 @@ function NewServicePOForm() {
     e.preventDefault();
     if (!vendorId) { toast.error("Vendor is required"); return; }
     if (!serviceItemName.trim()) { toast.error("Service description is required"); return; }
-    if (!serviceStartDate) { toast.error("Service start date is required"); return; }
-    if (cycleCountNum < 1) { toast.error("Number of cycles must be at least 1"); return; }
-    if (unitCostNum <= 0) { toast.error("Cost per cycle must be greater than 0"); return; }
+
+    if (isAmc) {
+      if (!linkedAssetId) { toast.error("Select the asset this AMC covers"); return; }
+      if (!amcStartDate) { toast.error("Contract start date is required"); return; }
+      if (!amcEndDate) { toast.error("Contract end date is required"); return; }
+    } else {
+      if (!serviceStartDate) { toast.error("Service start date is required"); return; }
+      if (cycleCountNum < 1) { toast.error("Number of cycles must be at least 1"); return; }
+    }
+
+    if (unitCostNum <= 0) { toast.error(isAmc ? "Annual contract value must be greater than 0" : "Cost per cycle must be greater than 0"); return; }
+
     if (advanceRequired) {
       if (!advanceAmount || isNaN(parseFloat(advanceAmount)) || parseFloat(advanceAmount) <= 0) {
         toast.error("Advance amount must be a positive number"); return;
       }
       if (!advanceMode) { toast.error("Please select a payment mode for the advance"); return; }
-      if (totalWithGst > 0 && parseFloat(advanceAmount) > totalWithGst) {
-        toast.error(`Advance amount (${formatCurrency(parseFloat(advanceAmount))}) cannot exceed the PO total (${formatCurrency(totalWithGst)})`);
+      const poTotal = isAmc ? amcTotalWithGst : totalWithGst;
+      if (poTotal > 0 && parseFloat(advanceAmount) > poTotal) {
+        toast.error(`Advance amount (${formatCurrency(parseFloat(advanceAmount))}) cannot exceed the PO total (${formatCurrency(poTotal)})`);
         return;
       }
-    }
-
-    // AMC hard validation — start date is now in Schedule & Cost
-    if (isAmc && !amcStartDate) {
-      toast.error("Contract start date is required for AMC"); return;
-    }
-    if (isAmc && !amcEndDate) {
-      toast.error("Contract end date is required for AMC"); return;
     }
 
     setSaving(true);
@@ -186,7 +199,6 @@ function NewServicePOForm() {
           advance_payment_mode: advanceRequired && advanceMode ? advanceMode : undefined,
           advance_payment_reference: advanceRequired && advanceReference.trim() ? advanceReference.trim() : undefined,
           advance_notes: advanceRequired && advanceNotes.trim() ? advanceNotes.trim() : undefined,
-          // AMC fields
           ...(isAmc ? {
             amc_start_date: amcStartDate || undefined,
             amc_end_date: amcEndDate || undefined,
@@ -225,27 +237,64 @@ function NewServicePOForm() {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Service Details */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Service Details</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-1.5">
-              <Label>Vendor *</Label>
-              <Select value={vendorId} onValueChange={setVendorId}>
-                <SelectTrigger><SelectValue placeholder="Select vendor" /></SelectTrigger>
-                <SelectContent>
-                  {vendors.map((v) => (
-                    <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
 
-            {isAmc ? (
-              <>
-                {/* AMC mode: coverage type + plain description, no catalog */}
+        {/* ── Mode switcher — declare intent first ── */}
+        <div className="grid grid-cols-2 gap-3">
+          <button
+            type="button"
+            onClick={() => setIsAmc(false)}
+            className={`rounded-lg border-2 px-4 py-3 text-left transition-colors ${
+              !isAmc ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+            }`}
+          >
+            <p className="text-sm font-semibold">Regular Service</p>
+            <p className="text-xs text-muted-foreground mt-0.5">Cleaning, security, generator, etc.</p>
+          </button>
+          <button
+            type="button"
+            onClick={() => setIsAmc(true)}
+            className={`rounded-lg border-2 px-4 py-3 text-left transition-colors ${
+              isAmc ? "border-primary bg-primary/5" : "border-border hover:border-primary/50"
+            }`}
+          >
+            <div className="flex items-center gap-1.5 mb-0.5">
+              <Wrench className={`h-3.5 w-3.5 ${isAmc ? "text-primary" : "text-muted-foreground"}`} />
+              <p className="text-sm font-semibold">Annual Maintenance Contract</p>
+            </div>
+            <p className="text-xs text-muted-foreground">AMC for a specific asset (printer, AC, UPS…)</p>
+          </button>
+        </div>
+
+        {isAmc ? (
+          /* ════════════════════════════════════════
+             AMC FLOW — asset-first ordering
+             ════════════════════════════════════════ */
+          <>
+            {/* Card 1: Asset & Coverage */}
+            <Card className="border-primary/20">
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Asset &amp; Coverage</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label>Asset being covered *</Label>
+                  <Select
+                    value={linkedAssetId || "_none"}
+                    onValueChange={(v) => handleAssetSelect(v === "_none" ? "" : v)}
+                  >
+                    <SelectTrigger><SelectValue placeholder="Select asset" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_none">— Select an asset —</SelectItem>
+                      {assets.map((a) => (
+                        <SelectItem key={a.id} value={a.id}>
+                          {a.name}{a.asset_code ? ` (${a.asset_code})` : ""}{a.location ? ` — ${(a.location as { name: string }).name}` : ""}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="text-xs text-muted-foreground">The asset this AMC will cover.</p>
+                </div>
+
                 <div className="space-y-1.5">
                   <Label>Coverage Type *</Label>
                   <div className="grid grid-cols-2 gap-3">
@@ -275,6 +324,7 @@ function NewServicePOForm() {
                     </button>
                   </div>
                 </div>
+
                 <div className="space-y-1.5">
                   <Label>Service Description *</Label>
                   <Input
@@ -282,58 +332,37 @@ function NewServicePOForm() {
                     value={customName}
                     onChange={(e) => setCustomName(e.target.value)}
                   />
-                  <p className="text-xs text-muted-foreground">Describe the service being contracted.</p>
+                  <p className="text-xs text-muted-foreground">Auto-filled from asset name — edit if needed.</p>
                 </div>
-              </>
-            ) : (
-              <>
+              </CardContent>
+            </Card>
+
+            {/* Card 2: Vendor */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Vendor</CardTitle>
+              </CardHeader>
+              <CardContent>
                 <div className="space-y-1.5">
-                  <Label>Service Item *</Label>
-                  <Select value={itemId} onValueChange={(v) => { setItemId(v === "_custom" ? "" : v); setCustomName(""); }}>
-                    <SelectTrigger><SelectValue placeholder="Select from catalog or type below" /></SelectTrigger>
+                  <Label>Vendor *</Label>
+                  <Select value={vendorId} onValueChange={setVendorId}>
+                    <SelectTrigger><SelectValue placeholder="Select vendor" /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="_custom">— Enter custom name —</SelectItem>
-                      {serviceItems.map((i) => (
-                        <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>
+                      {vendors.map((v) => (
+                        <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>
                       ))}
                     </SelectContent>
                   </Select>
-                  {!itemId && (
-                    <Input
-                      placeholder="e.g. Generator Maintenance, Security Service..."
-                      value={customName}
-                      onChange={(e) => setCustomName(e.target.value)}
-                      className="mt-1.5"
-                    />
-                  )}
                 </div>
-              </>
-            )}
+              </CardContent>
+            </Card>
 
-            <div className="space-y-1.5">
-              <Label>Location</Label>
-              <Select value={locationId} onValueChange={(v) => setLocationId(v === "_all" ? "" : v)}>
-                <SelectTrigger><SelectValue placeholder="All locations" /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="_all">All locations</SelectItem>
-                  {locations.map((l) => (
-                    <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Schedule & Cost */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Schedule &amp; Cost</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            {isAmc ? (
-              /* ── AMC mode: annual contract period + lump sum ── */
-              <div className="space-y-4">
+            {/* Card 3: Contract Period & Cost */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Contract Period &amp; Cost</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
                 <div className="grid grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <Label>Contract Start Date *</Label>
@@ -381,214 +410,47 @@ function NewServicePOForm() {
                     </Select>
                   </div>
                 </div>
-              </div>
-            ) : (
-              /* ── Standard recurring service ── */
-              <div className="grid grid-cols-2 gap-4">
-                <div className="space-y-1.5">
-                  <Label>Service Start Date *</Label>
-                  <Input
-                    type="date"
-                    value={serviceStartDate}
-                    onChange={(e) => setServiceStartDate(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Billing Cycle *</Label>
-                  <Select value={billingCycle} onValueChange={setBillingCycle}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      {SERVICE_PO_BILLING_CYCLES.map((c) => (
-                        <SelectItem key={c} value={c}>{BILLING_CYCLE_LABELS[c]}</SelectItem>
-                      ))}
-                    </SelectContent>
-                  </Select>
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Number of Cycles *</Label>
-                  <Input
-                    type="number"
-                    min="1"
-                    value={cycleCount}
-                    onChange={(e) => setCycleCount(e.target.value)}
-                    placeholder="e.g. 12"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>Cost per Cycle (₹) *</Label>
-                  <Input
-                    type="number"
-                    min="0.01"
-                    step="0.01"
-                    value={unitCost}
-                    onChange={(e) => setUnitCost(e.target.value)}
-                    placeholder="0.00"
-                  />
-                </div>
-                <div className="space-y-1.5">
-                  <Label>GST Rate</Label>
-                  <Select value={gstRate} onValueChange={setGstRate}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
-                    <SelectContent>
-                      <SelectItem value="0">0% (Exempt)</SelectItem>
-                      <SelectItem value="5">5%</SelectItem>
-                      <SelectItem value="12">12%</SelectItem>
-                      <SelectItem value="18">18%</SelectItem>
-                      <SelectItem value="28">28%</SelectItem>
-                    </SelectContent>
-                  </Select>
-                </div>
-              </div>
-            )}
-
-            {unitCostNum > 0 && (
-              <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2.5 text-sm text-blue-800 space-y-1">
-                {isAmc ? (
-                  <div className="flex justify-between">
-                    <span>Annual Contract Value</span>
-                    <strong>{formatCurrency(unitCostNum)}</strong>
-                  </div>
-                ) : (
-                  <div className="flex justify-between">
-                    <span>Subtotal ({cycleCountNum} × {formatCurrency(unitCostNum)})</span>
-                    <strong>{formatCurrency(totalAmount)}</strong>
+                {unitCostNum > 0 && (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2.5 text-sm text-blue-800 space-y-1">
+                    <div className="flex justify-between">
+                      <span>Annual Contract Value</span>
+                      <strong>{formatCurrency(unitCostNum)}</strong>
+                    </div>
+                    {gstRateNum > 0 && (
+                      <div className="flex justify-between text-blue-700">
+                        <span>GST @{gstRateNum}%</span>
+                        <span>{formatCurrency(amcGstAmount)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between border-t border-blue-200 pt-1 font-semibold">
+                      <span>Total{gstRateNum > 0 ? " (incl. GST)" : ""}</span>
+                      <span>{formatCurrency(amcTotalWithGst)}</span>
+                    </div>
                   </div>
                 )}
-                {gstRateNum > 0 && (
-                  <div className="flex justify-between text-blue-700">
-                    <span>GST @{gstRateNum}%</span>
-                    <span>{formatCurrency(isAmc ? Math.round(unitCostNum * gstRateNum) / 100 : gstAmount)}</span>
-                  </div>
-                )}
-                <div className="flex justify-between border-t border-blue-200 pt-1 font-semibold">
-                  <span>Total{gstRateNum > 0 ? " (incl. GST)" : ""}</span>
-                  <span>{formatCurrency(isAmc ? unitCostNum + Math.round(unitCostNum * gstRateNum) / 100 : totalWithGst)}</span>
+              </CardContent>
+            </Card>
+
+            {/* Card 4: AMC Service Contact (collapsible) */}
+            <Card>
+              <CardHeader
+                className="flex flex-row items-center justify-between pb-3 cursor-pointer select-none"
+                onClick={() => setAmcContactExpanded((v) => !v)}
+              >
+                <div className="flex items-center gap-2">
+                  <CardTitle className="text-base">Service Contact</CardTitle>
+                  <span className="text-xs text-muted-foreground">(recommended)</span>
                 </div>
-              </div>
-            )}
-
-            {/* Cycle schedule preview — only for non-AMC recurring services */}
-            {!isAmc && cycleSchedule.length > 0 && (
-              <div>
-                <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
-                  <Info className="h-3 w-3" /> Expected cycle schedule (first {cycleSchedule.length} of {cycleCountNum})
-                </p>
-                <div className="rounded-md border overflow-hidden text-xs">
-                  <table className="w-full">
-                    <thead className="bg-muted/40">
-                      <tr>
-                        <th className="px-3 py-2 text-left font-medium">Cycle</th>
-                        <th className="px-3 py-2 text-left font-medium">From</th>
-                        <th className="px-3 py-2 text-left font-medium">To</th>
-                        <th className="px-3 py-2 text-right font-medium">Amount</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {cycleSchedule.map((c) => (
-                        <tr key={c.cycle} className="border-t">
-                          <td className="px-3 py-1.5">Cycle {c.cycle}</td>
-                          <td className="px-3 py-1.5 text-muted-foreground">{c.from}</td>
-                          <td className="px-3 py-1.5 text-muted-foreground">{c.to}</td>
-                          <td className="px-3 py-1.5 text-right">{unitCostNum > 0 ? formatCurrency(unitCostNum) : "—"}</td>
-                        </tr>
-                      ))}
-                      {cycleCountNum > 6 && (
-                        <tr className="border-t bg-muted/20">
-                          <td colSpan={4} className="px-3 py-1.5 text-center text-muted-foreground">
-                            +{cycleCountNum - 6} more cycles...
-                          </td>
-                        </tr>
-                      )}
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-            )}
-          </CardContent>
-        </Card>
-
-        {/* Terms */}
-        <Card>
-          <CardHeader className="pb-3">
-            <CardTitle className="text-base">Terms &amp; Notes</CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-4">
-            <div className="space-y-1.5">
-              <Label>Payment Terms</Label>
-              <Input value={paymentTerms} onChange={(e) => setPaymentTerms(e.target.value)} placeholder="e.g. Net 30" />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Notes</Label>
-              <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Internal notes..." />
-            </div>
-            <div className="space-y-1.5">
-              <Label>Terms &amp; Conditions</Label>
-              <Textarea value={termsAndConditions} onChange={(e) => setTermsAndConditions(e.target.value)} rows={3} placeholder="Contract terms..." />
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* AMC Contract Details */}
-        <Card className={isAmc ? "border-primary/30" : ""}>
-          <CardHeader
-            className="flex flex-row items-center justify-between pb-3 cursor-pointer select-none"
-            onClick={() => setAmcExpanded((v) => !v)}
-          >
-            <div className="flex items-center gap-2">
-              <Wrench className={`h-4 w-4 ${isAmc ? "text-primary" : "text-muted-foreground"}`} />
-              <CardTitle className="text-base">AMC Contract</CardTitle>
-              {isAmc && <span className="text-xs text-primary font-medium bg-primary/8 px-2 py-0.5 rounded-full">Enabled</span>}
-              {!isAmc && <span className="text-xs text-muted-foreground">(optional — tick to enable)</span>}
-            </div>
-            {amcExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
-          </CardHeader>
-          {amcExpanded && (
-            <CardContent className="space-y-4">
-              {/* Toggle */}
-              <div className="flex items-center gap-2">
-                <input
-                  id="is_amc"
-                  type="checkbox"
-                  checked={isAmc}
-                  onChange={(e) => setIsAmc(e.target.checked)}
-                  className="h-4 w-4 rounded border-gray-300"
-                />
-                <label htmlFor="is_amc" className="text-sm cursor-pointer font-medium">
-                  This is an AMC / Annual Maintenance Contract
-                </label>
-              </div>
-
-              {isAmc && (
-                <div className="space-y-4 pt-2 border-t">
-                  {/* Warning if contact missing */}
+                {amcContactExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+              </CardHeader>
+              {amcContactExpanded && (
+                <CardContent className="space-y-4">
                   {(!amcContactName && !amcHelpline) && (
                     <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
                       <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-amber-600" />
-                      <span>Add at least one contact detail (name or helpline number) before issuing the PO. You can save now and update later.</span>
+                      <span>Add at least one contact detail before issuing the PO. You can save now and update later.</span>
                     </div>
                   )}
-
-                  {/* Asset covered */}
-                  <div className="space-y-1.5">
-                    <Label>Asset Covered by this AMC</Label>
-                    <Select
-                      value={linkedAssetId || "_none"}
-                      onValueChange={(v) => setLinkedAssetId(v === "_none" ? "" : v)}
-                    >
-                      <SelectTrigger><SelectValue placeholder="Select asset (optional)" /></SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="_none">— No specific asset —</SelectItem>
-                        {assets.map((a) => (
-                          <SelectItem key={a.id} value={a.id}>
-                            {a.name}{a.asset_code ? ` (${a.asset_code})` : ""}{a.location ? ` — ${(a.location as { name: string }).name}` : ""}
-                          </SelectItem>
-                        ))}
-                      </SelectContent>
-                    </Select>
-                    <p className="text-xs text-muted-foreground">Link this AMC to the specific asset it covers.</p>
-                  </div>
-
-                  {/* Visits covered */}
                   <div className="space-y-1.5">
                     <Label>Service Visits / Calls Covered</Label>
                     <div className="flex items-center gap-3">
@@ -614,10 +476,7 @@ function NewServicePOForm() {
                         Unlimited
                       </label>
                     </div>
-                    <p className="text-xs text-muted-foreground">Total number of service visits / support calls included in this AMC.</p>
                   </div>
-
-                  {/* Contact details */}
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div className="space-y-1.5">
                       <Label>AMC Contact Name</Label>
@@ -645,13 +504,243 @@ function NewServicePOForm() {
                       />
                     </div>
                   </div>
-                </div>
+                </CardContent>
               )}
-            </CardContent>
-          )}
-        </Card>
+            </Card>
 
-        {/* Advance Payment */}
+            {/* Terms (collapsible optional) */}
+            <Card>
+              <CardHeader
+                className="flex flex-row items-center justify-between pb-3 cursor-pointer select-none"
+                onClick={() => setTermsExpanded((v) => !v)}
+              >
+                <div className="flex items-center gap-2">
+                  <CardTitle className="text-base">Terms &amp; Notes</CardTitle>
+                  <span className="text-xs text-muted-foreground">(optional)</span>
+                </div>
+                {termsExpanded ? <ChevronUp className="h-4 w-4 text-muted-foreground" /> : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
+              </CardHeader>
+              {termsExpanded && (
+                <CardContent className="space-y-4">
+                  <div className="space-y-1.5">
+                    <Label>Payment Terms</Label>
+                    <Input value={paymentTerms} onChange={(e) => setPaymentTerms(e.target.value)} placeholder="e.g. Net 30" />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Notes</Label>
+                    <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Internal notes..." />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Terms &amp; Conditions</Label>
+                    <Textarea value={termsAndConditions} onChange={(e) => setTermsAndConditions(e.target.value)} rows={3} placeholder="Contract terms..." />
+                  </div>
+                </CardContent>
+              )}
+            </Card>
+          </>
+        ) : (
+          /* ════════════════════════════════════════
+             REGULAR SERVICE FLOW — unchanged
+             ════════════════════════════════════════ */
+          <>
+            {/* Service Details */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Service Details</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label>Vendor *</Label>
+                  <Select value={vendorId} onValueChange={setVendorId}>
+                    <SelectTrigger><SelectValue placeholder="Select vendor" /></SelectTrigger>
+                    <SelectContent>
+                      {vendors.map((v) => (
+                        <SelectItem key={v.id} value={v.id}>{v.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label>Service Item *</Label>
+                  <Select value={itemId} onValueChange={(v) => { setItemId(v === "_custom" ? "" : v); setCustomName(""); }}>
+                    <SelectTrigger><SelectValue placeholder="Select from catalog or type below" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_custom">— Enter custom name —</SelectItem>
+                      {serviceItems.map((i) => (
+                        <SelectItem key={i.id} value={i.id}>{i.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  {!itemId && (
+                    <Input
+                      placeholder="e.g. Generator Maintenance, Security Service..."
+                      value={customName}
+                      onChange={(e) => setCustomName(e.target.value)}
+                      className="mt-1.5"
+                    />
+                  )}
+                </div>
+
+                <div className="space-y-1.5">
+                  <Label>Location</Label>
+                  <Select value={locationId} onValueChange={(v) => setLocationId(v === "_all" ? "" : v)}>
+                    <SelectTrigger><SelectValue placeholder="All locations" /></SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="_all">All locations</SelectItem>
+                      {locations.map((l) => (
+                        <SelectItem key={l.id} value={l.id}>{l.name}</SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              </CardContent>
+            </Card>
+
+            {/* Schedule & Cost */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Schedule &amp; Cost</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-1.5">
+                    <Label>Service Start Date *</Label>
+                    <Input
+                      type="date"
+                      value={serviceStartDate}
+                      onChange={(e) => setServiceStartDate(e.target.value)}
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Billing Cycle *</Label>
+                    <Select value={billingCycle} onValueChange={setBillingCycle}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {SERVICE_PO_BILLING_CYCLES.map((c) => (
+                          <SelectItem key={c} value={c}>{BILLING_CYCLE_LABELS[c]}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Number of Cycles *</Label>
+                    <Input
+                      type="number"
+                      min="1"
+                      value={cycleCount}
+                      onChange={(e) => setCycleCount(e.target.value)}
+                      placeholder="e.g. 12"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>Cost per Cycle (₹) *</Label>
+                    <Input
+                      type="number"
+                      min="0.01"
+                      step="0.01"
+                      value={unitCost}
+                      onChange={(e) => setUnitCost(e.target.value)}
+                      placeholder="0.00"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <Label>GST Rate</Label>
+                    <Select value={gstRate} onValueChange={setGstRate}>
+                      <SelectTrigger><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="0">0% (Exempt)</SelectItem>
+                        <SelectItem value="5">5%</SelectItem>
+                        <SelectItem value="12">12%</SelectItem>
+                        <SelectItem value="18">18%</SelectItem>
+                        <SelectItem value="28">28%</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+
+                {unitCostNum > 0 && (
+                  <div className="rounded-lg border border-blue-200 bg-blue-50/50 px-3 py-2.5 text-sm text-blue-800 space-y-1">
+                    <div className="flex justify-between">
+                      <span>Subtotal ({cycleCountNum} × {formatCurrency(unitCostNum)})</span>
+                      <strong>{formatCurrency(totalAmount)}</strong>
+                    </div>
+                    {gstRateNum > 0 && (
+                      <div className="flex justify-between text-blue-700">
+                        <span>GST @{gstRateNum}%</span>
+                        <span>{formatCurrency(gstAmount)}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between border-t border-blue-200 pt-1 font-semibold">
+                      <span>Total{gstRateNum > 0 ? " (incl. GST)" : ""}</span>
+                      <span>{formatCurrency(totalWithGst)}</span>
+                    </div>
+                  </div>
+                )}
+
+                {cycleSchedule.length > 0 && (
+                  <div>
+                    <p className="text-xs font-medium text-muted-foreground mb-2 flex items-center gap-1">
+                      <Info className="h-3 w-3" /> Expected cycle schedule (first {cycleSchedule.length} of {cycleCountNum})
+                    </p>
+                    <div className="rounded-md border overflow-hidden text-xs">
+                      <table className="w-full">
+                        <thead className="bg-muted/40">
+                          <tr>
+                            <th className="px-3 py-2 text-left font-medium">Cycle</th>
+                            <th className="px-3 py-2 text-left font-medium">From</th>
+                            <th className="px-3 py-2 text-left font-medium">To</th>
+                            <th className="px-3 py-2 text-right font-medium">Amount</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {cycleSchedule.map((c) => (
+                            <tr key={c.cycle} className="border-t">
+                              <td className="px-3 py-1.5">Cycle {c.cycle}</td>
+                              <td className="px-3 py-1.5 text-muted-foreground">{c.from}</td>
+                              <td className="px-3 py-1.5 text-muted-foreground">{c.to}</td>
+                              <td className="px-3 py-1.5 text-right">{unitCostNum > 0 ? formatCurrency(unitCostNum) : "—"}</td>
+                            </tr>
+                          ))}
+                          {cycleCountNum > 6 && (
+                            <tr className="border-t bg-muted/20">
+                              <td colSpan={4} className="px-3 py-1.5 text-center text-muted-foreground">
+                                +{cycleCountNum - 6} more cycles...
+                              </td>
+                            </tr>
+                          )}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
+              </CardContent>
+            </Card>
+
+            {/* Terms */}
+            <Card>
+              <CardHeader className="pb-3">
+                <CardTitle className="text-base">Terms &amp; Notes</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-4">
+                <div className="space-y-1.5">
+                  <Label>Payment Terms</Label>
+                  <Input value={paymentTerms} onChange={(e) => setPaymentTerms(e.target.value)} placeholder="e.g. Net 30" />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Notes</Label>
+                  <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} placeholder="Internal notes..." />
+                </div>
+                <div className="space-y-1.5">
+                  <Label>Terms &amp; Conditions</Label>
+                  <Textarea value={termsAndConditions} onChange={(e) => setTermsAndConditions(e.target.value)} rows={3} placeholder="Contract terms..." />
+                </div>
+              </CardContent>
+            </Card>
+          </>
+        )}
+
+        {/* Advance Payment — both modes */}
         <Card>
           <CardHeader
             className="flex flex-row items-center justify-between pb-3 cursor-pointer select-none"
@@ -696,13 +785,7 @@ function NewServicePOForm() {
                       placeholder="e.g. 5000"
                       value={advanceAmount}
                       onChange={(e) => setAdvanceAmount(e.target.value)}
-                      className={totalWithGst > 0 && parseFloat(advanceAmount) > totalWithGst ? "border-red-400 focus-visible:ring-red-400" : ""}
                     />
-                    {totalWithGst > 0 && parseFloat(advanceAmount) > 0 && parseFloat(advanceAmount) > totalWithGst && (
-                      <p className="text-xs text-red-600 mt-0.5">
-                        Exceeds PO total ({formatCurrency(totalWithGst)})
-                      </p>
-                    )}
                   </div>
                   <div className="space-y-1.5">
                     <Label htmlFor="advance_mode">Payment Mode <span className="text-red-500">*</span></Label>
