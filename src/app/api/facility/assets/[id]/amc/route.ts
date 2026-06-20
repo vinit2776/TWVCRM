@@ -3,8 +3,13 @@ import { createClient } from "@/lib/supabase/server";
 
 /**
  * GET /api/facility/assets/[id]/amc
- * Returns AMC contracts (purchase_orders with linked_asset_id matching this asset)
- * and all service events linked to this asset.
+ * Returns:
+ *  - contracts: purchase_orders (po_type='service') with linked_asset_id matching this asset
+ *  - events: ad-hoc service events (breakdown / preventive / annual) linked to this asset
+ *  - service_reports: cycle-based service reports from any contract on this asset
+ *
+ * Events come from a dedicated asset_id column. Service reports don't have one
+ * (they live per-PO with no asset link), so we resolve them via the contracts.
  */
 export async function GET(
   _request: NextRequest,
@@ -23,7 +28,7 @@ export async function GET(
       amc_visits_covered, amc_visits_used,
       amc_contact_name, amc_helpline_number, amc_contact_email,
       amc_scope_covered, amc_scope_exclusions,
-      total_ordered_amount,
+      total_ordered_amount, created_at,
       procurement_vendors(id, name)
     `)
     .eq("linked_asset_id", assetId)
@@ -46,8 +51,47 @@ export async function GET(
     .order("event_date", { ascending: false })
     .limit(50);
 
+  // Fetch cycle-based service reports from the linked contracts. po_service_reports
+  // has no asset_id of its own, so we look up reports for every PO on this asset.
+  const contractIds = (contracts ?? []).map((c) => c.id);
+  let serviceReports: Array<{
+    id: string;
+    po_id: string;
+    po_number?: string | null;
+    cycle_number: number;
+    period_from: string | null;
+    period_to: string | null;
+    report_file_url: string | null;
+    notes: string | null;
+    created_at: string;
+    recorder?: { id: string; full_name?: string } | null;
+  }> = [];
+  if (contractIds.length > 0) {
+    const { data: reports } = await supabase
+      .from("po_service_reports")
+      .select(`
+        id, po_id, cycle_number, period_from, period_to,
+        report_file_url, notes, created_at,
+        recorder:users!po_service_reports_recorded_by_fkey(id, full_name)
+      `)
+      .in("po_id", contractIds)
+      .order("period_from", { ascending: false })
+      .limit(50);
+
+    // Tag each report with its PO number for the timeline UI
+    const poNumberById = new Map(
+      (contracts ?? []).map((c) => [c.id, c.po_number])
+    );
+    serviceReports = (reports ?? []).map((r) => ({
+      ...r,
+      po_number: poNumberById.get(r.po_id) ?? null,
+      recorder: Array.isArray(r.recorder) ? r.recorder[0] ?? null : r.recorder,
+    }));
+  }
+
   return NextResponse.json({
     contracts: contracts || [],
     events: events || [],
+    service_reports: serviceReports,
   });
 }

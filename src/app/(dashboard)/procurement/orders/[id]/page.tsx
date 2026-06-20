@@ -34,6 +34,8 @@ import { formatDate, formatCurrency } from "@/lib/utils";
 import { createClient as createBrowserClient } from "@/lib/supabase/client";
 import type { PurchaseOrder, AuditLog, PoServiceReport, AmcServiceEvent, AmcStatus } from "@/types";
 import { AmcEventDialog } from "@/components/procurement/amc-event-dialog";
+import { AmcLifecycleStrip } from "@/components/procurement/amc-lifecycle-strip";
+import { computeAmcLifecycle } from "@/lib/amc-lifecycle";
 
 const ACCEPTED_FILE_TYPES = ["application/pdf", "image/jpeg", "image/jpg", "image/png", "image/webp"];
 const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10 MB
@@ -1071,15 +1073,23 @@ export default function PurchaseOrderDetailPage() {
 
         const missingInfo = !po.amc_start_date || (!po.amc_contact_name && !po.amc_helpline_number);
 
+        // Live status — reflects today, not the day the PO was created
+        const liveLc = computeAmcLifecycle({
+          amc_start_date: po.amc_start_date,
+          amc_end_date: po.amc_end_date,
+          amc_visits_covered: po.amc_visits_covered,
+          amc_visits_used: po.amc_visits_used,
+        });
+
         return (
           <Card className="border-blue-200">
             <CardHeader className="pb-3">
               <div className="flex items-center justify-between">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
                   <Wrench className="h-4 w-4 text-blue-600" />
                   <CardTitle className="text-base">AMC Contract</CardTitle>
-                  <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full font-medium ${AMC_STATUS_BADGE[amcStatus]}`}>
-                    {AMC_STATUS_LABELS[amcStatus]}
+                  <span className={`inline-flex items-center text-xs px-2 py-0.5 rounded-full font-medium border ${liveLc.badgeClass}`}>
+                    {liveLc.label}
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
@@ -1117,6 +1127,19 @@ export default function PurchaseOrderDetailPage() {
                       ? "AMC contract dates are not set. Add start/end dates to activate tracking."
                       : "AMC contact details are missing. Add helpline/contact info before issuing."}
                   </span>
+                </div>
+              )}
+
+              {/* Lifecycle strip — Created → Activates → Expires, current position highlighted */}
+              {!amcEditMode && po.amc_start_date && po.amc_end_date && (
+                <div className="rounded-lg border bg-muted/20 px-4 py-3">
+                  <AmcLifecycleStrip
+                    createdAt={po.created_at}
+                    amcStartDate={po.amc_start_date}
+                    amcEndDate={po.amc_end_date}
+                    amcVisitsCovered={po.amc_visits_covered}
+                    amcVisitsUsed={po.amc_visits_used}
+                  />
                 </div>
               )}
 

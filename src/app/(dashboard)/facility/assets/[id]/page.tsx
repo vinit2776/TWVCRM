@@ -13,6 +13,8 @@ import { cn, formatDate, formatCurrency } from "@/lib/utils";
 import { PRIORITY_STYLES, STATUS_STYLES, timeAgo } from "@/lib/facility-ui";
 import { FacilityAssetFormDialog } from "@/components/facility/asset-form-dialog";
 import { AssetEventDialog, type OpenIssue } from "@/components/facility/asset-event-dialog";
+import { AmcLifecycleStrip } from "@/components/procurement/amc-lifecycle-strip";
+import { computeAmcLifecycle } from "@/lib/amc-lifecycle";
 import type { FacilityAsset, FacilityIssue, FacilityAssetEvent, FacilityAssetEventType, FacilityLifecycleStage, CategoryCustomField, AmcStatus, AssetDocument, AssetDocumentTier } from "@/types";
 import { createClient } from "@/lib/supabase/client";
 import { toast } from "sonner";
@@ -81,7 +83,21 @@ interface AmcContract {
   amc_scope_covered: string | null;
   amc_scope_exclusions: string | null;
   total_ordered_amount: number;
+  created_at: string;
   procurement_vendors: { id: string; name: string } | null;
+}
+
+interface ServiceReport {
+  id: string;
+  po_id: string;
+  po_number: string | null;
+  cycle_number: number;
+  period_from: string | null;
+  period_to: string | null;
+  report_file_url: string | null;
+  notes: string | null;
+  created_at: string;
+  recorder?: { id: string; full_name?: string } | null;
 }
 
 interface AmcEvent {
@@ -113,6 +129,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
   const [tab, setTab] = useState<Tab>("details");
   const [amcContracts, setAmcContracts] = useState<AmcContract[]>([]);
   const [amcEvents, setAmcEvents] = useState<AmcEvent[]>([]);
+  const [serviceReports, setServiceReports] = useState<ServiceReport[]>([]);
   const [amcLoaded, setAmcLoaded] = useState(false);
   const [docs, setDocs] = useState<AssetDocument[]>([]);
   const [docsLoaded, setDocsLoaded] = useState(false);
@@ -137,6 +154,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
       if (res.ok) {
         setAmcContracts(json.contracts || []);
         setAmcEvents(json.events || []);
+        setServiceReports(json.service_reports || []);
       }
     } catch (e) {
       console.error("Failed to load AMC data for asset", id, e);
@@ -397,18 +415,25 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                   </div>
                 ) : (
                   <div className="space-y-2">
-                    {amcContracts.map((c) => (
+                    {amcContracts.map((c) => {
+                      const lc = computeAmcLifecycle({
+                        amc_start_date: c.amc_start_date,
+                        amc_end_date: c.amc_end_date,
+                        amc_visits_covered: c.amc_visits_covered,
+                        amc_visits_used: c.amc_visits_used,
+                      });
+                      return (
                       <Link
                         key={c.id}
                         href={`/procurement/orders/${c.id}`}
-                        className="block rounded-lg border bg-card p-4 hover:bg-accent/30 transition-colors"
+                        className="block rounded-lg border bg-card p-4 hover:bg-accent/30 transition-colors space-y-3"
                       >
                         <div className="flex items-start justify-between gap-3">
                           <div className="space-y-1">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <code className="text-xs font-mono">{c.po_number}</code>
-                              <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full font-medium", AMC_STATUS_CHIP[c.amc_status])}>
-                                {c.amc_status}
+                              <span className={cn("text-[10px] px-2 py-0.5 rounded-full font-medium border", lc.badgeClass)}>
+                                {lc.label}
                               </span>
                             </div>
                             <div className="text-sm">{c.procurement_vendors?.name || "—"}</div>
@@ -436,20 +461,78 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                             <ExternalLink className="h-3.5 w-3.5 ml-auto text-muted-foreground" />
                           </div>
                         </div>
+                        {/* Lifecycle strip — shows where this contract sits today */}
+                        <div className="pt-2 border-t border-dashed">
+                          <AmcLifecycleStrip
+                            createdAt={c.created_at}
+                            amcStartDate={c.amc_start_date}
+                            amcEndDate={c.amc_end_date}
+                            amcVisitsCovered={c.amc_visits_covered}
+                            amcVisitsUsed={c.amc_visits_used}
+                          />
+                        </div>
                       </Link>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </section>
 
-              {/* Visit history */}
+              {/* Service & Breakdown History — unified memory of everything that's happened on this asset */}
+              {(() => {
+                const breakdownCount = amcEvents.filter(e => e.event_type === "breakdown").length;
+                const preventiveCount = amcEvents.filter(e => e.event_type === "preventive" || e.event_type === "annual_service" || e.event_type === "remote_support").length;
+                const total = amcEvents.length + serviceReports.length;
+                return (
               <section className="space-y-3">
-                <div className="text-xs uppercase tracking-wide text-muted-foreground">
-                  Service Visit History ({amcEvents.length})
+                <div className="flex items-baseline justify-between flex-wrap gap-2">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">
+                    Service &amp; Breakdown History
+                  </div>
+                  <div className="text-xs text-muted-foreground">
+                    {total} total
+                    {breakdownCount > 0 && <> · <span className="text-red-700 font-medium">{breakdownCount} breakdown{breakdownCount === 1 ? "" : "s"}</span></>}
+                    {preventiveCount > 0 && <> · <span className="text-blue-700 font-medium">{preventiveCount} preventive</span></>}
+                    {serviceReports.length > 0 && <> · <span className="text-emerald-700 font-medium">{serviceReports.length} periodic report{serviceReports.length === 1 ? "" : "s"}</span></>}
+                  </div>
                 </div>
-                {amcEvents.length === 0 ? (
-                  <p className="text-sm text-muted-foreground italic py-3">No service events logged for this asset.</p>
-                ) : (
+
+                {/* Periodic service reports (cycle-based) */}
+                {serviceReports.length > 0 && (
+                  <div className="space-y-2">
+                    {serviceReports.map((r) => (
+                      <div key={r.id} className="rounded-lg border bg-card p-3 space-y-1">
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="text-[10px] px-1.5 py-0.5 rounded-full font-medium bg-emerald-100 text-emerald-700">
+                            Periodic Service
+                          </span>
+                          <span className="font-medium">Cycle #{r.cycle_number}</span>
+                          {r.po_number && <code className="text-[10px] font-mono text-muted-foreground">{r.po_number}</code>}
+                          <span className="text-xs text-muted-foreground ml-auto flex items-center gap-1">
+                            <Calendar className="h-3 w-3" />
+                            {r.period_from && r.period_to
+                              ? `${formatDate(r.period_from)} — ${formatDate(r.period_to)}`
+                              : formatDate(r.created_at)}
+                          </span>
+                        </div>
+                        {r.notes && <p className="text-sm">{r.notes}</p>}
+                        <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
+                          {r.recorder?.full_name && <span>Logged by: {r.recorder.full_name}</span>}
+                          {r.report_file_url && (
+                            <a href={r.report_file_url} target="_blank" rel="noopener noreferrer" className="text-primary hover:underline">
+                              View report
+                            </a>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* Ad-hoc events (breakdown, preventive, annual, remote) */}
+                {amcEvents.length === 0 && serviceReports.length === 0 ? (
+                  <p className="text-sm text-muted-foreground italic py-3">No service or breakdown history yet for this asset.</p>
+                ) : amcEvents.length === 0 ? null : (
                   <div className="space-y-2">
                     {amcEvents.map((e) => (
                       <div key={e.id} className="rounded-lg border bg-card p-3 space-y-1.5">
@@ -522,6 +605,8 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                   </div>
                 )}
               </section>
+                );
+              })()}
             </>
           )}
         </>
