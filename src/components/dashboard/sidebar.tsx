@@ -134,6 +134,7 @@ const navSections: NavSection[] = [
     label: "Operations",
     icon: CalendarClock,
     items: [
+      { href: "/contracts", label: "Contracts", icon: ScrollText,    roles: [...OPERATIONS_ROLES, "accounts"] },
       { href: "/bookings",  label: "Bookings",  icon: CalendarClock, roles: OPERATIONS_ROLES },
       { href: "/spaces",    label: "Spaces",    icon: DoorOpen,      roles: OPERATIONS_ROLES },
       { href: "/headcount", label: "Headcount", icon: UsersRound,    roles: OPERATIONS_ROLES },
@@ -167,7 +168,6 @@ const navSections: NavSection[] = [
       { href: "/procurement/inventory",   label: "Inventory",         icon: Warehouse,         roles: ["admin", "manager", "office_admin", "viewer"] },
       { href: "/procurement/transfers",   label: "Transfers",         icon: ArrowLeftRight,    roles: ["admin", "manager", "office_admin", "viewer"] },
       { href: "/procurement/consumption", label: "Consumption",       icon: UtensilsCrossed,   roles: ["admin", "manager", "office_admin", "viewer"] },
-      { href: "/procurement/amc",            label: "AMC Contracts",     icon: Wrench,            roles: ["admin", "manager", "office_admin", "viewer"] },
       { href: "/procurement/electricity",  label: "Electricity Bills", icon: Zap,               roles: ["admin", "manager", "accounts", "office_admin"] },
       { href: "/procurement/verify",       label: "Verify Approval",   icon: ShieldCheck,       roles: ["admin", "manager", "office_admin"] },
     ],
@@ -178,6 +178,7 @@ const navSections: NavSection[] = [
     icon: Wrench,
     items: [
       { href: "/facility",               label: "Dashboard",           icon: BarChart3Icon, roles: ["admin", "manager", "it_manager", "fms", "viewer"] },
+      { href: "/procurement/amc",        label: "AMC Contracts",       icon: Wrench,        roles: ["admin", "manager", "office_admin", "viewer"] },
       { href: "/facility/issues",        label: "Issues",              icon: ClipboardList, roles: null },
       { href: "/facility/my-issues",     label: "My Issues",           icon: Ticket,        roles: null },
       { href: "/facility/assets",        label: "Assets",              icon: Server,        roles: ["admin", "manager", "it_manager", "it_technician", "fms", "viewer"] },
