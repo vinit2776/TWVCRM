@@ -127,28 +127,46 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
     if (res.ok) setAsset(json.data);
   };
 
+  // All three fetchers wrap in try/finally so the *Loaded flag always flips,
+  // even on a network blip or JSON parse error. Otherwise the tab gets stuck
+  // on "Loading…" forever with no way to retry except a full page reload.
   const fetchAmc = async () => {
-    const res = await fetch(`/api/facility/assets/${id}/amc`);
-    const json = await res.json();
-    if (res.ok) {
-      setAmcContracts(json.contracts || []);
-      setAmcEvents(json.events || []);
+    try {
+      const res = await fetch(`/api/facility/assets/${id}/amc`);
+      const json = await res.json();
+      if (res.ok) {
+        setAmcContracts(json.contracts || []);
+        setAmcEvents(json.events || []);
+      }
+    } catch (e) {
+      console.error("Failed to load AMC data for asset", id, e);
+    } finally {
+      setAmcLoaded(true);
     }
-    setAmcLoaded(true);
   };
 
   const fetchDocs = async () => {
-    const res = await fetch(`/api/facility/assets/${id}/documents`);
-    const json = await res.json();
-    if (res.ok) setDocs(json.data || []);
-    setDocsLoaded(true);
+    try {
+      const res = await fetch(`/api/facility/assets/${id}/documents`);
+      const json = await res.json();
+      if (res.ok) setDocs(json.data || []);
+    } catch (e) {
+      console.error("Failed to load documents for asset", id, e);
+    } finally {
+      setDocsLoaded(true);
+    }
   };
 
   const fetchEvents = async () => {
-    const res = await fetch(`/api/facility/assets/${id}/events`);
-    const json = await res.json();
-    if (res.ok) setEvents(json.data || []);
-    setEventsLoaded(true);
+    try {
+      const res = await fetch(`/api/facility/assets/${id}/events`);
+      const json = await res.json();
+      if (res.ok) setEvents(json.data || []);
+    } catch (e) {
+      console.error("Failed to load events for asset", id, e);
+    } finally {
+      setEventsLoaded(true);
+    }
   };
 
   useEffect(() => {
