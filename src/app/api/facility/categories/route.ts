@@ -20,6 +20,9 @@ export async function GET(request: NextRequest) {
 
   if (scope) query = query.eq("scope", scope);
   if (!includeInactive) query = query.eq("is_active", true);
+  // Only return the 6 canonical group categories unless caller opts out
+  const includeAll = searchParams.get("include_all") === "true";
+  if (!includeAll) query = query.like("slug", "group-%");
 
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

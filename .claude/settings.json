@@ -1,0 +1,15 @@
+{
+  "hooks": {
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "STATUS=$(git status --short 2>/dev/null | grep -v '\\.claude/' | grep -v '^??'); if [ -n \"$STATUS\" ]; then MSG=$(echo \"$STATUS\" | head -20 | tr '\\n' '|' | sed 's/|/\\\\n/g'); echo \"{\\\"systemMessage\\\": \\\"⚠ Uncommitted changes — commit and push before closing:\\\\n$MSG\\\"}\"; else echo '{\"suppressOutput\": true}'; fi",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}
