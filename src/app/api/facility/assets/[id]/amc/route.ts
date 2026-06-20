@@ -27,8 +27,10 @@ export async function GET(
       id, po_number, amc_status, amc_start_date, amc_end_date,
       amc_visits_covered, amc_visits_used,
       amc_contact_name, amc_helpline_number, amc_contact_email,
+      amc_escalation_name, amc_escalation_phone,
+      amc_escalation2_name, amc_escalation2_phone,
       amc_scope_covered, amc_scope_exclusions,
-      total_ordered_amount, created_at,
+      total_ordered_amount, created_at, status,
       procurement_vendors(id, name)
     `)
     .eq("linked_asset_id", assetId)

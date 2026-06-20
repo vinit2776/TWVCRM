@@ -7,6 +7,7 @@ import {
   ArrowLeft, Pencil, Printer, Server, MapPin, Calendar,
   AlertTriangle, Wrench, CheckCircle2, Clock, ExternalLink,
   Upload, FileText, Trash2, Loader2, X, Plus,
+  Phone, Mail, MessageCircle, TrendingUp,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn, formatDate, formatCurrency } from "@/lib/utils";
@@ -14,6 +15,7 @@ import { PRIORITY_STYLES, STATUS_STYLES, timeAgo } from "@/lib/facility-ui";
 import { FacilityAssetFormDialog } from "@/components/facility/asset-form-dialog";
 import { AssetEventDialog, type OpenIssue } from "@/components/facility/asset-event-dialog";
 import { AmcLifecycleStrip } from "@/components/procurement/amc-lifecycle-strip";
+import { AmcEventDialog } from "@/components/procurement/amc-event-dialog";
 import { computeAmcLifecycle } from "@/lib/amc-lifecycle";
 import type { FacilityAsset, FacilityIssue, FacilityAssetEvent, FacilityAssetEventType, FacilityLifecycleStage, CategoryCustomField, AmcStatus, AssetDocument, AssetDocumentTier } from "@/types";
 import { createClient } from "@/lib/supabase/client";
@@ -80,10 +82,15 @@ interface AmcContract {
   amc_contact_name: string | null;
   amc_helpline_number: string | null;
   amc_contact_email: string | null;
+  amc_escalation_name: string | null;
+  amc_escalation_phone: string | null;
+  amc_escalation2_name: string | null;
+  amc_escalation2_phone: string | null;
   amc_scope_covered: string | null;
   amc_scope_exclusions: string | null;
   total_ordered_amount: number;
   created_at: string;
+  status: string; // PO status — needed to gate "Log Breakdown Visit"
   procurement_vendors: { id: string; name: string } | null;
 }
 
@@ -131,6 +138,14 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
   const [amcEvents, setAmcEvents] = useState<AmcEvent[]>([]);
   const [serviceReports, setServiceReports] = useState<ServiceReport[]>([]);
   const [amcLoaded, setAmcLoaded] = useState(false);
+
+  // Breakdown dialog state — opens the same AmcEventDialog used on the PO page
+  // but pre-filled with this asset and the picked contract
+  const [breakdownDialogOpen, setBreakdownDialogOpen] = useState(false);
+  const [breakdownPoId, setBreakdownPoId] = useState<string | null>(null);
+  const [breakdownEventNumber, setBreakdownEventNumber] = useState(1);
+  const [breakdownVisitsCovered, setBreakdownVisitsCovered] = useState<number | null>(null);
+  const [breakdownVisitsUsed, setBreakdownVisitsUsed] = useState(0);
   const [docs, setDocs] = useState<AssetDocument[]>([]);
   const [docsLoaded, setDocsLoaded] = useState(false);
   const [userRole, setUserRole] = useState<string>("");
@@ -404,6 +419,105 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
             <div className="py-12 text-center text-sm text-muted-foreground">Loading AMC data…</div>
           ) : (
             <>
+              {/* Asset Memory — narrative summary that builds up as data accumulates */}
+              <AssetMemoryCard
+                assetName={asset.name}
+                assetCode={asset.asset_code}
+                createdAt={asset.created_at}
+                purchaseDate={asset.purchase_date}
+                installationDate={asset.installation_date}
+                attentionNotes={asset.attention_notes}
+                contracts={amcContracts}
+                events={amcEvents}
+                serviceReports={serviceReports}
+                issues={asset.issue_history}
+              />
+
+              {/* Performance summary — derived from events + reports */}
+              {(amcContracts.length > 0 || amcEvents.length > 0 || serviceReports.length > 0) && (() => {
+                const now = new Date();
+                const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+                const last6moBreakdowns = amcEvents.filter((e) =>
+                  e.event_type === "breakdown" && new Date(e.event_date) >= sixMonthsAgo
+                ).length;
+                const last6moPreventive = amcEvents.filter((e) =>
+                  (e.event_type === "preventive" || e.event_type === "annual_service") &&
+                  new Date(e.event_date) >= sixMonthsAgo
+                ).length;
+                // Last service of any kind
+                const allServiceDates: string[] = [
+                  ...amcEvents.map((e) => e.event_date),
+                  ...serviceReports.map((r) => r.period_to || r.created_at).filter((d): d is string => !!d),
+                ].sort((a, b) => new Date(b).getTime() - new Date(a).getTime());
+                const lastServiceDate = allServiceDates[0] ?? null;
+                // Next scheduled — earliest future next_scheduled_date across events
+                const upcomingDates = amcEvents
+                  .map((e) => e.next_scheduled_date)
+                  .filter((d): d is string => !!d && new Date(d) >= now)
+                  .sort((a, b) => new Date(a).getTime() - new Date(b).getTime());
+                const nextScheduled = upcomingDates[0] ?? null;
+                // MTTR (mean time to resolution) — average days from event_date to confirmed_at
+                const resolvedDurations = amcEvents
+                  .filter((e) => e.confirmed_at)
+                  .map((e) => {
+                    const start = new Date(e.event_date).getTime();
+                    const end = new Date(e.confirmed_at!).getTime();
+                    return Math.max(0, (end - start) / (1000 * 60 * 60 * 24));
+                  });
+                const mttrDays = resolvedDurations.length > 0
+                  ? resolvedDurations.reduce((s, d) => s + d, 0) / resolvedDurations.length
+                  : null;
+
+                return (
+                  <section className="rounded-lg border bg-gradient-to-br from-slate-50 to-blue-50/30 p-4 space-y-3">
+                    <div className="flex items-center gap-2">
+                      <TrendingUp className="h-4 w-4 text-blue-600" />
+                      <div className="text-xs uppercase tracking-wide font-semibold text-blue-900">Performance Summary</div>
+                    </div>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                      <div>
+                        <div className="text-xs text-muted-foreground">Breakdowns (6mo)</div>
+                        <div className={cn(
+                          "text-lg font-bold",
+                          last6moBreakdowns === 0 ? "text-emerald-700" :
+                          last6moBreakdowns <= 2 ? "text-amber-700" : "text-rose-700"
+                        )}>
+                          {last6moBreakdowns}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Periodic Services (6mo)</div>
+                        <div className="text-lg font-bold text-blue-700">{last6moPreventive + serviceReports.filter(r => r.period_to && new Date(r.period_to) >= sixMonthsAgo).length}</div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">Last Service</div>
+                        <div className="text-sm font-semibold">
+                          {lastServiceDate ? (
+                            <>
+                              {formatDate(lastServiceDate)}
+                              <div className="text-[10px] font-normal text-muted-foreground">{timeAgo(lastServiceDate)}</div>
+                            </>
+                          ) : "—"}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-xs text-muted-foreground">{nextScheduled ? "Next Scheduled" : "MTTR"}</div>
+                        <div className="text-sm font-semibold">
+                          {nextScheduled
+                            ? formatDate(nextScheduled)
+                            : mttrDays !== null
+                              ? `${mttrDays.toFixed(1)} ${mttrDays === 1 ? "day" : "days"}`
+                              : "—"}
+                          {nextScheduled && (
+                            <div className="text-[10px] font-normal text-muted-foreground">in {Math.ceil((new Date(nextScheduled).getTime() - now.getTime()) / (1000 * 60 * 60 * 24))} days</div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </section>
+                );
+              })()}
+
               {/* Contracts */}
               <section className="space-y-3">
                 <div className="text-xs uppercase tracking-wide text-muted-foreground">AMC Contracts</div>
@@ -413,23 +527,56 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                     <p>No AMC contract linked to this asset yet.</p>
                     <p className="text-xs mt-1">Link this asset from Procurement &gt; AMC when creating or editing a service PO.</p>
                   </div>
-                ) : (
+                ) : (() => {
+                  // Sort contracts: active/expiring at top, inactive (pending activation)
+                  // next, then exhausted/expired at the bottom with reduced visual weight.
+                  // Within each group, newest start date wins.
+                  const priority: Record<string, number> = {
+                    active: 0, expiring: 1, inactive: 2, exhausted: 3, expired: 4,
+                  };
+                  const sortedContracts = [...amcContracts].sort((a, b) => {
+                    const aLc = computeAmcLifecycle({
+                      amc_start_date: a.amc_start_date,
+                      amc_end_date: a.amc_end_date,
+                      amc_visits_covered: a.amc_visits_covered,
+                      amc_visits_used: a.amc_visits_used,
+                    });
+                    const bLc = computeAmcLifecycle({
+                      amc_start_date: b.amc_start_date,
+                      amc_end_date: b.amc_end_date,
+                      amc_visits_covered: b.amc_visits_covered,
+                      amc_visits_used: b.amc_visits_used,
+                    });
+                    const pa = priority[aLc.status] ?? 99;
+                    const pb = priority[bLc.status] ?? 99;
+                    if (pa !== pb) return pa - pb;
+                    const aDate = a.amc_start_date ? new Date(a.amc_start_date).getTime() : 0;
+                    const bDate = b.amc_start_date ? new Date(b.amc_start_date).getTime() : 0;
+                    return bDate - aDate;
+                  });
+                  return (
                   <div className="space-y-2">
-                    {amcContracts.map((c) => {
+                    {sortedContracts.map((c) => {
                       const lc = computeAmcLifecycle({
                         amc_start_date: c.amc_start_date,
                         amc_end_date: c.amc_end_date,
                         amc_visits_covered: c.amc_visits_covered,
                         amc_visits_used: c.amc_visits_used,
                       });
+                      const canLogBreakdown = c.status === "ordered" && (lc.status === "active" || lc.status === "expiring");
+                      // Inactive contracts (expired, exhausted, pre-activation) get
+                      // greyed-out styling so the eye lands on the active contract first.
+                      const isDimmed = lc.status === "expired" || lc.status === "exhausted" || lc.status === "inactive";
                       return (
-                      <Link
+                      <div
                         key={c.id}
-                        href={`/procurement/orders/${c.id}`}
-                        className="block rounded-lg border bg-card p-4 hover:bg-accent/30 transition-colors space-y-3"
+                        className={cn(
+                          "rounded-lg border p-4 space-y-3 transition-opacity",
+                          isDimmed ? "bg-muted/40 opacity-70 hover:opacity-100" : "bg-card",
+                        )}
                       >
                         <div className="flex items-start justify-between gap-3">
-                          <div className="space-y-1">
+                          <div className="space-y-1 min-w-0">
                             <div className="flex items-center gap-2 flex-wrap">
                               <code className="text-xs font-mono">{c.po_number}</code>
                               <span className={cn("text-[10px] px-2 py-0.5 rounded-full font-medium border", lc.badgeClass)}>
@@ -437,13 +584,11 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                               </span>
                             </div>
                             <div className="text-sm">{c.procurement_vendors?.name || "—"}</div>
-                            <div className="flex items-center gap-3 text-xs text-muted-foreground">
-                              {c.amc_start_date && <span>{formatDate(c.amc_start_date)} — {c.amc_end_date ? formatDate(c.amc_end_date) : "Open"}</span>}
-                              {c.amc_contact_name && <span>{c.amc_contact_name}</span>}
-                              {c.amc_helpline_number && <span>{c.amc_helpline_number}</span>}
+                            <div className="text-xs text-muted-foreground">
+                              {c.amc_start_date && <>{formatDate(c.amc_start_date)} — {c.amc_end_date ? formatDate(c.amc_end_date) : "Open"}</>}
                             </div>
                             {(c.amc_scope_covered || c.amc_scope_exclusions) && (
-                              <div className="mt-1.5 grid grid-cols-2 gap-2 text-xs">
+                              <div className="mt-1.5 grid grid-cols-1 sm:grid-cols-2 gap-2 text-xs">
                                 {c.amc_scope_covered && (
                                   <div><span className="font-medium text-emerald-700">✓ Covered:</span> <span className="text-muted-foreground">{c.amc_scope_covered}</span></div>
                                 )}
@@ -458,10 +603,13 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                             <div className="text-xs text-muted-foreground">
                               {c.amc_visits_used}{c.amc_visits_covered ? ` / ${c.amc_visits_covered}` : ""} visits
                             </div>
-                            <ExternalLink className="h-3.5 w-3.5 ml-auto text-muted-foreground" />
+                            <Link href={`/procurement/orders/${c.id}`} className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                              View PO <ExternalLink className="h-3 w-3" />
+                            </Link>
                           </div>
                         </div>
-                        {/* Lifecycle strip — shows where this contract sits today */}
+
+                        {/* Lifecycle strip */}
                         <div className="pt-2 border-t border-dashed">
                           <AmcLifecycleStrip
                             createdAt={c.created_at}
@@ -471,11 +619,69 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                             amcVisitsUsed={c.amc_visits_used}
                           />
                         </div>
-                      </Link>
+
+                        {/* Vendor service contacts — tap-to-call/email/WhatsApp */}
+                        {(c.amc_contact_name || c.amc_helpline_number || c.amc_escalation_name || c.amc_escalation2_name) && (
+                          <div className="pt-3 border-t border-dashed space-y-2">
+                            <div className="flex items-center justify-between">
+                              <p className="text-xs font-semibold text-muted-foreground">Vendor Service Contacts</p>
+                              <p className="text-[10px] text-muted-foreground">L1 primary · L2 / L3 escalation</p>
+                            </div>
+                            <div className="space-y-1.5">
+                              <AmcContactRow
+                                level="L1"
+                                name={c.amc_contact_name}
+                                phone={c.amc_helpline_number}
+                                email={c.amc_contact_email}
+                                assetName={asset.name}
+                              />
+                              {(c.amc_escalation_name || c.amc_escalation_phone) && (
+                                <AmcContactRow
+                                  level="L2"
+                                  name={c.amc_escalation_name}
+                                  phone={c.amc_escalation_phone}
+                                  email={null}
+                                  assetName={asset.name}
+                                />
+                              )}
+                              {(c.amc_escalation2_name || c.amc_escalation2_phone) && (
+                                <AmcContactRow
+                                  level="L3"
+                                  name={c.amc_escalation2_name}
+                                  phone={c.amc_escalation2_phone}
+                                  email={null}
+                                  assetName={asset.name}
+                                />
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Log Breakdown Visit CTA — only when contract is active + PO is ordered */}
+                        {canLogBreakdown && (
+                          <div className="pt-3 border-t border-dashed">
+                            <Button
+                              size="sm"
+                              className="w-full bg-blue-600 hover:bg-blue-700"
+                              onClick={() => {
+                                setBreakdownPoId(c.id);
+                                setBreakdownEventNumber((amcEvents.filter(e => e.po_id === c.id).length) + 1);
+                                setBreakdownVisitsCovered(c.amc_visits_covered);
+                                setBreakdownVisitsUsed(c.amc_visits_used);
+                                setBreakdownDialogOpen(true);
+                              }}
+                            >
+                              <Wrench className="h-4 w-4 mr-1.5" />
+                              Log Breakdown Visit
+                            </Button>
+                          </div>
+                        )}
+                      </div>
                       );
                     })}
                   </div>
-                )}
+                  );
+                })()}
               </section>
 
               {/* Service & Breakdown History — unified memory of everything that's happened on this asset */}
@@ -636,6 +842,259 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
         )}
         onCreated={() => { fetchEvents(); fetchData(); }}
       />
+
+      {/* Log Breakdown Visit — opens against a specific AMC contract picked on the card */}
+      {breakdownPoId && (
+        <AmcEventDialog
+          open={breakdownDialogOpen}
+          onOpenChange={setBreakdownDialogOpen}
+          poId={breakdownPoId}
+          eventNumber={breakdownEventNumber}
+          visitsCovered={breakdownVisitsCovered}
+          visitsUsed={breakdownVisitsUsed}
+          defaultAssetId={asset.id}
+          onSuccess={() => { setAmcLoaded(false); fetchAmc(); }}
+        />
+      )}
+    </div>
+  );
+}
+
+/* ── Asset Memory — auto-generated narrative summary ──────────────────────── */
+
+interface MemoryInput {
+  assetName: string;
+  assetCode: string;
+  createdAt: string;
+  purchaseDate?: string | null;
+  installationDate?: string | null;
+  attentionNotes?: string | null;
+  contracts: AmcContract[];
+  events: AmcEvent[];
+  serviceReports: ServiceReport[];
+  issues: FacilityIssue[];
+}
+
+function buildAssetMemory(m: MemoryInput): string[] {
+  const now = new Date();
+  const lines: string[] = [];
+
+  // ── Sentence 1: who/what + age + current AMC status ─────────────────────────
+  const ageStart = m.purchaseDate ? new Date(m.purchaseDate) : new Date(m.createdAt);
+  const ageMonths = Math.max(0, Math.floor((now.getTime() - ageStart.getTime()) / (1000 * 60 * 60 * 24 * 30.4)));
+  const ageStr = ageMonths < 1 ? "less than a month old"
+    : ageMonths < 12 ? `${ageMonths} month${ageMonths === 1 ? "" : "s"} old`
+    : `${(ageMonths / 12).toFixed(1)} years old`;
+
+  // Find the live-active contract (active or expiring)
+  const activeContract = m.contracts.find((c) => {
+    const lc = computeAmcLifecycle({
+      amc_start_date: c.amc_start_date,
+      amc_end_date: c.amc_end_date,
+      amc_visits_covered: c.amc_visits_covered,
+      amc_visits_used: c.amc_visits_used,
+    });
+    return lc.status === "active" || lc.status === "expiring";
+  });
+  const pendingContract = m.contracts.find((c) => {
+    const lc = computeAmcLifecycle({
+      amc_start_date: c.amc_start_date,
+      amc_end_date: c.amc_end_date,
+      amc_visits_covered: c.amc_visits_covered,
+      amc_visits_used: c.amc_visits_used,
+    });
+    return lc.isPendingActivation;
+  });
+
+  let sentence1 = `${m.assetName} (${m.assetCode}) is ${ageStr}`;
+  if (activeContract) {
+    const vendor = activeContract.procurement_vendors?.name ?? "vendor";
+    const endStr = activeContract.amc_end_date ? formatDate(activeContract.amc_end_date) : "open-ended";
+    sentence1 += ` and is currently under AMC with ${vendor} until ${endStr}`;
+  } else if (pendingContract) {
+    const vendor = pendingContract.procurement_vendors?.name ?? "vendor";
+    const startStr = pendingContract.amc_start_date ? formatDate(pendingContract.amc_start_date) : "soon";
+    sentence1 += `. AMC with ${vendor} activates ${startStr}`;
+  } else if (m.contracts.length > 0) {
+    sentence1 += ". No active AMC right now";
+  } else {
+    sentence1 += ". No AMC contract on record";
+  }
+  sentence1 += ".";
+  lines.push(sentence1);
+
+  // ── Sentence 2: breakdown frequency + pattern detection ─────────────────────
+  const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());
+  const breakdowns = m.events.filter(
+    (e) => e.event_type === "breakdown" && new Date(e.event_date) >= sixMonthsAgo
+  );
+  const allIssues6mo = m.issues.filter((i) => new Date(i.created_at) >= sixMonthsAgo);
+
+  if (breakdowns.length > 0 || allIssues6mo.length > 0) {
+    let sentence2 = "";
+    if (breakdowns.length > 0) {
+      sentence2 = `${breakdowns.length} breakdown${breakdowns.length === 1 ? "" : "s"} logged in the last 6 months`;
+    } else if (allIssues6mo.length > 0) {
+      sentence2 = `${allIssues6mo.length} issue${allIssues6mo.length === 1 ? "" : "s"} reported in the last 6 months`;
+    }
+    // Recurring-keyword detection from issue titles + breakdown descriptions
+    const corpus = [
+      ...allIssues6mo.map((i) => i.title.toLowerCase()),
+      ...breakdowns.map((b) => b.issue_description.toLowerCase()),
+    ].join(" ");
+    const stopWords = new Set(["the", "and", "for", "with", "from", "this", "that", "not", "but", "very", "asset", "issue", "problem", "again"]);
+    const wordCounts: Record<string, number> = {};
+    for (const word of corpus.match(/[a-z]{4,}/g) ?? []) {
+      if (stopWords.has(word)) continue;
+      wordCounts[word] = (wordCounts[word] ?? 0) + 1;
+    }
+    const recurring = Object.entries(wordCounts).find(([, count]) => count >= 3);
+    if (recurring) {
+      sentence2 += ` — recurring keyword "${recurring[0]}" (${recurring[1]} times)`;
+    }
+    // MTTR — average days from event_date to confirmed_at on resolved events
+    const resolvedDurations = m.events
+      .filter((e) => e.confirmed_at)
+      .map((e) => Math.max(0, (new Date(e.confirmed_at!).getTime() - new Date(e.event_date).getTime()) / (1000 * 60 * 60 * 24)));
+    if (resolvedDurations.length > 0) {
+      const mttr = resolvedDurations.reduce((s, d) => s + d, 0) / resolvedDurations.length;
+      sentence2 += `. Average resolution time: ${mttr.toFixed(1)} day${mttr === 1 ? "" : "s"}`;
+    }
+    sentence2 += ".";
+    lines.push(sentence2);
+  } else if (m.contracts.length > 0 || m.events.length > 0) {
+    lines.push("No breakdowns or issues in the last 6 months — the asset has been quiet.");
+  }
+
+  // ── Sentence 3: last service + next due signal ──────────────────────────────
+  const lastEvent = m.events[0]; // events come pre-sorted desc
+  const lastReport = m.serviceReports[0];
+  const lastDate = (() => {
+    const a = lastEvent ? new Date(lastEvent.event_date) : null;
+    const b = lastReport?.period_to ? new Date(lastReport.period_to) : (lastReport ? new Date(lastReport.created_at) : null);
+    if (a && b) return a > b ? a : b;
+    return a ?? b;
+  })();
+  const nextScheduled = m.events
+    .map((e) => e.next_scheduled_date)
+    .filter((d): d is string => !!d && new Date(d) >= now)
+    .sort((a, b) => new Date(a).getTime() - new Date(b).getTime())[0];
+
+  if (lastDate || nextScheduled) {
+    let sentence3 = "";
+    if (lastDate) {
+      const daysSince = Math.floor((now.getTime() - lastDate.getTime()) / (1000 * 60 * 60 * 24));
+      sentence3 = `Last service ${daysSince === 0 ? "today" : daysSince === 1 ? "yesterday" : `${daysSince} days ago`}`;
+    }
+    if (nextScheduled) {
+      const daysTo = Math.ceil((new Date(nextScheduled).getTime() - now.getTime()) / (1000 * 60 * 60 * 24));
+      sentence3 += sentence3 ? `, next visit due in ${daysTo} day${daysTo === 1 ? "" : "s"}` : `Next visit due in ${daysTo} day${daysTo === 1 ? "" : "s"}`;
+    }
+    sentence3 += ".";
+    lines.push(sentence3);
+  } else if (activeContract) {
+    // Active AMC but no events logged yet — flag the gap
+    const daysActive = activeContract.amc_start_date
+      ? Math.floor((now.getTime() - new Date(activeContract.amc_start_date).getTime()) / (1000 * 60 * 60 * 24))
+      : 0;
+    if (daysActive > 30) {
+      lines.push(`No service visits logged in ${daysActive} days under this AMC — worth checking with the vendor.`);
+    }
+  }
+
+  // ── Optional sentence 4: attention notes echo ──────────────────────────────
+  if (m.attentionNotes?.trim()) {
+    lines.push(`Standing instruction: ${m.attentionNotes.trim()}`);
+  }
+
+  return lines;
+}
+
+function AssetMemoryCard(props: MemoryInput) {
+  const lines = buildAssetMemory(props);
+  if (lines.length === 0) return null;
+  return (
+    <section className="rounded-lg border border-blue-200 bg-gradient-to-br from-blue-50/60 to-white p-4 space-y-2">
+      <div className="flex items-center gap-2">
+        <FileText className="h-4 w-4 text-blue-600" />
+        <div className="text-xs uppercase tracking-wide font-semibold text-blue-900">Asset Memory</div>
+        <div className="text-[10px] text-muted-foreground ml-auto">auto-summarised from this asset&apos;s data</div>
+      </div>
+      <div className="text-sm text-slate-700 leading-relaxed">
+        {lines.map((l, i) => (
+          <span key={i}>
+            {l}{i < lines.length - 1 ? " " : ""}
+          </span>
+        ))}
+      </div>
+    </section>
+  );
+}
+
+/* ── Vendor contact row with tap-to-call / WhatsApp / email ───────────────── */
+
+function AmcContactRow({
+  level, name, phone, email, assetName,
+}: {
+  level: "L1" | "L2" | "L3";
+  name: string | null;
+  phone: string | null;
+  email: string | null;
+  assetName: string;
+}) {
+  if (!name && !phone && !email) return null;
+  // Normalise the phone for tel: + wa.me — strip everything that's not digits.
+  // If the result is 10 digits we assume India and prefix 91; otherwise pass as-is.
+  const digits = phone ? phone.replace(/\D/g, "") : "";
+  const e164 = digits.length === 10 ? `91${digits}` : digits;
+  const telHref = phone ? `tel:${phone.startsWith("+") ? phone : `+${e164}`}` : null;
+  const waText = encodeURIComponent(`Hi ${name ?? "team"}, raising a service request for ${assetName}.`);
+  const waHref = e164 ? `https://wa.me/${e164}?text=${waText}` : null;
+  const mailHref = email ? `mailto:${email}?subject=${encodeURIComponent(`Service request — ${assetName}`)}` : null;
+
+  return (
+    <div className="flex items-center justify-between gap-2 py-1.5 px-2 rounded-md bg-muted/30">
+      <div className="min-w-0">
+        <div className="flex items-center gap-1.5">
+          <span className="text-[10px] px-1.5 py-0.5 rounded-full font-semibold bg-blue-100 text-blue-700">
+            {level}
+          </span>
+          <span className="text-sm font-medium truncate">{name ?? "—"}</span>
+        </div>
+        {phone && <div className="text-xs text-muted-foreground mt-0.5 ml-7">{phone}</div>}
+        {email && <div className="text-xs text-muted-foreground ml-7">{email}</div>}
+      </div>
+      <div className="flex items-center gap-1 shrink-0">
+        {telHref && (
+          <a
+            href={telHref}
+            className="h-8 w-8 rounded-full flex items-center justify-center bg-emerald-100 text-emerald-700 hover:bg-emerald-200"
+            title="Call"
+          >
+            <Phone className="h-3.5 w-3.5" />
+          </a>
+        )}
+        {waHref && (
+          <a
+            href={waHref}
+            target="_blank"
+            rel="noopener noreferrer"
+            className="h-8 w-8 rounded-full flex items-center justify-center bg-green-100 text-green-700 hover:bg-green-200"
+            title="WhatsApp"
+          >
+            <MessageCircle className="h-3.5 w-3.5" />
+          </a>
+        )}
+        {mailHref && (
+          <a
+            href={mailHref}
+            className="h-8 w-8 rounded-full flex items-center justify-center bg-blue-100 text-blue-700 hover:bg-blue-200"
+            title="Email"
+          >
+            <Mail className="h-3.5 w-3.5" />
+          </a>
+        )}
+      </div>
     </div>
   );
 }
