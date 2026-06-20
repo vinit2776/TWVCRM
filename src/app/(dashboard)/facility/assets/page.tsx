@@ -2,11 +2,12 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Plus, Search, Pencil } from "lucide-react";
+import { Plus, Search, Pencil, ScanLine } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { FacilityAssetFormDialog } from "@/components/facility/asset-form-dialog";
+import { QRScannerDialog } from "@/components/facility/qr-scanner-dialog";
 import type { FacilityAsset } from "@/types";
 
 interface Location { id: string; name: string }
@@ -19,6 +20,7 @@ export default function FacilityAssetsPage() {
   const [locationId, setLocationId] = useState("");
   const [openForm, setOpenForm] = useState(false);
   const [editing, setEditing] = useState<FacilityAsset | null>(null);
+  const [scannerOpen, setScannerOpen] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -59,9 +61,14 @@ export default function FacilityAssetsPage() {
           <h1 className="text-xl md:text-2xl font-semibold">Facility Assets</h1>
           <p className="text-xs md:text-sm text-muted-foreground">Equipment inventory: UDMs, switches, access points and more</p>
         </div>
-        <Button size="sm" onClick={() => { setEditing(null); setOpenForm(true); }}>
-          <Plus className="h-4 w-4 mr-1" /> Add Asset
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button size="sm" variant="outline" onClick={() => setScannerOpen(true)}>
+            <ScanLine className="h-4 w-4 mr-1" /> Scan QR
+          </Button>
+          <Button size="sm" onClick={() => { setEditing(null); setOpenForm(true); }}>
+            <Plus className="h-4 w-4 mr-1" /> Add Asset
+          </Button>
+        </div>
       </div>
 
       <div className="flex items-center gap-2">
@@ -143,6 +150,8 @@ export default function FacilityAssetsPage() {
         defaultLocationId={locationId}
         onSuccess={() => fetchData()}
       />
+
+      <QRScannerDialog open={scannerOpen} onClose={() => setScannerOpen(false)} />
     </div>
   );
 }
