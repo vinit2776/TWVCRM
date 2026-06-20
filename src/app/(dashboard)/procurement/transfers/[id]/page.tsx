@@ -272,11 +272,20 @@ export default function TransferDetailPage() {
             <ChevronLeft className="h-5 w-5" />
           </Button>
           <div>
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <h1 className="text-2xl font-bold">{transfer.transfer_number}</h1>
               <Badge variant="secondary" className={TRANSFER_STATUS_COLORS[transfer.status]}>
                 {TRANSFER_STATUS_LABELS[transfer.status]}
               </Badge>
+              {(transfer as unknown as { billing_status?: string }).billing_status === "billed" && (
+                <Badge className="bg-amber-100 text-amber-800 border-amber-300">Billable — Billed</Badge>
+              )}
+              {(transfer as unknown as { billing_status?: string }).billing_status === "pending" && (
+                <Badge className="bg-amber-100 text-amber-800 border-amber-300">Billable — Pending</Badge>
+              )}
+              {(transfer as unknown as { billing_status?: string }).billing_status === "error" && (
+                <Badge variant="destructive">Billing Error</Badge>
+              )}
             </div>
             <p className="text-sm text-muted-foreground flex items-center gap-1 mt-0.5">
               {transfer.from_location?.name ?? "—"}
@@ -515,6 +524,37 @@ export default function TransferDetailPage() {
           </div>
         </CardContent>
       </Card>
+
+      {/* Billing Summary (billable transfers only, after receipt) */}
+      {(transfer as unknown as { billing_status?: string }).billing_status === "billed" && (
+        <Card className="border-amber-300 bg-amber-50/30 dark:bg-amber-950/10">
+          <CardHeader className="pb-2">
+            <CardTitle className="text-base text-amber-800 dark:text-amber-300 flex items-center gap-2">
+              Billing Summary
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <p className="text-xs text-muted-foreground mb-3">
+              This transfer has been billed. The charge will appear on the destination&apos;s next billing statement.
+              Refer to this DC ({transfer.transfer_number}) for the itemised goods list.
+            </p>
+            <div className="text-sm space-y-1">
+              <div className="flex justify-between text-muted-foreground">
+                <span>Procurement value (incl. GST)</span>
+                <span className="font-mono">see DC</span>
+              </div>
+              <div className="flex justify-between text-muted-foreground">
+                <span>Service charge</span>
+                <span className="font-mono">see DC</span>
+              </div>
+              <div className="flex justify-between font-medium border-t pt-1 mt-1">
+                <span>Usage charge created</span>
+                <Badge className="bg-green-100 text-green-800">Pending billing</Badge>
+              </div>
+            </div>
+          </CardContent>
+        </Card>
+      )}
 
       {/* Issues Section */}
       {issues.length > 0 && (transfer.status === "issue_raised" || transfer.status === "received" || transfer.status === "completed") && (

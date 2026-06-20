@@ -207,8 +207,10 @@ const navSections: NavSection[] = [
     label: "Admin",
     icon: Settings,
     items: [
-      { href: "/locations",           label: "Locations",      icon: MapPin,        roles: ["admin", "manager", "fms", "floor_manager"] },
-      { href: "/audit-logs",          label: "Audit Logs",     icon: ClipboardList, roles: ["admin", "manager"] },
+      { href: "/locations",                        label: "Locations",              icon: MapPin,        roles: ["admin", "manager", "fms", "floor_manager"] },
+      { href: "/admin/user-locations",             label: "User Locations",          icon: UsersRound,    roles: ["admin", "manager"] },
+      { href: "/admin/transfer-billing-policies",  label: "Transfer Billing",        icon: ArrowLeftRight, roles: ["admin"] },
+      { href: "/audit-logs",                       label: "Audit Logs",              icon: ClipboardList, roles: ["admin", "manager"] },
       { href: "/admin/tally-sync",    label: "Tally Sync",     icon: RefreshCw,     roles: ["admin"] },
       { href: "/infrastructure",      label: "Infrastructure", icon: Server,        roles: ["admin"] },
       { href: "/support",             label: "Support",        icon: LifeBuoy,      roles: ["admin"] },
