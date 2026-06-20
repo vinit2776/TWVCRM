@@ -36,7 +36,8 @@ import { RentRevenueWidget } from "@/components/dashboard/widgets/rent-revenue-w
 import { NetworkWidget } from "@/components/network/network-widget";
 
 import Link from "next/link";
-import { Bell, RefreshCw, Zap } from "lucide-react";
+import { Zap } from "lucide-react";
+import { EnquiryQueueRow } from "@/components/enquiries/enquiry-queue-row";
 
 import {
   DASHBOARD_ROLE_WIDGETS,
@@ -64,35 +65,16 @@ async function fetchWidgetConfig(role: UserRole): Promise<WidgetId[]> {
   return DASHBOARD_ROLE_WIDGETS[role];
 }
 
-// ─── Pure utility — defined outside any component ────────────────────────────
-
-function timeAgo(iso: string): string {
-  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (diff < 60) return `${diff}s ago`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
-
 // ─── Live Enquiries inline widget (uses context hook) ────────────────────────
 
 function LiveEnquiriesWidget() {
-  const {
-    newLeadCount,
-    reEnquiryCount,
-    recentItems,
-    markReEnquiriesSeen,
-  } = useEnquiryNotifications();
+  const { items, activeCount } = useEnquiryNotifications();
 
-  const newLeadItems = recentItems.filter((i) => i.type === "lead");
-  const reEnquiryItems = recentItems.filter((i) => i.type === "activity");
-  const hasLiveEnquiries = newLeadCount > 0 || reEnquiryCount > 0;
-
-  if (!hasLiveEnquiries) {
+  if (items.length === 0) {
     return (
       <div className="flex items-center gap-2 px-4 py-2.5 rounded-lg border border-dashed border-muted-foreground/20 text-muted-foreground/60">
         <Zap className="h-4 w-4" />
-        <p className="text-xs">No pending new enquiries — you&apos;re all caught up!</p>
+        <p className="text-xs">No pending enquiries — you&apos;re all caught up!</p>
       </div>
     );
   }
@@ -110,85 +92,25 @@ function LiveEnquiriesWidget() {
               Live Enquiries
             </span>
             <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-emerald-500 px-1.5 text-[10px] font-bold text-white">
-              {newLeadCount + reEnquiryCount}
+              {activeCount}
             </span>
           </div>
           <Link
-            href="/leads?status=new"
+            href="/leads/enquiry-log"
             className="text-xs font-medium text-emerald-700 hover:underline underline-offset-2"
           >
-            All New Leads →
+            Enquiry log →
           </Link>
         </div>
 
-        <div className="space-y-3">
-          {newLeadItems.length > 0 && (
-            <div>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700 mb-1.5 flex items-center gap-1">
-                <Bell className="h-3 w-3" />
-                New Enquiries ({newLeadCount})
-              </p>
-              <div className="space-y-1">
-                {newLeadItems.slice(0, 4).map((item) => (
-                  <Link
-                    key={item.leadId}
-                    href={`/leads/${item.leadId}`}
-                    className="flex items-center justify-between rounded-md px-3 py-2 bg-white/80 hover:bg-white transition-colors border border-emerald-100 group"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate group-hover:text-emerald-700 transition-colors">
-                        {item.name}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        <span className="font-mono">#{item.leadId.slice(0, 6)}</span> · {item.source} · {timeAgo(item.time)}
-                      </p>
-                    </div>
-                    <span className="text-xs text-emerald-600 font-medium shrink-0 ml-2">→</span>
-                  </Link>
-                ))}
-                {newLeadCount > 4 && (
-                  <p className="text-xs text-emerald-700 text-center pt-1">+{newLeadCount - 4} more</p>
-                )}
-              </div>
-            </div>
-          )}
-
-          {reEnquiryItems.length > 0 && (
-            <div className={newLeadItems.length > 0 ? "border-t border-emerald-200 pt-3" : ""}>
-              <div className="flex items-center justify-between mb-1.5">
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-700 flex items-center gap-1">
-                  <RefreshCw className="h-3 w-3" />
-                  Re-Enquiries ({reEnquiryCount})
-                </p>
-                {reEnquiryCount > 0 && (
-                  <button
-                    onClick={markReEnquiriesSeen}
-                    className="text-[10px] text-muted-foreground hover:text-foreground transition-colors hover:underline underline-offset-2"
-                  >
-                    Mark seen
-                  </button>
-                )}
-              </div>
-              <div className="space-y-1">
-                {reEnquiryItems.slice(0, 4).map((item, idx) => (
-                  <Link
-                    key={item.leadId + "-" + idx}
-                    href={`/leads/${item.leadId}`}
-                    className="flex items-center justify-between rounded-md px-3 py-2 bg-amber-50/80 hover:bg-amber-50 transition-colors border border-amber-100 group"
-                  >
-                    <div className="min-w-0">
-                      <p className="text-sm font-medium truncate group-hover:text-amber-700 transition-colors">
-                        {item.name}
-                      </p>
-                      <p className="text-xs text-muted-foreground">
-                        <span className="font-mono">#{item.leadId.slice(0, 6)}</span> · {item.source} · {timeAgo(item.time)}
-                      </p>
-                    </div>
-                    <span className="text-xs text-amber-600 font-medium shrink-0 ml-2">→</span>
-                  </Link>
-                ))}
-              </div>
-            </div>
+        <div className="space-y-2">
+          {items.slice(0, 6).map((item) => (
+            <EnquiryQueueRow key={item.leadId} item={item} />
+          ))}
+          {items.length > 6 && (
+            <p className="text-xs text-emerald-700 text-center pt-1">
+              +{items.length - 6} more — see <Link href="/leads/enquiry-log" className="underline">enquiry log</Link>
+            </p>
           )}
         </div>
       </div>

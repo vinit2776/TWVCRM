@@ -11,7 +11,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
-import type { EnquiryNotificationItem, WhatsAppInboundItem } from "@/providers/enquiry-notifications-provider";
+import type { WhatsAppInboundItem } from "@/providers/enquiry-notifications-provider";
+import { EnquiryQueueRow } from "@/components/enquiries/enquiry-queue-row";
 
 function timeAgo(iso: string): string {
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -19,39 +20,6 @@ function timeAgo(iso: string): string {
   if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
   if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
   return `${Math.floor(diff / 86400)}d ago`;
-}
-
-function NotificationRow({
-  item,
-  onClose,
-  onDismiss,
-}: {
-  item: EnquiryNotificationItem;
-  onClose: () => void;
-  onDismiss?: (leadId: string) => void;
-}) {
-  const router = useRouter();
-
-  function handleClick() {
-    onClose();
-    onDismiss?.(item.leadId);
-    router.push(`/leads/${item.leadId}`);
-  }
-
-  return (
-    <button
-      onClick={handleClick}
-      className="w-full flex items-start justify-between gap-2 px-3 py-2 rounded-md text-left hover:bg-muted transition-colors"
-    >
-      <div className="min-w-0 flex-1">
-        <p className="text-sm font-medium truncate">{item.name}</p>
-        <p className="text-xs text-muted-foreground truncate">
-          <span className="font-mono">#{item.leadId.slice(0, 6)}</span> · {item.source} · {timeAgo(item.time)}
-        </p>
-      </div>
-      <span className="text-muted-foreground mt-0.5 shrink-0 text-xs">→</span>
-    </button>
-  );
 }
 
 function WhatsAppRow({
@@ -87,13 +55,9 @@ function WhatsAppRow({
 export function NotificationBell() {
   const [open, setOpen] = useState(false);
   const {
-    totalCount, newLeadCount, reEnquiryCount, recentItems,
-    markReEnquiriesSeen, dismissReEnquiryItem,
+    totalCount, activeCount, items,
     waInboundCount, waInboundItems, markWhatsAppSeen,
   } = useEnquiryNotifications();
-
-  const newLeadItems = recentItems.filter((i) => i.type === "lead");
-  const reEnquiryItems = recentItems.filter((i) => i.type === "activity");
 
   function handleClose() {
     setOpen(false);
@@ -117,7 +81,7 @@ export function NotificationBell() {
         </Button>
       </DropdownMenuTrigger>
 
-      <DropdownMenuContent align="end" className="w-80 p-0" sideOffset={8}>
+      <DropdownMenuContent align="end" className="w-96 p-0" sideOffset={8}>
         {/* Header */}
         <div className="flex items-center justify-between px-3 py-2.5 border-b">
           <p className="text-sm font-semibold">Enquiry Notifications</p>
@@ -128,34 +92,20 @@ export function NotificationBell() {
           )}
         </div>
 
-        <div className="max-h-96 overflow-y-auto">
-          {/* New Enquiries section */}
-          {newLeadItems.length > 0 && (
+        <div className="max-h-[28rem] overflow-y-auto">
+          {/* Active enquiries — single list, drives both new + re-enquiry attention */}
+          {items.length > 0 && (
             <div className="px-3 py-2">
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                New Enquiries ({newLeadCount})
+              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1.5">
+                Needs attention ({activeCount})
               </p>
-              <div className="space-y-0.5">
-                {newLeadItems.map((item) => (
-                  <NotificationRow key={item.leadId + "-lead"} item={item} onClose={handleClose} />
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Re-Enquiries section */}
-          {reEnquiryItems.length > 0 && (
-            <div className={`px-3 py-2 ${newLeadItems.length > 0 ? "border-t" : ""}`}>
-              <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1">
-                Re-Enquiries ({reEnquiryCount})
-              </p>
-              <div className="space-y-0.5">
-                {reEnquiryItems.map((item, idx) => (
-                  <NotificationRow
-                    key={item.leadId + "-activity-" + idx}
+              <div className="space-y-1.5">
+                {items.slice(0, 8).map((item) => (
+                  <EnquiryQueueRow
+                    key={item.leadId}
                     item={item}
-                    onClose={handleClose}
-                    onDismiss={dismissReEnquiryItem}
+                    onNavigate={handleClose}
+                    compact
                   />
                 ))}
               </div>
@@ -164,7 +114,7 @@ export function NotificationBell() {
 
           {/* WhatsApp Replies section */}
           {waInboundItems.length > 0 && (
-            <div className={`px-3 py-2 ${recentItems.length > 0 ? "border-t" : ""}`}>
+            <div className={`px-3 py-2 ${items.length > 0 ? "border-t" : ""}`}>
               <p className="text-[10px] font-semibold uppercase tracking-wider text-muted-foreground mb-1 flex items-center gap-1">
                 <MessageSquare className="h-3 w-3 text-green-600" />
                 WhatsApp Replies ({waInboundCount > 0 ? waInboundCount : waInboundItems.length})
@@ -178,7 +128,7 @@ export function NotificationBell() {
           )}
 
           {/* Empty state */}
-          {recentItems.length === 0 && waInboundItems.length === 0 && (
+          {items.length === 0 && waInboundItems.length === 0 && (
             <div className="px-3 py-6 text-center">
               <Bell className="h-8 w-8 mx-auto mb-2 text-muted-foreground/40" />
               <p className="text-sm text-muted-foreground">No notifications</p>
@@ -188,16 +138,13 @@ export function NotificationBell() {
 
         {/* Footer */}
         <div className="flex items-center justify-between gap-2 px-3 py-2 border-t">
-          {reEnquiryCount > 0 ? (
-            <button
-              onClick={markReEnquiriesSeen}
-              className="text-xs text-muted-foreground hover:text-foreground transition-colors underline-offset-2 hover:underline"
-            >
-              Mark re-enquiries seen
-            </button>
-          ) : (
-            <span />
-          )}
+          <Link
+            href="/leads/enquiry-log"
+            onClick={handleClose}
+            className="text-xs text-muted-foreground hover:text-foreground underline-offset-2 hover:underline"
+          >
+            Enquiry log →
+          </Link>
           <Link
             href="/leads?status=new"
             onClick={handleClose}

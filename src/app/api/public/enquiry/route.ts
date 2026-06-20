@@ -258,6 +258,20 @@ export async function POST(request: NextRequest) {
       description: enquirySummary,
     });
 
+    // Re-open the attention window: clear any prior claim/resolve so the
+    // dashboard surfaces this lead again, and bump the overdue timer.
+    await supabase
+      .from("leads")
+      .update({
+        claimed_by: null,
+        claimed_at: null,
+        resolved_at: null,
+        resolved_by: null,
+        resolution_outcome: null,
+        attention_reset_at: new Date().toISOString(),
+      })
+      .eq("id", existing.id);
+
     // Fire-and-forget email + push alert — must not block the response
     resend.emails.send({
       from: EMAIL_FROM,
