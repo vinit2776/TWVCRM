@@ -9,7 +9,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
-import type { EnquiryItem, ResolutionOutcome } from "@/hooks/use-enquiry-notifications";
+import type { EnquiryItem, ResolutionOutcome } from "@/providers/enquiry-notifications-provider";
 
 const OUTCOME_LABEL: Record<ResolutionOutcome, string> = {
   converted: "Converted to lead",
@@ -31,13 +31,6 @@ function timeAgo(iso: string): string {
   return `${Math.floor(diff / 86400)}d`;
 }
 
-/**
- * Returns the urgency tier of this item.
- *   red    — unclaimed and overdue by ≥4h
- *   yellow — unclaimed and overdue by ≥2h
- *   stale  — claimed but unresolved for ≥24h
- *   ok     — anything else
- */
 function urgency(item: EnquiryItem): "red" | "yellow" | "stale" | "ok" {
   if (item.resolvedAt) return "ok";
   const now = Date.now();
@@ -54,9 +47,7 @@ function urgency(item: EnquiryItem): "red" | "yellow" | "stale" | "ok" {
 
 interface Props {
   item: EnquiryItem;
-  /** Called when the user navigates away to the lead — for closing parent dropdown/etc. */
   onNavigate?: () => void;
-  /** Compact mode hides the mobile number and trims paddings — used in the bell dropdown. */
   compact?: boolean;
 }
 
@@ -87,7 +78,6 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
       className={`rounded-lg border ${borderClass} ${compact ? "px-2.5 py-2" : "px-3 py-2.5"} transition-colors`}
     >
       <div className="flex items-start justify-between gap-2">
-        {/* Left: name + meta */}
         <button onClick={goToLead} className="min-w-0 flex-1 text-left">
           <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-sm font-medium truncate">{item.name}</span>
@@ -109,7 +99,6 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
           </p>
         </button>
 
-        {/* Right: badge + age */}
         <div className="shrink-0 flex flex-col items-end gap-0.5 text-right">
           {isResolved && item.resolutionOutcome && (
             <span className={`rounded-full px-1.5 py-0.5 text-[10px] font-semibold ${OUTCOME_BG[item.resolutionOutcome]}`}>
@@ -137,7 +126,6 @@ export function EnquiryQueueRow({ item, onNavigate, compact = false }: Props) {
         </div>
       </div>
 
-      {/* Action row */}
       {!isResolved && (
         <div className="mt-2 flex items-center gap-1.5 flex-wrap">
           {item.claimedAt ? (
