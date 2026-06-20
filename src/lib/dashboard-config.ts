@@ -83,7 +83,6 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
   admin: [
     "pending_actions",
     "live_enquiries",
-    "kpi_stats",
     "week_in_review",
     "mtd_bookings",
     "revenue_pulse",
