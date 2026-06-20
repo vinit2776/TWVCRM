@@ -1928,12 +1928,30 @@ export interface PurchaseRequest {
   total_estimated_amount: number;
   created_at: string;
   updated_at: string;
+  // AMC service fields — only populated when department === "amc"
+  service_item_name?: string | null;
+  linked_asset_id?: string | null;
+  amc_coverage_type?: "comprehensive" | "labour_only" | null;
+  amc_start_date?: string | null;
+  amc_end_date?: string | null;
+  amc_visits_covered?: number | null;
+  amc_contact_name?: string | null;
+  amc_helpline_number?: string | null;
+  amc_contact_email?: string | null;
+  amc_escalation_name?: string | null;
+  amc_escalation_phone?: string | null;
+  amc_escalation2_name?: string | null;
+  amc_escalation2_phone?: string | null;
+  advance_amount?: number | null;
+  advance_payment_mode?: "neft" | "rtgs" | "imps" | "bank_transfer" | "cheque" | "cash" | null;
+  advance_notes?: string | null;
   // Joined fields
   locations?: { id: string; name: string } | null;
   requester?: { id: string; full_name?: string; email?: string } | null;
   approver?: { id: string; full_name?: string; email?: string } | null;
   purchase_request_items?: PurchaseRequestItem[];
   material_request_quotations?: MaterialRequestQuotation[];
+  linked_asset?: { id: string; name: string; asset_code: string } | null;
 }
 
 export interface MaterialRequestQuotation {

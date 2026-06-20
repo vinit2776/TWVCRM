@@ -1,9 +1,9 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, Suspense } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
-import { useRouter } from "next/navigation";
-import { Plus, Trash2, ChevronLeft, Search, Package, PenLine, AlertTriangle, FileUp, Paperclip } from "lucide-react";
+import { useRouter, useSearchParams } from "next/navigation";
+import { Plus, Trash2, ChevronLeft, Search, Package, PenLine, AlertTriangle, FileUp, Paperclip, Wrench, ChevronDown, ChevronUp } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -24,7 +24,8 @@ import {
   ITEM_UNITS,
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
-import type { ProcurementItem, Location, ProcurementDepartment, ItemUnit } from "@/types";
+import { SearchableSelect } from "@/components/ui/searchable-select";
+import type { ProcurementItem, Location, ProcurementDepartment, ItemUnit, FacilityAsset } from "@/types";
 
 interface LineItem {
   id: string; // local draft id
@@ -57,10 +58,47 @@ const emptyItem = (): LineItem => ({
 });
 
 export default function NewPurchaseRequestPage() {
+  return (
+    <Suspense fallback={<div className="p-6 text-sm text-muted-foreground">Loading…</div>}>
+      <NewPurchaseRequestForm />
+    </Suspense>
+  );
+}
+
+function NewPurchaseRequestForm() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const { user } = useCurrentUser();
-  const [department, setDepartment] = useState<ProcurementDepartment>("pantry");
+  // Pre-select department from ?department=amc — used by the legacy /orders/new-service redirect
+  const initialDepartment = (searchParams.get("department") as ProcurementDepartment | null) ?? "pantry";
+  const [department, setDepartment] = useState<ProcurementDepartment>(
+    PROCUREMENT_DEPARTMENTS.includes(initialDepartment) ? initialDepartment : "pantry"
+  );
   const [locationId, setLocationId] = useState<string>("");
+
+  // ── AMC fields (used when department === "amc") ─────────────────────────────
+  const [assets, setAssets] = useState<FacilityAsset[]>([]);
+  const [linkedAssetId, setLinkedAssetId] = useState("");
+  const [serviceItemName, setServiceItemName] = useState("");
+  const [amcCoverageType, setAmcCoverageType] = useState<"comprehensive" | "labour_only">("comprehensive");
+  const [amcStartDate, setAmcStartDate] = useState("");
+  const [amcEndDate, setAmcEndDate] = useState("");
+  const [amcUnlimited, setAmcUnlimited] = useState(false);
+  const [amcVisitsCovered, setAmcVisitsCovered] = useState("");
+  const [amcAnnualAmount, setAmcAnnualAmount] = useState(""); // pre-GST, INR
+  const [amcContactName, setAmcContactName] = useState("");
+  const [amcHelpline, setAmcHelpline] = useState("");
+  const [amcContactEmail, setAmcContactEmail] = useState("");
+  const [amcEscalationName, setAmcEscalationName] = useState("");
+  const [amcEscalationPhone, setAmcEscalationPhone] = useState("");
+  const [amcEscalation2Name, setAmcEscalation2Name] = useState("");
+  const [amcEscalation2Phone, setAmcEscalation2Phone] = useState("");
+  // Advance request — admin will approve on the PO, but the ask starts here.
+  const [advanceRequired, setAdvanceRequired] = useState(false);
+  const [advanceExpanded, setAdvanceExpanded] = useState(false);
+  const [advanceAmount, setAdvanceAmount] = useState("");
+  const [advanceMode, setAdvanceMode] = useState<"" | "neft" | "rtgs" | "imps" | "bank_transfer" | "cheque" | "cash">("");
+  const [advanceNotes, setAdvanceNotes] = useState("");
   const [amcBudgetCheck, setAmcBudgetCheck] = useState<{
     has_budget: boolean;
     annual_budget: number | null;
@@ -85,6 +123,33 @@ export default function NewPurchaseRequestPage() {
       .then((j) => setAmcBudgetCheck(j))
       .catch(() => setAmcBudgetCheck(null));
   }, [department]);
+
+  // Fetch facility assets for the AMC asset-picker (only when AMC is selected)
+  useEffect(() => {
+    if (department !== "amc" || assets.length > 0) return;
+    fetch("/api/facility/assets?status=active")
+      .then((r) => r.json())
+      .then((j) => setAssets(j.data ?? []))
+      .catch(() => setAssets([]));
+  }, [department, assets.length]);
+
+  // Auto-fill service name + end date when asset/start date change.
+  const handleAssetSelect = (assetId: string) => {
+    setLinkedAssetId(assetId);
+    if (assetId && !serviceItemName) {
+      const a = assets.find((x) => x.id === assetId);
+      if (a) setServiceItemName(`Annual Maintenance Contract — ${a.name}`);
+    }
+  };
+  const handleAmcStartDateChange = (v: string) => {
+    setAmcStartDate(v);
+    if (v && !amcEndDate) {
+      const d = new Date(v);
+      d.setFullYear(d.getFullYear() + 1);
+      d.setDate(d.getDate() - 1);
+      setAmcEndDate(d.toISOString().split("T")[0]);
+    }
+  };
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<LineItem[]>([emptyItem()]);
   // Quotations: staged in client memory until the MR is created, then uploaded.
@@ -183,21 +248,60 @@ export default function NewPurchaseRequestPage() {
     return sum;
   }, 0);
 
-  const buildPayload = (submit: boolean) => ({
-    department,
-    location_id: locationId || null,
-    expenditure_type: expenditureType,
-    notes: notes.trim() || undefined,
-    submit,
-    items: items.map((li) => ({
-      item_id: li.item_id || null,
-      item_name: li.item_name.trim(),
-      quantity: parseFloat(li.quantity),
-      unit: li.unit,
-      estimated_price: li.estimated_price ? parseFloat(li.estimated_price) : null,
-      notes: li.notes.trim() || undefined,
-    })),
-  });
+  const buildPayload = (submit: boolean) => {
+    // For AMC, synthesize a single line item from the AMC service block so the
+    // items table stays consistent (every PR has ≥1 item).
+    const isAmc = department === "amc";
+    const amount = parseFloat(amcAnnualAmount) || 0;
+    const payloadItems = isAmc
+      ? [{
+          item_id: null,
+          item_name: serviceItemName.trim() || "Annual Maintenance Contract",
+          quantity: 1,
+          unit: "year" as ItemUnit,
+          estimated_price: amount || null,
+          notes: undefined,
+        }]
+      : items.map((li) => ({
+          item_id: li.item_id || null,
+          item_name: li.item_name.trim(),
+          quantity: parseFloat(li.quantity),
+          unit: li.unit,
+          estimated_price: li.estimated_price ? parseFloat(li.estimated_price) : null,
+          notes: li.notes.trim() || undefined,
+        }));
+
+    return {
+      department,
+      location_id: locationId || null,
+      expenditure_type: expenditureType,
+      notes: notes.trim() || undefined,
+      submit,
+      items: payloadItems,
+      // AMC-specific fields — only sent when relevant, but always included
+      // (server ignores them on non-AMC departments).
+      ...(isAmc && {
+        service_item_name: serviceItemName.trim() || null,
+        linked_asset_id: linkedAssetId || null,
+        amc_coverage_type: amcCoverageType,
+        amc_start_date: amcStartDate || null,
+        amc_end_date: amcEndDate || null,
+        amc_visits_covered: amcUnlimited ? null : (parseInt(amcVisitsCovered) || null),
+        amc_contact_name: amcContactName.trim() || null,
+        amc_helpline_number: amcHelpline.trim() || null,
+        amc_contact_email: amcContactEmail.trim() || null,
+        amc_escalation_name: amcEscalationName.trim() || null,
+        amc_escalation_phone: amcEscalationPhone.trim() || null,
+        amc_escalation2_name: amcEscalation2Name.trim() || null,
+        amc_escalation2_phone: amcEscalation2Phone.trim() || null,
+        ...(advanceRequired && {
+          advance_amount: parseFloat(advanceAmount) || null,
+          advance_payment_mode: advanceMode || null,
+          advance_notes: advanceNotes.trim() || null,
+        }),
+      }),
+    };
+  };
 
   const isPriceOverCeiling = (li: LineItem): boolean => {
     if (li.isCustom) return false; // no ceiling for custom items
@@ -270,6 +374,24 @@ export default function NewPurchaseRequestPage() {
   };
 
   const validate = (): string | null => {
+    if (department === "amc") {
+      if (!linkedAssetId) return "Please select the asset this AMC covers";
+      if (!serviceItemName.trim()) return "Please enter the service / contract name";
+      if (!amcStartDate || !amcEndDate) return "AMC start and end dates are required";
+      if (new Date(amcEndDate) <= new Date(amcStartDate)) return "AMC end date must be after the start date";
+      if (!amcUnlimited && (!amcVisitsCovered || parseInt(amcVisitsCovered) <= 0))
+        return "Enter the number of visits covered, or tick 'Unlimited visits'";
+      const amt = parseFloat(amcAnnualAmount);
+      if (!amt || amt <= 0) return "Enter the annual AMC amount (pre-GST)";
+      if (!amcContactName.trim() || !amcHelpline.trim()) return "Primary contact name and helpline number are required";
+      if (advanceRequired) {
+        const adv = parseFloat(advanceAmount);
+        if (!adv || adv <= 0) return "Advance amount must be greater than zero";
+        if (adv > amt) return "Advance amount cannot exceed the annual AMC amount";
+        if (!advanceMode) return "Select an advance payment mode";
+      }
+      return null;
+    }
     for (const li of items) {
       if (!li.isCustom && !li.item_id) return "Please select all catalog items from the catalog, or use the Custom Item option for unlisted items";
       if (li.isCustom && !li.item_name.trim()) return "Custom items must have a name";
@@ -389,6 +511,12 @@ export default function NewPurchaseRequestPage() {
   const handleSubmit = () => {
     const err = validate();
     if (err) { toast.error(err); return; }
+    // AMC skips the goods-specific missing-price + pre-GST gates — annual amount
+    // is captured directly in the AMC block and validate() already required it.
+    if (department === "amc") {
+      doSubmit();
+      return;
+    }
     // Warn if any item is missing an estimated price — the omission cascades
     // silently through approval → PO → vendor bill with no price on record.
     const noPriceItems = items
@@ -497,7 +625,238 @@ export default function NewPurchaseRequestPage() {
         </CardContent>
       </Card>
 
-      {/* Line Items */}
+      {/* AMC Service Details — replaces the Line Items card when department=amc */}
+      {department === "amc" && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Wrench className="h-4 w-4" />
+              AMC Service Details <span className="text-red-500">*</span>
+            </CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label htmlFor="amc-asset">Linked Asset <span className="text-red-500">*</span></Label>
+                <SearchableSelect
+                  options={assets.map((a) => ({
+                    value: a.id,
+                    label: `${a.name}${a.asset_code ? ` (${a.asset_code})` : ""}`,
+                  }))}
+                  value={linkedAssetId}
+                  onValueChange={handleAssetSelect}
+                  placeholder="Select the asset this AMC covers..."
+                  emptyMessage="No active assets found"
+                />
+              </div>
+
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label htmlFor="service-item-name">Service / Contract Name <span className="text-red-500">*</span></Label>
+                <Input
+                  id="service-item-name"
+                  placeholder="e.g. Annual Maintenance Contract — HVAC System"
+                  value={serviceItemName}
+                  onChange={(e) => setServiceItemName(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1.5 sm:col-span-2">
+                <Label>Coverage Type <span className="text-red-500">*</span></Label>
+                <div className="flex gap-3">
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      name="amc-coverage"
+                      checked={amcCoverageType === "comprehensive"}
+                      onChange={() => setAmcCoverageType("comprehensive")}
+                    />
+                    Comprehensive (labour + parts)
+                  </label>
+                  <label className="flex items-center gap-2 text-sm cursor-pointer">
+                    <input
+                      type="radio"
+                      name="amc-coverage"
+                      checked={amcCoverageType === "labour_only"}
+                      onChange={() => setAmcCoverageType("labour_only")}
+                    />
+                    Labour-only
+                  </label>
+                </div>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="amc-start">Start Date <span className="text-red-500">*</span></Label>
+                <Input
+                  id="amc-start"
+                  type="date"
+                  value={amcStartDate}
+                  onChange={(e) => handleAmcStartDateChange(e.target.value)}
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="amc-end">End Date <span className="text-red-500">*</span></Label>
+                <Input
+                  id="amc-end"
+                  type="date"
+                  value={amcEndDate}
+                  onChange={(e) => setAmcEndDate(e.target.value)}
+                />
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="amc-visits">Visits Covered <span className="text-red-500">*</span></Label>
+                <Input
+                  id="amc-visits"
+                  type="number"
+                  min="1"
+                  placeholder="e.g. 4"
+                  value={amcVisitsCovered}
+                  onChange={(e) => setAmcVisitsCovered(e.target.value)}
+                  disabled={amcUnlimited}
+                />
+                <label className="flex items-center gap-2 text-xs cursor-pointer pt-1">
+                  <Checkbox
+                    checked={amcUnlimited}
+                    onCheckedChange={(c) => setAmcUnlimited(Boolean(c))}
+                  />
+                  Unlimited visits
+                </label>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label htmlFor="amc-amount">
+                  Annual Amount (pre-GST) <span className="text-red-500">*</span>
+                </Label>
+                <Input
+                  id="amc-amount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  placeholder="0.00"
+                  value={amcAnnualAmount}
+                  onChange={(e) => setAmcAnnualAmount(e.target.value)}
+                />
+              </div>
+            </div>
+
+            {/* Vendor Contact Hierarchy */}
+            <div className="border-t pt-4 space-y-3">
+              <div className="flex items-center justify-between">
+                <p className="text-sm font-medium">Vendor Service Contacts</p>
+                <p className="text-xs text-muted-foreground">L1 primary · L2 / L3 escalation</p>
+              </div>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div className="space-y-1.5">
+                  <Label className="text-xs">L1 Contact Name <span className="text-red-500">*</span></Label>
+                  <Input
+                    placeholder="Primary service rep"
+                    value={amcContactName}
+                    onChange={(e) => setAmcContactName(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">L1 Helpline / Phone <span className="text-red-500">*</span></Label>
+                  <Input
+                    placeholder="+91 ..."
+                    value={amcHelpline}
+                    onChange={(e) => setAmcHelpline(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5 sm:col-span-2">
+                  <Label className="text-xs">L1 Email</Label>
+                  <Input
+                    type="email"
+                    placeholder="support@vendor.com"
+                    value={amcContactEmail}
+                    onChange={(e) => setAmcContactEmail(e.target.value)}
+                  />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">L2 Escalation Name</Label>
+                  <Input value={amcEscalationName} onChange={(e) => setAmcEscalationName(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">L2 Phone</Label>
+                  <Input value={amcEscalationPhone} onChange={(e) => setAmcEscalationPhone(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">L3 Escalation Name</Label>
+                  <Input value={amcEscalation2Name} onChange={(e) => setAmcEscalation2Name(e.target.value)} />
+                </div>
+                <div className="space-y-1.5">
+                  <Label className="text-xs">L3 Phone</Label>
+                  <Input value={amcEscalation2Phone} onChange={(e) => setAmcEscalation2Phone(e.target.value)} />
+                </div>
+              </div>
+            </div>
+
+            {/* Advance Request (optional) */}
+            <div className="border-t pt-4 space-y-2">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <Checkbox checked={advanceRequired} onCheckedChange={(c) => { setAdvanceRequired(Boolean(c)); setAdvanceExpanded(Boolean(c)); }} />
+                <span className="text-sm font-medium">Vendor is requesting an advance payment</span>
+              </label>
+              {advanceRequired && (
+                <div className="pl-6 space-y-3">
+                  <p className="text-xs text-muted-foreground">
+                    Admin will review and approve the advance on the resulting PO before accounts can pay.
+                  </p>
+                  <button
+                    type="button"
+                    className="text-xs text-blue-600 underline flex items-center gap-1"
+                    onClick={() => setAdvanceExpanded((x) => !x)}
+                  >
+                    {advanceExpanded ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+                    {advanceExpanded ? "Hide" : "Show"} advance details
+                  </button>
+                  {advanceExpanded && (
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Advance Amount <span className="text-red-500">*</span></Label>
+                        <Input
+                          type="number"
+                          min="0"
+                          step="0.01"
+                          placeholder="0.00"
+                          value={advanceAmount}
+                          onChange={(e) => setAdvanceAmount(e.target.value)}
+                        />
+                      </div>
+                      <div className="space-y-1.5">
+                        <Label className="text-xs">Payment Mode <span className="text-red-500">*</span></Label>
+                        <Select value={advanceMode || "__none__"} onValueChange={(v) => setAdvanceMode(v === "__none__" ? "" : v as typeof advanceMode)}>
+                          <SelectTrigger><SelectValue placeholder="Select..." /></SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="__none__" disabled>Select...</SelectItem>
+                            <SelectItem value="neft">NEFT</SelectItem>
+                            <SelectItem value="rtgs">RTGS</SelectItem>
+                            <SelectItem value="imps">IMPS</SelectItem>
+                            <SelectItem value="bank_transfer">Bank Transfer</SelectItem>
+                            <SelectItem value="cheque">Cheque</SelectItem>
+                            <SelectItem value="cash">Cash</SelectItem>
+                          </SelectContent>
+                        </Select>
+                      </div>
+                      <div className="space-y-1.5 sm:col-span-2">
+                        <Label className="text-xs">Notes</Label>
+                        <Textarea
+                          rows={2}
+                          placeholder="e.g. 30% advance against PO, balance after first service visit"
+                          value={advanceNotes}
+                          onChange={(e) => setAdvanceNotes(e.target.value)}
+                        />
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Line Items — hidden for AMC; AMC uses the service block above */}
+      {department !== "amc" && (
       <Card>
         <CardHeader className="flex flex-row items-center justify-between pb-3">
           <CardTitle className="text-base">Items <span className="text-red-500">*</span></CardTitle>
@@ -725,6 +1084,7 @@ export default function NewPurchaseRequestPage() {
           </div>
         </CardContent>
       </Card>
+      )}
 
       {/* Quotations / Estimates — mandatory before submit */}
       <Card>
@@ -849,7 +1209,14 @@ export default function NewPurchaseRequestPage() {
       {/* Summary & Actions */}
       <Card>
         <CardContent className="pt-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          {(canSeePrices || items.some((li) => li.isCustom && li.estimated_price)) ? (
+          {department === "amc" ? (
+            <div>
+              <p className="text-sm text-muted-foreground">Annual AMC Amount</p>
+              <p className="text-xl font-bold">
+                {amcAnnualAmount && parseFloat(amcAnnualAmount) > 0 ? formatCurrency(parseFloat(amcAnnualAmount)) : "—"}
+              </p>
+            </div>
+          ) : (canSeePrices || items.some((li) => li.isCustom && li.estimated_price)) ? (
             <div>
               <p className="text-sm text-muted-foreground">Total Estimated</p>
               <p className="text-xl font-bold">

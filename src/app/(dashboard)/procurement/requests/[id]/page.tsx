@@ -363,7 +363,11 @@ export default function PurchaseRequestDetailPage() {
             <Button
               size="sm"
               className="bg-blue-600 hover:bg-blue-700"
-              onClick={() => router.push(`/procurement/orders/new?pr_id=${pr.id}`)}
+              onClick={() => router.push(
+                pr.department === "amc"
+                  ? `/procurement/orders/new-service?from_mr=${pr.id}`
+                  : `/procurement/orders/new?pr_id=${pr.id}`
+              )}
             >
               <ShoppingCart className="h-4 w-4 mr-1" /> Create PO
             </Button>
@@ -627,7 +631,88 @@ export default function PurchaseRequestDetailPage() {
       {/* Vendor Quotations / Estimates */}
       <MaterialRequestQuotations prId={pr.id} prStatus={pr.status} />
 
-      {/* Line Items */}
+      {/* AMC Service Block — replaces Items Requested when department=amc */}
+      {pr.department === "amc" && (
+        <Card>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base">AMC Service Details</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-3 text-sm">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-x-6 gap-y-2">
+              <div>
+                <p className="text-xs text-muted-foreground">Asset</p>
+                <p className="font-medium">
+                  {pr.linked_asset
+                    ? `${pr.linked_asset.name}${pr.linked_asset.asset_code ? ` (${pr.linked_asset.asset_code})` : ""}`
+                    : "—"}
+                </p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Service / Contract</p>
+                <p className="font-medium">{pr.service_item_name ?? "—"}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Coverage</p>
+                <p className="font-medium">{pr.amc_coverage_type === "labour_only" ? "Labour-only" : pr.amc_coverage_type === "comprehensive" ? "Comprehensive (labour + parts)" : "—"}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Visits Covered</p>
+                <p className="font-medium">{pr.amc_visits_covered ?? "Unlimited"}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">Start Date</p>
+                <p className="font-medium">{pr.amc_start_date ?? "—"}</p>
+              </div>
+              <div>
+                <p className="text-xs text-muted-foreground">End Date</p>
+                <p className="font-medium">{pr.amc_end_date ?? "—"}</p>
+              </div>
+              {canSeePrices && (
+                <div className="sm:col-span-2">
+                  <p className="text-xs text-muted-foreground">Annual Amount (pre-GST)</p>
+                  <p className="font-bold text-base">{formatCurrency(pr.total_estimated_amount ?? 0)}</p>
+                </div>
+              )}
+            </div>
+
+            <div className="border-t pt-3 space-y-2">
+              <p className="text-xs font-semibold text-muted-foreground">Vendor Service Contacts</p>
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <p className="text-xs text-muted-foreground">L1 Primary</p>
+                  <p className="font-medium">{pr.amc_contact_name ?? "—"}</p>
+                  <p className="text-xs">{pr.amc_helpline_number ?? ""}</p>
+                  <p className="text-xs text-muted-foreground">{pr.amc_contact_email ?? ""}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">L2 Escalation</p>
+                  <p className="font-medium">{pr.amc_escalation_name ?? "—"}</p>
+                  <p className="text-xs">{pr.amc_escalation_phone ?? ""}</p>
+                </div>
+                <div>
+                  <p className="text-xs text-muted-foreground">L3 Escalation</p>
+                  <p className="font-medium">{pr.amc_escalation2_name ?? "—"}</p>
+                  <p className="text-xs">{pr.amc_escalation2_phone ?? ""}</p>
+                </div>
+              </div>
+            </div>
+
+            {(pr.advance_amount ?? 0) > 0 && (
+              <div className="border-t pt-3">
+                <p className="text-xs font-semibold text-muted-foreground mb-1">Advance Requested</p>
+                <div className="flex flex-wrap gap-x-6 gap-y-1">
+                  <span className="text-sm">Amount: <span className="font-semibold">{formatCurrency(pr.advance_amount ?? 0)}</span></span>
+                  <span className="text-sm">Mode: <span className="font-medium">{pr.advance_payment_mode?.toUpperCase() ?? "—"}</span></span>
+                </div>
+                {pr.advance_notes && <p className="text-xs text-muted-foreground mt-1">{pr.advance_notes}</p>}
+              </div>
+            )}
+          </CardContent>
+        </Card>
+      )}
+
+      {/* Line Items — hidden for AMC; AMC has its own block above */}
+      {pr.department !== "amc" && (
       <Card>
         <CardHeader className="pb-3">
           <div className="flex items-center gap-2">
@@ -726,6 +811,7 @@ export default function PurchaseRequestDetailPage() {
           )}
         </CardContent>
       </Card>
+      )}
 
       {/* ═══════════════════════════════════════════════════════════════════
           Section A: Linked Purchase Orders

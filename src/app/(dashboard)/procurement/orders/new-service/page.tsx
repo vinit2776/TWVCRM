@@ -63,9 +63,11 @@ function NewServicePOForm() {
   const [advanceReference, setAdvanceReference] = useState("");
   const [advanceNotes, setAdvanceNotes] = useState("");
 
-  // AMC fields — pre-activate if URL param ?amc=1
-  const isAmcFromUrl = searchParams.get("amc") === "1";
+  // AMC fields — pre-activate if URL param ?amc=1 or ?from_mr=<id> (always AMC)
+  const fromMrId = searchParams.get("from_mr");
+  const isAmcFromUrl = searchParams.get("amc") === "1" || !!fromMrId;
   const [isAmc, setIsAmc] = useState(isAmcFromUrl);
+  const [sourceMrNumber, setSourceMrNumber] = useState<string | null>(null);
   const [amcContactExpanded, setAmcContactExpanded] = useState(true);
   const [termsExpanded, setTermsExpanded] = useState(false);
   const [amcCoverageType, setAmcCoverageType] = useState<"comprehensive" | "labour_only">("comprehensive");
@@ -124,6 +126,61 @@ function NewServicePOForm() {
     fetchAssets();
   }, [fetchVendors, fetchLocations, fetchAssets]);
 
+  // Redirect legacy direct entry → unified MR flow. Allow the route only when
+  // we're creating a PO from an approved MR (?from_mr=<id>) so the converter
+  // page keeps working.
+  useEffect(() => {
+    if (!fromMrId) {
+      router.replace("/procurement/requests/new?department=amc");
+    }
+  }, [fromMrId, router]);
+
+  // Pre-fill from approved AMC MR (?from_mr=<id>). Runs once on mount.
+  useEffect(() => {
+    if (!fromMrId) return;
+    fetch(`/api/procurement/requests/${fromMrId}`)
+      .then((r) => r.json())
+      .then((j) => {
+        const pr = j.data;
+        if (!pr) return;
+        setSourceMrNumber(pr.pr_number ?? null);
+        // Service identity
+        if (pr.service_item_name) setCustomName(pr.service_item_name);
+        else if (pr.purchase_request_items?.[0]?.item_name) setCustomName(pr.purchase_request_items[0].item_name);
+        if (pr.location_id) setLocationId(pr.location_id);
+        if (pr.linked_asset_id) setLinkedAssetId(pr.linked_asset_id);
+        // AMC coverage + dates
+        if (pr.amc_coverage_type) setAmcCoverageType(pr.amc_coverage_type);
+        if (pr.amc_start_date) {
+          setAmcStartDate(pr.amc_start_date);
+          setServiceStartDate(pr.amc_start_date);
+        }
+        if (pr.amc_end_date) setAmcEndDate(pr.amc_end_date);
+        if (pr.amc_visits_covered == null) setAmcUnlimited(true);
+        else setAmcVisitsCovered(String(pr.amc_visits_covered));
+        // Amount — MR annual amount is pre-GST
+        if (pr.total_estimated_amount) setUnitCost(String(pr.total_estimated_amount));
+        // Contacts
+        if (pr.amc_contact_name) setAmcContactName(pr.amc_contact_name);
+        if (pr.amc_helpline_number) setAmcHelpline(pr.amc_helpline_number);
+        if (pr.amc_contact_email) setAmcContactEmail(pr.amc_contact_email);
+        if (pr.amc_escalation_name) setAmcEscalationName(pr.amc_escalation_name);
+        if (pr.amc_escalation_phone) setAmcEscalationPhone(pr.amc_escalation_phone);
+        if (pr.amc_escalation2_name) setAmcEscalation2Name(pr.amc_escalation2_name);
+        if (pr.amc_escalation2_phone) setAmcEscalation2Phone(pr.amc_escalation2_phone);
+        // Advance — carry the request hint; admin still approves on the PO
+        if (pr.advance_amount && Number(pr.advance_amount) > 0) {
+          setAdvanceRequired(true);
+          setAdvanceExpanded(true);
+          setAdvanceAmount(String(pr.advance_amount));
+          if (pr.advance_payment_mode) setAdvanceMode(pr.advance_payment_mode);
+          if (pr.advance_notes) setAdvanceNotes(pr.advance_notes);
+        }
+        if (pr.notes) setNotes(pr.notes);
+      })
+      .catch(() => toast.error("Could not load source MR for pre-fill"));
+  }, [fromMrId]);
+
   const serviceItemName = customName;
   const cycleCountNum = parseInt(cycleCount) || 0;
   const unitCostNum = parseFloat(unitCost) || 0;
@@ -179,6 +236,7 @@ function NewServicePOForm() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           po_type: "service",
+          ...(fromMrId ? { pr_id: fromMrId } : {}),
           vendor_id: vendorId,
           location_id: locationId || undefined,
           service_item_name: serviceItemName.trim(),
@@ -230,10 +288,20 @@ function NewServicePOForm() {
           <ChevronLeft className="h-5 w-5" />
         </Button>
         <div>
-          <h1 className="text-2xl font-bold">New Service PO</h1>
-          <p className="text-sm text-muted-foreground">Authorize a recurring service contract</p>
+          <h1 className="text-2xl font-bold">{fromMrId ? "Create AMC PO from MR" : "New Service PO"}</h1>
+          <p className="text-sm text-muted-foreground">
+            {fromMrId
+              ? `Pre-filled from approved Material Request${sourceMrNumber ? ` ${sourceMrNumber}` : ""} — review and confirm`
+              : "Authorize a recurring service contract"}
+          </p>
         </div>
       </div>
+
+      {fromMrId && sourceMrNumber && (
+        <div className="rounded-lg border border-blue-200 bg-blue-50 px-3 py-2 text-sm text-blue-800">
+          Creating PO from <span className="font-semibold">{sourceMrNumber}</span>. Asset, dates, contacts and advance are pre-filled from the MR. Select the vendor below to proceed.
+        </div>
+      )}
 
       <form onSubmit={handleSubmit} className="space-y-6">
 

@@ -46,6 +46,9 @@ const createGoodsPoSchema = z.object({
 
 const createServicePoSchema = z.object({
   po_type: z.literal("service"),
+  // When a service PO is created from an approved AMC MR, the MR id is carried
+  // through so the audit trail and PR-status recalc work the same as goods.
+  pr_id: z.string().uuid().nullish(),
   vendor_id: z.string().uuid(),
   location_id: z.string().uuid().nullish(),
   service_start_date: z.string().min(1, "Service start date is required"),
@@ -332,6 +335,8 @@ export async function POST(request: NextRequest) {
       .from("purchase_orders")
       .insert({
         po_type: "service",
+        // Link back to the originating AMC MR if this PO was created from one
+        pr_id: parsed.data.pr_id ?? null,
         vendor_id: parsed.data.vendor_id,
         location_id: parsed.data.location_id ?? null,
         service_start_date: parsed.data.service_start_date,
@@ -401,8 +406,15 @@ export async function POST(request: NextRequest) {
         total_ordered_amount: { old: null, new: totalAmount },
         billing_cycle: { old: null, new: parsed.data.billing_cycle },
         cycle_count: { old: null, new: parsed.data.cycle_count },
+        ...(parsed.data.pr_id ? { pr_id: { old: null, new: parsed.data.pr_id } } : {}),
       },
     });
+
+    // When the service PO was created from an AMC MR, bump the MR's status
+    // forward (approved → po_created) the same way the goods flow does.
+    if (parsed.data.pr_id) {
+      await recalculatePrStatus(supabase, parsed.data.pr_id);
+    }
 
     return NextResponse.json({ data: { id: po.id, po_number: po.po_number } }, { status: 201 });
   }

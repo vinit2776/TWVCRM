@@ -14,12 +14,31 @@ const createPrItemSchema = z.object({
 });
 
 const createPrSchema = z.object({
-  department: z.enum(["pantry", "maintenance", "administration", "asset"]),
+  department: z.enum(["pantry", "maintenance", "administration", "asset", "amc"]),
   location_id: z.string().uuid().optional().nullable(),
   notes: z.string().optional(),
   expenditure_type: z.enum(["operational", "amc"]).default("operational"),
   items: z.array(createPrItemSchema).min(1, "At least one item is required"),
   submit: z.boolean().optional(), // If true, create in "submitted" state
+
+  // AMC fields — only used when department='amc'. Validated leniently here;
+  // the form gates the required ones client-side and the PO step re-validates.
+  service_item_name: z.string().optional().nullable(),
+  linked_asset_id: z.string().uuid().optional().nullable(),
+  amc_coverage_type: z.enum(["comprehensive", "labour_only"]).optional().nullable(),
+  amc_start_date: z.string().optional().nullable(),
+  amc_end_date: z.string().optional().nullable(),
+  amc_visits_covered: z.number().int().positive().optional().nullable(),
+  amc_contact_name: z.string().optional().nullable(),
+  amc_helpline_number: z.string().optional().nullable(),
+  amc_contact_email: z.string().email().optional().nullable().or(z.literal("")),
+  amc_escalation_name: z.string().optional().nullable(),
+  amc_escalation_phone: z.string().optional().nullable(),
+  amc_escalation2_name: z.string().optional().nullable(),
+  amc_escalation2_phone: z.string().optional().nullable(),
+  advance_amount: z.number().min(0).optional().nullable(),
+  advance_payment_mode: z.enum(["neft", "rtgs", "imps", "bank_transfer", "cheque", "cash"]).optional().nullable(),
+  advance_notes: z.string().optional().nullable(),
 });
 
 function generatePrNumber(count: number): string {

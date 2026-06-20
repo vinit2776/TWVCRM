@@ -189,11 +189,12 @@ export default function PurchaseOrdersPage() {
             </Button>
           )}
 
-          <Button variant="outline" onClick={() => router.push("/procurement/orders/new-service")}>
-            <Plus className="h-4 w-4 mr-1" /> New Service PO
-          </Button>
+          {/* "New Service PO" entry removed — AMC and service POs now flow through
+              Material Requests (department=AMC). Direct /orders/new-service redirects
+              there; the only path that still lands on it is "Create PO" on an
+              approved AMC MR (with ?from_mr=<id>). */}
           <Button onClick={() => router.push("/procurement/requests?status=approved")}>
-            <Plus className="h-4 w-4 mr-1" /> New Goods PO
+            <Plus className="h-4 w-4 mr-1" /> New PO from Request
           </Button>
         </div>
       </div>
