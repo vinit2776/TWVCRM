@@ -417,7 +417,44 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
         <>
           {!amcLoaded ? (
             <div className="py-12 text-center text-sm text-muted-foreground">Loading AMC data…</div>
-          ) : (
+          ) : (() => {
+            // Split + sort contracts so we can interleave the Service & Breakdown
+            // History between the live contracts and the dimmed past/pending ones.
+            const priority: Record<string, number> = {
+              active: 0, expiring: 1, inactive: 2, exhausted: 3, expired: 4,
+            };
+            const sortedContracts = [...amcContracts].sort((a, b) => {
+              const aLc = computeAmcLifecycle({
+                amc_start_date: a.amc_start_date,
+                amc_end_date: a.amc_end_date,
+                amc_visits_covered: a.amc_visits_covered,
+                amc_visits_used: a.amc_visits_used,
+              });
+              const bLc = computeAmcLifecycle({
+                amc_start_date: b.amc_start_date,
+                amc_end_date: b.amc_end_date,
+                amc_visits_covered: b.amc_visits_covered,
+                amc_visits_used: b.amc_visits_used,
+              });
+              const pa = priority[aLc.status] ?? 99;
+              const pb = priority[bLc.status] ?? 99;
+              if (pa !== pb) return pa - pb;
+              const aDate = a.amc_start_date ? new Date(a.amc_start_date).getTime() : 0;
+              const bDate = b.amc_start_date ? new Date(b.amc_start_date).getTime() : 0;
+              return bDate - aDate;
+            });
+            const isLive = (c: AmcContract) => {
+              const lc = computeAmcLifecycle({
+                amc_start_date: c.amc_start_date,
+                amc_end_date: c.amc_end_date,
+                amc_visits_covered: c.amc_visits_covered,
+                amc_visits_used: c.amc_visits_used,
+              });
+              return lc.status === "active" || lc.status === "expiring";
+            };
+            const liveContracts = sortedContracts.filter(isLive);
+            const dimmedContracts = sortedContracts.filter((c) => !isLive(c));
+            return (
             <>
               {/* Asset Memory — narrative summary that builds up as data accumulates */}
               <AssetMemoryCard
@@ -527,36 +564,9 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                     <p>No AMC contract linked to this asset yet.</p>
                     <p className="text-xs mt-1">Link this asset from Procurement &gt; AMC when creating or editing a service PO.</p>
                   </div>
-                ) : (() => {
-                  // Sort contracts: active/expiring at top, inactive (pending activation)
-                  // next, then exhausted/expired at the bottom with reduced visual weight.
-                  // Within each group, newest start date wins.
-                  const priority: Record<string, number> = {
-                    active: 0, expiring: 1, inactive: 2, exhausted: 3, expired: 4,
-                  };
-                  const sortedContracts = [...amcContracts].sort((a, b) => {
-                    const aLc = computeAmcLifecycle({
-                      amc_start_date: a.amc_start_date,
-                      amc_end_date: a.amc_end_date,
-                      amc_visits_covered: a.amc_visits_covered,
-                      amc_visits_used: a.amc_visits_used,
-                    });
-                    const bLc = computeAmcLifecycle({
-                      amc_start_date: b.amc_start_date,
-                      amc_end_date: b.amc_end_date,
-                      amc_visits_covered: b.amc_visits_covered,
-                      amc_visits_used: b.amc_visits_used,
-                    });
-                    const pa = priority[aLc.status] ?? 99;
-                    const pb = priority[bLc.status] ?? 99;
-                    if (pa !== pb) return pa - pb;
-                    const aDate = a.amc_start_date ? new Date(a.amc_start_date).getTime() : 0;
-                    const bDate = b.amc_start_date ? new Date(b.amc_start_date).getTime() : 0;
-                    return bDate - aDate;
-                  });
-                  return (
+                ) : (
                   <div className="space-y-2">
-                    {sortedContracts.map((c) => {
+                    {liveContracts.map((c) => {
                       const lc = computeAmcLifecycle({
                         amc_start_date: c.amc_start_date,
                         amc_end_date: c.amc_end_date,
@@ -564,9 +574,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                         amc_visits_used: c.amc_visits_used,
                       });
                       const canLogBreakdown = c.status === "ordered" && (lc.status === "active" || lc.status === "expiring");
-                      // Inactive contracts (expired, exhausted, pre-activation) get
-                      // greyed-out styling so the eye lands on the active contract first.
-                      const isDimmed = lc.status === "expired" || lc.status === "exhausted" || lc.status === "inactive";
+                      const isDimmed = false; // live contracts are never dimmed
                       return (
                       <div
                         key={c.id}
@@ -680,8 +688,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                       );
                     })}
                   </div>
-                  );
-                })()}
+                )}
               </section>
 
               {/* Service & Breakdown History — unified memory of everything that's happened on this asset */}
@@ -813,8 +820,67 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
               </section>
                 );
               })()}
+
+              {/* Dimmed contracts — pending activation, exhausted, expired — at the bottom */}
+              {dimmedContracts.length > 0 && (
+                <section className="space-y-3">
+                  <div className="text-xs uppercase tracking-wide text-muted-foreground">Past / Pending Contracts</div>
+                  <div className="space-y-2">
+                    {dimmedContracts.map((c) => {
+                      const lc = computeAmcLifecycle({
+                        amc_start_date: c.amc_start_date,
+                        amc_end_date: c.amc_end_date,
+                        amc_visits_covered: c.amc_visits_covered,
+                        amc_visits_used: c.amc_visits_used,
+                      });
+                      return (
+                      <div
+                        key={c.id}
+                        className="rounded-lg border p-4 space-y-3 transition-opacity bg-muted/40 opacity-70 hover:opacity-100"
+                      >
+                        <div className="flex items-start justify-between gap-3">
+                          <div className="space-y-1 min-w-0">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <code className="text-xs font-mono">{c.po_number}</code>
+                              <span className={cn("text-[10px] px-2 py-0.5 rounded-full font-medium border", lc.badgeClass)}>
+                                {lc.label}
+                              </span>
+                            </div>
+                            <div className="text-sm">{c.procurement_vendors?.name || "—"}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {c.amc_start_date && <>{formatDate(c.amc_start_date)} — {c.amc_end_date ? formatDate(c.amc_end_date) : "Open"}</>}
+                            </div>
+                          </div>
+                          <div className="text-right shrink-0 space-y-1">
+                            <div className="text-sm font-semibold">{formatCurrency(c.total_ordered_amount)}</div>
+                            <div className="text-xs text-muted-foreground">
+                              {c.amc_visits_used}{c.amc_visits_covered ? ` / ${c.amc_visits_covered}` : ""} visits
+                            </div>
+                            <Link href={`/procurement/orders/${c.id}`} className="inline-flex items-center gap-1 text-xs text-primary hover:underline">
+                              View PO <ExternalLink className="h-3 w-3" />
+                            </Link>
+                          </div>
+                        </div>
+
+                        {/* Lifecycle strip — explains the dimmed state */}
+                        <div className="pt-2 border-t border-dashed">
+                          <AmcLifecycleStrip
+                            createdAt={c.created_at}
+                            amcStartDate={c.amc_start_date}
+                            amcEndDate={c.amc_end_date}
+                            amcVisitsCovered={c.amc_visits_covered}
+                            amcVisitsUsed={c.amc_visits_used}
+                          />
+                        </div>
+                      </div>
+                      );
+                    })}
+                  </div>
+                </section>
+              )}
             </>
-          )}
+            );
+          })()}
         </>
       )}
 
