@@ -50,11 +50,11 @@ type Step = 1 | 2 | 3;
 
 const VIAS: FacilityReportedVia[] = ["walk_in", "phone", "whatsapp", "email", "proactive"];
 
-const SCOPE_ORDER: FacilityScope[] = ["it", "hvac", "electrical", "plumbing", "housekeeping", "security", "other"];
+const SCOPE_ORDER: FacilityScope[] = ["it", "hvac", "electrical", "plumbing", "housekeeping", "security", "other", "facility"];
 
 const SCOPE_ICONS: Record<FacilityScope, typeof Wifi> = {
   it: Wifi, hvac: ThermometerSun, plumbing: Droplets,
-  electrical: Zap, housekeeping: Sparkles, security: ShieldAlert, other: HelpCircle,
+  electrical: Zap, housekeeping: Sparkles, security: ShieldAlert, other: HelpCircle, facility: HelpCircle,
 };
 
 export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }: Props) {

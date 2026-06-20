@@ -60,7 +60,7 @@ export async function PUT(
     "purchase_date", "warranty_expiry", "vendor", "status",
     "lifecycle_stage", "installation_date", "commissioned_at", "commissioned_by",
     "custom_field_values", "procurement_po_id",
-    "location_notes", "notes", "sort_order",
+    "location_notes", "notes", "attention_notes", "sort_order",
   ];
   for (const f of allowed) if (f in body) updates[f] = body[f];
   if (typeof updates.asset_code === "string") {

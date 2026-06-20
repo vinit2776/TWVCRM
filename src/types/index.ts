@@ -2631,7 +2631,7 @@ export interface SpaceHeadcount {
 // ==========================================
 // Facility Issues Module
 // ==========================================
-export type FacilityScope = "it" | "hvac" | "plumbing" | "electrical" | "housekeeping" | "security" | "other";
+export type FacilityScope = "it" | "hvac" | "plumbing" | "electrical" | "housekeeping" | "security" | "other" | "facility";
 export type FacilityIssuePriority = "low" | "medium" | "high" | "critical";
 export type FacilityIssueStatus = "new" | "acknowledged" | "in_progress" | "resolved" | "closed" | "reopened";
 export type FacilityRootCause =
@@ -2705,6 +2705,7 @@ export interface FacilityAsset {
   procurement_po_id?: string | null;
   location_notes?: string | null;
   notes?: string | null;
+  attention_notes?: string | null;
   sort_order: number;
   created_by?: string | null;
   creator?: { id: string; full_name: string } | null;

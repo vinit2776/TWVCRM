@@ -78,6 +78,8 @@ interface AmcContract {
   amc_contact_name: string | null;
   amc_helpline_number: string | null;
   amc_contact_email: string | null;
+  amc_scope_covered: string | null;
+  amc_scope_exclusions: string | null;
   total_ordered_amount: number;
   procurement_vendors: { id: string; name: string } | null;
 }
@@ -205,6 +207,17 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
           </Button>
         </div>
       </div>
+
+      {/* Attention notes banner */}
+      {asset.attention_notes && (
+        <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-4 py-3">
+          <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+          <div>
+            <p className="text-xs font-semibold text-amber-800 uppercase tracking-wide mb-0.5">Attention — check on every visit</p>
+            <p className="text-sm text-amber-900">{asset.attention_notes}</p>
+          </div>
+        </div>
+      )}
 
       {/* Tabs */}
       <div className="flex gap-1 border-b">
@@ -386,6 +399,16 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                               {c.amc_contact_name && <span>{c.amc_contact_name}</span>}
                               {c.amc_helpline_number && <span>{c.amc_helpline_number}</span>}
                             </div>
+                            {(c.amc_scope_covered || c.amc_scope_exclusions) && (
+                              <div className="mt-1.5 grid grid-cols-2 gap-2 text-xs">
+                                {c.amc_scope_covered && (
+                                  <div><span className="font-medium text-emerald-700">✓ Covered:</span> <span className="text-muted-foreground">{c.amc_scope_covered}</span></div>
+                                )}
+                                {c.amc_scope_exclusions && (
+                                  <div><span className="font-medium text-red-600">✗ Exclusions:</span> <span className="text-muted-foreground">{c.amc_scope_exclusions}</span></div>
+                                )}
+                              </div>
+                            )}
                           </div>
                           <div className="text-right shrink-0 space-y-1">
                             <div className="text-sm font-semibold">{formatCurrency(c.total_ordered_amount)}</div>
@@ -504,6 +527,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
         assetId={asset.id}
         assetName={asset.name}
         assetCode={asset.asset_code}
+        attentionNotes={asset.attention_notes}
         openIssues={asset.issue_history.filter((i): i is OpenIssue & FacilityIssue =>
           ["new", "acknowledged", "in_progress", "reopened"].includes(i.status)
         )}

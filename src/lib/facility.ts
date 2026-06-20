@@ -26,6 +26,7 @@ const SCOPE_PREFIX: Record<FacilityScope, string> = {
   housekeeping: "HK",
   security: "SC",
   other: "OT",
+  facility: "FA",
 };
 
 /**

@@ -39,6 +39,7 @@ export async function GET(request: NextRequest) {
       amc_start_date, amc_end_date,
       amc_visits_covered, amc_visits_used,
       amc_contact_name, amc_helpline_number, amc_contact_email,
+      amc_scope_covered, amc_scope_exclusions,
       total_ordered_amount, created_at,
       procurement_vendors(id, name),
       locations(id, name),

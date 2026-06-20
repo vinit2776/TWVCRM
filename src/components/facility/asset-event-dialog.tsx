@@ -7,7 +7,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { Checkbox } from "@/components/ui/checkbox";
-import { Loader2, Check, LinkIcon } from "lucide-react";
+import { Loader2, Check, LinkIcon, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { FacilityPhotoUpload, type UploadedPhoto } from "@/components/facility/photo-upload";
@@ -38,11 +38,12 @@ interface Props {
   assetId: string;
   assetName: string;
   assetCode: string;
+  attentionNotes?: string | null;
   openIssues?: OpenIssue[];
   onCreated?: () => void;
 }
 
-export function AssetEventDialog({ open, onOpenChange, assetId, assetName, assetCode, openIssues = [], onCreated }: Props) {
+export function AssetEventDialog({ open, onOpenChange, assetId, assetName, assetCode, attentionNotes, openIssues = [], onCreated }: Props) {
   const [eventType, setEventType] = useState<FacilityAssetEventType>("maintenance");
   const [note, setNote] = useState("");
   const [photos, setPhotos] = useState<UploadedPhoto[]>([]);
@@ -102,6 +103,16 @@ export function AssetEventDialog({ open, onOpenChange, assetId, assetName, asset
         </DialogHeader>
 
         <div className="space-y-4">
+          {attentionNotes && (
+            <div className="flex items-start gap-2 rounded-lg border border-amber-300 bg-amber-50 px-3 py-2.5">
+              <AlertTriangle className="h-4 w-4 text-amber-600 shrink-0 mt-0.5" />
+              <div>
+                <p className="text-[11px] font-semibold text-amber-800 uppercase tracking-wide mb-0.5">Attention — check on this visit</p>
+                <p className="text-sm text-amber-900">{attentionNotes}</p>
+              </div>
+            </div>
+          )}
+
           <div>
             <div className="text-sm font-medium mb-2">What happened?</div>
             <div className="grid grid-cols-2 gap-1.5">

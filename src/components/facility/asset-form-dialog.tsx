@@ -46,7 +46,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
     status: "active" as "active" | "maintenance" | "retired",
     lifecycle_stage: "operational" as FacilityLifecycleStage,
     installation_date: "",
-    location_notes: "", notes: "",
+    location_notes: "", notes: "", attention_notes: "",
   });
   const [customValues, setCustomValues] = useState<Record<string, unknown>>({});
   const [busy, setBusy] = useState(false);
@@ -89,6 +89,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       installation_date: asset?.installation_date?.slice(0, 10) || "",
       location_notes: asset?.location_notes || "",
       notes: asset?.notes || "",
+      attention_notes: asset?.attention_notes || "",
     });
     setCustomValues((asset?.custom_field_values as Record<string, unknown>) || {});
   }, [open, asset, defaultLocationId]);
@@ -134,6 +135,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
           purchase_date: form.purchase_date || null,
           warranty_expiry: form.warranty_expiry || null,
           installation_date: form.installation_date || null,
+          attention_notes: form.attention_notes || null,
           custom_field_values: customValues,
         }),
       });
@@ -184,7 +186,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
             </div>
           </div>
 
-          {/* Category — grouped by scope */}
+          {/* Category */}
           <div>
             <Label className="text-xs">Category *</Label>
             <select
@@ -193,15 +195,8 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
               className="mt-1 w-full h-9 px-2 rounded-md border bg-background text-sm"
             >
               <option value="">— Select —</option>
-              {Object.entries(
-                categories.reduce<Record<string, FacilityAssetCategory[]>>((acc, c) => {
-                  (acc[c.scope] ||= []).push(c);
-                  return acc;
-                }, {}),
-              ).map(([scope, cats]) => (
-                <optgroup key={scope} label={scope.toUpperCase()}>
-                  {cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </optgroup>
+              {categories.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
               ))}
             </select>
           </div>
@@ -343,6 +338,17 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
           <div>
             <Label className="text-xs">Notes</Label>
             <Input value={form.notes} onChange={(e) => setForm({ ...form, notes: e.target.value })} className="mt-1" />
+          </div>
+
+          <div>
+            <Label className="text-xs text-amber-700">⚠ Attention notes (shown to technicians on every visit)</Label>
+            <textarea
+              value={form.attention_notes}
+              onChange={(e) => setForm({ ...form, attention_notes: e.target.value })}
+              placeholder="e.g. Belt is loose — check and tighten every preventive visit"
+              rows={2}
+              className="mt-1 w-full rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-amber-400"
+            />
           </div>
         </div>
         <DialogFooter>

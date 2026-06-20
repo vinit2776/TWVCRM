@@ -30,7 +30,7 @@ export const STATUS_STYLES: Record<FacilityIssueStatus, { chip: string; label: s
 
 export const SCOPE_LABEL: Record<FacilityScope, string> = {
   it: "IT", hvac: "HVAC", plumbing: "Plumbing", electrical: "Electrical",
-  housekeeping: "Housekeeping", security: "Security", other: "Other",
+  housekeeping: "Housekeeping", security: "Security", other: "Other", facility: "Facility",
 };
 
 export const ROOT_CAUSE_LABEL: Record<FacilityRootCause, string> = {
@@ -60,7 +60,7 @@ export const REPORTED_VIA_LABEL: Record<FacilityReportedVia, string> = {
 export const SCOPE_ICON: Record<FacilityScope, string> = {
   it: "Wifi", hvac: "ThermometerSun", plumbing: "Droplets",
   electrical: "Zap", housekeeping: "Sparkles", security: "ShieldAlert",
-  other: "HelpCircle",
+  other: "HelpCircle", facility: "Package",
 };
 
 /** Compact relative time, e.g. "2h ago", "3d ago". */

@@ -49,6 +49,8 @@ interface AmcRow {
   purchase_requests: { id: string; pr_number: string; department: string; expenditure_type: string } | null;
   purchase_order_items: Array<{ id: string; item_name: string; unit: string }>;
   linked_asset: { id: string; name: string; asset_code: string } | null;
+  amc_scope_covered: string | null;
+  amc_scope_exclusions: string | null;
 }
 
 const EVENT_TYPE_LABEL: Record<ServiceEvent["event_type"], string> = {
@@ -441,6 +443,24 @@ export default function AmcRegisterPage() {
                       <VisitsBar used={row.amc_visits_used} covered={row.amc_visits_covered} />
                     </div>
                   </div>
+
+                  {/* Scope: what's covered / not covered */}
+                  {(row.amc_scope_covered || row.amc_scope_exclusions) && (
+                    <div className="mt-3 pt-3 border-t grid grid-cols-1 sm:grid-cols-2 gap-3 text-xs">
+                      {row.amc_scope_covered && (
+                        <div>
+                          <p className="font-semibold text-emerald-700 mb-1">✓ Covered</p>
+                          <p className="text-muted-foreground whitespace-pre-line">{row.amc_scope_covered}</p>
+                        </div>
+                      )}
+                      {row.amc_scope_exclusions && (
+                        <div>
+                          <p className="font-semibold text-red-600 mb-1">✗ Not covered</p>
+                          <p className="text-muted-foreground whitespace-pre-line">{row.amc_scope_exclusions}</p>
+                        </div>
+                      )}
+                    </div>
+                  )}
 
                   {/* AMC Contact */}
                   {(row.amc_contact_name || row.amc_helpline_number || row.amc_contact_email) && (
