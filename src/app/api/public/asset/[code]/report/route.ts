@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
 import { z } from "zod";
 import { generateIssueNumber, computeSlaTarget, logIssueEvent } from "@/lib/facility";
-import { notifyItTeam, getItPrimaryAssignee } from "@/lib/facility-notifications";
+import { notifyIssueAssignee, notifyAdminsStaleAssignee } from "@/lib/facility-notifications";
 import type { FacilityScope } from "@/types";
 
 const reportSchema = z.object({
@@ -26,6 +26,7 @@ export async function POST(
       id, name, asset_code, location_id,
       floor_id, space_unit_id,
       category:facility_asset_categories(id, scope,
+        default_assignee_id,
         default_sla_critical_hrs, default_sla_high_hrs,
         default_sla_medium_hrs, default_sla_low_hrs)
     `)
@@ -58,6 +59,7 @@ export async function POST(
 
   const categoryRaw = asset.category as unknown as {
     id: string; scope: string;
+    default_assignee_id: string | null;
     default_sla_critical_hrs: number | null;
     default_sla_high_hrs: number | null;
     default_sla_medium_hrs: number | null;
@@ -70,8 +72,17 @@ export async function POST(
   const slaTargetAt = category ? computeSlaTarget(category, "medium") : null;
 
   let autoAssignee: { id: string; full_name: string } | null = null;
-  if (scope === "it") {
-    autoAssignee = await getItPrimaryAssignee();
+  if (category?.default_assignee_id) {
+    const { data: assignee } = await admin
+      .from("users")
+      .select("id, full_name")
+      .eq("id", category.default_assignee_id)
+      .eq("is_active", true)
+      .single();
+    autoAssignee = assignee ?? null;
+    if (!autoAssignee && category.id) {
+      notifyAdminsStaleAssignee({ categoryId: category.id, issueNumber: "", issueTitle: parsed.data.title.trim() });
+    }
   }
 
   const now = new Date().toISOString();
@@ -117,15 +128,10 @@ export async function POST(
     payload: { priority: "medium", scope, asset_code: code },
   });
 
-  await notifyItTeam({
-    type: "created",
-    issueId: issue.id,
-    issueNumber: issue.issue_number,
-    title: parsed.data.title.trim(),
-    priority: "medium",
-    reportedBy: parsed.data.reporter_name,
-    assigneeId: autoAssignee?.id,
-  });
+  await notifyIssueAssignee(
+    { id: issue.id, category_id: category?.id ?? null, assigned_to: autoAssignee?.id ?? null, issue_number: issue.issue_number, title: parsed.data.title.trim() },
+    { type: "created", priority: "medium", reportedBy: parsed.data.reporter_name }
+  );
 
   return NextResponse.json({
     data: { id: issue.id, issue_number: issue.issue_number },

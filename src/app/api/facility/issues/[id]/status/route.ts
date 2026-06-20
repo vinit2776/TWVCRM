@@ -3,10 +3,10 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import {
   hasRole, FACILITY_ROLES, canTransition, timestampsForStatus,
-  resolutionMinutes, metSla, logIssueEvent,
+  resolutionMinutes, metSla, logIssueEvent, computeSlaTarget,
 } from "@/lib/facility";
-import { notifyItTeam } from "@/lib/facility-notifications";
-import type { FacilityIssueStatus, FacilityRootCause } from "@/types";
+import { notifyIssueAssignee } from "@/lib/facility-notifications";
+import type { FacilityIssueStatus, FacilityIssuePriority, FacilityRootCause } from "@/types";
 
 const VALID_ROOT: FacilityRootCause[] = [
   "hardware_failure", "config_issue", "isp_outage", "power_issue",
@@ -41,7 +41,7 @@ export async function PATCH(
 
   const { data: existing, error: loadErr } = await supabase
     .from("facility_issues")
-    .select("id, issue_number, title, status, assigned_to, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, reopen_count, reporter_email, reporter_phone")
+    .select("id, issue_number, title, status, priority, category_id, assigned_to, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, reopen_count, reporter_email, reporter_phone")
     .eq("id", id).single();
   if (loadErr || !existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -55,9 +55,20 @@ export async function PATCH(
   const tsUpdates = timestampsForStatus(next, existing);
   const updates: Record<string, unknown> = { status: next, ...tsUpdates };
 
-  // Reopen bookkeeping
+  // Reopen bookkeeping: increment counter and reset SLA so the cron can re-trigger
   if (next === "reopened") {
     updates.reopen_count = (existing.reopen_count ?? 0) + 1;
+    updates.sla_breached = false;
+    if (existing.category_id) {
+      const { data: cat } = await supabase
+        .from("facility_asset_categories")
+        .select("default_sla_critical_hrs, default_sla_high_hrs, default_sla_medium_hrs, default_sla_low_hrs")
+        .eq("id", existing.category_id)
+        .single();
+      if (cat) {
+        updates.sla_target_at = computeSlaTarget(cat, existing.priority as FacilityIssuePriority);
+      }
+    }
   }
 
   // Resolution-related fields
@@ -98,16 +109,10 @@ export async function PATCH(
     performedBy: dbUser!.id, changes: { status: { old: existing.status, new: next } },
   });
 
-  await notifyItTeam({
-    type: "status_changed",
-    issueId: id,
-    issueNumber: existing.issue_number,
-    title: existing.title,
-    from: existing.status,
-    to: next,
-    actorName: dbUser!.full_name,
-    assigneeId: existing.assigned_to ?? undefined,
-  });
+  await notifyIssueAssignee(
+    { id, category_id: existing.category_id, assigned_to: existing.assigned_to, issue_number: existing.issue_number, title: existing.title },
+    { type: "status_changed", from: existing.status, to: next, actorName: dbUser!.full_name }
+  );
 
   return NextResponse.json({ data });
 }

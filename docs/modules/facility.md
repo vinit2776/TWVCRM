@@ -74,8 +74,10 @@ All pages are `"use client"` components that fetch from the API routes below.
 - `POST /api/public/asset/[code]/report` — `src/app/api/public/asset/[code]/report/route.ts` (unauthenticated issue report submitted from QR scan page)
 - `POST /api/public/asset/[code]/service/upload` — `src/app/api/public/asset/[code]/service/upload/route.ts` (vendor service sheet upload via public QR scan)
 - `GET/POST /api/facility/categories` — `src/app/api/facility/categories/route.ts`
-- `GET/PUT/DELETE /api/facility/categories/[id]` — `src/app/api/facility/categories/[id]/route.ts`
+- `GET/PUT/PATCH/DELETE /api/facility/categories/[id]` — `src/app/api/facility/categories/[id]/route.ts` (PATCH updates `default_assignee_id` / `backup_assignee_id` only)
+- `GET /api/facility/assets/[id]/cost-summary` — `src/app/api/facility/assets/[id]/cost-summary/route.ts` (monthly cost-of-ownership aggregated from approved vendor bills)
 - `GET /api/facility/assignees` — `src/app/api/facility/assignees/route.ts`
+- `GET /api/cron/facility-sla-check` — `src/app/api/cron/facility-sla-check/route.ts` (every 6h cron; marks breached issues, sends digest per recipient)
 - `GET /api/facility/dashboard` — `src/app/api/facility/dashboard/route.ts`
 - `GET /api/facility/team-kpi` — `src/app/api/facility/team-kpi/route.ts`
 - `GET/POST /api/facility/satisfaction/[token]` — `src/app/api/facility/satisfaction/[token]/route.ts` (PUBLIC — no auth)
@@ -83,7 +85,7 @@ All pages are `"use client"` components that fetch from the API routes below.
 ### Lib Files
 - `src/lib/facility.ts` — server-side: issue number generation, SLA computation, transition guard, timestamp side-effects, `logIssueEvent`, role constants
 - `src/lib/facility-ui.ts` — client-side: style maps for priority/status/scope/root-cause/via, `timeAgo`, `timeUntil`, `formatDuration`, `nextStatusOptions`
-- `src/lib/facility-notifications.ts` — `notifyItTeam`, `getItPrimaryAssignee`, `IT_NOTIFY_EMAILS`
+- `src/lib/facility-notifications.ts` — `notifyIssueAssignee(issue, event)` (category-driven, notifies assigned user + backup assignee + collaborators), `notifyAdminsStaleAssignee(params)` (fires when a category's `default_assignee_id` points to an inactive/missing user)
 
 ### Type Definitions
 `src/types/index.ts` starting at line 2594
@@ -120,6 +122,8 @@ All DB enums and tables are defined in migration `00116_facility_issues.sql`.
 | `default_sla_high_hrs` | NUMERIC(6,2) DEFAULT 8 | |
 | `default_sla_medium_hrs` | NUMERIC(6,2) DEFAULT 24 | |
 | `default_sla_low_hrs` | NUMERIC(6,2) DEFAULT 72 | |
+| `default_assignee_id` | UUID FK `users(id) ON DELETE SET NULL` | nullable — user auto-assigned when an issue is created for this category; NULL = unrouted (admins are alerted via `notifyAdminsStaleAssignee`) (migration 00292) |
+| `backup_assignee_id` | UUID FK `users(id) ON DELETE SET NULL` | nullable — CC-notified on every new issue for this category; not the primary owner (migration 00292) |
 | `sort_order` | INTEGER DEFAULT 0 | |
 | `is_active` | BOOLEAN DEFAULT true | |
 | `custom_field_schema` | JSONB DEFAULT `[]` | Array of `{key, label, type, required, options?}` defining category-specific fields (migration 00270) |
@@ -444,7 +448,7 @@ When a ticket is resolved (`status → resolved`):
 
 6. **`asset_code` must be unique per location.** Attempting to create or update an asset with a duplicate code within the same location yields a 409 with message "An asset with this code already exists at this location".
 
-7. **Auto-assignment:** IT-scoped issues created via the API are automatically assigned to the primary IT contact (`techsupport@theworkvilla.com`) if that user exists and is active.
+7. **Auto-assignment (category-driven):** When an issue is created and its `category_id` has a non-null `default_assignee_id`, the issue is automatically assigned to that user (if they are active). If the user is inactive, `notifyAdminsStaleAssignee()` fires and the issue is left unassigned. The backup assignee (`backup_assignee_id`) is CC-notified but not set as the owner. This applies to all scopes — the previous IT-only hardcoded behaviour has been replaced by per-category configuration. Configure assignees via `PATCH /api/facility/categories/[id]`.
 
 8. **Satisfaction token is static** — it is generated once at row creation. If a token is leaked, it can only be rotated via a direct `UPDATE` on the row. There is no API to rotate it.
 
@@ -507,24 +511,43 @@ FACILITY_ROLES = {
 
 Notifications fire on: `created`, `status_changed`, `assigned`, `comment`.
 
-Recipients on each event:
-- **IT team** (users with email `techsupport@theworkvilla.com` or `it@theworkvilla.com`)
-- **Assignee** (primary assignee, if any)
-- **Collaborators** (all `facility_issue_collaborators` members)
+### Recipients (category-driven)
 
-Three notification channels fire in parallel via `Promise.allSettled` (failures are logged but do not throw):
+For each event, `notifyIssueAssignee(issue, event)` in `src/lib/facility-notifications.ts` builds the recipient list:
+
+1. **Primary assignee** — `issue.assigned_to` (looked up from `users` table)
+2. **Backup assignee** — the `backup_assignee_id` of the issue's category (if set and active)
+3. **Collaborators** — all rows in `facility_issue_collaborators` for the issue
+
+If the final recipient list is empty (unassigned, no backup, no collaborators), all admins are notified as a fallback.
+
+### Channels
+
+Three channels fire in parallel via `Promise.allSettled` (failures are silently absorbed):
 1. **Push notification** — `sendPushToUsers` from `src/lib/push`
 2. **Email** — via Resend (`resend.emails.send`), HTML template inline in `facility-notifications.ts`
 3. **In-app notification** — persisted via `createNotificationsForUsers` from `src/lib/in-app-notifications`
 
-The notification function uses `createAdminClient()` internally (bypasses RLS) because it runs in a server context without a user cookie.
+The notification function uses `createAdminClient()` (synchronous, no `await`) internally because it runs in a server-side route handler without a user cookie.
 
-**Hard-coded IT emails** in `src/lib/facility-notifications.ts`:
-```
-IT_PRIMARY_EMAIL = "techsupport@theworkvilla.com"
-IT_SECONDARY_EMAIL = "it@theworkvilla.com"
-```
-These are also used by `/api/facility/assignees` to include the IT contacts in the assignee list even if they don't have `it_manager` / `it_technician` roles.
+### Stale Assignee Alert
+
+`notifyAdminsStaleAssignee({ categoryId, issueNumber, issueTitle })` fires when:
+- A category has `default_assignee_id` set (non-null)
+- But that user either no longer exists or has `is_active = false`
+
+It notifies all active admins so they can update the category routing.
+
+### SLA Breach Digest (Cron)
+
+`GET /api/cron/facility-sla-check` runs every 6h (UTC: `0 */6 * * *`). It:
+1. Queries all open issues with `sla_breached = false AND sla_target_at < now()`
+2. Bulk-sets `sla_breached = true` on matched issues
+3. Groups matched issues by assignee
+4. Sends **one digest email + push per recipient** (not per issue) to avoid spam
+5. Unassigned breaches are routed to all active admins
+
+Protected by `Authorization: Bearer ${CRON_SECRET}`.
 
 ---
 
@@ -561,7 +584,19 @@ Returns 409 on duplicate `issue_number` race condition (caller should retry).
 
 Body: `{ status: FacilityIssueStatus, resolution_notes?, resolution_root_cause?, parts_cost?, parts_notes? }`.
 
-Validates transition via `canTransition()`. Sets lifecycle timestamps. At `resolved`: sets `resolution_time_minutes`, `sla_breached`, `satisfaction_requested_at`. At `reopened`: increments `reopen_count`.
+Validates transition via `canTransition()`. Sets lifecycle timestamps. At `resolved`: sets `resolution_time_minutes`, `sla_breached`, `satisfaction_requested_at`. At `reopened`: increments `reopen_count`, resets `sla_breached = false`, and recomputes `sla_target_at` from the category's current SLA defaults (so the issue gets a fresh SLA window after a reopen).
+
+### `PATCH /api/facility/categories/[id]`
+
+Body: `{ default_assignee_id: string | null, backup_assignee_id: string | null }`.
+
+Updates only the assignee routing fields on a category. Validated with Zod (UUID format or null). Logs an audit trail. Used by `/facility/settings` to save routing configuration. Requires `manage` role (`admin`, `it_manager`).
+
+### `GET /api/facility/assets/[id]/cost-summary`
+
+Returns monthly cost-of-ownership for an asset from approved vendor bills. Follows the chain: `facility_issues → purchase_requests (issue_id) → purchase_orders (pr_id) → vendor_bills (po_id)`. Only bills with `approval_status = 'approved'` are included. Costs aggregated by `invoice_date` month.
+
+Response: `{ data: [{ month: "2025-03", cost: 12500 }, ...] }` sorted ascending by month.
 
 ### `PUT /api/facility/issues/[id]`
 
@@ -617,7 +652,7 @@ Auto-reopens the issue if `rating <= 2` and `status === "resolved"`.
 
 ### `GET /api/facility/assignees`
 
-Returns users matching: `role IN (it_technician, it_manager, it_team, admin)` OR `email IN (IT_NOTIFY_EMAILS)`, and `is_active = true`. Deduplicates by user ID.
+Returns active users with roles `it_technician`, `it_manager`, `fms`, `admin`, `manager` and `is_active = true`. These are the users eligible to be set as `default_assignee_id` or `backup_assignee_id` on a category, or manually assigned to an issue. No longer hardcodes IT email addresses.
 
 ---
 
@@ -661,9 +696,13 @@ Migration 00176 added the UPDATE RLS policy on `facility_issue_collaborators` be
 
 The API calls `.trim().toUpperCase()` on `asset_code` before insert/update. The dialog does the same in `onChange`. Do not rely on lowercase asset codes — they will be stored uppercase.
 
-### SLA Is Reset on Priority Change
+### SLA Is Reset on Priority Change and on Reopen
 
-Changing priority via PUT resets `sla_target_at` (computed from original `reported_at`, not from "now") and sets `sla_breached = false`. This is intentional but can surprise: downgrading a high-priority issue that was about to breach its SLA resets the clock and clears the breach flag.
+Two events reset the SLA clock:
+1. **Priority change (PUT)** — resets `sla_target_at` computed from original `reported_at` (not from now) and sets `sla_breached = false`. Downgrading a near-breach high-priority issue to medium gives it a fresh 24h window.
+2. **Reopen (PATCH /status)** — also resets `sla_breached = false` and recomputes `sla_target_at` from the category's current SLA defaults at the time of reopen. This gives the technician a clean SLA window for the second attempt.
+
+In both cases, `sla_target_at` uses the category's SLA hours — if the category's SLA was updated between issue creation and reopen, the new SLA hours apply.
 
 ### Satisfaction Token — No Rotation API
 
@@ -705,13 +744,9 @@ Both can be populated simultaneously. The satisfaction survey is sent to `report
 
 ## Environment / Config Dependencies
 
-No module-specific env vars or feature flags beyond the standard app ones (`NEXT_PUBLIC_APP_URL` is used to build issue links in notification emails via `issueUrl()` in `src/lib/facility-notifications.ts`).
+No module-specific env vars or feature flags beyond the standard app ones (`NEXT_PUBLIC_APP_URL` is used to build issue links in notification emails in `src/lib/facility-notifications.ts`).
 
-Hard-coded email constants in `src/lib/facility-notifications.ts`:
-- `IT_PRIMARY_EMAIL = "techsupport@theworkvilla.com"` — used for auto-assignment and notification list
-- `IT_SECONDARY_EMAIL = "it@theworkvilla.com"` — notification list only
-
-These are in source code, not env vars. Changes require a code deploy.
+There are no hardcoded IT email addresses in this module. Assignee routing is fully database-driven via `facility_asset_categories.default_assignee_id` and `backup_assignee_id`.
 
 No `app_settings` table keys are used by this module.
 
@@ -839,8 +874,8 @@ The complete lifecycle of a facility issue from report to closure:
 - Reporter creates issue via the wizard (scope-first, category optional)
 - System generates scoped issue number (e.g. `IT-2026-00042`, `EL-2026-00001`)
 - SLA target computed from category SLA hours (or fallback defaults: 2h/8h/24h/72h)
-- IT-scoped issues auto-assigned to primary IT contact
-- Notifications sent to IT team + assignee
+- If the category has `default_assignee_id` set → issue auto-assigned to that user. If the user is inactive → admins notified via `notifyAdminsStaleAssignee()`, issue left unassigned
+- Notifications sent to assignee + category backup assignee (if set)
 
 ### Phase 2: Triage (NEW → ACKNOWLEDGED)
 - First responder acknowledges receipt → sets `acknowledged_at`
@@ -948,6 +983,18 @@ Schema format:
 ]
 ```
 
+### Cost of Ownership
+
+An asset's maintenance cost is tracked through the procurement chain:
+
+```
+facility_issues (asset_id) → purchase_requests (issue_id) → purchase_orders (pr_id) → vendor_bills (po_id)
+```
+
+`GET /api/facility/assets/[id]/cost-summary` aggregates `vendor_bills.total_amount` by `invoice_date` month for all approved bills on that chain. This gives a per-asset monthly cost bar chart useful for lifecycle decisions (repair vs replace).
+
+The `purchase_requests.issue_id` FK was added in migration 00293. Existing MRs that predate this migration have `issue_id = NULL` and do not appear in cost summaries. New MRs generated from an issue (via the "Generate MR" button on the issue detail page) will carry `issue_id` automatically.
+
 ### Document Management (Two-Tier)
 
 Assets support document uploads with access tiers:
@@ -986,7 +1033,7 @@ Outside the `(dashboard)` layout — no authentication required. Served at `/ass
 
 **API used by the public page:**
 - `GET /api/public/asset/[code]` — returns `{ id, name, asset_code, status, location_name, floor_name, category_name, category_scope, has_active_amc }`. Uses `createAdminClient()` (no auth cookie needed). AMC check: queries `purchase_orders` where `linked_asset_id = asset.id AND po_type = 'service' AND amc_status IN ('active', 'expiring')`.
-- `POST /api/public/asset/[code]/report` — creates a facility issue. Required body: `title`. Optional: `description`, `reporter_name`, `reporter_email`, `reporter_phone`. Uses `createAdminClient()`.
+- `POST /api/public/asset/[code]/report` — creates a facility issue. Required body: `title`. Optional: `description`, `reporter_name`, `reporter_email`, `reporter_phone`. Uses `createAdminClient()`. Auto-assigns to `category.default_assignee_id` (if active); if the assignee is inactive, `notifyAdminsStaleAssignee()` fires.
 - `POST /api/public/asset/[code]/service/upload` — uploads a service document for a vendor visit. Stores in `amc_event_attachments` with `uploaded_by_vendor: true`. Accepts `multipart/form-data`. Body: `file` (required), `vendor_name` (optional), `notes` (optional). Uses `createAdminClient()`.
 
 **Gotcha — these are unauthenticated endpoints.** They use `createAdminClient()` and bypass RLS. They are intentionally open for QR scan use-cases (no login friction for vendors or members). Do not expand their scope beyond the specific operations listed above.
@@ -1023,3 +1070,6 @@ All seven scopes now have seeded categories with scope-specific SLA defaults:
 | `00277_facility_asset_events.sql` | Create `facility_asset_events` table — append-only event log per asset |
 | `00278_asset_events_add_issue_id.sql` | Add `issue_id` FK to asset events for issue linking |
 | `00279_facility_issues_category_nullable.sql` | Make `category_id` nullable on `facility_issues` — scope-first reporting |
+| `00292_facility_category_assignees.sql` | Add `default_assignee_id` and `backup_assignee_id` to `facility_asset_categories` — enables per-category issue routing |
+| `00293_purchase_requests_issue_link.sql` | Add `issue_id` FK to `purchase_requests` — links a material request to the facility issue that triggered it; drives asset cost-of-ownership reporting |
+| `00294_facility_asset_events_issue_link.sql` | Safe no-op — `issue_id` already existed from migration 00278 |

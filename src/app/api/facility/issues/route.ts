@@ -6,7 +6,8 @@ import {
   computeSlaTarget,
   logIssueEvent,
 } from "@/lib/facility";
-import { notifyItTeam, getItPrimaryAssignee } from "@/lib/facility-notifications";
+import { notifyIssueAssignee, notifyAdminsStaleAssignee } from "@/lib/facility-notifications";
+import { createAdminClient } from "@/lib/supabase/server";
 import type { FacilityScope, FacilityIssuePriority, FacilityReportedVia } from "@/types";
 
 const VALID_PRIORITY: FacilityIssuePriority[] = ["low", "medium", "high", "critical"];
@@ -113,25 +114,38 @@ export async function POST(request: NextRequest) {
     default_sla_critical_hrs: 0, default_sla_high_hrs: 0,
     default_sla_medium_hrs: 0, default_sla_low_hrs: 0,
   };
+  let categoryDefaultAssigneeId: string | null = null;
   if (category_id) {
     const { data: category, error: catErr } = await supabase
       .from("facility_asset_categories")
-      .select("id, scope, default_sla_critical_hrs, default_sla_high_hrs, default_sla_medium_hrs, default_sla_low_hrs")
+      .select("id, scope, default_assignee_id, default_sla_critical_hrs, default_sla_high_hrs, default_sla_medium_hrs, default_sla_low_hrs")
       .eq("id", category_id)
       .single();
     if (catErr || !category) {
       return NextResponse.json({ error: "Category not found" }, { status: 404 });
     }
     slaSource = category;
+    categoryDefaultAssigneeId = category.default_assignee_id ?? null;
   }
 
   const issueNumber = await generateIssueNumber(supabase, scope as FacilityScope);
   const slaTargetAt = computeSlaTarget(slaSource, priority);
 
-  // Auto-assign IT-scoped issues to the primary IT contact
+  // Auto-assign based on category's default_assignee_id (any scope, any category)
   let autoAssignee: { id: string; full_name: string } | null = null;
-  if (scope === "it") {
-    autoAssignee = await getItPrimaryAssignee();
+  if (categoryDefaultAssigneeId) {
+    const adminClient = createAdminClient();
+    const { data: assignee } = await adminClient
+      .from("users")
+      .select("id, full_name")
+      .eq("id", categoryDefaultAssigneeId)
+      .eq("is_active", true)
+      .single();
+    autoAssignee = assignee ?? null;
+    if (!autoAssignee) {
+      // UUID set but user is inactive — alert admins so they fix the routing in /facility/settings
+      notifyAdminsStaleAssignee({ categoryId: category_id!, issueNumber, issueTitle: title.trim() });
+    }
   }
 
   const now = new Date().toISOString();
@@ -204,15 +218,10 @@ export async function POST(request: NextRequest) {
     performedBy: dbUser.id, changes: { record: { old: null, new: issue } },
   });
 
-  // Notify IT team + assignee (awaited so Vercel doesn't kill the function early)
-  await notifyItTeam({
+  await notifyIssueAssignee(issue, {
     type: "created",
-    issueId: issue.id,
-    issueNumber: issueNumber,
-    title: title.trim(),
     priority,
     reportedBy: dbUser.full_name,
-    assigneeId: autoAssignee?.id,
   });
 
   return NextResponse.json({ data: issue }, { status: 201 });

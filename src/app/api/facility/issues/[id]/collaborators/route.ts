@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { hasRole, FACILITY_ROLES, logIssueEvent } from "@/lib/facility";
-import { notifyItTeam } from "@/lib/facility-notifications";
+import { notifyIssueAssignee } from "@/lib/facility-notifications";
 
 export async function GET(
   _request: NextRequest,
@@ -62,7 +62,7 @@ export async function POST(
 
   const { data: issue } = await supabase
     .from("facility_issues")
-    .select("issue_number, title, assigned_to")
+    .select("issue_number, title, category_id, assigned_to")
     .eq("id", id).single();
 
   const names = (data ?? []).map((d) => (d.user as unknown as { full_name: string })?.full_name).filter(Boolean);
@@ -75,15 +75,10 @@ export async function POST(
     payload: { collaborators_added: userIds },
   });
 
-  await notifyItTeam({
-    type: "assigned",
-    issueId: id,
-    issueNumber: issue?.issue_number ?? "",
-    title: issue?.title ?? "",
-    assigneeName: names.join(", "),
-    assigneeId: issue?.assigned_to ?? undefined,
-    actorName: dbUser!.full_name,
-  });
+  await notifyIssueAssignee(
+    { id, category_id: issue?.category_id ?? null, assigned_to: issue?.assigned_to ?? null, issue_number: issue?.issue_number ?? "", title: issue?.title ?? "" },
+    { type: "assigned", assigneeName: names.join(", "), actorName: dbUser!.full_name }
+  );
 
   return NextResponse.json({ data: data ?? [] }, { status: 201 });
 }

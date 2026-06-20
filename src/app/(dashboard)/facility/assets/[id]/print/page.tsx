@@ -9,7 +9,7 @@ import type { FacilityAsset } from "@/types";
 
 type Layout = "avery" | "9up" | "single";
 
-const GRID_SIZE: Record<Layout, number> = { avery: 21, "9up": 9, single: 1 };
+const GRID_SIZE: Record<Layout, number> = { avery: 21, "9up": 8, single: 1 };
 
 export default function AssetQRPrintPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = use(params);
@@ -85,7 +85,7 @@ export default function AssetQRPrintPage({ params }: { params: Promise<{ id: str
                 border: "none", cursor: "pointer",
               }}
             >
-              {l === "avery" ? "21-up (63.5×38mm)" : l === "9up" ? "9-up cut sheet" : "Single large"}
+              {l === "avery" ? "21-up (63.5×38mm)" : l === "9up" ? "8-up (100×72mm)" : "Single large"}
             </button>
           ))}
         </div>
@@ -124,7 +124,7 @@ export default function AssetQRPrintPage({ params }: { params: Promise<{ id: str
       {/* Hint */}
       <div data-print-hide className="text-xs text-muted-foreground px-4 py-2 bg-muted/30 border-b">
         {layout === "avery" && `21 labels per A4 (63.5 × 38 mm). Printing ${effectiveCopies} label(s) starting at position ${startFrom}.${startFrom > 1 ? ` Positions 1–${startFrom - 1} will be left blank for already-used labels.` : ""}`}
-        {layout === "9up" && `9-up cut sheet — 3 × 3. Printing ${effectiveCopies} starting at position ${startFrom}. Cut along dashed lines.`}
+        {layout === "9up" && `8-up cut sheet — 2 × 4 (100 × 72 mm). Printing ${effectiveCopies} starting at position ${startFrom}. Cut along dashed lines.`}
         {layout === "single" && "Single large label — good for test-printing before a full sheet."}
       </div>
 
@@ -136,28 +136,28 @@ export default function AssetQRPrintPage({ params }: { params: Promise<{ id: str
           <SingleLabel qr={qrDataUrl} code={asset.asset_code} name={asset.name} location={locationLine} />
         )}
 
-        {/* 9-UP CUT SHEET */}
+        {/* 8-UP CUT SHEET */}
         {layout === "9up" && (
           <div style={{
             width: "210mm", background: "white",
             display: "grid",
-            gridTemplateColumns: "repeat(3, 1fr)",
-            gridTemplateRows: "repeat(3, 88mm)",
-            padding: "10mm",
-            gap: "3mm",
+            gridTemplateColumns: "repeat(2, 100mm)",
+            gridTemplateRows: "repeat(4, 72mm)",
+            padding: "5mm",
+            gap: "2mm",
           }}>
             {Array.from({ length: maxLabels }).map((_, i) => {
               const pos = i + 1;
               const isLabel = pos >= startFrom && pos < startFrom + effectiveCopies;
               return (
-                <div key={i} style={{ border: "0.5px dashed #bbb", boxSizing: "border-box", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: 3, padding: "3mm" }}>
+                <div key={i} style={{ border: "0.5px dashed #bbb", boxSizing: "border-box", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", gap: "2mm", padding: "2mm" }}>
                   {isLabel ? (
                     <>
-                      <img src="/logo.png" alt="The WorkVilla" style={{ width: "36mm", height: "auto", marginBottom: 1 }} />
-                      {qrDataUrl && <img src={qrDataUrl} alt="QR code" style={{ width: "40mm", height: "40mm" }} />}
-                      <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: "9pt", letterSpacing: "0.06em" }}>{asset.asset_code}</div>
-                      <div style={{ fontSize: "7pt", textAlign: "center", lineHeight: 1.3 }}>{asset.name}</div>
-                      {locationLine && <div style={{ fontSize: "6pt", color: "#666", textAlign: "center" }}>{locationLine}</div>}
+                      <img src="/logo.png" alt="The WorkVilla" style={{ width: "28mm", height: "auto" }} />
+                      {qrDataUrl && <img src={qrDataUrl} alt="QR code" style={{ width: "32mm", height: "32mm" }} />}
+                      <div style={{ fontFamily: "monospace", fontWeight: 700, fontSize: "8pt", letterSpacing: "0.04em", textAlign: "center" }}>{asset.asset_code}</div>
+                      <div style={{ fontSize: "6pt", textAlign: "center", lineHeight: 1.2 }}>{asset.name}</div>
+                      {locationLine && <div style={{ fontSize: "5pt", color: "#666", textAlign: "center" }}>{locationLine}</div>}
                     </>
                   ) : null}
                 </div>
@@ -211,7 +211,7 @@ export default function AssetQRPrintPage({ params }: { params: Promise<{ id: str
 function SingleLabel({ qr, code, name, location }: { qr: string; code: string; name: string; location: string }) {
   return (
     <div style={{
-      width: "100mm", minHeight: "130mm",
+      width: "100mm", minHeight: "145mm",
       background: "white", border: "1px solid #ccc",
       display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center",
       gap: 6, padding: "6mm",
