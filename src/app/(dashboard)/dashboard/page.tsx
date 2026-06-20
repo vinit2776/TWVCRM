@@ -34,6 +34,7 @@ import { MtdBookingsWidget } from "@/components/dashboard/widgets/mtd-bookings-w
 import { PendingActionsWidget } from "@/components/dashboard/widgets/pending-actions-widget";
 import { RentRevenueWidget } from "@/components/dashboard/widgets/rent-revenue-widget";
 import { NetworkWidget } from "@/components/network/network-widget";
+import { WeekInReviewWidget } from "@/components/dashboard/widgets/week-in-review-widget";
 
 import Link from "next/link";
 import { Zap } from "lucide-react";
@@ -229,13 +230,15 @@ export default function DashboardPage() {
         return <RentRevenueWidget key="rent_revenue" />;
       case "network":
         return <NetworkWidget key="network" locationId={locationFilter ?? undefined} />;
+      case "week_in_review":
+        return <WeekInReviewWidget key="week_in_review" />;
       default:
         return null;
     }
   }
 
   // live_enquiries and kpi_stats always render full-width outside the grid
-  const FULL_WIDTH: WidgetId[] = ["pending_actions", "live_enquiries", "kpi_stats"];
+  const FULL_WIDTH: WidgetId[] = ["pending_actions", "live_enquiries", "kpi_stats", "week_in_review"];
   const topWidgets = widgetIds.filter((id) => FULL_WIDTH.includes(id));
   const gridWidgets = widgetIds.filter((id) => !FULL_WIDTH.includes(id));
 

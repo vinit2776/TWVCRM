@@ -33,7 +33,8 @@ export type WidgetId =
   | "quota_overuse"
   | "mtd_bookings"
   | "rent_revenue"
-  | "network";
+  | "network"
+  | "week_in_review";
 
 // ─── Widget metadata registry ──────────────────────────────────────────────
 
@@ -70,6 +71,7 @@ export const WIDGET_REGISTRY: Record<WidgetId, WidgetMeta> = {
   mtd_bookings:           { id: "mtd_bookings",           title: "Bookings Value (MTD)" },
   rent_revenue:           { id: "rent_revenue",           title: "Rent vs Revenue" },
   network:                { id: "network",                title: "Network Status" },
+  week_in_review:         { id: "week_in_review",         title: "Last 7 Days" },
 };
 
 // ─── Role → widget order ───────────────────────────────────────────────────
@@ -82,6 +84,7 @@ export const DASHBOARD_ROLE_WIDGETS: Record<UserRole, WidgetId[]> = {
     "pending_actions",
     "live_enquiries",
     "kpi_stats",
+    "week_in_review",
     "mtd_bookings",
     "revenue_pulse",
     "renewal_pipeline",
