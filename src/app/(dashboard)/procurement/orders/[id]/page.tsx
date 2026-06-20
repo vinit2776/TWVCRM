@@ -274,7 +274,7 @@ function FileDropzone({
 export default function PurchaseOrderDetailPage() {
   const { id } = useParams<{ id: string }>();
   const router = useRouter();
-  const { user } = useCurrentUser();
+  const { user, loading: userLoading } = useCurrentUser();
   const currentUserRole = user?.role ?? null;
 
   const [po, setPo] = useState<PurchaseOrder | null>(null);
@@ -1390,44 +1390,54 @@ export default function PurchaseOrderDetailPage() {
             {po.advance_notes && (
               <p className="text-sm text-muted-foreground">{po.advance_notes}</p>
             )}
-            {po.advance_status === "pending" && (
-              <div className="pt-1 flex flex-wrap gap-2">
-                {po.advance_approval_status === "pending_review" && currentUserRole === "admin" && (
-                  <>
+            {po.advance_status === "pending" && (() => {
+              // Treat null/undefined as pending_review (schema cache lag or pre-migration rows)
+              const approvalStatus = po.advance_approval_status ?? "pending_review";
+              const needsApproval = approvalStatus === "pending_review";
+              const isApproved = approvalStatus === "approved";
+              const isAdmin = !userLoading && currentUserRole === "admin";
+              return (
+                <div className="pt-1 flex flex-wrap items-center gap-2">
+                  {needsApproval && isAdmin && (
+                    <>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-red-600 border-red-200 hover:bg-red-50"
+                        onClick={() => setActionDialog("reject_advance")}
+                        disabled={actionLoading}
+                      >
+                        <XCircle className="h-4 w-4 mr-1" /> Reject Advance
+                      </Button>
+                      <Button
+                        size="sm"
+                        className="bg-green-600 hover:bg-green-700"
+                        onClick={() => setActionDialog("approve_advance")}
+                        disabled={actionLoading}
+                      >
+                        <CheckCircle2 className="h-4 w-4 mr-1" /> Approve Advance
+                      </Button>
+                    </>
+                  )}
+                  {needsApproval && !isAdmin && !userLoading && (
+                    <p className="text-xs text-amber-600 font-medium">Awaiting admin approval before payment can be processed</p>
+                  )}
+                  {isApproved && (
                     <Button
                       size="sm"
-                      variant="outline"
-                      className="text-red-600 border-red-200 hover:bg-red-50"
-                      onClick={() => setActionDialog("reject_advance")}
+                      className="bg-orange-600 hover:bg-orange-700"
+                      onClick={() => {
+                        setAdvancePaymentDate(today);
+                        setActionDialog("process_advance");
+                      }}
                       disabled={actionLoading}
                     >
-                      <XCircle className="h-4 w-4 mr-1" /> Reject Advance
+                      <CheckCircle2 className="h-4 w-4 mr-1.5" /> Process Advance Payment
                     </Button>
-                    <Button
-                      size="sm"
-                      className="bg-green-600 hover:bg-green-700"
-                      onClick={() => setActionDialog("approve_advance")}
-                      disabled={actionLoading}
-                    >
-                      <CheckCircle2 className="h-4 w-4 mr-1" /> Approve Advance
-                    </Button>
-                  </>
-                )}
-                {po.advance_approval_status === "approved" && (
-                  <Button
-                    size="sm"
-                    className="bg-orange-600 hover:bg-orange-700"
-                    onClick={() => {
-                      setAdvancePaymentDate(today);
-                      setActionDialog("process_advance");
-                    }}
-                    disabled={actionLoading}
-                  >
-                    <CheckCircle2 className="h-4 w-4 mr-1.5" /> Process Advance Payment
-                  </Button>
-                )}
-              </div>
-            )}
+                  )}
+                </div>
+              );
+            })()}
           </CardContent>
         </Card>
       )}
