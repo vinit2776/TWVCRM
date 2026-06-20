@@ -140,7 +140,7 @@ export function AmcEventDialog({
     <Dialog open={open} onOpenChange={(o) => { if (!uploading) { onOpenChange(o); if (!o) reset(); } }}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Log Service Event #{eventNumber}</DialogTitle>
+          <DialogTitle>Log Breakdown Visit #{eventNumber}</DialogTitle>
         </DialogHeader>
 
         {/* Visit limit warning */}
@@ -296,7 +296,7 @@ export function AmcEventDialog({
           </Button>
           <Button onClick={handleSubmit} disabled={uploading || !issueDescription.trim()}>
             {uploading && <Loader2 className="h-4 w-4 mr-1.5 animate-spin" />}
-            Log Event #{eventNumber}
+            Log Visit #{eventNumber}
           </Button>
         </DialogFooter>
       </DialogContent>

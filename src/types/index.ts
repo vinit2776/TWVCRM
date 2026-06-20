@@ -2102,6 +2102,7 @@ export interface PurchaseOrder {
   amc_helpline_number?: string | null;
   amc_contact_email?: string | null;
   amc_status?: AmcStatus;
+  linked_asset_id?: string | null;
   created_at: string;
   updated_at: string;
   // Joined fields

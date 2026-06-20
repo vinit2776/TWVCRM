@@ -814,6 +814,16 @@ export default function PurchaseOrderDetailPage() {
               <ClipboardList className="h-4 w-4 mr-1" /> Record Service Report
             </Button>
           )}
+          {isAmcPo && po.status === "ordered" && (
+            <Button
+              size="sm"
+              className="bg-blue-600 hover:bg-blue-700"
+              onClick={() => setShowAmcEventDialog(true)}
+              disabled={actionLoading}
+            >
+              <Wrench className="h-4 w-4 mr-1" /> Log Breakdown Visit
+            </Button>
+          )}
           {po.po_type !== "service" && !["cancelled", "partially_cancelled", "invoice_received"].includes(po.status) && (
             <Button
               size="sm"
@@ -1091,14 +1101,8 @@ export default function PurchaseOrderDetailPage() {
                       <Edit3 className="h-3.5 w-3.5 mr-1" /> Edit
                     </Button>
                   )}
-                  <Button
-                    size="sm"
-                    className="bg-blue-600 hover:bg-blue-700"
-                    onClick={() => setShowAmcEventDialog(true)}
-                  >
-                    <Wrench className="h-3.5 w-3.5 mr-1" />
-                    Log Service Event
-                  </Button>
+                  {/* "Log Breakdown Visit" moved to the top action row alongside
+                      "Record Service Report" — both AMC actions live together now. */}
                 </div>
               </div>
             </CardHeader>
@@ -1281,7 +1285,7 @@ export default function PurchaseOrderDetailPage() {
                   <div className="rounded-lg border border-dashed p-4 text-center">
                     <p className="text-sm text-muted-foreground">No service events logged yet.</p>
                     <p className="text-xs text-muted-foreground mt-1">
-                      Click &ldquo;Log Service Event&rdquo; above when AMC services are used.
+                      Click &ldquo;Log Breakdown Visit&rdquo; at the top when a service visit happens.
                     </p>
                   </div>
                 ) : (
@@ -2512,6 +2516,7 @@ export default function PurchaseOrderDetailPage() {
           eventNumber={(amcEvents.length) + 1}
           visitsCovered={amcVisitsCoveredNum}
           visitsUsed={amcVisitsUsed}
+          defaultAssetId={po.linked_asset_id ?? null}
           onSuccess={() => {
             setAmcEventsLoaded(false);
             fetchAmcEvents();
