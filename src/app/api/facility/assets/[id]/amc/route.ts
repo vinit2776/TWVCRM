@@ -30,7 +30,9 @@ export async function GET(
       amc_escalation_name, amc_escalation_phone,
       amc_escalation2_name, amc_escalation2_phone,
       amc_scope_covered, amc_scope_exclusions,
+      amc_terminated_at, amc_termination_reason,
       total_ordered_amount, created_at, status,
+      terminator:users!amc_terminated_by(id, full_name),
       procurement_vendors(id, name)
     `)
     .eq("linked_asset_id", assetId)

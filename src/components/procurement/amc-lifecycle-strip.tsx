@@ -18,6 +18,7 @@ interface Props {
   amcEndDate?: string | null;
   amcVisitsCovered?: number | null;
   amcVisitsUsed?: number | null;
+  amcTerminatedAt?: string | null;
   className?: string;
 }
 
@@ -28,7 +29,7 @@ interface Step {
 }
 
 export function AmcLifecycleStrip({
-  createdAt, amcStartDate, amcEndDate, amcVisitsCovered, amcVisitsUsed, className,
+  createdAt, amcStartDate, amcEndDate, amcVisitsCovered, amcVisitsUsed, amcTerminatedAt, className,
 }: Props) {
   if (!amcStartDate || !amcEndDate) {
     return (
@@ -43,10 +44,13 @@ export function AmcLifecycleStrip({
     amc_end_date: amcEndDate,
     amc_visits_covered: amcVisitsCovered,
     amc_visits_used: amcVisitsUsed,
+    amc_terminated_at: amcTerminatedAt,
   });
 
   // Four anchors: Created, Activates, Active midpoint marker, Expires
   // We don't render an "Active" anchor — the bar between Activates and Expires IS the active phase.
+  // When terminated, the third anchor becomes "Terminated" + the termination date.
+  const isTerminated = lc.status === "terminated";
   const steps: Step[] = [
     {
       label: "Created",
@@ -59,9 +63,9 @@ export function AmcLifecycleStrip({
       state: lc.isPendingActivation ? "future" : "done",
     },
     {
-      label: lc.status === "expired" ? "Expired" : "Expires",
-      date: formatDate(amcEndDate),
-      state: lc.status === "expired" ? "done" : "future",
+      label: isTerminated ? "Terminated" : lc.status === "expired" ? "Expired" : "Expires",
+      date: isTerminated && amcTerminatedAt ? formatDate(amcTerminatedAt) : formatDate(amcEndDate),
+      state: isTerminated || lc.status === "expired" ? "done" : "future",
     },
   ];
 

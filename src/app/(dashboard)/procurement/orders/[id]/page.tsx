@@ -52,6 +52,7 @@ type ActionType =
   | "process_advance"
   | "approve_advance"
   | "reject_advance"
+  | "terminate_amc"
   | "email_po";
 
 // ─── Timeline helper ─────────────────────────────────────────────────────────
@@ -344,6 +345,8 @@ export default function PurchaseOrderDetailPage() {
   const [showAmcEventDialog, setShowAmcEventDialog] = useState(false);
   // AMC contact edit mode
   const [amcEditMode, setAmcEditMode] = useState(false);
+  // Termination reason — captured in the confirm dialog before calling the API
+  const [terminationReason, setTerminationReason] = useState("");
   const [amcContactName, setAmcContactName] = useState("");
   const [amcHelpline, setAmcHelpline] = useState("");
   const [amcContactEmail, setAmcContactEmail] = useState("");
@@ -447,6 +450,7 @@ export default function PurchaseOrderDetailPage() {
         process_advance: "Advance payment marked as processed",
         approve_advance: "Advance payment approved — accounts can now process payment",
         reject_advance: "Advance payment rejected",
+        terminate_amc: "AMC terminated — events history preserved",
       };
       toast.success(msgs[action] ?? "Done");
       setActionDialog(null);
@@ -709,7 +713,7 @@ export default function PurchaseOrderDetailPage() {
 
   const AMC_STATUS_LABELS: Record<AmcStatus, string> = {
     inactive: "Inactive", active: "Active", expiring: "Expiring Soon",
-    exhausted: "Exhausted", expired: "Expired",
+    exhausted: "Exhausted", expired: "Expired", terminated: "Terminated",
   };
   const AMC_STATUS_BADGE: Record<AmcStatus, string> = {
     inactive: "bg-gray-100 text-gray-600",
@@ -717,6 +721,7 @@ export default function PurchaseOrderDetailPage() {
     expiring: "bg-amber-100 text-amber-700",
     exhausted:"bg-red-100 text-red-700",
     expired:  "bg-red-100 text-red-600",
+    terminated: "bg-rose-100 text-rose-700",
   };
 
   const amcStatus = (po.amc_status ?? "inactive") as AmcStatus;
@@ -800,7 +805,7 @@ export default function PurchaseOrderDetailPage() {
               <Package className="h-4 w-4 mr-1" /> Record Delivery
             </Button>
           )}
-          {po.po_type === "service" && po.status === "ordered" && (
+          {po.po_type === "service" && po.status === "ordered" && !po.amc_terminated_at && (
             <Button
               size="sm"
               className="bg-teal-600 hover:bg-teal-700"
@@ -816,7 +821,7 @@ export default function PurchaseOrderDetailPage() {
               <ClipboardList className="h-4 w-4 mr-1" /> Record Service Report
             </Button>
           )}
-          {isAmcPo && po.status === "ordered" && (
+          {isAmcPo && po.status === "ordered" && !po.amc_terminated_at && (
             <Button
               size="sm"
               className="bg-blue-600 hover:bg-blue-700"
@@ -1079,7 +1084,13 @@ export default function PurchaseOrderDetailPage() {
           amc_end_date: po.amc_end_date,
           amc_visits_covered: po.amc_visits_covered,
           amc_visits_used: po.amc_visits_used,
+          amc_terminated_at: po.amc_terminated_at,
         });
+        const isTerminated = !!po.amc_terminated_at;
+        const canTerminate = !isTerminated
+          && po.po_type === "service"
+          && (currentUserRole === "admin" || currentUserRole === "manager")
+          && (liveLc.status === "active" || liveLc.status === "expiring");
 
         return (
           <Card className="border-blue-200">
@@ -1093,7 +1104,7 @@ export default function PurchaseOrderDetailPage() {
                   </span>
                 </div>
                 <div className="flex items-center gap-2">
-                  {!amcEditMode && (
+                  {!amcEditMode && !isTerminated && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -1111,15 +1122,42 @@ export default function PurchaseOrderDetailPage() {
                       <Edit3 className="h-3.5 w-3.5 mr-1" /> Edit
                     </Button>
                   )}
-                  {/* "Log Breakdown Visit" moved to the top action row alongside
-                      "Record Service Report" — both AMC actions live together now. */}
+                  {canTerminate && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      className="text-rose-700 border-rose-200 hover:bg-rose-50"
+                      onClick={() => { setTerminationReason(""); setActionDialog("terminate_amc"); }}
+                    >
+                      <XCircle className="h-3.5 w-3.5 mr-1" /> Terminate AMC
+                    </Button>
+                  )}
                 </div>
               </div>
             </CardHeader>
 
             <CardContent className="space-y-5">
+              {/* Termination banner — supersedes everything else when AMC is terminated */}
+              {isTerminated && (
+                <div className="rounded-lg border border-rose-200 bg-rose-50 px-4 py-3 space-y-1.5">
+                  <div className="flex items-center gap-2">
+                    <XCircle className="h-4 w-4 text-rose-600 shrink-0" />
+                    <p className="text-sm font-semibold text-rose-900">
+                      AMC Terminated{po.amc_terminated_at ? ` on ${formatDate(po.amc_terminated_at)}` : ""}
+                      {po.terminator?.full_name ? ` by ${po.terminator.full_name}` : ""}
+                    </p>
+                  </div>
+                  {po.amc_termination_reason && (
+                    <p className="text-sm text-rose-800 ml-6">{po.amc_termination_reason}</p>
+                  )}
+                  <p className="text-xs text-rose-700 ml-6">
+                    Service events logged before termination remain on record. To resume AMC coverage, create a new Material Request.
+                  </p>
+                </div>
+              )}
+
               {/* Missing info warning */}
-              {missingInfo && (
+              {!isTerminated && missingInfo && (
                 <div className="flex items-start gap-2 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2.5 text-sm text-amber-800">
                   <AlertTriangle className="h-4 w-4 flex-shrink-0 mt-0.5 text-amber-600" />
                   <span>
@@ -1139,6 +1177,7 @@ export default function PurchaseOrderDetailPage() {
                     amcEndDate={po.amc_end_date}
                     amcVisitsCovered={po.amc_visits_covered}
                     amcVisitsUsed={po.amc_visits_used}
+                    amcTerminatedAt={po.amc_terminated_at}
                   />
                 </div>
               )}
@@ -1449,7 +1488,7 @@ export default function PurchaseOrderDetailPage() {
                   {needsApproval && !isAdmin && !userLoading && (
                     <p className="text-xs text-amber-600 font-medium">Awaiting admin approval before payment can be processed</p>
                   )}
-                  {isApproved && (
+                  {isApproved && !po.amc_terminated_at && (
                     <Button
                       size="sm"
                       className="bg-orange-600 hover:bg-orange-700"
@@ -1908,6 +1947,56 @@ export default function PurchaseOrderDetailPage() {
             >
               {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
               <XCircle className="h-4 w-4 mr-1" /> Reject Advance
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* ── Terminate AMC dialog ─────────────────────────────────────────── */}
+      <Dialog
+        open={actionDialog === "terminate_amc"}
+        onOpenChange={() => { setActionDialog(null); setTerminationReason(""); }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Terminate AMC — {po.po_number}</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 py-2">
+            <div className="rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-900">
+              <p className="font-medium">This action cannot be undone.</p>
+              <ul className="list-disc list-inside text-xs mt-1.5 space-y-0.5 text-rose-800">
+                <li>No new breakdowns or service reports can be logged on this AMC</li>
+                <li>Existing event history stays visible as institutional memory</li>
+                <li>Pending advances will not be processed</li>
+                <li>To resume AMC, create a new Material Request</li>
+              </ul>
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm">
+                Reason for termination <span className="text-rose-600">*</span>
+              </Label>
+              <Textarea
+                rows={3}
+                placeholder="e.g. Vendor failed to respond to 2 consecutive breakdown calls. Switching to a different vendor."
+                value={terminationReason}
+                onChange={(e) => setTerminationReason(e.target.value)}
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Minimum 10 characters. This reason will be visible on the asset page as part of its history.
+              </p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setActionDialog(null); setTerminationReason(""); }}>
+              Cancel
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={() => performAction("terminate_amc", { termination_reason: terminationReason.trim() })}
+              disabled={actionLoading || terminationReason.trim().length < 10}
+            >
+              {actionLoading && <Loader2 className="h-4 w-4 animate-spin mr-1" />}
+              <XCircle className="h-4 w-4 mr-1" /> Terminate AMC
             </Button>
           </DialogFooter>
         </DialogContent>

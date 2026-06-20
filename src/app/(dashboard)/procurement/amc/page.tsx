@@ -80,6 +80,7 @@ const AMC_STATUS_LABELS: Record<AmcStatus, string> = {
   expiring: "Expiring Soon",
   exhausted:"Exhausted",
   expired:  "Expired",
+  terminated:"Terminated",
 };
 
 const AMC_STATUS_BADGE: Record<AmcStatus, string> = {
@@ -88,6 +89,7 @@ const AMC_STATUS_BADGE: Record<AmcStatus, string> = {
   expiring: "bg-amber-100 text-amber-700",
   exhausted:"bg-red-100 text-red-700",
   expired:  "bg-red-100 text-red-600",
+  terminated:"bg-rose-100 text-rose-700",
 };
 
 const AMC_STATUS_ICON: Record<AmcStatus, React.ReactNode> = {
@@ -96,6 +98,7 @@ const AMC_STATUS_ICON: Record<AmcStatus, React.ReactNode> = {
   expiring: <AlertTriangle className="h-3.5 w-3.5" />,
   exhausted:<XCircle className="h-3.5 w-3.5" />,
   expired:  <XCircle className="h-3.5 w-3.5" />,
+  terminated:<XCircle className="h-3.5 w-3.5" />,
 };
 
 function daysRemaining(endDate: string | null): number | null {

@@ -62,6 +62,7 @@ const AMC_STATUS_CHIP: Record<AmcStatus, string> = {
   expiring: "bg-amber-100 text-amber-700",
   exhausted: "bg-red-100 text-red-700",
   expired: "bg-red-100 text-red-600",
+  terminated: "bg-rose-100 text-rose-700",
 };
 
 const AMC_EVENT_TYPE_LABEL: Record<string, string> = {
@@ -88,6 +89,9 @@ interface AmcContract {
   amc_escalation2_phone: string | null;
   amc_scope_covered: string | null;
   amc_scope_exclusions: string | null;
+  amc_terminated_at: string | null;
+  amc_termination_reason: string | null;
+  terminator: { id: string; full_name: string } | null;
   total_ordered_amount: number;
   created_at: string;
   status: string; // PO status — needed to gate "Log Breakdown Visit"
@@ -429,12 +433,14 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                 amc_end_date: a.amc_end_date,
                 amc_visits_covered: a.amc_visits_covered,
                 amc_visits_used: a.amc_visits_used,
+                amc_terminated_at: a.amc_terminated_at,
               });
               const bLc = computeAmcLifecycle({
                 amc_start_date: b.amc_start_date,
                 amc_end_date: b.amc_end_date,
                 amc_visits_covered: b.amc_visits_covered,
                 amc_visits_used: b.amc_visits_used,
+                amc_terminated_at: b.amc_terminated_at,
               });
               const pa = priority[aLc.status] ?? 99;
               const pb = priority[bLc.status] ?? 99;
@@ -449,6 +455,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                 amc_end_date: c.amc_end_date,
                 amc_visits_covered: c.amc_visits_covered,
                 amc_visits_used: c.amc_visits_used,
+                amc_terminated_at: c.amc_terminated_at,
               });
               return lc.status === "active" || lc.status === "expiring";
             };
@@ -572,6 +579,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                         amc_end_date: c.amc_end_date,
                         amc_visits_covered: c.amc_visits_covered,
                         amc_visits_used: c.amc_visits_used,
+                        amc_terminated_at: c.amc_terminated_at,
                       });
                       const canLogBreakdown = c.status === "ordered" && (lc.status === "active" || lc.status === "expiring");
                       const isDimmed = false; // live contracts are never dimmed
@@ -625,6 +633,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                             amcEndDate={c.amc_end_date}
                             amcVisitsCovered={c.amc_visits_covered}
                             amcVisitsUsed={c.amc_visits_used}
+                            amcTerminatedAt={c.amc_terminated_at}
                           />
                         </div>
 
@@ -832,6 +841,7 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                         amc_end_date: c.amc_end_date,
                         amc_visits_covered: c.amc_visits_covered,
                         amc_visits_used: c.amc_visits_used,
+                        amc_terminated_at: c.amc_terminated_at,
                       });
                       return (
                       <div
@@ -870,8 +880,24 @@ export default function AssetDetailPage({ params }: { params: Promise<{ id: stri
                             amcEndDate={c.amc_end_date}
                             amcVisitsCovered={c.amc_visits_covered}
                             amcVisitsUsed={c.amc_visits_used}
+                            amcTerminatedAt={c.amc_terminated_at}
                           />
                         </div>
+
+                        {/* Termination context — only shows when this contract was terminated */}
+                        {c.amc_terminated_at && (
+                          <div className="pt-2 border-t border-dashed">
+                            <div className="rounded-md border border-rose-200 bg-rose-50/70 px-3 py-2 space-y-1">
+                              <p className="text-xs font-semibold text-rose-900">
+                                Terminated {formatDate(c.amc_terminated_at)}
+                                {c.terminator?.full_name ? ` by ${c.terminator.full_name}` : ""}
+                              </p>
+                              {c.amc_termination_reason && (
+                                <p className="text-xs text-rose-800 italic">&ldquo;{c.amc_termination_reason}&rdquo;</p>
+                              )}
+                            </div>
+                          </div>
+                        )}
                       </div>
                       );
                     })}
@@ -959,6 +985,7 @@ function buildAssetMemory(m: MemoryInput): string[] {
       amc_end_date: c.amc_end_date,
       amc_visits_covered: c.amc_visits_covered,
       amc_visits_used: c.amc_visits_used,
+      amc_terminated_at: c.amc_terminated_at,
     });
     return lc.status === "active" || lc.status === "expiring";
   });
@@ -968,9 +995,16 @@ function buildAssetMemory(m: MemoryInput): string[] {
       amc_end_date: c.amc_end_date,
       amc_visits_covered: c.amc_visits_covered,
       amc_visits_used: c.amc_visits_used,
+      amc_terminated_at: c.amc_terminated_at,
     });
     return lc.isPendingActivation;
   });
+  // Most recent terminated contract — if there's no active AMC, this is worth mentioning
+  const recentlyTerminated = !activeContract
+    ? m.contracts
+        .filter((c) => c.amc_terminated_at)
+        .sort((a, b) => new Date(b.amc_terminated_at!).getTime() - new Date(a.amc_terminated_at!).getTime())[0]
+    : null;
 
   let sentence1 = `${m.assetName} (${m.assetCode}) is ${ageStr}`;
   if (activeContract) {
@@ -988,6 +1022,20 @@ function buildAssetMemory(m: MemoryInput): string[] {
   }
   sentence1 += ".";
   lines.push(sentence1);
+
+  // ── Termination context — if the most recent AMC was terminated, surface why
+  if (recentlyTerminated && recentlyTerminated.amc_terminated_at) {
+    const vendor = recentlyTerminated.procurement_vendors?.name ?? "vendor";
+    const termDate = new Date(recentlyTerminated.amc_terminated_at);
+    const daysSince = Math.max(0, Math.floor((now.getTime() - termDate.getTime()) / (1000 * 60 * 60 * 24)));
+    const sinceStr = daysSince === 0 ? "today" : daysSince === 1 ? "yesterday" : `${daysSince} days ago`;
+    let line = `Previous AMC with ${vendor} was terminated ${sinceStr}`;
+    if (recentlyTerminated.amc_termination_reason) {
+      line += ` — "${recentlyTerminated.amc_termination_reason}"`;
+    }
+    line += ".";
+    lines.push(line);
+  }
 
   // ── Sentence 2: breakdown frequency + pattern detection ─────────────────────
   const sixMonthsAgo = new Date(now.getFullYear(), now.getMonth() - 6, now.getDate());

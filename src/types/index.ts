@@ -2044,7 +2044,7 @@ export interface AssetDocument {
   uploader?: { id: string; full_name: string } | null;
 }
 
-export type AmcStatus = "inactive" | "active" | "expiring" | "exhausted" | "expired";
+export type AmcStatus = "inactive" | "active" | "expiring" | "exhausted" | "expired" | "terminated";
 export type AmcEventType = "breakdown" | "preventive" | "remote_support" | "annual_service";
 
 export interface AmcServiceEvent {
@@ -2104,6 +2104,10 @@ export interface PurchaseOrder {
   amc_helpline_number?: string | null;
   amc_contact_email?: string | null;
   amc_status?: AmcStatus;
+  amc_terminated_at?: string | null;
+  amc_terminated_by?: string | null;
+  amc_termination_reason?: string | null;
+  terminator?: { id: string; full_name?: string } | null;
   linked_asset_id?: string | null;
   created_at: string;
   updated_at: string;

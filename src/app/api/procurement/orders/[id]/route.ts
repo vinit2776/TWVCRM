@@ -37,6 +37,10 @@ const patchPoSchema = z.discriminatedUnion("action", [
     amc_helpline_number: z.string().nullable().optional(),
     amc_contact_email: z.string().email().nullable().optional().or(z.literal("").transform(() => null)),
   }),
+  z.object({
+    action: z.literal("terminate_amc"),
+    termination_reason: z.string().min(10, "Reason must be at least 10 characters"),
+  }),
 ]);
 
 export async function GET(
@@ -54,7 +58,7 @@ export async function GET(
   const { data, error } = await supabase
     .from("purchase_orders")
     .select(
-      `*, purchase_order_items(*, procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), purchase_requests(id, pr_number, department, expenditure_type, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), po_service_reports(*, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, approval_status, service_report_id, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
+      `*, purchase_order_items(*, procurement_items(id, name, description)), procurement_vendors(id, name, contact_name, contact_phone, contact_email), locations(id, name), orderer:users!purchase_orders_ordered_by_fkey(id, full_name, email), terminator:users!amc_terminated_by(id, full_name), purchase_requests(id, pr_number, department, expenditure_type, approval_code, approved_at, approver:users!purchase_requests_approved_by_fkey(id, full_name, email)), po_delivery_receipts(*, receiver:users!po_delivery_receipts_received_by_fkey(id, full_name, email), po_delivery_receipt_items(id, po_item_id, qty_received)), po_service_reports(*, recorder:users!po_service_reports_recorded_by_fkey(id, full_name)), vendor_bills(id, bill_number, invoice_date, invoice_file_url, total_amount, payment_status, approval_status, service_report_id, created_at, creator:users!vendor_bills_created_by_fkey(id, full_name))`
     )
     .eq("id", id)
     .single();
@@ -357,6 +361,43 @@ export async function PATCH(
         amc_helpline_number: amc_helpline_number ?? null,
         amc_contact_email: amc_contact_email ?? null,
         amc_status: newAmcStatus,
+      };
+      break;
+    }
+
+    case "terminate_amc": {
+      // Admin/manager only — terminating an AMC mid-contract is a destructive,
+      // irreversible action. Once terminated, no new events can be logged and
+      // the only way back is to create a new PO.
+      if (!["admin", "manager"].includes(dbUser.role)) {
+        return NextResponse.json(
+          { error: "Only admin and manager can terminate an AMC" },
+          { status: 403 }
+        );
+      }
+      if (po.po_type !== "service") {
+        return NextResponse.json(
+          { error: "Termination is only available on service / AMC POs" },
+          { status: 422 }
+        );
+      }
+      if (po.amc_terminated_at) {
+        return NextResponse.json(
+          { error: "This AMC has already been terminated" },
+          { status: 422 }
+        );
+      }
+      if (!["active", "expiring"].includes(po.amc_status ?? "")) {
+        return NextResponse.json(
+          { error: `Can only terminate an active or expiring AMC (current state: ${po.amc_status ?? "unknown"})` },
+          { status: 422 }
+        );
+      }
+      updatePayload = {
+        amc_terminated_at: new Date().toISOString(),
+        amc_terminated_by: dbUser.id,
+        amc_termination_reason: parsed.data.termination_reason.trim(),
+        amc_status: "terminated",
       };
       break;
     }

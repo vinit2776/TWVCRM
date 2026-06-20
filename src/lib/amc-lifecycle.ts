@@ -28,6 +28,9 @@ interface Input {
   amc_end_date?: string | null;
   amc_visits_covered?: number | null;
   amc_visits_used?: number | null;
+  // When set, the AMC was terminated mid-contract — short-circuit all the
+  // date math and surface the termination state directly.
+  amc_terminated_at?: string | null;
 }
 
 /** Days between two dates, rounded down. b - a. */
@@ -44,11 +47,12 @@ function days(n: number): string {
 const EXPIRING_THRESHOLD_DAYS = 60;
 
 const BADGE_CLASSES: Record<AmcStatus, string> = {
-  inactive:  "bg-amber-100 text-amber-800 border-amber-200",
-  active:    "bg-emerald-100 text-emerald-800 border-emerald-200",
-  expiring:  "bg-orange-100 text-orange-800 border-orange-200",
-  exhausted: "bg-rose-100 text-rose-800 border-rose-200",
-  expired:   "bg-rose-100 text-rose-800 border-rose-200",
+  inactive:   "bg-amber-100 text-amber-800 border-amber-200",
+  active:     "bg-emerald-100 text-emerald-800 border-emerald-200",
+  expiring:   "bg-orange-100 text-orange-800 border-orange-200",
+  exhausted:  "bg-rose-100 text-rose-800 border-rose-200",
+  expired:    "bg-rose-100 text-rose-800 border-rose-200",
+  terminated: "bg-rose-100 text-rose-800 border-rose-300",
 };
 
 export function computeAmcLifecycle(po: Input, today: Date = new Date()): AmcLifecycle {
@@ -62,6 +66,27 @@ export function computeAmcLifecycle(po: Input, today: Date = new Date()): AmcLif
 
   const daysToStart = start ? daysBetween(todayMid, start) : null;
   const daysToEnd = end ? daysBetween(todayMid, end) : null;
+
+  // ── Terminated — overrides everything else ─────────────────────────────────
+  if (po.amc_terminated_at) {
+    const termDate = new Date(po.amc_terminated_at);
+    // Normalise termination to midnight too so a same-day termination doesn't
+    // read as "-1 days" because the wall-clock time hasn't crossed midnight.
+    const termMid = new Date(termDate.getFullYear(), termDate.getMonth(), termDate.getDate());
+    const daysSince = Math.max(0, daysBetween(termMid, todayMid));
+    return {
+      status: "terminated",
+      label: daysSince === 0
+        ? "Terminated today"
+        : daysSince === 1
+          ? "Terminated yesterday"
+          : `Terminated ${days(daysSince)} ago`,
+      badgeClass: BADGE_CLASSES.terminated,
+      daysToStart,
+      daysToEnd,
+      isPendingActivation: false,
+    };
+  }
 
   // ── No start date set at all ───────────────────────────────────────────────
   if (!start) {
