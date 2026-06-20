@@ -3,7 +3,7 @@
 import { useState, useMemo } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
-import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload, Bell, RefreshCw, AlertTriangle, Clock } from "lucide-react";
+import { Plus, Search, ChevronLeft, ChevronRight, Users, Upload, AlertTriangle, Clock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -31,19 +31,7 @@ const ImportLeadsDialog = dynamic(
   { ssr: false }
 );
 import { useEnquiryNotifications } from "@/providers/enquiry-notifications-provider";
-
-const FORM_TAGS = ["google-ads-form", "meta-ads-form", "walkin-form"];
-function isUnreadFormLead(lead: { status: string; tags: string[] }) {
-  return lead.status === "new" && lead.tags?.some((t) => FORM_TAGS.includes(t));
-}
-
-function timeAgo(iso: string): string {
-  const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
-  if (diff < 60) return `${diff}s ago`;
-  if (diff < 3600) return `${Math.floor(diff / 60)}m ago`;
-  if (diff < 86400) return `${Math.floor(diff / 3600)}h ago`;
-  return `${Math.floor(diff / 86400)}d ago`;
-}
+import { EnquiryQueueRow } from "@/components/enquiries/enquiry-queue-row";
 
 export default function LeadsPage() {
   const router = useRouter();
@@ -60,21 +48,23 @@ export default function LeadsPage() {
   const { users } = useUsers();
 
   // Live enquiry data from shared context (real-time)
-  const {
-    newLeadCount,
-    reEnquiryCount,
-    recentItems,
-    markReEnquiriesSeen,
-    dismissReEnquiryItem,
-  } = useEnquiryNotifications();
+  const { items: enquiryItems, activeCount } = useEnquiryNotifications();
 
-  const pinnedLeads = recentItems.filter((i) => i.type === "lead");
-  const pinnedReEnquiries = recentItems.filter((i) => i.type === "activity");
-  const hasPinned = pinnedLeads.length > 0 || pinnedReEnquiries.length > 0;
-  const reEnquiryLeadIds = useMemo(
-    () => new Set(pinnedReEnquiries.map((i) => i.leadId)),
-    [pinnedReEnquiries]
+  const unresolvedItems = useMemo(
+    () => enquiryItems.filter((i) => !i.resolvedAt),
+    [enquiryItems]
   );
+  const attentionLeadIds = useMemo(
+    () => new Set(unresolvedItems.map((i) => i.leadId)),
+    [unresolvedItems]
+  );
+  const reEnquiryLeadIds = useMemo(
+    () => new Set(unresolvedItems.filter((i) => i.isReEnquiry).map((i) => i.leadId)),
+    [unresolvedItems]
+  );
+  const isUnreadFormLead = (lead: { id: string }) =>
+    unresolvedItems.some((i) => i.leadId === lead.id && !i.isReEnquiry);
+  const hasPinned = enquiryItems.length > 0;
 
   const { data: leads, pagination, loading, refetch } = useLeads({
     page,
@@ -86,17 +76,14 @@ export default function LeadsPage() {
     include_archived: showDisabled,
   });
 
-  // Client-side: sort leads — new form leads first (0), re-enquiry leads second (1), rest last (2)
+  // Client-side: sort leads — unresolved attention items first
   const sortedLeads = useMemo(() => {
     return [...leads].sort((a, b) => {
-      const priority = (lead: typeof leads[number]) => {
-        if (isUnreadFormLead(lead)) return 0;
-        if (reEnquiryLeadIds.has(lead.id)) return 1;
-        return 2;
-      };
-      return priority(a) - priority(b);
+      const aPri = attentionLeadIds.has(a.id) ? 0 : 1;
+      const bPri = attentionLeadIds.has(b.id) ? 0 : 1;
+      return aPri - bPri;
     });
-  }, [leads, reEnquiryLeadIds]);
+  }, [leads, attentionLeadIds]);
 
   const handleSearch = () => {
     setSearch(searchInput);
@@ -125,10 +112,9 @@ export default function LeadsPage() {
         </div>
       </div>
 
-      {/* ── Pinned: New Form Enquiries (real-time, always at top) ── */}
+      {/* ── Pinned: Public-form enquiries needing attention (real-time) ── */}
       {hasPinned && (
         <div className="rounded-lg border-2 border-emerald-400 bg-emerald-50/60 dark:bg-emerald-950/20 overflow-hidden">
-          {/* Section header */}
           <div className="flex items-center justify-between px-4 py-2.5 bg-emerald-100/60 dark:bg-emerald-900/30 border-b border-emerald-300/60">
             <div className="flex items-center gap-2">
               <span className="relative flex h-2 w-2">
@@ -136,94 +122,26 @@ export default function LeadsPage() {
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500" />
               </span>
               <span className="text-xs font-semibold text-emerald-800 dark:text-emerald-200 uppercase tracking-wider">
-                New Form Enquiries Requiring Action
+                Public-form enquiries
               </span>
-              {(newLeadCount + reEnquiryCount) > 0 && (
+              {activeCount > 0 && (
                 <span className="flex h-5 min-w-5 items-center justify-center rounded-full bg-emerald-500 px-1.5 text-[10px] font-bold text-white">
-                  {newLeadCount + reEnquiryCount}
+                  {activeCount}
                 </span>
               )}
             </div>
             <Link
-              href="/leads?status=new"
+              href="/leads/enquiry-log"
               className="text-xs font-medium text-emerald-700 hover:underline underline-offset-2"
             >
-              View all new →
+              Enquiry log →
             </Link>
           </div>
 
-          <div className="p-3 space-y-3">
-            {/* New Leads */}
-            {pinnedLeads.length > 0 && (
-              <div>
-                <p className="text-[10px] font-semibold uppercase tracking-wider text-emerald-700 mb-1.5 flex items-center gap-1 px-1">
-                  <Bell className="h-3 w-3" />
-                  New Enquiries ({newLeadCount})
-                </p>
-                <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
-                  {pinnedLeads.map((item) => (
-                    <Link
-                      key={item.leadId}
-                      href={`/leads/${item.leadId}`}
-                      className="flex items-center justify-between rounded-md px-3 py-2 bg-white/90 hover:bg-white transition-colors border border-emerald-200 group shadow-sm"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold truncate group-hover:text-emerald-700 transition-colors">
-                          {item.name}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          <span className="font-mono">#{item.leadId.slice(0, 6)}</span> · {item.source} · {timeAgo(item.time)}
-                        </p>
-                      </div>
-                      <span className="shrink-0 ml-2 text-xs font-bold text-emerald-600 bg-emerald-100 px-1.5 py-0.5 rounded">
-                        NEW
-                      </span>
-                    </Link>
-                  ))}
-                </div>
-              </div>
-            )}
-
-            {/* Re-Enquiries */}
-            {pinnedReEnquiries.length > 0 && (
-              <div className={pinnedLeads.length > 0 ? "border-t border-emerald-200 pt-3" : ""}>
-                <div className="flex items-center justify-between mb-1.5 px-1">
-                  <p className="text-[10px] font-semibold uppercase tracking-wider text-amber-700 flex items-center gap-1">
-                    <RefreshCw className="h-3 w-3" />
-                    Re-Enquiries ({reEnquiryCount})
-                  </p>
-                  {reEnquiryCount > 0 && (
-                    <button
-                      onClick={markReEnquiriesSeen}
-                      className="text-[10px] text-muted-foreground hover:text-foreground transition-colors hover:underline underline-offset-2"
-                    >
-                      Mark seen
-                    </button>
-                  )}
-                </div>
-                <div className="grid gap-1.5 sm:grid-cols-2 lg:grid-cols-3">
-                  {pinnedReEnquiries.map((item, idx) => (
-                    <button
-                      key={item.leadId + "-" + idx}
-                      onClick={() => { dismissReEnquiryItem(item.leadId); router.push(`/leads/${item.leadId}`); }}
-                      className="flex items-center justify-between rounded-md px-3 py-2 bg-amber-50/90 hover:bg-amber-50 transition-colors border border-amber-200 group shadow-sm text-left w-full"
-                    >
-                      <div className="min-w-0 flex-1">
-                        <p className="text-sm font-semibold truncate group-hover:text-amber-700 transition-colors">
-                          {item.name}
-                        </p>
-                        <p className="text-xs text-muted-foreground">
-                          <span className="font-mono">#{item.leadId.slice(0, 6)}</span> · {item.source} · {timeAgo(item.time)}
-                        </p>
-                      </div>
-                      <span className="shrink-0 ml-2 text-xs font-bold text-amber-600 bg-amber-100 px-1.5 py-0.5 rounded">
-                        RE-ENQ
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            )}
+          <div className="p-3 grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+            {enquiryItems.map((item) => (
+              <EnquiryQueueRow key={item.leadId} item={item} />
+            ))}
           </div>
         </div>
       )}

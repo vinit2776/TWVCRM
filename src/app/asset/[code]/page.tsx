@@ -29,27 +29,24 @@ export default function PublicAssetPage({ params }: { params: Promise<{ code: st
   const [notFound, setNotFound] = useState(false);
   const [isAuth, setIsAuth] = useState<boolean | null>(null);
 
-  // Check auth and redirect if logged in
+  // Check auth and redirect staff to the dashboard asset page
   useEffect(() => {
     fetch("/api/me")
-      .then((r) => {
-        if (r.ok) {
-          setIsAuth(true);
-          return r.json();
-        }
-        setIsAuth(false);
-        return null;
-      })
+      .then((r) => (r.ok ? r.json() : null))
       .then((data) => {
-        if (data?.role) {
-          fetch(`/api/public/asset/${code}`)
-            .then((r) => r.json())
-            .then((j) => {
-              if (j.data?.id) {
-                router.replace(`/facility/assets/${j.data.id}`);
-              }
-            });
-        }
+        if (!data?.role) { setIsAuth(false); return; }
+        // Confirmed staff — fetch asset id then redirect
+        setIsAuth(true);
+        fetch(`/api/public/asset/${code}`)
+          .then((r) => r.json())
+          .then((j) => {
+            if (j.data?.id) {
+              router.replace(`/facility/assets/${j.data.id}`);
+            } else {
+              setIsAuth(false); // asset not found — show public page
+            }
+          })
+          .catch(() => setIsAuth(false));
       })
       .catch(() => setIsAuth(false));
   }, [code, router]);
