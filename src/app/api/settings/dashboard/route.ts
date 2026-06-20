@@ -39,12 +39,13 @@ export async function GET(request: NextRequest) {
         const config = JSON.parse(data.value);
         if (config[role] && Array.isArray(config[role])) {
           const saved = config[role] as string[];
-          // Merge any newly-added widgets from code defaults so new widgets
-          // appear automatically without requiring a manual DB update.
           const defaults = DASHBOARD_ROLE_WIDGETS[role];
-          const missing = defaults.filter((w) => !saved.includes(w));
+          // Strip widgets removed from defaults since the config was saved.
+          const filtered = saved.filter((w) => (defaults as string[]).includes(w));
+          // Add any new widgets introduced in defaults since last save.
+          const missing = defaults.filter((w) => !filtered.includes(w));
           return NextResponse.json(
-            missing.length > 0 ? [...saved, ...missing] : saved
+            missing.length > 0 ? [...filtered, ...missing] : filtered
           );
         }
       } catch {

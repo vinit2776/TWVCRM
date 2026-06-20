@@ -53,11 +53,11 @@ async function fetchWidgetConfig(role: UserRole): Promise<WidgetId[]> {
       const data = await res.json();
       if (Array.isArray(data) && data.length > 0) {
         const saved = data as WidgetId[];
-        // Merge any newly-added widgets from code defaults that the saved
-        // config doesn't know about yet, so new widgets appear automatically.
         const defaults = DASHBOARD_ROLE_WIDGETS[role];
-        const missing = defaults.filter((w) => !saved.includes(w));
-        return missing.length > 0 ? [...saved, ...missing] : saved;
+        // Strip widgets removed from defaults; add any newly introduced ones.
+        const filtered = saved.filter((w) => (defaults as WidgetId[]).includes(w));
+        const missing = defaults.filter((w) => !filtered.includes(w));
+        return missing.length > 0 ? [...filtered, ...missing] : filtered;
       }
     }
   } catch {
