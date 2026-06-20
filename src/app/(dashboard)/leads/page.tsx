@@ -50,16 +50,20 @@ export default function LeadsPage() {
   // Live enquiry data from shared context (real-time)
   const { items: enquiryItems, activeCount } = useEnquiryNotifications();
 
-  const attentionLeadIds = useMemo(
-    () => new Set(enquiryItems.filter((i) => !i.resolvedAt).map((i) => i.leadId)),
+  const unresolvedItems = useMemo(
+    () => enquiryItems.filter((i) => !i.resolvedAt),
     [enquiryItems]
+  );
+  const attentionLeadIds = useMemo(
+    () => new Set(unresolvedItems.map((i) => i.leadId)),
+    [unresolvedItems]
   );
   const reEnquiryLeadIds = useMemo(
-    () => new Set(enquiryItems.filter((i) => !i.resolvedAt && i.isReEnquiry).map((i) => i.leadId)),
-    [enquiryItems]
+    () => new Set(unresolvedItems.filter((i) => i.isReEnquiry).map((i) => i.leadId)),
+    [unresolvedItems]
   );
   const isUnreadFormLead = (lead: { id: string }) =>
-    enquiryItems.some((i) => i.leadId === lead.id && !i.resolvedAt && !i.isReEnquiry);
+    unresolvedItems.some((i) => i.leadId === lead.id && !i.isReEnquiry);
   const hasPinned = enquiryItems.length > 0;
 
   const { data: leads, pagination, loading, refetch } = useLeads({
