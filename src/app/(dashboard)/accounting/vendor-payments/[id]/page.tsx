@@ -554,10 +554,6 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       toast.error("Select a reason for the partial payment");
       return;
     }
-    if (payMode === "cash" && pettyCashBooks.length > 0 && !pettyCashBookId) {
-      toast.error("Select a petty cash book to debit");
-      return;
-    }
     if (tdsEnabled) {
       if (!tdsSectionCode) { toast.error("Select a TDS section"); return; }
       if (!tdsBaseAmount || Number(tdsBaseAmount) <= 0) { toast.error("Enter the pre-GST base amount for TDS"); return; }
@@ -1590,7 +1586,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
               </div>
               {payMode === "cash" && pettyCashBooks.length > 0 && (
                 <div className="space-y-1 col-span-2">
-                  <Label>Petty Cash Book to Debit <span className="text-red-500">*</span></Label>
+                  <Label>Petty Cash Book to Debit <span className="text-muted-foreground font-normal">(optional)</span></Label>
                   <Select value={pettyCashBookId} onValueChange={setPettyCashBookId}>
                     <SelectTrigger><SelectValue placeholder="Select book" /></SelectTrigger>
                     <SelectContent>
