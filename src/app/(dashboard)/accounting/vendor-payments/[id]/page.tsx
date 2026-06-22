@@ -36,6 +36,20 @@ import {
 import { VendorEmailBanner } from "@/components/finance-intelligence/vendor-email-banner";
 import { FinanceGuideCard } from "@/components/finance/finance-guide-card";
 
+// ── GST slab validator ────────────────────────────────────────────────────────
+
+const INDIA_GST_SLABS = [0, 5, 12, 18, 28];
+
+function gstSlabWarning(gstAmount: number, baseAmount: number): string | null {
+  if (baseAmount <= 0 || gstAmount <= 0) return null;
+  const rate = (gstAmount / baseAmount) * 100;
+  const closest = INDIA_GST_SLABS.reduce((a, b) => Math.abs(b - rate) < Math.abs(a - rate) ? b : a);
+  if (Math.abs(rate - closest) > 0.5) {
+    return `Computed rate ${rate.toFixed(1)}% — nearest GST slab is ${closest}%. Please verify the GST amount.`;
+  }
+  return null;
+}
+
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 type KycDoc = { label: string; field: string; path: string; signedUrl: string | null };
@@ -318,6 +332,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   // Inline GST setter (for accounts role when GST wasn't set at approval)
   const [inlineGstAmount, setInlineGstAmount] = useState<string>("");
   const [savingGst, setSavingGst] = useState(false);
+  const [showGstEdit, setShowGstEdit] = useState(false);
   const [gstZeroConfirm, setGstZeroConfirm] = useState(false);
 
   // TDS state
@@ -923,6 +938,98 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
         </div>
       )}
 
+      {/* GST Status Card — always visible to payment-capable roles */}
+      {canRecordPayment && !isFullyPaid && (
+        <div className={`rounded-lg border p-3 text-sm space-y-2 ${
+          billGstAmount > 0 || bill.gst_zero_confirmed
+            ? "bg-blue-50 border-blue-200"
+            : "bg-amber-50 border-amber-200"
+        }`}>
+          <div className="flex items-center justify-between">
+            <p className={`font-medium text-sm ${billGstAmount > 0 || bill.gst_zero_confirmed ? "text-blue-800" : "text-amber-800"}`}>
+              {billGstAmount > 0 ? "GST Confirmed" : bill.gst_zero_confirmed ? "Zero GST Confirmed" : "⚠ GST Not Confirmed"}
+            </p>
+            {!showGstEdit && (
+              <button
+                type="button"
+                onClick={() => { setShowGstEdit(true); setInlineGstAmount(String(billGstAmount || "")); setGstZeroConfirm(false); }}
+                className="text-xs text-blue-600 hover:text-blue-800 underline"
+              >
+                {billGstAmount > 0 || bill.gst_zero_confirmed ? "Correct GST" : "Enter GST"}
+              </button>
+            )}
+          </div>
+
+          {/* Current breakdown */}
+          {billGstAmount > 0 && !showGstEdit && (
+            <>
+              <div className="grid grid-cols-3 gap-1 text-xs text-blue-700">
+                <span>Base (excl. GST)</span><span className="text-center">GST</span><span className="text-right">Max Payable</span>
+                <span className="font-semibold">{formatCurrency(billBaseAmount)}</span>
+                <span className="text-center font-semibold">+ {formatCurrency(billGstAmount)}</span>
+                <span className="text-right font-semibold text-blue-900">{formatCurrency(approvedCeiling)}</span>
+              </div>
+              {gstSlabWarning(billGstAmount, billBaseAmount) && (
+                <p className="text-xs text-amber-800 bg-amber-100 border border-amber-300 rounded px-2 py-1">
+                  ⚠ {gstSlabWarning(billGstAmount, billBaseAmount)}
+                </p>
+              )}
+            </>
+          )}
+          {bill.gst_zero_confirmed && !showGstEdit && (
+            <p className="text-xs text-blue-700">No GST on this invoice — confirmed by {bill.gst_zero_confirmer?.full_name ?? "accounts"}.</p>
+          )}
+          {!billGstAmount && !bill.gst_zero_confirmed && !showGstEdit && (
+            <p className="text-xs text-amber-700">GST must be confirmed before recording payment. The approved invoice amount stays unchanged — only the GST is being set here.</p>
+          )}
+
+          {/* Inline edit form */}
+          {showGstEdit && (
+            <div className="space-y-2 pt-1">
+              <p className="text-xs text-muted-foreground">
+                Invoice base (approved): <strong>{formatCurrency(billBaseAmount)}</strong> — enter only the GST component.
+              </p>
+              <div className="flex items-center gap-2">
+                <Input
+                  type="number" min="0" step="0.01" placeholder="0.00"
+                  value={inlineGstAmount}
+                  onChange={(e) => { setInlineGstAmount(e.target.value); setGstZeroConfirm(false); }}
+                  className="h-8 text-xs flex-1"
+                />
+                <Button
+                  size="sm" className="h-8 text-xs shrink-0"
+                  onClick={async () => { await handleSaveInlineGst(); setShowGstEdit(false); }}
+                  disabled={savingGst || (parseFloat(inlineGstAmount) === 0 && !gstZeroConfirm)}
+                >
+                  {savingGst ? <><Loader2 className="h-3 w-3 mr-1 animate-spin" />Saving…</> : "Save"}
+                </Button>
+                <Button size="sm" variant="ghost" className="h-8 text-xs shrink-0" onClick={() => setShowGstEdit(false)} disabled={savingGst}>
+                  Cancel
+                </Button>
+              </div>
+              {(inlineGstAmount === "0" || parseFloat(inlineGstAmount) === 0) && inlineGstAmount !== "" && (
+                <label className="flex items-start gap-2 cursor-pointer text-xs text-amber-800 bg-amber-100 border border-amber-300 rounded px-2 py-1.5">
+                  <input type="checkbox" checked={gstZeroConfirm} onChange={(e) => setGstZeroConfirm(e.target.checked)} className="mt-0.5 rounded" />
+                  <span>I confirm this bill has <strong>no GST</strong>. This will be logged against my name.</span>
+                </label>
+              )}
+              {parseFloat(inlineGstAmount) > 0 && (
+                <div className="space-y-1 text-xs">
+                  <p className="text-muted-foreground">
+                    {formatCurrency(billBaseAmount)} base + {formatCurrency(parseFloat(inlineGstAmount))} GST = <strong>{formatCurrency(billBaseAmount + parseFloat(inlineGstAmount))}</strong> max payable
+                  </p>
+                  {gstSlabWarning(parseFloat(inlineGstAmount), billBaseAmount) && (
+                    <p className="text-amber-800 bg-amber-100 border border-amber-300 rounded px-2 py-1">
+                      ⚠ {gstSlabWarning(parseFloat(inlineGstAmount), billBaseAmount)}
+                    </p>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
       {/* Document Chain */}
       <Card>
         <CardHeader className="pb-2">
@@ -1444,6 +1551,11 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                     Bill was edited — click Save below to re-confirm the GST amount before recording payment.
                   </p>
                 )}
+                {gstSlabWarning(billGstAmount, billBaseAmount) && (
+                  <p className="text-[11px] text-amber-800 bg-amber-100 border border-amber-300 rounded px-2 py-1">
+                    ⚠ {gstSlabWarning(billGstAmount, billBaseAmount)}
+                  </p>
+                )}
                 {bill.gst_set_at && (
                   <button
                     type="button"
@@ -1454,23 +1566,30 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                   </button>
                 )}
                 {inlineGstAmount !== "" && (
-                  <div className="flex items-center gap-2 pt-1">
-                    <Input
-                      type="number"
-                      min="0"
-                      step="0.01"
-                      placeholder="0.00"
-                      value={inlineGstAmount}
-                      onChange={(e) => setInlineGstAmount(e.target.value)}
-                      className="h-8 text-xs flex-1"
-                    />
-                    <Button size="sm" className="h-8 text-xs shrink-0" onClick={handleSaveInlineGst} disabled={savingGst}>
-                      {savingGst && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
-                      Save
-                    </Button>
-                    <Button size="sm" variant="ghost" className="h-8 text-xs shrink-0" onClick={() => setInlineGstAmount("")} disabled={savingGst}>
-                      Cancel
-                    </Button>
+                  <div className="space-y-1 pt-1">
+                    <div className="flex items-center gap-2">
+                      <Input
+                        type="number"
+                        min="0"
+                        step="0.01"
+                        placeholder="0.00"
+                        value={inlineGstAmount}
+                        onChange={(e) => setInlineGstAmount(e.target.value)}
+                        className="h-8 text-xs flex-1"
+                      />
+                      <Button size="sm" className="h-8 text-xs shrink-0" onClick={handleSaveInlineGst} disabled={savingGst}>
+                        {savingGst && <Loader2 className="h-3 w-3 mr-1 animate-spin" />}
+                        Save
+                      </Button>
+                      <Button size="sm" variant="ghost" className="h-8 text-xs shrink-0" onClick={() => setInlineGstAmount("")} disabled={savingGst}>
+                        Cancel
+                      </Button>
+                    </div>
+                    {parseFloat(inlineGstAmount) > 0 && gstSlabWarning(parseFloat(inlineGstAmount), billBaseAmount) && (
+                      <p className="text-[11px] text-amber-800 bg-amber-100 border border-amber-300 rounded px-2 py-1">
+                        ⚠ {gstSlabWarning(parseFloat(inlineGstAmount), billBaseAmount)}
+                      </p>
+                    )}
                   </div>
                 )}
               </div>
@@ -1513,13 +1632,19 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                 {parseFloat(inlineGstAmount) > 0 && (() => {
                   const gstAmt = parseFloat(inlineGstAmount);
                   const base = Number(bill.total_amount);
+                  const slabWarn = gstSlabWarning(gstAmt, base);
                   return (
                     <div className="space-y-1">
                       <p className="text-xs text-amber-700">
                         Base {formatCurrency(base)} + GST {formatCurrency(gstAmt)} = Max payable {formatCurrency(base + gstAmt)}
                       </p>
+                      {slabWarn && (
+                        <p className="text-xs text-amber-800 bg-amber-100 border border-amber-300 rounded px-2 py-1">
+                          ⚠ {slabWarn}
+                        </p>
+                      )}
                       <p className="text-xs font-semibold text-amber-800 flex items-center gap-1">
-                        ⚠ Not saved yet — click <strong>Apply</strong> to confirm before recording payment
+                        Not saved yet — click <strong>Apply</strong> to confirm before recording payment
                       </p>
                     </div>
                   );
