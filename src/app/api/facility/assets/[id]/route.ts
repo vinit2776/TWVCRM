@@ -62,7 +62,9 @@ export async function PUT(
     "custom_field_values", "procurement_po_id",
     "location_notes", "notes", "attention_notes", "sort_order",
   ];
+  const uuidFields = new Set(["floor_id", "space_unit_id", "category_id", "procurement_po_id"]);
   for (const f of allowed) if (f in body) updates[f] = body[f];
+  for (const f of uuidFields) if (updates[f] === "") updates[f] = null;
   if (typeof updates.asset_code === "string") {
     updates.asset_code = (updates.asset_code as string).trim().toUpperCase();
   }
