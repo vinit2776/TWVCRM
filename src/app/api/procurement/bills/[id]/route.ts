@@ -210,9 +210,11 @@ export async function PATCH(
         return NextResponse.json({ error: "This bill is already fully paid" }, { status: 422 });
       }
 
-      // Mandatory GST gate: bill must have GST set (or explicit zero-GST confirmation) before any payment.
-      // Approval no longer requires GST — it is captured here by accounts using the inline GST setter.
-      if (!bill.gst_set_at) {
+      // Mandatory GST gate: GST must have been entered before any payment.
+      // A bill edit clears gst_set_at but preserves gst_amount — that existing
+      // value is still valid, so we accept it without requiring re-confirmation.
+      const gstConfigured = bill.gst_set_at || Number(bill.gst_amount ?? 0) > 0 || bill.gst_zero_confirmed;
+      if (!gstConfigured) {
         return NextResponse.json(
           { error: "GST amount has not been set on this bill. Enter the GST from the vendor's invoice (or confirm zero-GST) before recording payment." },
           { status: 422 }
