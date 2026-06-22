@@ -612,7 +612,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
         }
       }
 
-      await fetchChain();
+      router.push("/accounting?tab=vendor-payments");
     } catch {
       toast.error("Network error. Please try again.");
     }
