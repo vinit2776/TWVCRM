@@ -40,6 +40,12 @@ import { FinanceGuideCard } from "@/components/finance/finance-guide-card";
 
 type KycDoc = { label: string; field: string; path: string; signedUrl: string | null };
 
+type PettyCashBook = {
+  id: string;
+  current_balance: number;
+  owner: { id: string; full_name: string; email: string } | null;
+};
+
 type AuditRow = {
   id: string;
   entity_type: string;
@@ -88,6 +94,7 @@ type ChainData = {
       payment_reference: string | null; payment_date: string;
       notes: string | null;
       partial_reason: string | null;
+      petty_cash_book_id: string | null;
       recorder: { id: string; full_name: string } | null;
     }>;
   };
@@ -289,6 +296,25 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
     else setSendConfirmation(true);
   }, [payMode]);
 
+  // Fetch petty cash books when cash mode is selected
+  useEffect(() => {
+    const canCash = userRole === "admin" || userRole === "office_admin";
+    if (payMode !== "cash" || !canCash) {
+      setPettyCashBooks([]);
+      setPettyCashBookId("");
+      return;
+    }
+    const isAdmin = userRole === "admin";
+    fetch(`/api/petty-cash/books${isAdmin ? "?all=true" : ""}`)
+      .then(r => r.json())
+      .then(d => {
+        if (d.data) {
+          setPettyCashBooks(d.data);
+          if (d.data.length === 1) setPettyCashBookId(d.data[0].id);
+        }
+      });
+  }, [payMode, userRole]);
+
   // Inline GST setter (for accounts role when GST wasn't set at approval)
   const [inlineGstAmount, setInlineGstAmount] = useState<string>("");
   const [savingGst, setSavingGst] = useState(false);
@@ -314,6 +340,10 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
   const [auditExpanded, setAuditExpanded] = useState(false);
   const AUDIT_PREVIEW_COUNT = 5;
   const [resendLoading, setResendLoading] = useState(false);
+
+  // Petty cash book selection (when payment mode = cash)
+  const [pettyCashBooks, setPettyCashBooks] = useState<PettyCashBook[]>([]);
+  const [pettyCashBookId, setPettyCashBookId] = useState("");
 
   // Cheque signature flow
   const [signChequeLoading, setSignChequeLoading] = useState(false);
@@ -346,6 +376,17 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       const approvedCeiling = Number(data.bill.approved_amount ?? totalAmtPrefill) + gstAmtPrefill;
       const approvedOutstandingPrefill = Math.max(0, approvedCeiling - Number(data.bill.amount_paid ?? 0));
       if (approvedOutstandingPrefill > 0) setPayAmount(String(Math.round(approvedOutstandingPrefill)));
+      // If a bill edit cleared gst_set_at, pre-fill the inline GST input so the
+      // user just needs to click Apply rather than re-entering the value from scratch.
+      if (!data.bill.gst_set_at) {
+        const existingGst = Number(data.bill.gst_amount ?? 0);
+        if (existingGst > 0) {
+          setInlineGstAmount(String(existingGst));
+        } else if (data.bill.gst_zero_confirmed) {
+          setInlineGstAmount("0");
+          setGstZeroConfirm(true);
+        }
+      }
     } else {
       toast.error("Failed to load bill details");
       router.push("/accounting?tab=vendor-payments");
@@ -509,6 +550,10 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
       toast.error("Select a reason for the partial payment");
       return;
     }
+    if (payMode === "cash" && pettyCashBooks.length > 0 && !pettyCashBookId) {
+      toast.error("Select a petty cash book to debit");
+      return;
+    }
     if (tdsEnabled) {
       if (!tdsSectionCode) { toast.error("Select a TDS section"); return; }
       if (!tdsBaseAmount || Number(tdsBaseAmount) <= 0) { toast.error("Enter the pre-GST base amount for TDS"); return; }
@@ -543,6 +588,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
           notes: payNote || null,
           partial_reason: partialReason || null,
           tds: tdsPayload,
+          petty_cash_book_id: payMode === "cash" ? pettyCashBookId || null : null,
         }),
       });
       const data = await res.json();
@@ -1393,13 +1439,20 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                     Confirmed no-GST: <span className="font-semibold">{bill.gst_zero_confirmer.full_name}</span>
                   </p>
                 )}
-                <button
-                  type="button"
-                  onClick={() => { setInlineGstAmount(String(billGstAmount)); setGstZeroConfirm(false); }}
-                  className="text-[10px] text-blue-500 hover:text-blue-700 underline"
-                >
-                  Change GST amount
-                </button>
+                {!bill.gst_set_at && (
+                  <p className="text-[11px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-2 py-1">
+                    Bill was edited — click Save below to re-confirm the GST amount before recording payment.
+                  </p>
+                )}
+                {bill.gst_set_at && (
+                  <button
+                    type="button"
+                    onClick={() => { setInlineGstAmount(String(billGstAmount)); setGstZeroConfirm(false); }}
+                    className="text-[10px] text-blue-500 hover:text-blue-700 underline"
+                  >
+                    Change GST amount
+                  </button>
+                )}
                 {inlineGstAmount !== "" && (
                   <div className="flex items-center gap-2 pt-1">
                     <Input
@@ -1531,6 +1584,21 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
                   </SelectContent>
                 </Select>
               </div>
+              {payMode === "cash" && pettyCashBooks.length > 0 && (
+                <div className="space-y-1 col-span-2">
+                  <Label>Petty Cash Book to Debit <span className="text-red-500">*</span></Label>
+                  <Select value={pettyCashBookId} onValueChange={setPettyCashBookId}>
+                    <SelectTrigger><SelectValue placeholder="Select book" /></SelectTrigger>
+                    <SelectContent>
+                      {pettyCashBooks.map(b => (
+                        <SelectItem key={b.id} value={b.id}>
+                          {b.owner?.full_name ?? "Unknown"} · {formatCurrency(b.current_balance)} balance
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                </div>
+              )}
               <div className="space-y-1">
                 <Label>Reference / UTR / Cheque No.</Label>
                 <Input value={payRef} onChange={(e) => setPayRef(e.target.value)} placeholder="e.g. UTR123456789" />

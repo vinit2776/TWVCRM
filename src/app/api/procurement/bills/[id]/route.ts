@@ -39,6 +39,7 @@ const patchBillSchema = z.discriminatedUnion("action", [
     /** Required when the payment is less than the approved outstanding (partial). */
     partial_reason: z.string().nullish(),
     tds: tdsSchema.nullish(),
+    petty_cash_book_id: z.string().uuid().nullish(),
   }),
   z.object({
     action: z.literal("approve"),
@@ -274,6 +275,7 @@ export async function PATCH(
           notes: parsed.data.notes ?? null,
           partial_reason: partialReason,
           recorded_by: dbUser.id,
+          petty_cash_book_id: parsed.data.petty_cash_book_id ?? null,
         })
         .select("id")
         .single();
@@ -295,6 +297,22 @@ export async function PATCH(
           period_year: pd.getFullYear(),
           created_by: dbUser.id,
         });
+      }
+
+      // Debit the selected petty cash book when paying in cash (overdraft allowed)
+      if (parsed.data.payment_mode === "cash" && parsed.data.petty_cash_book_id) {
+        const { data: pcBook } = await supabase
+          .from("petty_cash_books")
+          .select("id, current_balance")
+          .eq("id", parsed.data.petty_cash_book_id)
+          .single();
+        if (pcBook) {
+          const newBalance = Number(pcBook.current_balance) - parsed.data.amount;
+          await supabase
+            .from("petty_cash_books")
+            .update({ current_balance: newBalance })
+            .eq("id", parsed.data.petty_cash_book_id);
+        }
       }
 
       updatePayload = {
