@@ -298,14 +298,14 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
 
   // Fetch petty cash books when cash mode is selected
   useEffect(() => {
-    const canCash = userRole === "admin" || userRole === "office_admin";
+    const canCash = userRole === "admin" || userRole === "office_admin" || userRole === "accounts";
     if (payMode !== "cash" || !canCash) {
       setPettyCashBooks([]);
       setPettyCashBookId("");
       return;
     }
-    const isAdmin = userRole === "admin";
-    fetch(`/api/petty-cash/books${isAdmin ? "?all=true" : ""}`)
+    const canSeeAll = userRole === "admin" || userRole === "accounts";
+    fetch(`/api/petty-cash/books${canSeeAll ? "?all=true" : ""}`)
       .then(r => r.json())
       .then(d => {
         if (d.data) {
@@ -479,7 +479,7 @@ export default function VendorPaymentDetailPage({ params }: { params: Promise<{ 
     { value: "bank_transfer", label: "Bank Transfer" },
     { value: "cheque", label: "Cheque" },
   ];
-  const canRecordCash = userRole === "admin" || userRole === "office_admin";
+  const canRecordCash = userRole === "admin" || userRole === "office_admin" || userRole === "accounts";
   const allPayModes = canRecordCash ? [...bankModes, { value: "cash", label: "Cash / Petty Cash" }] : bankModes;
   const canRecordPayment = userRole === "accounts" || userRole === "admin" || userRole === "office_admin";
 

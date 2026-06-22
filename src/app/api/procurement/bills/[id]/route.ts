@@ -179,15 +179,11 @@ export async function PATCH(
   switch (parsed.data.action) {
     case "record_payment": {
       // Role-based payment mode gate
-      // - accounts: bank modes only (primary payment processor)
-      // - admin: all modes (bank + cash, standby)
-      // - office_admin: cash only (petty cash exception, procurement context)
+      // - accounts: all modes (bank + cash/petty cash)
+      // - admin: all modes
+      // - office_admin: cash only (petty cash)
       // - everyone else: no payment access
       const mode = parsed.data.payment_mode;
-      const isBankMode = BANK_MODES.includes(mode as typeof BANK_MODES[number]);
-      if (dbUser.role === "accounts" && !isBankMode) {
-        return NextResponse.json({ error: "Accounts team can only record bank payments (NEFT, RTGS, IMPS, Bank Transfer, Cheque)" }, { status: 403 });
-      }
       if (dbUser.role === "office_admin" && mode !== "cash") {
         return NextResponse.json({ error: "Petty cash payments only — bank payments must be processed by the Accounts team" }, { status: 403 });
       }

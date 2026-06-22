@@ -189,7 +189,7 @@ export default function AccountingPage() {
   const { user: currentUserCtx } = useCurrentUser();
   const currentUserRole = currentUserCtx?.role ?? null;
   const canRecordPayment = ["admin", "accounts", "office_admin"].includes(currentUserRole ?? "");
-  const canRecordCash = currentUserRole === "admin" || currentUserRole === "office_admin";
+  const canRecordCash = currentUserRole === "admin" || currentUserRole === "office_admin" || currentUserRole === "accounts";
   // Rent payments tab
   const [rentView, setRentView] = useState<"pending" | "paid">("pending");
   const [rentPayments, setRentPayments] = useState<RentPaymentItem[]>([]);
