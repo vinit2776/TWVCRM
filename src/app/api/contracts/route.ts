@@ -19,6 +19,7 @@ export async function GET(request: NextRequest) {
   const parentContractId = searchParams.get("parent_contract_id");
   const isRenewal = searchParams.get("is_renewal");
   const terminatedAfter = searchParams.get("terminated_after"); // ISO date — include terminated contracts after this date
+  const locationId = searchParams.get("location_id");
 
   const offset = (page - 1) * limit;
 
@@ -33,11 +34,12 @@ export async function GET(request: NextRequest) {
   if (useRpc) {
     const expiringDays = expiringSoon ? (parseInt(expiringSoon) || 60) : null;
     const { data: rpcRows, error: rpcErr } = await supabase.rpc("search_contracts", {
-      p_search:        search   || null,
-      p_status:        status   || null,
+      p_search:        search      || null,
+      p_status:        status      || null,
       p_expiring_days: expiringDays,
       p_limit:         limit,
       p_offset:        offset,
+      p_location_id:   locationId  || null,
     });
     if (rpcErr) return NextResponse.json({ error: rpcErr.message }, { status: 500 });
 
@@ -64,6 +66,7 @@ export async function GET(request: NextRequest) {
   if (leadId) query = query.eq("lead_id", leadId);
   if (parentContractId) query = query.eq("parent_contract_id", parentContractId);
   if (isRenewal === "true") query = query.eq("is_renewal", true);
+  if (locationId) query = query.eq("location_id", locationId);
 
   // "Expiring soon" filter: active contracts ending within N days
   if (expiringSoon) {

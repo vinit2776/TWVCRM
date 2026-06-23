@@ -16,6 +16,7 @@ import {
 } from "@/components/ui/sheet";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
+import { LocationSelector } from "@/components/shared/location-selector";
 import { ContractQuotasSection } from "@/components/contracts/contract-quotas-section";
 import { ContractFacilitiesSection } from "@/components/contracts/contract-facilities-section";
 import {
@@ -50,6 +51,7 @@ export default function ContractsPage() {
   const [search, setSearch] = useState("");
   const [expiringSoon, setExpiringSoon] = useState("");
   const [noQuotasFilter, setNoQuotasFilter] = useState(false);
+  const [locationFilter, setLocationFilter] = useState<string | null>(null);
   const [selectedContract, setSelectedContract] = useState<ContractWithQuotaCount | null>(null);
 
   const fetchContracts = useCallback(async () => {
@@ -62,6 +64,7 @@ export default function ContractsPage() {
     if (effectiveLimit !== "25") params.set("limit", effectiveLimit);
     if (search.trim()) params.set("search", search.trim());
     if (expiringSoon) params.set("expiring_soon", expiringSoon);
+    if (locationFilter) params.set("location_id", locationFilter);
     const res = await fetch(`/api/contracts?${params}`);
     if (res.ok) {
       const json = await res.json();
@@ -70,7 +73,7 @@ export default function ContractsPage() {
       setPagination(json.pagination);
     }
     setLoading(false);
-  }, [page, statusFilter, search, expiringSoon, noQuotasFilter]);
+  }, [page, statusFilter, search, expiringSoon, noQuotasFilter, locationFilter]);
 
   useEffect(() => { fetchContracts(); }, [fetchContracts]);
 
@@ -79,6 +82,7 @@ export default function ContractsPage() {
     setStatusFilter("");
     setExpiringSoon("");
     setNoQuotasFilter(false);
+    setLocationFilter(null);
     setPage(1);
   };
 
@@ -89,7 +93,7 @@ export default function ContractsPage() {
     setPage(1);
   };
 
-  const hasFilters = search || statusFilter || expiringSoon || noQuotasFilter;
+  const hasFilters = search || statusFilter || expiringSoon || noQuotasFilter || locationFilter;
   const canEditQuotas = userRole && (CONTRACT_QUOTA_ROLES as readonly string[]).includes(userRole);
 
   const openQuotaSheet = (e: React.MouseEvent, c: ContractWithQuotaCount) => {
@@ -146,6 +150,14 @@ export default function ContractsPage() {
               {CONTRACT_STATUSES.map((s) => <SelectItem key={s} value={s}>{CONTRACT_STATUS_LABELS[s]}</SelectItem>)}
             </SelectContent>
           </Select>
+          <div className="w-[180px]">
+            <LocationSelector
+              value={locationFilter}
+              onValueChange={(id) => { setLocationFilter(id); setPage(1); }}
+              includeAllOption
+              placeholder="All Locations"
+            />
+          </div>
           <Button
             variant={expiringSoon === "60" ? "default" : "outline"}
             size="sm"
