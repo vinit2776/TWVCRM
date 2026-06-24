@@ -70,7 +70,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
       title: lead?.title || "",
       secondary_email: lead?.secondary_email || "",
       status: lead?.status || "new",
-      source: lead?.source || "online_form",
+      source: lead?.source || "meta_ads",
       industry: lead?.industry || "",
       no_of_employees: lead?.no_of_employees || undefined,
       rating: lead?.rating || "none",
