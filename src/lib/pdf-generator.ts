@@ -190,7 +190,7 @@ function addServicesIncludedSection(doc: jsPDF, startY: number): number {
   const textY = startY + 23.5;
 
   const SERVICES: Array<{ label: string; fn: (cx: number, cy: number) => void }> = [
-    { label: "High-speed Wi-Fi & LAN",      fn: (cx, cy) => iconWifi(doc, cx, cy, s) },
+    { label: "Hi-speed Internet",            fn: (cx, cy) => iconWifi(doc, cx, cy, s) },
     { label: "Pantry Services",              fn: (cx, cy) => iconCoffee(doc, cx, cy, s) },
     { label: "Printing Facilities",          fn: (cx, cy) => iconPrinter(doc, cx, cy, s) },
     { label: "Conference & Meeting Rooms",   fn: (cx, cy) => iconMeeting(doc, cx, cy, s) },
@@ -261,7 +261,7 @@ function generatePDF(options: PDFOptions): jsPDF {
   doc.setFontSize(18);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_DARK);
-  doc.text(options.title, 14, y);
+  doc.text(options.title, pageWidth / 2, y, { align: "center" });
 
   // Document number & date — right aligned
   doc.setFontSize(11);
@@ -419,8 +419,9 @@ function generatePDF(options: PDFOptions): jsPDF {
       0: { cellWidth: 12, halign: "center" },
       1: { cellWidth: "auto" },
       2: { cellWidth: 16, halign: "center" },
-      3: { cellWidth: 38, halign: "right" },
-      4: { cellWidth: 38, halign: "right" },
+      3: { cellWidth: 22, halign: "center" },
+      4: { cellWidth: 36, halign: "right" },
+      5: { cellWidth: 36, halign: "right" },
     },
     margin: { left: 14, right: 14 },
   });
@@ -510,7 +511,7 @@ function generatePDF(options: PDFOptions): jsPDF {
 
     autoTable(doc, {
       startY: y,
-      head: [["Service", "Unit", "Free quota / month", "Overage rate"]],
+      head: [["Service", "Unit", "Free quota / month", "Addl Usage rate"]],
       body: quotaRows,
       theme: "striped",
       headStyles: { fillColor: BRAND_TEAL, textColor: [255, 255, 255], fontStyle: "bold", fontSize: 9 },
@@ -733,8 +734,19 @@ export function generateProposalPDF(
   preparedBy?: { name: string; email?: string; phone?: string },
   serviceQuotas?: { name: string; unit_label: string; monthly_quota: number; overage_rate: number }[]
 ): jsPDF {
+  // Merge complimentary facilities (e.g. conference room) from proposal into the quotas table
+  const facilityRows = ((proposal.complimentary_items ?? []) as { name: string; unit: string; quantity: number; price_per_unit?: number }[])
+    .filter(item => item.quantity > 0)
+    .map(item => ({
+      name: item.name,
+      unit_label: item.unit,
+      monthly_quota: item.quantity,
+      overage_rate: item.price_per_unit ?? 0,
+    }));
+  const allQuotas = [...(serviceQuotas ?? []), ...facilityRows];
+
   return generatePDF({
-    title: "PRO-FORMA INVOICE / PROPOSAL",
+    title: "PROPOSAL",
     documentNumber: proposal.proposal_number,
     items: proposal.items,
     subtotal: proposal.subtotal,
@@ -759,7 +771,7 @@ export function generateProposalPDF(
     razorpayPaymentLink: paymentOptions?.razorpayPaymentLink,
     preparedBy,
     showServicesIncluded: true,
-    serviceQuotas,
+    serviceQuotas: allQuotas.length > 0 ? allQuotas : undefined,
   });
 }
 

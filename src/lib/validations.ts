@@ -201,6 +201,7 @@ export const createProposalSchema = z.object({
     name: z.string().min(1),
     unit: z.string().min(1),
     quantity: z.number().min(0),
+    price_per_unit: z.number().min(0).optional(),
   })).optional(),
   service_quotas: z.array(z.object({
     service_id: z.string().uuid(),
