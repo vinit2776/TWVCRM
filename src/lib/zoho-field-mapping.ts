@@ -21,22 +21,22 @@ const ZOHO_STATUS_MAP: Record<string, LeadStatus> = {
 
 const ZOHO_SOURCE_MAP: Record<string, LeadSource> = {
   "meta ads": "meta_ads",
-  "online form": "online_form",
+  "online form": "referral",
   "direct/walk-in": "direct_walkin",
   "walk in": "direct_walkin",
-  "agreegator": "partner",
+  "agreegator": "aggregator",
   "inbound call": "cold_call",
   "google ads": "google_ads",
-  "sales email alias": "other",
-  "chat": "online_form",
-  "advertisement": "advertisement",
+  "sales email alias": "cold_call",
+  "chat": "referral",
+  "advertisement": "meta_ads",
 };
 
 // When Lead Source is empty, use Description to infer source
 const DESCRIPTION_SOURCE_MAP: Record<string, LeadSource> = {
   "walkin": "direct_walkin",
   "walk in": "direct_walkin",
-  "workvilla site": "online_form",
+  "workvilla site": "referral",
   "phone": "cold_call",
   "old client": "referral",
 };
@@ -107,7 +107,7 @@ function mapSource(raw: string, description: string): LeadSource {
     const descKey = description.trim().toLowerCase();
     if (descKey && DESCRIPTION_SOURCE_MAP[descKey]) return DESCRIPTION_SOURCE_MAP[descKey];
   }
-  return "other";
+  return "referral";
 }
 
 function mapWorkspaceType(raw: string): WorkspaceType | undefined {
