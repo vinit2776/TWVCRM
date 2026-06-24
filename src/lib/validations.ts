@@ -45,6 +45,8 @@ export const createLeadSchema = z.object({
       "meeting_room",
       "conference_room",
       "virtual_office",
+      "managed",
+      "enterprise",
     ])
     .optional(),
   seat_capacity: z.number().int().positive().optional(),
@@ -99,6 +101,7 @@ export const importLeadSchema = z.object({
   workspace_type: z.enum([
     "hot_desk", "dedicated_desk", "private_office",
     "meeting_room", "conference_room", "virtual_office",
+    "managed", "enterprise",
   ]).optional(),
   seat_capacity: z.number().int().positive().optional(),
   preferred_location: z.string().optional(),

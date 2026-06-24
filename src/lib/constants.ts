@@ -148,6 +148,8 @@ export const WORKSPACE_TYPES = [
   "meeting_room",
   "conference_room",
   "virtual_office",
+  "managed",
+  "enterprise",
 ] as const;
 
 export const WORKSPACE_TYPE_LABELS: Record<string, string> = {
@@ -157,6 +159,8 @@ export const WORKSPACE_TYPE_LABELS: Record<string, string> = {
   meeting_room: "Meeting Room",
   conference_room: "Conference Room",
   virtual_office: "Virtual Office",
+  managed: "Managed",
+  enterprise: "Enterprise",
 };
 
 export const ACTIVITY_TYPES = ["call", "meeting", "note", "email", "tour"] as const;
