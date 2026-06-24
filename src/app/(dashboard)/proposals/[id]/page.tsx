@@ -826,7 +826,13 @@ export default function ProposalDetailPage({
           {Number(proposal.security_deposit_months) > 0 && (
             <Card className={proposal.deposit_payment_status === "paid" ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}>
               <CardHeader className="pb-2">
-                <CardTitle className={`text-base ${proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}`}>
+                <CardTitle className={`text-base flex items-center gap-2 ${proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}`}>
+                  {proposal.deposit_payment_status !== "paid" && (
+                    <span className="relative flex h-2.5 w-2.5 shrink-0">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-amber-500"></span>
+                    </span>
+                  )}
                   Security Deposit ({proposal.security_deposit_months} month{Number(proposal.security_deposit_months) > 1 ? "s" : ""})
                 </CardTitle>
               </CardHeader>
@@ -966,7 +972,13 @@ export default function ProposalDetailPage({
             return (
               <Card className={proposal.payment_status === "paid" ? "border-green-200 bg-green-50" : "border-blue-200 bg-blue-50"}>
                 <CardHeader className="pb-2">
-                  <CardTitle className={`text-base ${proposal.payment_status === "paid" ? "text-green-700" : "text-blue-700"}`}>
+                  <CardTitle className={`text-base flex items-center gap-2 ${proposal.payment_status === "paid" ? "text-green-700" : "text-blue-700"}`}>
+                    {canSendInvoice && proposal.payment_status !== "paid" && (
+                      <span className="relative flex h-2.5 w-2.5 shrink-0">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500"></span>
+                      </span>
+                    )}
                     Monthly Charge — ₹{Number(proposal.total_amount).toLocaleString("en-IN")}/month
                   </CardTitle>
                 </CardHeader>
