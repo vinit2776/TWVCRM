@@ -102,15 +102,28 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
   }, [form.location_id]);
 
   useEffect(() => {
-    if (isEdit || form.asset_code) return;
-    if (!form.category_id || !form.location_id) return;
+    if (isEdit) return;
+    if (!form.category_id || !form.location_id) {
+      setForm((f) => ({ ...f, asset_code: "" }));
+      return;
+    }
     const cat = categories.find((c) => c.id === form.category_id);
     const loc = locations.find((l) => l.id === form.location_id);
     if (!cat || !loc) return;
     const locPrefix = (loc.name.match(/[A-Z]/g)?.slice(0, 3).join("") || "LOC").toUpperCase();
     const catPrefix = (cat.slug.split("-").pop() || cat.name.slice(0, 3)).toUpperCase().slice(0, 4);
-    setForm((f) => ({ ...f, asset_code: `${locPrefix}-${catPrefix}-001` }));
-  }, [form.location_id, form.category_id, isEdit, categories, locations, form.asset_code]);
+    const prefix = `${locPrefix}-${catPrefix}-`;
+    fetch(`/api/facility/assets?location_id=${form.location_id}&category_id=${form.category_id}`)
+      .then((r) => r.json())
+      .then((json) => {
+        const existing: { asset_code?: string }[] = json.data || [];
+        const nums = existing
+          .map((a) => { const m = a.asset_code?.match(/(\d+)$/); return m ? parseInt(m[1], 10) : 0; })
+          .filter((n) => !isNaN(n));
+        const next = nums.length > 0 ? Math.max(...nums) + 1 : 1;
+        setForm((f) => ({ ...f, asset_code: `${prefix}${String(next).padStart(3, "0")}` }));
+      });
+  }, [form.location_id, form.category_id, isEdit, categories, locations]);
 
   const submit = async () => {
     if (!form.location_id || !form.category_id || !form.name.trim() || !form.asset_code.trim()) {
@@ -208,8 +221,13 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
               <Input value={form.name} onChange={(e) => setForm({ ...form, name: e.target.value })} placeholder="e.g. Split AC Conference Room" className="mt-1" />
             </div>
             <div>
-              <Label className="text-xs">Asset code *</Label>
-              <Input value={form.asset_code} onChange={(e) => setForm({ ...form, asset_code: e.target.value.toUpperCase() })} className="mt-1 font-mono" />
+              <Label className="text-xs">Asset code</Label>
+              <Input
+                value={form.asset_code}
+                readOnly
+                placeholder="Auto-generated"
+                className="mt-1 font-mono bg-muted text-muted-foreground cursor-not-allowed"
+              />
             </div>
           </div>
 

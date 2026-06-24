@@ -312,6 +312,7 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
             expandedContract={expandedContract}
             onToggleExpand={(id) => setExpandedContract((prev) => (prev === id ? null : id))}
             onVerifyAndSend={openReview}
+            onViewStatement={onViewStatement}
           />
         </div>
       )}
@@ -469,8 +470,9 @@ function UsageTable(props: {
   expandedContract: string | null;
   onToggleExpand: (id: string) => void;
   onVerifyAndSend: (row: UsageRow) => void;
+  onViewStatement?: (id: string) => void;
 }) {
-  const { rows, loading, opsLabel, expandedContract, onToggleExpand, onVerifyAndSend } = props;
+  const { rows, loading, opsLabel, expandedContract, onToggleExpand, onVerifyAndSend, onViewStatement } = props;
 
   // Pending first (call-to-action), sorted by contract number within group.
   const sorted = useMemo(() => {
@@ -563,6 +565,14 @@ function UsageTable(props: {
                                 {r.paid_total > 0 ? <>Verify &amp; Send</> : <>Review &amp; Add</>}
                               </Button>
                             </div>
+                          )}
+                          {isSent && stmt?.id && onViewStatement && (
+                            <button
+                              onClick={() => onViewStatement(stmt.id)}
+                              className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2"
+                            >
+                              Details
+                            </button>
                           )}
                         </div>
                       </td>
