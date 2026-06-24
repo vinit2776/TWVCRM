@@ -74,14 +74,9 @@ export type LeadSource =
   | "meta_ads"
   | "google_ads"
   | "direct_walkin"
-  | "online_form"
   | "referral"
-  | "social_media"
-  | "advertisement"
   | "cold_call"
-  | "event"
-  | "partner"
-  | "other";
+  | "aggregator";
 
 export type WorkspaceType =
   | "hot_desk"
@@ -89,7 +84,9 @@ export type WorkspaceType =
   | "private_office"
   | "meeting_room"
   | "conference_room"
-  | "virtual_office";
+  | "virtual_office"
+  | "managed"
+  | "enterprise";
 
 export type Rating = "none" | "hot" | "warm" | "cold";
 
