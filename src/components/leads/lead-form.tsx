@@ -151,9 +151,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="last_name">
-              Last Name <span className="text-destructive">*</span>
-            </Label>
+            <Label htmlFor="last_name">Last Name</Label>
             <Input
               id="last_name"
               {...register("last_name")}

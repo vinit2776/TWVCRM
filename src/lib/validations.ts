@@ -5,7 +5,7 @@ import { z } from "zod";
 // ==========================================
 export const createLeadSchema = z.object({
   first_name: z.string().min(1, "First name is required"),
-  last_name: z.string().min(1, "Last name is required"),
+  last_name: z.string().optional(),
   company: z.string().optional(),
   aggregator_contact_name: z.string().optional(),
   email: z.string().email("Invalid email address").optional().or(z.literal("")),
@@ -76,7 +76,7 @@ export const updateLeadSchema = createLeadSchema.partial();
 // Relaxed schema for CSV imports — status/source/rating/score/tags have defaults
 export const importLeadSchema = z.object({
   first_name: z.string().min(1, "First name is required"),
-  last_name: z.string().min(1, "Last name is required"),
+  last_name: z.string().optional(),
   company: z.string().optional(),
   aggregator_contact_name: z.string().optional(),
   email: z.string().email("Invalid email").optional().or(z.literal("")),
