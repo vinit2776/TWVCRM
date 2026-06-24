@@ -127,28 +127,18 @@ export const LEAD_SOURCES = [
   "meta_ads",
   "google_ads",
   "direct_walkin",
-  "online_form",
   "referral",
-  "social_media",
-  "advertisement",
   "cold_call",
-  "event",
-  "partner",
-  "other",
+  "aggregator",
 ] as const;
 
 export const LEAD_SOURCE_LABELS: Record<string, string> = {
   meta_ads: "Meta Ads",
   google_ads: "Google Ads",
   direct_walkin: "Direct/Walk-in",
-  online_form: "Online Form",
   referral: "Referral",
-  social_media: "Social Media",
-  advertisement: "Advertisement",
   cold_call: "Cold Call",
-  event: "Event",
-  partner: "Partner",
-  other: "Other",
+  aggregator: "Aggregator",
 };
 
 export const WORKSPACE_TYPES = [
