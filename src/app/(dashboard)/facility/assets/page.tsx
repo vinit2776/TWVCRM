@@ -85,8 +85,41 @@ export default function FacilityAssetsPage() {
       {loading ? (
         <div className="text-sm text-muted-foreground py-12 text-center">Loading…</div>
       ) : grouped.length === 0 ? (
-        <div className="text-center py-16 text-sm text-muted-foreground">
-          No assets yet. Add your first one to start tracking issues against specific devices.
+        <div className="max-w-md mx-auto py-14 px-4 text-center space-y-6">
+          <div className="text-2xl font-semibold">Start your asset register</div>
+          <p className="text-sm text-muted-foreground">
+            Once assets are registered, your team can log issues and schedule AMC visits against specific devices — no more guessing which unit broke down.
+          </p>
+          <ol className="text-left space-y-4">
+            {[
+              {
+                n: 1,
+                title: "Add each asset",
+                body: "Tap Add Asset and follow the 3 steps — location, specs, and a photo. Takes about 2 minutes per item.",
+              },
+              {
+                n: 2,
+                title: "Print or stick the QR code",
+                body: "Open the asset and print its QR sticker. Stick it on the device so technicians can scan it on-site.",
+              },
+              {
+                n: 3,
+                title: "Log issues against it",
+                body: "When something breaks, open the asset and raise an issue. This builds a history that helps with AMC and vendor decisions.",
+              },
+            ].map(({ n, title, body }) => (
+              <li key={n} className="flex gap-3">
+                <span className="flex-shrink-0 h-6 w-6 rounded-full bg-primary text-primary-foreground text-xs flex items-center justify-center font-semibold mt-0.5">{n}</span>
+                <div>
+                  <div className="text-sm font-medium">{title}</div>
+                  <div className="text-xs text-muted-foreground mt-0.5">{body}</div>
+                </div>
+              </li>
+            ))}
+          </ol>
+          <Button onClick={() => { setEditing(null); setOpenForm(true); }} className="w-full sm:w-auto">
+            <Plus className="h-4 w-4 mr-1" /> Add your first asset
+          </Button>
         </div>
       ) : (
         <div className="space-y-6">
