@@ -638,190 +638,8 @@ export default function ProposalDetailPage({
         </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Main Content */}
-        <div className="lg:col-span-2 space-y-6">
-          {/* Overview Card */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Overview</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
-                {proposal.lead && (
-                  <>
-                    <div>
-                      <p className="text-muted-foreground text-xs">Lead</p>
-                      <Link
-                        href={`/leads/${proposal.lead.id}`}
-                        className="text-primary hover:underline font-medium"
-                      >
-                        {proposal.lead.first_name} {proposal.lead.last_name}
-                      </Link>
-                    </div>
-                    {proposal.lead.company && (
-                      <div>
-                        <p className="text-muted-foreground text-xs">Company</p>
-                        <p>{proposal.lead.company}</p>
-                      </div>
-                    )}
-                    {proposal.lead.email && (
-                      <div>
-                        <p className="text-muted-foreground text-xs">Email</p>
-                        <p>{proposal.lead.email}</p>
-                      </div>
-                    )}
-                    {(proposal.lead.phone || proposal.lead.mobile) && (
-                      <div>
-                        <p className="text-muted-foreground text-xs">Phone</p>
-                        <p>{proposal.lead.phone || proposal.lead.mobile}</p>
-                      </div>
-                    )}
-                  </>
-                )}
-              </div>
-              <Separator className="my-4" />
-              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
-                <div>
-                  <p className="text-muted-foreground text-xs">Subtotal</p>
-                  <p className="font-medium">{formatCurrency(proposal.subtotal)}</p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs">
-                    Tax ({proposal.tax_percentage}%)
-                  </p>
-                  <p className="font-medium">
-                    {formatCurrency(proposal.tax_amount)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs">
-                    Discount ({proposal.discount_percentage}%)
-                  </p>
-                  <p className="font-medium">
-                    -{formatCurrency(proposal.discount_amount)}
-                  </p>
-                </div>
-                <div>
-                  <p className="text-muted-foreground text-xs">Total</p>
-                  <p className="font-bold text-lg">
-                    {formatCurrency(proposal.total_amount)}
-                  </p>
-                </div>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Line Items Table */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Line Items</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="rounded-md border overflow-x-auto">
-                <table className="w-full text-sm">
-                  <thead>
-                    <tr className="border-b bg-muted/50">
-                      <th className="px-4 py-3 text-left font-medium">
-                        Description
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">Qty</th>
-                      <th className="px-4 py-3 text-right font-medium">Unit</th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        Unit Price
-                      </th>
-                      <th className="px-4 py-3 text-right font-medium">
-                        Total
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {proposal.items.map((item, idx) => (
-                      <tr key={idx} className="border-b">
-                        <td className="px-4 py-3">{item.description}</td>
-                        <td className="px-4 py-3 text-right">
-                          {item.quantity}
-                        </td>
-                        <td className="px-4 py-3 text-right text-muted-foreground">
-                          {item.unit || "—"}
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          {formatCurrency(item.unit_price)}
-                        </td>
-                        <td className="px-4 py-3 text-right font-medium">
-                          {formatCurrency(item.total)}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Complimentary Services Offered (formerly Description) */}
-          {proposal.description && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Complimentary Services Offered</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm whitespace-pre-wrap">
-                  {proposal.description}
-                </p>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Terms & Conditions */}
-          {proposal.terms_and_conditions && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">
-                  Terms & Conditions
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm whitespace-pre-wrap">
-                  {proposal.terms_and_conditions}
-                </p>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Customer Notes (formerly Notes) */}
-          {proposal.notes && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">Customer Notes</CardTitle>
-              </CardHeader>
-              <CardContent>
-                <p className="text-sm whitespace-pre-wrap">{proposal.notes}</p>
-              </CardContent>
-            </Card>
-          )}
-
-          {/* KYC Documents Required */}
-          {proposal.lead?.entity_type && KYC_DOCUMENTS[proposal.lead.entity_type] && (
-            <Card>
-              <CardHeader>
-                <CardTitle className="text-base">
-                  Documents Required — {ENTITY_TYPE_LABELS[proposal.lead.entity_type] || proposal.lead.entity_type}
-                </CardTitle>
-              </CardHeader>
-              <CardContent>
-                <ul className="list-disc list-inside text-sm space-y-1 text-muted-foreground">
-                  {KYC_DOCUMENTS[proposal.lead.entity_type].map((doc, idx) => (
-                    <li key={idx}>{doc}</li>
-                  ))}
-                </ul>
-              </CardContent>
-            </Card>
-          )}
-        </div>
-
-        {/* Sidebar */}
-        <div className="space-y-4">
+      {/* Action Cards */}
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
           {/* Security Deposit */}
           {Number(proposal.security_deposit_months) > 0 && (
             <Card className={proposal.deposit_payment_status === "paid" ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}>
@@ -1069,6 +887,192 @@ export default function ProposalDetailPage({
             );
           })()}
 
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Main Content */}
+        <div className="lg:col-span-2 space-y-6">
+          {/* Overview Card */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Overview</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-sm">
+                {proposal.lead && (
+                  <>
+                    <div>
+                      <p className="text-muted-foreground text-xs">Lead</p>
+                      <Link
+                        href={`/leads/${proposal.lead.id}`}
+                        className="text-primary hover:underline font-medium"
+                      >
+                        {proposal.lead.first_name} {proposal.lead.last_name}
+                      </Link>
+                    </div>
+                    {proposal.lead.company && (
+                      <div>
+                        <p className="text-muted-foreground text-xs">Company</p>
+                        <p>{proposal.lead.company}</p>
+                      </div>
+                    )}
+                    {proposal.lead.email && (
+                      <div>
+                        <p className="text-muted-foreground text-xs">Email</p>
+                        <p>{proposal.lead.email}</p>
+                      </div>
+                    )}
+                    {(proposal.lead.phone || proposal.lead.mobile) && (
+                      <div>
+                        <p className="text-muted-foreground text-xs">Phone</p>
+                        <p>{proposal.lead.phone || proposal.lead.mobile}</p>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+              <Separator className="my-4" />
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-4 text-sm">
+                <div>
+                  <p className="text-muted-foreground text-xs">Subtotal</p>
+                  <p className="font-medium">{formatCurrency(proposal.subtotal)}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">
+                    Tax ({proposal.tax_percentage}%)
+                  </p>
+                  <p className="font-medium">
+                    {formatCurrency(proposal.tax_amount)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">
+                    Discount ({proposal.discount_percentage}%)
+                  </p>
+                  <p className="font-medium">
+                    -{formatCurrency(proposal.discount_amount)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Total</p>
+                  <p className="font-bold text-lg">
+                    {formatCurrency(proposal.total_amount)}
+                  </p>
+                </div>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Line Items Table */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Line Items</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <div className="rounded-md border overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="border-b bg-muted/50">
+                      <th className="px-4 py-3 text-left font-medium">
+                        Description
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">Qty</th>
+                      <th className="px-4 py-3 text-right font-medium">Unit</th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        Unit Price
+                      </th>
+                      <th className="px-4 py-3 text-right font-medium">
+                        Total
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {proposal.items.map((item, idx) => (
+                      <tr key={idx} className="border-b">
+                        <td className="px-4 py-3">{item.description}</td>
+                        <td className="px-4 py-3 text-right">
+                          {item.quantity}
+                        </td>
+                        <td className="px-4 py-3 text-right text-muted-foreground">
+                          {item.unit || "—"}
+                        </td>
+                        <td className="px-4 py-3 text-right">
+                          {formatCurrency(item.unit_price)}
+                        </td>
+                        <td className="px-4 py-3 text-right font-medium">
+                          {formatCurrency(item.total)}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Complimentary Services Offered (formerly Description) */}
+          {proposal.description && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Complimentary Services Offered</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm whitespace-pre-wrap">
+                  {proposal.description}
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Terms & Conditions */}
+          {proposal.terms_and_conditions && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  Terms & Conditions
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm whitespace-pre-wrap">
+                  {proposal.terms_and_conditions}
+                </p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Customer Notes (formerly Notes) */}
+          {proposal.notes && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">Customer Notes</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p className="text-sm whitespace-pre-wrap">{proposal.notes}</p>
+              </CardContent>
+            </Card>
+          )}
+
+          {/* KYC Documents Required */}
+          {proposal.lead?.entity_type && KYC_DOCUMENTS[proposal.lead.entity_type] && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="text-base">
+                  Documents Required — {ENTITY_TYPE_LABELS[proposal.lead.entity_type] || proposal.lead.entity_type}
+                </CardTitle>
+              </CardHeader>
+              <CardContent>
+                <ul className="list-disc list-inside text-sm space-y-1 text-muted-foreground">
+                  {KYC_DOCUMENTS[proposal.lead.entity_type].map((doc, idx) => (
+                    <li key={idx}>{doc}</li>
+                  ))}
+                </ul>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+
+        {/* Sidebar */}
+        <div className="space-y-4">
           {/* Proposal Details */}
           <Card>
             <CardHeader>
