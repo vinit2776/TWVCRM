@@ -294,7 +294,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
             placeholder="e.g. Split AC — Conference Room 2"
             className="mt-1"
           />
-          <Hint>Be specific — include the room or zone so it's easy to identify on a list.</Hint>
+          <Hint>Be specific — include the room or zone so it&apos;s easy to identify on a list.</Hint>
         </div>
         <div>
           <Label className="text-xs">Asset code</Label>
@@ -348,7 +348,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
         <div>
           <Label className="text-xs">Warranty expiry</Label>
           <Input type="date" value={form.warranty_expiry} onChange={(e) => setForm({ ...form, warranty_expiry: e.target.value })} className="mt-1" />
-          <Hint>You'll get an alert before this lapses — don&apos;t skip it.</Hint>
+          <Hint>You&apos;ll get an alert before this lapses — don&apos;t skip it.</Hint>
         </div>
       </div>
 
