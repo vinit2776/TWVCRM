@@ -8,7 +8,7 @@ export const createLeadSchema = z.object({
   last_name: z.string().min(1, "Last name is required"),
   company: z.string().optional(),
   aggregator_contact_name: z.string().optional(),
-  email: z.string().min(1, "Email is required").email("Invalid email address"),
+  email: z.string().email("Invalid email address").optional().or(z.literal("")),
   phone: z.string().optional(),
   mobile: z.string().min(1, "Mobile number is required"),
   website: z.string().url("Invalid URL").optional().or(z.literal("")),

@@ -185,9 +185,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             <Input id="title" {...register("title")} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="email">
-              Email <span className="text-destructive">*</span>
-            </Label>
+            <Label htmlFor="email">Email</Label>
             <Input id="email" type="email" {...register("email")} />
             {errors.email && (
               <p className="text-xs text-destructive">
