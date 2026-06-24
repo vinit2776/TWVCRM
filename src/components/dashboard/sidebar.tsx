@@ -139,7 +139,7 @@ const navSections: NavSection[] = [
       { href: "/spaces",    label: "Spaces",    icon: DoorOpen,      roles: OPERATIONS_ROLES },
       { href: "/headcount", label: "Headcount", icon: UsersRound,    roles: OPERATIONS_ROLES },
       { href: "/packages",  label: "Packages",  icon: TicketCheck,   roles: OPERATIONS_ROLES },
-      { href: "/vouchers",    label: "Vouchers",    icon: Wifi,          roles: [...OPERATIONS_ROLES, "facility_staff"] },
+      { href: "/vouchers",    label: "Vouchers",    icon: Wifi,          roles: [...OPERATIONS_ROLES, "facility_staff", "it_manager", "it_technician"] },
       { href: "/network",     label: "Network",     icon: Server,        roles: ["admin", "manager", "it_manager", "it_technician", "office_admin"] },
       { href: "/attendance",  label: "Attendance",  icon: Fingerprint,   roles: ["admin", "manager", "viewer"] },
     ],
