@@ -44,6 +44,9 @@ interface LeadFormProps {
 
 export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
   const [submitting, setSubmitting] = useState(false);
+  const [isOtherLocation, setIsOtherLocation] = useState(
+    !!(lead?.preferred_location && !lead?.location_id)
+  );
 
   const {
     register,
@@ -438,12 +441,25 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
           <div className="space-y-2">
             <Label>Preferred Location</Label>
             <LocationSelector
-              value={watch("location_id") || null}
-              onValueChange={(id) => setValue("location_id", id || "")}
+              value={isOtherLocation ? "__other__" : (watch("location_id") || null)}
+              onValueChange={(id) => {
+                if (id === "__other__") {
+                  setIsOtherLocation(true);
+                  setValue("location_id", "");
+                } else {
+                  setIsOtherLocation(false);
+                  setValue("preferred_location", "");
+                  setValue("location_id", id || "");
+                }
+              }}
               placeholder="Select center"
+              includeOtherOption
             />
-            {lead?.preferred_location && !lead?.location_id && (
-              <p className="text-xs text-muted-foreground">Legacy: {lead.preferred_location}</p>
+            {isOtherLocation && (
+              <Input
+                placeholder="Specify preferred location"
+                {...register("preferred_location")}
+              />
             )}
           </div>
           <div className="space-y-2">
