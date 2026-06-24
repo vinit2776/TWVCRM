@@ -2718,6 +2718,7 @@ export interface FacilityAsset {
   creator?: { id: string; full_name: string } | null;
   created_at: string;
   updated_at: string;
+  photos?: { url: string; path: string; size: number }[];
   // Aggregates (when requested)
   open_issue_count?: number;
   total_issue_count?: number;

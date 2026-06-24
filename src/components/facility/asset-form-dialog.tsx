@@ -1,14 +1,15 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Loader2 } from "lucide-react";
+import { Camera, Loader2, X } from "lucide-react";
 import { toast } from "sonner";
+import { compressImageClient } from "@/lib/uploads/compress-image-client";
 import type { FacilityAsset, FacilityAssetCategory, FacilityLifecycleStage, CategoryCustomField } from "@/types";
 
 interface Location { id: string; name: string }
@@ -49,6 +50,8 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
     location_notes: "", notes: "", attention_notes: "",
   });
   const [customValues, setCustomValues] = useState<Record<string, unknown>>({});
+  const [pendingPhotos, setPendingPhotos] = useState<{ file: File; preview: string }[]>([]);
+  const photoInputRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState(false);
 
   const selectedCategory = useMemo(
@@ -92,6 +95,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       attention_notes: asset?.attention_notes || "",
     });
     setCustomValues((asset?.custom_field_values as Record<string, unknown>) || {});
+    setPendingPhotos([]);
   }, [open, asset, defaultLocationId]);
 
   useEffect(() => {
@@ -125,6 +129,35 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       });
   }, [form.location_id, form.category_id, isEdit, categories, locations]);
 
+  const handlePhotoPick = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const files = Array.from(e.target.files || []);
+    if (!files.length) return;
+    const existingCount = (asset?.photos?.length ?? 0) + pendingPhotos.length;
+    const slots = 6 - existingCount;
+    const toAdd = files.slice(0, slots);
+    const compressed = await Promise.all(
+      toAdd.map((f) => compressImageClient(f, { maxDimension: 1200, quality: 0.78 }))
+    );
+    const previews = compressed.map((f) => ({ file: f, preview: URL.createObjectURL(f) }));
+    setPendingPhotos((p) => [...p, ...previews]);
+    if (photoInputRef.current) photoInputRef.current.value = "";
+  };
+
+  const removePending = (idx: number) => {
+    setPendingPhotos((p) => {
+      URL.revokeObjectURL(p[idx].preview);
+      return p.filter((_, i) => i !== idx);
+    });
+  };
+
+  const uploadPhotos = async (assetId: string) => {
+    for (const { file } of pendingPhotos) {
+      const fd = new FormData();
+      fd.append("photo", file);
+      await fetch(`/api/facility/assets/${assetId}/photos`, { method: "POST", body: fd });
+    }
+  };
+
   const submit = async () => {
     if (!form.location_id || !form.category_id || !form.name.trim() || !form.asset_code.trim()) {
       toast.error("Location, category, name and asset code are required");
@@ -154,6 +187,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Save failed");
+      if (pendingPhotos.length > 0) await uploadPhotos(json.data.id);
       toast.success(isEdit ? "Asset updated" : "Asset added");
       onSuccess(json.data);
       onOpenChange(false);
@@ -367,6 +401,67 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
               rows={2}
               className="mt-1 w-full rounded-md border border-amber-300 bg-amber-50 px-3 py-2 text-sm placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-amber-400"
             />
+          </div>
+          {/* Photos — optional, encouraged */}
+          <div className="border-t pt-3">
+            <div className="flex items-center justify-between mb-1">
+              <Label className="text-xs flex items-center gap-1">
+                <Camera className="h-3.5 w-3.5 text-muted-foreground" />
+                Photos
+                <span className="text-muted-foreground font-normal">(optional — helps technicians identify the asset on-site)</span>
+              </Label>
+              {((asset?.photos?.length ?? 0) + pendingPhotos.length) < 6 && (
+                <button
+                  type="button"
+                  onClick={() => photoInputRef.current?.click()}
+                  className="text-xs text-primary underline-offset-2 hover:underline"
+                >
+                  + Add photo
+                </button>
+              )}
+            </div>
+            <input
+              ref={photoInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={handlePhotoPick}
+            />
+            {/* Existing saved photos */}
+            {(asset?.photos?.length ?? 0) > 0 || pendingPhotos.length > 0 ? (
+              <div className="flex flex-wrap gap-2 mt-2">
+                {(asset?.photos || []).map((p) => (
+                  <img
+                    key={p.path}
+                    src={p.url}
+                    alt="Asset photo"
+                    className="h-16 w-16 rounded-md object-cover border"
+                  />
+                ))}
+                {pendingPhotos.map((p, i) => (
+                  <div key={i} className="relative">
+                    <img src={p.preview} alt="Preview" className="h-16 w-16 rounded-md object-cover border border-dashed border-primary/50" />
+                    <button
+                      type="button"
+                      onClick={() => removePending(i)}
+                      className="absolute -top-1.5 -right-1.5 bg-destructive text-white rounded-full p-0.5"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => photoInputRef.current?.click()}
+                className="mt-1 w-full h-16 rounded-md border border-dashed border-muted-foreground/30 flex flex-col items-center justify-center gap-1 text-muted-foreground hover:border-primary/50 hover:text-primary transition-colors"
+              >
+                <Camera className="h-5 w-5" />
+                <span className="text-xs">Tap to add a photo of this asset</span>
+              </button>
+            )}
           </div>
         </div>
         <DialogFooter>
