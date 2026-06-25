@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { createActivitySchema } from "@/lib/validations";
 import { autoUpdateLeadStatus } from "@/lib/auto-status";
+import { logAudit } from "@/lib/audit";
 
 export async function GET(
   _request: NextRequest,
@@ -72,6 +73,32 @@ export async function POST(
 
   if (error) {
     return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+
+  // Auto-claim the lead to whoever logged the activity.
+  // Transfers ownership even if another user had previously claimed it.
+  if (dbUser?.id) {
+    const { data: oldLead } = await supabase
+      .from("leads")
+      .select("claimed_by, claimed_at")
+      .eq("id", id)
+      .single();
+
+    await supabase
+      .from("leads")
+      .update({ claimed_by: dbUser.id, claimed_at: new Date().toISOString() })
+      .eq("id", id);
+
+    logAudit(supabase, {
+      entityType: "lead",
+      entityId: id,
+      action: "update",
+      performedBy: dbUser.id,
+      changes: {
+        claimed_by: { old: oldLead?.claimed_by ?? null, new: dbUser.id },
+        claimed_at: { old: oldLead?.claimed_at ?? null, new: new Date().toISOString() },
+      },
+    });
   }
 
   // Auto-advance lead status based on activity type:
