@@ -14,16 +14,19 @@
  */
 
 import { Fragment, useEffect, useMemo, useState, useCallback } from "react";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil } from "lucide-react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
 import {
   AGING_ESCALATE_HOURS,
   HANDOFF_STATE_LABELS,
+  type BookingHandoffState,
+  type BookingInboxRow,
   type HandoffBucket,
   type InboxResponse,
   type InboxRow,
 } from "@/lib/tally-handoff";
 import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
+import { BookingGstUploadForm } from "./booking-gst-upload-form";
 
 type FilterTab = "all" | "gst_to_issue" | "payment_to_record" | "discrepancy" | "closed";
 
@@ -87,11 +90,18 @@ export function TallyInboxClient() {
   const [tab, setTab] = useState<FilterTab>("all");
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
+  // Statement row state
   const [expandedId, setExpandedId] = useState<string | null>(null);
   const [sendingId, setSendingId] = useState<string | null>(null);
   const [closingId, setClosingId] = useState<string | null>(null);
   const [resendingId, setResendingId] = useState<string | null>(null);
   const [sentConfirmedId, setSentConfirmedId] = useState<string | null>(null);
+  // Booking row state
+  const [expandedBookingId, setExpandedBookingId] = useState<string | null>(null);
+  const [sendingBookingId, setSendingBookingId] = useState<string | null>(null);
+  const [closingBookingId, setClosingBookingId] = useState<string | null>(null);
+  const [resendingBookingId, setResendingBookingId] = useState<string | null>(null);
+  const [sentConfirmedBookingId, setSentConfirmedBookingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [closedPage, setClosedPage] = useState(1);
 
@@ -211,11 +221,72 @@ export function TallyInboxClient() {
     }
   }, [load]);
 
+  const handleBookingSend = useCallback(async (taskId: string) => {
+    setSendingBookingId(taskId);
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/booking-gst-tasks/${taskId}/inbox-send`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      await load();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Send failed");
+    } finally {
+      setSendingBookingId(null);
+    }
+  }, [load]);
+
+  const handleBookingClose = useCallback(async (taskId: string) => {
+    setClosingBookingId(taskId);
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/booking-gst-tasks/${taskId}/inbox-complete`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      await load();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Close failed");
+    } finally {
+      setClosingBookingId(null);
+    }
+  }, [load]);
+
+  const handleBookingResend = useCallback(async (taskId: string) => {
+    setResendingBookingId(taskId);
+    setActionError(null);
+    setSentConfirmedBookingId(null);
+    try {
+      const res = await fetch(`/api/booking-gst-tasks/${taskId}/inbox-send`, { method: "POST" });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(body.error || `HTTP ${res.status}`);
+      setSentConfirmedBookingId(taskId);
+      await load();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Resend failed");
+    } finally {
+      setResendingBookingId(null);
+    }
+  }, [load]);
+
   const visibleRows = useMemo(() => {
     if (!data) return [];
     if (tab === "all" || tab === "closed") return data.rows;
     if (tab === "discrepancy") return data.rows.filter((r) => r.has_discrepancy);
     return data.rows.filter((r) => r.bucket === tab && !r.has_discrepancy);
+  }, [data, tab]);
+
+  const visibleBookingRows = useMemo(() => {
+    if (!data?.booking_rows) return [];
+    const br = data.booking_rows;
+    if (tab === "closed") return br.filter((r) => r.handoff_state === "complete");
+    if (tab === "all") return br.filter((r) => r.handoff_state !== "complete");
+    if (tab === "discrepancy") return br.filter((r) => r.has_discrepancy && r.handoff_state !== "complete");
+    if (tab === "gst_to_issue") return br.filter((r) => r.bucket === "gst_to_issue" && !r.has_discrepancy && r.handoff_state !== "complete");
+    return [];
   }, [data, tab]);
 
   return (
@@ -314,7 +385,7 @@ export function TallyInboxClient() {
         <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
           Loading inbox…
         </div>
-      ) : visibleRows.length === 0 ? (
+      ) : visibleRows.length === 0 && visibleBookingRows.length === 0 ? (
         <EmptyState tab={tab} totalOpen={data?.stats.total_open ?? 0} />
       ) : (
         <>
@@ -341,6 +412,23 @@ export function TallyInboxClient() {
                 onUploaded={handleUploaded}
                 onCancelUpload={() => setExpandedId(null)}
                 onGstinUpdated={() => void load()}
+              />
+            ))}
+            {visibleBookingRows.map((row) => (
+              <BookingInboxRowItem
+                key={row.task_id}
+                row={row}
+                expanded={expandedBookingId === row.task_id}
+                sending={sendingBookingId === row.task_id}
+                closing={closingBookingId === row.task_id}
+                resending={resendingBookingId === row.task_id}
+                sentConfirmed={sentConfirmedBookingId === row.task_id}
+                onToggle={() => setExpandedBookingId(expandedBookingId === row.task_id ? null : row.task_id)}
+                onSend={() => handleBookingSend(row.task_id)}
+                onClose={() => handleBookingClose(row.task_id)}
+                onResend={() => handleBookingResend(row.task_id)}
+                onUploaded={handleUploaded}
+                onCancelUpload={() => setExpandedBookingId(null)}
               />
             ))}
           </ul>
@@ -871,6 +959,274 @@ function InboxRowItem({
       {expanded && canUpload && (
         <TallyInboxUploadForm
           row={row}
+          onUploaded={onUploaded}
+          onCancel={onCancelUpload}
+        />
+      )}
+    </li>
+  );
+}
+
+// ── Booking GST task row ─────────────────────────────────────────────────────
+
+function BookingInboxLifecycleTracker({ state }: { state: BookingHandoffState }) {
+  type StepStatus = "done" | "current" | "pending";
+  const steps: { label: string; status: StepStatus }[] = [
+    {
+      label: "GST\nto issue",
+      status: state === "gst_to_issue" ? "current" : "done",
+    },
+    {
+      label: "Invoice\nsent",
+      status:
+        state === "ready_to_send" ? "current"
+        : state === "complete" ? "done"
+        : "pending",
+    },
+    {
+      label: "Done",
+      status: state === "complete" ? "done" : "pending",
+    },
+  ];
+
+  return (
+    <div className="col-span-2 pt-2 pb-0.5">
+      <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide mb-1.5">
+        Direct GST — Booking
+      </div>
+      <div className="flex items-start">
+        {steps.map((step, i) => (
+          <Fragment key={step.label}>
+            <div className="flex flex-col items-center" style={{ minWidth: 52 }}>
+              <div
+                className={`h-5 w-5 rounded-full flex items-center justify-center border-2 text-[10px] font-semibold ${
+                  step.status === "done"
+                    ? "bg-green-500 border-green-500 text-white"
+                    : step.status === "current"
+                    ? "bg-blue-500 border-blue-500 text-white"
+                    : "border-gray-200 bg-white text-gray-300"
+                }`}
+              >
+                {step.status === "done" ? <CheckCircle2 className="h-3 w-3" /> : String(i + 1)}
+              </div>
+              <div
+                className={`text-[10px] mt-0.5 text-center leading-tight whitespace-pre-line ${
+                  step.status === "done"
+                    ? "text-green-700"
+                    : step.status === "current"
+                    ? "text-blue-700 font-medium"
+                    : "text-muted-foreground opacity-50"
+                }`}
+              >
+                {step.label}
+              </div>
+            </div>
+            {i < steps.length - 1 && (
+              <div
+                className={`flex-1 h-0.5 mt-2.5 rounded-full ${
+                  step.status === "done" ? "bg-green-300" : "bg-gray-100"
+                }`}
+              />
+            )}
+          </Fragment>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function BookingInboxRowItem({
+  row,
+  expanded,
+  sending,
+  closing,
+  resending,
+  sentConfirmed,
+  onToggle,
+  onSend,
+  onClose,
+  onResend,
+  onUploaded,
+  onCancelUpload,
+}: {
+  row: BookingInboxRow;
+  expanded: boolean;
+  sending: boolean;
+  closing: boolean;
+  resending: boolean;
+  sentConfirmed: boolean;
+  onToggle: () => void;
+  onSend: () => void;
+  onClose: () => void;
+  onResend: () => void;
+  onUploaded: () => void;
+  onCancelUpload: () => void;
+}) {
+  const aging = row.aging_hours;
+  const agingClass =
+    aging >= AGING_ESCALATE_HOURS ? "text-red-700" : aging >= 24 ? "text-amber-700" : "text-muted-foreground";
+
+  const canUpload = row.handoff_state === "gst_to_issue";
+  const canSend = row.handoff_state === "ready_to_send" && !row.has_discrepancy;
+  const canMarkDone = row.handoff_state === "ready_to_send";
+  const hasUpload = row.latest_upload !== null;
+  const isClosed = row.handoff_state === "complete";
+
+  const partyName = row.customer_name ?? row.customer_email ?? "(walk-in)";
+
+  return (
+    <li className="hover:bg-muted/30 transition-colors rounded" data-statement-id={row.task_id}>
+      <div className="p-3 md:p-4 grid grid-cols-[1fr_auto] gap-x-4 gap-y-2 items-start">
+        {/* Line 1: badge + party name */}
+        <div className="min-w-0 flex items-baseline gap-2 flex-wrap">
+          <span className={`text-[11px] px-2 py-0.5 rounded-full border flex-shrink-0 ${bucketBadgeClass(row.bucket as HandoffBucket, row.has_discrepancy)}`}>
+            {bucketLabel(row.bucket as HandoffBucket)}
+          </span>
+          <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground border border-muted-foreground/20 flex-shrink-0">
+            <CalendarDays className="h-2.5 w-2.5" />
+            Booking
+          </span>
+          <span className="font-medium text-sm truncate">{partyName}</span>
+        </div>
+        <div className="text-right">
+          <div className="font-medium tabular-nums text-sm">{formatCurrency(row.statement_total_amount)}</div>
+        </div>
+
+        {/* Line 2: booking number + state + aging */}
+        <div className="min-w-0 text-xs text-muted-foreground truncate">
+          <span className="font-mono">{row.booking_number ?? "(no number)"}</span>
+          {row.space_name && <span> · {row.space_name}</span>}
+          {row.booking_date && <span> · {row.booking_date}</span>}
+          <span> · {row.handoff_state === "gst_to_issue" ? "GST to issue" : row.handoff_state === "ready_to_send" ? "Ready to send" : "Complete"}</span>
+        </div>
+        <div className={`text-xs ${agingClass} text-right`}>
+          {aging < 1 ? "just now" : aging < 24 ? `${aging}h ago` : `${Math.floor(aging / 24)}d ago`}
+        </div>
+
+        {/* Line 3: GSTIN + IRN pill */}
+        <div className="col-span-2 flex items-center gap-1.5 flex-wrap text-[11px]">
+          {row.customer_gstin ? (
+            <span className="font-mono px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground" title="Customer GSTIN">
+              {row.customer_gstin}
+            </span>
+          ) : (
+            <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">no GSTIN</span>
+          )}
+          <span
+            className={`px-1.5 py-0.5 rounded border ${row.irn_required ? "bg-blue-50 text-blue-900 border-blue-200" : "bg-muted/60 text-muted-foreground border-transparent"}`}
+            title={row.irn_required ? "A-series invoice + IRN required" : "B-series invoice, no IRN"}
+          >
+            {row.irn_required ? "IRN required" : "no IRN"}
+          </span>
+          {row.location_name && (
+            <span className="text-muted-foreground">{row.location_name}</span>
+          )}
+        </div>
+
+        {/* Lifecycle tracker */}
+        <BookingInboxLifecycleTracker state={row.handoff_state} />
+
+        {/* Discrepancy banner */}
+        {row.has_discrepancy && row.discrepancy_reason && (
+          <div className="col-span-2 text-xs text-red-700 flex items-start gap-1">
+            <AlertCircle className="h-3.5 w-3.5 flex-shrink-0 mt-0.5" aria-hidden />
+            <span>{row.discrepancy_reason}</span>
+          </div>
+        )}
+        {hasUpload && !canSend && (
+          <div className="col-span-2 text-xs text-muted-foreground">
+            Upload: <span className="font-mono">{row.latest_upload!.tally_invoice_number}</span>
+          </div>
+        )}
+
+        {/* Actions */}
+        <div className="col-span-2 flex items-center gap-1.5 flex-wrap justify-end pt-1">
+          {hasUpload && (
+            <a
+              href={`/api/booking-gst-tasks/${row.task_id}/gst-invoice-pdf`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+              title="Open the uploaded GST tax invoice PDF"
+            >
+              <FileCheck className="h-3 w-3" />
+              View GST
+            </a>
+          )}
+          {canUpload && !isClosed && (
+            <button
+              type="button"
+              onClick={onToggle}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+              aria-expanded={expanded}
+            >
+              {expanded ? (
+                <><ChevronUp className="h-3 w-3" /> Close</>
+              ) : (
+                <><Upload className="h-3 w-3" /> Upload <ChevronDown className="h-3 w-3" /></>
+              )}
+            </button>
+          )}
+          {canSend && (
+            <button
+              type="button"
+              onClick={onSend}
+              disabled={sending}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-foreground text-background hover:opacity-90 disabled:opacity-50"
+            >
+              {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+              {sending ? "Sending…" : "Save & send"}
+            </button>
+          )}
+          {canMarkDone && (
+            <button
+              type="button"
+              onClick={onClose}
+              disabled={closing}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted disabled:opacity-50"
+              title="Mark as done without sending email"
+            >
+              {closing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+              {closing ? "Closing…" : "Mark as done"}
+            </button>
+          )}
+          {isClosed && hasUpload && (
+            <div className="flex flex-col items-end gap-0.5">
+              <button
+                type="button"
+                onClick={onResend}
+                disabled={resending}
+                className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted disabled:opacity-50"
+                title="Resend the GST invoice email to the customer"
+              >
+                {resending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
+                {resending ? "Sending…" : "Resend email"}
+              </button>
+              {sentConfirmed ? (
+                <span className="text-[10px] text-green-700 flex items-center gap-0.5">
+                  <Check className="h-3 w-3" /> Sent successfully
+                </span>
+              ) : row.gst_invoice_sent_at ? (
+                <span className="text-[10px] text-muted-foreground">
+                  Last sent: {new Date(row.gst_invoice_sent_at).toLocaleString("en-IN", { dateStyle: "short", timeStyle: "short" })}
+                </span>
+              ) : null}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {expanded && canUpload && (
+        <BookingGstUploadForm
+          taskId={row.task_id}
+          bookingNumber={row.booking_number}
+          spaceName={row.space_name}
+          customerName={row.customer_name}
+          customerGstin={row.customer_gstin}
+          totalAmount={row.statement_total_amount}
+          irnRequired={row.irn_required}
+          expectedSeries={row.expected_series ?? (row.irn_required ? "SDIPL-REG" : "SDIPL-UNREG")}
+          expectedPrefix={row.expected_prefix ?? (row.irn_required ? "SD/A/" : "SD/B/")}
           onUploaded={onUploaded}
           onCancel={onCancelUpload}
         />

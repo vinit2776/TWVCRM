@@ -3,9 +3,12 @@ import { createClient } from "@/lib/supabase/server";
 import {
   AGING_ESCALATE_HOURS,
   bucketFor,
+  bucketForBooking,
   HANDOFF_STATE_LABELS,
   INBOX_OPEN_STATES,
   isInboxRole,
+  type BookingHandoffState,
+  type BookingInboxRow,
   type HandoffState,
   type InboxPayment,
   type InboxResponse,
@@ -397,6 +400,166 @@ export async function GET(req: NextRequest) {
     };
   });
 
+  // ── Booking GST tasks ────────────────────────────────────────────────────
+  // Fetch open booking_gst_tasks (or closed if tab=closed). These are non-contract
+  // bookings that are checked_out + paid and need a Tally GST invoice.
+  let bookingTasksQuery = supabase
+    .from("booking_gst_tasks")
+    .select(`
+      id, handoff_state, updated_at, created_at,
+      gst_invoice_number, tally_invoice_number, gst_invoice_sent_at,
+      booking:bookings!booking_gst_tasks_booking_id_fkey(
+        id, booking_number, total_amount_with_gst, payment_status,
+        booking_date, guest_name, guest_email, guest_phone, guest_company,
+        space:spaces!bookings_space_id_fkey(id, name),
+        location:locations!bookings_location_id_fkey(id, name),
+        lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, gst_number)
+      )
+    `);
+
+  if (tab === "closed") {
+    bookingTasksQuery = bookingTasksQuery.eq("handoff_state", "complete");
+  } else {
+    bookingTasksQuery = bookingTasksQuery.neq("handoff_state", "complete");
+  }
+
+  const { data: bookingTaskData } = await bookingTasksQuery
+    .order("updated_at", { ascending: tab !== "closed" });
+
+  type RawBookingTask = {
+    id: string;
+    handoff_state: string;
+    updated_at: string;
+    created_at: string;
+    gst_invoice_number: string | null;
+    tally_invoice_number: string | null;
+    gst_invoice_sent_at: string | null;
+    booking: {
+      id: string;
+      booking_number: string | null;
+      total_amount_with_gst: number;
+      payment_status: string;
+      booking_date: string | null;
+      guest_name: string | null;
+      guest_email: string | null;
+      guest_phone: string | null;
+      guest_company: string | null;
+      space: { id: string; name: string } | null;
+      location: { id: string; name: string } | null;
+      lead: {
+        id: string;
+        first_name: string | null;
+        last_name: string | null;
+        company: string | null;
+        email: string | null;
+        phone: string | null;
+        gst_number: string | null;
+      } | null;
+    } | null;
+  };
+
+  const rawBookingTasks = (bookingTaskData || []) as unknown as RawBookingTask[];
+
+  // Apply search filter to booking tasks
+  const filteredBookingTasks = q
+    ? rawBookingTasks.filter((t) => {
+        const lc = q.toLowerCase();
+        const lead = t.booking?.lead;
+        const haystack: string[] = [
+          t.booking?.booking_number ?? "",
+          t.gst_invoice_number ?? "",
+          t.tally_invoice_number ?? "",
+          lead?.gst_number ?? "",
+          lead?.company ?? "",
+          lead?.first_name ?? "",
+          lead?.last_name ?? "",
+          lead?.email ?? "",
+          t.booking?.guest_name ?? "",
+          t.booking?.guest_email ?? "",
+          t.booking?.guest_company ?? "",
+          t.booking?.space?.name ?? "",
+        ];
+        return haystack.some((h) => h.toLowerCase().includes(lc));
+      })
+    : rawBookingTasks;
+
+  // Fetch uploads for booking tasks
+  const bookingTaskIds = filteredBookingTasks.map((t) => t.id);
+  let bookingUploadsMap = new Map<string, InboxUpload>();
+  if (bookingTaskIds.length > 0) {
+    const { data: bookingUploads } = await supabase
+      .from("gst_invoice_uploads")
+      .select("id, booking_gst_task_id, tally_invoice_number, tally_invoice_series, irn, invoice_amount, uploaded_at, name_check_status, autofill_source, superseded_by")
+      .in("booking_gst_task_id", bookingTaskIds)
+      .is("superseded_by", null)
+      .order("uploaded_at", { ascending: false });
+
+    for (const u of bookingUploads || []) {
+      const tid = (u as { booking_gst_task_id: string }).booking_gst_task_id;
+      if (!bookingUploadsMap.has(tid)) {
+        bookingUploadsMap.set(tid, {
+          id: u.id as string,
+          tally_invoice_number: u.tally_invoice_number as string,
+          tally_invoice_series: u.tally_invoice_series as "SDIPL-REG" | "SDIPL-UNREG",
+          irn: (u.irn as string | null) ?? null,
+          invoice_amount: Number(u.invoice_amount),
+          uploaded_at: u.uploaded_at as string,
+          name_check_status: u.name_check_status as "pending" | "approved" | "overridden",
+          autofill_source: u.autofill_source as "qr" | "pdf_text" | "bridge_match" | "manual",
+        });
+      }
+    }
+  }
+
+  const bookingRows: BookingInboxRow[] = filteredBookingTasks.map((t) => {
+    const lead = t.booking?.lead ?? null;
+    const customerGstin = lead?.gst_number ?? null;
+    const customerHasGstin = !!customerGstin;
+    const upload = bookingUploadsMap.get(t.id) ?? null;
+
+    let hasDiscrepancy = false;
+    let discrepancyReason: string | null = null;
+    if (upload && Number(upload.invoice_amount).toFixed(2) !== Number(t.booking?.total_amount_with_gst ?? 0).toFixed(2)) {
+      hasDiscrepancy = true;
+      discrepancyReason = `Upload amount ₹${upload.invoice_amount} does not match booking total ₹${t.booking?.total_amount_with_gst}`;
+    }
+
+    const agingHours = Math.max(0, Math.round((now - Date.parse(t.updated_at)) / 3_600_000));
+    const bucket = bucketForBooking(t.handoff_state as BookingHandoffState, hasDiscrepancy);
+
+    const customerName = lead?.company
+      || t.booking?.guest_company
+      || [lead?.first_name ?? t.booking?.guest_name, lead?.last_name].filter(Boolean).join(" ")
+      || null;
+
+    return {
+      row_type: "booking" as const,
+      task_id: t.id,
+      booking_id: t.booking?.id ?? "",
+      booking_number: t.booking?.booking_number ?? null,
+      booking_date: t.booking?.booking_date ?? null,
+      space_name: t.booking?.space?.name ?? null,
+      location_name: t.booking?.location?.name ?? null,
+      statement_total_amount: Math.round(Number(t.booking?.total_amount_with_gst ?? 0)),
+      payment_status: t.booking?.payment_status ?? "paid",
+      handoff_state: t.handoff_state as BookingHandoffState,
+      bucket,
+      aging_hours: agingHours,
+      state_changed_at: t.updated_at,
+      customer_name: customerName,
+      customer_email: lead?.email ?? t.booking?.guest_email ?? null,
+      customer_phone: lead?.phone ?? t.booking?.guest_phone ?? null,
+      customer_gstin: customerGstin,
+      irn_required: customerHasGstin,
+      expected_series: customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG",
+      expected_prefix: customerHasGstin ? "SD/A/" : "SD/B/",
+      latest_upload: upload,
+      has_discrepancy: hasDiscrepancy,
+      discrepancy_reason: discrepancyReason,
+      gst_invoice_sent_at: t.gst_invoice_sent_at ?? null,
+    };
+  });
+
   const stats = rows.reduce(
     (acc, r) => {
       acc.total_open += 1;
@@ -409,9 +572,19 @@ export async function GET(req: NextRequest) {
     { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0 },
   );
 
+  // Fold booking rows into stats
+  for (const br of bookingRows) {
+    if (br.handoff_state === "complete") continue;
+    stats.total_open += 1;
+    if (br.has_discrepancy) stats.discrepancies += 1;
+    else if (br.bucket === "gst_to_issue") stats.gst_to_issue += 1;
+    if (br.aging_hours >= AGING_ESCALATE_HOURS) stats.aging_over_48h += 1;
+  }
+
   const response: InboxResponse = {
     stats,
     rows,
+    booking_rows: bookingRows,
     last_synced_at: lastSyncedAt,
     ...(tab === "closed" && !singleId ? {
       has_more: rows.length > CLOSED_PAGE_SIZE,
