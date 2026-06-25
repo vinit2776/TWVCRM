@@ -95,7 +95,9 @@ export async function POST(
         .update({ claimed_by: dbUser.id, claimed_at: claimedAt })
         .eq("id", id);
 
-      if (!claimError) {
+      if (claimError) {
+        console.error("auto-claim failed", claimError.code, claimError.message);
+      } else {
         logAudit(supabase, {
           entityType: "lead",
           entityId: id,
