@@ -77,28 +77,37 @@ export async function POST(
 
   // Auto-claim the lead to whoever logged the activity.
   // Transfers ownership even if another user had previously claimed it.
+  // Skips if the user already owns the lead or the lead is resolved.
   if (dbUser?.id) {
     const { data: oldLead } = await supabase
       .from("leads")
-      .select("claimed_by, claimed_at")
+      .select("claimed_by, claimed_at, resolved_at")
       .eq("id", id)
       .single();
 
-    await supabase
-      .from("leads")
-      .update({ claimed_by: dbUser.id, claimed_at: new Date().toISOString() })
-      .eq("id", id);
+    const alreadyOwner = oldLead?.claimed_by === dbUser.id;
+    const isResolved = oldLead?.resolved_at != null;
 
-    logAudit(supabase, {
-      entityType: "lead",
-      entityId: id,
-      action: "update",
-      performedBy: dbUser.id,
-      changes: {
-        claimed_by: { old: oldLead?.claimed_by ?? null, new: dbUser.id },
-        claimed_at: { old: oldLead?.claimed_at ?? null, new: new Date().toISOString() },
-      },
-    });
+    if (!alreadyOwner && !isResolved) {
+      const claimedAt = new Date().toISOString();
+      const { error: claimError } = await supabase
+        .from("leads")
+        .update({ claimed_by: dbUser.id, claimed_at: claimedAt })
+        .eq("id", id);
+
+      if (!claimError) {
+        logAudit(supabase, {
+          entityType: "lead",
+          entityId: id,
+          action: "update",
+          performedBy: dbUser.id,
+          changes: {
+            claimed_by: { old: oldLead?.claimed_by ?? null, new: dbUser.id },
+            claimed_at: { old: oldLead?.claimed_at ?? null, new: claimedAt },
+          },
+        });
+      }
+    }
   }
 
   // Auto-advance lead status based on activity type:
