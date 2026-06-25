@@ -124,6 +124,11 @@ export async function POST(
 
   if (!task.booking) return NextResponse.json({ error: "Booking not found" }, { status: 404 });
 
+  // Fix #1: Block re-uploads on completed tasks — would re-open the task and re-send the email.
+  if (task.handoff_state === "complete") {
+    return badRequest("This task is already complete. Re-uploading is not allowed.");
+  }
+
   // ── Hard-block rules ──────────────────────────────────────────────────────
   // Amount must match total_amount_with_gst (GST-inclusive for bookings)
   if (Number(meta.invoice_amount).toFixed(2) !== Number(task.booking.total_amount_with_gst).toFixed(2)) {
@@ -161,6 +166,8 @@ export async function POST(
   }
 
   // ── Normalize + stamp + upload PDF ───────────────────────────────────────
+  // File-size protection (#9): normalizeUploadServer checks file.size (metadata,
+  // not a full read) and rejects anything > 50 MB before buffering.
   const allowedTypes = ["application/pdf", "image/jpeg", "image/png"];
   if (!allowedTypes.includes(file.type)) {
     return badRequest("Only PDF / JPEG / PNG files are allowed.");
@@ -208,6 +215,9 @@ export async function POST(
       qr_payload: meta.qr_payload,
       autofill_source: meta.autofill_source,
       nic_signature_verified: meta.nic_signature_verified,
+      // name_check_status "approved" is intentional (#10): accounts is the
+      // uploader and has already verified the invoice against the booking.
+      // The booking task flow has no separate name-check approval step in the UI.
       name_check_status: "approved",
       name_check_decided_by: user.id,
       name_check_decided_at: new Date().toISOString(),
@@ -220,7 +230,9 @@ export async function POST(
   }
 
   // ── Mirror onto booking_gst_tasks ────────────────────────────────────────
-  await adminClient
+  // Fix #6: check error — upload row is committed; if state transition fails
+  // we surface it rather than silently leaving the task in gst_to_issue.
+  const { error: taskUpdateErr } = await adminClient
     .from("booking_gst_tasks")
     .update({
       gst_invoice_number: meta.tally_invoice_number,
@@ -231,6 +243,13 @@ export async function POST(
       updated_at: new Date().toISOString(),
     })
     .eq("id", task.id);
+
+  if (taskUpdateErr) {
+    return NextResponse.json(
+      { error: `Invoice saved (id: ${insertedUpload.id}) but task status update failed: ${taskUpdateErr.message}. Refresh and check task state.` },
+      { status: 500 },
+    );
+  }
 
   // ── Send intimation email to accounts ────────────────────────────────────
   // (fire-and-forget — non-blocking)

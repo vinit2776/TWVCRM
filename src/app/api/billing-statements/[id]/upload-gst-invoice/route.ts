@@ -243,7 +243,8 @@ export async function POST(
 
   // ── Mirror onto billing_statements + stamp issuance_channel='tally' ───────
   // D2 (decide once): once stamped, CRM will refuse to generate its own GST invoice.
-  await supabase
+  // Must use adminClient — accounts role RLS does not permit updating gst_invoice_number.
+  await adminClient
     .from("billing_statements")
     .update({
       gst_invoice_number: meta.tally_invoice_number,

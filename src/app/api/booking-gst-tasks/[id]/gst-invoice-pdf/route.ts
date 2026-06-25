@@ -49,7 +49,7 @@ export async function GET(
   }
 
   const buf = Buffer.from(await fileBlob.arrayBuffer());
-  const filename = `${(upload.tally_invoice_number as string).replace(/[^\w-]/g, "_")}.pdf`;
+  const filename = `${((upload.tally_invoice_number as string | null) ?? "invoice").replace(/[^\w-]/g, "_")}.pdf`;
 
   return new NextResponse(buf, {
     status: 200,

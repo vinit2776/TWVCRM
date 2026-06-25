@@ -46,9 +46,12 @@ export async function POST(
 
   if (!task) return NextResponse.json({ error: "Task not found" }, { status: 404 });
 
-  if (!["ready_to_send", "gst_to_issue"].includes(task.handoff_state as string)) {
+  // Fix #8: Only allow closing from ready_to_send. gst_to_issue means no
+  // invoice has been uploaded yet — closing from that state would mark the
+  // task complete with no invoice record, silently skipping GST compliance.
+  if (task.handoff_state !== "ready_to_send") {
     return NextResponse.json(
-      { error: `Cannot close from state "${task.handoff_state}".` },
+      { error: `Cannot close from state "${task.handoff_state}". Upload the GST invoice first.` },
       { status: 409 },
     );
   }

@@ -93,6 +93,15 @@ export async function POST(
 
   if (!upload) return NextResponse.json({ error: "No GST invoice upload found" }, { status: 409 });
 
+  // Fix #3: Re-validate amount at send time — booking total may have changed
+  // since upload, and client-side canSend check is bypassable via direct POST.
+  if (task.booking && Number(upload.invoice_amount).toFixed(2) !== Number(task.booking.total_amount_with_gst).toFixed(2)) {
+    return NextResponse.json(
+      { error: `Invoice amount ₹${upload.invoice_amount} no longer matches booking total ₹${task.booking.total_amount_with_gst}. Re-upload the corrected invoice.` },
+      { status: 409 },
+    );
+  }
+
   const { data: fileBlob, error: downloadErr } = await supabase.storage
     .from("crm-documents")
     .download(upload.invoice_pdf_url as string);

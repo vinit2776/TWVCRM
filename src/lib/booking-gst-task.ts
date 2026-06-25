@@ -34,7 +34,7 @@ export async function maybeCreateBookingGstTask(
   try {
     const { data: booking, error: fetchErr } = await adminClient
       .from("bookings")
-      .select("id, status, payment_status")
+      .select("id, status, payment_status, customer_type, contract_id")
       .eq("id", bookingId)
       .maybeSingle();
 
@@ -46,6 +46,9 @@ export async function maybeCreateBookingGstTask(
     if (booking.status !== "checked_out") return;
     if ((EXCLUDED_PAYMENT_STATUSES as readonly string[]).includes(booking.payment_status)) return;
     if (booking.payment_status !== "paid") return;
+    // Fix #5: Contract-holder bookings are billed through the monthly statement
+    // cycle — creating a separate booking GST task would duplicate the invoice.
+    if (booking.customer_type === "contract_holder" || booking.contract_id != null) return;
 
     const { error: insertErr } = await adminClient
       .from("booking_gst_tasks")

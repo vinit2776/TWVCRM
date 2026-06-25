@@ -14,8 +14,13 @@
  */
 
 import { Fragment, useEffect, useMemo, useState, useCallback } from "react";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays } from "lucide-react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee } from "lucide-react";
 import { formatCurrency } from "@/lib/utils";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import {
   AGING_ESCALATE_HOURS,
   HANDOFF_STATE_LABELS,
@@ -104,6 +109,14 @@ export function TallyInboxClient() {
   const [sentConfirmedBookingId, setSentConfirmedBookingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [closedPage, setClosedPage] = useState(1);
+  // Record Payment dialog state
+  const [payRow, setPayRow] = useState<{ id: string; statement_number: string | null; balance_due: number } | null>(null);
+  const [payAmount, setPayAmount] = useState("");
+  const [payDate, setPayDate] = useState("");
+  const [payMode, setPayMode] = useState("bank_transfer");
+  const [payRef, setPayRef] = useState("");
+  const [payNotes, setPayNotes] = useState("");
+  const [paySubmitting, setPaySubmitting] = useState(false);
 
   const load = useCallback(async (opts?: { tab?: FilterTab; q?: string; page?: number }) => {
     setLoading(true);
@@ -218,6 +231,56 @@ export function TallyInboxClient() {
       setActionError(e instanceof Error ? e.message : "Resend failed");
     } finally {
       setResendingId(null);
+    }
+  }, [load]);
+
+  const openPayDialog = useCallback((row: InboxRow) => {
+    const balance = Math.max(0, row.statement_total_amount - (row.total_paid ?? 0));
+    setPayRow({ id: row.statement_id, statement_number: row.statement_number, balance_due: balance });
+    setPayAmount(String(balance));
+    setPayDate(new Date().toISOString().slice(0, 10));
+    setPayMode("bank_transfer");
+    setPayRef("");
+    setPayNotes("");
+  }, []);
+
+  const submitPayment = useCallback(async () => {
+    if (!payRow) return;
+    const amt = parseFloat(payAmount);
+    if (!amt || amt <= 0) { setActionError("Enter a valid amount"); return; }
+    setPaySubmitting(true);
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/billing-statements/${payRow.id}/payment`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ amount: amt, payment_date: payDate, payment_mode: payMode, payment_reference: payRef || null, notes: payNotes || null }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed");
+      setPayRow(null);
+      await load();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Failed to record payment");
+    } finally {
+      setPaySubmitting(false);
+    }
+  }, [payRow, payAmount, payDate, payMode, payRef, payNotes, load]);
+
+  const handleAccounted = useCallback(async (statementId: string) => {
+    setClosingId(statementId);
+    setActionError(null);
+    try {
+      const res = await fetch(`/api/billing-statements/${statementId}/inbox-complete`, { method: "POST" });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error(body.error || `HTTP ${res.status}`);
+      }
+      await load();
+    } catch (e) {
+      setActionError(e instanceof Error ? e.message : "Failed");
+    } finally {
+      setClosingId(null);
     }
   }, [load]);
 
@@ -407,11 +470,12 @@ export function TallyInboxClient() {
                 sentConfirmed={sentConfirmedId === row.statement_id}
                 onToggle={() => setExpandedId(expandedId === row.statement_id ? null : row.statement_id)}
                 onSend={() => handleSend(row.statement_id)}
-                onClose={() => handleClose(row.statement_id)}
+                onClose={() => handleAccounted(row.statement_id)}
                 onResend={() => handleResend(row.statement_id)}
                 onUploaded={handleUploaded}
                 onCancelUpload={() => setExpandedId(null)}
                 onGstinUpdated={() => void load()}
+                onRecordPayment={() => openPayDialog(row)}
               />
             ))}
             {visibleBookingRows.map((row) => (
@@ -465,6 +529,60 @@ export function TallyInboxClient() {
           )}
         </>
       )}
+
+      {/* ── Record Payment dialog ── */}
+      <Dialog open={!!payRow} onOpenChange={(o) => !o && setPayRow(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Record Payment — {payRow?.statement_number}</DialogTitle>
+          </DialogHeader>
+          {payRow && (
+            <div className="space-y-3">
+              <div className="text-sm text-muted-foreground">
+                Balance due: <strong className="text-foreground">{formatCurrency(payRow.balance_due)}</strong>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <Label>Amount (₹)</Label>
+                  <Input type="number" value={payAmount} onChange={(e) => setPayAmount(e.target.value)} />
+                </div>
+                <div>
+                  <Label>Payment date</Label>
+                  <Input type="date" value={payDate} onChange={(e) => setPayDate(e.target.value)} />
+                </div>
+              </div>
+              <div>
+                <Label>Payment mode</Label>
+                <Select value={payMode} onValueChange={setPayMode}>
+                  <SelectTrigger><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="bank_transfer">Bank transfer / NEFT / RTGS</SelectItem>
+                    <SelectItem value="upi">UPI</SelectItem>
+                    <SelectItem value="cheque">Cheque</SelectItem>
+                    <SelectItem value="cash">Cash</SelectItem>
+                    <SelectItem value="razorpay">Razorpay (manually reconciled)</SelectItem>
+                    <SelectItem value="other">Other</SelectItem>
+                  </SelectContent>
+                </Select>
+              </div>
+              <div>
+                <Label>Reference (UTR / cheque # / txn id)</Label>
+                <Input value={payRef} onChange={(e) => setPayRef(e.target.value)} placeholder="optional" />
+              </div>
+              <div>
+                <Label>Notes</Label>
+                <Input value={payNotes} onChange={(e) => setPayNotes(e.target.value)} placeholder="optional" />
+              </div>
+            </div>
+          )}
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setPayRow(null)} disabled={paySubmitting}>Cancel</Button>
+            <Button onClick={() => void submitPayment()} disabled={paySubmitting}>
+              {paySubmitting ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Recording…</> : "Record payment"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
@@ -547,7 +665,7 @@ function InboxRowLifecycleTracker({ row }: { row: InboxRow }) {
     const linkSent  = inStates("gst_sent", "gst_sent_awaiting_payment", "paid_awaiting_receipt_record", "complete") || paid;
     const pmtDone   = paid || inStates("paid_awaiting_receipt_record", "complete");
     steps = buildSteps(
-      ["GST\nRequested", "GST in\nTally", "Invoice +\nLink Sent", "Payment\nReceived", "Done"],
+      ["GST\nRequested", "GST in\nTally", "Invoice +\nLink Sent", "Collect\nPayment", "Done"],
       [true, gstReady, linkSent, pmtDone, isComplete],
     );
   } else if (row.pi_was_cancelled) {
@@ -556,7 +674,7 @@ function InboxRowLifecycleTracker({ row }: { row: InboxRow }) {
     const emailSent = inStates("gst_sent_awaiting_payment", "paid_awaiting_receipt_record", "complete");
     const pmtDone   = paid || inStates("paid_awaiting_receipt_record", "complete");
     steps = buildSteps(
-      ["PI\nCancelled", "GST in\nTally", "Link +\nEmail Sent", "Payment\nReceived", "Done"],
+      ["PI\nCancelled", "GST in\nTally", "Link +\nEmail Sent", "Collect\nPayment", "Done"],
       [true, gstReady, emailSent, pmtDone, isComplete],
     );
   } else {
@@ -565,7 +683,7 @@ function InboxRowLifecycleTracker({ row }: { row: InboxRow }) {
     const gstReady     = inStates("ready_to_send", "gst_sent", "paid_awaiting_receipt_record", "complete");
     const invoiceSent  = inStates("gst_sent", "paid_awaiting_receipt_record", "complete");
     steps = buildSteps(
-      ["PI\nSent", "Payment\nReceived", "GST in\nTally", "Invoice\nSent", "Done"],
+      ["PI\nSent", "Collect\nPayment", "GST in\nTally", "Invoice\nSent", "Done"],
       [true, pmtDone, gstReady, invoiceSent, isComplete],
     );
   }
@@ -643,6 +761,7 @@ function InboxRowItem({
   onUploaded,
   onCancelUpload,
   onGstinUpdated,
+  onRecordPayment,
 }: {
   row: InboxRow;
   expanded: boolean;
@@ -657,6 +776,7 @@ function InboxRowItem({
   onUploaded: () => void;
   onCancelUpload: () => void;
   onGstinUpdated: () => void;
+  onRecordPayment: () => void;
 }) {
   const [gstinEditing, setGstinEditing] = useState(false);
   const [gstinInput, setGstinInput] = useState("");
@@ -700,10 +820,10 @@ function InboxRowItem({
   const canUpload =
     row.handoff_state === "pi_paid_awaiting_gst" || row.handoff_state === "direct_gst_requested";
   const canSend = row.handoff_state === "ready_to_send" && !row.has_discrepancy;
-  const canMarkDone =
-    row.handoff_state === "gst_sent"
-    || row.handoff_state === "gst_sent_awaiting_payment"
+  const canRecordPayment =
+    row.handoff_state === "gst_sent_awaiting_payment"
     || row.handoff_state === "paid_awaiting_receipt_record";
+  const canMarkAccounted = row.handoff_state === "gst_sent";
   const hasUpload = row.latest_upload !== null;
   const isClosed = row.handoff_state === "complete";
 
@@ -769,6 +889,9 @@ function InboxRowItem({
             </>
           )}
           <span className="font-mono">{row.statement_number ?? "(no number)"}</span>
+          {row.latest_upload?.tally_invoice_number && (
+            <span className="font-mono text-foreground"> → {row.latest_upload.tally_invoice_number}</span>
+          )}
           <span> · {row.handoff_state ? HANDOFF_STATE_LABELS[row.handoff_state] : "Draft"}</span>
           {row.contract?.billing_mode === "gst_direct" && <span> · direct GST</span>}
         </div>
@@ -872,16 +995,18 @@ function InboxRowItem({
 
         {/* ── Actions row ── */}
         <div className="col-span-2 flex items-center gap-1.5 flex-wrap justify-end pt-1">
-          <a
-            href={`/api/billing-statements/${row.statement_id}/proforma-pdf`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
-            title="Open the CRM-generated proforma invoice PDF (original bill)"
-          >
-            <FileDown className="h-3 w-3" />
-            View PI
-          </a>
+          {!row.pi_was_cancelled && (
+            <a
+              href={`/api/billing-statements/${row.statement_id}/proforma-pdf`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+              title="Open the CRM-generated proforma invoice PDF (original bill)"
+            >
+              <FileDown className="h-3 w-3" />
+              View PI
+            </a>
+          )}
           {hasUpload && (
             <a
               href={`/api/billing-statements/${row.statement_id}/gst-invoice-pdf`}
@@ -919,16 +1044,27 @@ function InboxRowItem({
               {sending ? "Sending…" : "Save & send"}
             </button>
           )}
-          {canMarkDone && (
+          {canRecordPayment && (
+            <button
+              type="button"
+              onClick={onRecordPayment}
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-foreground text-background hover:opacity-90"
+              title="Record bank transfer / UPI payment received from customer"
+            >
+              <IndianRupee className="h-3 w-3" />
+              Record payment
+            </button>
+          )}
+          {canMarkAccounted && (
             <button
               type="button"
               onClick={onClose}
               disabled={closing}
               className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted disabled:opacity-50"
-              title="Mark this row as done so it drops off the open inbox"
+              title="Payment already collected via PI — mark GST invoice as accounted"
             >
               {closing ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
-              {closing ? "Closing…" : "Mark as done"}
+              {closing ? "Saving…" : "Mark as accounted"}
             </button>
           )}
           {isClosed && row.latest_upload && (

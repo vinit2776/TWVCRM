@@ -401,6 +401,29 @@ export async function GET(req: NextRequest) {
   });
 
   // ── Booking GST tasks ────────────────────────────────────────────────────
+  // Fix #4: Skip booking tasks in single-row mode. singleId targets a specific
+  // billing_statement; returning all booking tasks would leak unrelated customer
+  // data (PII: names, GSTINs, emails) to callers who only need one statement.
+  if (singleId) {
+    const singleStats = rows.reduce(
+      (acc, r) => {
+        acc.total_open += 1;
+        if (r.has_discrepancy) acc.discrepancies += 1;
+        else if (r.bucket === "gst_to_issue") acc.gst_to_issue += 1;
+        else if (r.bucket === "payment_to_record") acc.payments_to_record += 1;
+        if (r.aging_hours >= AGING_ESCALATE_HOURS) acc.aging_over_48h += 1;
+        return acc;
+      },
+      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0 },
+    );
+    return NextResponse.json({
+      stats: singleStats,
+      rows,
+      booking_rows: [],
+      last_synced_at: lastSyncedAt,
+    } satisfies InboxResponse);
+  }
+
   // Fetch open booking_gst_tasks (or closed if tab=closed). These are non-contract
   // bookings that are checked_out + paid and need a Tally GST invoice.
   let bookingTasksQuery = supabase

@@ -252,7 +252,7 @@ export function BookingGstUploadForm({
         <span className="block mb-1 text-muted-foreground">Invoice PDF<span className="text-red-600">*</span></span>
         <input
           type="file"
-          accept=".pdf,image/png,image/jpeg,image/webp"
+          accept=".pdf,image/png,image/jpeg"
           onChange={(e) => {
             const f = e.target.files?.[0] ?? null;
             setPdfFile(f);
