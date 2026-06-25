@@ -41,6 +41,13 @@ export const HANDOFF_STATE_LABELS: Record<HandoffState, string> = {
  */
 export type HandoffBucket = "gst_to_issue" | "payment_to_record" | "discrepancy" | "in_flight" | "complete";
 
+export function bucketForBooking(state: BookingHandoffState | null | undefined, hasDiscrepancy = false): HandoffBucket {
+  if (hasDiscrepancy) return "discrepancy";
+  if (state === "gst_to_issue" || state === "ready_to_send") return "gst_to_issue";
+  if (state === "complete") return "complete";
+  return "in_flight";
+}
+
 export function bucketFor(state: HandoffState | null | undefined, hasDiscrepancy = false): HandoffBucket | null {
   if (!state) return null;
   if (hasDiscrepancy) return "discrepancy";
@@ -203,6 +210,41 @@ export interface InboxRow {
   gst_invoice_sent_at: string | null;
 }
 
+// -----------------------------------------------------------------------------
+// Booking GST tasks — non-contract (walk-in/guest) booking inbox rows.
+// These rows appear in the same inbox worklist but are anchored to a booking,
+// not a billing_statement.
+// -----------------------------------------------------------------------------
+
+export type BookingHandoffState = "gst_to_issue" | "ready_to_send" | "complete";
+
+export interface BookingInboxRow {
+  row_type: "booking";
+  task_id: string;
+  booking_id: string;
+  booking_number: string | null;
+  booking_date: string | null;
+  space_name: string | null;
+  location_name: string | null;
+  statement_total_amount: number;   // total_amount_with_gst (GST-inclusive)
+  payment_status: string;
+  handoff_state: BookingHandoffState;
+  bucket: HandoffBucket;
+  aging_hours: number;
+  state_changed_at: string;
+  customer_name: string | null;
+  customer_email: string | null;
+  customer_phone: string | null;
+  customer_gstin: string | null;
+  irn_required: boolean;
+  expected_series: "SDIPL-REG" | "SDIPL-UNREG";
+  expected_prefix: string;
+  latest_upload: InboxUpload | null;
+  has_discrepancy: boolean;
+  discrepancy_reason: string | null;
+  gst_invoice_sent_at: string | null;
+}
+
 export interface InboxStats {
   gst_to_issue: number;
   payments_to_record: number;
@@ -214,6 +256,7 @@ export interface InboxStats {
 export interface InboxResponse {
   stats: InboxStats;
   rows: InboxRow[];
+  booking_rows: BookingInboxRow[];
   last_synced_at: string | null;
   /** Closed-tab pagination */
   has_more?: boolean;
