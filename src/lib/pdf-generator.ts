@@ -66,6 +66,7 @@ interface PDFOptions {
   razorpayPaymentLink?: string; // Razorpay payment link URL
   preparedBy?: { name: string; email?: string; phone?: string }; // Sales rep info
   showServicesIncluded?: boolean; // Show the "What's Included" icon strip (proposals only)
+  amenityIcons?: string[]; // Icon keys to show in the amenities strip (falls back to default 4)
   serviceQuotas?: { name: string; unit_label: string; monthly_quota: number; overage_rate: number }[];
 }
 
@@ -152,9 +153,7 @@ function iconPrinter(doc: jsPDF, cx: number, cy: number, s: number): void {
 function iconMeeting(doc: jsPDF, cx: number, cy: number, s: number): void {
   doc.setFillColor(...BRAND_TEAL);
   doc.setDrawColor(...BRAND_TEAL);
-  // Table (filled rounded rect)
   doc.roundedRect(cx - s * 0.5, cy - s * 0.22, s * 1.0, s * 0.44, s * 0.08, s * 0.08, "F");
-  // Six seat circles around the table
   const r = s * 0.12;
   [
     [cx - s * 0.28, cy - s * 0.58],
@@ -166,44 +165,118 @@ function iconMeeting(doc: jsPDF, cx: number, cy: number, s: number): void {
   ].forEach(([px, py]) => doc.circle(px, py, r, "F"));
 }
 
+/** Power backup — battery outline with lightning bolt inside. */
+function iconPowerBackup(doc: jsPDF, cx: number, cy: number, s: number): void {
+  doc.setDrawColor(...BRAND_TEAL);
+  doc.setFillColor(...BRAND_TEAL);
+  doc.setLineWidth(0.55);
+  // Battery body
+  const bw = s * 1.1, bh = s * 0.65;
+  doc.rect(cx - bw / 2, cy - bh / 2, bw, bh, "S");
+  // Battery terminal nub on the right
+  const nw = s * 0.15, nh = s * 0.35;
+  doc.rect(cx + bw / 2, cy - nh / 2, nw, nh, "F");
+  // Lightning bolt — two lines forming a zigzag
+  doc.setLineWidth(0.8);
+  doc.line(cx + s * 0.08, cy - bh * 0.38, cx - s * 0.12, cy + s * 0.04);
+  doc.line(cx - s * 0.12, cy + s * 0.04, cx + s * 0.12, cy + s * 0.04);
+  doc.line(cx + s * 0.12, cy + s * 0.04, cx - s * 0.08, cy + bh * 0.38);
+}
+
+/** Parking — filled circle with a bold "P". */
+function iconParking(doc: jsPDF, cx: number, cy: number, s: number): void {
+  doc.setFillColor(...BRAND_TEAL);
+  doc.setDrawColor(...BRAND_TEAL);
+  doc.circle(cx, cy, s * 0.85, "F");
+  doc.setFontSize(s * 3.8);
+  doc.setFont("helvetica", "bold");
+  doc.setTextColor(255, 255, 255);
+  doc.text("P", cx, cy + s * 0.42, { align: "center" });
+  doc.setTextColor(...BRAND_TEAL);
+}
+
+/** CCTV / Security — camera body with lens and mounting bracket. */
+function iconCCTV(doc: jsPDF, cx: number, cy: number, s: number): void {
+  doc.setDrawColor(...BRAND_TEAL);
+  doc.setFillColor(...BRAND_TEAL);
+  doc.setLineWidth(0.55);
+  // Camera body (tilted slightly — trapezoid via lines)
+  const bw = s * 1.0, bh = s * 0.55;
+  doc.rect(cx - bw / 2, cy - bh / 2 + s * 0.1, bw, bh, "F");
+  // Lens — white circle on the left face of body
+  doc.setFillColor(255, 255, 255);
+  doc.circle(cx - bw * 0.28, cy + s * 0.1, s * 0.18, "F");
+  doc.setFillColor(...BRAND_TEAL);
+  // Mounting arm going up to bracket
+  doc.line(cx + s * 0.1, cy - bh / 2 + s * 0.1, cx + s * 0.1, cy - s * 0.75);
+  doc.line(cx - s * 0.3, cy - s * 0.75, cx + s * 0.45, cy - s * 0.75);
+}
+
+/** Reception / front desk — desk outline with a person silhouette behind it. */
+function iconReception(doc: jsPDF, cx: number, cy: number, s: number): void {
+  doc.setDrawColor(...BRAND_TEAL);
+  doc.setFillColor(...BRAND_TEAL);
+  doc.setLineWidth(0.55);
+  // Head circle
+  doc.circle(cx, cy - s * 0.6, s * 0.22, "F");
+  // Shoulders arc (body)
+  arcSegments(doc, cx, cy - s * 0.6, s * 0.42, 20, 160, 14);
+  // Desk — horizontal bar below person
+  const dw = s * 1.2, dh = s * 0.22;
+  doc.rect(cx - dw / 2, cy + s * 0.1, dw, dh, "F");
+  // Desk front panel
+  doc.rect(cx - dw / 2, cy + dh + s * 0.1, dw, s * 0.18, "S");
+}
+
+/** All 8 amenity definitions — key → display label + draw function. */
+const AMENITY_CATALOG: Record<string, { label: string; fn: (doc: jsPDF, cx: number, cy: number, s: number) => void }> = {
+  wifi:         { label: "Hi-speed Internet",          fn: iconWifi },
+  coffee:       { label: "Pantry Services",            fn: iconCoffee },
+  printer:      { label: "Printing Facilities",        fn: iconPrinter },
+  meeting:      { label: "Conference & Meeting Rooms", fn: iconMeeting },
+  power_backup: { label: "Power Backup",               fn: iconPowerBackup },
+  parking:      { label: "Parking Available",          fn: iconParking },
+  cctv:         { label: "CCTV & Security",            fn: iconCCTV },
+  reception:    { label: "Reception / Front Desk",     fn: iconReception },
+};
+
+const DEFAULT_AMENITY_ICONS = ["wifi", "coffee", "printer", "meeting"];
+
 /**
- * Renders the "What's Included" icon strip.
+ * Renders the "Featured Amenities" icon strip.
+ * Only the icons whose keys appear in `iconKeys` are shown.
  * Returns the new Y cursor after the section.
  */
-function addServicesIncludedSection(doc: jsPDF, startY: number): number {
+function addServicesIncludedSection(doc: jsPDF, startY: number, iconKeys: string[] = DEFAULT_AMENITY_ICONS): number {
+  const active = iconKeys.filter((k) => k in AMENITY_CATALOG);
+  if (active.length === 0) return startY;
+
   const pageWidth = doc.internal.pageSize.getWidth();
   const sectionH = 28;
 
-  // Light teal background band
   doc.setFillColor(240, 250, 245);
   doc.rect(14, startY, pageWidth - 28, sectionH, "F");
 
-  // Section label
   doc.setFontSize(8);
   doc.setFont("helvetica", "bold");
   doc.setTextColor(...BRAND_TEAL);
   doc.text("FEATURED AMENITIES", 16, startY + 5);
 
-  const cellW = (pageWidth - 28) / 4;
-  const s = 4.5;           // icon half-size in mm
-  const iconY = startY + 15; // icon vertical centre
+  const cols = Math.min(active.length, 4);
+  const cellW = (pageWidth - 28) / cols;
+  const s = 4.5;
+  const iconY = startY + 15;
   const textY = startY + 23.5;
 
-  const SERVICES: Array<{ label: string; fn: (cx: number, cy: number) => void }> = [
-    { label: "Hi-speed Internet",            fn: (cx, cy) => iconWifi(doc, cx, cy, s) },
-    { label: "Pantry Services",              fn: (cx, cy) => iconCoffee(doc, cx, cy, s) },
-    { label: "Printing Facilities",          fn: (cx, cy) => iconPrinter(doc, cx, cy, s) },
-    { label: "Conference & Meeting Rooms",   fn: (cx, cy) => iconMeeting(doc, cx, cy, s) },
-  ];
-
-  SERVICES.forEach((svc, i) => {
+  active.slice(0, 4).forEach((key, i) => {
+    const entry = AMENITY_CATALOG[key];
     const cx = 14 + cellW * i + cellW / 2;
-    svc.fn(cx, iconY);
+    entry.fn(doc, cx, iconY, s);
 
     doc.setFontSize(7.5);
     doc.setFont("helvetica", "normal");
     doc.setTextColor(...BRAND_TEAL);
-    doc.text(svc.label, cx, textY, { align: "center" });
+    doc.text(entry.label, cx, textY, { align: "center" });
   });
 
   return startY + sectionH + 4;
@@ -387,7 +460,7 @@ function generatePDF(options: PDFOptions): jsPDF {
 
   // ── Services Included Strip (proposals only) ──
   if (options.showServicesIncluded) {
-    y = addServicesIncludedSection(doc, y);
+    y = addServicesIncludedSection(doc, y, options.amenityIcons);
   }
 
   // ── Line Items Table ──
@@ -771,6 +844,7 @@ export function generateProposalPDF(
     razorpayPaymentLink: paymentOptions?.razorpayPaymentLink,
     preparedBy,
     showServicesIncluded: true,
+    amenityIcons: proposal.location?.proposal_amenity_icons ?? undefined,
     serviceQuotas: allQuotas.length > 0 ? allQuotas : undefined,
   });
 }
