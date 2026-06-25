@@ -3,6 +3,10 @@
 /**
  * Facility Issues — list page (mobile-first; desktop uses table layout).
  *
+ * Default view: all tickets grouped by status. Active groups (new, acknowledged,
+ * in_progress, reopened) are expanded. Resolved / closed start collapsed but are
+ * visible so the team can reference them without changing filters.
+ *
  * Filters: search, scope, status, priority, location, assigned_to, sla_breached.
  * Top-right action: Report Issue → opens FacilityReportWizard.
  */
@@ -10,7 +14,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  Plus, Search, Filter, X, Wifi, AlertTriangle, ChevronRight, RefreshCw,
+  Plus, Search, Filter, X, Wifi, AlertTriangle, ChevronRight, RefreshCw, ChevronDown,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -27,18 +31,28 @@ import type {
 
 interface Location { id: string; name: string; code: string }
 
+// Active statuses rendered first; resolved/closed appended at bottom
+const STATUS_ORDER: FacilityIssueStatus[] = [
+  "reopened", "new", "acknowledged", "in_progress", "resolved", "closed",
+];
+const ACTIVE_STATUSES = new Set<FacilityIssueStatus>(["new", "acknowledged", "in_progress", "reopened"]);
+
 export default function FacilityIssuesPage() {
   const [issues, setIssues] = useState<FacilityIssue[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
   const [wizardOpen, setWizardOpen] = useState(false);
+  // resolved + closed start collapsed; active groups start expanded
+  const [collapsedGroups, setCollapsedGroups] = useState<Set<FacilityIssueStatus>>(
+    new Set(["resolved", "closed"]),
+  );
 
   // ---- filters -------------------------------------------------------------
   const [search, setSearch] = useState("");
   const [statusFilters, setStatusFilters] = useState<FacilityIssueStatus[]>([]);
   const [priority, setPriority] = useState<FacilityIssuePriority | "">("");
   const [locationId, setLocationId] = useState("");
-  const [onlyOpen, setOnlyOpen] = useState(true);
+  const [onlyOpen, setOnlyOpen] = useState(false);   // default: fetch all statuses
   const [onlyMine, setOnlyMine] = useState(false);
   const [slaBreached, setSlaBreached] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -80,7 +94,7 @@ export default function FacilityIssuesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [priority, locationId, slaBreached, onlyMine, onlyOpen, statusFilters]);
 
-  // Client-side text search (server already returns the right scope)
+  // Client-side text search
   const filtered = useMemo(() => {
     if (!search.trim()) return issues;
     const q = search.toLowerCase();
@@ -92,13 +106,38 @@ export default function FacilityIssuesPage() {
     );
   }, [issues, search]);
 
+  // Group by status in canonical order; only include groups that have issues
+  const grouped = useMemo(() => {
+    const map = new Map<FacilityIssueStatus, FacilityIssue[]>();
+    for (const s of STATUS_ORDER) map.set(s, []);
+    for (const issue of filtered) {
+      map.get(issue.status)?.push(issue);
+    }
+    return STATUS_ORDER
+      .map((s) => ({ status: s, items: map.get(s) ?? [] }))
+      .filter(({ items }) => items.length > 0);
+  }, [filtered]);
+
+  // Show grouped view unless the user has drilled into specific statuses via filter
+  const showGrouped = statusFilters.length === 0;
+
+  const toggleGroup = (status: FacilityIssueStatus) => {
+    setCollapsedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(status)) next.delete(status); else next.add(status);
+      return next;
+    });
+  };
+
   return (
     <div className="p-4 md:p-6 max-w-7xl mx-auto space-y-4">
       {/* ───── Header ──────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-3">
         <div>
           <h1 className="text-xl md:text-2xl font-semibold">Facility Issues</h1>
-          <p className="text-xs md:text-sm text-muted-foreground">IT infrastructure tickets across all locations</p>
+          <p className="text-xs md:text-sm text-muted-foreground">
+            {showGrouped ? "All tickets · grouped by status" : "IT infrastructure tickets across all locations"}
+          </p>
         </div>
         <div className="flex items-center gap-2">
           <Button variant="outline" size="icon" onClick={fetchData} title="Refresh" className="hidden sm:inline-flex">
@@ -133,7 +172,7 @@ export default function FacilityIssuesPage() {
 
       {/* ───── Quick filter chips (always visible) ────────────────────────── */}
       <div className="flex flex-wrap gap-1.5">
-        <Chip active={onlyOpen} onClick={() => { setOnlyOpen(true); setStatusFilters([]); }}>Open only</Chip>
+        <Chip active={onlyOpen} onClick={() => { setOnlyOpen((v) => !v); setStatusFilters([]); }}>Open only</Chip>
         <Chip active={onlyMine} onClick={() => setOnlyMine((v) => !v)}>Mine</Chip>
         <Chip active={slaBreached} onClick={() => setSlaBreached((v) => !v)}>
           <AlertTriangle className="h-3 w-3 mr-1 inline" /> SLA breached
@@ -221,7 +260,59 @@ export default function FacilityIssuesPage() {
           <Wifi className="h-10 w-10 mx-auto opacity-30 mb-3" />
           No issues match these filters.
         </div>
+      ) : showGrouped ? (
+        /* ── Grouped view ─────────────────────────────────────────────────── */
+        <div className="space-y-2">
+          {grouped.map(({ status, items }) => {
+            const collapsed = collapsedGroups.has(status);
+            const isActive = ACTIVE_STATUSES.has(status);
+            const breachedCount = items.filter((i) => i.sla_breached).length;
+            return (
+              <div key={status} className="rounded-lg border overflow-hidden">
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(status)}
+                  className={cn(
+                    "w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-muted/30 transition-colors",
+                    isActive ? "bg-muted/10" : "bg-muted/40",
+                  )}
+                >
+                  <span className={cn("text-[11px] px-2 py-0.5 rounded-full ring-1 font-medium shrink-0", STATUS_STYLES[status].chip)}>
+                    {STATUS_STYLES[status].label}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {items.length} {items.length === 1 ? "issue" : "issues"}
+                  </span>
+                  {isActive && breachedCount > 0 && (
+                    <span className="text-[10px] text-red-600 font-medium inline-flex items-center gap-0.5 ml-1">
+                      <AlertTriangle className="h-2.5 w-2.5" />
+                      {breachedCount} SLA breach{breachedCount > 1 ? "es" : ""}
+                    </span>
+                  )}
+                  {!isActive && (
+                    <span className="text-[10px] text-muted-foreground/50 ml-1">· for reference</span>
+                  )}
+                  <ChevronDown
+                    className={cn(
+                      "h-3.5 w-3.5 ml-auto text-muted-foreground transition-transform duration-150",
+                      collapsed && "-rotate-90",
+                    )}
+                  />
+                </button>
+
+                {!collapsed && (
+                  <div className="divide-y">
+                    {items.map((i) => (
+                      <IssueCard key={i.id} issue={i} inGroup />
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       ) : (
+        /* ── Flat view (when status filter is active) ─────────────────────── */
         <div className="space-y-2">
           {filtered.map((i) => (
             <IssueCard key={i.id} issue={i} />
@@ -238,7 +329,9 @@ export default function FacilityIssuesPage() {
   );
 }
 
-function Chip({ active, onClick, children }: { active: boolean; onClick: () => void; children: React.ReactNode }) {
+function Chip({ active, onClick, children }: {
+  active: boolean; onClick: () => void; children: React.ReactNode;
+}) {
   return (
     <button
       type="button"
@@ -253,22 +346,28 @@ function Chip({ active, onClick, children }: { active: boolean; onClick: () => v
   );
 }
 
-function IssueCard({ issue }: { issue: FacilityIssue }) {
+function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean }) {
   const sla = issue.sla_target_at;
-  const isOpen = ["new", "acknowledged", "in_progress", "reopened"].includes(issue.status);
+  const isOpen = ACTIVE_STATUSES.has(issue.status);
   return (
     <Link
       href={`/facility/issues/${issue.id}`}
-      className="block rounded-lg border bg-card hover:border-foreground/20 hover:shadow-sm transition p-3"
+      className={cn(
+        "block bg-card hover:bg-muted/20 transition-colors p-3",
+        !inGroup && "rounded-lg border hover:border-foreground/20 hover:shadow-sm",
+      )}
     >
       <div className="flex items-start gap-3">
         <span className={cn("mt-1 h-2.5 w-2.5 rounded-full shrink-0", PRIORITY_STYLES[issue.priority].dot)} />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <code className="text-xs font-mono text-muted-foreground">{issue.issue_number}</code>
-            <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1", STATUS_STYLES[issue.status].chip)}>
-              {STATUS_STYLES[issue.status].label}
-            </span>
+            {/* In flat view show status badge; in grouped view the group header already shows it */}
+            {!inGroup && (
+              <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1", STATUS_STYLES[issue.status].chip)}>
+                {STATUS_STYLES[issue.status].label}
+              </span>
+            )}
             {issue.sla_breached && isOpen && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-700 ring-1 ring-red-200 inline-flex items-center">
                 <AlertTriangle className="h-2.5 w-2.5 mr-0.5" /> Breached
