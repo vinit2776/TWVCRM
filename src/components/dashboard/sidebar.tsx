@@ -99,7 +99,6 @@ const navSections: NavSection[] = [
       { href: "/leads",      label: "Leads",      icon: Users,       roles: [...LEGACY_ROLES, "accounts"] },
       { href: "/pipeline",   label: "Pipeline",    icon: GitBranch,   roles: LEGACY_ROLES },
       { href: "/activities", label: "Activities",  icon: Activity,    roles: LEGACY_ROLES },
-      { href: "/tasks",      label: "Tasks",       icon: CheckSquare, roles: LEGACY_ROLES },
       { href: "/proposals",  label: "Proposals",   icon: FileText,    roles: [...LEGACY_ROLES, "accounts"] },
     ],
   },

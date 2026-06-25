@@ -14,7 +14,6 @@ import { useUiStore } from "@/stores/ui-store";
 const mobileNavItems = [
   { href: "/dashboard", label: "Dashboard", icon: LayoutDashboard },
   { href: "/leads", label: "Leads", icon: Users },
-  { href: "/tasks", label: "Tasks", icon: CheckSquare },
 ];
 
 export function MobileNav() {
