@@ -17,7 +17,6 @@ import { PaymentGatewaySettings } from "@/components/settings/payment-gateway-se
 import { ProcurementSettings } from "@/components/settings/procurement-settings";
 import { DashboardSettings } from "@/components/settings/dashboard-settings";
 import { PettyCashSettings } from "@/components/settings/petty-cash-settings";
-import { ServicesSettings } from "@/components/settings/services-settings";
 import { ReorderSettings } from "@/components/settings/reorder-settings";
 import { ProcurementBudgetSettings } from "@/components/settings/procurement-budget-settings";
 import { EInvoiceSettings } from "@/components/settings/e-invoice-settings";
@@ -116,11 +115,6 @@ export default function SettingsPage() {
           {profile.role === "admin" && (
             <TabsTrigger value="documents" className="justify-start gap-2 px-3 py-2 text-sm">
               <FolderOpen className="h-4 w-4 shrink-0" />Documents
-            </TabsTrigger>
-          )}
-          {["admin", "manager"].includes(profile.role) && (
-            <TabsTrigger value="services" className="justify-start gap-2 px-3 py-2 text-sm">
-              <DoorOpen className="h-4 w-4 shrink-0" />Services
             </TabsTrigger>
           )}
           {profile.role === "admin" && (
@@ -307,13 +301,6 @@ export default function SettingsPage() {
             </Card>
           </TabsContent>
         )}
-
-        {["admin", "manager"].includes(profile.role) && (
-          <TabsContent value="services" className="mt-0">
-            <ServicesSettings />
-          </TabsContent>
-        )}
-
 
         {profile.role === "admin" && (
           <TabsContent value="procurement" className="mt-0">

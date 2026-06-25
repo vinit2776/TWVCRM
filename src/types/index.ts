@@ -33,6 +33,8 @@ export interface Location {
   unifi_console_id?: string | null;
   /** 'repository' (default) = issue from pre-uploaded pool; 'unifi_api' = generate on-demand. */
   wifi_voucher_mode?: string | null;
+  /** Icon keys shown in the proposal PDF amenities strip. Defaults to ["wifi","coffee","printer","meeting"]. */
+  proposal_amenity_icons?: string[];
   created_at: string;
   updated_at: string;
 }
