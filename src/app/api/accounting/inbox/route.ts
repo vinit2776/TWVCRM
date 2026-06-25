@@ -485,7 +485,7 @@ export async function GET(req: NextRequest) {
 
   // Fetch uploads for booking tasks
   const bookingTaskIds = filteredBookingTasks.map((t) => t.id);
-  let bookingUploadsMap = new Map<string, InboxUpload>();
+  const bookingUploadsMap = new Map<string, InboxUpload>();
   if (bookingTaskIds.length > 0) {
     const { data: bookingUploads } = await supabase
       .from("gst_invoice_uploads")
