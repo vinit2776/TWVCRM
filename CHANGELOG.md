@@ -2,6 +2,16 @@
 
 All notable changes to TWV CRM are documented here.
 
+## [1.0.97.0] - 2026-06-26
+
+### Added
+- **Tally Inbox — booking payment confirmation**: every booking GST task row now shows a green "Paid · Mode · Ref" pill inline; a "Payment ▼" toggle in the actions bar expands a full confirmation table (Amount, Mode, Reference/ID, Date) at any handoff state without opening the upload drawer
+- **Facility claim model**: migration 00305 adds claim tracking; assign and status routes tightened with role checks and claim handling; SLA cron skips already-claimed issues
+
+### Changed
+- Tally inbox booking rows fall back to `bookings.payment_mode` + `payment_reference` when no `booking_payments` confirmation row exists
+- Assignee scoping and notification improvements in facility module
+
 ## [1.0.96.0] - 2026-06-26
 
 ### Added
