@@ -56,21 +56,20 @@ The browser UI cannot catch PDF rendering bugs — only the PDF itself can.
 
 ## Local Development Environment
 
-**Never run `npm run dev` from the iCloud Drive path** (`~/Library/Mobile Documents/com~apple~CloudDocs/...`). Next.js 16 / Turbopack breaks under iCloud:
+The repo lives in iCloud Drive (`~/Library/Mobile Documents/com~apple~CloudDocs/...`), kept there intentionally as a backup layer. Editing, `git`, and `npm run build` are fine in iCloud. Two things are **not**:
 
-- **HMR doesn't fire** — FSEvents file-watching is unreliable under `com~apple~CloudDocs`, so the dev server keeps serving stale code.
-- **Cold compiles hang** — iCloud "Optimize Mac Storage" evicts module files to dataless stubs; a cold Turbopack compile blocks for minutes re-downloading thousands of them.
+- **`npm run dev` is broken in iCloud.** Turbopack HMR never fires under `com~apple~CloudDocs` (FSEvents is unreliable → stale code served), and cold compiles hang for minutes on iCloud-evicted module files. **Never run `next dev` from the iCloud path** — run it from a real-disk mirror instead.
+- **iCloud spawns conflict copies** (`foo 2.ts`, `00302_… 2.sql`) that duplicate migration numbers and break `supabase db push`.
 
-`npm run build`, `git`, and CI are unaffected — only the long-running dev server is.
-
-**Fix (do this once):** keep the working copy on real disk. GitHub (`origin`) is the source of truth, so the code never needs to live in iCloud.
+Three helper scripts handle this (full details in `README.md`):
 
 ```bash
-bash scripts/setup-local-dev.sh   # rsyncs checkout → ~/Projects/twv-crm, carries .env.local, runs npm ci
-cd ~/Projects/twv-crm && npm run dev
+bash scripts/checkpoint.sh             # dated, restorable snapshot tag BEFORE making changes (+ sync check)
+bash scripts/dev-mirror.sh             # rsync → ~/Projects/twv-crm-mirror, then npm run dev (HMR works there)
+bash scripts/clean-icloud-conflicts.sh # delete conflict copies that are identical to their canonical file
 ```
 
-Then do all local dev in `~/Projects/twv-crm`. See `README.md` for the clean-clone alternative and the iCloud-canonical fallback. Editing in iCloud also produces conflict copies (`foo 2.ts`, `00302_… 2.sql`) that duplicate migration numbers and break `supabase db push` — moving off iCloud prevents them.
+When starting a work session, run `scripts/checkpoint.sh` first. To run/preview the app, use `scripts/dev-mirror.sh` — do not start the dev server from the iCloud checkout. `npm run build` is safe to run directly from iCloud.
 
 ## Commands
 

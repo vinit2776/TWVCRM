@@ -10,62 +10,65 @@ See [`CLAUDE.md`](./CLAUDE.md) for architecture, business rules, and contributio
 
 ---
 
-## ⚠️ Do not run local dev from iCloud Drive
+## Working in iCloud Drive (canonical) — safely
 
-This repo currently lives in iCloud Drive
-(`~/Library/Mobile Documents/com~apple~CloudDocs/Projects/TWV CRM`). **Never run
-`npm run dev` from that path.** Next.js 16 / Turbopack breaks badly under iCloud:
+This repo lives in iCloud Drive
+(`~/Library/Mobile Documents/com~apple~CloudDocs/Projects/TWV CRM`), kept there
+deliberately as an extra backup layer. That's fine for editing, `git`, and
+`npm run build` — but iCloud breaks the long-running dev server, and it
+occasionally creates conflict-copy files. Three helper scripts make this safe.
 
-- **File-watching doesn't fire.** FSEvents is unreliable under
-  `com~apple~CloudDocs`, so HMR never picks up source edits and the dev server
-  keeps serving stale, months-old code.
-- **Cold compiles hang.** iCloud "Optimize Mac Storage" evicts files to dataless
-  stubs. A cold Turbopack compile reads thousands of module files and blocks for
-  minutes re-downloading them — often never finishing.
+### 1. Checkpoint before you start changing things
 
-`npm run build` and `git`/CI are unaffected — only the long-running dev server is.
-
-### The fix: keep the working copy on real disk
-
-GitHub (`origin`) is the real source of truth, so the code does not need to live
-in iCloud. **Recommended setup: clone/move the canonical working copy to
-`~/Projects/twv-crm` and reserve iCloud for non-code documents only.**
-
-One command, from the iCloud checkout:
+iCloud can serve stale state and silently spawn conflict copies, so create a
+dated, restorable snapshot at the start of each work session:
 
 ```bash
-bash scripts/setup-local-dev.sh
+bash scripts/checkpoint.sh           # git fetch + dated snapshot tag
+PUSH=1 bash scripts/checkpoint.sh    # also push the snapshot to GitHub (off-machine)
 ```
 
-This rsyncs the checkout to `~/Projects/twv-crm` (excluding `node_modules`/`.next`),
-carries over your gitignored `.env.local`, and runs `npm ci`. Then:
+It checks how far ahead/behind `origin` you are, then snapshots the **entire
+working copy** (including uncommitted edits and new untracked files; gitignored
+files like `.env.local` are excluded) into a `checkpoint/<timestamp>` tag —
+without touching your working tree. Restore anytime:
 
 ```bash
-cd ~/Projects/twv-crm
-npm run dev          # HMR + compiles are now instant
+git tag --list 'checkpoint/*'                  # list snapshots
+git diff checkpoint/<timestamp>                # see what changed since
+git checkout checkpoint/<timestamp> -- <path>  # restore a file
 ```
 
-Once the new copy builds and runs, archive the iCloud copy. From then on, do all
-local dev in `~/Projects/twv-crm`.
+### 2. Run the dev server from a real-disk mirror
 
-> Prefer a clean clone? `cd ~/Projects && git clone https://github.com/vinit2776/TWVCRM.git twv-crm`,
-> then copy `.env.local` over and `npm ci`.
-
-<details>
-<summary>Fallback: keep iCloud canonical, run from a local mirror</summary>
-
-Only if you must keep editing inside iCloud (e.g. multi-machine Finder access).
-Maintain a real-disk run mirror and re-sync before each dev session — note this
-two-copy model is exactly what causes stale-code confusion, so the move above is
-strongly preferred:
+**Never run `npm run dev` directly from the iCloud path** — Turbopack HMR never
+fires under `com~apple~CloudDocs` (so it serves stale code), and cold compiles
+hang for minutes on iCloud-evicted module files. Instead, run from a fast
+real-disk mirror:
 
 ```bash
-rsync -a --delete --exclude node_modules --exclude .next \
-  "$HOME/Library/Mobile Documents/com~apple~CloudDocs/Projects/TWV CRM/" \
-  "$HOME/Projects/twv-crm-local/"
-cd ~/Projects/twv-crm-local && npm ci && npm run dev
+bash scripts/dev-mirror.sh           # rsync source → ~/Projects/twv-crm-mirror, then npm run dev
 ```
-</details>
+
+The mirror is a throwaway **run** environment, not a second source of truth.
+Edits in iCloud won't hot-reload there until you re-run the sync (it's fast); if
+you edit inside the mirror, commit/push from there so the work reaches git.
+`npm run build` and `git` are unaffected by iCloud, so run those normally from
+the iCloud checkout.
+
+### 3. Clean up iCloud conflict copies
+
+Editing in iCloud produces conflict duplicates like `00302_amenity_icons 2.sql`
+or `booking-gst-task 2.ts`. Duplicate migration numbers break `supabase db push`
+(and the pre-commit hook blocks commits while they exist):
+
+```bash
+DRY_RUN=1 bash scripts/clean-icloud-conflicts.sh   # report only
+bash scripts/clean-icloud-conflicts.sh             # delete copies identical to canonical
+```
+
+It deletes a conflict copy **only** when it is byte-identical to its canonical
+file; anything that differs is kept and flagged for you to resolve by hand.
 
 ---
 
@@ -80,16 +83,17 @@ npm run dev          # start dev server (http://localhost:3000)
 ## Commands
 
 ```bash
-npm run dev          # Start dev server (Next.js 16, Turbopack)
-npm run build        # Production build — CI runs this on every push to main
+npm run dev          # Start dev server — DON'T run from iCloud; use scripts/dev-mirror.sh
+npm run build        # Production build — CI runs this on every push to main (safe in iCloud)
 npm run lint         # ESLint — must pass clean (0 errors) before merging
 
 npx supabase db push # Apply pending migrations to the live Supabase project
 ```
 
-There are no test suites — verify changes by running the dev server and testing
-in the browser. If the dev server serves stale code after edits, clear the cache:
-`rm -rf .next` then restart (and confirm you are **not** running from iCloud — see above).
+There are no test suites — verify changes by running the dev server (via
+`scripts/dev-mirror.sh`, see above) and testing in the browser. If it serves
+stale code, you're almost certainly running `next dev` straight from iCloud —
+use the mirror; otherwise clear the cache with `rm -rf .next` and restart.
 
 ## Migrations
 
@@ -100,9 +104,5 @@ skip a migration.
 
 > **iCloud conflict copies:** editing in iCloud can produce conflict duplicates
 > like `00302_… 2.sql` or `foo 2.ts`. These duplicate migration numbers and break
-> `supabase db push`. Delete them once confirmed identical to the canonical file:
-> ```bash
-> find . -regextype posix-extended -regex '.* [0-9]\.[a-z]+$' \
->   -not -path './node_modules/*' -not -path './.git/*'
-> ```
-> Moving the working copy off iCloud (above) prevents them entirely.
+> `supabase db push`. Run `bash scripts/clean-icloud-conflicts.sh` to remove the
+> ones identical to their canonical file (see the iCloud section above).
