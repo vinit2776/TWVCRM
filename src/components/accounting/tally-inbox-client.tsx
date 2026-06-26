@@ -1304,6 +1304,8 @@ function BookingInboxRowItem({
   onUploaded: () => void;
   onCancelUpload: () => void;
 }) {
+  const [paymentOpen, setPaymentOpen] = useState(false);
+
   const aging = row.aging_hours;
   const agingClass =
     aging >= AGING_ESCALATE_HOURS ? "text-red-700" : aging >= 24 ? "text-amber-700" : "text-muted-foreground";
@@ -1384,6 +1386,17 @@ function BookingInboxRowItem({
 
         {/* Actions */}
         <div className="col-span-2 flex items-center gap-1.5 flex-wrap justify-end pt-1">
+          {/* Payment detail toggle — always available on booking rows */}
+          <button
+            type="button"
+            onClick={() => setPaymentOpen(o => !o)}
+            className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors mr-auto ${paymentOpen ? "bg-green-50 border-green-300 text-green-800" : "hover:bg-muted"}`}
+            title="View payment confirmation details"
+          >
+            <IndianRupee className="h-3 w-3" />
+            Payment
+            {paymentOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+          </button>
           {hasUpload && (
             <a
               href={`/api/booking-gst-tasks/${row.task_id}/gst-invoice-pdf`}
@@ -1459,7 +1472,7 @@ function BookingInboxRowItem({
         </div>
       </div>
 
-      {expanded && canUpload && (
+      {paymentOpen && (
         <BookingPaymentPanel confirmations={row.payment_confirmations} totalAmount={row.statement_total_amount} />
       )}
 
