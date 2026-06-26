@@ -606,7 +606,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
       open={qrScannerOpen}
       onClose={() => setQrScannerOpen(false)}
       onAssetScanned={(asset) => {
-        selectAsset(asset as FacilityAsset);
+        setAssetQuery(asset.asset_code);
         setQrScannerOpen(false);
       }}
     />
