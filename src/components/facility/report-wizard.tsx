@@ -219,9 +219,9 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   const Step1 = (
     <div className="space-y-4">
       {/* Asset quick-search */}
-      <div>
-        <Label className="text-sm font-medium">Know the asset? <span className="text-amber-600 font-normal">(Recommended)</span></Label>
-        <p className="text-xs text-muted-foreground mb-2">Linking an asset routes the ticket correctly and shows the technician AMC status, vendor helpline, and repair history.</p>
+      <div className="rounded-xl border border-[#015E65]/30 bg-[#015E65]/5 p-3">
+        <Label className="text-sm font-medium text-[#015E65]">Know the asset? <span className="text-amber-600 font-normal">(Recommended)</span></Label>
+        <p className="text-xs text-muted-foreground mb-2 mt-0.5">Linking an asset routes the ticket correctly and shows the technician AMC status, vendor helpline, and repair history.</p>
         {selectedAsset ? (
           <div className="flex items-center gap-2 p-3 rounded-lg border border-[#015E65] bg-[#015E65]/5">
             <Check className="h-4 w-4 text-[#015E65] shrink-0" />
