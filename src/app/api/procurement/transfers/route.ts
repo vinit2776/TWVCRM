@@ -41,6 +41,9 @@ export async function GET(request: NextRequest) {
   // incoming_to: transfers heading TO this location that are still in the
   // pipeline (requested → approved → on the way) — i.e. "upcoming inwards".
   const incomingTo = searchParams.get("incoming_to");
+  // location_ids: scope the list to transfers involving any of these locations
+  // (from OR to) — used to show a user only their assigned locations' transfers.
+  const locationIds = searchParams.get("location_ids");
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
   const offset = (page - 1) * limit;
@@ -61,7 +64,15 @@ export async function GET(request: NextRequest) {
   } else if (status) {
     query = query.eq("status", status);
   }
-  if (locationId) {
+  if (locationIds) {
+    const ids = locationIds.split(",").map((s) => s.trim()).filter(Boolean);
+    if (ids.length > 0) {
+      const orClause = ids
+        .flatMap((id) => [`from_location_id.eq.${id}`, `to_location_id.eq.${id}`])
+        .join(",");
+      query = query.or(orClause);
+    }
+  } else if (locationId) {
     query = query.or(`from_location_id.eq.${locationId},to_location_id.eq.${locationId}`);
   }
 

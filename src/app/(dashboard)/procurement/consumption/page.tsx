@@ -144,7 +144,8 @@ function ConsumptionPageContent() {
 
   // Available locations for this user
   const availableLocations = useMemo(() => {
-    if (isCrossLocationRole) return allLocations;
+    // HO roles, or any user not yet assigned to a location, see all (no lockout).
+    if (isCrossLocationRole || userLocations.length === 0) return allLocations;
     return userLocations
       .sort((a, b) => (a.responsibility === "primary" ? -1 : 1))
       .map((ul) => ul.location);
@@ -158,22 +159,18 @@ function ConsumptionPageContent() {
         const [meRes, locRes, ulRes] = await Promise.all([
           fetch("/api/me").then((r) => r.json()),
           fetch("/api/locations").then((r) => r.json()),
-          fetch("/api/admin/user-locations").then((r) => r.json()).catch(() => ({ data: [] })),
+          // self-scoped — any authenticated user can read their own assignments
+          fetch("/api/me/locations").then((r) => r.json()).catch(() => ({ data: [] })),
         ]);
 
         const role = meRes.role ?? "";
-        const userId = meRes.id ?? "";
         setUserRole(role);
 
         const locs = locRes.data || locRes.locations || [];
         setAllLocations(Array.isArray(locs) ? locs : []);
 
-        const uls: UserLocation[] = ulRes.data ?? [];
-        const myUls = uls.filter((ul: UserLocation) => {
-          // user_locations returns all rows; filter to current user's
-          // We need the user_id from the row — check via userId
-          return (ul as unknown as { user_id: string }).user_id === userId;
-        });
+        // /api/me/locations already returns only the current user's rows
+        const myUls: UserLocation[] = ulRes.data ?? [];
         setUserLocations(myUls);
 
         // Auto-select primary location
@@ -182,7 +179,8 @@ function ConsumptionPageContent() {
           setSelectedLocationId(primaryUl.location_id);
         } else if (myUls.length > 0) {
           setSelectedLocationId(myUls[0].location_id);
-        } else if (["admin", "manager", "office_admin"].includes(role) && locs.length > 0) {
+        } else if (locs.length > 0) {
+          // HO roles or unassigned users fall back to the first location
           setSelectedLocationId(locs[0].id);
         }
       } catch {

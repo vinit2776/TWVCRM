@@ -11,38 +11,28 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { IncomingTransfers } from "@/components/procurement/incoming-transfers";
+import { useScopedLocations } from "@/hooks/use-scoped-locations";
 import {
   PROCUREMENT_DEPARTMENTS,
   PROCUREMENT_DEPARTMENT_LABELS,
   PROCUREMENT_DEPARTMENT_COLORS,
 } from "@/lib/constants";
-import type { LocationStock, Location } from "@/types";
+import type { LocationStock } from "@/types";
 
 const DEPARTMENT_TABS = ["all", ...PROCUREMENT_DEPARTMENTS] as const;
 
 export default function InventoryPage() {
+  const { availableLocations, primaryLocationId, loading: locationsLoading } = useScopedLocations();
   const [stock, setStock] = useState<LocationStock[]>([]);
-  const [locations, setLocations] = useState<Location[]>([]);
   const [locationId, setLocationId] = useState("");
   const [department, setDepartment] = useState("all");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
-  const [locationsLoading, setLocationsLoading] = useState(true);
 
-  // Fetch locations on mount
+  // Auto-select the user's primary (or first available) location once resolved
   useEffect(() => {
-    fetch("/api/locations")
-      .then((r) => r.json())
-      .then((json) => {
-        const locs = (json.data || []).filter((l: Location) => l.is_active !== false);
-        setLocations(locs);
-        if (locs.length > 0 && !locationId) {
-          setLocationId(locs[0].id);
-        }
-      })
-      .finally(() => setLocationsLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (!locationId && primaryLocationId) setLocationId(primaryLocationId);
+  }, [primaryLocationId, locationId]);
 
   const fetchStock = useCallback(async () => {
     if (!locationId) return;
@@ -106,7 +96,7 @@ export default function InventoryPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__none__">Select location</SelectItem>
-            {locations.map((loc) => (
+            {availableLocations.map((loc) => (
               <SelectItem key={loc.id} value={loc.id}>{loc.name}</SelectItem>
             ))}
           </SelectContent>
@@ -145,7 +135,7 @@ export default function InventoryPage() {
       {locationId && (
         <IncomingTransfers
           locationId={locationId}
-          locationName={locations.find((l) => l.id === locationId)?.name}
+          locationName={availableLocations.find((l) => l.id === locationId)?.name}
         />
       )}
 
