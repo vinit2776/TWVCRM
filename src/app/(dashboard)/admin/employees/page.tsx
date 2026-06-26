@@ -56,6 +56,8 @@ interface Employee {
   created_at: string;
   location: { id: string; name: string } | null;
   enrollments: EnrollmentSummary[];
+  is_crm_user?: boolean;
+  crm_role?: string;
 }
 
 interface EnrollmentSummary {
@@ -188,7 +190,7 @@ export default function EmployeesPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [empRes, locRes, devRes] = await Promise.all([
+    const [empRes, locRes, devRes, usersRes] = await Promise.all([
       supabase
         .from("employees")
         .select("*, location:locations(id, name)")
@@ -199,6 +201,10 @@ export default function EmployeesPage() {
         .select("id, label, location_id, location:locations(name)")
         .eq("is_enabled", true)
         .eq("device_category", "entry_point"),
+      supabase
+        .from("users")
+        .select("id, full_name, email, phone, role, is_active")
+        .order("full_name"),
     ]);
 
     const allDevices = (devRes.data ?? []) as Device[];
@@ -226,10 +232,36 @@ export default function EmployeesPage() {
         });
       }
 
-      const enriched: Employee[] = (empRes.data as Omit<Employee, "enrollments">[]).map(emp => ({
+      const enriched: Employee[] = (empRes.data as Omit<Employee, "enrollments" | "is_crm_user" | "crm_role">[]).map(emp => ({
         ...emp,
         enrollments: enrollByEmp.get(emp.id) ?? [],
       }));
+
+      // Merge CRM users that don't already exist in employees (matched by email)
+      const employeeEmails = new Set(enriched.map(e => e.email?.toLowerCase()).filter(Boolean));
+      const crmUsers = (usersRes.data ?? []) as { id: string; full_name: string; email: string | null; phone: string | null; role: string; is_active: boolean }[];
+      for (const u of crmUsers) {
+        if (u.email && employeeEmails.has(u.email.toLowerCase())) continue;
+        enriched.push({
+          id: u.id,
+          full_name: u.full_name,
+          email: u.email,
+          phone: u.phone,
+          department: null,
+          designation: u.role,
+          location_id: null,
+          cosec_ref_id: null,
+          nfc_card_number: null,
+          is_active: u.is_active,
+          created_at: "",
+          location: null,
+          enrollments: [],
+          is_crm_user: true,
+          crm_role: u.role,
+        });
+      }
+
+      enriched.sort((a, b) => a.full_name.localeCompare(b.full_name));
       setEmployees(enriched);
     }
 
@@ -564,10 +596,17 @@ export default function EmployeesPage() {
                 <div className="flex items-start justify-between gap-4">
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2 flex-wrap">
-                      <Link href={`/admin/employees/${emp.id}`} className="font-medium hover:underline">
-                        {emp.full_name}
-                      </Link>
+                      {emp.is_crm_user ? (
+                        <span className="font-medium">{emp.full_name}</span>
+                      ) : (
+                        <Link href={`/admin/employees/${emp.id}`} className="font-medium hover:underline">
+                          {emp.full_name}
+                        </Link>
+                      )}
                       {!emp.is_active && <Badge className="bg-gray-100 text-gray-500 text-xs">Inactive</Badge>}
+                      {emp.is_crm_user && (
+                        <Badge className="bg-blue-50 text-blue-700 border-blue-200 text-xs">CRM User</Badge>
+                      )}
                       {emp.cosec_ref_id && (
                         <span className="text-xs text-muted-foreground font-mono">#{emp.cosec_ref_id}</span>
                       )}
@@ -611,7 +650,21 @@ export default function EmployeesPage() {
 
                   {/* Actions */}
                   <div className="flex items-center gap-1.5 shrink-0 flex-wrap justify-end">
-                    {(pendingCount > 0 || failures.length > 0) && emp.is_active && (
+                    {emp.is_crm_user && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setForm(prev => ({ ...prev, full_name: emp.full_name, email: emp.email ?? "", phone: emp.phone ?? "" }));
+                          setAddOpen(true);
+                        }}
+                        title="Create an employee record to enable COSEC enrollment"
+                      >
+                        <UserPlus className="h-3.5 w-3.5 mr-1" />
+                        Add to COSEC
+                      </Button>
+                    )}
+                    {!emp.is_crm_user && (pendingCount > 0 || failures.length > 0) && emp.is_active && (
                       <Button
                         variant="outline"
                         size="sm"
@@ -628,7 +681,7 @@ export default function EmployeesPage() {
                       </Button>
                     )}
 
-                    {emp.enrollments.length > 0 && emp.is_active && (
+                    {!emp.is_crm_user && emp.enrollments.length > 0 && emp.is_active && (
                       <>
                         <Button
                           variant="outline"
@@ -652,7 +705,7 @@ export default function EmployeesPage() {
                       </>
                     )}
 
-                    {!isBlocked && emp.is_active && emp.enrollments.length > 0 && (
+                    {!emp.is_crm_user && !isBlocked && emp.is_active && emp.enrollments.length > 0 && (
                       <Button
                         variant="outline"
                         size="sm"
@@ -664,7 +717,7 @@ export default function EmployeesPage() {
                         {actionLoading[emp.id + "_block"] ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <ShieldOff className="h-3.5 w-3.5" />}
                       </Button>
                     )}
-                    {(isBlocked || !emp.is_active) && (
+                    {!emp.is_crm_user && (isBlocked || !emp.is_active) && (
                       <Button
                         variant="outline"
                         size="sm"

@@ -2,6 +2,11 @@
 
 All notable changes to TWV CRM are documented here.
 
+## [1.0.98.1] - 2026-06-26
+
+### Changed
+- **Employees page**: CRM users (app users) are now listed by default alongside manually-created employees. CRM users show a "CRM User" badge and an "Add to COSEC" button that pre-fills the create-employee dialog. COSEC enrollment actions (Enroll, Assign Card, Block, Restore) are hidden for CRM-only entries. De-duplication is by email so users with an existing employee record don't appear twice.
+
 ## [1.0.98.0] - 2026-06-26
 
 ### Added
