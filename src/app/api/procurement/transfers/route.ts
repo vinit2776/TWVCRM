@@ -38,6 +38,9 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status");
   const locationId = searchParams.get("location_id");
+  // incoming_to: transfers heading TO this location that are still in the
+  // pipeline (requested → approved → on the way) — i.e. "upcoming inwards".
+  const incomingTo = searchParams.get("incoming_to");
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
   const offset = (page - 1) * limit;
@@ -45,13 +48,19 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("stock_transfers")
     .select(
-      `*, from_location:locations!stock_transfers_from_location_id_fkey(id, name, code), to_location:locations!stock_transfers_to_location_id_fkey(id, name, code), initiator:users!stock_transfers_initiated_by_fkey(id, full_name)`,
+      `*, from_location:locations!stock_transfers_from_location_id_fkey(id, name, code), to_location:locations!stock_transfers_to_location_id_fkey(id, name, code), initiator:users!stock_transfers_initiated_by_fkey(id, full_name), stock_transfer_items(id)`,
       { count: "exact" }
     )
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
-  if (status) query = query.eq("status", status);
+  if (incomingTo) {
+    query = query
+      .eq("to_location_id", incomingTo)
+      .in("status", ["pending_approval", "approved", "dispatched"]);
+  } else if (status) {
+    query = query.eq("status", status);
+  }
   if (locationId) {
     query = query.or(`from_location_id.eq.${locationId},to_location_id.eq.${locationId}`);
   }

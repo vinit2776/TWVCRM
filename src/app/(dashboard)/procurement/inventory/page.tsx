@@ -10,6 +10,7 @@ import {
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
+import { IncomingTransfers } from "@/components/procurement/incoming-transfers";
 import {
   PROCUREMENT_DEPARTMENTS,
   PROCUREMENT_DEPARTMENT_LABELS,
@@ -139,6 +140,14 @@ export default function InventoryPage() {
           className="pl-9"
         />
       </div>
+
+      {/* Upcoming inwards — transfers on the way to this location */}
+      {locationId && (
+        <IncomingTransfers
+          locationId={locationId}
+          locationName={locations.find((l) => l.id === locationId)?.name}
+        />
+      )}
 
       {loading ? (
         <TableSkeleton rows={8} />
