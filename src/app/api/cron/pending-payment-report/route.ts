@@ -95,39 +95,107 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ skipped: "No active admin/manager/accounts users found" });
   }
 
-  // ── 1b. Yesterday's collections ───────────────────────────────────────────────
+  // ── 1b. Yesterday's collections (all payment sources) ────────────────────────
   const yesterdayIST = new Date(new Date(todayIST + "T00:00:00Z").getTime() - 86_400_000)
     .toISOString().slice(0, 10);
+  // IST day boundaries as UTC timestamps for timestamptz columns
+  const ydayStartUTC = new Date(yesterdayIST + "T00:00:00+05:30").toISOString();
+  const ydayEndUTC   = new Date(todayIST    + "T00:00:00+05:30").toISOString();
 
-  const { data: yesterdayPayments } = await admin
-    .from("billing_payments")
-    .select(`
-      amount, payment_date, payment_mode, payment_reference,
+  type CollectionRow = {
+    customerName: string;
+    company: string | null;
+    ref: string;
+    amount: number;
+    mode: string;
+    reference: string | null;
+    type: string;
+  };
+
+  const [billingPmts, bookingPmts, contractPmts, depositPmts, proRataPmts] = await Promise.all([
+    // 1. Invoice payments (monthly rent, usage, ad hoc)
+    admin.from("billing_payments").select(`
+      amount, payment_mode, payment_reference,
       billing_statement:billing_statements!billing_payments_billing_statement_id_fkey(
+        statement_type,
         contract:contracts!billing_statements_contract_id_fkey(
           contract_number,
           lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
         )
       )
-    `)
-    .eq("payment_date", yesterdayIST)
-    .order("amount", { ascending: false });
+    `).eq("payment_date", yesterdayIST),
+
+    // 2. Booking payments (meeting rooms, day passes)
+    admin.from("booking_payments").select(`
+      amount, payment_mode, payment_reference,
+      booking:bookings!booking_payments_booking_id_fkey(
+        booking_number, guest_name,
+        lead:leads!bookings_lead_id_fkey(first_name, last_name, company)
+      )
+    `).eq("status", "verified").gte("created_at", ydayStartUTC).lt("created_at", ydayEndUTC),
+
+    // 3. Contract payments (manual accounting module)
+    admin.from("contract_payments").select(`
+      amount, payment_mode, payment_reference,
+      contract:contracts!contract_payments_contract_id_fkey(
+        contract_number,
+        lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
+      )
+    `).eq("status", "verified").eq("payment_date", yesterdayIST),
+
+    // 4. Security deposits from proposals
+    admin.from("proposals").select(`
+      deposit_payment_amount, deposit_payment_medium, deposit_payment_reference,
+      lead:leads!proposals_lead_id_fkey(first_name, last_name, company)
+    `).eq("deposit_payment_status", "paid")
+      .gte("deposit_payment_received_at", ydayStartUTC)
+      .lt("deposit_payment_received_at", ydayEndUTC),
+
+    // 5. Pro-rata / first-month payments from proposals
+    admin.from("proposals").select(`
+      payment_amount, payment_reference,
+      lead:leads!proposals_lead_id_fkey(first_name, last_name, company)
+    `).eq("payment_status", "paid")
+      .gte("payment_received_at", ydayStartUTC)
+      .lt("payment_received_at", ydayEndUTC),
+  ]);
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const ydayRows = (yesterdayPayments || []).map((p: any) => {
-    const contract = p.billing_statement?.contract;
-    const lead = contract?.lead;
-    const name = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "—";
-    return {
-      customerName: name,
-      company: lead?.company || null,
-      contractNumber: contract?.contract_number || "—",
-      amount: Number(p.amount || 0),
-      mode: p.payment_mode || "—",
-      reference: p.payment_reference || null,
-    };
-  });
-  const ydayTotal = ydayRows.reduce((s: number, r: { amount: number }) => s + r.amount, 0);
+  function leadName(lead: any): string {
+    return lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() || "—" : "—";
+  }
+
+  const ydayRows: CollectionRow[] = [
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ...(billingPmts.data || []).map((p: any) => {
+      const contract = p.billing_statement?.contract;
+      const stmtType = p.billing_statement?.statement_type;
+      const typeLabel = stmtType === "rent" ? "Monthly Rent" : stmtType === "usage" ? "Usage Invoice" : "Invoice";
+      return { customerName: leadName(contract?.lead), company: contract?.lead?.company || null, ref: contract?.contract_number || "—", amount: Number(p.amount || 0), mode: p.payment_mode || "—", reference: p.payment_reference || null, type: typeLabel };
+    }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ...(bookingPmts.data || []).map((p: any) => {
+      const booking = p.booking;
+      const lead = booking?.lead;
+      const name = lead ? leadName(lead) : (booking?.guest_name || "—");
+      return { customerName: name, company: lead?.company || null, ref: booking?.booking_number || "—", amount: Number(p.amount || 0), mode: p.payment_mode || "—", reference: p.payment_reference || null, type: "Booking" };
+    }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ...(contractPmts.data || []).map((p: any) => {
+      const contract = p.contract;
+      return { customerName: leadName(contract?.lead), company: contract?.lead?.company || null, ref: contract?.contract_number || "—", amount: Number(p.amount || 0), mode: p.payment_mode || "—", reference: p.payment_reference || null, type: "Contract" };
+    }),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ...(depositPmts.data || []).map((p: any) => ({
+      customerName: leadName(p.lead), company: p.lead?.company || null, ref: "—", amount: Number(p.deposit_payment_amount || 0), mode: p.deposit_payment_medium || "—", reference: p.deposit_payment_reference || null, type: "Deposit",
+    })),
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    ...(proRataPmts.data || []).map((p: any) => ({
+      customerName: leadName(p.lead), company: p.lead?.company || null, ref: "—", amount: Number(p.payment_amount || 0), mode: "—", reference: p.payment_reference || null, type: "Pro-rata",
+    })),
+  ].filter(r => r.amount > 0).sort((a, b) => b.amount - a.amount);
+
+  const ydayTotal = ydayRows.reduce((s, r) => s + r.amount, 0);
 
   // ── 2. Unpaid statements ─────────────────────────────────────────────────────
   const { data: statements, error: stmtErr } = await admin
@@ -389,22 +457,26 @@ export async function GET(request: NextRequest) {
     <table style="width:100%;border-collapse:collapse;font-size:12px;">
       <tr style="background:#f0fdf4;">
         <th style="padding:8px 12px;text-align:left;font-size:11px;color:#065f46;font-weight:600;text-transform:uppercase;">Customer</th>
-        <th style="padding:8px 12px;text-align:left;font-size:11px;color:#065f46;font-weight:600;text-transform:uppercase;">Contract</th>
+        <th style="padding:8px 12px;text-align:left;font-size:11px;color:#065f46;font-weight:600;text-transform:uppercase;">Type</th>
+        <th style="padding:8px 12px;text-align:left;font-size:11px;color:#065f46;font-weight:600;text-transform:uppercase;">Ref</th>
         <th style="padding:8px 12px;text-align:right;font-size:11px;color:#065f46;font-weight:600;text-transform:uppercase;">Amount</th>
         <th style="padding:8px 12px;text-align:left;font-size:11px;color:#065f46;font-weight:600;text-transform:uppercase;">Mode</th>
       </tr>
-      ${ydayRows.map((r: { customerName: string; company: string | null; contractNumber: string; amount: number; mode: string; reference: string | null }) => `
+      ${ydayRows.map((r) => `
       <tr style="border-bottom:1px solid #ecfdf5;">
         <td style="padding:8px 12px;color:#111827;">
           <div style="font-weight:600;">${r.customerName}</div>
           ${r.company ? `<div style="color:#6b7280;font-size:11px;">${r.company}</div>` : ""}
         </td>
-        <td style="padding:8px 12px;color:#374151;">${r.contractNumber}</td>
+        <td style="padding:8px 12px;">
+          <span style="display:inline-block;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;background:#dcfce7;color:#166534;">${r.type}</span>
+        </td>
+        <td style="padding:8px 12px;color:#6b7280;font-size:11px;">${r.ref}</td>
         <td style="padding:8px 12px;text-align:right;font-weight:600;color:#065f46;">${fmtCurrency(r.amount)}</td>
         <td style="padding:8px 12px;color:#6b7280;">${r.mode}${r.reference ? ` · ${r.reference}` : ""}</td>
       </tr>`).join("")}
       <tr style="background:#f0fdf4;">
-        <td colspan="2" style="padding:8px 12px;font-weight:600;color:#065f46;font-size:12px;">Total Collected</td>
+        <td colspan="3" style="padding:8px 12px;font-weight:600;color:#065f46;font-size:12px;">Total Collected</td>
         <td style="padding:8px 12px;text-align:right;font-weight:700;color:#065f46;font-size:13px;">${fmtCurrency(ydayTotal)}</td>
         <td></td>
       </tr>
