@@ -54,6 +54,24 @@ Any change to `src/lib/billing.ts`, `src/lib/send-proforma.ts`, `src/lib/pdf-gen
 
 The browser UI cannot catch PDF rendering bugs — only the PDF itself can.
 
+## Local Development Environment
+
+**Never run `npm run dev` from the iCloud Drive path** (`~/Library/Mobile Documents/com~apple~CloudDocs/...`). Next.js 16 / Turbopack breaks under iCloud:
+
+- **HMR doesn't fire** — FSEvents file-watching is unreliable under `com~apple~CloudDocs`, so the dev server keeps serving stale code.
+- **Cold compiles hang** — iCloud "Optimize Mac Storage" evicts module files to dataless stubs; a cold Turbopack compile blocks for minutes re-downloading thousands of them.
+
+`npm run build`, `git`, and CI are unaffected — only the long-running dev server is.
+
+**Fix (do this once):** keep the working copy on real disk. GitHub (`origin`) is the source of truth, so the code never needs to live in iCloud.
+
+```bash
+bash scripts/setup-local-dev.sh   # rsyncs checkout → ~/Projects/twv-crm, carries .env.local, runs npm ci
+cd ~/Projects/twv-crm && npm run dev
+```
+
+Then do all local dev in `~/Projects/twv-crm`. See `README.md` for the clean-clone alternative and the iCloud-canonical fallback. Editing in iCloud also produces conflict copies (`foo 2.ts`, `00302_… 2.sql`) that duplicate migration numbers and break `supabase db push` — moving off iCloud prevents them.
+
 ## Commands
 
 ```bash
