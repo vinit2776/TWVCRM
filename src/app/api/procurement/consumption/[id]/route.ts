@@ -46,7 +46,7 @@ export async function GET(
   const { data: log, error } = await supabase
     .from("consumption_logs")
     .select(
-      `*, consumption_log_items(*), consumption_corrections(*, corrector:users!consumption_corrections_corrected_by_fkey(id, full_name)), logger:users!consumption_logs_logged_by_fkey(id, full_name), locations(id, name)`
+      `*, consumption_log_items(*), consumption_corrections!consumption_corrections_consumption_log_id_fkey(*, corrector:users!consumption_corrections_corrected_by_fkey(id, full_name)), logger:users!consumption_logs_logged_by_fkey(id, full_name), locations(id, name)`
     )
     .eq("id", id)
     .single();
@@ -127,14 +127,19 @@ export async function PATCH(
       const corrections = logItems.map((item) => ({
         consumption_log_id: id,
         consumption_log_item_id: item.id,
-        type: "void",
+        correction_type: "void",
         reason: parsed.data.reason,
-        old_quantity: item.quantity_consumed,
+        original_quantity: item.quantity_consumed,
         new_quantity: 0,
         corrected_by: dbUser.id,
       }));
 
-      await supabase.from("consumption_corrections").insert(corrections);
+      const { error: correctionError } = await supabase
+        .from("consumption_corrections")
+        .insert(corrections);
+      if (correctionError) {
+        console.error("Failed to record void corrections:", correctionError.message);
+      }
 
       await logAudit(supabase, {
         entityType: "consumption_log",
@@ -292,15 +297,20 @@ export async function PATCH(
       const voidCorrections = logItems.map((item) => ({
         consumption_log_id: id,
         consumption_log_item_id: item.id,
-        type: "relog",
+        correction_type: "relog",
         reason: parsed.data.reason,
-        old_quantity: item.quantity_consumed,
+        original_quantity: item.quantity_consumed,
         new_quantity: 0,
         new_consumption_log_id: newLog.id,
         corrected_by: dbUser.id,
       }));
 
-      await supabase.from("consumption_corrections").insert(voidCorrections);
+      const { error: relogCorrectionError } = await supabase
+        .from("consumption_corrections")
+        .insert(voidCorrections);
+      if (relogCorrectionError) {
+        console.error("Failed to record relog corrections:", relogCorrectionError.message);
+      }
 
       await logAudit(supabase, {
         entityType: "consumption_log",

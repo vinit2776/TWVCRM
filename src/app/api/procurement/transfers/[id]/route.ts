@@ -392,7 +392,6 @@ export async function PATCH(
         reported_quantity: item.reported_quantity,
         expected_quantity: item.expected_quantity,
         description: item.description ?? null,
-        reported_by: dbUser.id,
         status: "open",
       }));
 

@@ -48,7 +48,7 @@ export default function ConsumptionHistoryPage() {
     fetch("/api/locations")
       .then((r) => r.json())
       .then((locData) => {
-        const locs = locData.locations || locData || [];
+        const locs = locData.data || [];
         setLocations(locs);
         if (locs.length > 0) setSelectedLocation(locs[0].id);
       })
@@ -66,8 +66,8 @@ export default function ConsumptionHistoryPage() {
 
       const res = await fetch(`/api/procurement/consumption?${params}`);
       const data = await res.json();
-      setLogs(data.logs || data || []);
-      setTotalPages(data.total_pages || 1);
+      setLogs(data.data || []);
+      setTotalPages(data.pagination?.totalPages || 1);
     } catch {
       toast.error("Failed to load consumption history");
     } finally {
