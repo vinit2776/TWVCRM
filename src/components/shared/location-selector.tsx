@@ -14,6 +14,7 @@ interface LocationSelectorProps {
   value: string | null;
   onValueChange: (id: string | null) => void;
   includeAllOption?: boolean;
+  includeOtherOption?: boolean;
   placeholder?: string;
   disabled?: boolean;
   required?: boolean;
@@ -23,6 +24,7 @@ export function LocationSelector({
   value,
   onValueChange,
   includeAllOption = false,
+  includeOtherOption = false,
   placeholder = "Select location",
   disabled = false,
 }: LocationSelectorProps) {
@@ -49,6 +51,9 @@ export function LocationSelector({
             {loc.name} ({loc.code})
           </SelectItem>
         ))}
+        {includeOtherOption && (
+          <SelectItem value="__other__">Others</SelectItem>
+        )}
       </SelectContent>
     </Select>
   );

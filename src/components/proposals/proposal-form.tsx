@@ -57,6 +57,8 @@ export function ProposalForm({
   const [validUntil, setValidUntil] = useState("");
   const [termsAndConditions, setTermsAndConditions] = useState(DEFAULT_PROPOSAL_TERMS);
   const [notes, setNotes] = useState("");
+  const [confRoomHours, setConfRoomHours] = useState(0);
+  const [confRoomOverageRate, setConfRoomOverageRate] = useState(0);
   const [depositMonths, setDepositMonths] = useState(0);
   const [depositAmount, setDepositAmount] = useState(0);
   const [depositOverridden, setDepositOverridden] = useState(false);
@@ -96,6 +98,8 @@ export function ProposalForm({
     setTermsAndConditions(DEFAULT_PROPOSAL_TERMS);
     setNotes("");
     setLocationId(leadLocationId || null);
+    setConfRoomHours(0);
+    setConfRoomOverageRate(0);
     setDepositMonths(0);
     setDepositAmount(0);
     setDepositOverridden(false);
@@ -162,6 +166,12 @@ export function ProposalForm({
       terms_and_conditions: termsAndConditions.trim() || undefined,
       notes: notes.trim() || undefined,
       service_quotas: activeQuotas.length > 0 ? activeQuotas : undefined,
+      complimentary_items: confRoomHours > 0 ? [{
+        name: "Conference Room",
+        unit: "hrs",
+        quantity: confRoomHours,
+        price_per_unit: confRoomOverageRate,
+      }] : undefined,
       security_deposit_months: depositMonths,
       security_deposit_amount: depositMonths > 0 ? depositAmount : 0,
     };
@@ -248,14 +258,14 @@ export function ProposalForm({
                   <div className="col-span-4">Service</div>
                   <div className="col-span-2">Unit</div>
                   <div className="col-span-3">Free quota / month</div>
-                  <div className="col-span-3">Overage rate</div>
+                  <div className="col-span-3">Addl Usage rate</div>
                 </div>
                 {serviceQuotas.map((sq) => (
                   <div key={sq.service_id} className="grid grid-cols-12 gap-2 items-center">
-                    <div className="col-span-4">
+                    <div className="col-span-4 flex items-center h-8">
                       <span className="text-sm font-medium">{sq.name}</span>
                     </div>
-                    <div className="col-span-2">
+                    <div className="col-span-2 flex items-center h-8">
                       <span className="text-xs text-muted-foreground">{sq.unit_label}</span>
                     </div>
                     <div className="col-span-3">
@@ -289,6 +299,45 @@ export function ProposalForm({
                 </p>
               </div>
             )}
+          </div>
+
+          {/* Conference Room Complimentary */}
+          <div className="border rounded-lg p-4 space-y-3 bg-muted/30">
+            <div>
+              <Label className="text-sm font-semibold">Conference Room Complimentary</Label>
+              <p className="text-xs text-muted-foreground mt-0.5">
+                Free conference room hours offered per month. Leave at 0 if not included.
+              </p>
+            </div>
+            <div className="grid grid-cols-2 gap-4">
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Free hours / month</Label>
+                <Input
+                  type="number"
+                  min="0"
+                  step="0.5"
+                  placeholder="0"
+                  value={confRoomHours || ""}
+                  onChange={(e) => setConfRoomHours(Number(e.target.value) || 0)}
+                  className="h-8 text-sm"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label className="text-xs text-muted-foreground">Overage rate (₹ / hr)</Label>
+                <div className="relative">
+                  <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-xs text-muted-foreground">₹</span>
+                  <Input
+                    type="number"
+                    min="0"
+                    step="1"
+                    placeholder="0"
+                    value={confRoomOverageRate || ""}
+                    onChange={(e) => setConfRoomOverageRate(Number(e.target.value) || 0)}
+                    className="h-8 text-sm pl-6"
+                  />
+                </div>
+              </div>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">

@@ -127,28 +127,18 @@ export const LEAD_SOURCES = [
   "meta_ads",
   "google_ads",
   "direct_walkin",
-  "online_form",
   "referral",
-  "social_media",
-  "advertisement",
   "cold_call",
-  "event",
-  "partner",
-  "other",
+  "aggregator",
 ] as const;
 
 export const LEAD_SOURCE_LABELS: Record<string, string> = {
   meta_ads: "Meta Ads",
   google_ads: "Google Ads",
   direct_walkin: "Direct/Walk-in",
-  online_form: "Online Form",
   referral: "Referral",
-  social_media: "Social Media",
-  advertisement: "Advertisement",
   cold_call: "Cold Call",
-  event: "Event",
-  partner: "Partner",
-  other: "Other",
+  aggregator: "Aggregator",
 };
 
 export const WORKSPACE_TYPES = [
@@ -158,6 +148,8 @@ export const WORKSPACE_TYPES = [
   "meeting_room",
   "conference_room",
   "virtual_office",
+  "managed",
+  "enterprise",
 ] as const;
 
 export const WORKSPACE_TYPE_LABELS: Record<string, string> = {
@@ -167,6 +159,8 @@ export const WORKSPACE_TYPE_LABELS: Record<string, string> = {
   meeting_room: "Meeting Room",
   conference_room: "Conference Room",
   virtual_office: "Virtual Office",
+  managed: "Managed",
+  enterprise: "Enterprise",
 };
 
 export const ACTIVITY_TYPES = ["call", "meeting", "note", "email", "tour"] as const;

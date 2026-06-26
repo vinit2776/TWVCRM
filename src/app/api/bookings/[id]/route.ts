@@ -1,9 +1,10 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit, diffChanges } from "@/lib/audit";
 import { messaging } from "@/lib/whatsapp";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
+import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
 
 export const maxDuration = 30;
 
@@ -533,6 +534,17 @@ export async function PATCH(
           endTime: booking.end_time,
         }, { skipWaitlistOffer: true, revokeReason: "Booking checked out" })
           .catch((err: unknown) => console.error("[checkout] voucher revocation failed:", err));
+
+        // Create a Tally Inbox task when the booking is checked out AND already
+        // paid. The helper is idempotent (UNIQUE ON booking_id) and fire-and-forget.
+        void (async () => {
+          try {
+            const adminClient = await createAdminClient();
+            await maybeCreateBookingGstTask(adminClient, id);
+          } catch (err) {
+            console.error("[checkout] booking-gst-task creation failed:", err);
+          }
+        })();
 
         break;
       }

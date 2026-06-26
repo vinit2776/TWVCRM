@@ -44,6 +44,9 @@ interface LeadFormProps {
 
 export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
   const [submitting, setSubmitting] = useState(false);
+  const [isOtherLocation, setIsOtherLocation] = useState(
+    !!(lead?.preferred_location && !lead?.location_id)
+  );
 
   const {
     register,
@@ -67,7 +70,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
       title: lead?.title || "",
       secondary_email: lead?.secondary_email || "",
       status: lead?.status || "new",
-      source: lead?.source || "online_form",
+      source: lead?.source || "meta_ads",
       industry: lead?.industry || "",
       no_of_employees: lead?.no_of_employees || undefined,
       rating: lead?.rating || "none",
@@ -151,9 +154,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="last_name">
-              Last Name <span className="text-destructive">*</span>
-            </Label>
+            <Label htmlFor="last_name">Last Name</Label>
             <Input
               id="last_name"
               {...register("last_name")}
@@ -185,9 +186,7 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             <Input id="title" {...register("title")} />
           </div>
           <div className="space-y-2">
-            <Label htmlFor="email">
-              Email <span className="text-destructive">*</span>
-            </Label>
+            <Label htmlFor="email">Email</Label>
             <Input id="email" type="email" {...register("email")} />
             {errors.email && (
               <p className="text-xs text-destructive">
@@ -442,12 +441,25 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
           <div className="space-y-2">
             <Label>Preferred Location</Label>
             <LocationSelector
-              value={watch("location_id") || null}
-              onValueChange={(id) => setValue("location_id", id || "")}
+              value={isOtherLocation ? "__other__" : (watch("location_id") || null)}
+              onValueChange={(id) => {
+                if (id === "__other__") {
+                  setIsOtherLocation(true);
+                  setValue("location_id", "");
+                } else {
+                  setIsOtherLocation(false);
+                  setValue("preferred_location", "");
+                  setValue("location_id", id || "");
+                }
+              }}
               placeholder="Select center"
+              includeOtherOption
             />
-            {lead?.preferred_location && !lead?.location_id && (
-              <p className="text-xs text-muted-foreground">Legacy: {lead.preferred_location}</p>
+            {isOtherLocation && (
+              <Input
+                placeholder="Specify preferred location"
+                {...register("preferred_location")}
+              />
             )}
           </div>
           <div className="space-y-2">

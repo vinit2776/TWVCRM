@@ -247,6 +247,15 @@ export async function handleStatementPaid(
     contract: { billing_mode: "proforma_first" | "gst_direct" | null } | null;
   }).contract)?.billing_mode;
 
+  const currentState = (statement as unknown as { handoff_state: string | null }).handoff_state;
+
+  // If GST invoice was already sent and we're now recording payment (e.g. bank
+  // transfer on an Override/PI-cancelled statement), close the loop directly.
+  if (currentState === "gst_sent_awaiting_payment") {
+    await setHandoffState(supabase, statementId, "complete", trigger);
+    return;
+  }
+
   if (billingMode === "proforma_first") {
     await setHandoffState(supabase, statementId, "pi_paid_awaiting_gst", trigger);
     return;

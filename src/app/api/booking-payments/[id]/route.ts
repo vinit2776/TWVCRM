@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
 
 // PATCH — verify or reject a payment (UPI screenshot verification)
 export async function PATCH(
@@ -84,6 +85,18 @@ export async function PATCH(
           .from("bookings")
           .update({ payment_status: "paid", payment_mode: payment.payment_mode })
           .eq("id", payment.booking_id);
+
+        // Create a Tally Inbox task if the booking is already checked out.
+        // The helper checks booking.status internally so this is safe to call
+        // even when the booking is still confirmed/checked_in.
+        void (async () => {
+          try {
+            const adminClient = await createAdminClient();
+            await maybeCreateBookingGstTask(adminClient, payment.booking_id as string);
+          } catch (err) {
+            console.error("[payment-verify] booking-gst-task creation failed:", err);
+          }
+        })();
       }
     }
   }

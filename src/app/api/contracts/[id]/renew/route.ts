@@ -209,12 +209,14 @@ export async function POST(
     console.error("[renew] failed to mark parent as renewal_in_progress:", err);
   }
 
-  // 8. Copy approved KYC documents
+  // 8. Copy approved and deferred KYC documents.
+  // Deferred docs carry over with their deferral metadata so they remain
+  // visible as still-pending-collection on the renewal contract.
   const { data: kycDocs } = await admin
     .from("contract_documents")
-    .select("document_id, document_type, label, is_required, status, reviewed_by, reviewed_at, notes")
+    .select("document_id, document_type, label, is_required, status, reviewed_by, reviewed_at, notes, deferred_by, deferred_at, deferred_reason, deferred_until")
     .eq("contract_id", id)
-    .eq("status", "approved");
+    .in("status", ["approved", "deferred"]);
 
   if (kycDocs && kycDocs.length > 0) {
     const kycInserts = kycDocs.map((doc) => ({
@@ -223,10 +225,18 @@ export async function POST(
       document_type: doc.document_type,
       label: doc.label,
       is_required: doc.is_required,
-      status: "approved",
+      status: doc.status,
       reviewed_by: doc.reviewed_by,
       reviewed_at: doc.reviewed_at,
       notes: doc.notes ? `${doc.notes} [carried from ${source.contract_number}]` : `Carried from ${source.contract_number}`,
+      ...(doc.status === "deferred"
+        ? {
+            deferred_by: doc.deferred_by,
+            deferred_at: doc.deferred_at,
+            deferred_reason: doc.deferred_reason,
+            deferred_until: doc.deferred_until,
+          }
+        : {}),
     }));
     await admin.from("contract_documents").insert(kycInserts).select("id");
   }

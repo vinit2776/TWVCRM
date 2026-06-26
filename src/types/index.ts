@@ -33,6 +33,8 @@ export interface Location {
   unifi_console_id?: string | null;
   /** 'repository' (default) = issue from pre-uploaded pool; 'unifi_api' = generate on-demand. */
   wifi_voucher_mode?: string | null;
+  /** Icon keys shown in the proposal PDF amenities strip. Defaults to ["wifi","coffee","printer","meeting"]. */
+  proposal_amenity_icons?: string[];
   created_at: string;
   updated_at: string;
 }
@@ -74,14 +76,9 @@ export type LeadSource =
   | "meta_ads"
   | "google_ads"
   | "direct_walkin"
-  | "online_form"
   | "referral"
-  | "social_media"
-  | "advertisement"
   | "cold_call"
-  | "event"
-  | "partner"
-  | "other";
+  | "aggregator";
 
 export type WorkspaceType =
   | "hot_desk"
@@ -89,7 +86,9 @@ export type WorkspaceType =
   | "private_office"
   | "meeting_room"
   | "conference_room"
-  | "virtual_office";
+  | "virtual_office"
+  | "managed"
+  | "enterprise";
 
 export type Rating = "none" | "hot" | "warm" | "cold";
 
@@ -2718,6 +2717,7 @@ export interface FacilityAsset {
   creator?: { id: string; full_name: string } | null;
   created_at: string;
   updated_at: string;
+  photos?: { url: string; path: string; size: number }[];
   // Aggregates (when requested)
   open_issue_count?: number;
   total_issue_count?: number;

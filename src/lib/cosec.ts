@@ -233,6 +233,15 @@ export async function refreshUserValidity(
   assertResponseCode(text, `refreshUserValidity(${cosecUserId})`);
 }
 
+export async function setUserPin(device: CosecDevice, cosecUserId: string, pin: string): Promise<void> {
+  const text = await cosecGet(device, "users", {
+    action: "set",
+    "user-id": cosecUserId,
+    "user-pin": pin,
+  });
+  assertResponseCode(text, `setUserPin(${cosecUserId})`);
+}
+
 export async function setCardNumber(device: CosecDevice, cosecUserId: string, cardNumber: string): Promise<void> {
   const text = await cosecGet(device, "users", {
     action: "set",

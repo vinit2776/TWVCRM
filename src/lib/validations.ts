@@ -5,10 +5,10 @@ import { z } from "zod";
 // ==========================================
 export const createLeadSchema = z.object({
   first_name: z.string().min(1, "First name is required"),
-  last_name: z.string().min(1, "Last name is required"),
+  last_name: z.string().optional(),
   company: z.string().optional(),
   aggregator_contact_name: z.string().optional(),
-  email: z.string().min(1, "Email is required").email("Invalid email address"),
+  email: z.string().email("Invalid email address").optional().or(z.literal("")),
   phone: z.string().optional(),
   mobile: z.string().min(1, "Mobile number is required"),
   website: z.string().url("Invalid URL").optional().or(z.literal("")),
@@ -29,14 +29,9 @@ export const createLeadSchema = z.object({
     "meta_ads",
     "google_ads",
     "direct_walkin",
-    "online_form",
     "referral",
-    "social_media",
-    "advertisement",
     "cold_call",
-    "event",
-    "partner",
-    "other",
+    "aggregator",
   ]),
   industry: z.string().optional(),
   no_of_employees: z.number().int().positive().optional(),
@@ -50,6 +45,8 @@ export const createLeadSchema = z.object({
       "meeting_room",
       "conference_room",
       "virtual_office",
+      "managed",
+      "enterprise",
     ])
     .optional(),
   seat_capacity: z.number().int().positive().optional(),
@@ -81,7 +78,7 @@ export const updateLeadSchema = createLeadSchema.partial();
 // Relaxed schema for CSV imports — status/source/rating/score/tags have defaults
 export const importLeadSchema = z.object({
   first_name: z.string().min(1, "First name is required"),
-  last_name: z.string().min(1, "Last name is required"),
+  last_name: z.string().optional(),
   company: z.string().optional(),
   aggregator_contact_name: z.string().optional(),
   email: z.string().email("Invalid email").optional().or(z.literal("")),
@@ -95,9 +92,8 @@ export const importLeadSchema = z.object({
     "proposal_sent", "negotiating", "won", "lost", "junk",
   ]).default("new"),
   source: z.enum([
-    "meta_ads", "google_ads", "direct_walkin", "online_form", "referral",
-    "social_media", "advertisement", "cold_call", "event", "partner", "other",
-  ]).default("other"),
+    "meta_ads", "google_ads", "direct_walkin", "referral", "cold_call", "aggregator",
+  ]).default("meta_ads"),
   industry: z.string().optional(),
   no_of_employees: z.number().int().positive().optional(),
   rating: z.enum(["none", "hot", "warm", "cold"]).default("none"),
@@ -105,6 +101,7 @@ export const importLeadSchema = z.object({
   workspace_type: z.enum([
     "hot_desk", "dedicated_desk", "private_office",
     "meeting_room", "conference_room", "virtual_office",
+    "managed", "enterprise",
   ]).optional(),
   seat_capacity: z.number().int().positive().optional(),
   preferred_location: z.string().optional(),
@@ -204,6 +201,7 @@ export const createProposalSchema = z.object({
     name: z.string().min(1),
     unit: z.string().min(1),
     quantity: z.number().min(0),
+    price_per_unit: z.number().min(0).optional(),
   })).optional(),
   service_quotas: z.array(z.object({
     service_id: z.string().uuid(),

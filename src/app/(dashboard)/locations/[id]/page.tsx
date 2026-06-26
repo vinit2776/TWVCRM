@@ -13,6 +13,7 @@ import {
   MapPin,
   Layers,
   Zap,
+  ConciergeBell,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -24,10 +25,11 @@ import { SpaceUnitFormDialog } from "@/components/spaces/space-unit-form-dialog"
 import { SpaceAnalyticsPanel } from "@/components/spaces/space-analytics";
 import { LocationFormDialog } from "@/components/locations/location-form-dialog";
 import { ElectricityConfigTab } from "@/components/locations/electricity-config-tab";
+import { LocationServicesTab } from "@/components/locations/location-services-tab";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import type { Location, LocationFloor, SpaceUnit, SpaceAnalytics } from "@/types";
 
-type Tab = "overview" | "spaces" | "analytics" | "electricity";
+type Tab = "overview" | "spaces" | "analytics" | "electricity" | "services";
 
 export default function LocationDetailPage({
   params,
@@ -220,24 +222,29 @@ export default function LocationDetailPage({
       </div>
 
       {/* Tab bar */}
-      <div className="flex border-b gap-1">
-        {(["overview", "spaces", "analytics", "electricity"] as Tab[]).map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors capitalize -mb-px ${
-              tab === t
-                ? "border-[#015E65] text-[#015E65]"
-                : "border-transparent text-muted-foreground hover:text-foreground"
-            }`}
-          >
-            {t === "overview" && <Info className="inline mr-1.5 h-3.5 w-3.5" />}
-            {t === "spaces" && <LayoutGrid className="inline mr-1.5 h-3.5 w-3.5" />}
-            {t === "analytics" && <BarChart3 className="inline mr-1.5 h-3.5 w-3.5" />}
-            {t === "electricity" && <Zap className="inline mr-1.5 h-3.5 w-3.5" />}
-            {t.charAt(0).toUpperCase() + t.slice(1)}
-          </button>
-        ))}
+      <div className="flex border-b gap-1 flex-wrap">
+        {(["overview", "spaces", "analytics", "electricity", "services"] as Tab[]).map((t) => {
+          if (t === "electricity" && !canEditElectricity) return null;
+          if (t === "services" && !canEditElectricity) return null;
+          return (
+            <button
+              key={t}
+              onClick={() => setTab(t)}
+              className={`px-4 py-2 text-sm font-medium border-b-2 transition-colors capitalize -mb-px ${
+                tab === t
+                  ? "border-[#015E65] text-[#015E65]"
+                  : "border-transparent text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              {t === "overview" && <Info className="inline mr-1.5 h-3.5 w-3.5" />}
+              {t === "spaces" && <LayoutGrid className="inline mr-1.5 h-3.5 w-3.5" />}
+              {t === "analytics" && <BarChart3 className="inline mr-1.5 h-3.5 w-3.5" />}
+              {t === "electricity" && <Zap className="inline mr-1.5 h-3.5 w-3.5" />}
+              {t === "services" && <ConciergeBell className="inline mr-1.5 h-3.5 w-3.5" />}
+              {t.charAt(0).toUpperCase() + t.slice(1)}
+            </button>
+          );
+        })}
       </div>
 
       {/* ── OVERVIEW TAB ─────────────────────────────────────────────────── */}
@@ -553,6 +560,15 @@ export default function LocationDetailPage({
       {/* ── ELECTRICITY TAB ──────────────────────────────────────────────── */}
       {tab === "electricity" && (
         <ElectricityConfigTab locationId={id} canEdit={canEditElectricity} />
+      )}
+
+      {/* ── SERVICES TAB ─────────────────────────────────────────────────── */}
+      {tab === "services" && (
+        <LocationServicesTab
+          locationId={id}
+          canEdit={canEditElectricity}
+          initialAmenityIcons={location.proposal_amenity_icons}
+        />
       )}
 
       {/* ── Dialogs ───────────────────────────────────────────────────────── */}

@@ -822,208 +822,17 @@ export default function ProposalDetailPage({
 
         {/* Sidebar */}
         <div className="space-y-4">
-          {/* Proposal Details */}
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Proposal Details</CardTitle>
-            </CardHeader>
-            <CardContent className="space-y-3 text-sm">
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Status</span>
-                <Badge
-                  variant="secondary"
-                  className={PROPOSAL_STATUS_COLORS[proposal.status]}
-                >
-                  {PROPOSAL_STATUS_LABELS[proposal.status]}
-                </Badge>
-              </div>
-              {proposal.valid_until && (
-                <>
-                  <Separator />
-                  <div className="flex justify-between items-center">
-                    <span className="text-muted-foreground">Valid Until</span>
-                    <div className="flex items-center gap-1.5">
-                      {isExpired && (
-                        <AlertTriangle className="h-3.5 w-3.5 text-orange-500" />
-                      )}
-                      <span className={isExpired ? "text-orange-600" : ""}>
-                        {formatDate(proposal.valid_until)}
-                      </span>
-                    </div>
-                  </div>
-                </>
-              )}
-              <Separator />
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Created</span>
-                <span>{formatDate(proposal.created_at)}</span>
-              </div>
-              <Separator />
-              <div className="flex justify-between">
-                <span className="text-muted-foreground">Updated</span>
-                <span>{formatDate(proposal.updated_at)}</span>
-              </div>
-            </CardContent>
-          </Card>
-
-          {/* Deposit Waiver Gate — shown for zero-deposit proposals */}
-          {isZeroDeposit && (
-            <div id="deposit-waiver-gate">
-              <DepositWaiverGate
-                proposalId={proposal.id}
-                proposalNumber={proposal.proposal_number}
-                isVerified={waiverVerified}
-                requestedAt={proposal.deposit_waiver_requested_at}
-                onVerified={fetchProposal}
-              />
-            </div>
-          )}
-
-          {/* Lifecycle Timeline */}
-          <Card>
-            <CardHeader className="pb-3">
-              <CardTitle className="text-base">Lifecycle</CardTitle>
-            </CardHeader>
-            <CardContent className="pt-0">
-              <ProposalLifecycle proposal={proposal} />
-            </CardContent>
-          </Card>
-
-          {/* Payment Details */}
-          {proposal.payment_status === "paid" && (
-            <Card className="border-green-200 bg-green-50">
-              <CardHeader className="pb-2">
-                <CardTitle className="text-base text-green-700">Payment Received</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-1 text-sm">
-                {proposal.payment_amount && (
-                  <div className="flex justify-between">
-                    <span className="text-green-700">Amount</span>
-                    <span className="font-semibold text-green-800">₹{Number(proposal.payment_amount).toLocaleString("en-IN")}</span>
-                  </div>
-                )}
-                {proposal.payment_reference && (
-                  <div className="flex justify-between">
-                    <span className="text-green-700">Reference</span>
-                    <span className="font-mono text-xs text-green-800">{proposal.payment_reference}</span>
-                  </div>
-                )}
-                {proposal.payment_received_at && (
-                  <div className="flex justify-between">
-                    <span className="text-green-700">Received</span>
-                    <span className="text-green-800">{formatDate(proposal.payment_received_at)}</span>
-                  </div>
-                )}
-              </CardContent>
-            </Card>
-          )}
-
-          {/* Monthly Charge — GST Invoice */}
-          {proposal.status !== "draft" && proposal.status !== "rejected" && (() => {
-            const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
-            const depositPaid = proposal.deposit_payment_status === "paid";
-            const canSendInvoice = !depositRequired || depositPaid;
-            const invoiceSent = !!proposal.occupation_start_date;
-
-            return (
-              <Card className={proposal.payment_status === "paid" ? "border-green-200 bg-green-50" : "border-blue-200 bg-blue-50"}>
-                <CardHeader className="pb-2">
-                  <CardTitle className={`text-base ${proposal.payment_status === "paid" ? "text-green-700" : "text-blue-700"}`}>
-                    Monthly Charge — ₹{Number(proposal.total_amount).toLocaleString("en-IN")}/month
-                  </CardTitle>
-                </CardHeader>
-                <CardContent className="space-y-2 text-sm">
-                  {/* Paid state */}
-                  {proposal.payment_status === "paid" && proposal.payment_amount && (
-                    <>
-                      <div className="flex justify-between">
-                        <span className="text-green-700">Paid</span>
-                        <span className="font-semibold text-green-800">₹{Number(proposal.payment_amount).toLocaleString("en-IN")}</span>
-                      </div>
-                      {proposal.payment_reference && (
-                        <div className="flex justify-between">
-                          <span className="text-green-700">Reference</span>
-                          <span className="font-mono text-xs text-green-800">{proposal.payment_reference}</span>
-                        </div>
-                      )}
-                    </>
-                  )}
-
-                  {/* Invoice already sent */}
-                  {invoiceSent && proposal.payment_status !== "paid" && (
-                    <>
-                      <div className="flex justify-between text-xs">
-                        <span className="text-blue-700">Occupation from: {new Date(proposal.occupation_start_date + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })}</span>
-                        <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-700">Invoice Sent</Badge>
-                      </div>
-                      {proposal.razorpay_payment_link_url && (
-                        <div className="flex items-center gap-2 mt-1">
-                          <input readOnly value={proposal.razorpay_payment_link_url} className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-blue-800" />
-                          <Button size="sm" variant="outline" className="text-xs h-7"
-                            onClick={() => { navigator.clipboard.writeText(proposal.razorpay_payment_link_url!); toast.success("Payment link copied"); }}>
-                            Copy
-                          </Button>
-                        </div>
-                      )}
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="w-full border-blue-300 text-blue-700 hover:bg-blue-100"
-                        onClick={() => openGstDialog(true)}
-                      >
-                        <Mail className="mr-2 h-3.5 w-3.5" />
-                        Revise Start Date & Resend Invoice
-                      </Button>
-                    </>
-                  )}
-
-                  {/* Monthly payment link — always visible once created, for sharing with customer */}
-                  {!invoiceSent && proposal.payment_status !== "paid" && proposal.razorpay_payment_link_url && (
-                    <div className="rounded bg-blue-50 border border-blue-200 p-2 space-y-1">
-                      <p className="text-xs text-blue-700 font-medium">Monthly charge payment link</p>
-                      <div className="flex items-center gap-2">
-                        <input
-                          readOnly
-                          value={proposal.razorpay_payment_link_url}
-                          className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-blue-800"
-                        />
-                        <Button size="sm" variant="outline" className="text-xs h-7 shrink-0"
-                          onClick={() => { navigator.clipboard.writeText(proposal.razorpay_payment_link_url!); toast.success("Payment link copied"); }}>
-                          Copy
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-
-                  {/* Send GST Invoice button */}
-                  {!invoiceSent && proposal.payment_status !== "paid" && (
-                    <>
-                      {!canSendInvoice && (
-                        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
-                          Security deposit must be paid before sending the GST invoice.
-                        </p>
-                      )}
-                      <Button
-                        size="sm"
-                        className="w-full"
-                        disabled={!canSendInvoice}
-                        onClick={() => openGstDialog(false)}
-                      >
-                        <Mail className="mr-2 h-3.5 w-3.5" />
-                        Preview & Send GST Invoice
-                      </Button>
-                    </>
-                  )}
-                </CardContent>
-              </Card>
-            );
-          })()}
-
           {/* Security Deposit */}
           {Number(proposal.security_deposit_months) > 0 && (
             <Card className={proposal.deposit_payment_status === "paid" ? "border-green-200 bg-green-50" : "border-amber-200 bg-amber-50"}>
               <CardHeader className="pb-2">
-                <CardTitle className={`text-base ${proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}`}>
+                <CardTitle className={`text-base flex items-center gap-2 ${proposal.deposit_payment_status === "paid" ? "text-green-700" : "text-amber-700"}`}>
+                  {proposal.deposit_payment_status !== "paid" && (
+                    <span className="relative flex h-2.5 w-2.5 shrink-0">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                      <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-amber-500"></span>
+                    </span>
+                  )}
                   Security Deposit ({proposal.security_deposit_months} month{Number(proposal.security_deposit_months) > 1 ? "s" : ""})
                 </CardTitle>
               </CardHeader>
@@ -1149,6 +958,209 @@ export default function ProposalDetailPage({
                     </div>
                   );
                 })()}
+              </CardContent>
+            </Card>
+          )}
+
+          {/* Monthly Charge — GST Invoice */}
+          {proposal.status !== "draft" && proposal.status !== "rejected" && (() => {
+            const depositRequired = Number(proposal.security_deposit_months || 0) > 0;
+            const depositPaid = proposal.deposit_payment_status === "paid";
+            const canSendInvoice = !depositRequired || depositPaid;
+            const invoiceSent = !!proposal.occupation_start_date;
+
+            return (
+              <Card className={proposal.payment_status === "paid" ? "border-green-200 bg-green-50" : "border-blue-200 bg-blue-50"}>
+                <CardHeader className="pb-2">
+                  <CardTitle className={`text-base flex items-center gap-2 ${proposal.payment_status === "paid" ? "text-green-700" : "text-blue-700"}`}>
+                    {canSendInvoice && proposal.payment_status !== "paid" && (
+                      <span className="relative flex h-2.5 w-2.5 shrink-0">
+                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-blue-400 opacity-75"></span>
+                        <span className="relative inline-flex h-2.5 w-2.5 rounded-full bg-blue-500"></span>
+                      </span>
+                    )}
+                    Monthly Charge — ₹{Number(proposal.total_amount).toLocaleString("en-IN")}/month
+                  </CardTitle>
+                </CardHeader>
+                <CardContent className="space-y-2 text-sm">
+                  {/* Paid state */}
+                  {proposal.payment_status === "paid" && proposal.payment_amount && (
+                    <>
+                      <div className="flex justify-between">
+                        <span className="text-green-700">Paid</span>
+                        <span className="font-semibold text-green-800">₹{Number(proposal.payment_amount).toLocaleString("en-IN")}</span>
+                      </div>
+                      {proposal.payment_reference && (
+                        <div className="flex justify-between">
+                          <span className="text-green-700">Reference</span>
+                          <span className="font-mono text-xs text-green-800">{proposal.payment_reference}</span>
+                        </div>
+                      )}
+                    </>
+                  )}
+
+                  {/* Invoice already sent */}
+                  {invoiceSent && proposal.payment_status !== "paid" && (
+                    <>
+                      <div className="flex justify-between text-xs">
+                        <span className="text-blue-700">Occupation from: {new Date(proposal.occupation_start_date + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })}</span>
+                        <Badge variant="outline" className="text-[10px] border-blue-300 text-blue-700">Invoice Sent</Badge>
+                      </div>
+                      {proposal.razorpay_payment_link_url && (
+                        <div className="flex items-center gap-2 mt-1">
+                          <input readOnly value={proposal.razorpay_payment_link_url} className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-blue-800" />
+                          <Button size="sm" variant="outline" className="text-xs h-7"
+                            onClick={() => { navigator.clipboard.writeText(proposal.razorpay_payment_link_url!); toast.success("Payment link copied"); }}>
+                            Copy
+                          </Button>
+                        </div>
+                      )}
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="w-full border-blue-300 text-blue-700 hover:bg-blue-100"
+                        onClick={() => openGstDialog(true)}
+                      >
+                        <Mail className="mr-2 h-3.5 w-3.5" />
+                        Revise Start Date & Resend Invoice
+                      </Button>
+                    </>
+                  )}
+
+                  {/* Monthly payment link — always visible once created, for sharing with customer */}
+                  {!invoiceSent && proposal.payment_status !== "paid" && proposal.razorpay_payment_link_url && (
+                    <div className="rounded bg-blue-50 border border-blue-200 p-2 space-y-1">
+                      <p className="text-xs text-blue-700 font-medium">Monthly charge payment link</p>
+                      <div className="flex items-center gap-2">
+                        <input
+                          readOnly
+                          value={proposal.razorpay_payment_link_url}
+                          className="flex-1 text-xs font-mono bg-white border rounded px-2 py-1 text-blue-800"
+                        />
+                        <Button size="sm" variant="outline" className="text-xs h-7 shrink-0"
+                          onClick={() => { navigator.clipboard.writeText(proposal.razorpay_payment_link_url!); toast.success("Payment link copied"); }}>
+                          Copy
+                        </Button>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Send GST Invoice button */}
+                  {!invoiceSent && proposal.payment_status !== "paid" && (
+                    <>
+                      {!canSendInvoice && (
+                        <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded px-3 py-2">
+                          Security deposit must be paid before sending the GST invoice.
+                        </p>
+                      )}
+                      <Button
+                        size="sm"
+                        className="w-full"
+                        disabled={!canSendInvoice}
+                        onClick={() => openGstDialog(false)}
+                      >
+                        <Mail className="mr-2 h-3.5 w-3.5" />
+                        Preview & Send GST Invoice
+                      </Button>
+                    </>
+                  )}
+                </CardContent>
+              </Card>
+            );
+          })()}
+
+          {/* Proposal Details */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Proposal Details</CardTitle>
+            </CardHeader>
+            <CardContent className="space-y-3 text-sm">
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Status</span>
+                <Badge
+                  variant="secondary"
+                  className={PROPOSAL_STATUS_COLORS[proposal.status]}
+                >
+                  {PROPOSAL_STATUS_LABELS[proposal.status]}
+                </Badge>
+              </div>
+              {proposal.valid_until && (
+                <>
+                  <Separator />
+                  <div className="flex justify-between items-center">
+                    <span className="text-muted-foreground">Valid Until</span>
+                    <div className="flex items-center gap-1.5">
+                      {isExpired && (
+                        <AlertTriangle className="h-3.5 w-3.5 text-orange-500" />
+                      )}
+                      <span className={isExpired ? "text-orange-600" : ""}>
+                        {formatDate(proposal.valid_until)}
+                      </span>
+                    </div>
+                  </div>
+                </>
+              )}
+              <Separator />
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Created</span>
+                <span>{formatDate(proposal.created_at)}</span>
+              </div>
+              <Separator />
+              <div className="flex justify-between">
+                <span className="text-muted-foreground">Updated</span>
+                <span>{formatDate(proposal.updated_at)}</span>
+              </div>
+            </CardContent>
+          </Card>
+
+          {/* Deposit Waiver Gate — shown for zero-deposit proposals */}
+          {isZeroDeposit && (
+            <div id="deposit-waiver-gate">
+              <DepositWaiverGate
+                proposalId={proposal.id}
+                proposalNumber={proposal.proposal_number}
+                isVerified={waiverVerified}
+                requestedAt={proposal.deposit_waiver_requested_at}
+                onVerified={fetchProposal}
+              />
+            </div>
+          )}
+
+          {/* Lifecycle Timeline */}
+          <Card>
+            <CardHeader className="pb-3">
+              <CardTitle className="text-base">Lifecycle</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-0">
+              <ProposalLifecycle proposal={proposal} />
+            </CardContent>
+          </Card>
+
+          {/* Payment Details */}
+          {proposal.payment_status === "paid" && (
+            <Card className="border-green-200 bg-green-50">
+              <CardHeader className="pb-2">
+                <CardTitle className="text-base text-green-700">Payment Received</CardTitle>
+              </CardHeader>
+              <CardContent className="space-y-1 text-sm">
+                {proposal.payment_amount && (
+                  <div className="flex justify-between">
+                    <span className="text-green-700">Amount</span>
+                    <span className="font-semibold text-green-800">₹{Number(proposal.payment_amount).toLocaleString("en-IN")}</span>
+                  </div>
+                )}
+                {proposal.payment_reference && (
+                  <div className="flex justify-between">
+                    <span className="text-green-700">Reference</span>
+                    <span className="font-mono text-xs text-green-800">{proposal.payment_reference}</span>
+                  </div>
+                )}
+                {proposal.payment_received_at && (
+                  <div className="flex justify-between">
+                    <span className="text-green-700">Received</span>
+                    <span className="text-green-800">{formatDate(proposal.payment_received_at)}</span>
+                  </div>
+                )}
               </CardContent>
             </Card>
           )}

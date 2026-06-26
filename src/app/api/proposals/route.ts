@@ -19,7 +19,7 @@ export async function GET(request: NextRequest) {
 
   let query = supabase
     .from("proposals")
-    .select("*, lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company), location:locations!proposals_location_id_fkey(id, name, code)", { count: "exact" });
+    .select("*, lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company), location:locations!proposals_location_id_fkey(id, name, code, proposal_amenity_icons)", { count: "exact" });
 
   if (status) query = query.eq("status", status);
   if (leadId) query = query.eq("lead_id", leadId);

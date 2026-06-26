@@ -72,6 +72,16 @@ export default function ProposalsPage() {
                 <td className="px-4 py-3">
                   <div className="flex items-center gap-1.5 flex-wrap">
                     <Badge variant="secondary" className={PROPOSAL_STATUS_COLORS[p.status]}>{PROPOSAL_STATUS_LABELS[p.status]}</Badge>
+                    {/* Deposit status badge — shown when deposit is required but not yet collected */}
+                    {Number(p.security_deposit_months || 0) > 0 && p.deposit_payment_status === "pending" && ["sent", "viewed", "accepted"].includes(p.status) && (
+                      <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${
+                        !p.deposit_razorpay_link_id
+                          ? "bg-red-100 text-red-700 border-red-200"
+                          : "bg-amber-100 text-amber-700 border-amber-200"
+                      }`}>
+                        {!p.deposit_razorpay_link_id ? "Deposit Not Sent" : "Deposit Pending"}
+                      </span>
+                    )}
                     {/* Escalating "needs activation" badge — shown when both payments are in */}
                     {p.status === "accepted" && p.payment_status === "paid" && (p.deposit_payment_status === "paid" || p.deposit_payment_status === "not_required" || !p.security_deposit_months) && (() => {
                       const daysAgo = p.accepted_at ? Math.floor((Date.now() - new Date(p.accepted_at).getTime()) / 86400000) : 0;

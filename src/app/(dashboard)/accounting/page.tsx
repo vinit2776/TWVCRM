@@ -1116,6 +1116,10 @@ export default function AccountingPage() {
                                     {isOverdue && <AlertCircle className="h-3 w-3" />}
                                     {new Date(bill.due_date).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" })}
                                   </span>
+                                ) : bill.payment_batch_type === "immediate" ? (
+                                  <span className="inline-flex items-center rounded-full bg-orange-100 px-2 py-0.5 text-[10px] font-semibold text-orange-700">
+                                    Immediate
+                                  </span>
                                 ) : <span className="text-muted-foreground">—</span>}
                               </td>
                               <td className="px-4 py-3 text-right text-xs">

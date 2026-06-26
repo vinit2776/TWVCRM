@@ -55,7 +55,6 @@ const LeadBillingSnippet = dynamic(
   () => import("@/components/leads/lead-billing-snippet").then((m) => m.LeadBillingSnippet),
   { ssr: false }
 );
-import { LeadTasksTab } from "@/components/leads/lead-tasks-tab";
 import { LeadFeedbacksTab } from "@/components/leads/lead-feedbacks-tab";
 import { LeadLifecycle } from "@/components/leads/lead-lifecycle";
 import { LeadContactsPanel } from "@/components/leads/lead-contacts-panel";
@@ -180,7 +179,6 @@ export default function LeadDetailPage({
         <TabsList>
           <TabsTrigger value="overview">Overview</TabsTrigger>
           <TabsTrigger value="activities">Activities</TabsTrigger>
-          <TabsTrigger value="tasks">Tasks</TabsTrigger>
           <TabsTrigger value="proposals">Proposals</TabsTrigger>
           <TabsTrigger value="contracts">Contracts</TabsTrigger>
           <TabsTrigger value="documents">Documents</TabsTrigger>
@@ -592,12 +590,6 @@ export default function LeadDetailPage({
           </Card>
         </TabsContent>
 
-        <TabsContent value="tasks" className="mt-4">
-          <LeadTasksTab
-            leadId={id}
-            leadName={`${lead.first_name} ${lead.last_name}`}
-          />
-        </TabsContent>
 
         <TabsContent value="proposals" className="mt-4">
           <LeadProposalsTab leadId={id} leadLocationId={lead?.location_id} />
