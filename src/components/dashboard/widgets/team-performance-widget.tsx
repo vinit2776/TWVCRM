@@ -72,7 +72,8 @@ export function TeamPerformanceWidget({ locationFilter }: TeamPerformanceWidgetP
                 <CheckSquare className="h-3 w-3" /> Tasks
               </span>
             </div>
-            {data.slice(0, 6).map((member) => (
+            <div className="max-h-72 overflow-y-auto -mx-1 px-1">
+            {data.map((member) => (
               <div
                 key={member.user_id}
                 className="grid grid-cols-[1fr_auto_auto] gap-2 items-center rounded-md px-1 py-2 hover:bg-muted/40 transition-colors"
@@ -91,6 +92,7 @@ export function TeamPerformanceWidget({ locationFilter }: TeamPerformanceWidgetP
                 </span>
               </div>
             ))}
+            </div>
           </div>
         )}
       </CardContent>
