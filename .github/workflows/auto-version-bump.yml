@@ -30,7 +30,17 @@ jobs:
         run: git pull --rebase origin main
 
       - name: Bump patch version
-        run: npm version patch --no-git-tag-version
+        run: |
+          node -e "
+            const fs = require('fs');
+            const pkg = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+            const parts = pkg.version.split('.');
+            // Support both 3-digit (1.0.90) and 4-digit (1.0.90.0) versioning
+            parts[parts.length - 1] = String(parseInt(parts[parts.length - 1], 10) + 1);
+            pkg.version = parts.join('.');
+            fs.writeFileSync('package.json', JSON.stringify(pkg, null, 2) + '\n');
+            console.log('Bumped to', pkg.version);
+          "
 
       - name: Commit and push
         run: |
