@@ -100,29 +100,31 @@ export async function GET(request: NextRequest) {
     .toISOString().slice(0, 10);
 
   const { data: yesterdayPayments } = await admin
-    .from("contract_payments")
+    .from("billing_payments")
     .select(`
-      amount, payment_date, payment_mode, reference_number,
-      contract:contracts!contract_payments_contract_id_fkey(
-        contract_number,
-        lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
+      amount, payment_date, payment_mode, payment_reference,
+      billing_statement:billing_statements!billing_payments_billing_statement_id_fkey(
+        contract:contracts!billing_statements_contract_id_fkey(
+          contract_number,
+          lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
+        )
       )
     `)
-    .eq("status", "verified")
     .eq("payment_date", yesterdayIST)
     .order("amount", { ascending: false });
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const ydayRows = (yesterdayPayments || []).map((p: any) => {
-    const lead = p.contract?.lead;
+    const contract = p.billing_statement?.contract;
+    const lead = contract?.lead;
     const name = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "—";
     return {
       customerName: name,
       company: lead?.company || null,
-      contractNumber: p.contract?.contract_number || "—",
+      contractNumber: contract?.contract_number || "—",
       amount: Number(p.amount || 0),
       mode: p.payment_mode || "—",
-      reference: p.reference_number || null,
+      reference: p.payment_reference || null,
     };
   });
   const ydayTotal = ydayRows.reduce((s: number, r: { amount: number }) => s + r.amount, 0);
