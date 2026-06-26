@@ -27,6 +27,7 @@ import {
   TRANSFER_ISSUE_STATUS_LABELS, TRANSFER_ISSUE_STATUS_COLORS,
 } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
+import { TransferLifecycleStatus } from "@/components/procurement/transfer-lifecycle-status";
 import type { StockTransfer, StockTransferItem, StockTransferIssue } from "@/types";
 
 interface StockLevel {
@@ -333,6 +334,9 @@ export default function TransferDetailPage() {
           )}
         </div>
       </div>
+
+      {/* Lifecycle progress */}
+      <TransferLifecycleStatus transfer={transfer} />
 
       {/* Approval Stock Info Card (when pending_approval) */}
       {transfer.status === "pending_approval" && stockLevels.length > 0 && (
