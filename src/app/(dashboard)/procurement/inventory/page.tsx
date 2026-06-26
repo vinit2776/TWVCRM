@@ -11,6 +11,8 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { IncomingTransfers } from "@/components/procurement/incoming-transfers";
+import { InventoryAnalytics } from "@/components/procurement/inventory-analytics";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
 import { useScopedLocations } from "@/hooks/use-scoped-locations";
 import {
   STOCK_DEPARTMENTS,
@@ -106,6 +108,14 @@ export default function InventoryPage() {
           </SelectContent>
         </Select>
       </div>
+
+      <Tabs defaultValue="inventory" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="inventory">Inventory</TabsTrigger>
+          <TabsTrigger value="analytics">Analytics</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="inventory" className="space-y-4">
 
       {/* Department filter tabs */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -224,6 +234,21 @@ export default function InventoryPage() {
           </table>
         </div>
       )}
+        </TabsContent>
+
+        <TabsContent value="analytics">
+          {locationId ? (
+            <InventoryAnalytics
+              locationId={locationId}
+              locationName={availableLocations.find((l) => l.id === locationId)?.name}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground py-8 text-center">
+              Select a location to view analytics.
+            </p>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }
