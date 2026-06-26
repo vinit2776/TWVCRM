@@ -220,8 +220,8 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     <div className="space-y-4">
       {/* Asset quick-search */}
       <div>
-        <Label className="text-sm font-medium">Know the asset?</Label>
-        <p className="text-xs text-muted-foreground mb-2">Search by name or code to auto-fill location & scope. Skip if unsure.</p>
+        <Label className="text-sm font-medium">Know the asset? <span className="text-amber-600 font-normal">(Recommended)</span></Label>
+        <p className="text-xs text-muted-foreground mb-2">Linking an asset routes the ticket correctly and shows the technician AMC status, vendor helpline, and repair history.</p>
         {selectedAsset ? (
           <div className="flex items-center gap-2 p-3 rounded-lg border border-[#015E65] bg-[#015E65]/5">
             <Check className="h-4 w-4 text-[#015E65] shrink-0" />
