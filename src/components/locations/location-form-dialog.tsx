@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Loader2, MapPin, LocateFixed, FileSpreadsheet, Trash2, Check, UserCircle2 } from "lucide-react";
+import { Loader2, MapPin, LocateFixed, FileSpreadsheet, Trash2, Check, UserCircle2, AlertTriangle } from "lucide-react";
 import { toast } from "sonner";
 import type { Location, LocationCapacityConfig, LocationPrintTemplate, User } from "@/types";
 import {
@@ -68,6 +68,9 @@ export function LocationFormDialog({
   const [inchargeUserId1, setInchargeUserId1] = useState<string>("");
   const [inchargeUserId2, setInchargeUserId2] = useState<string>("");
   const [eligibleUsers, setEligibleUsers] = useState<User[]>([]);
+  // User IDs that already have a user_locations entry for this location.
+  // Used to warn when an in-charge has no inventory/consumption access.
+  const [locationAssignedUserIds, setLocationAssignedUserIds] = useState<Set<string>>(new Set());
 
   // Print-server template — optional. The admin can upload it now or later
   // (passively from the location's edit dialog). Just stores the sample file;
@@ -104,6 +107,17 @@ export function LocationFormDialog({
         .then((r) => r.json())
         .then((j) => setPrintTemplate(j.data || null))
         .catch(() => setPrintTemplate(null));
+      // Load which users already have inventory/consumption access for this
+      // location so we can warn when an in-charge is missing an assignment.
+      fetch("/api/admin/user-locations")
+        .then((r) => r.json())
+        .then((j) => {
+          const rows: { location_id: string; user_id: string }[] = j.data ?? [];
+          setLocationAssignedUserIds(
+            new Set(rows.filter((r) => r.location_id === location.id).map((r) => r.user_id))
+          );
+        })
+        .catch(() => setLocationAssignedUserIds(new Set()));
     } else {
       setPrintTemplate(null);
       setPendingTemplateFile(null);
@@ -114,6 +128,7 @@ export function LocationFormDialog({
       setLatitude(""); setLongitude("");
       setInchargeUserId1("");
       setInchargeUserId2("");
+      setLocationAssignedUserIds(new Set());
     }
   }, [location, open]);
 
@@ -426,11 +441,13 @@ export function LocationFormDialog({
           <div className="rounded-md border p-3 space-y-3 bg-muted/20">
             <div className="flex items-center gap-1.5">
               <UserCircle2 className="h-4 w-4 text-[#015E65]" />
-              <Label className="font-semibold">Floor In-Charges</Label>
+              <Label className="font-semibold">Alert In-Charges</Label>
+              <span className="text-[10px] text-muted-foreground font-normal">(cleaning, headcount &amp; check-in alerts)</span>
             </div>
             <p className="text-[11px] text-muted-foreground -mt-1">
-              The people on the ground for this centre. They receive checkout cleaning alerts
-              and headcount nudges in place of the broad admin/manager broadcast.
+              Who gets notified for this centre — checkout cleaning alerts, headcount nudges,
+              and check-in notifications. Separate from inventory/consumption access (set that in{" "}
+              <strong>Admin → User-Location Assignments</strong>).
             </p>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
@@ -464,6 +481,26 @@ export function LocationFormDialog({
                 </div>
               ))}
             </div>
+            {/* Cross-check: warn if an in-charge has no inventory/consumption access for this location */}
+            {isEdit && [
+              { id: inchargeUserId1, label: "Primary" },
+              { id: inchargeUserId2, label: "Secondary" },
+            ]
+              .filter(({ id }) => id && !locationAssignedUserIds.has(id))
+              .map(({ id, label }) => {
+                const name = eligibleUsers.find((u) => u.id === id)?.full_name ?? "This user";
+                return (
+                  <div key={id} className="flex items-start gap-1.5 text-[11px] text-amber-700">
+                    <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                    <span>
+                      <strong>{label} in-charge ({name})</strong> has no inventory / consumption
+                      access for this location. Add them in{" "}
+                      <strong>Admin → User-Location Assignments</strong> if they need to log
+                      stock here.
+                    </span>
+                  </div>
+                );
+              })}
             {eligibleUsers.length === 0 && (
               <p className="text-[11px] text-amber-700">
                 No eligible users found. Add users in the Settings → Users section first
