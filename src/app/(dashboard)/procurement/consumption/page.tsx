@@ -32,7 +32,7 @@ import {
 } from "lucide-react";
 import { t } from "@/lib/translations";
 import { useLanguage, LanguageProvider } from "@/providers/language-provider";
-import { PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS } from "@/lib/constants";
+import { STOCK_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS } from "@/lib/constants";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 
@@ -51,6 +51,20 @@ interface InventoryItem {
   unit: string;
   quantity_on_hand: number;
   reorder_level: number;
+}
+
+// Raw row shape from GET /api/procurement/inventory (location_stock + joined item)
+interface InventoryRow {
+  id: string;
+  item_id: string;
+  quantity_on_hand: number | string;
+  reorder_level: number | string;
+  procurement_items: {
+    name?: string;
+    department?: string;
+    unit?: string;
+    item_type?: string;
+  } | null;
 }
 
 interface CartEntry {
@@ -144,9 +158,10 @@ function ConsumptionPageContent() {
 
   // Available locations for this user
   const availableLocations = useMemo(() => {
-    if (isCrossLocationRole) return allLocations;
+    // HO roles, or any user not yet assigned to a location, see all (no lockout).
+    if (isCrossLocationRole || userLocations.length === 0) return allLocations;
     return userLocations
-      .sort((a, b) => (a.responsibility === "primary" ? -1 : 1))
+      .sort((a, b) => (a.responsibility === "primary" ? -1 : 1) - (b.responsibility === "primary" ? -1 : 1))
       .map((ul) => ul.location);
   }, [isCrossLocationRole, allLocations, userLocations]);
 
@@ -158,22 +173,18 @@ function ConsumptionPageContent() {
         const [meRes, locRes, ulRes] = await Promise.all([
           fetch("/api/me").then((r) => r.json()),
           fetch("/api/locations").then((r) => r.json()),
-          fetch("/api/admin/user-locations").then((r) => r.json()).catch(() => ({ data: [] })),
+          // self-scoped — any authenticated user can read their own assignments
+          fetch("/api/me/locations").then((r) => r.json()).catch(() => ({ data: [] })),
         ]);
 
         const role = meRes.role ?? "";
-        const userId = meRes.id ?? "";
         setUserRole(role);
 
         const locs = locRes.data || locRes.locations || [];
         setAllLocations(Array.isArray(locs) ? locs : []);
 
-        const uls: UserLocation[] = ulRes.data ?? [];
-        const myUls = uls.filter((ul: UserLocation) => {
-          // user_locations returns all rows; filter to current user's
-          // We need the user_id from the row — check via userId
-          return (ul as unknown as { user_id: string }).user_id === userId;
-        });
+        // /api/me/locations already returns only the current user's rows
+        const myUls: UserLocation[] = ulRes.data ?? [];
         setUserLocations(myUls);
 
         // Auto-select primary location
@@ -182,7 +193,8 @@ function ConsumptionPageContent() {
           setSelectedLocationId(primaryUl.location_id);
         } else if (myUls.length > 0) {
           setSelectedLocationId(myUls[0].location_id);
-        } else if (["admin", "manager", "office_admin"].includes(role) && locs.length > 0) {
+        } else if (locs.length > 0) {
+          // HO roles or unassigned users fall back to the first location
           setSelectedLocationId(locs[0].id);
         }
       } catch {
@@ -200,16 +212,24 @@ function ConsumptionPageContent() {
     try {
       const res = await fetch(`/api/procurement/inventory?location_id=${selectedLocationId}`);
       const data = await res.json();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      setItems((data.data || []).map((row: any) => ({
-        id: row.id,
-        item_id: row.item_id,
-        item_name: row.procurement_items?.name ?? "Unknown",
-        department: row.procurement_items?.department ?? "",
-        unit: row.procurement_items?.unit ?? "",
-        quantity_on_hand: Number(row.quantity_on_hand) || 0,
-        reorder_level: Number(row.reorder_level) || 0,
-      })));
+      const rows = (data.data || []) as InventoryRow[];
+      setItems(rows
+        // Services (AMC, rentals, pest control, etc.) are not physical stock —
+        // they cannot be consumed, so keep them out of the picker.
+        .filter(
+          (row) =>
+            row.procurement_items?.item_type !== "service" &&
+            STOCK_DEPARTMENTS.includes(row.procurement_items?.department ?? "")
+        )
+        .map((row) => ({
+          id: row.id,
+          item_id: row.item_id,
+          item_name: row.procurement_items?.name ?? "Unknown",
+          department: row.procurement_items?.department ?? "",
+          unit: row.procurement_items?.unit ?? "",
+          quantity_on_hand: Number(row.quantity_on_hand) || 0,
+          reorder_level: Number(row.reorder_level) || 0,
+        })));
       setCart({});
     } catch {
       toast.error("Failed to load inventory");
@@ -488,7 +508,7 @@ function ConsumptionPageContent() {
                   <TabsTrigger value="all">
                     {lang === "en" ? t("filter.all", lang) : "அனைத்தும்"}
                   </TabsTrigger>
-                  {PROCUREMENT_DEPARTMENTS.map((dept) => (
+                  {STOCK_DEPARTMENTS.map((dept) => (
                     <TabsTrigger key={dept} value={dept}>
                       {PROCUREMENT_DEPARTMENT_LABELS[dept]}
                     </TabsTrigger>

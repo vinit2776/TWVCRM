@@ -19,6 +19,7 @@ import { ArrowLeft, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { ConsumptionLog } from "@/types";
 import { ConsumptionCorrectionDialog } from "@/components/procurement/consumption-correction-dialog";
+import { ConsumptionLifecycleStatus } from "@/components/procurement/consumption-lifecycle-status";
 import Link from "next/link";
 
 interface Location {
@@ -48,7 +49,7 @@ export default function ConsumptionHistoryPage() {
     fetch("/api/locations")
       .then((r) => r.json())
       .then((locData) => {
-        const locs = locData.locations || locData || [];
+        const locs = locData.data || [];
         setLocations(locs);
         if (locs.length > 0) setSelectedLocation(locs[0].id);
       })
@@ -66,8 +67,8 @@ export default function ConsumptionHistoryPage() {
 
       const res = await fetch(`/api/procurement/consumption?${params}`);
       const data = await res.json();
-      setLogs(data.logs || data || []);
-      setTotalPages(data.total_pages || 1);
+      setLogs(data.data || []);
+      setTotalPages(data.pagination?.totalPages || 1);
     } catch {
       toast.error("Failed to load consumption history");
     } finally {
@@ -260,6 +261,7 @@ export default function ConsumptionHistoryPage() {
                               Notes: {log.notes}
                             </p>
                           )}
+                          <ConsumptionLifecycleStatus log={log} />
                         </div>
                       )}
                     </td>

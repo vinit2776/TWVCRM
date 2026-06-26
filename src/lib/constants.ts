@@ -1429,6 +1429,38 @@ export const PROCUREMENT_APPROVAL_THRESHOLDS = {
 export const PROCUREMENT_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset", "amc"] as const;
 export type ProcurementDepartment = (typeof PROCUREMENT_DEPARTMENTS)[number];
 
+/**
+ * Departments whose items are physical, movable stock — the only ones that can
+ * appear in Inventory and be transferred / consumed. Administration (office
+ * supplies, utility bills) and AMC (service contracts) are excluded: they are
+ * not branch stock that physically moves between locations.
+ */
+export const STOCK_DEPARTMENTS: readonly string[] = ["pantry", "maintenance", "asset"];
+
+/**
+ * Stock-aging thresholds (days) per department — how long held stock can sit
+ * before it's considered "old / check condition". Items age differently:
+ * pantry consumables faster, durable assets slower. "Age" is days since the
+ * last inward (PO delivery / transfer received) — an estimate, not exact FIFO.
+ */
+export const STOCK_AGING_DAYS: Record<string, number> = {
+  pantry: 60,
+  maintenance: 180,
+  asset: 365,
+};
+export const DEFAULT_AGING_DAYS = 180;
+
+export type AgingStatus = "fresh" | "watch" | "old";
+
+/** Classify an item's stock age against its department threshold. */
+export function agingStatus(department: string, ageDays: number | null): AgingStatus | null {
+  if (ageDays == null) return null;
+  const limit = STOCK_AGING_DAYS[department] ?? DEFAULT_AGING_DAYS;
+  if (ageDays >= limit) return "old";
+  if (ageDays >= limit * 0.66) return "watch";
+  return "fresh";
+}
+
 export const PROCUREMENT_DEPARTMENT_LABELS: Record<string, string> = {
   pantry: "Pantry",
   maintenance: "Maintenance",

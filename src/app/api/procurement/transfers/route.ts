@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { STOCK_DEPARTMENTS } from "@/lib/constants";
 import { z } from "zod";
+
+const CROSS_LOCATION_ROLES = ["admin", "manager", "office_admin"];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
 
 const createTransferSchema = z.object({
   from_location_id: z.string().uuid(),
@@ -38,21 +42,65 @@ export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
   const status = searchParams.get("status");
   const locationId = searchParams.get("location_id");
+  // incoming_to: transfers heading TO this location that are still in the
+  // pipeline (requested → approved → on the way) — i.e. "upcoming inwards".
+  const incomingTo = searchParams.get("incoming_to");
+  // location_ids: scope the list to transfers involving any of these locations
+  // (from OR to) — used to show a user only their assigned locations' transfers.
+  const locationIds = searchParams.get("location_ids");
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
   const offset = (page - 1) * limit;
 
+  // Validate incoming_to is a UUID before passing to the DB
+  if (incomingTo && !UUID_RE.test(incomingTo)) {
+    return NextResponse.json({ error: "Invalid incoming_to parameter" }, { status: 400 });
+  }
+
+  // Scope check: non-HO roles may only query locations they're assigned to
+  if (!CROSS_LOCATION_ROLES.includes(dbUser.role)) {
+    const { data: assignedRows } = await supabase
+      .from("user_locations")
+      .select("location_id")
+      .eq("user_id", dbUser.id);
+    const assignedIds = new Set((assignedRows ?? []).map((r: { location_id: string }) => r.location_id));
+
+    const idsToCheck = [
+      ...(locationIds ? locationIds.split(",").map((s) => s.trim()).filter(Boolean) : []),
+      ...(incomingTo ? [incomingTo] : []),
+      ...(locationId ? [locationId] : []),
+    ];
+
+    if (idsToCheck.length > 0 && idsToCheck.some((id) => !assignedIds.has(id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+  }
+
   let query = supabase
     .from("stock_transfers")
     .select(
-      `*, from_location:locations!stock_transfers_from_location_id_fkey(id, name, code), to_location:locations!stock_transfers_to_location_id_fkey(id, name, code), initiator:users!stock_transfers_initiated_by_fkey(id, full_name)`,
+      `*, from_location:locations!stock_transfers_from_location_id_fkey(id, name, code), to_location:locations!stock_transfers_to_location_id_fkey(id, name, code), initiator:users!stock_transfers_initiated_by_fkey(id, full_name), stock_transfer_items(id)`,
       { count: "exact" }
     )
     .order("created_at", { ascending: false })
     .range(offset, offset + limit - 1);
 
-  if (status) query = query.eq("status", status);
-  if (locationId) {
+  if (incomingTo) {
+    query = query
+      .eq("to_location_id", incomingTo)
+      .in("status", ["pending_approval", "approved", "dispatched"]);
+  } else if (status) {
+    query = query.eq("status", status);
+  }
+  if (locationIds) {
+    const ids = locationIds.split(",").map((s) => s.trim()).filter(Boolean);
+    if (ids.length > 0) {
+      const orClause = ids
+        .flatMap((id) => [`from_location_id.eq.${id}`, `to_location_id.eq.${id}`])
+        .join(",");
+      query = query.or(orClause);
+    }
+  } else if (locationId) {
     query = query.or(`from_location_id.eq.${locationId},to_location_id.eq.${locationId}`);
   }
 
@@ -90,6 +138,25 @@ export async function POST(request: NextRequest) {
 
   if (parsed.data.from_location_id === parsed.data.to_location_id) {
     return NextResponse.json({ error: "From and To locations must be different" }, { status: 422 });
+  }
+
+  // Block non-stock items: services (AMC, rentals, pest control) and items from
+  // non-stock departments (e.g. Administration) cannot be transferred.
+  const transferItemIds = parsed.data.items.map((i) => i.item_id).filter(Boolean) as string[];
+  if (transferItemIds.length > 0) {
+    const { data: itemRows } = await supabase
+      .from("procurement_items")
+      .select("id, name, item_type, department")
+      .in("id", transferItemIds);
+    const blocked = (itemRows ?? []).find(
+      (r) => r.item_type === "service" || !STOCK_DEPARTMENTS.includes(r.department)
+    );
+    if (blocked) {
+      return NextResponse.json(
+        { error: `"${blocked.name}" is not a transferable stock item (services and non-stock departments like Administration cannot be transferred).` },
+        { status: 422 }
+      );
+    }
   }
 
   // Generate transfer number

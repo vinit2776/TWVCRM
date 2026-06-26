@@ -133,9 +133,10 @@ export default function UserLocationsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">User-Location Assignments</h1>
+          <h1 className="text-2xl font-bold tracking-tight">Location Access Assignments</h1>
           <p className="text-muted-foreground text-sm">
-            Control which locations each staff member can log consumption for.
+            Controls which locations each staff member can access for inventory, consumption &amp; stock transfers.
+            For alert recipients (cleaning, headcount), set Floor In-Charges on the location itself.
           </p>
         </div>
         <Button onClick={() => setShowAdd(true)} className="gap-2">
@@ -185,7 +186,7 @@ export default function UserLocationsPage() {
                 <th className="text-left p-3 font-medium">User</th>
                 <th className="text-left p-3 font-medium">Role</th>
                 <th className="text-left p-3 font-medium">Location</th>
-                <th className="text-left p-3 font-medium">Responsibility</th>
+                <th className="text-left p-3 font-medium">Access Priority</th>
                 <th className="p-3 w-12" />
               </tr>
             </thead>
@@ -227,7 +228,7 @@ export default function UserLocationsPage() {
       <Dialog open={showAdd} onOpenChange={setShowAdd}>
         <DialogContent className="max-w-md">
           <DialogHeader>
-            <DialogTitle>Assign User to Location</DialogTitle>
+            <DialogTitle>Grant Location Access</DialogTitle>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div className="space-y-2">
@@ -260,7 +261,8 @@ export default function UserLocationsPage() {
               </Select>
             </div>
             <div className="space-y-2">
-              <Label>Responsibility</Label>
+              <Label>Access Priority</Label>
+              <p className="text-[11px] text-muted-foreground">Primary locations are auto-selected on consumption / transfer pages.</p>
               <Select
                 value={addResponsibility}
                 onValueChange={(v) => setAddResponsibility(v as "primary" | "secondary")}
@@ -269,8 +271,8 @@ export default function UserLocationsPage() {
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="primary">Primary</SelectItem>
-                  <SelectItem value="secondary">Secondary</SelectItem>
+                  <SelectItem value="primary">Primary — auto-selected by default</SelectItem>
+                  <SelectItem value="secondary">Secondary — accessible but not default</SelectItem>
                 </SelectContent>
               </Select>
             </div>

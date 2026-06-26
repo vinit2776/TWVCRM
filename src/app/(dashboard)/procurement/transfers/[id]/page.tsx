@@ -27,16 +27,24 @@ import {
   TRANSFER_ISSUE_STATUS_LABELS, TRANSFER_ISSUE_STATUS_COLORS,
 } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
+import { TransferLifecycleStatus } from "@/components/procurement/transfer-lifecycle-status";
+import { TransferAuditTrail } from "@/components/procurement/transfer-audit-trail";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
+
+interface AuditEntry {
+  id: string;
+  action: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  changes: any;
+  created_at: string;
+  performer?: { full_name?: string | null; role?: string | null } | null;
+}
 import type { StockTransfer, StockTransferItem, StockTransferIssue } from "@/types";
 
 interface StockLevel {
   item_id: string;
   location_id: string;
   quantity_on_hand: number;
-}
-
-interface UserInfo {
-  role: string;
 }
 
 // ─── Receive Dialog types ─────────────────────────────────────────────────
@@ -59,6 +67,7 @@ export default function TransferDetailPage() {
 
   const [transfer, setTransfer] = useState<StockTransfer | null>(null);
   const [stockLevels, setStockLevels] = useState<StockLevel[]>([]);
+  const [auditTrail, setAuditTrail] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -79,6 +88,7 @@ export default function TransferDetailPage() {
       const json = await res.json();
       setTransfer(json.data);
       setStockLevels(json.stock_levels || []);
+      setAuditTrail(json.audit_trail || []);
     }
     setLoading(false);
   }, [id]);
@@ -320,6 +330,7 @@ export default function TransferDetailPage() {
               <Button onClick={handleDispatch} disabled={actionLoading}>
                 <Truck className="h-4 w-4 mr-1" /> Mark Dispatched
               </Button>
+              <InfoTooltip text="Dispatching removes this stock from the source location immediately." />
               <Button variant="outline" onClick={handleDownloadChallan}>
                 <Download className="h-4 w-4 mr-1" /> Download Challan
               </Button>
@@ -327,12 +338,18 @@ export default function TransferDetailPage() {
           )}
 
           {transfer.status === "dispatched" && (
-            <Button onClick={openReceiveDialog} disabled={actionLoading}>
-              <PackageCheck className="h-4 w-4 mr-1" /> Receive Transfer
-            </Button>
+            <>
+              <Button onClick={openReceiveDialog} disabled={actionLoading}>
+                <PackageCheck className="h-4 w-4 mr-1" /> Receive Transfer
+              </Button>
+              <InfoTooltip text="Receiving adds the entered quantities to this location's stock." />
+            </>
           )}
         </div>
       </div>
+
+      {/* Lifecycle progress */}
+      <TransferLifecycleStatus transfer={transfer} />
 
       {/* Approval Stock Info Card (when pending_approval) */}
       {transfer.status === "pending_approval" && stockLevels.length > 0 && (
@@ -626,6 +643,9 @@ export default function TransferDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Audit trail — who did what, and when */}
+      {auditTrail.length > 0 && <TransferAuditTrail entries={auditTrail} />}
 
       {/* ─── Reject Dialog ──────────────────────────────────────────────── */}
       <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>

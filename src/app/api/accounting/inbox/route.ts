@@ -9,6 +9,7 @@ import {
   isInboxRole,
   type BookingHandoffState,
   type BookingInboxRow,
+  type BookingPaymentConfirmation,
   type HandoffState,
   type InboxPayment,
   type InboxResponse,
@@ -433,6 +434,7 @@ export async function GET(req: NextRequest) {
       gst_invoice_number, tally_invoice_number, gst_invoice_sent_at,
       booking:bookings!booking_gst_tasks_booking_id_fkey(
         id, booking_number, total_amount_with_gst, payment_status,
+        payment_mode, payment_reference,
         booking_date, guest_name, guest_email, guest_phone, guest_company,
         space:spaces!bookings_space_id_fkey(id, name),
         location:locations!bookings_location_id_fkey(id, name),
@@ -462,6 +464,8 @@ export async function GET(req: NextRequest) {
       booking_number: string | null;
       total_amount_with_gst: number;
       payment_status: string;
+      payment_mode: string | null;
+      payment_reference: string | null;
       booking_date: string | null;
       guest_name: string | null;
       guest_email: string | null;
@@ -506,8 +510,36 @@ export async function GET(req: NextRequest) {
       })
     : rawBookingTasks;
 
-  // Fetch uploads for booking tasks
+  // Fetch uploads and payment confirmations for booking tasks
   const bookingTaskIds = filteredBookingTasks.map((t) => t.id);
+  const bookingIds = filteredBookingTasks.map((t) => t.booking?.id).filter(Boolean) as string[];
+
+  // booking_payments keyed by booking_id
+  const bookingPaymentsMap = new Map<string, BookingPaymentConfirmation[]>();
+  if (bookingIds.length > 0) {
+    const { data: bpRows } = await supabase
+      .from("booking_payments")
+      .select("id, booking_id, amount, payment_mode, payment_reference, razorpay_payment_id, created_at, status")
+      .in("booking_id", bookingIds)
+      .in("status", ["confirmed", "captured"])
+      .order("created_at", { ascending: false });
+
+    for (const bp of bpRows || []) {
+      const bid = (bp as { booking_id: string }).booking_id;
+      const list = bookingPaymentsMap.get(bid) ?? [];
+      list.push({
+        id: bp.id as string,
+        amount: Number(bp.amount),
+        payment_mode: bp.payment_mode as string,
+        payment_reference: (bp.payment_reference as string | null) ?? null,
+        razorpay_payment_id: (bp.razorpay_payment_id as string | null) ?? null,
+        created_at: bp.created_at as string,
+        status: bp.status as string,
+      });
+      bookingPaymentsMap.set(bid, list);
+    }
+  }
+
   const bookingUploadsMap = new Map<string, InboxUpload>();
   if (bookingTaskIds.length > 0) {
     const { data: bookingUploads } = await supabase
@@ -580,6 +612,23 @@ export async function GET(req: NextRequest) {
       has_discrepancy: hasDiscrepancy,
       discrepancy_reason: discrepancyReason,
       gst_invoice_sent_at: t.gst_invoice_sent_at ?? null,
+      payment_confirmations: (() => {
+        const fromPaymentsTable = bookingPaymentsMap.get(t.booking?.id ?? "") ?? [];
+        if (fromPaymentsTable.length > 0) return fromPaymentsTable;
+        // Fallback: synthesize from booking-level payment_mode / payment_reference
+        if (t.booking?.payment_mode && t.booking.payment_status === "paid") {
+          return [{
+            id: t.booking.id,
+            amount: Number(t.booking.total_amount_with_gst ?? 0),
+            payment_mode: t.booking.payment_mode,
+            payment_reference: t.booking.payment_reference ?? null,
+            razorpay_payment_id: null,
+            created_at: t.updated_at,
+            status: "paid",
+          } satisfies BookingPaymentConfirmation];
+        }
+        return [];
+      })(),
     };
   });
 

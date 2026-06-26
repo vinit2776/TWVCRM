@@ -13,6 +13,7 @@ import {
   TRANSFER_STATUS_COLORS,
 } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
+import { useScopedLocations } from "@/hooks/use-scoped-locations";
 import type { StockTransfer } from "@/types";
 
 const FILTER_TABS = [
@@ -25,6 +26,7 @@ const FILTER_TABS = [
 
 export default function TransfersPage() {
   const router = useRouter();
+  const { isScoped, assignedLocationIds, loading: scopeLoading } = useScopedLocations();
   const [transfers, setTransfers] = useState<StockTransfer[]>([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
@@ -35,6 +37,11 @@ export default function TransfersPage() {
     setLoading(true);
     const params = new URLSearchParams({ page: String(page), limit: "25" });
     if (statusFilter) params.set("status", statusFilter);
+    // Scoped (non-HO) users with assignments only see transfers involving
+    // their location(s); everyone else (HO roles, or unassigned users) sees all.
+    if (isScoped) {
+      params.set("location_ids", assignedLocationIds.join(","));
+    }
     const res = await fetch(`/api/procurement/transfers?${params}`);
     if (res.ok) {
       const json = await res.json();
@@ -42,9 +49,9 @@ export default function TransfersPage() {
       setPagination(json.pagination);
     }
     setLoading(false);
-  }, [page, statusFilter]);
+  }, [page, statusFilter, isScoped, assignedLocationIds]);
 
-  useEffect(() => { fetchTransfers(); }, [fetchTransfers]);
+  useEffect(() => { if (!scopeLoading) fetchTransfers(); }, [fetchTransfers, scopeLoading]);
 
   return (
     <div className="space-y-4">

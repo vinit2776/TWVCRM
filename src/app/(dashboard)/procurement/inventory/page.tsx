@@ -9,38 +9,35 @@ import {
 } from "@/components/ui/select";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
+import { IncomingTransfers } from "@/components/procurement/incoming-transfers";
+import { InventoryAnalytics } from "@/components/procurement/inventory-analytics";
+import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
+import { useScopedLocations } from "@/hooks/use-scoped-locations";
 import {
-  PROCUREMENT_DEPARTMENTS,
+  STOCK_DEPARTMENTS,
   PROCUREMENT_DEPARTMENT_LABELS,
   PROCUREMENT_DEPARTMENT_COLORS,
+  agingStatus,
 } from "@/lib/constants";
-import type { LocationStock, Location } from "@/types";
+import { ageInDays } from "@/lib/procurement/stock-aging";
+import type { LocationStock } from "@/types";
 
-const DEPARTMENT_TABS = ["all", ...PROCUREMENT_DEPARTMENTS] as const;
+// Only physical-stock departments are shown in Inventory.
+const DEPARTMENT_TABS = ["all", ...STOCK_DEPARTMENTS] as const;
 
 export default function InventoryPage() {
+  const { availableLocations, primaryLocationId, loading: locationsLoading } = useScopedLocations();
   const [stock, setStock] = useState<LocationStock[]>([]);
-  const [locations, setLocations] = useState<Location[]>([]);
   const [locationId, setLocationId] = useState("");
   const [department, setDepartment] = useState("all");
   const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(true);
-  const [locationsLoading, setLocationsLoading] = useState(true);
 
-  // Fetch locations on mount
+  // Auto-select the user's primary (or first available) location once resolved
   useEffect(() => {
-    fetch("/api/locations")
-      .then((r) => r.json())
-      .then((json) => {
-        const locs = (json.data || []).filter((l: Location) => l.is_active !== false);
-        setLocations(locs);
-        if (locs.length > 0 && !locationId) {
-          setLocationId(locs[0].id);
-        }
-      })
-      .finally(() => setLocationsLoading(false));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+    if (!locationId && primaryLocationId) setLocationId(primaryLocationId);
+  }, [primaryLocationId, locationId]);
 
   const fetchStock = useCallback(async () => {
     if (!locationId) return;
@@ -59,8 +56,11 @@ export default function InventoryPage() {
     if (locationId) fetchStock();
   }, [fetchStock, locationId]);
 
-  // Client-side search filter
+  // Only show physical-stock departments (hide administration / non-stock),
+  // then apply the search filter.
   const filtered = stock.filter((s) => {
+    const dept = (s.procurement_items as { department?: string } | null)?.department ?? "";
+    if (!STOCK_DEPARTMENTS.includes(dept)) return false;
     if (!search.trim()) return true;
     const name = s.procurement_items?.name ?? "";
     return name.toLowerCase().includes(search.toLowerCase());
@@ -91,7 +91,7 @@ export default function InventoryPage() {
         <div>
           <h1 className="text-2xl font-bold">Inventory</h1>
           <p className="text-sm text-muted-foreground">
-            Stock levels across locations
+            Stock levels across locations — view only. Stock changes through purchase orders, transfers, and consumption.
           </p>
         </div>
 
@@ -104,12 +104,20 @@ export default function InventoryPage() {
           </SelectTrigger>
           <SelectContent>
             <SelectItem value="__none__">Select location</SelectItem>
-            {locations.map((loc) => (
+            {availableLocations.map((loc) => (
               <SelectItem key={loc.id} value={loc.id}>{loc.name}</SelectItem>
             ))}
           </SelectContent>
         </Select>
       </div>
+
+      <Tabs defaultValue="inventory" className="space-y-4">
+        <TabsList>
+          <TabsTrigger value="inventory">Inventory</TabsTrigger>
+          <TabsTrigger value="analytics">Analytics</TabsTrigger>
+        </TabsList>
+
+        <TabsContent value="inventory" className="space-y-4">
 
       {/* Department filter tabs */}
       <div className="flex items-center gap-2 flex-wrap">
@@ -139,6 +147,14 @@ export default function InventoryPage() {
         />
       </div>
 
+      {/* Upcoming inwards — transfers on the way to this location */}
+      {locationId && (
+        <IncomingTransfers
+          locationId={locationId}
+          locationName={availableLocations.find((l) => l.id === locationId)?.name}
+        />
+      )}
+
       {loading ? (
         <TableSkeleton rows={8} />
       ) : filtered.length === 0 ? (
@@ -161,17 +177,42 @@ export default function InventoryPage() {
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Unit</th>
                 <th className="px-4 py-3 text-right font-medium">Qty on Hand</th>
                 <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Reorder Level</th>
-                <th className="px-4 py-3 text-center font-medium">Status</th>
+                <th className="px-4 py-3 text-center font-medium">
+                  <span className="inline-flex items-center gap-1">
+                    Status
+                    <InfoTooltip text="OK = healthy stock. Low = at or below the reorder level, plan to reorder. Out = nothing in stock." />
+                  </span>
+                </th>
+                <th className="px-4 py-3 text-left font-medium">
+                  <span className="inline-flex items-center gap-1">
+                    Age
+                    <InfoTooltip text="Time since this stock was last received (PO delivery or transfer in). Amber/red = older than the department's freshness window — worth checking the item's condition." />
+                  </span>
+                </th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((item) => {
                 const dept = item.procurement_items?.department ?? "";
                 const status = getStatus(item);
+                const lastReceived = (item as { last_received?: string | null }).last_received ?? null;
+                const age = ageInDays(lastReceived);
+                const aging = agingStatus(dept, age);
                 return (
                   <tr key={item.id} className="border-b hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-3 font-medium">
-                      {item.procurement_items?.name ?? "—"}
+                      <span className="inline-flex items-center gap-2">
+                        {item.procurement_items?.name ?? "—"}
+                        {(item.procurement_items as { item_type?: string } | null)?.item_type === "service" && (
+                          <Badge
+                            variant="secondary"
+                            className="bg-violet-100 text-violet-700 text-[10px] gap-1"
+                            title="Service / contract item (e.g. AMC). Tracked at this location but cannot be transferred or consumed."
+                          >
+                            Service
+                          </Badge>
+                        )}
+                      </span>
                     </td>
                     <td className="px-4 py-3 hidden sm:table-cell">
                       {dept ? (
@@ -183,14 +224,37 @@ export default function InventoryPage() {
                     <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
                       {item.procurement_items?.unit ?? "—"}
                     </td>
-                    <td className="px-4 py-3 text-right font-medium">
+                    <td className={`px-4 py-3 text-right font-medium ${status === "out" ? "text-red-600" : status === "low" ? "text-amber-600" : ""}`}>
                       {item.quantity_on_hand}
+                      {item.reorder_level > 0 && (
+                        <span className="block md:hidden text-[10px] font-normal text-muted-foreground">
+                          reorder at {item.reorder_level}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right hidden md:table-cell text-muted-foreground">
                       {item.reorder_level > 0 ? item.reorder_level : "—"}
                     </td>
                     <td className="px-4 py-3 text-center">
                       {statusBadge(status)}
+                    </td>
+                    <td className="px-4 py-3">
+                      {age == null ? (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      ) : (
+                        <span
+                          className={`text-xs whitespace-nowrap ${
+                            aging === "old"
+                              ? "text-red-600 font-medium"
+                              : aging === "watch"
+                              ? "text-amber-600"
+                              : "text-muted-foreground"
+                          }`}
+                          title={`Last received ${age} days ago`}
+                        >
+                          {age}d{aging === "old" ? " · old" : ""}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 );
@@ -199,6 +263,21 @@ export default function InventoryPage() {
           </table>
         </div>
       )}
+        </TabsContent>
+
+        <TabsContent value="analytics">
+          {locationId ? (
+            <InventoryAnalytics
+              locationId={locationId}
+              locationName={availableLocations.find((l) => l.id === locationId)?.name}
+            />
+          ) : (
+            <p className="text-sm text-muted-foreground py-8 text-center">
+              Select a location to view analytics.
+            </p>
+          )}
+        </TabsContent>
+      </Tabs>
     </div>
   );
 }

@@ -16,6 +16,8 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { SearchableSelect } from "@/components/ui/searchable-select";
+import { STOCK_DEPARTMENTS } from "@/lib/constants";
 import type { Location, LocationStock } from "@/types";
 
 interface LineItem {
@@ -82,7 +84,12 @@ export default function NewTransferPage() {
     ]).then(([locJson, itemJson]) => {
       const locs = (locJson.data || []).filter((l: Location) => l.is_active !== false);
       setLocations(locs);
-      setCatalogItems(itemJson.data || []);
+      // Only physical-stock departments can be transferred (no Administration / services)
+      setCatalogItems(
+        (itemJson.data || []).filter((it: CatalogItem) =>
+          STOCK_DEPARTMENTS.includes(it.department)
+        )
+      );
     });
   }, []);
 
@@ -311,32 +318,22 @@ export default function NewTransferPage() {
                   {/* Item selector */}
                   <div className="space-y-1">
                     <Label className="text-xs">Item <span className="text-red-500">*</span></Label>
-                    <Select
-                      value={li.item_id || "__none__"}
-                      onValueChange={(v) => updateItem(li.id, "item_id", v === "__none__" ? "" : v)}
-                    >
-                      <SelectTrigger>
-                        <SelectValue placeholder="Select an item" />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="__none__">Select an item</SelectItem>
-                        {catalogItems.map((cat) => {
-                          const inStock = sourceStockMap[cat.id] ?? 0;
-                          return (
-                            <SelectItem key={cat.id} value={cat.id}>
-                              <span className="flex items-center gap-2">
-                                <span>{cat.name}</span>
-                                {fromLocationId && (
-                                  <span className={`text-xs ${inStock === 0 ? "text-red-500" : "text-muted-foreground"}`}>
-                                    {inStock > 0 ? `${inStock} ${cat.unit}` : "no stock"}
-                                  </span>
-                                )}
-                              </span>
-                            </SelectItem>
-                          );
-                        })}
-                      </SelectContent>
-                    </Select>
+                    <SearchableSelect
+                      options={catalogItems.map((cat) => {
+                        const inStock = sourceStockMap[cat.id] ?? 0;
+                        const stockHint = fromLocationId
+                          ? inStock > 0
+                            ? ` — ${inStock} ${cat.unit}`
+                            : " — no stock"
+                          : "";
+                        return { value: cat.id, label: `${cat.name}${stockHint}` };
+                      })}
+                      value={li.item_id || ""}
+                      onValueChange={(v) => updateItem(li.id, "item_id", v)}
+                      placeholder="Select an item"
+                      searchPlaceholder="Search items…"
+                      emptyMessage="No matching items"
+                    />
                   </div>
 
                   {/* ── Stock display — shown as soon as item is selected ── */}

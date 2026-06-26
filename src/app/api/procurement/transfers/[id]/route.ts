@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { generateSignedApprovalCode } from "@/lib/procurement/approval-code";
 import { z } from "zod";
@@ -79,7 +79,20 @@ export async function GET(
     stockLevels = levels ?? [];
   }
 
-  return NextResponse.json({ data: transfer, stock_levels: stockLevels });
+  // Audit trail — full who/what/when for this transfer. Read with the admin
+  // client so it's visible to anyone allowed to view the transfer (the
+  // audit_trail table is otherwise admin-only via RLS).
+  const adminSupabase = await createAdminClient();
+  const { data: auditTrail } = await adminSupabase
+    .from("audit_trail")
+    .select(
+      "id, action, changes, created_at, performer:users!audit_trail_performed_by_fkey(id, full_name, role)"
+    )
+    .eq("entity_type", "stock_transfer")
+    .eq("entity_id", id)
+    .order("created_at", { ascending: true });
+
+  return NextResponse.json({ data: transfer, stock_levels: stockLevels, audit_trail: auditTrail ?? [] });
 }
 
 export async function PATCH(
@@ -392,7 +405,6 @@ export async function PATCH(
         reported_quantity: item.reported_quantity,
         expected_quantity: item.expected_quantity,
         description: item.description ?? null,
-        reported_by: dbUser.id,
         status: "open",
       }));
 
