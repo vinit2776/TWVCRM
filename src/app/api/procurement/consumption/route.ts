@@ -101,19 +101,20 @@ export async function POST(request: NextRequest) {
   // Check stock levels — log warnings if below tracked stock, but don't block
   // (physical stock may differ from system records if deliveries weren't location-linked)
   const stockWarnings: string[] = [];
-  for (const item of parsed.data.items) {
-    if (!item.item_id) continue;
-
-    const { data: stock } = await supabase
+  const itemIdsToCheck = parsed.data.items.map((i) => i.item_id).filter(Boolean) as string[];
+  if (itemIdsToCheck.length > 0) {
+    const { data: stockRows } = await supabase
       .from("location_stock")
-      .select("quantity_on_hand")
+      .select("item_id, quantity_on_hand")
       .eq("location_id", parsed.data.location_id)
-      .eq("item_id", item.item_id)
-      .maybeSingle();
-
-    const onHand = stock?.quantity_on_hand ?? 0;
-    if (item.quantity_consumed > Number(onHand)) {
-      stockWarnings.push(`${item.item_name}: consumed ${item.quantity_consumed} but system shows ${onHand} in stock`);
+      .in("item_id", itemIdsToCheck);
+    const stockMap = new Map((stockRows ?? []).map((r) => [r.item_id as string, r.quantity_on_hand]));
+    for (const item of parsed.data.items) {
+      if (!item.item_id) continue;
+      const onHand = stockMap.get(item.item_id) ?? 0;
+      if (item.quantity_consumed > Number(onHand)) {
+        stockWarnings.push(`${item.item_name}: consumed ${item.quantity_consumed} but system shows ${onHand} in stock`);
+      }
     }
   }
 
@@ -144,18 +145,21 @@ export async function POST(request: NextRequest) {
   const { error: itemsError } = await supabase.from("consumption_log_items").insert(items);
   if (itemsError) return NextResponse.json({ error: itemsError.message }, { status: 500 });
 
-  // Deduct stock for each item
-  for (const item of parsed.data.items) {
-    if (!item.item_id) continue;
-    const { error: rpcError } = await supabase.rpc("upsert_location_stock", {
-      p_location_id: parsed.data.location_id,
-      p_item_id: item.item_id,
-      p_quantity_delta: -item.quantity_consumed,
-    });
-    if (rpcError) {
-      console.error(`Failed to deduct stock for ${item.item_name}:`, rpcError.message);
-    }
-  }
+  // Deduct stock for each item — run in parallel to avoid N sequential round-trips
+  await Promise.all(
+    parsed.data.items
+      .filter((item) => item.item_id)
+      .map(async (item) => {
+        const { error: rpcError } = await supabase.rpc("upsert_location_stock", {
+          p_location_id: parsed.data.location_id,
+          p_item_id: item.item_id,
+          p_quantity_delta: -item.quantity_consumed,
+        });
+        if (rpcError) {
+          console.error(`Failed to deduct stock for ${item.item_name}:`, rpcError.message);
+        }
+      })
+  );
 
   // Check reorder levels at this location
   const { data: reorderAlerts } = await supabase

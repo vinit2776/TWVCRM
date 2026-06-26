@@ -139,6 +139,12 @@ export async function PATCH(
         .insert(corrections);
       if (correctionError) {
         console.error("Failed to record void corrections:", correctionError.message);
+        // Void and stock restore already committed — can't roll back here.
+        // Return success with a warning so the caller knows the audit trail needs a follow-up.
+        return NextResponse.json({
+          data: { id, status: "voided" },
+          warning: "Void recorded but correction audit trail could not be written. Contact support.",
+        });
       }
 
       await logAudit(supabase, {

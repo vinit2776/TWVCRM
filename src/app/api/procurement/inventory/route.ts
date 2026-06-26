@@ -3,6 +3,8 @@ import { createClient } from "@/lib/supabase/server";
 import { getLastReceivedMap } from "@/lib/procurement/stock-aging";
 import { z } from "zod";
 
+const CROSS_LOCATION_ROLES = ["admin", "manager", "office_admin"];
+
 const upsertStockSchema = z.object({
   location_id: z.string().uuid(),
   item_id: z.string().uuid(),
@@ -22,6 +24,16 @@ export async function GET(request: NextRequest) {
   const locationId = searchParams.get("location_id");
   const department = searchParams.get("department");
   const belowReorder = searchParams.get("below_reorder");
+
+  // Scope check: non-HO roles may only query their assigned location
+  if (locationId && !CROSS_LOCATION_ROLES.includes(dbUser.role)) {
+    const { count } = await supabase
+      .from("user_locations")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", dbUser.id)
+      .eq("location_id", locationId);
+    if (!count) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
 
   let query = supabase
     .from("location_stock")

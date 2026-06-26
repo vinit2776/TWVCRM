@@ -26,6 +26,8 @@ interface StockRow {
   } | null;
 }
 
+const CROSS_LOCATION_ROLES = ["admin", "manager", "office_admin"];
+
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
   const {
@@ -33,24 +35,52 @@ export async function GET(request: NextRequest) {
   } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
+  const { data: dbUser } = await supabase
+    .from("users")
+    .select("id, role")
+    .eq("auth_id", user.id)
+    .single();
+  if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
+
   const { searchParams } = new URL(request.url);
   const locationId = searchParams.get("location_id");
   if (!locationId) return NextResponse.json({ error: "location_id required" }, { status: 400 });
 
-  // Period — default last 30 days
+  // Scope check: non-HO roles must have a user_locations entry for this location
+  if (!CROSS_LOCATION_ROLES.includes(dbUser.role)) {
+    const { count } = await supabase
+      .from("user_locations")
+      .select("id", { count: "exact", head: true })
+      .eq("user_id", dbUser.id)
+      .eq("location_id", locationId);
+    if (!count) return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+  }
+
+  // Period — default last 30 days (capped at 365 days to prevent unbounded queries)
   const toParam = searchParams.get("to");
   const fromParam = searchParams.get("from");
   const to = toParam ? new Date(toParam) : new Date();
-  const from = fromParam ? new Date(fromParam) : new Date(to.getTime() - 30 * 86400000);
+  const fromRaw = fromParam ? new Date(fromParam) : new Date(to.getTime() - 30 * 86400000);
+  const from = new Date(Math.max(fromRaw.getTime(), to.getTime() - 365 * 86400000));
   const periodDays = Math.max(1, Math.round((to.getTime() - from.getTime()) / 86400000));
 
-  // ── Current holding ────────────────────────────────────────────────────
-  const { data: stockRaw } = await supabase
-    .from("location_stock")
-    .select(
-      "quantity_on_hand, reorder_level, item_id, procurement_items(name, department, item_type, unit, standard_price)"
-    )
-    .eq("location_id", locationId);
+  // ── Current holding + Consumption in period + stock aging — run in parallel ─
+  const [{ data: stockRaw }, { data: logsRawParallel }, lastReceivedMap] = await Promise.all([
+    supabase
+      .from("location_stock")
+      .select(
+        "quantity_on_hand, reorder_level, item_id, procurement_items(name, department, item_type, unit, standard_price)"
+      )
+      .eq("location_id", locationId),
+    supabase
+      .from("consumption_logs")
+      .select("id, logged_at, status, consumption_log_items(item_id, item_name, unit, quantity_consumed)")
+      .eq("location_id", locationId)
+      .eq("status", "active")
+      .gte("logged_at", from.toISOString())
+      .lte("logged_at", to.toISOString()),
+    getLastReceivedMap(supabase, locationId),
+  ]);
 
   const stock = ((stockRaw ?? []) as unknown as StockRow[]).filter((r) => {
     const pi = r.procurement_items;
@@ -118,15 +148,8 @@ export async function GET(request: NextRequest) {
     .slice(0, 8);
 
   // ── Consumption in period ──────────────────────────────────────────────
-  const { data: logsRaw } = await supabase
-    .from("consumption_logs")
-    .select("id, logged_at, status, consumption_log_items(item_id, item_name, unit, quantity_consumed)")
-    .eq("location_id", locationId)
-    .eq("status", "active")
-    .gte("logged_at", from.toISOString())
-    .lte("logged_at", to.toISOString());
-
-  const logs = (logsRaw ?? []) as unknown as {
+  // (query already executed in parallel with the stock query above)
+  const logs = (logsRawParallel ?? []) as unknown as {
     id: string;
     logged_at: string;
     consumption_log_items: { item_id: string | null; item_name: string; unit: string | null; quantity_consumed: number | string }[];
@@ -240,7 +263,7 @@ export async function GET(request: NextRequest) {
     : null;
 
   // ── Stock aging (days since last received) ─────────────────────────────
-  const lastReceivedMap = await getLastReceivedMap(supabase, locationId);
+  // lastReceivedMap was already fetched in the parallel block above
   const nowMs = to.getTime();
   const bucketsDef = [
     { label: "0–90d", min: 0, max: 90 },

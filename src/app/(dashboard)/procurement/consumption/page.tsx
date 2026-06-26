@@ -161,7 +161,7 @@ function ConsumptionPageContent() {
     // HO roles, or any user not yet assigned to a location, see all (no lockout).
     if (isCrossLocationRole || userLocations.length === 0) return allLocations;
     return userLocations
-      .sort((a) => (a.responsibility === "primary" ? -1 : 1))
+      .sort((a, b) => (a.responsibility === "primary" ? -1 : 1) - (b.responsibility === "primary" ? -1 : 1))
       .map((ul) => ul.location);
   }, [isCrossLocationRole, allLocations, userLocations]);
 

@@ -4,6 +4,9 @@ import { logAudit } from "@/lib/audit";
 import { STOCK_DEPARTMENTS } from "@/lib/constants";
 import { z } from "zod";
 
+const CROSS_LOCATION_ROLES = ["admin", "manager", "office_admin"];
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
 const createTransferSchema = z.object({
   from_location_id: z.string().uuid(),
   to_location_id: z.string().uuid(),
@@ -48,6 +51,30 @@ export async function GET(request: NextRequest) {
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
   const offset = (page - 1) * limit;
+
+  // Validate incoming_to is a UUID before passing to the DB
+  if (incomingTo && !UUID_RE.test(incomingTo)) {
+    return NextResponse.json({ error: "Invalid incoming_to parameter" }, { status: 400 });
+  }
+
+  // Scope check: non-HO roles may only query locations they're assigned to
+  if (!CROSS_LOCATION_ROLES.includes(dbUser.role)) {
+    const { data: assignedRows } = await supabase
+      .from("user_locations")
+      .select("location_id")
+      .eq("user_id", dbUser.id);
+    const assignedIds = new Set((assignedRows ?? []).map((r: { location_id: string }) => r.location_id));
+
+    const idsToCheck = [
+      ...(locationIds ? locationIds.split(",").map((s) => s.trim()).filter(Boolean) : []),
+      ...(incomingTo ? [incomingTo] : []),
+      ...(locationId ? [locationId] : []),
+    ];
+
+    if (idsToCheck.length > 0 && idsToCheck.some((id) => !assignedIds.has(id))) {
+      return NextResponse.json({ error: "Forbidden" }, { status: 403 });
+    }
+  }
 
   let query = supabase
     .from("stock_transfers")
