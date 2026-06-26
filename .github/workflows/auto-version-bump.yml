@@ -4,6 +4,10 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: auto-version-bump
+  cancel-in-progress: false
+
 jobs:
   bump-version:
     # Skip if this push was the version bump itself — prevents infinite loop
@@ -21,6 +25,9 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Pull latest main before bumping
+        run: git pull --rebase origin main
 
       - name: Bump patch version
         run: npm version patch --no-git-tag-version
