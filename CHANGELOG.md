@@ -2,6 +2,18 @@
 
 All notable changes to TWV CRM are documented here.
 
+## [1.0.98.0] - 2026-06-26
+
+### Added
+- **Facility claim model — full UI**: ticket detail page now shows a claim countdown banner (amber/red), "Claim this ticket" button for any user on unowned tickets, "Take over" button when owned by someone else, and a ShieldAlert ownership notice for non-owners
+- **Dispatch board (Unowned tab)**: issues list has a new "Unowned" chip with badge count; activating it fetches only new/reopened unassigned tickets sorted by claim SLA breach → priority → age
+- **Asset AMC context card**: when an issue has a linked asset, the detail page sidebar shows make/model, warranty expiry, AMC status + end date, vendor helpline (clickable tel: link), contact name/email, escalation contact, scope notes, and last 3 issues on that asset
+- **Auto-asset maintenance event on resolve**: resolving an issue with a linked asset automatically writes a `maintenance` event to `facility_asset_events` — no manual logging needed; shows up in the asset's event history
+
+### Changed
+- Issues list "Unowned" filter uses `assigned_to=unassigned` + status `new/reopened`; grouped view is disabled in unowned mode to preserve the sort order
+- `GET /api/facility/issues` now accepts `asset_id` query param for filtering issues by asset
+
 ## [1.0.97.0] - 2026-06-26
 
 ### Added

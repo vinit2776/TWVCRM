@@ -27,6 +27,7 @@ export async function GET(request: NextRequest) {
   const assignedTo = searchParams.get("assigned_to");
   const reportedBy = searchParams.get("reported_by");
   const categoryId = searchParams.get("category_id");
+  const assetId = searchParams.get("asset_id");
   const slaBreached = searchParams.get("sla_breached");
   const search = searchParams.get("search");
   const dateFrom = searchParams.get("date_from");
@@ -64,6 +65,7 @@ export async function GET(request: NextRequest) {
   }
   if (reportedBy) query = query.eq("reported_by", reportedBy);
   if (categoryId) query = query.eq("category_id", categoryId);
+  if (assetId) query = query.eq("asset_id", assetId);
   if (slaBreached === "true") query = query.eq("sla_breached", true);
   if (dateFrom) query = query.gte("created_at", dateFrom);
   if (dateTo) query = query.lte("created_at", dateTo);
