@@ -41,9 +41,21 @@ export async function PATCH(
 
   const { data: existing, error: loadErr } = await supabase
     .from("facility_issues")
-    .select("id, issue_number, title, status, priority, category_id, assigned_to, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, reopen_count, reporter_email, reporter_phone")
+    .select("id, issue_number, title, status, priority, category_id, asset_id, assigned_to, acknowledged_at, started_at, resolved_at, closed_at, sla_target_at, reopen_count, reporter_email, reporter_phone, assignee:users!facility_issues_assigned_to_fkey(full_name)")
     .eq("id", id).single();
   if (loadErr || !existing) return NextResponse.json({ error: "Not found" }, { status: 404 });
+
+  // Ownership gate: once a ticket is acknowledged, only the assignee or override tier can move it
+  const isOverrideTier = ["admin", "manager", "office_admin"].includes(dbUser?.role ?? "");
+  const isOwner = existing.assigned_to === dbUser?.id;
+  const needsOwnershipCheck = !["new", "reopened"].includes(existing.status as string);
+  if (needsOwnershipCheck && !isOwner && !isOverrideTier) {
+    const ownerName = (existing.assignee as { full_name?: string } | null)?.full_name ?? "the assignee";
+    return NextResponse.json(
+      { error: `This ticket is assigned to ${ownerName}. Only they can update its status.` },
+      { status: 403 }
+    );
+  }
 
   if (!canTransition(existing.status as FacilityIssueStatus, next)) {
     return NextResponse.json(
@@ -111,8 +123,19 @@ export async function PATCH(
 
   await notifyIssueAssignee(
     { id, category_id: existing.category_id, assigned_to: existing.assigned_to, issue_number: existing.issue_number, title: existing.title },
-    { type: "status_changed", from: existing.status, to: next, actorName: dbUser!.full_name }
+    { type: "status_changed", from: existing.status, to: next, actorName: dbUser!.full_name, reporterEmail: existing.reporter_email ?? null }
   );
+
+  // Auto-log maintenance event on the linked asset when issue is resolved
+  if (next === "resolved" && existing.asset_id) {
+    await supabase.from("facility_asset_events").insert({
+      asset_id: existing.asset_id,
+      event_type: "maintenance",
+      note: `Resolved via ${existing.issue_number}: ${existing.title}`,
+      logged_by: dbUser!.id,
+      issue_id: id,
+    });
+  }
 
   return NextResponse.json({ data });
 }

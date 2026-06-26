@@ -87,6 +87,24 @@ export function computeSlaTarget(
 }
 
 /**
+ * Compute the time-to-claim SLA deadline from priority.
+ * Hardcoded targets: critical=2h, high=4h, medium=8h, low=24h.
+ */
+export function computeClaimSlaTarget(
+  priority: FacilityIssuePriority,
+  reportedAt: Date = new Date()
+): string {
+  const hoursMap: Record<FacilityIssuePriority, number> = {
+    critical: 2,
+    high: 4,
+    medium: 8,
+    low: 24,
+  };
+  const target = new Date(reportedAt.getTime() + hoursMap[priority] * 3600 * 1000);
+  return target.toISOString();
+}
+
+/**
  * What status transitions are allowed? Used by the PATCH /status route to
  * reject bogus transitions early with a clear error.
  */

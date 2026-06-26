@@ -2813,6 +2813,9 @@ export interface FacilityIssue {
   closed_at?: string | null;
   sla_target_at?: string | null;
   sla_breached: boolean;
+  claimed_at?: string | null;
+  claim_sla_target_at?: string | null;
+  claim_sla_breached?: boolean;
   resolution_root_cause?: FacilityRootCause | null;
   resolution_notes?: string | null;
   resolution_time_minutes?: number | null;

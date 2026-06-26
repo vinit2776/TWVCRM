@@ -52,8 +52,9 @@ export default function FacilityIssuesPage() {
   const [statusFilters, setStatusFilters] = useState<FacilityIssueStatus[]>([]);
   const [priority, setPriority] = useState<FacilityIssuePriority | "">("");
   const [locationId, setLocationId] = useState("");
-  const [onlyOpen, setOnlyOpen] = useState(false);   // default: fetch all statuses
+  const [onlyOpen, setOnlyOpen] = useState(false);
   const [onlyMine, setOnlyMine] = useState(false);
+  const [onlyUnowned, setOnlyUnowned] = useState(false);
   const [slaBreached, setSlaBreached] = useState(false);
   const [filtersOpen, setFiltersOpen] = useState(false);
 
@@ -64,8 +65,12 @@ export default function FacilityIssuesPage() {
     if (locationId) params.set("location_id", locationId);
     if (slaBreached) params.set("sla_breached", "true");
     if (onlyMine) params.set("assigned_to", "me");
+    if (onlyUnowned) params.set("assigned_to", "unassigned");
     if (statusFilters.length > 0) {
       for (const s of statusFilters) params.append("status", s);
+    } else if (onlyUnowned) {
+      params.append("status", "new");
+      params.append("status", "reopened");
     } else if (onlyOpen) {
       params.set("only_open", "true");
     }
@@ -92,19 +97,35 @@ export default function FacilityIssuesPage() {
   useEffect(() => {
     fetchData();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [priority, locationId, slaBreached, onlyMine, onlyOpen, statusFilters]);
+  }, [priority, locationId, slaBreached, onlyMine, onlyOpen, onlyUnowned, statusFilters]);
 
-  // Client-side text search
+  // Client-side text search + sort for unowned view
   const filtered = useMemo(() => {
-    if (!search.trim()) return issues;
-    const q = search.toLowerCase();
-    return issues.filter((i) =>
-      i.title.toLowerCase().includes(q) ||
-      i.issue_number.toLowerCase().includes(q) ||
-      (i.description ?? "").toLowerCase().includes(q) ||
-      (i.location?.name ?? "").toLowerCase().includes(q)
-    );
-  }, [issues, search]);
+    let result = issues;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      result = result.filter((i) =>
+        i.title.toLowerCase().includes(q) ||
+        i.issue_number.toLowerCase().includes(q) ||
+        (i.description ?? "").toLowerCase().includes(q) ||
+        (i.location?.name ?? "").toLowerCase().includes(q)
+      );
+    }
+    if (onlyUnowned) {
+      // Sort: claim_sla_breached first, then by priority (critical → low), then by created_at
+      const PRIORITY_WEIGHT: Record<string, number> = { critical: 0, high: 1, medium: 2, low: 3 };
+      result = [...result].sort((a, b) => {
+        const aBreached = a.claim_sla_breached ? 0 : 1;
+        const bBreached = b.claim_sla_breached ? 0 : 1;
+        if (aBreached !== bBreached) return aBreached - bBreached;
+        const aPri = PRIORITY_WEIGHT[a.priority] ?? 4;
+        const bPri = PRIORITY_WEIGHT[b.priority] ?? 4;
+        if (aPri !== bPri) return aPri - bPri;
+        return new Date(a.created_at).getTime() - new Date(b.created_at).getTime();
+      });
+    }
+    return result;
+  }, [issues, search, onlyUnowned]);
 
   // Group by status in canonical order; only include groups that have issues
   const grouped = useMemo(() => {
@@ -118,8 +139,8 @@ export default function FacilityIssuesPage() {
       .filter(({ items }) => items.length > 0);
   }, [filtered]);
 
-  // Show grouped view unless the user has drilled into specific statuses via filter
-  const showGrouped = statusFilters.length === 0;
+  // Show grouped view unless the user has drilled into specific statuses or is in unowned view
+  const showGrouped = statusFilters.length === 0 && !onlyUnowned;
 
   const toggleGroup = (status: FacilityIssueStatus) => {
     setCollapsedGroups((prev) => {
@@ -172,8 +193,15 @@ export default function FacilityIssuesPage() {
 
       {/* ───── Quick filter chips (always visible) ────────────────────────── */}
       <div className="flex flex-wrap gap-1.5">
-        <Chip active={onlyOpen} onClick={() => { setOnlyOpen((v) => !v); setStatusFilters([]); }}>Open only</Chip>
-        <Chip active={onlyMine} onClick={() => setOnlyMine((v) => !v)}>Mine</Chip>
+        <Chip active={onlyUnowned} onClick={() => { setOnlyUnowned((v) => !v); setOnlyOpen(false); setOnlyMine(false); setStatusFilters([]); }}>
+          Unowned{issues.filter((i) => !i.assigned_to && (i.status === "new" || i.status === "reopened")).length > 0 && !onlyUnowned && (
+            <span className="ml-1 bg-amber-500 text-white text-[9px] px-1 py-0.5 rounded-full font-bold">
+              {issues.filter((i) => !i.assigned_to && (i.status === "new" || i.status === "reopened")).length}
+            </span>
+          )}
+        </Chip>
+        <Chip active={onlyOpen} onClick={() => { setOnlyOpen((v) => !v); setOnlyUnowned(false); setStatusFilters([]); }}>Open only</Chip>
+        <Chip active={onlyMine} onClick={() => { setOnlyMine((v) => !v); setOnlyUnowned(false); }}>Mine</Chip>
         <Chip active={slaBreached} onClick={() => setSlaBreached((v) => !v)}>
           <AlertTriangle className="h-3 w-3 mr-1 inline" /> SLA breached
         </Chip>
@@ -349,12 +377,16 @@ function Chip({ active, onClick, children }: {
 function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean }) {
   const sla = issue.sla_target_at;
   const isOpen = ACTIVE_STATUSES.has(issue.status);
+  const isUnowned = !issue.assigned_to && (issue.status === "new" || issue.status === "reopened");
+  const claimOverdue = isUnowned && issue.claim_sla_breached;
+
   return (
     <Link
       href={`/facility/issues/${issue.id}`}
       className={cn(
         "block bg-card hover:bg-muted/20 transition-colors p-3",
         !inGroup && "rounded-lg border hover:border-foreground/20 hover:shadow-sm",
+        claimOverdue && !inGroup && "border-amber-300",
       )}
     >
       <div className="flex items-start gap-3">
@@ -362,15 +394,22 @@ function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <code className="text-xs font-mono text-muted-foreground">{issue.issue_number}</code>
-            {/* In flat view show status badge; in grouped view the group header already shows it */}
-            {!inGroup && (
+            {isUnowned && (
+              <span className={cn(
+                "text-[10px] px-1.5 py-0.5 rounded-full ring-1 font-medium",
+                claimOverdue ? "bg-red-50 text-red-700 ring-red-200" : "bg-amber-50 text-amber-700 ring-amber-200",
+              )}>
+                {claimOverdue ? "Claim overdue" : "Unowned"}
+              </span>
+            )}
+            {!inGroup && !isUnowned && (
               <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1", STATUS_STYLES[issue.status].chip)}>
                 {STATUS_STYLES[issue.status].label}
               </span>
             )}
             {issue.sla_breached && isOpen && (
               <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-red-50 text-red-700 ring-1 ring-red-200 inline-flex items-center">
-                <AlertTriangle className="h-2.5 w-2.5 mr-0.5" /> Breached
+                <AlertTriangle className="h-2.5 w-2.5 mr-0.5" /> SLA Breached
               </span>
             )}
           </div>
@@ -385,6 +424,14 @@ function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean
               <>
                 <span>·</span>
                 <span className={issue.sla_breached ? "text-red-600 font-medium" : ""}>SLA {timeUntil(sla)}</span>
+              </>
+            )}
+            {isUnowned && issue.claim_sla_target_at && (
+              <>
+                <span>·</span>
+                <span className={cn("font-medium", claimOverdue ? "text-red-600" : "text-amber-600")}>
+                  {timeUntil(issue.claim_sla_target_at)}
+                </span>
               </>
             )}
           </div>
