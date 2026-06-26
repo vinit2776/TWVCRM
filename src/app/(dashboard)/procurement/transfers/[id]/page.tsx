@@ -28,7 +28,17 @@ import {
 } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
 import { TransferLifecycleStatus } from "@/components/procurement/transfer-lifecycle-status";
+import { TransferAuditTrail } from "@/components/procurement/transfer-audit-trail";
 import { InfoTooltip } from "@/components/ui/info-tooltip";
+
+interface AuditEntry {
+  id: string;
+  action: string;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  changes: any;
+  created_at: string;
+  performer?: { full_name?: string | null; role?: string | null } | null;
+}
 import type { StockTransfer, StockTransferItem, StockTransferIssue } from "@/types";
 
 interface StockLevel {
@@ -61,6 +71,7 @@ export default function TransferDetailPage() {
 
   const [transfer, setTransfer] = useState<StockTransfer | null>(null);
   const [stockLevels, setStockLevels] = useState<StockLevel[]>([]);
+  const [auditTrail, setAuditTrail] = useState<AuditEntry[]>([]);
   const [loading, setLoading] = useState(true);
   const [actionLoading, setActionLoading] = useState(false);
 
@@ -81,6 +92,7 @@ export default function TransferDetailPage() {
       const json = await res.json();
       setTransfer(json.data);
       setStockLevels(json.stock_levels || []);
+      setAuditTrail(json.audit_trail || []);
     }
     setLoading(false);
   }, [id]);
@@ -635,6 +647,9 @@ export default function TransferDetailPage() {
           </CardContent>
         </Card>
       )}
+
+      {/* Audit trail — who did what, and when */}
+      {auditTrail.length > 0 && <TransferAuditTrail entries={auditTrail} />}
 
       {/* ─── Reject Dialog ──────────────────────────────────────────────── */}
       <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>

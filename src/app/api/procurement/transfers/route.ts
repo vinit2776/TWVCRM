@@ -92,6 +92,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "From and To locations must be different" }, { status: 422 });
   }
 
+  // Block service items (AMC, rentals, pest control, etc.) — they are tied to a
+  // location/asset and cannot be transferred between locations.
+  const transferItemIds = parsed.data.items.map((i) => i.item_id).filter(Boolean) as string[];
+  if (transferItemIds.length > 0) {
+    const { data: itemRows } = await supabase
+      .from("procurement_items")
+      .select("id, name, item_type")
+      .in("id", transferItemIds);
+    const svc = (itemRows ?? []).find((r) => r.item_type === "service");
+    if (svc) {
+      return NextResponse.json(
+        { error: `"${svc.name}" is a service item (e.g. AMC) and cannot be transferred between locations.` },
+        { status: 422 }
+      );
+    }
+  }
+
   // Generate transfer number
   const { count: existingCount } = await supabase
     .from("stock_transfers")

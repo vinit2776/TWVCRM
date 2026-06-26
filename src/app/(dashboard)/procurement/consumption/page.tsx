@@ -201,15 +201,21 @@ function ConsumptionPageContent() {
       const res = await fetch(`/api/procurement/inventory?location_id=${selectedLocationId}`);
       const data = await res.json();
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      setItems((data.data || []).map((row: any) => ({
-        id: row.id,
-        item_id: row.item_id,
-        item_name: row.procurement_items?.name ?? "Unknown",
-        department: row.procurement_items?.department ?? "",
-        unit: row.procurement_items?.unit ?? "",
-        quantity_on_hand: Number(row.quantity_on_hand) || 0,
-        reorder_level: Number(row.reorder_level) || 0,
-      })));
+      setItems((data.data || [])
+        // Services (AMC, rentals, pest control, etc.) are not physical stock —
+        // they cannot be consumed, so keep them out of the picker.
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .filter((row: any) => row.procurement_items?.item_type !== "service")
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        .map((row: any) => ({
+          id: row.id,
+          item_id: row.item_id,
+          item_name: row.procurement_items?.name ?? "Unknown",
+          department: row.procurement_items?.department ?? "",
+          unit: row.procurement_items?.unit ?? "",
+          quantity_on_hand: Number(row.quantity_on_hand) || 0,
+          reorder_level: Number(row.reorder_level) || 0,
+        })));
       setCart({});
     } catch {
       toast.error("Failed to load inventory");

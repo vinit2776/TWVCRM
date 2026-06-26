@@ -177,7 +177,18 @@ export default function InventoryPage() {
                 return (
                   <tr key={item.id} className="border-b hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-3 font-medium">
-                      {item.procurement_items?.name ?? "—"}
+                      <span className="inline-flex items-center gap-2">
+                        {item.procurement_items?.name ?? "—"}
+                        {(item.procurement_items as { item_type?: string } | null)?.item_type === "service" && (
+                          <Badge
+                            variant="secondary"
+                            className="bg-violet-100 text-violet-700 text-[10px] gap-1"
+                            title="Service / contract item (e.g. AMC). Tracked at this location but cannot be transferred or consumed."
+                          >
+                            Service
+                          </Badge>
+                        )}
+                      </span>
                     </td>
                     <td className="px-4 py-3 hidden sm:table-cell">
                       {dept ? (

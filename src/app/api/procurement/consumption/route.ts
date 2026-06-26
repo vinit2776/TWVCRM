@@ -78,6 +78,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
+  // Block service items (AMC, rentals, pest control, etc.) — they are not
+  // physical stock and cannot be consumed like inventory.
+  const consumeItemIds = parsed.data.items.map((i) => i.item_id).filter(Boolean) as string[];
+  if (consumeItemIds.length > 0) {
+    const { data: itemRows } = await supabase
+      .from("procurement_items")
+      .select("id, name, item_type")
+      .in("id", consumeItemIds);
+    const svc = (itemRows ?? []).find((r) => r.item_type === "service");
+    if (svc) {
+      return NextResponse.json(
+        { error: `"${svc.name}" is a service item (e.g. AMC) and cannot be consumed.` },
+        { status: 422 }
+      );
+    }
+  }
+
   // Check stock levels — log warnings if below tracked stock, but don't block
   // (physical stock may differ from system records if deliveries weren't location-linked)
   const stockWarnings: string[] = [];
