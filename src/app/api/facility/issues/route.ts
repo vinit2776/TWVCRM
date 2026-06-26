@@ -4,6 +4,7 @@ import { logAudit } from "@/lib/audit";
 import {
   generateIssueNumber,
   computeSlaTarget,
+  computeClaimSlaTarget,
   logIssueEvent,
 } from "@/lib/facility";
 import { notifyIssueAssignee, notifyAdminsStaleAssignee } from "@/lib/facility-notifications";
@@ -130,6 +131,7 @@ export async function POST(request: NextRequest) {
 
   const issueNumber = await generateIssueNumber(supabase, scope as FacilityScope);
   const slaTargetAt = computeSlaTarget(slaSource, priority);
+  const claimSlaTargetAt = computeClaimSlaTarget(priority);
 
   // Auto-assign based on category's default_assignee_id (any scope, any category)
   let autoAssignee: { id: string; full_name: string } | null = null;
@@ -170,7 +172,13 @@ export async function POST(request: NextRequest) {
       reported_via,
       linked_feedback_id: linked_feedback_id || null,
       sla_target_at: slaTargetAt,
-      ...(autoAssignee ? { assigned_to: autoAssignee.id, assigned_at: now, assigned_by: dbUser.id } : {}),
+      claim_sla_target_at: claimSlaTargetAt,
+      ...(autoAssignee ? {
+        assigned_to: autoAssignee.id,
+        assigned_at: now,
+        assigned_by: dbUser.id,
+        claimed_at: now,
+      } : {}),
     })
     .select(`
       *,

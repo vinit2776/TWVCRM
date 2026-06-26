@@ -13,8 +13,10 @@ type IssueRef = {
 
 export type FacilityNotifyEvent =
   | { type: "created"; priority: string; reportedBy: string }
-  | { type: "status_changed"; from: string; to: string; actorName: string }
+  | { type: "status_changed"; from: string; to: string; actorName: string; reporterEmail?: string | null }
   | { type: "assigned"; assigneeName: string | null; actorName: string }
+  | { type: "claimed"; claimerName: string }
+  | { type: "taken_over"; newOwnerName: string }
   | { type: "comment"; actorName: string; message: string };
 
 function issueUrl(issueId: string) {
@@ -42,14 +44,14 @@ function emailHtml(params: {
 
 /**
  * Notify the assigned technician, backup CC, and collaborators about an issue event.
- * Falls back to all admin users if the issue has no assignee and no backup.
+ * Falls back to managers + office_admin if the issue has no assignee.
  */
 export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotifyEvent): Promise<void> {
   try {
     const supabase = createAdminClient();
     const url = issueUrl(issue.id);
 
-    // Look up backup assignee from category (one extra query, fire-and-forget context)
+    // Look up backup assignee from category
     let backupAssigneeId: string | null = null;
     if (issue.category_id) {
       const { data: cat } = await supabase
@@ -69,27 +71,33 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
 
     // Build recipient user ID set
     const recipientIds: string[] = [];
-    if (issue.assigned_to) recipientIds.push(issue.assigned_to);
-    if (backupAssigneeId && !recipientIds.includes(backupAssigneeId)) {
-      recipientIds.push(backupAssigneeId);
-    }
-    for (const cid of collabUserIds) {
-      if (!recipientIds.includes(cid)) recipientIds.push(cid);
+
+    // For taken_over event: notify the PREVIOUS assignee (stored in assigned_to before the update)
+    // The caller must pass the previous assigned_to in issue.assigned_to for this event type.
+    if (event.type === "taken_over") {
+      if (issue.assigned_to) recipientIds.push(issue.assigned_to);
+    } else {
+      if (issue.assigned_to) recipientIds.push(issue.assigned_to);
+      if (backupAssigneeId && !recipientIds.includes(backupAssigneeId)) {
+        recipientIds.push(backupAssigneeId);
+      }
+      for (const cid of collabUserIds) {
+        if (!recipientIds.includes(cid)) recipientIds.push(cid);
+      }
     }
 
-    // Fetch emails for all recipients
     let pushUserIds: string[];
     let emailTo: string[];
 
     if (recipientIds.length === 0) {
-      // No assignee, no backup, no collaborators — alert all admins
-      const { data: admins } = await supabase
+      // No assignee — route to managers + office_admin
+      const { data: routing } = await supabase
         .from("users")
         .select("id, email")
-        .eq("role", "admin")
+        .in("role", ["manager", "office_admin"])
         .eq("is_active", true);
-      pushUserIds = (admins ?? []).map((a) => a.id as string);
-      emailTo = (admins ?? []).map((a) => a.email as string).filter(Boolean);
+      pushUserIds = (routing ?? []).map((u) => u.id as string);
+      emailTo = (routing ?? []).map((u) => u.email as string).filter(Boolean);
     } else {
       pushUserIds = recipientIds;
       const { data: userRows } = await supabase
@@ -106,6 +114,7 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
     let emailSubject: string;
     let emailHeadline: string;
     let emailDetail: string;
+    let skipEmail = false;
 
     switch (event.type) {
       case "created":
@@ -121,6 +130,22 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
         emailSubject = `[${issue.issue_number}] Status: ${event.from} → ${event.to}`;
         emailHeadline = "Ticket Status Updated";
         emailDetail = `<strong>Status:</strong> ${event.from} → ${event.to}<br/><strong>Updated by:</strong> ${event.actorName}`;
+        // Also email the reporter when resolved or closed
+        if ((event.to === "resolved" || event.to === "closed") && event.reporterEmail) {
+          resend.emails.send({
+            from: EMAIL_FROM,
+            to: event.reporterEmail,
+            subject: `[${issue.issue_number}] Your ticket has been ${event.to}`,
+            html: emailHtml({
+              headline: `Ticket ${event.to === "resolved" ? "Resolved" : "Closed"}`,
+              issueNumber: issue.issue_number,
+              title: issue.title,
+              detail: `Your facility ticket has been marked <strong>${event.to}</strong> by ${event.actorName}. Thank you for reporting!`,
+              url,
+            }),
+            replyTo: EMAIL_REPLY_TO,
+          }).catch((err) => console.error("[facility-notify] reporter email failed:", err));
+        }
         break;
       case "assigned":
         pushTitle = `${issue.issue_number} — Assignment`;
@@ -133,26 +158,47 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
           ? `<strong>Assigned to:</strong> ${event.assigneeName}<br/><strong>By:</strong> ${event.actorName}`
           : `<strong>Unassigned</strong> by ${event.actorName}`;
         break;
+      case "claimed":
+        pushTitle = `${issue.issue_number} — Claimed`;
+        pushBody = `${event.claimerName} claimed this ticket`;
+        emailSubject = `[${issue.issue_number}] Ticket claimed by ${event.claimerName}`;
+        emailHeadline = "Ticket Claimed";
+        emailDetail = `<strong>${event.claimerName}</strong> has claimed and acknowledged this ticket.`;
+        break;
+      case "taken_over":
+        pushTitle = `${issue.issue_number} — Taken over`;
+        pushBody = `${event.newOwnerName} took over this ticket from you`;
+        emailSubject = `[${issue.issue_number}] Taken over by ${event.newOwnerName}`;
+        emailHeadline = "Ticket Taken Over";
+        emailDetail = `<strong>${event.newOwnerName}</strong> has taken over ownership of this ticket.`;
+        // Push only for take-over (no email blast)
+        skipEmail = true;
+        break;
       case "comment":
         pushTitle = `${issue.issue_number} — New Comment`;
         pushBody = `${event.actorName}: ${event.message.slice(0, 100)}`;
         emailSubject = `[${issue.issue_number}] Comment by ${event.actorName}`;
         emailHeadline = "New Comment on Ticket";
         emailDetail = `<strong>By:</strong> ${event.actorName}<br/><strong>Comment:</strong> ${event.message}`;
+        skipEmail = true; // comments: push + in-app only, no email
         break;
     }
 
     const issuePath = `/facility/issues/${issue.id}`;
 
+    const emailPromise = skipEmail
+      ? Promise.resolve(null)
+      : resend.emails.send({
+          from: EMAIL_FROM,
+          to: emailTo,
+          subject: emailSubject,
+          html: emailHtml({ headline: emailHeadline, issueNumber: issue.issue_number, title: issue.title, detail: emailDetail, url }),
+          replyTo: EMAIL_REPLY_TO,
+        });
+
     const [pushResult, emailResult, inAppResult] = await Promise.allSettled([
       sendPushToUsers(pushUserIds, { title: pushTitle, body: pushBody, url, tag: `facility-${issue.id}` }),
-      resend.emails.send({
-        from: EMAIL_FROM,
-        to: emailTo,
-        subject: emailSubject,
-        html: emailHtml({ headline: emailHeadline, issueNumber: issue.issue_number, title: issue.title, detail: emailDetail, url }),
-        replyTo: EMAIL_REPLY_TO,
-      }),
+      emailPromise,
       createNotificationsForUsers(pushUserIds, {
         type: `facility_${event.type}`,
         title: pushTitle,
@@ -169,6 +215,77 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
     console.log(`[facility-notify] ${event.type} — push/in-app to ${pushUserIds.length} users, email to ${emailTo.join(", ")}`);
   } catch (err) {
     console.error("[facility-notify] unexpected error:", err);
+  }
+}
+
+/**
+ * Notify managers + office_admin about unowned tickets that breached claim SLA.
+ */
+export async function notifyClaimSlaBreached(issues: { id: string; issue_number: string; title: string; priority: string }[]): Promise<void> {
+  try {
+    const supabase = createAdminClient();
+    const { data: routing } = await supabase
+      .from("users")
+      .select("id, email, full_name")
+      .in("role", ["manager", "office_admin"])
+      .eq("is_active", true);
+
+    const recipients = routing ?? [];
+    if (recipients.length === 0) return;
+
+    const base = process.env.NEXT_PUBLIC_APP_URL || "https://app.theworkvilla.com";
+    const recipientIds = recipients.map((u) => u.id as string);
+    const recipientEmails = recipients.map((u) => u.email as string).filter(Boolean);
+
+    const rows = issues
+      .map(
+        (i) =>
+          `<tr>
+            <td style="padding:6px 8px;border-bottom:1px solid #e5e5e5">
+              <a href="${base}/facility/issues/${i.id}" style="color:#2563eb;text-decoration:none">${i.issue_number}</a>
+            </td>
+            <td style="padding:6px 8px;border-bottom:1px solid #e5e5e5">${i.title}</td>
+            <td style="padding:6px 8px;border-bottom:1px solid #e5e5e5;text-transform:uppercase;font-weight:bold;color:#dc2626">${i.priority}</td>
+          </tr>`
+      )
+      .join("");
+
+    const html = `
+<div style="font-family:sans-serif;max-width:700px;margin:0 auto;padding:24px">
+  <h2 style="color:#d97706;margin:0 0 8px">Unclaimed Ticket Alert</h2>
+  <p style="color:#555;margin:0 0 16px">The following tickets have no owner and have exceeded the claim SLA. Please assign them now.</p>
+  <table style="width:100%;border-collapse:collapse">
+    <thead>
+      <tr style="background:#fef3c7">
+        <th style="padding:8px;text-align:left;border-bottom:2px solid #e5e5e5">Ticket</th>
+        <th style="padding:8px;text-align:left;border-bottom:2px solid #e5e5e5">Title</th>
+        <th style="padding:8px;text-align:left;border-bottom:2px solid #e5e5e5">Priority</th>
+      </tr>
+    </thead>
+    <tbody>${rows}</tbody>
+  </table>
+  <a href="${base}/facility/issues" style="display:inline-block;padding:10px 20px;background:#d97706;color:#fff;text-decoration:none;border-radius:6px;margin-top:16px">View Unowned Tickets</a>
+  <hr style="border:none;border-top:1px solid #e5e5e5;margin:24px 0"/>
+  <p style="font-size:12px;color:#999">The WorkVilla — Facility Support</p>
+</div>`;
+
+    await Promise.allSettled([
+      sendPushToUsers(recipientIds, {
+        title: `${issues.length} ticket${issues.length > 1 ? "s" : ""} unclaimed past SLA`,
+        body: issues.map((i) => i.issue_number).join(", "),
+        url: `${base}/facility/issues`,
+        tag: `facility-claim-sla-digest`,
+      }),
+      resend.emails.send({
+        from: EMAIL_FROM,
+        to: recipientEmails,
+        subject: `[Action needed] ${issues.length} ticket${issues.length > 1 ? "s" : ""} unclaimed past SLA`,
+        html,
+        replyTo: EMAIL_REPLY_TO,
+      }),
+    ]);
+  } catch (err) {
+    console.error("[facility-notify] claim-sla-breach alert failed:", err);
   }
 }
 

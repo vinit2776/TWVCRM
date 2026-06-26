@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { sendPushToUsers } from "@/lib/push";
+import { notifyClaimSlaBreached } from "@/lib/facility-notifications";
 
 /**
  * GET /api/cron/facility-sla-check
@@ -160,5 +161,35 @@ export async function GET(request: NextRequest) {
   );
 
   console.log(`[sla-check] marked ${issueIds.length} issues, notified ${assigneeMap.size} recipients`);
-  return NextResponse.json({ checked: issues.length, breached: issueIds.length });
+
+  // ── Claim SLA breach check ────────────────────────────────────────────────
+  // Find unowned open tickets that have exceeded their time-to-claim deadline
+  const { data: unclaimedBreached } = await supabase
+    .from("facility_issues")
+    .select("id, issue_number, title, priority")
+    .eq("status", "new")
+    .is("assigned_to", null)
+    .eq("claim_sla_breached", false)
+    .not("claim_sla_target_at", "is", null)
+    .lt("claim_sla_target_at", now);
+
+  if (unclaimedBreached && unclaimedBreached.length > 0) {
+    const unclaimedIds = unclaimedBreached.map((i) => i.id as string);
+    await supabase
+      .from("facility_issues")
+      .update({ claim_sla_breached: true })
+      .in("id", unclaimedIds);
+
+    await notifyClaimSlaBreached(
+      unclaimedBreached.map((i) => ({
+        id: i.id as string,
+        issue_number: i.issue_number as string,
+        title: i.title as string,
+        priority: i.priority as string,
+      }))
+    );
+    console.log(`[sla-check] claim SLA: marked ${unclaimedIds.length} unclaimed breaches`);
+  }
+
+  return NextResponse.json({ checked: issues.length, breached: issueIds.length, claim_breached: unclaimedBreached?.length ?? 0 });
 }
