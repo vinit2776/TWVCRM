@@ -39,7 +39,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("consumption_logs")
     .select(
-      `*, locations(id, name), logger:users!consumption_logs_logged_by_fkey(id, full_name), consumption_log_items(*)`,
+      `*, locations(id, name), logger:users!consumption_logs_logged_by_fkey(id, full_name), consumption_log_items(*), consumption_corrections!consumption_corrections_consumption_log_id_fkey(*, corrector:users!consumption_corrections_corrected_by_fkey(id, full_name))`,
       { count: "exact" }
     )
     .order("logged_at", { ascending: false })

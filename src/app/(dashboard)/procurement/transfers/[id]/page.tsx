@@ -28,6 +28,7 @@ import {
 } from "@/lib/constants";
 import { formatDate } from "@/lib/utils";
 import { TransferLifecycleStatus } from "@/components/procurement/transfer-lifecycle-status";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import type { StockTransfer, StockTransferItem, StockTransferIssue } from "@/types";
 
 interface StockLevel {
@@ -321,6 +322,7 @@ export default function TransferDetailPage() {
               <Button onClick={handleDispatch} disabled={actionLoading}>
                 <Truck className="h-4 w-4 mr-1" /> Mark Dispatched
               </Button>
+              <InfoTooltip text="Dispatching removes this stock from the source location immediately." />
               <Button variant="outline" onClick={handleDownloadChallan}>
                 <Download className="h-4 w-4 mr-1" /> Download Challan
               </Button>
@@ -328,9 +330,12 @@ export default function TransferDetailPage() {
           )}
 
           {transfer.status === "dispatched" && (
-            <Button onClick={openReceiveDialog} disabled={actionLoading}>
-              <PackageCheck className="h-4 w-4 mr-1" /> Receive Transfer
-            </Button>
+            <>
+              <Button onClick={openReceiveDialog} disabled={actionLoading}>
+                <PackageCheck className="h-4 w-4 mr-1" /> Receive Transfer
+              </Button>
+              <InfoTooltip text="Receiving adds the entered quantities to this location's stock." />
+            </>
           )}
         </div>
       </div>

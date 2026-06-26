@@ -9,6 +9,7 @@ import {
 } from "@/components/ui/select";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
+import { InfoTooltip } from "@/components/ui/info-tooltip";
 import {
   PROCUREMENT_DEPARTMENTS,
   PROCUREMENT_DEPARTMENT_LABELS,
@@ -91,7 +92,7 @@ export default function InventoryPage() {
         <div>
           <h1 className="text-2xl font-bold">Inventory</h1>
           <p className="text-sm text-muted-foreground">
-            Stock levels across locations
+            Stock levels across locations — view only. Stock changes through purchase orders, transfers, and consumption.
           </p>
         </div>
 
@@ -161,7 +162,12 @@ export default function InventoryPage() {
                 <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Unit</th>
                 <th className="px-4 py-3 text-right font-medium">Qty on Hand</th>
                 <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Reorder Level</th>
-                <th className="px-4 py-3 text-center font-medium">Status</th>
+                <th className="px-4 py-3 text-center font-medium">
+                  <span className="inline-flex items-center gap-1">
+                    Status
+                    <InfoTooltip text="OK = healthy stock. Low = at or below the reorder level, plan to reorder. Out = nothing in stock." />
+                  </span>
+                </th>
               </tr>
             </thead>
             <tbody>
@@ -183,8 +189,13 @@ export default function InventoryPage() {
                     <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
                       {item.procurement_items?.unit ?? "—"}
                     </td>
-                    <td className="px-4 py-3 text-right font-medium">
+                    <td className={`px-4 py-3 text-right font-medium ${status === "out" ? "text-red-600" : status === "low" ? "text-amber-600" : ""}`}>
                       {item.quantity_on_hand}
+                      {item.reorder_level > 0 && (
+                        <span className="block md:hidden text-[10px] font-normal text-muted-foreground">
+                          reorder at {item.reorder_level}
+                        </span>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-right hidden md:table-cell text-muted-foreground">
                       {item.reorder_level > 0 ? item.reorder_level : "—"}

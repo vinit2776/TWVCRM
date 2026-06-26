@@ -19,6 +19,7 @@ import { ArrowLeft, ChevronDown, ChevronRight, Loader2 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { ConsumptionLog } from "@/types";
 import { ConsumptionCorrectionDialog } from "@/components/procurement/consumption-correction-dialog";
+import { ConsumptionLifecycleStatus } from "@/components/procurement/consumption-lifecycle-status";
 import Link from "next/link";
 
 interface Location {
@@ -260,6 +261,7 @@ export default function ConsumptionHistoryPage() {
                               Notes: {log.notes}
                             </p>
                           )}
+                          <ConsumptionLifecycleStatus log={log} />
                         </div>
                       )}
                     </td>
