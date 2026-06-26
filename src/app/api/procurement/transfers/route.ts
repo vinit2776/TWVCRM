@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { STOCK_DEPARTMENTS } from "@/lib/constants";
 import { z } from "zod";
 
 const createTransferSchema = z.object({
@@ -112,18 +113,20 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "From and To locations must be different" }, { status: 422 });
   }
 
-  // Block service items (AMC, rentals, pest control, etc.) — they are tied to a
-  // location/asset and cannot be transferred between locations.
+  // Block non-stock items: services (AMC, rentals, pest control) and items from
+  // non-stock departments (e.g. Administration) cannot be transferred.
   const transferItemIds = parsed.data.items.map((i) => i.item_id).filter(Boolean) as string[];
   if (transferItemIds.length > 0) {
     const { data: itemRows } = await supabase
       .from("procurement_items")
-      .select("id, name, item_type")
+      .select("id, name, item_type, department")
       .in("id", transferItemIds);
-    const svc = (itemRows ?? []).find((r) => r.item_type === "service");
-    if (svc) {
+    const blocked = (itemRows ?? []).find(
+      (r) => r.item_type === "service" || !STOCK_DEPARTMENTS.includes(r.department)
+    );
+    if (blocked) {
       return NextResponse.json(
-        { error: `"${svc.name}" is a service item (e.g. AMC) and cannot be transferred between locations.` },
+        { error: `"${blocked.name}" is not a transferable stock item (services and non-stock departments like Administration cannot be transferred).` },
         { status: 422 }
       );
     }

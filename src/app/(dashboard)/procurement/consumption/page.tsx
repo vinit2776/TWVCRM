@@ -32,7 +32,7 @@ import {
 } from "lucide-react";
 import { t } from "@/lib/translations";
 import { useLanguage, LanguageProvider } from "@/providers/language-provider";
-import { PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS } from "@/lib/constants";
+import { STOCK_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS } from "@/lib/constants";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 
@@ -203,7 +203,11 @@ function ConsumptionPageContent() {
         // Services (AMC, rentals, pest control, etc.) are not physical stock —
         // they cannot be consumed, so keep them out of the picker.
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .filter((row: any) => row.procurement_items?.item_type !== "service")
+        .filter(
+          (row: any) =>
+            row.procurement_items?.item_type !== "service" &&
+            STOCK_DEPARTMENTS.includes(row.procurement_items?.department)
+        )
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .map((row: any) => ({
           id: row.id,
@@ -492,7 +496,7 @@ function ConsumptionPageContent() {
                   <TabsTrigger value="all">
                     {lang === "en" ? t("filter.all", lang) : "அனைத்தும்"}
                   </TabsTrigger>
-                  {PROCUREMENT_DEPARTMENTS.map((dept) => (
+                  {STOCK_DEPARTMENTS.map((dept) => (
                     <TabsTrigger key={dept} value={dept}>
                       {PROCUREMENT_DEPARTMENT_LABELS[dept]}
                     </TabsTrigger>

@@ -13,13 +13,14 @@ import { InfoTooltip } from "@/components/ui/info-tooltip";
 import { IncomingTransfers } from "@/components/procurement/incoming-transfers";
 import { useScopedLocations } from "@/hooks/use-scoped-locations";
 import {
-  PROCUREMENT_DEPARTMENTS,
+  STOCK_DEPARTMENTS,
   PROCUREMENT_DEPARTMENT_LABELS,
   PROCUREMENT_DEPARTMENT_COLORS,
 } from "@/lib/constants";
 import type { LocationStock } from "@/types";
 
-const DEPARTMENT_TABS = ["all", ...PROCUREMENT_DEPARTMENTS] as const;
+// Only physical-stock departments are shown in Inventory.
+const DEPARTMENT_TABS = ["all", ...STOCK_DEPARTMENTS] as const;
 
 export default function InventoryPage() {
   const { availableLocations, primaryLocationId, loading: locationsLoading } = useScopedLocations();
@@ -51,8 +52,11 @@ export default function InventoryPage() {
     if (locationId) fetchStock();
   }, [fetchStock, locationId]);
 
-  // Client-side search filter
+  // Only show physical-stock departments (hide administration / non-stock),
+  // then apply the search filter.
   const filtered = stock.filter((s) => {
+    const dept = (s.procurement_items as { department?: string } | null)?.department ?? "";
+    if (!STOCK_DEPARTMENTS.includes(dept)) return false;
     if (!search.trim()) return true;
     const name = s.procurement_items?.name ?? "";
     return name.toLowerCase().includes(search.toLowerCase());

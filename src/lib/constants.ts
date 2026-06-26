@@ -1429,6 +1429,14 @@ export const PROCUREMENT_APPROVAL_THRESHOLDS = {
 export const PROCUREMENT_DEPARTMENTS = ["pantry", "maintenance", "administration", "asset", "amc"] as const;
 export type ProcurementDepartment = (typeof PROCUREMENT_DEPARTMENTS)[number];
 
+/**
+ * Departments whose items are physical, movable stock — the only ones that can
+ * appear in Inventory and be transferred / consumed. Administration (office
+ * supplies, utility bills) and AMC (service contracts) are excluded: they are
+ * not branch stock that physically moves between locations.
+ */
+export const STOCK_DEPARTMENTS: readonly string[] = ["pantry", "maintenance", "asset"];
+
 export const PROCUREMENT_DEPARTMENT_LABELS: Record<string, string> = {
   pantry: "Pantry",
   maintenance: "Maintenance",

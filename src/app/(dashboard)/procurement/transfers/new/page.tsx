@@ -16,6 +16,7 @@ import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
 import { toast } from "sonner";
+import { STOCK_DEPARTMENTS } from "@/lib/constants";
 import type { Location, LocationStock } from "@/types";
 
 interface LineItem {
@@ -82,7 +83,12 @@ export default function NewTransferPage() {
     ]).then(([locJson, itemJson]) => {
       const locs = (locJson.data || []).filter((l: Location) => l.is_active !== false);
       setLocations(locs);
-      setCatalogItems(itemJson.data || []);
+      // Only physical-stock departments can be transferred (no Administration / services)
+      setCatalogItems(
+        (itemJson.data || []).filter((it: CatalogItem) =>
+          STOCK_DEPARTMENTS.includes(it.department)
+        )
+      );
     });
   }, []);
 
