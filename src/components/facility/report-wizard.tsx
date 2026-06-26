@@ -18,12 +18,13 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   ChevronLeft, ChevronRight, Loader2, MapPin, AlertTriangle, Check,
-  Search, X, Wifi, ThermometerSun, Droplets, Zap, Sparkles, ShieldAlert, HelpCircle,
+  Search, X, Wifi, ThermometerSun, Droplets, Zap, Sparkles, ShieldAlert, HelpCircle, ScanLine,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { PRIORITY_LIST, PRIORITY_STYLES, REPORTED_VIA_LABEL, SCOPE_LABEL } from "@/lib/facility-ui";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
+import { QRScannerDialog } from "@/components/facility/qr-scanner-dialog";
 import type {
   FacilityAsset, FacilityIssuePriority, FacilityReportedVia, FacilityScope,
 } from "@/types";
@@ -88,6 +89,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   const [assetQuery, setAssetQuery] = useState("");
   const [assetResults, setAssetResults] = useState<FacilityAsset[]>([]);
   const [assetSearching, setAssetSearching] = useState(false);
+  const [qrScannerOpen, setQrScannerOpen] = useState(false);
 
   // prefilled = caller already knows location + scope (e.g. asset page)
   const prefilled = !!(defaults?.location_id && defaults?.scope);
@@ -235,18 +237,20 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
             </button>
           </div>
         ) : (
-          <div className="relative">
-            <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
-            <Input
-              value={assetQuery}
-              onChange={(e) => setAssetQuery(e.target.value)}
-              placeholder="Type asset name or code…"
-              className="pl-9"
-            />
-            {assetSearching && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />}
-            {assetResults.length > 0 && (
-              <div className="absolute z-10 w-full mt-1 rounded-lg border bg-popover shadow-md max-h-48 overflow-y-auto">
-                {assetResults.slice(0, 10).map((a) => (
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground pointer-events-none" />
+                <Input
+                  value={assetQuery}
+                  onChange={(e) => setAssetQuery(e.target.value)}
+                  placeholder="Type asset name or code…"
+                  className="pl-9"
+                />
+                {assetSearching && <Loader2 className="absolute right-3 top-1/2 -translate-y-1/2 h-4 w-4 animate-spin text-muted-foreground" />}
+                {assetResults.length > 0 && (
+                  <div className="absolute z-10 w-full mt-1 rounded-lg border bg-popover shadow-md max-h-48 overflow-y-auto">
+                    {assetResults.slice(0, 10).map((a) => (
                   <button
                     key={a.id}
                     type="button"
@@ -257,9 +261,21 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
                     <span className="text-xs text-muted-foreground ml-2">{a.asset_code}</span>
                     {a.location && <span className="text-xs text-muted-foreground ml-1">· {a.location.name}</span>}
                   </button>
-                ))}
+                    ))}
+                  </div>
+                )}
               </div>
-            )}
+              <Button
+                type="button"
+                variant="outline"
+                size="icon"
+                onClick={() => setQrScannerOpen(true)}
+                title="Scan asset QR code"
+                className="shrink-0"
+              >
+                <ScanLine className="h-4 w-4" />
+              </Button>
+            </div>
           </div>
         )}
       </div>
@@ -543,6 +559,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   );
 
   return (
+    <>
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg p-0 gap-0 max-h-[92vh] flex flex-col">
         <DialogHeader className="p-4 pb-3 border-b">
@@ -584,5 +601,15 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
         </div>
       </DialogContent>
     </Dialog>
+
+    <QRScannerDialog
+      open={qrScannerOpen}
+      onClose={() => setQrScannerOpen(false)}
+      onAssetScanned={(asset) => {
+        selectAsset(asset as FacilityAsset);
+        setQrScannerOpen(false);
+      }}
+    />
+    </>
   );
 }

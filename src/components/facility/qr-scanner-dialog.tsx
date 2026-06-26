@@ -9,11 +9,13 @@ import { toast } from "sonner";
 interface QRScannerDialogProps {
   open: boolean;
   onClose: () => void;
+  /** When provided, resolves the scanned asset and calls this instead of navigating to the asset page. */
+  onAssetScanned?: (asset: { id: string; asset_code: string; name: string; location_id: string; floor_id: string | null; space_unit_id: string | null; category?: { scope?: string } | null; location?: { id: string; name: string } | null }) => void;
 }
 
 type ScanState = "starting" | "scanning" | "found" | "error";
 
-export function QRScannerDialog({ open, onClose }: QRScannerDialogProps) {
+export function QRScannerDialog({ open, onClose, onAssetScanned }: QRScannerDialogProps) {
   const router = useRouter();
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
@@ -115,7 +117,11 @@ export function QRScannerDialog({ open, onClose }: QRScannerDialogProps) {
         return;
       }
       onClose();
-      router.push(`/facility/assets/${json.data.id}`);
+      if (onAssetScanned) {
+        onAssetScanned(json.data);
+      } else {
+        router.push(`/facility/assets/${json.data.id}`);
+      }
     } catch {
       toast.error("Failed to look up asset. Check your connection.");
       readerRef.current = false;
