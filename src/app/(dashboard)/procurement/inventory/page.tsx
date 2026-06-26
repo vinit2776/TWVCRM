@@ -18,7 +18,9 @@ import {
   STOCK_DEPARTMENTS,
   PROCUREMENT_DEPARTMENT_LABELS,
   PROCUREMENT_DEPARTMENT_COLORS,
+  agingStatus,
 } from "@/lib/constants";
+import { ageInDays } from "@/lib/procurement/stock-aging";
 import type { LocationStock } from "@/types";
 
 // Only physical-stock departments are shown in Inventory.
@@ -181,12 +183,21 @@ export default function InventoryPage() {
                     <InfoTooltip text="OK = healthy stock. Low = at or below the reorder level, plan to reorder. Out = nothing in stock." />
                   </span>
                 </th>
+                <th className="px-4 py-3 text-left font-medium">
+                  <span className="inline-flex items-center gap-1">
+                    Age
+                    <InfoTooltip text="Time since this stock was last received (PO delivery or transfer in). Amber/red = older than the department's freshness window — worth checking the item's condition." />
+                  </span>
+                </th>
               </tr>
             </thead>
             <tbody>
               {filtered.map((item) => {
                 const dept = item.procurement_items?.department ?? "";
                 const status = getStatus(item);
+                const lastReceived = (item as { last_received?: string | null }).last_received ?? null;
+                const age = ageInDays(lastReceived);
+                const aging = agingStatus(dept, age);
                 return (
                   <tr key={item.id} className="border-b hover:bg-muted/30 transition-colors">
                     <td className="px-4 py-3 font-medium">
@@ -226,6 +237,24 @@ export default function InventoryPage() {
                     </td>
                     <td className="px-4 py-3 text-center">
                       {statusBadge(status)}
+                    </td>
+                    <td className="px-4 py-3">
+                      {age == null ? (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      ) : (
+                        <span
+                          className={`text-xs whitespace-nowrap ${
+                            aging === "old"
+                              ? "text-red-600 font-medium"
+                              : aging === "watch"
+                              ? "text-amber-600"
+                              : "text-muted-foreground"
+                          }`}
+                          title={`Last received ${age} days ago`}
+                        >
+                          {age}d{aging === "old" ? " · old" : ""}
+                        </span>
+                      )}
                     </td>
                   </tr>
                 );

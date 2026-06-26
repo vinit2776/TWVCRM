@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { STOCK_DEPARTMENTS } from "@/lib/constants";
+import { STOCK_DEPARTMENTS, agingStatus } from "@/lib/constants";
+import { getLastReceivedMap, ageInDays } from "@/lib/procurement/stock-aging";
 
 /**
  * GET /api/procurement/inventory/analytics?location_id=X&from=ISO&to=ISO
@@ -238,8 +239,47 @@ export async function GET(request: NextRequest) {
     ? Math.round(coverVals.reduce((a, b) => a + b, 0) / coverVals.length)
     : null;
 
+  // ── Stock aging (days since last received) ─────────────────────────────
+  const lastReceivedMap = await getLastReceivedMap(supabase, locationId);
+  const nowMs = to.getTime();
+  const bucketsDef = [
+    { label: "0–90d", min: 0, max: 90 },
+    { label: "91–180d", min: 91, max: 180 },
+    { label: "181–365d", min: 181, max: 365 },
+    { label: "365d+", min: 366, max: Infinity },
+  ];
+  const agingBuckets = bucketsDef.map((b) => ({ label: b.label, count: 0, value: 0 }));
+  let oldValue = 0;
+  let oldCount = 0;
+  let withInward = 0;
+  let agedItems: { name: string; department: string; ageDays: number; qty: number; unit: string; value: number; status: string }[] = [];
+
+  for (const r of stock) {
+    const qty = num(r.quantity_on_hand);
+    if (qty <= 0) continue;
+    const age = ageInDays(lastReceivedMap.get(r.item_id) ?? null, nowMs);
+    if (age == null) continue;
+    withInward++;
+    const price = priceOf(r);
+    const value = price == null ? 0 : price * qty;
+    const dept = r.procurement_items?.department ?? "other";
+    const bi = bucketsDef.findIndex((b) => age >= b.min && age <= b.max);
+    if (bi >= 0) { agingBuckets[bi].count++; agingBuckets[bi].value += value; }
+    const st = agingStatus(dept, age);
+    if (st === "old") { oldValue += value; oldCount++; }
+    agedItems.push({ name: r.procurement_items?.name ?? "—", department: dept, ageDays: age, qty, unit: r.procurement_items?.unit ?? "", value, status: st ?? "fresh" });
+  }
+  agedItems = agedItems.sort((a, b) => b.ageDays - a.ageDays).slice(0, 10);
+
   return NextResponse.json({
     period: { from: from.toISOString(), to: to.toISOString(), days: periodDays, bucket: bucketByWeek ? "week" : "day" },
+    aging: {
+      hasInwardData: withInward > 0,
+      buckets: agingBuckets,
+      oldValue,
+      oldCount,
+      oldest: agedItems,
+    },
     holding: {
       itemCount: stock.length,
       totalUnits,

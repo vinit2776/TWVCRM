@@ -19,6 +19,7 @@ const DEPT_COLORS: Record<string, string> = {
   pantry: "#10b981", maintenance: "#6366f1", asset: "#f59e0b", administration: "#94a3b8", amc: "#a78bfa", other: "#cbd5e1",
 };
 const STATUS_COLORS = { ok: "#22c55e", low: "#f59e0b", out: "#ef4444" };
+const AGE_COLORS = ["#22c55e", "#eab308", "#f97316", "#ef4444"]; // fresh → old
 
 interface Analytics {
   period: { from: string; to: string; days: number; bucket: string };
@@ -40,6 +41,13 @@ interface Analytics {
     topItems: { name: string; unit: string; units: number; value: number }[];
     byDepartment: { department: string; units: number; value: number }[];
     hasData: boolean;
+  };
+  aging: {
+    hasInwardData: boolean;
+    buckets: { label: string; count: number; value: number }[];
+    oldValue: number;
+    oldCount: number;
+    oldest: { name: string; department: string; ageDays: number; qty: number; unit: string; value: number; status: string }[];
   };
 }
 
@@ -94,7 +102,7 @@ export function InventoryAnalytics({ locationId, locationName }: { locationId: s
   }
   if (!data) return null;
 
-  const { holding, needsAttention, consumption } = data;
+  const { holding, needsAttention, consumption, aging } = data;
   const valLabel = (v: number) => formatCurrency(v);
   const deptHoldingChart = holding.byDepartment.map((d) => ({ name: deptLabel(d.department), value: Math.round(d.value), units: d.units, color: DEPT_COLORS[d.department] ?? DEPT_COLORS.other }));
   const statusChart = [
@@ -247,6 +255,58 @@ export function InventoryAnalytics({ locationId, locationName }: { locationId: s
                   <span className="shrink-0 text-muted-foreground">{t.qty} {t.unit} · <span className="font-medium text-foreground">{valLabel(t.value)}</span></span>
                 </div>
               ))}
+            </div>
+          )}
+        </CardContent>
+      </Card>
+
+      {/* Stock aging */}
+      <Card>
+        <CardHeader className="pb-2">
+          <CardTitle className="text-sm flex items-center justify-between gap-2">
+            <span className="flex items-center gap-2"><CalendarClock className="h-4 w-4 text-amber-500" /> Stock aging (time held)</span>
+            {aging.oldCount > 0 && (
+              <span className="text-xs font-normal text-red-600">{aging.oldCount} item{aging.oldCount > 1 ? "s" : ""} too old · {valLabel(aging.oldValue)}</span>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent>
+          {!aging.hasInwardData ? (
+            <p className="text-xs text-muted-foreground py-6 text-center">
+              No inward dates yet — aging appears once items arrive via PO delivery or transfer.
+            </p>
+          ) : (
+            <div className="grid md:grid-cols-2 gap-6">
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-1">Holding value by age</p>
+                <ResponsiveContainer width="100%" height={200}>
+                  <BarChart data={aging.buckets}>
+                    <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                    <XAxis dataKey="label" fontSize={11} />
+                    <YAxis fontSize={11} tickFormatter={(v) => `₹${v >= 1000 ? (v / 1000).toFixed(0) + "k" : v}`} />
+                    <Tooltip formatter={(v) => valLabel(Number(v) || 0)} />
+                    <Bar dataKey="value" radius={[4, 4, 0, 0]}>
+                      {aging.buckets.map((_, i) => <Cell key={i} fill={AGE_COLORS[i]} />)}
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </div>
+              <div>
+                <p className="text-xs font-medium text-muted-foreground mb-2">Oldest stock held</p>
+                <div className="space-y-1.5">
+                  {aging.oldest.map((o, k) => (
+                    <div key={k} className="flex items-center justify-between gap-2 text-sm">
+                      <span className="flex items-center gap-2 min-w-0">
+                        <Badge variant="secondary" className="text-[10px]" style={{ backgroundColor: (DEPT_COLORS[o.department] ?? "#eee") + "22", color: DEPT_COLORS[o.department] }}>{deptLabel(o.department)}</Badge>
+                        <span className="truncate">{o.name}</span>
+                      </span>
+                      <span className={`text-xs shrink-0 ${o.status === "old" ? "text-red-600 font-medium" : o.status === "watch" ? "text-amber-600" : "text-muted-foreground"}`}>
+                        {o.ageDays}d · {valLabel(o.value)}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
             </div>
           )}
         </CardContent>

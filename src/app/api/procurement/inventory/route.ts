@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { getLastReceivedMap } from "@/lib/procurement/stock-aging";
 import { z } from "zod";
 
 const upsertStockSchema = z.object({
@@ -53,6 +54,15 @@ export async function GET(request: NextRequest) {
         return item && item.department === department;
       }
     );
+  }
+
+  // Attach stock age: most recent inward (PO delivery / transfer) per item
+  if (locationId && results.length > 0) {
+    const lastReceivedMap = await getLastReceivedMap(supabase, locationId);
+    results = results.map((row: Record<string, unknown>) => ({
+      ...row,
+      last_received: lastReceivedMap.get(String(row.item_id)) ?? null,
+    }));
   }
 
   return NextResponse.json({ data: results });
