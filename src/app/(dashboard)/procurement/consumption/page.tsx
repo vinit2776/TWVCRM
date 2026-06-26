@@ -53,6 +53,20 @@ interface InventoryItem {
   reorder_level: number;
 }
 
+// Raw row shape from GET /api/procurement/inventory (location_stock + joined item)
+interface InventoryRow {
+  id: string;
+  item_id: string;
+  quantity_on_hand: number | string;
+  reorder_level: number | string;
+  procurement_items: {
+    name?: string;
+    department?: string;
+    unit?: string;
+    item_type?: string;
+  } | null;
+}
+
 interface CartEntry {
   quantity: number;
   notes: string;
@@ -147,7 +161,7 @@ function ConsumptionPageContent() {
     // HO roles, or any user not yet assigned to a location, see all (no lockout).
     if (isCrossLocationRole || userLocations.length === 0) return allLocations;
     return userLocations
-      .sort((a, b) => (a.responsibility === "primary" ? -1 : 1))
+      .sort((a) => (a.responsibility === "primary" ? -1 : 1))
       .map((ul) => ul.location);
   }, [isCrossLocationRole, allLocations, userLocations]);
 
@@ -198,18 +212,16 @@ function ConsumptionPageContent() {
     try {
       const res = await fetch(`/api/procurement/inventory?location_id=${selectedLocationId}`);
       const data = await res.json();
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      setItems((data.data || [])
+      const rows = (data.data || []) as InventoryRow[];
+      setItems(rows
         // Services (AMC, rentals, pest control, etc.) are not physical stock —
         // they cannot be consumed, so keep them out of the picker.
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
         .filter(
-          (row: any) =>
+          (row) =>
             row.procurement_items?.item_type !== "service" &&
-            STOCK_DEPARTMENTS.includes(row.procurement_items?.department)
+            STOCK_DEPARTMENTS.includes(row.procurement_items?.department ?? "")
         )
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        .map((row: any) => ({
+        .map((row) => ({
           id: row.id,
           item_id: row.item_id,
           item_name: row.procurement_items?.name ?? "Unknown",

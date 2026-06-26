@@ -67,7 +67,7 @@ export function useScopedLocations() {
     if (!isScoped) return allLocations;
     return assignments
       .slice()
-      .sort((a, b) => (a.responsibility === "primary" ? -1 : 1))
+      .sort((a) => (a.responsibility === "primary" ? -1 : 1))
       .map((a) => a.location)
       .filter((l): l is ScopedLocation => !!l);
   }, [isScoped, allLocations, assignments]);

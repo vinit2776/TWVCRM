@@ -47,10 +47,6 @@ interface StockLevel {
   quantity_on_hand: number;
 }
 
-interface UserInfo {
-  role: string;
-}
-
 // ─── Receive Dialog types ─────────────────────────────────────────────────
 interface ReceiveLineItem {
   transfer_item_id: string;
