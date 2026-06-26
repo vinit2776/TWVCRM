@@ -429,19 +429,26 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
           {PRIORITY_LIST.map((p) => {
             const sel = priority === p;
             const sty = PRIORITY_STYLES[p];
+            const selBg: Record<string, string> = {
+              critical: "bg-red-500 border-red-500 text-white",
+              high:     "bg-orange-500 border-orange-500 text-white",
+              medium:   "bg-amber-500 border-amber-500 text-white",
+              low:      "bg-slate-400 border-slate-400 text-white",
+            };
             return (
               <button
                 key={p}
                 type="button"
                 onClick={() => setPriority(p)}
                 className={cn(
-                  "p-3 rounded-lg border text-left transition flex items-center gap-2",
-                  sel ? "border-[#015E65] bg-[#015E65]/5" : "border-border hover:bg-muted/40",
+                  "p-3 rounded-lg border text-left transition-all flex items-center gap-2 shadow-sm",
+                  sel ? selBg[p] : "border-border hover:bg-muted/40",
                 )}
               >
-                <span className={cn("h-2.5 w-2.5 rounded-full", sty.dot)} />
-                <span className="text-sm font-medium">{sty.label}</span>
-                {p === "critical" && <AlertTriangle className="h-3.5 w-3.5 text-red-500 ml-auto" />}
+                <span className={cn("h-2.5 w-2.5 rounded-full shrink-0", sel ? "bg-white/80" : sty.dot)} />
+                <span className="text-sm font-semibold">{sty.label}</span>
+                {p === "critical" && <AlertTriangle className={cn("h-3.5 w-3.5 ml-auto", sel ? "text-white" : "text-red-500")} />}
+                {sel && p !== "critical" && <Check className="h-3.5 w-3.5 ml-auto" />}
               </button>
             );
           })}
