@@ -56,20 +56,11 @@ The browser UI cannot catch PDF rendering bugs — only the PDF itself can.
 
 ## Local Development Environment
 
-The repo lives in iCloud Drive (`~/Library/Mobile Documents/com~apple~CloudDocs/...`), kept there intentionally as a backup layer. Editing, `git`, and `npm run build` are fine in iCloud. Two things are **not**:
+Do not run `npm run dev` from the iCloud Drive path (`~/Library/Mobile Documents/com~apple~CloudDocs/...`) — Turbopack HMR never fires under `com~apple~CloudDocs` (stale code served) and cold compiles hang for minutes on iCloud-evicted files. `npm run build` and `git` are unaffected.
 
-- **`npm run dev` is broken in iCloud.** Turbopack HMR never fires under `com~apple~CloudDocs` (FSEvents is unreliable → stale code served), and cold compiles hang for minutes on iCloud-evicted module files. **Never run `next dev` from the iCloud path** — run it from a real-disk mirror instead.
-- **iCloud spawns conflict copies** (`foo 2.ts`, `00302_… 2.sql`) that duplicate migration numbers and break `supabase db push`.
+**Fix (run once):** `bash scripts/setup-local-dev.sh` copies the project to `~/Projects/twv-crm` (with `.env.local`) and installs deps. Do all local dev there. GitHub remains the backup.
 
-Three helper scripts handle this (full details in `README.md`):
-
-```bash
-bash scripts/checkpoint.sh             # dated, restorable snapshot tag BEFORE making changes (+ sync check)
-bash scripts/dev-mirror.sh             # rsync → ~/Projects/twv-crm-mirror, then npm run dev (HMR works there)
-bash scripts/clean-icloud-conflicts.sh # delete conflict copies that are identical to their canonical file
-```
-
-When starting a work session, run `scripts/checkpoint.sh` first. To run/preview the app, use `scripts/dev-mirror.sh` — do not start the dev server from the iCloud checkout. `npm run build` is safe to run directly from iCloud.
+Editing in iCloud can also create conflict copies (`foo 2.ts`, `00302_… 2.sql`) that duplicate migration numbers and break `supabase db push`; working from `~/Projects/twv-crm` avoids them.
 
 ## Commands
 
