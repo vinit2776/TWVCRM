@@ -1103,6 +1103,112 @@ function InboxRowItem({
   );
 }
 
+// ── Booking payment confirmation helpers ────────────────────────────────────
+
+import type { BookingPaymentConfirmation } from "@/lib/tally-handoff";
+
+function paymentModeLabel(mode: string): string {
+  const map: Record<string, string> = {
+    razorpay: "Razorpay",
+    upi: "UPI",
+    cash: "Cash",
+    card: "Card",
+    neft: "NEFT",
+    rtgs: "RTGS",
+    cheque: "Cheque",
+    bank_transfer: "Bank Transfer",
+  };
+  return map[mode.toLowerCase()] ?? mode;
+}
+
+function BookingPaymentPill({ confirmations }: { confirmations: BookingPaymentConfirmation[] }) {
+  if (confirmations.length === 0) {
+    return (
+      <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 flex-shrink-0">
+        ⚠ Payment unverified
+      </span>
+    );
+  }
+  const latest = confirmations[0];
+  const ref = latest.razorpay_payment_id ?? latest.payment_reference;
+  return (
+    <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-green-50 text-green-800 border border-green-200 flex-shrink-0">
+      <CheckCircle2 className="h-2.5 w-2.5" />
+      Paid · {paymentModeLabel(latest.payment_mode)}{ref ? ` · ${ref.slice(-8)}` : ""}
+    </span>
+  );
+}
+
+function BookingPaymentPanel({
+  confirmations,
+  totalAmount,
+}: {
+  confirmations: BookingPaymentConfirmation[];
+  totalAmount: number;
+}) {
+  const totalConfirmed = confirmations.reduce((s, p) => s + p.amount, 0);
+  const isFullyPaid = Math.abs(totalConfirmed - totalAmount) < 0.5;
+
+  if (confirmations.length === 0) {
+    return (
+      <div className="mx-3 mb-2 md:mx-4 p-3 rounded-lg bg-amber-50 border border-amber-200 text-xs text-amber-900">
+        <div className="flex items-center gap-1.5 font-medium mb-0.5">
+          <AlertCircle className="h-3.5 w-3.5" />
+          No confirmed payment records found
+        </div>
+        <p className="text-amber-800">
+          This booking is marked paid but no <code>booking_payments</code> confirmation row exists.
+          Verify in the Bookings module before issuing the GST invoice.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="mx-3 mb-2 md:mx-4 p-3 rounded-lg bg-green-50 border border-green-200 text-xs">
+      <div className="flex items-center justify-between mb-2">
+        <span className="flex items-center gap-1.5 font-medium text-green-900">
+          <CheckCircle2 className="h-3.5 w-3.5 text-green-600" />
+          Payment confirmed — cross-check before issuing GST invoice
+        </span>
+        {isFullyPaid ? (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-800 border border-green-300 font-medium">
+            Fully paid
+          </span>
+        ) : (
+          <span className="text-[10px] px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-300 font-medium">
+            Partial — {formatCurrency(totalConfirmed)} of {formatCurrency(totalAmount)}
+          </span>
+        )}
+      </div>
+      <table className="w-full text-[11px] border-separate border-spacing-y-0.5">
+        <thead>
+          <tr className="text-muted-foreground">
+            <th className="text-left font-medium pb-1">Amount</th>
+            <th className="text-left font-medium pb-1">Mode</th>
+            <th className="text-left font-medium pb-1">Reference / ID</th>
+            <th className="text-left font-medium pb-1">Date</th>
+          </tr>
+        </thead>
+        <tbody>
+          {confirmations.map((p) => {
+            const ref = p.razorpay_payment_id ?? p.payment_reference ?? "—";
+            const date = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+            return (
+              <tr key={p.id} className="text-green-900">
+                <td className="font-medium tabular-nums pr-3">{formatCurrency(p.amount)}</td>
+                <td className="pr-3">{paymentModeLabel(p.payment_mode)}</td>
+                <td className="font-mono pr-3 text-green-700">{ref}</td>
+                <td className="text-muted-foreground">{date}</td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 // ── Booking GST task row ─────────────────────────────────────────────────────
 
 function BookingInboxLifecycleTracker({ state }: { state: BookingHandoffState }) {
@@ -1222,6 +1328,7 @@ function BookingInboxRowItem({
             <CalendarDays className="h-2.5 w-2.5" />
             Booking
           </span>
+          <BookingPaymentPill confirmations={row.payment_confirmations} />
           <span className="font-medium text-sm truncate">{partyName}</span>
         </div>
         <div className="text-right">
@@ -1351,6 +1458,10 @@ function BookingInboxRowItem({
           )}
         </div>
       </div>
+
+      {expanded && canUpload && (
+        <BookingPaymentPanel confirmations={row.payment_confirmations} totalAmount={row.statement_total_amount} />
+      )}
 
       {expanded && canUpload && (
         <BookingGstUploadForm

@@ -218,6 +218,16 @@ export interface InboxRow {
 
 export type BookingHandoffState = "gst_to_issue" | "ready_to_send" | "complete";
 
+export interface BookingPaymentConfirmation {
+  id: string;
+  amount: number;
+  payment_mode: string;
+  payment_reference: string | null;
+  razorpay_payment_id: string | null;
+  created_at: string;
+  status: string;
+}
+
 export interface BookingInboxRow {
   row_type: "booking";
   task_id: string;
@@ -243,6 +253,7 @@ export interface BookingInboxRow {
   has_discrepancy: boolean;
   discrepancy_reason: string | null;
   gst_invoice_sent_at: string | null;
+  payment_confirmations: BookingPaymentConfirmation[];
 }
 
 export interface InboxStats {
