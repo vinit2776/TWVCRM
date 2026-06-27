@@ -48,7 +48,7 @@ export async function POST(
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   // Parse body — may contain per-seat params
-  let body: { seat_number?: number; seat_occupant_email?: string } = {};
+  let body: { seat_number?: number; seat_occupant_email?: string; member_id?: string } = {};
   try {
     body = await request.json();
   } catch {
@@ -180,6 +180,7 @@ export async function POST(
           valid_from: contract.start_date,
           valid_until: contract.end_date,
           seat_occupant_email: body.seat_occupant_email || null,
+          member_id: body.member_id || null,
           is_active: true,
           unifi_voucher_id: unifiId,
         })
@@ -342,7 +343,7 @@ export async function POST(
     }
 
     // Issue 1 voucher using smart validity matching
-    const voucher = await findAndIssueOneVoucher(supabase, contract, id, seatNumber, body.seat_occupant_email, user.id, locationId);
+    const voucher = await findAndIssueOneVoucher(supabase, contract, id, seatNumber, body.seat_occupant_email, user.id, locationId, body.member_id);
 
     if ("error" in voucher) {
       return NextResponse.json({ error: voucher.error }, { status: voucher.status || 400 });
@@ -557,7 +558,8 @@ async function findAndIssueOneVoucher(
   seatNumber: number,
   seatOccupantEmail: string | undefined,
   authUserId: string,
-  locationId: string | null
+  locationId: string | null,
+  memberId?: string
 ) {
 /* eslint-enable @typescript-eslint/no-explicit-any */
   const tenureMonths: number = contract.tenure_months || 1;
@@ -661,6 +663,7 @@ async function findAndIssueOneVoucher(
       valid_from: contract.start_date,
       valid_until: contract.end_date,
       seat_occupant_email: seatOccupantEmail || null,
+      member_id: memberId || null,
       is_active: true,
     })
     .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")

@@ -186,8 +186,39 @@ export async function DELETE(
     .single();
   if (!member) return NextResponse.json({ error: "Member not found" }, { status: 404 });
 
+  const now = new Date().toISOString();
+
   // Deactivate member
-  await admin.from("contract_members").update({ is_active: false, updated_at: new Date().toISOString() }).eq("id", member_id);
+  await admin.from("contract_members").update({ is_active: false, updated_at: now }).eq("id", member_id);
+
+  // Revoke active voucher issuance linked to this member (fire-and-forget)
+  (async () => {
+    try {
+      const { data: activeIssuance } = await admin
+        .from("voucher_issuances")
+        .select("id, voucher_id")
+        .eq("member_id", member_id)
+        .eq("is_active", true)
+        .maybeSingle();
+
+      if (activeIssuance) {
+        await admin
+          .from("voucher_issuances")
+          .update({ is_active: false, revoked_at: now, revoke_reason: "Member removed from contract" })
+          .eq("id", activeIssuance.id);
+
+        // Return voucher to available pool if it's a repository voucher
+        if (activeIssuance.voucher_id) {
+          await admin
+            .from("voucher_repository")
+            .update({ status: "available", issued_at: null, expires_at: null })
+            .eq("id", activeIssuance.voucher_id);
+        }
+      }
+    } catch (err) {
+      console.error("[members] voucher revocation on remove failed:", err);
+    }
+  })();
 
   // Block on all devices (fire-and-forget)
   (async () => {
@@ -200,7 +231,6 @@ export async function DELETE(
         .eq("user_type", "member")
         .not("enrollment_status", "in", "(blocked,deleted)");
 
-      const now = new Date().toISOString();
       await Promise.allSettled((accessUsers ?? []).map(async (au) => {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const dev = au.device as any;
