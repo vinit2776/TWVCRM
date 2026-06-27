@@ -1,25 +1,21 @@
 "use client";
 
-import { useState, useEffect, useCallback, Fragment } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
-import { Input } from "@/components/ui/input";
 import {
   Wifi,
-  ChevronDown,
-  ChevronRight,
   Loader2,
   Ticket,
   AlertTriangle,
   Mail,
   CheckCircle2,
   XCircle,
-  RefreshCw,
   Eye,
   EyeOff,
   Send,
-  Pencil,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate, getValidityLabel } from "@/lib/utils";
@@ -28,18 +24,21 @@ import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { VOUCHER_STATUS_LABELS, VOUCHER_STATUS_COLORS } from "@/lib/constants";
 import { VoucherReplaceDialog } from "./voucher-replace-dialog";
 
+// ── Types ──────────────────────────────────────────────────────────────────────
+
+interface Member {
+  id: string;
+  name: string;
+  phone: string;
+  email: string | null;
+  is_active: boolean;
+}
+
 interface VoucherIssuance {
   id: string;
   contract_id: string;
-  voucher_id: string;
-  voucher?: {
-    id: string;
-    voucher_code: string;
-    status: string;
-    metadata: Record<string, unknown>;
-    validity_days?: number | null;
-  };
-  lead_id: string;
+  voucher_id: string | null;
+  member_id: string | null;
   seat_number: number;
   issued_at: string;
   valid_from: string;
@@ -50,6 +49,13 @@ interface VoucherIssuance {
   emailed_at?: string;
   is_active: boolean;
   replaces_issuance_id?: string;
+  voucher?: {
+    id: string;
+    voucher_code: string;
+    status: string;
+    metadata: Record<string, unknown>;
+    validity_days?: number | null;
+  };
 }
 
 interface ContractVouchersSectionProps {
@@ -66,33 +72,35 @@ interface ContractVouchersSectionProps {
   onDepartmentIdUpdate?: () => void;
 }
 
+// ── Helpers ────────────────────────────────────────────────────────────────────
+
+function maskCode(code: string) {
+  if (!code || code.length <= 5) return code;
+  return "•••••" + code.slice(-5);
+}
+
+// ── Main component ─────────────────────────────────────────────────────────────
+
 export function ContractVouchersSection({
   contractId,
   seats,
   contractStatus,
-  startDate,
-  endDate,
+  startDate: _startDate,
+  endDate: _endDate,
   tenureMonths,
   signedDocumentId,
-  leadEmail,
+  leadEmail: _leadEmail,
   locationId,
   printerDepartmentId,
   onDepartmentIdUpdate,
 }: ContractVouchersSectionProps) {
+  const [members, setMembers] = useState<Member[]>([]);
   const [issuances, setIssuances] = useState<VoucherIssuance[]>([]);
   const [loading, setLoading] = useState(true);
-  const [issuingSeat, setIssuingSeat] = useState<number | null>(null);
+  const [issuingMember, setIssuingMember] = useState<string | null>(null);
   const [issuingAll, setIssuingAll] = useState(false);
-  const [sendingSeat, setSendingSeat] = useState<string | null>(null);
-  const [expandedRows, setExpandedRows] = useState<Set<string>>(new Set());
+  const [sendingIssuance, setSendingIssuance] = useState<string | null>(null);
   const [showHistory, setShowHistory] = useState(false);
-  const [editingEmail, setEditingEmail] = useState<string | null>(null);
-  const [emailDraft, setEmailDraft] = useState("");
-  const [savingEmail, setSavingEmail] = useState(false);
-  const [matchInfo, setMatchInfo] = useState<{
-    matched_validity_days?: number | null;
-    match_warning?: string | null;
-  }>({});
   const [inventoryCheck, setInventoryCheck] = useState<{
     loading: boolean;
     compatible: boolean;
@@ -100,8 +108,11 @@ export function ContractVouchersSection({
     availableCount: number;
     neededCount: number;
   }>({ loading: false, compatible: false, matchedGroup: null, availableCount: 0, neededCount: 0 });
+  const [matchInfo, setMatchInfo] = useState<{
+    matched_validity_days?: number | null;
+    match_warning?: string | null;
+  }>({});
 
-  // Replace dialog state
   const [replaceDialog, setReplaceDialog] = useState<{
     open: boolean;
     issuanceId: string;
@@ -110,31 +121,45 @@ export function ContractVouchersSection({
     seatEmail?: string;
   }>({ open: false, issuanceId: "", seatNumber: 0, voucherCode: "" });
 
-  // Per-seat email drafts for unissued seats
-  const [unissuedEmails, setUnissuedEmails] = useState<Record<number, string>>({});
+  // ── Data loading ─────────────────────────────────────────────────────────────
 
-  const fetchIssuances = useCallback(async () => {
+  const load = useCallback(async () => {
     setLoading(true);
     const params = showHistory ? "?show_history=true" : "";
-    const res = await fetch(`/api/contracts/${contractId}/vouchers${params}`);
-    if (res.ok) {
-      const json = await res.json();
-      setIssuances(json.data || []);
+    const [membersRes, issuancesRes] = await Promise.all([
+      fetch(`/api/contracts/${contractId}/members`),
+      fetch(`/api/contracts/${contractId}/vouchers${params}`),
+    ]);
+
+    if (membersRes.ok) {
+      const json = await membersRes.json();
+      setMembers((json.data ?? []).filter((m: Member) => m.is_active));
+    }
+    if (issuancesRes.ok) {
+      const json = await issuancesRes.json();
+      setIssuances(json.data ?? []);
     }
     setLoading(false);
   }, [contractId, showHistory]);
 
-  // Check voucher inventory compatibility
-  const checkInventoryCompatibility = useCallback(async (activeCount: number) => {
-    if (!tenureMonths) return;
+  useEffect(() => { load(); }, [load]);
+
+  // ── Inventory check ──────────────────────────────────────────────────────────
+
+  const activeIssuances = issuances.filter((i) => i.is_active);
+  const issuedMemberIds = new Set(
+    activeIssuances.map((i) => i.member_id).filter(Boolean) as string[]
+  );
+  const unissuedMembers = members.filter((m) => !issuedMemberIds.has(m.id));
+
+  const checkInventory = useCallback(async (needed: number) => {
+    if (!tenureMonths || needed <= 0) return;
     const targetDays = tenureMonths * 30;
     const tolerance = 0.20;
-    const minAcceptable = Math.floor(targetDays * (1 - tolerance));
-    const maxAcceptable = Math.ceil(targetDays * (1 + tolerance));
-    const needed = seats - activeCount;
-    if (needed <= 0) return;
+    const min = Math.floor(targetDays * (1 - tolerance));
+    const max = Math.ceil(targetDays * (1 + tolerance));
 
-    setInventoryCheck((prev) => ({ ...prev, loading: true }));
+    setInventoryCheck((p) => ({ ...p, loading: true }));
     try {
       const params = new URLSearchParams();
       if (locationId) params.set("location_id", locationId);
@@ -142,12 +167,11 @@ export function ContractVouchersSection({
       if (res.ok) {
         const json = await res.json();
         const groups: { validity_days: number | null; available: number }[] = json.data || [];
-        const compatible = groups.filter(
-          (g) => g.validity_days != null && g.validity_days >= minAcceptable && g.validity_days <= maxAcceptable
-        );
+        const compatible = groups
+          .filter((g) => g.validity_days != null && g.validity_days >= min && g.validity_days <= max)
+          .sort((a, b) => Math.abs((a.validity_days || 0) - targetDays) - Math.abs((b.validity_days || 0) - targetDays));
         if (compatible.length > 0) {
-          const sorted = compatible.sort((a, b) => Math.abs((a.validity_days || 0) - targetDays) - Math.abs((b.validity_days || 0) - targetDays));
-          const best = sorted[0];
+          const best = compatible[0];
           setInventoryCheck({
             loading: false,
             compatible: best.available >= needed,
@@ -160,171 +184,131 @@ export function ContractVouchersSection({
         }
       }
     } catch {
-      setInventoryCheck((prev) => ({ ...prev, loading: false }));
+      setInventoryCheck((p) => ({ ...p, loading: false }));
     }
-  }, [tenureMonths, seats, locationId]);
+  }, [tenureMonths, locationId]);
 
   useEffect(() => {
-    fetchIssuances();
-  }, [fetchIssuances]);
-
-  // Check inventory for remaining seats
-  const activeIssuances = issuances.filter((i) => i.is_active);
-
-  useEffect(() => {
-    if (!loading && activeIssuances.length < seats && contractStatus === "active") {
-      checkInventoryCompatibility(activeIssuances.length);
+    if (!loading && unissuedMembers.length > 0 && contractStatus === "active") {
+      checkInventory(unissuedMembers.length);
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [loading, activeIssuances.length, seats, contractStatus, checkInventoryCompatibility]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [loading, unissuedMembers.length, contractStatus]);
 
-  // Issue voucher for a specific seat
-  const handleIssueSeat = async (seatNumber: number) => {
-    const email = unissuedEmails[seatNumber]?.trim();
-    if (!email) {
-      toast.error("Enter an email address before issuing");
+  // ── Actions ──────────────────────────────────────────────────────────────────
+
+  async function handleIssueMember(member: Member) {
+    if (!member.email) {
+      toast.error(`${member.name} has no email address — add an email to issue a voucher`);
       return;
     }
-    setIssuingSeat(seatNumber);
-    const res = await fetch(`/api/contracts/${contractId}/vouchers`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ seat_number: seatNumber, seat_occupant_email: email }),
-    });
-    setIssuingSeat(null);
+    setIssuingMember(member.id);
+    try {
+      // Find the next available seat number
+      const activeSeatNumbers = new Set(activeIssuances.map((i) => i.seat_number));
+      let nextSeat = 1;
+      while (activeSeatNumbers.has(nextSeat) && nextSeat <= seats) nextSeat++;
 
-    if (res.ok) {
+      const res = await fetch(`/api/contracts/${contractId}/vouchers`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          seat_number: nextSeat,
+          seat_occupant_email: member.email,
+          member_id: member.id,
+        }),
+      });
       const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error ?? "Failed to issue voucher");
+        return;
+      }
       setMatchInfo({ matched_validity_days: json.matched_validity_days, match_warning: json.match_warning });
-      // Clear the draft email for this seat
-      setUnissuedEmails((prev) => { const next = { ...prev }; delete next[seatNumber]; return next; });
-      toast.success(`Voucher issued for seat ${seatNumber}`);
-      fetchIssuances();
-    } else {
-      const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to issue voucher");
+      toast.success(`Voucher issued for ${member.name}`);
+      await load();
+    } finally {
+      setIssuingMember(null);
     }
-  };
+  }
 
-  // Issue all remaining seats
-  const handleIssueAllRemaining = async () => {
+  async function handleIssueAll() {
+    const membersNeedingVouchers = unissuedMembers.filter((m) => !!m.email);
+    if (membersNeedingVouchers.length === 0) {
+      toast.error("No members with email addresses need vouchers");
+      return;
+    }
     setIssuingAll(true);
-    const res = await fetch(`/api/contracts/${contractId}/vouchers`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-    });
-    setIssuingAll(false);
+    try {
+      let issued = 0;
+      const activeSeatNumbers = new Set(activeIssuances.map((i) => i.seat_number));
 
-    if (res.ok) {
-      const json = await res.json();
-      const count = json.data?.length || 0;
-      setMatchInfo({ matched_validity_days: json.matched_validity_days, match_warning: json.match_warning });
-      toast.success(`Issued ${count} voucher${count !== 1 ? "s" : ""} successfully`);
-      fetchIssuances();
-    } else {
-      const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to issue vouchers");
+      for (const member of membersNeedingVouchers) {
+        let nextSeat = 1;
+        while (activeSeatNumbers.has(nextSeat) && nextSeat <= seats) nextSeat++;
+        activeSeatNumbers.add(nextSeat);
+
+        const res = await fetch(`/api/contracts/${contractId}/vouchers`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            seat_number: nextSeat,
+            seat_occupant_email: member.email,
+            member_id: member.id,
+          }),
+        });
+        if (res.ok) issued++;
+        else {
+          const json = await res.json();
+          toast.error(`Failed for ${member.name}: ${json.error ?? "Unknown error"}`);
+          break;
+        }
+      }
+
+      if (issued > 0) {
+        toast.success(`${issued} voucher${issued !== 1 ? "s" : ""} issued`);
+        await load();
+      }
+    } finally {
+      setIssuingAll(false);
     }
-  };
+  }
 
-  // Send email for a specific seat
-  const handleSendEmail = async (issuanceId: string, email?: string) => {
-    if (!email) {
-      toast.error("Enter an email address first");
-      return;
+  async function handleSendEmail(issuanceId: string, email: string) {
+    setSendingIssuance(issuanceId);
+    try {
+      const res = await fetch(`/api/contracts/${contractId}/vouchers/email`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ issuance_id: issuanceId, email }),
+      });
+      if (res.ok) {
+        toast.success(`Voucher emailed to ${email}`);
+        await load();
+      } else {
+        const json = await res.json();
+        toast.error(json.error ?? "Failed to send email");
+      }
+    } finally {
+      setSendingIssuance(null);
     }
-    setSendingSeat(issuanceId);
-    const res = await fetch(`/api/contracts/${contractId}/vouchers/email`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ issuance_id: issuanceId, email }),
-    });
-    setSendingSeat(null);
+  }
 
-    if (res.ok) {
-      toast.success(`Voucher emailed to ${email}`);
-      fetchIssuances();
-    } else {
-      const err = await res.json().catch(() => null);
-      toast.error(err?.error || "Failed to send email");
-    }
-  };
-
-  // Save inline email edit
-  const handleSaveEmail = async (issuanceId: string) => {
-    setSavingEmail(true);
-    const res = await fetch(`/api/contracts/${contractId}/vouchers/${issuanceId}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ seat_occupant_email: emailDraft }),
-    });
-    setSavingEmail(false);
-
-    if (res.ok) {
-      setEditingEmail(null);
-      setEmailDraft("");
-      fetchIssuances();
-    } else {
-      toast.error("Failed to save email");
-    }
-  };
-
-  const toggleRow = (id: string) => {
-    setExpandedRows((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
-  // Mask voucher code: show only last 5 chars
-  const maskCode = (code: string) => {
-    if (!code || code.length <= 5) return code;
-    return "•••••" + code.slice(-5);
-  };
+  // ── Derived state ─────────────────────────────────────────────────────────────
 
   const isContractActive = contractStatus === "active";
   const hasSignedDoc = !!signedDocumentId;
-  const activeSeatNumbers = new Set(activeIssuances.map((i) => i.seat_number));
-  const allSeatsFilled = activeIssuances.length >= seats;
-  const canIssue = isContractActive && !allSeatsFilled && hasSignedDoc;
-
-  // Build seat rows: combine issued + unissued
-  const buildSeatRows = () => {
-    const rows: { seatNumber: number; issuance?: VoucherIssuance; isUnissued: boolean }[] = [];
-
-    for (const iss of activeIssuances) {
-      rows.push({ seatNumber: iss.seat_number, issuance: iss, isUnissued: false });
-    }
-
-    if (isContractActive && hasSignedDoc) {
-      for (let s = 1; s <= seats; s++) {
-        if (!activeSeatNumbers.has(s)) {
-          rows.push({ seatNumber: s, isUnissued: true });
-        }
-      }
-    }
-
-    rows.sort((a, b) => a.seatNumber - b.seatNumber);
-    return rows;
-  };
-
-  const historyIssuances = issuances.filter((i) => !i.is_active);
+  const canIssue = isContractActive && hasSignedDoc;
   const expectedValidity = tenureMonths ? tenureMonths * 30 : null;
+  const historyIssuances = issuances.filter((i) => !i.is_active);
 
-  const issueTooltip = !isContractActive
-    ? "Contract must be active to issue vouchers"
-    : !hasSignedDoc
-    ? "Upload signed contract before issuing vouchers"
-    : allSeatsFilled
-    ? "All seats have been filled"
-    : "Issue vouchers for remaining seats";
+  // Build a map: member_id → active issuance
+  const issuanceByMember = new Map<string, VoucherIssuance>();
+  for (const iss of activeIssuances) {
+    if (iss.member_id) issuanceByMember.set(iss.member_id, iss);
+  }
 
-  // Suppress unused var warnings
-  void startDate;
-  void endDate;
-  void leadEmail;
+  // Legacy issuances not linked to any member (issued before this change)
+  const legacyIssuances = activeIssuances.filter((i) => !i.member_id);
 
   return (
     <Card>
@@ -339,26 +323,25 @@ export function ContractVouchersSection({
           )}
         </CardTitle>
         <div className="flex items-center gap-2">
-          {issuances.length > 0 && (
+          {(issuances.length > 0 || historyIssuances.length > 0) && (
             <Button size="sm" variant="ghost" onClick={() => setShowHistory(!showHistory)} className="text-xs">
               {showHistory ? <EyeOff className="mr-1 h-3.5 w-3.5" /> : <Eye className="mr-1 h-3.5 w-3.5" />}
               {showHistory ? "Hide History" : "Show History"}
             </Button>
           )}
-          {canIssue && (
-            <Button size="sm" onClick={handleIssueAllRemaining} disabled={issuingAll} title={issueTooltip}>
-              {issuingAll ? (
-                <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Issuing...</>
-              ) : (
-                <><Wifi className="mr-2 h-4 w-4" />Issue All Remaining</>
-              )}
+          {canIssue && unissuedMembers.filter((m) => !!m.email).length > 1 && (
+            <Button size="sm" onClick={handleIssueAll} disabled={issuingAll}>
+              {issuingAll
+                ? <><Loader2 className="mr-2 h-4 w-4 animate-spin" />Issuing...</>
+                : <><Wifi className="mr-2 h-4 w-4" />Issue All</>
+              }
             </Button>
           )}
         </div>
       </CardHeader>
-      <CardContent>
-        {/* Printer Department ID — only when contract has a location.
-            Without one there's no printer to map to, so we hide the field. */}
+
+      <CardContent className="space-y-3">
+        {/* Printer Department ID */}
         {isContractActive && locationId && (
           <DepartmentIdCard
             contractId={contractId}
@@ -369,225 +352,160 @@ export function ContractVouchersSection({
 
         {/* Signed document warning */}
         {isContractActive && !hasSignedDoc && !loading && (
-          <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 flex items-start gap-2">
+          <div className="mb-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 flex items-start gap-2">
             <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
             <p>Upload a signed contract document before issuing vouchers.</p>
           </div>
         )}
 
-        {/* Match info banner */}
+        {/* Match warning */}
         {matchInfo.match_warning && (
-          <div className="mb-4 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 flex items-start gap-2">
+          <div className="mb-2 rounded-md border border-amber-200 bg-amber-50 p-3 text-sm text-amber-800 flex items-start gap-2">
             <AlertTriangle className="h-4 w-4 mt-0.5 flex-shrink-0" />
             <div>
               <p>{matchInfo.match_warning}</p>
               {matchInfo.matched_validity_days && (
                 <p className="text-xs mt-1">
-                  Matched validity: <Badge variant="outline" className="text-xs">{getValidityLabel(matchInfo.matched_validity_days)}</Badge>
+                  Matched: <Badge variant="outline" className="text-xs">{getValidityLabel(matchInfo.matched_validity_days)}</Badge>
                 </p>
               )}
             </div>
           </div>
         )}
 
-        {/* Expected validity + inventory check */}
-        {expectedValidity && isContractActive && !allSeatsFilled && !loading && (
-          <div className="mb-4 rounded-md border p-3 space-y-2">
+        {/* Inventory check */}
+        {expectedValidity && isContractActive && unissuedMembers.length > 0 && !loading && (
+          <div className="mb-2 rounded-md border p-3 space-y-1.5">
             <div className="text-xs text-muted-foreground flex items-center gap-1">
-              Required voucher type: <Badge variant="outline" className="text-xs ml-1 font-medium">{getValidityLabel(expectedValidity)}</Badge>
-              <span className="ml-1">(based on {tenureMonths}-month tenure)</span>
+              Required type: <Badge variant="outline" className="text-xs ml-1 font-medium">{getValidityLabel(expectedValidity)}</Badge>
+              <span className="ml-1">({tenureMonths}-month tenure)</span>
             </div>
             {inventoryCheck.loading ? (
               <div className="text-xs text-muted-foreground flex items-center gap-1">
-                <Loader2 className="h-3 w-3 animate-spin" /> Checking voucher inventory...
+                <Loader2 className="h-3 w-3 animate-spin" /> Checking inventory…
               </div>
             ) : inventoryCheck.matchedGroup ? (
               inventoryCheck.compatible ? (
                 <div className="text-xs text-green-700 flex items-center gap-1">
                   <CheckCircle2 className="h-3.5 w-3.5" />
-                  {inventoryCheck.availableCount} compatible vouchers available ({inventoryCheck.matchedGroup}) — need {inventoryCheck.neededCount}
+                  {inventoryCheck.availableCount} compatible vouchers available ({inventoryCheck.matchedGroup})
                 </div>
               ) : (
                 <div className="text-xs text-amber-700 flex items-center gap-1">
                   <AlertTriangle className="h-3.5 w-3.5" />
-                  Only {inventoryCheck.availableCount} compatible vouchers ({inventoryCheck.matchedGroup}) — need {inventoryCheck.neededCount}. Upload more before issuing.
+                  Only {inventoryCheck.availableCount} ({inventoryCheck.matchedGroup}) — need {inventoryCheck.neededCount}. Upload more.
                 </div>
               )
             ) : inventoryCheck.neededCount > 0 ? (
               <div className="text-xs text-red-600 flex items-center gap-1">
                 <XCircle className="h-3.5 w-3.5" />
-                No compatible vouchers found. Upload {getValidityLabel(expectedValidity)} vouchers before issuing.
+                No compatible vouchers. Upload {getValidityLabel(expectedValidity)} vouchers.
               </div>
             ) : null}
           </div>
         )}
 
+        {/* Member list */}
         {loading ? (
           <TableSkeleton rows={3} />
-        ) : activeIssuances.length === 0 && (!isContractActive || !hasSignedDoc) ? (
+        ) : members.length === 0 ? (
           <EmptyState
             icon={Ticket}
-            title="No vouchers issued"
-            description={
-              !isContractActive
-                ? "Activate the contract to issue vouchers."
-                : "Upload a signed contract document to enable voucher issuance."
-            }
+            title="No members added"
+            description="Add members in the Members & Access section above — they will appear here for voucher issuance."
           />
-        ) : (activeIssuances.length > 0 || (isContractActive && hasSignedDoc)) ? (
-          <div className="rounded-md border overflow-x-auto">
+        ) : (
+          <div className="rounded-md border overflow-hidden">
             <table className="w-full text-sm">
               <thead>
                 <tr className="border-b bg-muted/50">
-                  <th className="px-3 py-3 text-left font-medium w-8"></th>
-                  <th className="px-3 py-3 text-center font-medium w-16">Seat</th>
-                  <th className="px-3 py-3 text-left font-medium">Occupant Email</th>
-                  <th className="px-3 py-3 text-left font-medium">Voucher Code</th>
-                  <th className="px-3 py-3 text-left font-medium hidden sm:table-cell">Validity</th>
-                  <th className="px-3 py-3 text-left font-medium hidden lg:table-cell">Email Status</th>
-                  <th className="px-3 py-3 text-left font-medium">Status</th>
-                  <th className="px-3 py-3 text-right font-medium">Actions</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Member</th>
+                  <th className="px-3 py-2.5 text-left font-medium hidden sm:table-cell">Email</th>
+                  <th className="px-3 py-2.5 text-left font-medium">Voucher Code</th>
+                  <th className="px-3 py-2.5 text-left font-medium hidden sm:table-cell">Validity</th>
+                  <th className="px-3 py-2.5 text-left font-medium hidden lg:table-cell">Sent</th>
+                  <th className="px-3 py-2.5 text-right font-medium">Actions</th>
                 </tr>
               </thead>
               <tbody>
-                {buildSeatRows().map((row) => {
-                  const { seatNumber, issuance, isUnissued } = row;
-
-                  if (isUnissued) {
-                    const draftEmail = unissuedEmails[seatNumber] || "";
-                    const hasEmail = draftEmail.trim().length > 0;
-                    return (
-                      <tr key={`empty-${seatNumber}`} className="border-b bg-muted/10">
-                        <td className="px-3 py-3"></td>
-                        <td className="px-3 py-3 text-center font-medium text-muted-foreground">{seatNumber}</td>
-                        <td className="px-3 py-3">
-                          <Input
-                            type="email"
-                            value={draftEmail}
-                            onChange={(e) => setUnissuedEmails((prev) => ({ ...prev, [seatNumber]: e.target.value }))}
-                            onKeyDown={(e) => { if (e.key === "Enter" && hasEmail) handleIssueSeat(seatNumber); }}
-                            placeholder="email@example.com"
-                            className="h-7 text-xs w-48"
-                          />
-                        </td>
-                        <td className="px-3 py-3 text-muted-foreground text-xs italic" colSpan={3}>—</td>
-                        <td className="px-3 py-3">
-                          <Badge variant="outline" className="text-xs text-muted-foreground">Unissued</Badge>
-                        </td>
-                        <td className="px-3 py-3 text-right">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => handleIssueSeat(seatNumber)}
-                            disabled={!hasEmail || issuingSeat === seatNumber || issuingAll}
-                            className="text-xs h-7"
-                            title={hasEmail ? `Issue voucher for ${draftEmail.trim()}` : "Enter email first"}
-                          >
-                            {issuingSeat === seatNumber ? (
-                              <Loader2 className="h-3 w-3 animate-spin" />
-                            ) : (
-                              <><Ticket className="mr-1 h-3 w-3" />Issue</>
-                            )}
-                          </Button>
-                        </td>
-                      </tr>
-                    );
-                  }
-
-                  if (!issuance) return null;
-
-                  const isExpanded = expandedRows.has(issuance.id);
-                  const voucherStatus = issuance.voucher?.status || "issued";
-                  const metadata = issuance.voucher?.metadata || {};
-                  const hasMetadata = Object.keys(metadata).length > 0;
-                  const isEditingThis = editingEmail === issuance.id;
+                {members.map((member) => {
+                  const issuance = issuanceByMember.get(member.id);
+                  const hasVoucher = !!issuance;
+                  const voucherStatus = issuance?.voucher?.status || "issued";
+                  const isIssuing = issuingMember === member.id;
+                  const isSending = sendingIssuance === issuance?.id;
+                  const hasEmail = !!member.email;
 
                   return (
-                    <Fragment key={issuance.id}>
-                      <tr className={`border-b hover:bg-muted/30 transition-colors ${!issuance.is_active ? "opacity-50" : ""}`}>
-                        <td className="px-3 py-3">
-                          {hasMetadata ? (
-                            <button onClick={() => toggleRow(issuance.id)} className="text-muted-foreground hover:text-foreground">
-                              {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
-                            </button>
-                          ) : null}
-                        </td>
-                        <td className="px-3 py-3 text-center font-medium">{issuance.seat_number}</td>
-                        <td className="px-3 py-3">
-                          {isEditingThis ? (
-                            <div className="flex items-center gap-1">
-                              <Input
-                                type="email"
-                                value={emailDraft}
-                                onChange={(e) => setEmailDraft(e.target.value)}
-                                onKeyDown={(e) => {
-                                  if (e.key === "Enter") handleSaveEmail(issuance.id);
-                                  if (e.key === "Escape") { setEditingEmail(null); setEmailDraft(""); }
-                                }}
-                                placeholder="email@example.com"
-                                className="h-7 text-xs w-44"
-                                autoFocus
-                                disabled={savingEmail}
-                              />
-                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => handleSaveEmail(issuance.id)} disabled={savingEmail}>
-                                {savingEmail ? <Loader2 className="h-3 w-3 animate-spin" /> : <CheckCircle2 className="h-3 w-3 text-green-600" />}
-                              </Button>
-                              <Button size="sm" variant="ghost" className="h-7 w-7 p-0" onClick={() => { setEditingEmail(null); setEmailDraft(""); }}>
-                                <XCircle className="h-3 w-3 text-red-500" />
-                              </Button>
-                            </div>
-                          ) : (
-                            <div className="flex items-center gap-1">
-                              {issuance.seat_occupant_email ? (
-                                <span className="text-xs">{issuance.seat_occupant_email}</span>
-                              ) : (
-                                <span className="text-xs text-muted-foreground italic">No email</span>
-                              )}
-                              {issuance.is_active && (
-                                <button
-                                  onClick={() => { setEditingEmail(issuance.id); setEmailDraft(issuance.seat_occupant_email || ""); }}
-                                  className="text-muted-foreground hover:text-foreground ml-1"
-                                  title="Edit email"
-                                >
-                                  <Pencil className="h-3 w-3" />
-                                </button>
-                              )}
-                            </div>
+                    <tr key={member.id} className="border-b hover:bg-muted/20 transition-colors">
+                      <td className="px-3 py-3">
+                        <div className="font-medium text-sm">{member.name}</div>
+                        <div className="text-xs text-muted-foreground">{member.phone}</div>
+                      </td>
+                      <td className="px-3 py-3 hidden sm:table-cell text-xs text-muted-foreground">
+                        {member.email ?? <span className="italic">No email</span>}
+                      </td>
+                      <td className="px-3 py-3 font-mono text-xs text-muted-foreground">
+                        {hasVoucher
+                          ? maskCode(issuance.voucher?.voucher_code || "—")
+                          : <span className="italic text-muted-foreground/60">Not issued</span>
+                        }
+                      </td>
+                      <td className="px-3 py-3 hidden sm:table-cell">
+                        {hasVoucher
+                          ? <Badge variant="outline" className="text-xs">{getValidityLabel(issuance.voucher?.validity_days)}</Badge>
+                          : "—"
+                        }
+                      </td>
+                      <td className="px-3 py-3 hidden lg:table-cell">
+                        {hasVoucher && issuance.emailed_at ? (
+                          <span className="text-xs text-green-700 flex items-center gap-1">
+                            <Mail className="h-3 w-3" />Sent {formatDate(issuance.emailed_at)}
+                          </span>
+                        ) : hasVoucher ? (
+                          <span className="text-xs text-muted-foreground">Not sent</span>
+                        ) : "—"}
+                      </td>
+                      <td className="px-3 py-3 text-right">
+                        <div className="flex items-center justify-end gap-1">
+                          {!hasVoucher && canIssue && (
+                            <Button
+                              size="sm"
+                              variant="outline"
+                              className="text-xs h-7"
+                              onClick={() => handleIssueMember(member)}
+                              disabled={isIssuing || issuingAll}
+                              title={hasEmail ? `Issue voucher to ${member.email}` : "Add email to this member first"}
+                            >
+                              {isIssuing
+                                ? <Loader2 className="h-3 w-3 animate-spin" />
+                                : <><Ticket className="mr-1 h-3 w-3" />Issue</>
+                              }
+                            </Button>
                           )}
-                        </td>
-                        <td className="px-3 py-3 font-mono text-xs text-muted-foreground">{maskCode(issuance.voucher?.voucher_code || "-")}</td>
-                        <td className="px-3 py-3 hidden sm:table-cell">
-                          <Badge variant="outline" className="text-xs">{getValidityLabel(issuance.voucher?.validity_days)}</Badge>
-                        </td>
-                        <td className="px-3 py-3 hidden lg:table-cell">
-                          {issuance.emailed_at ? (
-                            <span className="text-xs text-green-700 flex items-center gap-1">
-                              <Mail className="h-3 w-3" />Sent {formatDate(issuance.emailed_at)}
-                            </span>
-                          ) : issuance.is_active ? (
-                            <span className="text-xs text-muted-foreground">Not sent</span>
-                          ) : (
-                            <span className="text-xs text-muted-foreground">—</span>
-                          )}
-                        </td>
-                        <td className="px-3 py-3">
-                          <Badge variant="secondary" className={VOUCHER_STATUS_COLORS[voucherStatus] || "bg-gray-100 text-gray-800"}>
-                            {VOUCHER_STATUS_LABELS[voucherStatus] || voucherStatus}
-                          </Badge>
-                          {!issuance.is_active && <span className="ml-1 text-xs text-red-600">(Replaced)</span>}
-                        </td>
-                        <td className="px-3 py-3 text-right">
-                          {issuance.is_active && (
-                            <div className="flex items-center justify-end gap-1">
+                          {hasVoucher && (
+                            <>
+                              <Badge
+                                variant="secondary"
+                                className={`text-xs ${VOUCHER_STATUS_COLORS[voucherStatus] || "bg-gray-100 text-gray-800"}`}
+                              >
+                                {VOUCHER_STATUS_LABELS[voucherStatus] || voucherStatus}
+                              </Badge>
                               <Button
                                 size="sm"
                                 variant="ghost"
                                 className="h-7 w-7 p-0"
-                                onClick={() => handleSendEmail(issuance.id, issuance.seat_occupant_email)}
-                                disabled={sendingSeat === issuance.id || !issuance.seat_occupant_email}
-                                title={issuance.seat_occupant_email ? `Send to ${issuance.seat_occupant_email}` : "Enter email first"}
+                                onClick={() => {
+                                  if (!member.email) {
+                                    toast.error(`${member.name} has no email address — update their profile to send`);
+                                    return;
+                                  }
+                                  handleSendEmail(issuance.id, member.email);
+                                }}
+                                disabled={isSending}
+                                title={member.email ? `Send to ${member.email}` : "No email on member profile"}
                               >
-                                {sendingSeat === issuance.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                                {isSending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
                               </Button>
                               <Button
                                 size="sm"
@@ -598,109 +516,127 @@ export function ContractVouchersSection({
                                   issuanceId: issuance.id,
                                   seatNumber: issuance.seat_number,
                                   voucherCode: issuance.voucher?.voucher_code || "",
-                                  seatEmail: issuance.seat_occupant_email,
+                                  seatEmail: member.email ?? undefined,
                                 })}
                                 title="Replace voucher"
                               >
                                 <RefreshCw className="h-3.5 w-3.5" />
                               </Button>
-                            </div>
+                            </>
                           )}
-                        </td>
-                      </tr>
-
-                      {isExpanded && (hasMetadata || issuance.revoke_reason) && (
-                        <tr className="border-b bg-muted/10">
-                          <td colSpan={8} className="px-3 py-3">
-                            <div className="pl-8 space-y-1">
-                              {hasMetadata && (
-                                <>
-                                  <p className="text-xs font-medium text-muted-foreground uppercase tracking-wider mb-2">Metadata</p>
-                                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-2">
-                                    {Object.entries(metadata).map(([key, value]) => (
-                                      <div key={key} className="text-xs">
-                                        <span className="text-muted-foreground">{key}:</span>{" "}
-                                        <span className="font-medium">{typeof value === "object" ? JSON.stringify(value) : String(value)}</span>
-                                      </div>
-                                    ))}
-                                  </div>
-                                </>
-                              )}
-                              {issuance.revoke_reason && (
-                                <div className="mt-2 text-xs"><span className="text-red-600 font-medium">Revoke Reason:</span> {issuance.revoke_reason}</div>
-                              )}
-                              {issuance.replaces_issuance_id && (
-                                <div className="mt-1 text-xs text-muted-foreground">Replaces issuance: {issuance.replaces_issuance_id.slice(0, 8)}...</div>
-                              )}
-                            </div>
-                          </td>
-                        </tr>
-                      )}
-                    </Fragment>
-                  );
-                })}
-
-                {/* History rows */}
-                {showHistory && historyIssuances.length > 0 && (
-                  <>
-                    <tr className="border-b bg-muted/30">
-                      <td colSpan={8} className="px-3 py-2 text-xs font-medium text-muted-foreground uppercase tracking-wider">
-                        Replacement History
+                        </div>
                       </td>
                     </tr>
-                    {historyIssuances.map((issuance) => (
-                      <tr key={issuance.id} className="border-b opacity-50">
-                        <td className="px-3 py-2"></td>
-                        <td className="px-3 py-2 text-center font-medium text-muted-foreground">{issuance.seat_number}</td>
-                        <td className="px-3 py-2 text-xs text-muted-foreground">{issuance.seat_occupant_email || "—"}</td>
-                        <td className="px-3 py-2 font-mono text-xs line-through text-muted-foreground">{maskCode(issuance.voucher?.voucher_code || "-")}</td>
-                        <td className="px-3 py-2 hidden sm:table-cell">
-                          <Badge variant="outline" className="text-xs opacity-60">{getValidityLabel(issuance.voucher?.validity_days)}</Badge>
-                        </td>
-                        <td className="px-3 py-2 hidden lg:table-cell text-xs text-muted-foreground">
-                          {issuance.emailed_at ? `Sent ${formatDate(issuance.emailed_at)}` : "—"}
-                        </td>
-                        <td className="px-3 py-2">
-                          <Badge variant="secondary" className="bg-red-100 text-red-800 text-xs">Revoked</Badge>
-                        </td>
-                        <td className="px-3 py-2 text-right text-xs text-muted-foreground">
-                          {issuance.revoked_at ? formatDate(issuance.revoked_at) : ""}
-                          {issuance.revoke_reason && (
-                            <div className="text-xs text-red-500 truncate max-w-[120px]" title={issuance.revoke_reason}>{issuance.revoke_reason}</div>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </>
-                )}
+                  );
+                })}
               </tbody>
             </table>
           </div>
-        ) : (
-          <EmptyState
-            icon={Ticket}
-            title="No vouchers issued"
-            description="Issue vouchers for each seat to assign WiFi codes."
-            actionLabel={canIssue ? "Issue All Vouchers" : undefined}
-            onAction={canIssue ? handleIssueAllRemaining : undefined}
-          />
         )}
 
-        {/* Summary info */}
+        {/* Legacy issuances — issued before member linkage was introduced */}
+        {legacyIssuances.length > 0 && (
+          <div className="mt-4">
+            <p className="text-xs text-muted-foreground font-medium mb-2 uppercase tracking-wide">Previously issued (no member link)</p>
+            <div className="rounded-md border overflow-hidden">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b bg-muted/50">
+                    <th className="px-3 py-2 text-center font-medium w-16">Seat</th>
+                    <th className="px-3 py-2 text-left font-medium">Email</th>
+                    <th className="px-3 py-2 text-left font-medium">Code</th>
+                    <th className="px-3 py-2 text-left font-medium hidden sm:table-cell">Validity</th>
+                    <th className="px-3 py-2 text-right font-medium">Actions</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {legacyIssuances.map((iss) => {
+                    const voucherStatus = iss.voucher?.status || "issued";
+                    const isSending = sendingIssuance === iss.id;
+                    return (
+                      <tr key={iss.id} className="border-b hover:bg-muted/20 transition-colors">
+                        <td className="px-3 py-2.5 text-center text-muted-foreground">{iss.seat_number}</td>
+                        <td className="px-3 py-2.5 text-xs text-muted-foreground">{iss.seat_occupant_email ?? <span className="italic">—</span>}</td>
+                        <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">{maskCode(iss.voucher?.voucher_code || "—")}</td>
+                        <td className="px-3 py-2.5 hidden sm:table-cell">
+                          <Badge variant="outline" className="text-xs">{getValidityLabel(iss.voucher?.validity_days)}</Badge>
+                        </td>
+                        <td className="px-3 py-2.5 text-right">
+                          <div className="flex items-center justify-end gap-1">
+                            <Badge variant="secondary" className={`text-xs ${VOUCHER_STATUS_COLORS[voucherStatus] || ""}`}>
+                              {VOUCHER_STATUS_LABELS[voucherStatus] || voucherStatus}
+                            </Badge>
+                            {iss.seat_occupant_email && (
+                              <Button
+                                size="sm" variant="ghost" className="h-7 w-7 p-0"
+                                onClick={() => handleSendEmail(iss.id, iss.seat_occupant_email!)}
+                                disabled={isSending}
+                                title={`Send to ${iss.seat_occupant_email}`}
+                              >
+                                {isSending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Send className="h-3.5 w-3.5" />}
+                              </Button>
+                            )}
+                            <Button
+                              size="sm" variant="ghost" className="h-7 w-7 p-0 text-orange-600 hover:text-orange-700"
+                              onClick={() => setReplaceDialog({
+                                open: true,
+                                issuanceId: iss.id,
+                                seatNumber: iss.seat_number,
+                                voucherCode: iss.voucher?.voucher_code || "",
+                                seatEmail: iss.seat_occupant_email,
+                              })}
+                              title="Replace voucher"
+                            >
+                              <RefreshCw className="h-3.5 w-3.5" />
+                            </Button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Replacement history */}
+        {showHistory && historyIssuances.length > 0 && (
+          <div className="mt-4">
+            <p className="text-xs text-muted-foreground font-medium mb-2 uppercase tracking-wide">Replacement History</p>
+            <div className="rounded-md border overflow-hidden opacity-60">
+              <table className="w-full text-sm">
+                <tbody>
+                  {historyIssuances.map((iss) => (
+                    <tr key={iss.id} className="border-b">
+                      <td className="px-3 py-2 text-center text-xs text-muted-foreground w-12">{iss.seat_number}</td>
+                      <td className="px-3 py-2 text-xs text-muted-foreground">{iss.seat_occupant_email || "—"}</td>
+                      <td className="px-3 py-2 font-mono text-xs line-through text-muted-foreground">{maskCode(iss.voucher?.voucher_code || "—")}</td>
+                      <td className="px-3 py-2">
+                        <Badge variant="secondary" className="bg-red-100 text-red-800 text-xs">Revoked</Badge>
+                      </td>
+                      <td className="px-3 py-2 text-right text-xs text-muted-foreground">
+                        {iss.revoked_at ? formatDate(iss.revoked_at) : ""}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )}
+
+        {/* Summary */}
         {!loading && activeIssuances.length > 0 && (
-          <div className="mt-3 flex items-center gap-4 text-xs text-muted-foreground">
-            <span>{activeIssuances.length} of {seats} seat{seats !== 1 ? "s" : ""} filled</span>
-            {!allSeatsFilled && isContractActive && (
-              <span className="text-orange-600">{seats - activeIssuances.length} seat{seats - activeIssuances.length !== 1 ? "s" : ""} remaining</span>
-            )}
-            {historyIssuances.length > 0 && !showHistory && (
-              <span className="text-muted-foreground">{historyIssuances.length} replaced voucher{historyIssuances.length !== 1 ? "s" : ""}</span>
+          <div className="flex items-center gap-4 text-xs text-muted-foreground pt-1">
+            <span>{activeIssuances.length} of {seats} seat{seats !== 1 ? "s" : ""} issued</span>
+            {unissuedMembers.length > 0 && (
+              <span className="text-orange-600">{unissuedMembers.length} member{unissuedMembers.length !== 1 ? "s" : ""} without voucher</span>
             )}
           </div>
         )}
       </CardContent>
 
-      {/* Replace Dialog */}
       <VoucherReplaceDialog
         open={replaceDialog.open}
         onOpenChange={(open) => setReplaceDialog((prev) => ({ ...prev, open }))}
@@ -709,13 +645,17 @@ export function ContractVouchersSection({
         seatNumber={replaceDialog.seatNumber}
         currentVoucherCode={replaceDialog.voucherCode}
         seatEmail={replaceDialog.seatEmail}
-        onSuccess={fetchIssuances}
+        onSuccess={load}
       />
     </Card>
   );
 }
 
-// ── Inline Department ID Card ──
+// ── Inline Department ID Card (unchanged) ──────────────────────────────────────
+
+import { Input } from "@/components/ui/input";
+import { Pencil } from "lucide-react";
+
 function DepartmentIdCard({ contractId, departmentId, onUpdate }: { contractId: string; departmentId?: string; onUpdate?: () => void }) {
   const [editing, setEditing] = useState(false);
   const [value, setValue] = useState(departmentId || "");
@@ -763,11 +703,10 @@ function DepartmentIdCard({ contractId, departmentId, onUpdate }: { contractId: 
         </div>
       ) : (
         <div className="flex items-center gap-2 flex-1">
-          {departmentId ? (
-            <Badge variant="secondary" className="font-mono">{departmentId}</Badge>
-          ) : (
-            <span className="text-xs text-muted-foreground">Not assigned</span>
-          )}
+          {departmentId
+            ? <Badge variant="secondary" className="font-mono">{departmentId}</Badge>
+            : <span className="text-xs text-muted-foreground">Not assigned</span>
+          }
           <Button size="sm" variant="ghost" className="h-6 text-xs px-2" onClick={() => setEditing(true)}>
             <Pencil className="h-3 w-3 mr-1" />{departmentId ? "Edit" : "Assign"}
           </Button>
