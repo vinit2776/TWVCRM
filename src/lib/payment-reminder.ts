@@ -71,9 +71,9 @@ export const STAGES: Stage[] = [
     ccAccounts: true, ccManagerAndAdmin: true, whatsApp: true,
   },
   {
-    day: 21, toneLabel: "Service notice",
-    subject: (ref, _due, amt) => `Service-continuation notice — ${ref} · ₹${amt}`,
-    intro: "Despite multiple reminders, the payment below remains outstanding. Per the terms of your contract, continued non-payment may result in suspension of services. Please act today to avoid disruption.",
+    day: 21, toneLabel: "Checking in",
+    subject: (ref, _due, amt) => `Checking in — ${ref} · ₹${amt}`,
+    intro: "We've sent a few reminders about this payment and haven't heard back yet. We'd really appreciate a quick reply — even just to let us know when we can expect settlement, or if there's something we can help resolve. Our accounts team is available if you'd like to discuss.",
     ccAccounts: true, ccManagerAndAdmin: true, whatsApp: true,
   },
   {
