@@ -73,7 +73,12 @@ export const createLeadSchema = z.object({
   lost_reason: z.string().optional(),
 });
 
-export const updateLeadSchema = createLeadSchema.partial();
+// source and status accept any string on update so legacy DB values (e.g. sources
+// added before the current enum) don't block saves on unrelated fields like email.
+export const updateLeadSchema = createLeadSchema.partial().extend({
+  source: z.string().optional(),
+  status: z.string().optional(),
+});
 
 // Relaxed schema for CSV imports — status/source/rating/score/tags have defaults
 export const importLeadSchema = z.object({
