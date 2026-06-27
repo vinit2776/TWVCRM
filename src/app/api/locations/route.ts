@@ -16,6 +16,11 @@ export async function GET(request: NextRequest) {
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
   const isActive = request.nextUrl.searchParams.get("is_active");
+  // Central hubs (HQ stock store) are hidden from every normal location
+  // picker. Procurement contexts that genuinely need the hub (transfer
+  // source, reorder settings, replenishment, MR/PO) opt in explicitly.
+  const includeHubs = request.nextUrl.searchParams.get("include_hubs") === "true";
+  const hubsOnly = request.nextUrl.searchParams.get("hubs_only") === "true";
 
   let query = supabase
     .from("locations")
@@ -26,6 +31,12 @@ export async function GET(request: NextRequest) {
     query = query.eq("is_active", true);
   } else if (isActive === "false") {
     query = query.eq("is_active", false);
+  }
+
+  if (hubsOnly) {
+    query = query.eq("is_hub", true);
+  } else if (!includeHubs) {
+    query = query.eq("is_hub", false);
   }
 
   const { data, error } = await query;

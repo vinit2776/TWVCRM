@@ -11,6 +11,8 @@ const updateItemSchema = z.object({
   standard_price: z.number().min(0).optional().nullable(),
   gst_rate: z.number().min(0).max(28).optional(),
   description: z.string().optional(),
+  default_reorder_level: z.number().min(0).nullable().optional(),
+  default_max_level: z.number().min(0).nullable().optional(),
   is_active: z.boolean().optional(),
   is_suggested: z.boolean().optional(),
 });

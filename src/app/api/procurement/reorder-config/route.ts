@@ -10,6 +10,8 @@ const bulkUpsertSchema = z.object({
       z.object({
         item_id: z.string().uuid(),
         reorder_level: z.number().min(0),
+        // Refill target for MOQ replenishment. null = unset (no auto-suggest).
+        max_level: z.number().min(0).nullable().optional(),
       })
     )
     .min(1, "At least one item is required"),
@@ -59,28 +61,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
-  const upsertRows = parsed.data.items.map((item) => ({
-    location_id: parsed.data.location_id,
-    item_id: item.item_id,
-    reorder_level: item.reorder_level,
-    quantity_on_hand: 0, // default for new rows; existing rows keep their value via ON CONFLICT
-  }));
-
-  // Upsert each row individually to only update reorder_level on conflict
+  // Upsert each row, updating only the level columns on conflict.
+  // quantity_on_hand is intentionally OMITTED so existing stock is preserved
+  // (new rows fall back to its DEFAULT 0); the old code clobbered stock to 0.
   const errors: string[] = [];
-  for (const row of upsertRows) {
+  for (const item of parsed.data.items) {
     const { error } = await supabase
       .from("location_stock")
       .upsert(
         {
-          location_id: row.location_id,
-          item_id: row.item_id,
-          reorder_level: row.reorder_level,
-          quantity_on_hand: row.quantity_on_hand,
+          location_id: parsed.data.location_id,
+          item_id: item.item_id,
+          reorder_level: item.reorder_level,
+          max_level: item.max_level ?? null,
         },
         { onConflict: "location_id,item_id", ignoreDuplicates: false }
       );
-    if (error) errors.push(`${row.item_id}: ${error.message}`);
+    if (error) errors.push(`${item.item_id}: ${error.message}`);
   }
 
   if (errors.length > 0) {
@@ -95,7 +92,7 @@ export async function POST(request: NextRequest) {
     changes: {
       reorder_levels: {
         old: null,
-        new: parsed.data.items.map((i) => ({ item_id: i.item_id, reorder_level: i.reorder_level })),
+        new: parsed.data.items.map((i) => ({ item_id: i.item_id, reorder_level: i.reorder_level, max_level: i.max_level ?? null })),
       },
     },
   });

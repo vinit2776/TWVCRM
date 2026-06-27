@@ -10,6 +10,7 @@ const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 const createTransferSchema = z.object({
   from_location_id: z.string().uuid(),
   to_location_id: z.string().uuid(),
+  origin: z.enum(["manual", "replenishment"]).optional(),
   notes: z.string().optional(),
   items: z
     .array(
@@ -172,6 +173,7 @@ export async function POST(request: NextRequest) {
       transfer_number: transferNumber,
       from_location_id: parsed.data.from_location_id,
       to_location_id: parsed.data.to_location_id,
+      origin: parsed.data.origin ?? "manual",
       notes: parsed.data.notes ?? null,
       initiated_by: dbUser.id,
       status: "draft",

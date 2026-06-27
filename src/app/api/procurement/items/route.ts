@@ -11,6 +11,10 @@ const createItemSchema = z.object({
   standard_price: z.number().min(0).optional(),
   gst_rate: z.number().min(0).max(28).default(0),
   description: z.string().optional(),
+  // Catalog-level MOQ defaults — pre-fill new per-location rows / drive refill
+  // when a location hasn't set its own. null = unset.
+  default_reorder_level: z.number().min(0).nullable().optional(),
+  default_max_level: z.number().min(0).nullable().optional(),
   is_active: z.boolean().optional(),
   is_suggested: z.boolean().optional(),
 });

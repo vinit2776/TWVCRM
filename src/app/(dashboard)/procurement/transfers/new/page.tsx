@@ -67,6 +67,8 @@ export default function NewTransferPage() {
   const [notes, setNotes] = useState("");
   const [items, setItems] = useState<LineItem[]>([emptyItem()]);
   const [submitting, setSubmitting] = useState(false);
+  // Where this transfer came from: 'manual' or 'replenishment' (auto-refill deep-link).
+  const [origin, setOrigin] = useState<"manual" | "replenishment">("manual");
 
   const [locations, setLocations] = useState<Location[]>([]);
   const [catalogItems, setCatalogItems] = useState<CatalogItem[]>([]);
@@ -76,13 +78,17 @@ export default function NewTransferPage() {
   const sourceStockMap = buildStockMap(sourceStock);
   const destStockMap   = buildStockMap(destStock);
 
-  // Fetch locations + catalog on mount
+  // Fetch locations + catalog on mount. include_hubs: HQ — Central Store is a
+  // valid transfer source/destination (and the source for replenishment refills).
   useEffect(() => {
     Promise.all([
-      fetch("/api/locations").then((r) => r.json()),
+      fetch("/api/locations?include_hubs=true").then((r) => r.json()),
       fetch("/api/procurement/items?item_type=goods").then((r) => r.json()),
     ]).then(([locJson, itemJson]) => {
-      const locs = (locJson.data || []).filter((l: Location) => l.is_active !== false);
+      // Keep active locations and the (inactive-by-design) hub.
+      const locs = (locJson.data || []).filter(
+        (l: Location & { is_hub?: boolean }) => l.is_active !== false || l.is_hub
+      );
       setLocations(locs);
       // Only physical-stock departments can be transferred (no Administration / services)
       setCatalogItems(
@@ -92,6 +98,37 @@ export default function NewTransferPage() {
       );
     });
   }, []);
+
+  // Prefill from a replenishment deep-link: ?from=&to=&origin=&items=id:qty,id:qty
+  useEffect(() => {
+    const sp = new URLSearchParams(window.location.search);
+    const from = sp.get("from");
+    const to = sp.get("to");
+    if (from) setFromLocationId(from);
+    if (to) setToLocationId(to);
+    if (sp.get("origin") === "replenishment") setOrigin("replenishment");
+    const itemsParam = sp.get("items");
+    if (itemsParam) {
+      const prefilled = itemsParam
+        .split(",")
+        .map((pair) => pair.split(":"))
+        .filter(([id, qty]) => id && qty)
+        .map(([id, qty]) => ({ ...emptyItem(), item_id: id, quantity: qty }));
+      if (prefilled.length > 0) setItems(prefilled);
+    }
+  }, []);
+
+  // Once the catalog loads, backfill name/unit on any prefilled line items.
+  useEffect(() => {
+    if (catalogItems.length === 0) return;
+    setItems((prev) =>
+      prev.map((li) => {
+        if (!li.item_id || li.item_name) return li;
+        const cat = catalogItems.find((c) => c.id === li.item_id);
+        return cat ? { ...li, item_name: cat.name, unit: cat.unit } : li;
+      })
+    );
+  }, [catalogItems]);
 
   const fetchSourceStock = useCallback(async () => {
     if (!fromLocationId) { setSourceStock([]); return; }
@@ -176,6 +213,7 @@ export default function NewTransferPage() {
         body: JSON.stringify({
           from_location_id: fromLocationId,
           to_location_id:   toLocationId,
+          origin,
           notes: notes.trim() || undefined,
           items: validItems.map((li) => ({
             item_id:       li.item_id || undefined,
@@ -208,6 +246,13 @@ export default function NewTransferPage() {
           <p className="text-sm text-muted-foreground">Move inventory between locations</p>
         </div>
       </div>
+
+      {origin === "replenishment" && (
+        <div className="flex items-center gap-2 rounded-lg border border-blue-200 bg-blue-50/60 px-4 py-2.5 text-sm text-blue-800">
+          <Badge className="bg-blue-100 text-blue-800 border-0 text-[10px]">Auto-replenishment</Badge>
+          Prefilled from a refill suggestion. Review quantities, then create the transfer.
+        </div>
+      )}
 
       {/* ── Transfer Details ── */}
       <Card>

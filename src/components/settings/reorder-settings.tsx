@@ -29,6 +29,7 @@ interface ReorderConfigItem {
   unit: string;
   quantity_on_hand: number;
   reorder_level: number;
+  max_level: number | null;
 }
 
 export function ReorderSettings() {
@@ -38,9 +39,11 @@ export function ReorderSettings() {
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editedLevels, setEditedLevels] = useState<Record<string, string>>({});
+  const [editedMax, setEditedMax] = useState<Record<string, string>>({});
 
   useEffect(() => {
-    fetch("/api/locations")
+    // include_hubs: HQ (the central store) needs its own min/max too.
+    fetch("/api/locations?include_hubs=true")
       .then((r) => r.json())
       .then((data) => {
         const locs = data.data || data.locations || [];
@@ -61,6 +64,7 @@ export function ReorderSettings() {
         item_id: string;
         quantity_on_hand: number;
         reorder_level: number;
+        max_level: number | null;
         procurement_items?: { name?: string; department?: string; unit?: string } | null;
       }> = Array.isArray(json.data) ? json.data : [];
 
@@ -71,14 +75,18 @@ export function ReorderSettings() {
         unit: item.procurement_items?.unit ?? "",
         quantity_on_hand: Number(item.quantity_on_hand ?? 0),
         reorder_level: Number(item.reorder_level ?? 0),
+        max_level: item.max_level == null ? null : Number(item.max_level),
       }));
 
       setItems(configItems);
       const levels: Record<string, string> = {};
+      const maxes: Record<string, string> = {};
       configItems.forEach((item) => {
         levels[item.item_id] = String(item.reorder_level);
+        maxes[item.item_id] = item.max_level == null ? "" : String(item.max_level);
       });
       setEditedLevels(levels);
+      setEditedMax(maxes);
     } catch {
       toast.error("Failed to load reorder configuration");
     } finally {
@@ -91,16 +99,33 @@ export function ReorderSettings() {
   }, [fetchConfig]);
 
   const hasChanges = items.some(
-    (item) => editedLevels[item.item_id] !== String(item.reorder_level)
+    (item) =>
+      editedLevels[item.item_id] !== String(item.reorder_level) ||
+      (editedMax[item.item_id] ?? "") !== (item.max_level == null ? "" : String(item.max_level))
   );
 
   const handleSave = async () => {
+    // A Max that's set must be >= Min, otherwise refill maths goes negative.
+    const invalid = items.find((item) => {
+      const rawMax = (editedMax[item.item_id] ?? "").trim();
+      if (rawMax === "") return false;
+      return parseFloat(rawMax) < parseFloat(editedLevels[item.item_id] || "0");
+    });
+    if (invalid) {
+      toast.error(`"${invalid.item_name}": Max must be greater than or equal to Min.`);
+      return;
+    }
+
     setSaving(true);
     try {
-      const configs = items.map((item) => ({
-        item_id: item.item_id,
-        reorder_level: parseFloat(editedLevels[item.item_id] || "0"),
-      }));
+      const configs = items.map((item) => {
+        const rawMax = (editedMax[item.item_id] ?? "").trim();
+        return {
+          item_id: item.item_id,
+          reorder_level: parseFloat(editedLevels[item.item_id] || "0"),
+          max_level: rawMax === "" ? null : parseFloat(rawMax),
+        };
+      });
 
       const res = await fetch("/api/procurement/reorder-config", {
         method: "POST",
@@ -132,8 +157,9 @@ export function ReorderSettings() {
       </CardHeader>
       <CardContent className="space-y-6">
         <p className="text-sm text-muted-foreground">
-          Set minimum stock levels for each item. You will be alerted when stock falls below
-          these thresholds during consumption logging.
+          Set the <strong>Min</strong> (reorder point) and <strong>Max</strong> (refill target) for each item.
+          When stock drops to or below Min, replenishment suggests a transfer from HQ to bring it back up to Max.
+          Leave Max blank to disable auto-refill for an item. Select <strong>HQ — Central Store</strong> to set the hub&apos;s own levels.
         </p>
 
         {/* Location selector */}
@@ -171,7 +197,8 @@ export function ReorderSettings() {
                   <th className="text-left p-3 font-medium">Department</th>
                   <th className="text-left p-3 font-medium">Unit</th>
                   <th className="text-left p-3 font-medium">Current Stock</th>
-                  <th className="text-left p-3 font-medium w-36">Reorder Level</th>
+                  <th className="text-left p-3 font-medium w-32">Min (Reorder)</th>
+                  <th className="text-left p-3 font-medium w-32">Max (Refill to)</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
@@ -204,6 +231,22 @@ export function ReorderSettings() {
                           value={editedLevels[item.item_id] || ""}
                           onChange={(e) =>
                             setEditedLevels((prev) => ({
+                              ...prev,
+                              [item.item_id]: e.target.value,
+                            }))
+                          }
+                          className="h-8"
+                        />
+                      </td>
+                      <td className="p-3">
+                        <Input
+                          type="number"
+                          min={0}
+                          step="any"
+                          placeholder="—"
+                          value={editedMax[item.item_id] ?? ""}
+                          onChange={(e) =>
+                            setEditedMax((prev) => ({
                               ...prev,
                               [item.item_id]: e.target.value,
                             }))
