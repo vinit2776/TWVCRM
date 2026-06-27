@@ -35,6 +35,7 @@ import type { Lead } from "@/types";
 import { useState } from "react";
 import { Loader2, AlertTriangle } from "lucide-react";
 import { LocationSelector } from "@/components/shared/location-selector";
+import { toast } from "sonner";
 
 interface LeadFormProps {
   lead?: Lead;
@@ -111,9 +112,10 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
     }
   };
 
-  // Log validation errors for debugging
   const onFormError = (formErrors: Record<string, unknown>) => {
     console.error("Form validation errors:", formErrors);
+    const firstError = Object.values(formErrors)[0] as { message?: string } | undefined;
+    toast.error(firstError?.message || "Please fix the form errors before saving");
   };
 
   return (
@@ -180,6 +182,11 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
           <div className="space-y-2">
             <Label htmlFor="gst_number">GSTIN</Label>
             <Input id="gst_number" placeholder="e.g. 33AABCA1234E1Z5" {...register("gst_number")} className="uppercase" maxLength={15} />
+            {errors.gst_number && (
+              <p className="text-xs text-destructive">
+                {errors.gst_number.message}
+              </p>
+            )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="title">Title</Label>
@@ -220,6 +227,11 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
           <div className="space-y-2">
             <Label htmlFor="website">Website</Label>
             <Input id="website" {...register("website")} />
+            {errors.website && (
+              <p className="text-xs text-destructive">
+                {errors.website.message}
+              </p>
+            )}
           </div>
           <div className="space-y-2">
             <Label htmlFor="aggregator_contact_name">
