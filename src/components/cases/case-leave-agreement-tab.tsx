@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -24,10 +24,27 @@ import {
   Eye,
   Pencil,
   RefreshCw,
+  Download,
+  Upload,
+  AlertTriangle,
+  CheckCircle2,
+  XCircle,
+  Activity,
 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDate } from "@/lib/utils";
 import type { CaseAgreement } from "@/types";
+
+interface LeegalityHealth {
+  environment: string;
+  baseUrl: string;
+  envCheck: Record<string, boolean>;
+  allEnvSet: boolean;
+  apiReachable: boolean;
+  apiStatusCode: number | null;
+  apiError: string | null;
+  healthy: boolean;
+}
 
 interface CaseLeaveAgreementTabProps {
   caseId: string;
@@ -43,6 +60,11 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
   const [editOpen, setEditOpen] = useState(false);
   const [saving, setSaving] = useState(false);
   const [editVars, setEditVars] = useState<Record<string, string>>({});
+  const [health, setHealth] = useState<LeegalityHealth | null>(null);
+  const [healthLoading, setHealthLoading] = useState(false);
+  const [uploadOpen, setUploadOpen] = useState(false);
+  const [uploading, setUploading] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchAgreement = useCallback(async () => {
     setLoading(true);
@@ -275,6 +297,110 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
     }
   };
 
+  const checkLeegalityHealth = async () => {
+    setHealthLoading(true);
+    try {
+      const res = await fetch("/api/cases/leegality-health");
+      if (res.ok) {
+        const json = await res.json();
+        setHealth(json);
+      } else {
+        toast.error("Failed to check Leegality health");
+      }
+    } catch {
+      toast.error("Network error checking Leegality");
+    } finally {
+      setHealthLoading(false);
+    }
+  };
+
+  const REQUIRED_VARS: Array<{ key: string; label: string }> = [
+    { key: "client_name", label: "Client Name" },
+    { key: "client_address", label: "Client Address" },
+    { key: "lessee_signatory_name", label: "Lessee Signatory Name" },
+    { key: "nature_of_business", label: "Nature of Business" },
+    { key: "rate", label: "Monthly Rate" },
+    { key: "start_date", label: "Start Date" },
+    { key: "tenure_months", label: "Tenure (months)" },
+  ];
+
+  const getMissingVars = () => {
+    if (!agreement?.variables) return REQUIRED_VARS.map((v) => v.label);
+    const vars = agreement.variables as Record<string, unknown>;
+    return REQUIRED_VARS.filter(({ key }) => {
+      const val = vars[key];
+      if (val === null || val === undefined || val === "") return true;
+      if (key === "client_address" && String(val) === "To be provided") return true;
+      if ((key === "rate" || key === "tenure_months") && Number(val) <= 0) return true;
+      return false;
+    }).map((v) => v.label);
+  };
+
+  const handleDownloadForStampPaper = async () => {
+    const missing = getMissingVars();
+    if (missing.length > 0) {
+      toast.error(`Fill in required fields before downloading: ${missing.join(", ")}`, {
+        duration: 6000,
+      });
+      return;
+    }
+
+    // Re-fetch a fresh signed URL
+    setViewing(true);
+    try {
+      const res = await fetch(`/api/cases/${caseId}/leave-license`);
+      const json = await res.json();
+      const url = json.pdf_url;
+      if (!url) {
+        toast.error("PDF not found — regenerate the agreement first");
+        return;
+      }
+      // Trigger browser download
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `leave-license-${caseId}.pdf`;
+      a.rel = "noopener";
+      a.click();
+    } catch {
+      toast.error("Download failed");
+    } finally {
+      setViewing(false);
+    }
+  };
+
+  const handleUploadSignedDocument = async () => {
+    const file = fileInputRef.current?.files?.[0];
+    if (!file) {
+      toast.error("Please select a PDF file");
+      return;
+    }
+    if (!agreement) return;
+
+    setUploading(true);
+    try {
+      const form = new FormData();
+      form.append("file", file);
+      form.append("agreement_id", agreement.id);
+
+      const res = await fetch(`/api/cases/${caseId}/leave-license/manual-sign`, {
+        method: "POST",
+        body: form,
+      });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Upload failed");
+      }
+      toast.success("Signed agreement uploaded — agreement marked as Executed");
+      setUploadOpen(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      fetchAgreement();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Upload failed");
+    } finally {
+      setUploading(false);
+    }
+  };
+
   const isEditable = agreement?.status === "draft" || agreement?.status === "internally_approved";
 
   if (loading) {
@@ -299,8 +425,64 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
 
   const vars = (agreement.variables || {}) as Record<string, unknown>;
 
+  const canUploadManualSign = agreement &&
+    ["client_approved", "signing", "internally_approved", "draft"].includes(agreement.status) &&
+    agreement.status !== "executed";
+
   return (
     <div className="space-y-4">
+      {/* Leegality Health Card */}
+      <Card>
+        <CardHeader className="pb-2">
+          <div className="flex items-center justify-between">
+            <CardTitle className="text-sm flex items-center gap-2 text-muted-foreground font-medium">
+              <Activity className="h-4 w-4" />
+              Leegality Integration Health
+            </CardTitle>
+            <Button size="sm" variant="ghost" onClick={checkLeegalityHealth} disabled={healthLoading}>
+              {healthLoading ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <RefreshCw className="h-3.5 w-3.5" />}
+              <span className="ml-1.5 text-xs">Check</span>
+            </Button>
+          </div>
+        </CardHeader>
+        {health && (
+          <CardContent className="pt-0">
+            <div className={`rounded-md p-3 text-sm ${health.healthy ? "bg-green-50 text-green-800" : "bg-amber-50 text-amber-800"}`}>
+              <div className="flex items-center gap-2 font-medium mb-2">
+                {health.healthy
+                  ? <CheckCircle2 className="h-4 w-4 text-green-600" />
+                  : <AlertTriangle className="h-4 w-4 text-amber-600" />}
+                {health.healthy ? "Leegality is connected and working" : "Leegality configuration issues found"}
+                <span className="ml-auto text-xs font-normal opacity-70">{health.environment} · {health.baseUrl}</span>
+              </div>
+              <div className="grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                {Object.entries(health.envCheck).map(([key, ok]) => (
+                  <div key={key} className="flex items-center gap-1.5 text-xs">
+                    {ok ? <CheckCircle2 className="h-3 w-3 text-green-600 shrink-0" /> : <XCircle className="h-3 w-3 text-red-500 shrink-0" />}
+                    <span className={ok ? "" : "text-red-600 font-medium"}>{key.replace("LEEGALITY_", "")}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="flex items-center gap-1.5 text-xs mt-2">
+                {health.apiReachable
+                  ? <CheckCircle2 className="h-3 w-3 text-green-600 shrink-0" />
+                  : <XCircle className="h-3 w-3 text-red-500 shrink-0" />}
+                <span className={health.apiReachable ? "" : "text-red-600 font-medium"}>
+                  API reachable
+                  {health.apiStatusCode ? ` (HTTP ${health.apiStatusCode})` : ""}
+                  {health.apiError ? ` — ${health.apiError}` : ""}
+                </span>
+              </div>
+            </div>
+          </CardContent>
+        )}
+        {!health && !healthLoading && (
+          <CardContent className="pt-0">
+            <p className="text-xs text-muted-foreground">Click Check to verify Leegality env vars and API connectivity.</p>
+          </CardContent>
+        )}
+      </Card>
+
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -387,6 +569,11 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
               View PDF
             </Button>
 
+            <Button size="sm" variant="outline" onClick={handleDownloadForStampPaper} disabled={viewing}>
+              {viewing ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Download className="mr-2 h-4 w-4" />}
+              Download for Stamp Paper
+            </Button>
+
             {isEditable && (
               <Button size="sm" variant="outline" onClick={openEditDialog}>
                 <Pencil className="mr-2 h-4 w-4" />
@@ -440,6 +627,13 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
               >
                 <ExternalLink className="mr-2 h-4 w-4" />
                 Signing Link
+              </Button>
+            )}
+
+            {canUploadManualSign && (
+              <Button size="sm" variant="outline" onClick={() => setUploadOpen(true)}>
+                <Upload className="mr-2 h-4 w-4" />
+                Upload Signed Document
               </Button>
             )}
 
@@ -561,6 +755,49 @@ export function CaseLeaveAgreementTab({ caseId }: CaseLeaveAgreementTabProps) {
             <Button onClick={handleSaveEdit} disabled={saving}>
               {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Save & Regenerate PDF
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Upload Manually Signed Document Dialog */}
+      <Dialog open={uploadOpen} onOpenChange={setUploadOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle className="flex items-center gap-2">
+              <Upload className="h-5 w-5" />
+              Upload Signed Stamp-Paper Document
+            </DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="rounded-md bg-amber-50 text-amber-800 text-sm p-3">
+              <p className="font-medium mb-1">Before uploading, confirm:</p>
+              <ul className="list-disc list-inside space-y-0.5 text-xs">
+                <li>Agreement is printed on appropriate stamp paper</li>
+                <li>All parties have signed and witnesses have attested</li>
+                <li>Stamp duty is correct and stamp paper details are visible</li>
+                <li>Document is scanned at a readable resolution (min 150 dpi)</li>
+              </ul>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="signed-pdf">Signed Agreement PDF</Label>
+              <input
+                id="signed-pdf"
+                ref={fileInputRef}
+                type="file"
+                accept="application/pdf"
+                className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm file:border-0 file:bg-transparent file:text-sm file:font-medium cursor-pointer"
+              />
+              <p className="text-xs text-muted-foreground">PDF only, max 20 MB. This will replace the generated PDF and mark the agreement as Executed.</p>
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setUploadOpen(false); if (fileInputRef.current) fileInputRef.current.value = ""; }}>
+              Cancel
+            </Button>
+            <Button onClick={handleUploadSignedDocument} disabled={uploading}>
+              {uploading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Upload & Mark Executed
             </Button>
           </DialogFooter>
         </DialogContent>
