@@ -32,7 +32,7 @@ export const createLeadSchema = z.object({
     "referral",
     "cold_call",
     "aggregator",
-  ]),
+  ]).or(z.string()),
   industry: z.string().optional(),
   no_of_employees: z.number().int().positive().optional(),
   rating: z.enum(["none", "hot", "warm", "cold"]),
