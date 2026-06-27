@@ -1076,8 +1076,7 @@ export const CASE_STATUS_TRANSITIONS: Record<string, string[]> = {
 // Group statuses for Kanban view
 export const CASE_STATUS_GROUPS: Record<string, { label: string; statuses: string[] }> = {
   intake: { label: "Intake", statuses: ["intake_received", "docs_requested", "docs_received"] },
-  processing: { label: "Processing", statuses: ["under_review", "compliance_check"] },
-  approval: { label: "Approval", statuses: ["internal_approved", "sent_for_client_approval", "client_approved"] },
+  review_approval: { label: "Review & Approval", statuses: ["under_review", "compliance_check", "internal_approved", "sent_for_client_approval", "client_approved"] },
   execution: { label: "Execution", statuses: ["signing_in_progress", "executed", "invoiced"] },
   active: { label: "Active", statuses: ["active", "renewal_due"] },
   closed: { label: "Closed", statuses: ["renewed", "lapsed"] },

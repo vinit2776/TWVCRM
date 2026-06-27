@@ -127,9 +127,19 @@ export async function POST(
   // Get the DB user
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id")
+    .select("id, role")
     .eq("auth_id", user.id)
     .single();
+
+  // Review & approval stage transitions are restricted
+  const REVIEW_APPROVAL_STATUSES = [
+    "under_review", "compliance_check", "internal_approved",
+    "sent_for_client_approval", "client_approved",
+  ];
+  const ALLOWED_ROLES = ["admin", "manager", "sales_rep", "office_admin"];
+  if (REVIEW_APPROVAL_STATUSES.includes(newStatus) && (!dbUser || !ALLOWED_ROLES.includes(dbUser.role))) {
+    return NextResponse.json({ error: "Not authorized to move cases through review and approval" }, { status: 403 });
+  }
 
   // Set internal_approved_by when internally approving
   if (newStatus === "internal_approved" && dbUser?.id) {

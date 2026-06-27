@@ -9,7 +9,7 @@ interface CaseStatusPipelineProps {
   className?: string;
 }
 
-const PIPELINE_ORDER = ["intake", "processing", "approval", "execution", "active", "closed"];
+const PIPELINE_ORDER = ["intake", "review_approval", "execution", "active", "closed"];
 
 export function CaseStatusPipeline({ currentStatus, className }: CaseStatusPipelineProps) {
   // Find which group the current status belongs to

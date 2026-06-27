@@ -55,9 +55,14 @@ export async function POST(
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id")
+    .select("id, role")
     .eq("auth_id", user.id)
     .single();
+
+  const ALLOWED_ROLES = ["admin", "manager", "sales_rep", "office_admin"];
+  if (!dbUser || !ALLOWED_ROLES.includes(dbUser.role)) {
+    return NextResponse.json({ error: "Not authorized to review documents" }, { status: 403 });
+  }
 
   // Update the document status
   const { data: updatedDoc, error: updateError } = await supabase

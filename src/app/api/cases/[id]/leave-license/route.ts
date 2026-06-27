@@ -380,9 +380,14 @@ export async function PATCH(
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id")
+    .select("id, role")
     .eq("auth_id", user.id)
     .single();
+
+  const ALLOWED_ROLES = ["admin", "manager", "sales_rep", "office_admin"];
+  if (!dbUser || !ALLOWED_ROLES.includes(dbUser.role)) {
+    return NextResponse.json({ error: "Not authorized to update agreement status" }, { status: 403 });
+  }
 
   const { data: currentAgreement } = await supabase
     .from("case_agreements")

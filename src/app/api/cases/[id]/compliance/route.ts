@@ -102,9 +102,14 @@ export async function PATCH(
 
   const { data: dbUser } = await supabase
     .from("users")
-    .select("id")
+    .select("id, role")
     .eq("auth_id", user.id)
     .single();
+
+  const ALLOWED_ROLES = ["admin", "manager", "sales_rep", "office_admin"];
+  if (!dbUser || !ALLOWED_ROLES.includes(dbUser.role)) {
+    return NextResponse.json({ error: "Not authorized to update compliance checks" }, { status: 403 });
+  }
 
   const { data: updatedCheck, error: updateError } = await supabase
     .from("case_compliance_checks")
