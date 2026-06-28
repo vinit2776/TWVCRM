@@ -1876,6 +1876,9 @@ export interface ProcurementItem {
   standard_price?: number;
   gst_rate?: number;
   description?: string;
+  // Catalog-level MOQ defaults (fallback Min/Max for locations without their own)
+  default_reorder_level?: number | null;
+  default_max_level?: number | null;
   is_active: boolean;
   is_suggested: boolean;
   created_by?: string;
@@ -2415,6 +2418,8 @@ export interface StockTransfer {
   from_location_id: string;
   to_location_id: string;
   status: TransferStatus;
+  // 'manual' (default) or 'replenishment' (created from an MOQ refill suggestion)
+  origin?: "manual" | "replenishment";
   initiated_by: string;
   approved_by?: string;
   approved_at?: string;

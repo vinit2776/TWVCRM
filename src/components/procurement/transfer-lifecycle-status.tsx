@@ -2,7 +2,7 @@
 
 import {
   FileText, CheckCircle2, Truck, PackageCheck, Flag,
-  AlertTriangle, Clock, XCircle,
+  AlertTriangle, Clock, XCircle, RefreshCw,
 } from "lucide-react";
 import type { StockTransfer } from "@/types";
 
@@ -98,7 +98,15 @@ export function TransferLifecycleStatus({ transfer }: { transfer: StockTransfer 
   return (
     <div className="rounded-lg border bg-card p-4">
       <div className="flex items-center justify-between mb-4">
-        <span className="text-sm font-medium text-muted-foreground">Transfer progress</span>
+        <span className="text-sm font-medium text-muted-foreground flex items-center gap-2">
+          Transfer progress
+          {transfer.origin === "replenishment" && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-blue-100 text-blue-700 text-[10px] font-medium px-2 py-0.5">
+              <RefreshCw className="h-3 w-3" />
+              Auto-replenishment
+            </span>
+          )}
+        </span>
         <span className="text-xs flex items-center gap-1.5 text-muted-foreground">
           {isIssue ? (
             <AlertTriangle className="h-3.5 w-3.5 text-red-500" />

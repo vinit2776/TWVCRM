@@ -51,6 +51,8 @@ const emptyForm = {
   standard_price: "",
   gst_rate: "0",
   description: "",
+  default_reorder_level: "",
+  default_max_level: "",
 };
 
 // ── Helpers ────────────────────────────────────────────────────────────────────
@@ -161,6 +163,8 @@ export default function CatalogPage() {
       standard_price: item.standard_price != null ? String(item.standard_price) : "",
       gst_rate: item.gst_rate != null ? String(item.gst_rate) : "0",
       description: item.description || "",
+      default_reorder_level: item.default_reorder_level != null ? String(item.default_reorder_level) : "",
+      default_max_level: item.default_max_level != null ? String(item.default_max_level) : "",
     });
     setDialogOpen(true);
   }
@@ -176,6 +180,8 @@ export default function CatalogPage() {
       standard_price: form.standard_price ? Number(form.standard_price) : undefined,
       gst_rate: Number(form.gst_rate) || 0,
       description: form.description || undefined,
+      default_reorder_level: form.default_reorder_level.trim() === "" ? null : Number(form.default_reorder_level),
+      default_max_level: form.default_max_level.trim() === "" ? null : Number(form.default_max_level),
     };
     const res = editItem
       ? await fetch(`/api/procurement/items/${editItem.id}`, {
@@ -715,6 +721,38 @@ export default function CatalogPage() {
                 rows={2}
               />
             </div>
+
+            {form.item_type === "goods" && (
+              <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
+                <p className="text-xs font-medium">
+                  Default replenishment levels{" "}
+                  <span className="text-muted-foreground font-normal">optional</span>
+                </p>
+                <p className="text-[11px] text-muted-foreground">
+                  Used as the fallback Min/Max for locations that haven&apos;t set their own. Drives refill suggestions on the Replenishment page.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-1">
+                    <Label className="text-xs">Default Min</Label>
+                    <Input
+                      type="number" min="0" step="any"
+                      value={form.default_reorder_level}
+                      onChange={(e) => setForm((f) => ({ ...f, default_reorder_level: e.target.value }))}
+                      placeholder="—"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <Label className="text-xs">Default Max</Label>
+                    <Input
+                      type="number" min="0" step="any"
+                      value={form.default_max_level}
+                      onChange={(e) => setForm((f) => ({ ...f, default_max_level: e.target.value }))}
+                      placeholder="—"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setDialogOpen(false)} disabled={saving}>Cancel</Button>
