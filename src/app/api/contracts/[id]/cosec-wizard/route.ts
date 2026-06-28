@@ -38,7 +38,7 @@ export async function GET(
   const { data: accessUsers } = await admin
     .from("cosec_access_users")
     .select(
-      "id, entity_id, user_type, cosec_ref_id, enrollment_status, access_pin, nfc_card_number, provisioned_at, biometric_enrolled_at, card_enrolled_at, device_id, cosec_user_id, device:cosec_devices(id, label, device_category, supports_biometric)"
+      "id, entity_id, user_type, cosec_ref_id, enrollment_status, access_pin, pin_issued_at, nfc_card_number, provisioned_at, biometric_enrolled_at, card_enrolled_at, device_id, cosec_user_id, device:cosec_devices(id, label, device_category, supports_biometric)"
     )
     .in("entity_id", entityIds)
     .not("enrollment_status", "in", "(blocked,deleted)")
@@ -94,6 +94,7 @@ export async function GET(
       cosec_ref_id: au.cosec_ref_id,
       enrollment_status: au.enrollment_status,
       access_pin: au.access_pin,
+      pin_issued_at: au.pin_issued_at ?? null,
       nfc_card_number: au.nfc_card_number,
       provisioned_at: au.provisioned_at,
       biometric_enrolled_at: au.biometric_enrolled_at,

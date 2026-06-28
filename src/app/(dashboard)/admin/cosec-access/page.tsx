@@ -102,6 +102,8 @@ export default function CosecAccessPage() {
 
   // Action state
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
+  // Local override for unlinked user active state (optimistic, reset on refresh)
+  const [unlinkedActiveOverride, setUnlinkedActiveOverride] = useState<Record<string, boolean>>({});
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -176,6 +178,27 @@ export default function CosecAccessPage() {
       else toast.error(result.error || "Failed to block");
     } finally {
       setActionLoading(a => ({ ...a, [enrollment.id]: false }));
+    }
+  }
+
+  async function handleToggleUnlinked(u: UnlinkedDeviceUser, active: boolean) {
+    const key = `${u.device_id}-${u.cosec_user_id}`;
+    setActionLoading(a => ({ ...a, [key]: true }));
+    try {
+      const res = await fetch("/api/cosec/set-unlinked-user-active", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ device_id: u.device_id, cosec_user_id: u.cosec_user_id, active }),
+      });
+      const result = await res.json();
+      if (result.ok) {
+        toast.success(active ? "User enabled on device" : "User disabled on device");
+        setUnlinkedActiveOverride(o => ({ ...o, [key]: active }));
+      } else {
+        toast.error(result.error || "Device error");
+      }
+    } finally {
+      setActionLoading(a => ({ ...a, [key]: false }));
     }
   }
 
@@ -354,66 +377,90 @@ export default function CosecAccessPage() {
                 booking, or employee record in the system. Use <strong>View on device</strong> to link them.
               </span>
             </div>
-            {filteredUnlinked.map(u => (
-              <Card key={`${u.device_id}-${u.cosec_user_id}`}
-                className="border-violet-200 bg-violet-50/10">
-                <CardContent className="py-3 px-4">
-                  <div className="flex items-start justify-between gap-4">
-                    <div className="min-w-0 flex-1">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-violet-700 bg-violet-100 border border-violet-300 rounded px-1.5 py-0.5">
-                          <MonitorSmartphone size={10} />NOT IN SYSTEM
-                        </span>
-                        <span className="font-medium text-sm">
-                          {u.name || <span className="text-muted-foreground italic">Unnamed</span>}
-                        </span>
-                        {!u.is_active && (
-                          <span className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50 text-gray-500">
-                            Inactive
+            {filteredUnlinked.map(u => {
+              const key = `${u.device_id}-${u.cosec_user_id}`;
+              const isLoading = actionLoading[key];
+              const isActive = key in unlinkedActiveOverride ? unlinkedActiveOverride[key] : u.is_active;
+
+              return (
+                <Card key={key} className="border-violet-200 bg-violet-50/10">
+                  <CardContent className="py-3 px-4">
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="min-w-0 flex-1">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-violet-700 bg-violet-100 border border-violet-300 rounded px-1.5 py-0.5">
+                            <MonitorSmartphone size={10} />NOT IN SYSTEM
                           </span>
-                        )}
+                          <span className="font-medium text-sm">
+                            {u.name || <span className="text-muted-foreground italic">Unnamed</span>}
+                          </span>
+                          {!isActive && (
+                            <span className="text-[11px] px-1.5 py-0.5 rounded border border-gray-200 bg-gray-50 text-gray-500">
+                              Disabled
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-2 mt-1">
+                          <span className="text-xs text-muted-foreground">
+                            {u.device_label}
+                            {u.location_name && <> · {u.location_name}</>}
+                          </span>
+                          {u.device_category === "business_centre" && (
+                            <span className="text-[11px] px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-700">
+                              Business Centre
+                            </span>
+                          )}
+                        </div>
+
+                        <div className="flex flex-wrap gap-3 mt-1 text-xs text-muted-foreground">
+                          {u.finger_count > 0 && (
+                            <span className="flex items-center gap-1">
+                              <Fingerprint size={10} />{u.finger_count} fingerprint{u.finger_count !== 1 ? "s" : ""}
+                            </span>
+                          )}
+                          {u.card_number && (
+                            <span className="flex items-center gap-1">
+                              <CreditCard size={11} />{u.card_number}
+                            </span>
+                          )}
+                          <span className="font-mono text-[10px]">{u.cosec_user_id}</span>
+                          <span className="text-[10px]">ref #{u.cosec_ref_id}</span>
+                        </div>
                       </div>
 
-                      <div className="flex flex-wrap items-center gap-2 mt-1">
-                        <span className="text-xs text-muted-foreground">
-                          {u.device_label}
-                          {u.location_name && <> · {u.location_name}</>}
-                        </span>
-                        {u.device_category === "business_centre" && (
-                          <span className="text-[11px] px-1.5 py-0.5 rounded border border-amber-200 bg-amber-50 text-amber-700">
-                            Business Centre
-                          </span>
+                      <div className="shrink-0 flex items-center gap-1.5">
+                        {isActive ? (
+                          <Button size="sm" variant="outline"
+                            className="text-xs h-7 text-red-600 border-red-200 hover:bg-red-50"
+                            onClick={() => handleToggleUnlinked(u, false)} disabled={isLoading}>
+                            {isLoading
+                              ? <Loader2 size={12} className="animate-spin mr-1" />
+                              : <ShieldOff size={12} className="mr-1" />}
+                            Disable
+                          </Button>
+                        ) : (
+                          <Button size="sm" variant="outline"
+                            className="text-xs h-7 text-green-700 border-green-300 hover:bg-green-50"
+                            onClick={() => handleToggleUnlinked(u, true)} disabled={isLoading}>
+                            {isLoading
+                              ? <Loader2 size={12} className="animate-spin mr-1" />
+                              : <ShieldCheck size={12} className="mr-1" />}
+                            Enable
+                          </Button>
                         )}
-                      </div>
-
-                      <div className="flex flex-wrap gap-3 mt-1 text-xs text-muted-foreground">
-                        {u.finger_count > 0 && (
-                          <span className="flex items-center gap-1">
-                            <Fingerprint size={10} />{u.finger_count} fingerprint{u.finger_count !== 1 ? "s" : ""}
-                          </span>
-                        )}
-                        {u.card_number && (
-                          <span className="flex items-center gap-1">
-                            <CreditCard size={11} />{u.card_number}
-                          </span>
-                        )}
-                        <span className="font-mono text-[10px]">{u.cosec_user_id}</span>
-                        <span className="text-[10px]">ref #{u.cosec_ref_id}</span>
+                        <Link href={`/admin/cosec-devices/${u.device_id}`}>
+                          <Button size="sm" variant="outline" className="text-xs h-7 text-violet-700 border-violet-300 hover:bg-violet-50">
+                            <ExternalLink size={12} className="mr-1" />
+                            View on device
+                          </Button>
+                        </Link>
                       </div>
                     </div>
-
-                    <div className="shrink-0">
-                      <Link href={`/admin/cosec-devices/${u.device_id}`}>
-                        <Button size="sm" variant="outline" className="text-xs h-7 text-violet-700 border-violet-300 hover:bg-violet-50">
-                          <ExternalLink size={12} className="mr-1" />
-                          View on device
-                        </Button>
-                      </Link>
-                    </div>
-                  </div>
-                </CardContent>
-              </Card>
-            ))}
+                  </CardContent>
+                </Card>
+              );
+            })}
           </div>
         )
       ) : filtered.length === 0 ? (

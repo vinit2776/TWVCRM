@@ -39,7 +39,7 @@ export async function POST(request: NextRequest) {
   if (accessUser.enrollment_status === "pending") {
     return NextResponse.json({ error: "User is not yet provisioned on the device" }, { status: 422 });
   }
-  if (accessUser.enrollment_status === "blocked") {
+  if (accessUser.enrollment_status === "blocked" || accessUser.enrollment_status === "deleted") {
     return NextResponse.json({ error: "User is blocked — restore access first" }, { status: 422 });
   }
 
@@ -59,11 +59,21 @@ export async function POST(request: NextRequest) {
     );
   }
 
-  // Persist the new PIN
-  await admin
+  // Persist the new PIN and record when it was issued.
+  // pin_issued_at requires migration 00309 — attempt it and fall back gracefully.
+  const now = new Date().toISOString();
+  const { error: updateErr } = await admin
     .from("cosec_access_users")
-    .update({ access_pin: pin, updated_at: new Date().toISOString() })
+    .update({ access_pin: pin, pin_issued_at: now, updated_at: now })
     .eq("id", parsed.data.access_user_id);
+
+  if (updateErr) {
+    // Column may not exist yet — retry without pin_issued_at
+    await admin
+      .from("cosec_access_users")
+      .update({ access_pin: pin, updated_at: now })
+      .eq("id", parsed.data.access_user_id);
+  }
 
   // Resolve entity name + phone for SMS
   const { name, phone } = await resolveEntityContact(admin, accessUser.user_type, accessUser.entity_id);
@@ -81,7 +91,8 @@ export async function POST(request: NextRequest) {
     changes: { access_pin_generated: { old: null, new: "****" } },
   });
 
-  return NextResponse.json({ ok: true, pin, name, sms_sent: !!phone });
+  // Never return the PIN value — staff only see the issued timestamp
+  return NextResponse.json({ ok: true, name, sms_sent: !!phone, pin_issued_at: now });
 }
 
 // ─── helpers ──────────────────────────────────────────────────────────────────

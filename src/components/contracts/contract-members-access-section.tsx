@@ -31,6 +31,7 @@ import {
   DoorOpen,
   RefreshCw,
   Circle,
+  KeyRound,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 import { cn } from "@/lib/utils";
@@ -73,6 +74,7 @@ interface WizardEntry {
   cosec_ref_id: number;
   enrollment_status: string;
   access_pin: string | null;
+  pin_issued_at: string | null;
   nfc_card_number: string | null;
   provisioned_at: string | null;
   biometric_enrolled_at: string | null;
@@ -97,6 +99,7 @@ interface PersonGroup {
   biometric_enrolled_at: string | null;
   nfc_card_number: string | null;
   access_pin: string | null;
+  pin_issued_at: string | null;
   first_access_at: string | null;
   is_inside: boolean | null;
   last_seen_at: string | null;
@@ -150,6 +153,12 @@ function buildWizardGroup(entityId: string, entryList: WizardEntry[]): PersonGro
   // Supports biometric if the primary entry-point device does.
   // Defaults true so existing data behaves as before until flag is set.
   const supportsBio = primary.supports_biometric ?? true;
+  // Use the most recent pin_issued_at across all entries
+  const pinIssuedAt = entryList
+    .map((e) => e.pin_issued_at)
+    .filter(Boolean)
+    .sort()
+    .reverse()[0] ?? null;
   return {
     entity_id: entityId,
     user_type: primary.user_type,
@@ -159,6 +168,7 @@ function buildWizardGroup(entityId: string, entryList: WizardEntry[]): PersonGro
     biometric_enrolled_at: bioAt ?? null,
     nfc_card_number: card,
     access_pin: primary.access_pin,
+    pin_issued_at: pinIssuedAt,
     first_access_at: primary.first_access_at,
     is_inside: primary.is_inside,
     last_seen_at: primary.last_seen_at,
@@ -610,6 +620,26 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
     }
   }
 
+  async function handleIssuePin(member: Member, wizardGroup: PersonGroup) {
+    setActionLoading(a => ({ ...a, [`pin_${member.id}`]: true }));
+    try {
+      const res = await fetch("/api/cosec/generate-pin", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ access_user_id: wizardGroup.primaryEntry.id }),
+      });
+      const json = await res.json();
+      if (res.ok) {
+        toast.success(`Access PIN sent to ${member.phone} via SMS`);
+        await load();
+      } else {
+        toast.error(json.error ?? "Failed to issue PIN");
+      }
+    } finally {
+      setActionLoading(a => ({ ...a, [`pin_${member.id}`]: false }));
+    }
+  }
+
   async function handleBlock(member: Member) {
     setActionLoading(a => ({ ...a, [`block_${member.id}`]: true }));
     try {
@@ -748,6 +778,12 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                           <span className="font-mono font-medium tracking-wide">{wizardGroup.nfc_card_number}</span>
                         </span>
                       )}
+                      {wizardGroup?.pin_issued_at && (
+                        <span className="flex items-center gap-1 text-amber-600">
+                          <KeyRound size={10} />
+                          PIN issued · {formatDate(wizardGroup.pin_issued_at)}
+                        </span>
+                      )}
                     </div>
 
                     {/* Per-device chips */}
@@ -782,7 +818,7 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
 
                   {/* Actions */}
                   <div className="flex items-center gap-1 shrink-0">
-                    {/* Only show Resend PIN for biometric devices — NFC-only has no enrollment PIN */}
+                    {/* Resend enrollment PIN — biometric devices only, during enrollment phase */}
                     {status === "provisioned" && wizardGroup?.supports_biometric !== false && (
                       <Button
                         size="sm" variant="outline" className="text-xs h-7"
@@ -794,6 +830,21 @@ export function ContractMembersAccessSection({ contractId, seats, contractStatus
                           ? <Loader2 size={13} className="animate-spin" />
                           : <><Send size={12} className="mr-1" />Resend PIN</>
                         }
+                      </Button>
+                    )}
+                    {/* Issue access PIN — available for any provisioned/enrolled status */}
+                    {wizardGroup && !isBlocked && !["pending", "deleted"].includes(status) && (
+                      <Button
+                        size="sm" variant="outline" className="text-xs h-7 gap-1"
+                        onClick={() => handleIssuePin(member, wizardGroup)}
+                        disabled={isPinLoading}
+                        title="Issue a fallback access PIN — sent directly to member via SMS"
+                      >
+                        {isPinLoading
+                          ? <Loader2 size={13} className="animate-spin" />
+                          : <KeyRound size={12} />
+                        }
+                        Issue PIN
                       </Button>
                     )}
                     {!isBlocked && status !== "provisioned" && status !== "pending" && (
