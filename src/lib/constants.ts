@@ -1015,7 +1015,7 @@ export const CASE_STATUSES = [
   "intake_received", "docs_requested", "docs_received", "under_review",
   "compliance_check", "internal_approved", "sent_for_client_approval",
   "client_approved", "signing_in_progress", "executed",
-  "invoiced", "active", "renewal_due", "renewed", "lapsed",
+  "invoiced", "active", "renewal_due", "grace_period", "renewed", "lapsed",
 ] as const;
 
 export const CASE_STATUS_LABELS: Record<string, string> = {
@@ -1032,6 +1032,7 @@ export const CASE_STATUS_LABELS: Record<string, string> = {
   invoiced: "Invoiced",
   active: "Active",
   renewal_due: "Renewal Due",
+  grace_period: "Grace Period",
   renewed: "Renewed",
   lapsed: "Lapsed",
 };
@@ -1050,6 +1051,7 @@ export const CASE_STATUS_COLORS: Record<string, string> = {
   invoiced: "bg-lime-100 text-lime-800",
   active: "bg-green-200 text-green-900",
   renewal_due: "bg-amber-100 text-amber-800",
+  grace_period: "bg-orange-200 text-orange-900",
   renewed: "bg-blue-100 text-blue-800",
   lapsed: "bg-red-100 text-red-800",
 };
@@ -1068,18 +1070,19 @@ export const CASE_STATUS_TRANSITIONS: Record<string, string[]> = {
   executed: ["invoiced"],
   invoiced: ["active"],
   active: ["renewal_due", "lapsed"],
-  renewal_due: ["renewed", "lapsed"],
+  renewal_due: ["grace_period", "renewed", "lapsed"],
+  grace_period: ["renewed", "lapsed"],
   renewed: ["active"],
   lapsed: [],
 };
 
-// Group statuses for Kanban view
+// Group statuses for Kanban / pipeline view
 export const CASE_STATUS_GROUPS: Record<string, { label: string; statuses: string[] }> = {
   intake: { label: "Intake", statuses: ["intake_received", "docs_requested", "docs_received"] },
   review_approval: { label: "Review & Approval", statuses: ["under_review", "compliance_check", "internal_approved", "sent_for_client_approval", "client_approved"] },
   execution: { label: "Execution", statuses: ["signing_in_progress", "executed", "invoiced"] },
-  active: { label: "Active", statuses: ["active", "renewal_due"] },
-  closed: { label: "Closed", statuses: ["renewed", "lapsed"] },
+  active: { label: "Active", statuses: ["active"] },
+  closed: { label: "Closed", statuses: ["renewal_due", "grace_period", "renewed", "lapsed"] },
 };
 
 // ==========================================

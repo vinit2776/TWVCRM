@@ -5,6 +5,7 @@ import { provisionBookingAccess } from "@/lib/provision-booking-access";
 import { getCachedSetting } from "@/lib/app-settings-cache";
 import { enqueueTallyReceiptVoucher } from "@/lib/tally/enqueue";
 import { isHandoffV2Enabled, handleStatementPaid } from "@/lib/tally-handoff-server";
+import { handleRenewalPayment } from "@/lib/vo-renewal";
 
 export const dynamic = "force-dynamic";
 
@@ -306,6 +307,27 @@ export async function POST(request: NextRequest) {
           } catch (err) {
             console.error("[webhook] Could not trigger GST invoice generation:", err);
           }
+        }
+      }
+
+      // If this billing statement is linked to a VO case, complete the renewal
+      if (newStatus === "paid") {
+        const { data: stmtFull } = await supabase
+          .from("billing_statements")
+          .select("case_id, statement_type")
+          .eq("id", billingStatement.id)
+          .single();
+
+        if (stmtFull?.case_id && stmtFull.statement_type === "vo_renewal") {
+          void handleRenewalPayment({
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+          adminSupabase: supabase as unknown as any,
+            caseId: stmtFull.case_id,
+            statementId: billingStatement.id,
+            amountPaid,
+            razorpayPaymentId: razorpayPaymentId || "",
+            razorpayLinkId: paymentLinkId,
+          }).catch((err) => console.error("[webhook] VO renewal completion failed:", err));
         }
       }
 
