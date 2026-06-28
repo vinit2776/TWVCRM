@@ -25,7 +25,7 @@ export async function GET() {
     .select(`
       id, device_id, cosec_user_id, cosec_ref_id,
       user_type, entity_id, enrollment_status,
-      access_pin, nfc_card_number, valid_until,
+      access_pin, pin_issued_at, nfc_card_number, valid_until,
       provisioned_at, biometric_enrolled_at, card_enrolled_at, blocked_at,
       device:cosec_devices(id, label, device_category, location:locations(name))
     `)
@@ -169,6 +169,7 @@ export async function GET() {
       end_date: meta?.endDate ?? meta?.endTime,
       enrollment_status: r.enrollment_status,
       access_pin: r.access_pin,
+      pin_issued_at: r.pin_issued_at ?? null,
       nfc_card_number: r.nfc_card_number,
       valid_until: r.valid_until,
       provisioned_at: r.provisioned_at,

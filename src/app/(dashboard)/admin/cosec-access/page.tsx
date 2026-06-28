@@ -10,7 +10,7 @@ import { toast } from "sonner";
 import {
   AlertTriangle, Fingerprint, CreditCard, Loader2,
   ShieldOff, ShieldCheck, RefreshCw, Search, Filter,
-  MonitorSmartphone, ExternalLink,
+  MonitorSmartphone, ExternalLink, KeyRound,
 } from "lucide-react";
 import { formatDate } from "@/lib/utils";
 
@@ -33,6 +33,7 @@ interface Enrollment {
   end_date?: string | null;
   enrollment_status: string;
   access_pin: string | null;
+  pin_issued_at: string | null;
   nfc_card_number: string | null;
   valid_until: string | null;
   provisioned_at: string | null;
@@ -214,6 +215,29 @@ export default function CosecAccessPage() {
       else toast.error(result.error || "Failed to restore");
     } finally {
       setActionLoading(a => ({ ...a, [enrollment.id]: false }));
+    }
+  }
+
+  async function handleIssuePin(enrollment: Enrollment) {
+    const key = `pin_${enrollment.id}`;
+    setActionLoading(a => ({ ...a, [key]: true }));
+    try {
+      const res = await fetch("/api/cosec/generate-pin", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ access_user_id: enrollment.id }),
+      });
+      const result = await res.json();
+      if (result.ok) {
+        toast.success(result.sms_sent
+          ? `Access PIN sent to ${result.name} via SMS`
+          : `PIN issued for ${result.name} — no phone on file`
+        );
+        await load();
+      } else {
+        toast.error(result.error || "Failed to issue PIN");
+      }
+    } finally {
+      setActionLoading(a => ({ ...a, [key]: false }));
     }
   }
 
@@ -477,6 +501,8 @@ export default function CosecAccessPage() {
             const statusCfg = STATUS_CONFIG[e.enrollment_status] ?? STATUS_CONFIG.pending;
             const isBlocked = e.enrollment_status === "blocked";
             const isLoading = actionLoading[e.id];
+            const isPinLoading = actionLoading[`pin_${e.id}`];
+            const canIssuePin = !isBlocked && e.enrollment_status !== "pending";
 
             return (
               <Card key={e.id}
@@ -560,12 +586,27 @@ export default function CosecAccessPage() {
                         {e.blocked_at && (
                           <span className="text-red-500">Blocked {formatDate(e.blocked_at)}</span>
                         )}
+                        {e.pin_issued_at && (
+                          <span className="flex items-center gap-1 text-amber-600">
+                            <KeyRound size={10} />PIN issued {formatDate(e.pin_issued_at)}
+                          </span>
+                        )}
                         <span className="font-mono text-[10px]">{e.cosec_user_id}</span>
                       </div>
                     </div>
 
                     {/* Right: actions */}
-                    <div className="shrink-0">
+                    <div className="shrink-0 flex items-center gap-1.5">
+                      {canIssuePin && (
+                        <Button size="sm" variant="outline" className="text-xs h-7 gap-1"
+                          onClick={() => handleIssuePin(e)} disabled={isPinLoading}
+                          title="Generate & SMS a fallback access PIN to the member">
+                          {isPinLoading
+                            ? <Loader2 size={12} className="animate-spin" />
+                            : <KeyRound size={12} />}
+                          Issue PIN
+                        </Button>
+                      )}
                       {isBlocked ? (
                         <Button size="sm" variant="outline" className="text-xs h-7"
                           onClick={() => handleRestore(e)} disabled={isLoading}>
