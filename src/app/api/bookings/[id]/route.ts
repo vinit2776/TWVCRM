@@ -5,6 +5,7 @@ import { messaging } from "@/lib/whatsapp";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { executeBookingCancellationSideEffects } from "@/lib/booking-cancel";
 import { maybeCreateBookingGstTask } from "@/lib/booking-gst-task";
+import { deleteUserFromDevice } from "@/lib/cosec";
 
 export const maxDuration = 30;
 
@@ -543,6 +544,40 @@ export async function PATCH(
             await maybeCreateBookingGstTask(adminClient, id);
           } catch (err) {
             console.error("[checkout] booking-gst-task creation failed:", err);
+          }
+        })();
+
+        // Remove COSEC device access immediately on checkout (fire-and-forget).
+        // The cron at /api/cron/cosec-booking-cleanup is the fallback for any
+        // failures here, but triggering on checkout eliminates the up-to-30-min gap.
+        void (async () => {
+          try {
+            const adminClient = createAdminClient();
+            const { data: cauRow } = await adminClient
+              .from("cosec_access_users")
+              .select("id, cosec_user_id, device:cosec_devices(device_ip, device_port, device_password)")
+              .eq("entity_id", id)
+              .eq("user_type", "booking")
+              .not("enrollment_status", "in", "(deleted,blocked)")
+              .maybeSingle();
+
+            if (cauRow) {
+              // eslint-disable-next-line @typescript-eslint/no-explicit-any
+              const dev = cauRow.device as any;
+              if (dev) {
+                await deleteUserFromDevice(
+                  { ip: dev.device_ip, port: dev.device_port, password: dev.device_password },
+                  cauRow.cosec_user_id,
+                );
+              }
+              const ts = new Date().toISOString();
+              await adminClient
+                .from("cosec_access_users")
+                .update({ enrollment_status: "deleted", deleted_at: ts, updated_at: ts })
+                .eq("id", cauRow.id);
+            }
+          } catch (err) {
+            console.error("[checkout] cosec cleanup failed:", err);
           }
         })();
 
