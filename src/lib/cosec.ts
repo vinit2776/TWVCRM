@@ -456,6 +456,7 @@ export interface CosecLiveUser {
   isActive: boolean;
   fingerCount: number;  // number of enrolled fingerprints (0 = no biometric)
   cardNumber: string;   // NFC card CSN, empty if none
+  hasPin: boolean;      // true if user-pin field is non-empty on the device
 }
 
 /**
@@ -486,6 +487,7 @@ export async function listAllUsersFromDevice(device: CosecDevice): Promise<Cosec
       isActive: xmlValue(block, "user-active") === "1",
       fingerCount: parseInt(xmlValue(block, "no-of-finger") || "0", 10),
       cardNumber: xmlValue(block, "card1") || "",
+      hasPin: xmlValue(block, "user-pin") !== "",
     });
   }
 

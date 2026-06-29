@@ -96,10 +96,34 @@ export default function CosecAccessPage() {
   const [loading, setLoading] = useState(true);
 
   // Filter state
-  const [tab, setTab]             = useState<"all" | "legacy" | "blocked" | "unlinked">("all");
+  const [tab, setTab]             = useState<"all" | "legacy" | "blocked" | "unlinked" | "pin-audit">("all");
   const [typeFilter, setTypeFilter] = useState<string>("all");
   const [deviceFilter, setDeviceFilter] = useState<string>("all");
   const [search, setSearch]       = useState("");
+
+  // PIN audit state
+  type PinAuditRow = {
+    device_id: string; device_label: string; location_name: string;
+    cosec_user_id: string; device_name: string; is_active: boolean;
+    crm_name: string | null; crm_ref: string | null; crm_type: string | null;
+    crm_status: string | null; enrollment_status: string | null;
+    pin_issued_at: string | null; is_unlinked: boolean;
+  };
+  const [pinAudit, setPinAudit] = useState<PinAuditRow[]>([]);
+  const [pinAuditLoading, setPinAuditLoading] = useState(false);
+
+  const loadPinAudit = useCallback(async () => {
+    setPinAuditLoading(true);
+    try {
+      const res = await fetch("/api/cosec/pin-audit");
+      const json = await res.json();
+      setPinAudit(json.data ?? []);
+    } catch {
+      toast.error("Failed to load PIN audit");
+    } finally {
+      setPinAuditLoading(false);
+    }
+  }, []);
 
   // Action state
   const [actionLoading, setActionLoading] = useState<Record<string, boolean>>({});
@@ -322,6 +346,10 @@ export default function CosecAccessPage() {
                 : "All"}
             </button>
           ))}
+          <button onClick={() => { setTab("pin-audit"); loadPinAudit(); }}
+            className={`px-3 py-1.5 transition-colors border-l flex items-center gap-1 ${tab === "pin-audit" ? "bg-primary text-primary-foreground font-medium" : "bg-white text-muted-foreground hover:bg-muted/40"}`}>
+            <KeyRound size={11} />PIN Audit
+          </button>
         </div>
 
         {/* Type filter */}
@@ -376,6 +404,78 @@ export default function CosecAccessPage() {
         <div className="flex items-center justify-center py-20">
           <Loader2 className="animate-spin text-muted-foreground" size={28} />
         </div>
+      ) : tab === "pin-audit" ? (
+        /* ── PIN Audit ──────────────────────────────────────────────────── */
+        pinAuditLoading ? (
+          <div className="flex items-center justify-center py-20 gap-2 text-muted-foreground text-sm">
+            <Loader2 className="animate-spin" size={20} />Polling devices for active PINs…
+          </div>
+        ) : pinAudit.length === 0 ? (
+          <Card>
+            <CardContent className="py-14 text-center text-muted-foreground">
+              <KeyRound size={36} className="mx-auto mb-3 opacity-30" />
+              <p className="font-medium">No active PINs found on any device</p>
+              <p className="text-sm mt-1">No enrolled users currently have a PIN set on the device.</p>
+            </CardContent>
+          </Card>
+        ) : (
+          <div className="space-y-2">
+            <p className="text-xs text-muted-foreground px-1">
+              {pinAudit.length} user{pinAudit.length !== 1 ? "s" : ""} with an active PIN on the device
+              · <span className="text-amber-600">{pinAudit.filter(r => r.is_unlinked).length} unlinked</span>
+            </p>
+            {pinAudit.map(r => (
+              <Card key={`${r.device_id}-${r.cosec_user_id}`}
+                className={`border ${r.is_unlinked ? "border-amber-300 bg-amber-50/30" : "border-border"}`}>
+                <CardContent className="px-4 py-3 flex items-start justify-between gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
+                      {r.is_unlinked ? (
+                        <span className="text-amber-700">{r.device_name || r.cosec_user_id}</span>
+                      ) : (
+                        <span>{r.crm_name || r.device_name}</span>
+                      )}
+                      {r.crm_type && (
+                        <Badge variant="outline" className="text-[10px] capitalize">{r.crm_type}</Badge>
+                      )}
+                      {r.crm_ref && (
+                        <Badge variant="secondary" className="text-[10px]">{r.crm_ref}</Badge>
+                      )}
+                      {r.is_unlinked && (
+                        <Badge className="text-[10px] bg-amber-100 text-amber-700 border-amber-300">No CRM record</Badge>
+                      )}
+                      {!r.is_active && (
+                        <Badge className="text-[10px] bg-red-100 text-red-700 border-red-300">Inactive on device</Badge>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-[11px] text-muted-foreground">
+                      <span>{r.device_label} · {r.location_name}</span>
+                      {r.crm_status && (
+                        <span className={CONTRACT_STATUS_COLORS[r.crm_status] ?? "text-muted-foreground"}>
+                          Contract {r.crm_status}
+                        </span>
+                      )}
+                      {r.enrollment_status && (
+                        <span>Enrollment: {r.enrollment_status}</span>
+                      )}
+                      {r.pin_issued_at && (
+                        <span className="flex items-center gap-0.5 text-amber-600">
+                          <KeyRound size={9} />PIN issued via CRM {formatDate(r.pin_issued_at)}
+                        </span>
+                      )}
+                      {!r.pin_issued_at && (
+                        <span className="flex items-center gap-0.5 text-orange-600">
+                          <KeyRound size={9} />PIN set outside CRM
+                        </span>
+                      )}
+                      <span className="font-mono text-[10px]">{r.cosec_user_id}</span>
+                    </div>
+                  </div>
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        )
       ) : tab === "unlinked" ? (
         /* ── Unlinked device users ─────────────────────────────────────── */
         filteredUnlinked.length === 0 ? (
