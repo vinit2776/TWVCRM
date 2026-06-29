@@ -33,7 +33,7 @@ export async function GET(request: NextRequest) {
     const { data } = await supabase
       .from("leads")
       .select("id, first_name, last_name, id_proof_path")
-      .eq("phone", phone_exact.trim())
+      .or(`phone.eq.${phone_exact.trim()},mobile.eq.${phone_exact.trim()}`)
       .limit(1);
     return NextResponse.json({ data: data ?? [] });
   }
@@ -61,7 +61,7 @@ export async function GET(request: NextRequest) {
       query = query.eq("id", search.slice(1));
     } else {
       query = query.or(
-        `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,company.ilike.%${search}%`
+        `first_name.ilike.%${search}%,last_name.ilike.%${search}%,email.ilike.%${search}%,phone.ilike.%${search}%,mobile.ilike.%${search}%,company.ilike.%${search}%`
       );
     }
   }
