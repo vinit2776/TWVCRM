@@ -1413,7 +1413,7 @@ export function generateMembershipAgreementPDF(
   const scheduleData2: [string, string, string][] = [
     ["17", "Changes/Modifications\nbefore move-in date\n(to be charged on actuals)", "The layout, highlighting the changes/Modification is annexed as Annexure-A to this Agreement (If applicable)."],
     ["18", "Auto-renewal", `In case Notice for Termination (as defined below) is not served before the expiry of the Initial Term, the Membership Agreement will be auto-renewed for another Term, having the same Commitment Term with escalation on Monthly Membership Fees & all other charges at ${escalation}.0 %.`],
-    ["19", "Escalation on monthly\nMembership Fees", `${escalation} % on Monthly Membership Fees and all products and services after expiry of ${commitmentTerm}.0 months commencing from the Commencement Date.`],
+    ["19", "Escalation on monthly\nMembership Fees", `${escalation} % on Monthly Membership Fees and all products and services after expiry of ${contract.tenure_months}.0 months commencing from the Commencement Date.`],
   ];
 
   checkPageBreak(30);
