@@ -1284,10 +1284,24 @@ export function generateMembershipAgreementPDF(
   y += 6;
 
   const signatoryIdLabel = contract.member_signatory_id_type === 'aadhaar' ? 'Aadhaar' : 'PAN';
-  const signatoryClause = contract.member_signatory_name
-    ? `, represented herein by ${contract.member_signatory_name}, ${contract.member_signatory_designation || "Authorised Signatory"}${contract.member_signatory_pan ? ` (${signatoryIdLabel}: ${contract.member_signatory_pan})` : ""}, duly authorised to execute this Agreement`
-    : "";
-  const memberPartyText = `${memberName}, a company having its registered office at ${memberAddress} (PAN: ${panNumber})${signatoryClause}, hereinafter referred to as "Member" (which expression shall, unless repugnant to the context or meaning thereof, mean and include its successors and assigns).`;
+  const entityType = lead?.entity_type || "";
+  const isIndividual = entityType === "individual";
+  const isSoleProprietorship = entityType === "proprietorship";
+
+  let memberPartyText: string;
+  if (isIndividual) {
+    memberPartyText = `${memberName}, an individual having their address at ${memberAddress} (PAN: ${panNumber}), hereinafter referred to as "Member" (which expression shall, unless repugnant to the context or meaning thereof, mean and include their heirs, executors, and assigns).`;
+  } else if (isSoleProprietorship) {
+    const signatoryClause = contract.member_signatory_name
+      ? `, represented herein by ${contract.member_signatory_name}, ${contract.member_signatory_designation || "Proprietor"}${contract.member_signatory_pan ? ` (${signatoryIdLabel}: ${contract.member_signatory_pan})` : ""}, duly authorised to execute this Agreement`
+      : "";
+    memberPartyText = `${memberName}, a sole proprietorship having its principal place of business at ${memberAddress} (PAN: ${panNumber})${signatoryClause}, hereinafter referred to as "Member" (which expression shall, unless repugnant to the context or meaning thereof, mean and include its successors and assigns).`;
+  } else {
+    const signatoryClause = contract.member_signatory_name
+      ? `, represented herein by ${contract.member_signatory_name}, ${contract.member_signatory_designation || "Authorised Signatory"}${contract.member_signatory_pan ? ` (${signatoryIdLabel}: ${contract.member_signatory_pan})` : ""}, duly authorised to execute this Agreement`
+      : "";
+    memberPartyText = `${memberName}, a company having its registered office at ${memberAddress} (PAN: ${panNumber})${signatoryClause}, hereinafter referred to as "Member" (which expression shall, unless repugnant to the context or meaning thereof, mean and include its successors and assigns).`;
+  }
   addWrappedText(memberPartyText, marginLeft, contentWidth, 9, "normal", [50, 50, 50], 4.5);
   y += 4;
 
@@ -1319,7 +1333,7 @@ export function generateMembershipAgreementPDF(
       "\u2022 Electricity & air conditioning consumed during office hours.\n" +
       "\u2022 Wi-Fi and Internet as per fair usage Policy\n" +
       "\u2022 Housekeeping, security and maintenance services\n" +
-      "\u2022 Hot tea & coffee from specified vending machine 36 cups per week."],
+      "\u2022 Hot tea & coffee from specified vending machine 12 cups per week, per seat."],
     ["5", "Complimentary Services\n(subject to availability)", (contract.complimentary_services || "TBD") +
       "\n\nThese Complimentary Services will not be rolled over from month to month. If these allocated Complimentary Services are exceeded, Member will be responsible for paying fees for such overages as per applicable rates at that time."],
     ["6", "Additional Paid Services",
