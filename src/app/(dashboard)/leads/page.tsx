@@ -16,6 +16,7 @@ import {
 import { StatusBadge, RatingBadge } from "@/components/shared/status-badge";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
+import { Tooltip, TooltipContent, TooltipProvider, TooltipTrigger } from "@/components/ui/tooltip";
 import { useLeads, useUsers } from "@/hooks/use-leads";
 import { LocationSelector } from "@/components/shared/location-selector";
 import {
@@ -328,21 +329,38 @@ export default function LeadsPage() {
                           </span>
                         )}
                         {/* Followup flag */}
-                        {lead._followup?.overdue && (
-                          <span title="Overdue follow-up" className="shrink-0">
-                            <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
-                          </span>
-                        )}
-                        {!lead._followup?.overdue && lead._followup?.due_today && (
-                          <span title="Follow-up due today" className="shrink-0">
-                            <Clock className="h-3.5 w-3.5 text-amber-500" />
-                          </span>
-                        )}
-                        {!lead._followup?.overdue && !lead._followup?.due_today && lead._followup?.upcoming && (
-                          <span title="Upcoming follow-up" className="shrink-0">
-                            <Clock className="h-3.5 w-3.5 text-blue-500" />
-                          </span>
-                        )}
+                        <TooltipProvider delayDuration={100}>
+                          {lead._followup?.overdue && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="shrink-0 cursor-default">
+                                  <AlertTriangle className="h-3.5 w-3.5 text-red-500" />
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent side="top">Overdue follow-up</TooltipContent>
+                            </Tooltip>
+                          )}
+                          {!lead._followup?.overdue && lead._followup?.due_today && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="shrink-0 cursor-default">
+                                  <Clock className="h-3.5 w-3.5 text-amber-500" />
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent side="top">Follow-up due today</TooltipContent>
+                            </Tooltip>
+                          )}
+                          {!lead._followup?.overdue && !lead._followup?.due_today && lead._followup?.upcoming && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <span className="shrink-0 cursor-default">
+                                  <Clock className="h-3.5 w-3.5 text-blue-500" />
+                                </span>
+                              </TooltipTrigger>
+                              <TooltipContent side="top">Upcoming follow-up</TooltipContent>
+                            </Tooltip>
+                          )}
+                        </TooltipProvider>
                         {lead.archived_at && (
                           <span className="shrink-0 text-[10px] font-bold text-muted-foreground bg-muted px-1.5 py-0.5 rounded uppercase">
                             Disabled

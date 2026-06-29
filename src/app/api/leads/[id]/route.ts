@@ -19,7 +19,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("leads")
-    .select("*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code)")
+    .select("*, assigned_user:users!leads_assigned_to_fkey(*), location:locations!leads_location_id_fkey(id, name, code), _pending_followups:activities!activities_lead_id_fkey(follow_up_date, is_follow_up_done)")
     .eq("id", id)
     .single();
 
@@ -29,6 +29,26 @@ export async function GET(
 
   // Ensure tags is always an array (DB default is '{}' but could be null)
   if (data) data.tags = data.tags ?? [];
+
+  // Compute followup flags (same logic as the list endpoint)
+  if (data) {
+    const today = new Date().toISOString().slice(0, 10);
+    type Followup = { follow_up_date: string | null; is_follow_up_done: boolean };
+    const pending = ((data._pending_followups as Followup[]) || []).filter(
+      (f) => !f.is_follow_up_done && f.follow_up_date
+    );
+    if (pending.length > 0) {
+      const flags = { overdue: false, due_today: false, upcoming: false, earliest_date: "" };
+      for (const f of pending) {
+        const d = (f.follow_up_date as string).slice(0, 10);
+        if (d < today) { flags.overdue = true; if (!flags.earliest_date || d < flags.earliest_date) flags.earliest_date = d; }
+        else if (d === today) flags.due_today = true;
+        else flags.upcoming = true;
+      }
+      (data as Record<string, unknown>)._followup = flags;
+    }
+    delete (data as Record<string, unknown>)._pending_followups;
+  }
 
   return NextResponse.json({ data });
 }

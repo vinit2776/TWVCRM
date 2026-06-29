@@ -16,6 +16,7 @@ import {
   Star,
   Plus,
   Printer,
+  AlertTriangle,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -191,6 +192,24 @@ export default function LeadDetailPage({
               interacts with this customer. Auto-hides if no active
               cautions exist. */}
           <LeadCautionsBanner leadId={lead.id} mode="profile" />
+
+          {/* Overdue follow-up banner */}
+          {(lead as unknown as { _followup?: { overdue: boolean; earliest_date?: string } })._followup?.overdue && (
+            <div className="rounded-lg border border-red-200 bg-red-50 dark:bg-red-950/20 dark:border-red-900 px-4 py-3 flex items-start gap-3">
+              <AlertTriangle className="h-4 w-4 text-red-500 mt-0.5 shrink-0" />
+              <div className="text-sm">
+                <p className="font-semibold text-red-800 dark:text-red-300">
+                  Overdue follow-up
+                  {(lead as unknown as { _followup?: { earliest_date?: string } })._followup?.earliest_date
+                    ? ` — was due on ${(lead as unknown as { _followup: { earliest_date: string } })._followup.earliest_date}`
+                    : ""}
+                </p>
+                <p className="text-red-700 dark:text-red-400">
+                  This lead has a pending follow-up activity that is past its due date. Go to the Activities tab to mark it done or reschedule.
+                </p>
+              </div>
+            </div>
+          )}
 
           {/* Lost reason banner — shown prominently when a lead is lost */}
           {lead.status === "lost" && (lead.lost_reason || lead.description) && (
