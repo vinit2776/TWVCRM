@@ -1,5 +1,7 @@
 # Facility Management
 
+**Last Updated: 2026-06-28**
+
 ## Purpose and Business Context
 
 The Facility Management module is the internal help-desk and asset management layer for The WorkVilla. It covers two interconnected domains:
@@ -52,9 +54,10 @@ All pages are `"use client"` components that fetch from the API routes below.
 
 ### Components
 - `src/components/facility/report-wizard.tsx` — `FacilityReportWizard` — 3-step issue creation dialog (rewritten v2 — see Wizard section below)
-- `src/components/facility/asset-form-dialog.tsx` — `FacilityAssetFormDialog` — add/edit asset dialog
+- `src/components/facility/asset-form-dialog.tsx` — `FacilityAssetFormDialog` — add/edit asset dialog; updated to support photo uploads via `facility_asset_photos`
 - `src/components/facility/asset-event-dialog.tsx` — `AssetEventDialog` — log maintenance/inspection events on an asset, optionally link to and resolve an open issue
 - `src/components/facility/photo-upload.tsx` — `FacilityPhotoUpload` — upload to `facility-issue-photos` bucket
+- `src/components/facility/qr-scanner-dialog.tsx` — `QrScannerDialog` — QR code scanner for scanning asset QR codes in the field; quickly pulls up an asset record from a printed QR without navigating manually
 
 ### API Routes
 - `GET/POST /api/facility/issues` — `src/app/api/facility/issues/route.ts`
@@ -67,6 +70,7 @@ All pages are `"use client"` components that fetch from the API routes below.
 - `GET/POST /api/facility/assets` — `src/app/api/facility/assets/route.ts` (supports `?search=` for asset search)
 - `GET/PUT/DELETE /api/facility/assets/[id]` — `src/app/api/facility/assets/[id]/route.ts`
 - `GET/POST /api/facility/assets/[id]/events` — `src/app/api/facility/assets/[id]/events/route.ts` (asset event log with issue linking)
+- `POST/DELETE /api/facility/assets/[id]/photos` — `src/app/api/facility/assets/[id]/photos/route.ts` (asset photo uploads; bucket: `facility-asset-photos`)
 - `GET/POST/DELETE /api/facility/assets/[id]/documents` — `src/app/api/facility/assets/[id]/documents/route.ts` (two-tier document management)
 - `GET/POST /api/facility/assets/[id]/amc` — `src/app/api/facility/assets/[id]/amc/route.ts` (AMC summary + service event history for an asset)
 - `GET/POST /api/facility/checklist-templates` — `src/app/api/facility/checklist-templates/route.ts` (per-category checklists)
@@ -85,7 +89,7 @@ All pages are `"use client"` components that fetch from the API routes below.
 ### Lib Files
 - `src/lib/facility.ts` — server-side: issue number generation, SLA computation, transition guard, timestamp side-effects, `logIssueEvent`, role constants
 - `src/lib/facility-ui.ts` — client-side: style maps for priority/status/scope/root-cause/via, `timeAgo`, `timeUntil`, `formatDuration`, `nextStatusOptions`
-- `src/lib/facility-notifications.ts` — `notifyIssueAssignee(issue, event)` (category-driven, notifies assigned user + backup assignee + collaborators), `notifyAdminsStaleAssignee(params)` (fires when a category's `default_assignee_id` points to an inactive/missing user)
+- `src/lib/facility-notifications.ts` — centralised notification helpers: `notifyIssueAssignee(issue, event)` (category-driven, notifies assigned user + backup assignee + collaborators), `notifyAdminsStaleAssignee(params)` (fires when a category's `default_assignee_id` points to an inactive/missing user), plus helpers for SLA breach alerts and assignment notifications
 
 ### Type Definitions
 `src/types/index.ts` starting at line 2594
@@ -170,9 +174,30 @@ All DB enums and tables are defined in migration `00116_facility_issues.sql`.
 
 **Unique constraint:** `(location_id, asset_code)` — duplicate asset code within a location yields error `23505`.
 
-**RLS:** SELECT — any `authenticated`. ALL (write) — roles `admin`, `manager`, `it_manager`, `it_technician`, `fms` (migration 00270).
+**RLS:** SELECT — any `authenticated`. ALL (write) — roles `admin`, `manager`, `it_manager`, `it_technician`, `fms`, `floor_manager`, `office_admin` (migration 00270; `floor_manager` and `office_admin` added in migration 00300).
 
 **Soft delete:** DELETE API route sets `status = 'retired'` rather than deleting the row.
+
+### `facility_asset_photos`
+
+Multiple photos per asset. Added in migration 00301. Separate from `facility_asset_events.photo_urls` — these are standalone asset photos not tied to a specific event.
+
+| Column | Type | Notes |
+|---|---|---|
+| `id` | UUID PK | |
+| `asset_id` | UUID FK `facility_assets(id) ON DELETE CASCADE` | |
+| `photo_url` | TEXT NOT NULL | Signed URL stored in `facility-asset-photos` bucket |
+| `caption` | TEXT | nullable |
+| `uploaded_by` | UUID FK `users(id)` | nullable |
+| `created_at` | TIMESTAMPTZ DEFAULT NOW() | |
+
+**Storage bucket:** `facility-asset-photos` — private.
+
+**API:**
+- `POST /api/facility/assets/[id]/photos` — upload a photo; accepts `multipart/form-data` with `file` + optional `caption`
+- `DELETE /api/facility/assets/[id]/photos` — remove a photo by `photo_id`
+
+**Component:** `asset-form-dialog.tsx` supports photo uploads via this table.
 
 ### `facility_asset_events`
 
@@ -274,6 +299,8 @@ Per-category checklist items that are copied into service events. Optionally sco
 | `satisfaction_requested_at` | TIMESTAMPTZ | set when status → `resolved` |
 | `satisfaction_received_at` | TIMESTAMPTZ | set when reporter submits rating |
 | `reopen_count` | INTEGER DEFAULT 0 | incremented on each reopen |
+| `claimed_by` | UUID FK `users(id)` | nullable — floor manager who claimed the issue (migration 00305) |
+| `claimed_at` | TIMESTAMPTZ | nullable — when the claim was made (migration 00305) |
 
 **DB constraint:** `satisfaction_rating BETWEEN 1 AND 5`.
 
@@ -351,10 +378,13 @@ Bucket name: `facility-issue-photos` — **private** (not public).
 |---|---|---|
 | `new` | New | Blue |
 | `acknowledged` | Acknowledged | Indigo |
+| `claimed` | Claimed | Orange | 
 | `in_progress` | In Progress | Purple |
 | `resolved` | Resolved | Emerald |
 | `closed` | Closed | Slate |
 | `reopened` | Reopened | Rose |
+
+**Claim model (migration 00305):** A floor manager can "claim" an open issue before formal assignment, preventing duplicate work. Claiming sets `claimed_by` and `claimed_at` on the issue row and transitions status to `claimed`. The claim is an intermediate state between `new` and `acknowledged`/`in_progress`. Claiming does not constitute formal assignment — an admin/manager can still re-assign.
 
 ### Allowed Transitions
 
@@ -652,7 +682,7 @@ Auto-reopens the issue if `rating <= 2` and `status === "resolved"`.
 
 ### `GET /api/facility/assignees`
 
-Returns active users with roles `it_technician`, `it_manager`, `fms`, `admin`, `manager` and `is_active = true`. These are the users eligible to be set as `default_assignee_id` or `backup_assignee_id` on a category, or manually assigned to an issue. No longer hardcodes IT email addresses.
+Returns active users with roles `fms`, `admin`, `floor_manager` and `is_active = true`. These are the users eligible to be assigned to facility issues or set as `default_assignee_id` / `backup_assignee_id` on a category. Used by the issue assign dialog and the category routing settings. No longer hardcodes IT email addresses.
 
 ---
 
@@ -1073,3 +1103,35 @@ All seven scopes now have seeded categories with scope-specific SLA defaults:
 | `00292_facility_category_assignees.sql` | Add `default_assignee_id` and `backup_assignee_id` to `facility_asset_categories` — enables per-category issue routing |
 | `00293_purchase_requests_issue_link.sql` | Add `issue_id` FK to `purchase_requests` — links a material request to the facility issue that triggered it; drives asset cost-of-ownership reporting |
 | `00294_facility_asset_events_issue_link.sql` | Safe no-op — `issue_id` already existed from migration 00278 |
+| `00300_facility_assets_rls_floor_manager.sql` | Extend `facility_assets` RLS write policy to include `floor_manager` and `office_admin` roles |
+| `00301_facility_asset_photos.sql` | Add `facility_asset_photos` table — multiple photos per asset stored in `facility-asset-photos` bucket (id, asset_id, photo_url, caption, uploaded_by, created_at) |
+| `00305_facility_issues_claim_model.sql` | Add claim model to `facility_issues`: `claimed_by uuid REFERENCES users(id)`, `claimed_at timestamptz`; introduces `claimed` intermediate status for floor manager pre-assignment |
+
+---
+
+## Changelog
+
+### 2026-06-28
+
+**Asset Photos (migrations 00300, 00301)**
+- `facility_assets` RLS write policy extended to include `floor_manager` and `office_admin` roles (migration 00300).
+- New `facility_asset_photos` table added (migration 00301): stores multiple standalone photos per asset, separate from event-linked photos. Bucket: `facility-asset-photos`. Columns: `id`, `asset_id`, `photo_url`, `caption`, `uploaded_by`, `created_at`.
+- API: `POST /api/facility/assets/[id]/photos` to upload; `DELETE` to remove.
+- `asset-form-dialog.tsx` updated to support photo uploads via this new table.
+
+**QR Scanner Dialog**
+- New `src/components/facility/qr-scanner-dialog.tsx` (`QrScannerDialog`): in-app QR scanner for reading printed asset QR codes in the field. Quickly navigates to the asset detail page without manual search.
+
+**Facility SLA Check Cron**
+- New `src/app/api/cron/facility-sla-check/route.ts`: runs every 6 hours (`0 */6 * * *` in `vercel.json`). Finds open issues past their SLA deadline, marks `sla_breached = true`, and sends a digest alert to FMS + admin. Protected by `Authorization: Bearer CRON_SECRET`. (Previously documented above was already up-to-date; entry here for changelog completeness.)
+
+**Claim Model (migration 00305)**
+- `facility_issues` gains `claimed_by uuid` and `claimed_at timestamptz` columns.
+- A floor manager can claim an open issue before formal assignment, preventing duplicate work.
+- `claimed` is now an intermediate status value between `new` and `acknowledged`/`in_progress`.
+
+**Assignees API**
+- `GET /api/facility/assignees` — returns users with roles `fms`, `admin`, `floor_manager` eligible to be assigned issues or configured as category routing targets.
+
+**Facility Notifications**
+- `src/lib/facility-notifications.ts` extended with centralised helpers for issue status changes, SLA breach alerts, and assignment notifications.

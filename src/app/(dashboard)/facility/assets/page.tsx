@@ -2,7 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { Plus, Search, Pencil, ScanLine } from "lucide-react";
+import { useRouter } from "next/navigation";
+import { Plus, Search, Pencil, ScanLine, Printer, CheckSquare } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
@@ -13,6 +14,7 @@ import type { FacilityAsset } from "@/types";
 interface Location { id: string; name: string }
 
 export default function FacilityAssetsPage() {
+  const router = useRouter();
   const [assets, setAssets] = useState<FacilityAsset[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
@@ -21,6 +23,8 @@ export default function FacilityAssetsPage() {
   const [openForm, setOpenForm] = useState(false);
   const [editing, setEditing] = useState<FacilityAsset | null>(null);
   const [scannerOpen, setScannerOpen] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const [selectMode, setSelectMode] = useState(false);
 
   const fetchData = async () => {
     setLoading(true);
@@ -31,6 +35,33 @@ export default function FacilityAssetsPage() {
     const json = await res.json();
     setAssets(json.data || []);
     setLoading(false);
+  };
+
+  const toggleSelect = (id: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) {
+        next.delete(id);
+      } else if (next.size < BATCH_LIMIT) {
+        next.add(id);
+      }
+      return next;
+    });
+  };
+
+  const toggleSelectAll = () => {
+    if (selectedIds.size === Math.min(assets.length, BATCH_LIMIT)) {
+      setSelectedIds(new Set());
+    } else {
+      setSelectedIds(new Set(assets.slice(0, BATCH_LIMIT).map((a) => a.id)));
+    }
+  };
+
+  const BATCH_LIMIT = 15;
+
+  const openBatchPrint = () => {
+    const ids = Array.from(selectedIds).join(",");
+    router.push(`/facility/assets/batch-print?ids=${encodeURIComponent(ids)}`);
   };
 
   useEffect(() => {
@@ -64,6 +95,13 @@ export default function FacilityAssetsPage() {
         <div className="flex items-center gap-2">
           <Button size="sm" variant="outline" onClick={() => setScannerOpen(true)}>
             <ScanLine className="h-4 w-4 mr-1" /> Scan QR
+          </Button>
+          <Button
+            size="sm"
+            variant={selectMode ? "secondary" : "outline"}
+            onClick={() => { setSelectMode((v) => !v); setSelectedIds(new Set()); }}
+          >
+            <CheckSquare className="h-4 w-4 mr-1" /> {selectMode ? "Cancel" : "Select"}
           </Button>
           <Button size="sm" onClick={() => { setEditing(null); setOpenForm(true); }}>
             <Plus className="h-4 w-4 mr-1" /> Add Asset
@@ -123,6 +161,21 @@ export default function FacilityAssetsPage() {
         </div>
       ) : (
         <div className="space-y-6">
+          {selectMode && assets.length > 0 && (
+            <div className="flex items-center gap-2 text-sm text-muted-foreground">
+              <input
+                type="checkbox"
+                checked={selectedIds.size === Math.min(assets.length, BATCH_LIMIT)}
+                onChange={toggleSelectAll}
+                className="h-4 w-4 rounded border-gray-300 accent-primary cursor-pointer"
+              />
+              <span>
+                {selectedIds.size === 0
+                  ? `Select up to ${BATCH_LIMIT} assets to batch print`
+                  : `${selectedIds.size} of ${Math.min(assets.length, BATCH_LIMIT)} selected`}
+              </span>
+            </div>
+          )}
           {grouped.map(([lid, g]) => (
             <section key={lid}>
               <h2 className="text-sm font-semibold text-muted-foreground mb-2">{g.name}</h2>
@@ -130,20 +183,48 @@ export default function FacilityAssetsPage() {
                 <table className="w-full text-sm">
                   <thead className="bg-muted/40 text-xs">
                     <tr>
+                      {selectMode && <th className="w-10 px-3 py-2" />}
                       <th className="text-left px-3 py-2 font-medium">Code</th>
                       <th className="text-left px-3 py-2 font-medium">Name</th>
                       <th className="text-left px-3 py-2 font-medium hidden sm:table-cell">Category</th>
                       <th className="text-left px-3 py-2 font-medium hidden md:table-cell">Make / Model</th>
                       <th className="text-center px-3 py-2 font-medium">Issues</th>
                       <th className="text-right px-3 py-2 font-medium">Status</th>
-                      <th className="w-8"></th>
+                      {!selectMode && <th className="w-8"></th>}
                     </tr>
                   </thead>
                   <tbody>
                     {g.rows.map((a) => (
-                      <tr key={a.id} className="border-t hover:bg-muted/20">
-                        <td className="px-3 py-2"><Link className="font-mono text-xs hover:underline" href={`/facility/assets/${a.id}`}>{a.asset_code}</Link></td>
-                        <td className="px-3 py-2"><Link className="hover:underline" href={`/facility/assets/${a.id}`}>{a.name}</Link></td>
+                      <tr
+                        key={a.id}
+                        className={cn(
+                          "border-t hover:bg-muted/20",
+                          selectMode && selectedIds.has(a.id) && "bg-primary/5"
+                        )}
+                        onClick={selectMode ? () => toggleSelect(a.id) : undefined}
+                        style={selectMode ? { cursor: "pointer" } : undefined}
+                      >
+                        {selectMode && (
+                          <td className="px-3 py-2">
+                            <input
+                              type="checkbox"
+                              checked={selectedIds.has(a.id)}
+                              onChange={() => toggleSelect(a.id)}
+                              onClick={(e) => e.stopPropagation()}
+                              className="h-4 w-4 rounded border-gray-300 accent-primary cursor-pointer"
+                            />
+                          </td>
+                        )}
+                        <td className="px-3 py-2">
+                          {selectMode
+                            ? <span className="font-mono text-xs">{a.asset_code}</span>
+                            : <Link className="font-mono text-xs hover:underline" href={`/facility/assets/${a.id}`}>{a.asset_code}</Link>}
+                        </td>
+                        <td className="px-3 py-2">
+                          {selectMode
+                            ? <span>{a.name}</span>
+                            : <Link className="hover:underline" href={`/facility/assets/${a.id}`}>{a.name}</Link>}
+                        </td>
                         <td className="px-3 py-2 hidden sm:table-cell text-xs">{a.category?.name ?? "—"}</td>
                         <td className="px-3 py-2 hidden md:table-cell text-xs">{[a.make, a.model].filter(Boolean).join(" ") || "—"}</td>
                         <td className="px-3 py-2 text-center text-xs">
@@ -161,11 +242,13 @@ export default function FacilityAssetsPage() {
                             a.status === "retired" && "bg-slate-100 text-slate-600 ring-slate-200",
                           )}>{a.status}</span>
                         </td>
-                        <td className="px-1">
-                          <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(a); setOpenForm(true); }}>
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                        </td>
+                        {!selectMode && (
+                          <td className="px-1">
+                            <Button variant="ghost" size="icon" className="h-7 w-7" onClick={() => { setEditing(a); setOpenForm(true); }}>
+                              <Pencil className="h-3.5 w-3.5" />
+                            </Button>
+                          </td>
+                        )}
                       </tr>
                     ))}
                   </tbody>
@@ -173,6 +256,32 @@ export default function FacilityAssetsPage() {
               </div>
             </section>
           ))}
+        </div>
+      )}
+
+      {/* Floating batch action bar */}
+      {selectMode && selectedIds.size > 0 && (
+        <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 bg-gray-900 text-white rounded-full px-5 py-3 shadow-xl shadow-black/20">
+          <span className="text-sm font-medium">{selectedIds.size} / {BATCH_LIMIT} selected</span>
+          <div className="w-px h-4 bg-white/20" />
+          <button
+            onClick={() => setSelectedIds(new Set())}
+            className="text-sm text-white/60 hover:text-white transition-colors"
+          >
+            Clear
+          </button>
+          {selectedIds.size > BATCH_LIMIT ? (
+            <span className="text-xs text-amber-300 font-medium">Max {BATCH_LIMIT} per batch</span>
+          ) : (
+            <Button
+              size="sm"
+              onClick={openBatchPrint}
+              className="bg-white text-gray-900 hover:bg-gray-100 rounded-full px-4"
+            >
+              <Printer className="h-3.5 w-3.5 mr-1.5" />
+              Print QR labels
+            </Button>
+          )}
         </div>
       )}
 
