@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM } from "@/lib/mailer";
+import { getUnifiVoucher, siteConfigFromLocation, isUnifiLocation } from "@/lib/unifi";
 
 export async function POST(
   request: NextRequest,
@@ -58,6 +59,7 @@ export async function POST(
       .eq("contract_id", id)
       .single();
 
+
     if (issuanceError || !issuance) {
       return NextResponse.json(
         { error: "Issuance not found" },
@@ -74,7 +76,32 @@ export async function POST(
       );
     }
 
-    const voucherCode = issuance.voucher?.voucher_code || "—";
+    // For UniFi issuances, voucher_id is null so the repository join returns null.
+    // Fall back to the stored unifi_code; for legacy records (before unifi_code was
+    // stored), fetch the code live from the UniFi API using the unifi_voucher_id.
+    let voucherCode: string = issuance.voucher?.voucher_code || (issuance as Record<string, unknown>).unifi_code as string || "";
+    if (!voucherCode && (issuance as Record<string, unknown>).unifi_voucher_id) {
+      try {
+        const { data: locationRow } = await supabase
+          .from("locations")
+          .select("unifi_site_id, unifi_console_id, wifi_voucher_mode")
+          .eq("id", contract.location_id)
+          .single();
+        if (locationRow && isUnifiLocation(locationRow)) {
+          const siteConfig = siteConfigFromLocation(locationRow);
+          const unifiVoucher = await getUnifiVoucher((issuance as Record<string, unknown>).unifi_voucher_id as string, siteConfig);
+          if (unifiVoucher?.code) {
+            voucherCode = unifiVoucher.code;
+            // Backfill so future sends don't need the API call
+            await supabase.from("voucher_issuances").update({ unifi_code: unifiVoucher.code }).eq("id", issuance_id);
+          }
+        }
+      } catch (err) {
+        console.error("[voucher-email] UniFi code lookup failed:", err);
+      }
+    }
+    const displayCode = voucherCode || "—";
+
     const validFrom = issuance.valid_from
       ? new Date(issuance.valid_from).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" })
       : "—";
@@ -89,7 +116,7 @@ export async function POST(
         subject: `Your WiFi Access Code — The WorkVilla`,
         html: buildPerSeatEmailHTML({
           recipientName: issuance.seat_occupant_email ? recipientEmail.split("@")[0] : (contract.lead?.first_name || "User"),
-          voucherCode,
+          voucherCode: displayCode,
           validFrom,
           validUntil,
           seatNumber: issuance.seat_number,
@@ -162,7 +189,7 @@ export async function POST(
     const sendResults = await Promise.allSettled(
       issuancesWithEmail.map(async (issuance) => {
         const email = issuance.seat_occupant_email!;
-        const voucherCode = issuance.voucher?.voucher_code || "—";
+        const voucherCode = issuance.voucher?.voucher_code || (issuance as Record<string, unknown>).unifi_code as string || "—";
         const validFrom = issuance.valid_from
           ? new Date(issuance.valid_from).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" })
           : "—";
@@ -361,7 +388,7 @@ function buildPerSeatEmailHTML(params: {
         <div style="margin-top: 24px; padding: 16px; background: #f9fafb; border-radius: 6px; border: 1px solid #e5e7eb;">
           <h3 style="color: #015E65; margin: 0 0 12px; font-size: 14px;">How to Connect</h3>
           <ol style="color: #555; font-size: 13px; margin: 0; padding-left: 20px; line-height: 1.8;">
-            <li>Connect to the WiFi network: <strong style="color: #015E65;">The WorkVilla</strong></li>
+            <li>Connect to the WiFi network: <strong style="color: #015E65;">Workvilla Clients</strong></li>
             <li>A login page will appear in your browser</li>
             <li>Enter the voucher code shown above</li>
             <li>Click <strong>Connect</strong> — you&apos;re online!</li>

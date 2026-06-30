@@ -183,6 +183,7 @@ export async function POST(
           member_id: body.member_id || null,
           is_active: true,
           unifi_voucher_id: unifiId,
+          unifi_code: unifiCode,
         })
         .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
         .single();
@@ -275,6 +276,7 @@ export async function POST(
           valid_until: contract.end_date,
           is_active: true,
           unifi_voucher_id: unifiId,
+          unifi_code: unifiCode,
         })
         .select("*, voucher:voucher_repository!voucher_issuances_voucher_id_fkey(id, voucher_code, status, metadata, expires_at, validity_days)")
         .single();
