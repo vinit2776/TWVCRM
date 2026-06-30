@@ -104,10 +104,10 @@ export default function CosecAccessPage() {
   // PIN audit state
   type PinAuditRow = {
     device_id: string; device_label: string; location_name: string;
-    cosec_user_id: string; device_name: string; is_active: boolean;
+    cosec_user_id: string;
     crm_name: string | null; crm_ref: string | null; crm_type: string | null;
-    crm_status: string | null; enrollment_status: string | null;
-    pin_issued_at: string | null; is_unlinked: boolean;
+    crm_status: string | null; enrollment_status: string;
+    pin_issued_at: string | null; is_stale: boolean;
   };
   const [pinAudit, setPinAudit] = useState<PinAuditRow[]>([]);
   const [pinAuditLoading, setPinAuditLoading] = useState(false);
@@ -450,30 +450,23 @@ export default function CosecAccessPage() {
             )}
             <p className="text-xs text-muted-foreground px-1">
               {pinAudit.length} user{pinAudit.length !== 1 ? "s" : ""} with an active PIN on the device
-              · <span className="text-amber-600">{pinAudit.filter(r => r.is_unlinked).length} unlinked</span>
+              · <span className="text-red-600">{pinAudit.filter(r => r.is_stale).length} stale (access revoked but PIN still live)</span>
             </p>
             {pinAudit.map(r => (
               <Card key={`${r.device_id}-${r.cosec_user_id}`}
-                className={`border ${r.is_unlinked ? "border-amber-300 bg-amber-50/30" : "border-border"}`}>
+                className={`border ${r.is_stale ? "border-red-300 bg-red-50/30" : "border-border"}`}>
                 <CardContent className="px-4 py-3 flex items-start justify-between gap-3">
                   <div className="min-w-0 flex-1">
                     <div className="flex flex-wrap items-center gap-1.5 text-sm font-medium">
-                      {r.is_unlinked ? (
-                        <span className="text-amber-700">{r.device_name || r.cosec_user_id}</span>
-                      ) : (
-                        <span>{r.crm_name || r.device_name}</span>
-                      )}
+                      <span className={r.is_stale ? "text-red-700" : ""}>{r.crm_name || r.cosec_user_id}</span>
                       {r.crm_type && (
                         <Badge variant="outline" className="text-[10px] capitalize">{r.crm_type}</Badge>
                       )}
                       {r.crm_ref && (
                         <Badge variant="secondary" className="text-[10px]">{r.crm_ref}</Badge>
                       )}
-                      {r.is_unlinked && (
-                        <Badge className="text-[10px] bg-amber-100 text-amber-700 border-amber-300">No CRM record</Badge>
-                      )}
-                      {!r.is_active && (
-                        <Badge className="text-[10px] bg-red-100 text-red-700 border-red-300">Inactive on device</Badge>
+                      {r.is_stale && (
+                        <Badge className="text-[10px] bg-red-100 text-red-700 border-red-300">PIN not cleared</Badge>
                       )}
                     </div>
                     <div className="flex flex-wrap gap-x-3 gap-y-0.5 mt-1 text-[11px] text-muted-foreground">
@@ -483,17 +476,10 @@ export default function CosecAccessPage() {
                           Contract {r.crm_status}
                         </span>
                       )}
-                      {r.enrollment_status && (
-                        <span>Enrollment: {r.enrollment_status}</span>
-                      )}
+                      <span>Enrollment: {r.enrollment_status}</span>
                       {r.pin_issued_at && (
                         <span className="flex items-center gap-0.5 text-amber-600">
-                          <KeyRound size={9} />PIN issued via CRM {formatDate(r.pin_issued_at)}
-                        </span>
-                      )}
-                      {!r.pin_issued_at && (
-                        <span className="flex items-center gap-0.5 text-orange-600">
-                          <KeyRound size={9} />PIN set outside CRM
+                          <KeyRound size={9} />PIN issued {formatDate(r.pin_issued_at)}
                         </span>
                       )}
                       <span className="font-mono text-[10px]">{r.cosec_user_id}</span>
