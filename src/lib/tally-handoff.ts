@@ -226,6 +226,11 @@ export interface BookingPaymentConfirmation {
   razorpay_payment_id: string | null;
   created_at: string;
   status: string;
+  verification_notes: string | null;
+  // Razorpay settlement (from razorpay_settlement_cache)
+  settled: boolean | null;
+  settled_at: string | null;
+  settlement_utr: string | null;
 }
 
 export interface BookingInboxAddon {

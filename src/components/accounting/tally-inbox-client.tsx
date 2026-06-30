@@ -1181,30 +1181,74 @@ function BookingPaymentPanel({
           </span>
         )}
       </div>
-      <table className="w-full text-[11px] border-separate border-spacing-y-0.5">
-        <thead>
-          <tr className="text-muted-foreground">
-            <th className="text-left font-medium pb-1">Amount</th>
-            <th className="text-left font-medium pb-1">Mode</th>
-            <th className="text-left font-medium pb-1">Reference / ID</th>
-            <th className="text-left font-medium pb-1">Date</th>
-          </tr>
-        </thead>
-        <tbody>
-          {confirmations.map((p) => {
-            const ref = p.razorpay_payment_id ?? p.payment_reference ?? "—";
-            const date = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
-            return (
-              <tr key={p.id} className="text-green-900">
-                <td className="font-medium tabular-nums pr-3">{formatCurrency(p.amount)}</td>
-                <td className="pr-3">{paymentModeLabel(p.payment_mode)}</td>
-                <td className="font-mono pr-3 text-green-700">{ref}</td>
-                <td className="text-muted-foreground">{date}</td>
-              </tr>
-            );
-          })}
-        </tbody>
-      </table>
+      <div className="space-y-2">
+        {confirmations.map((p) => {
+          const txnDate = new Date(p.created_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+          const isRazorpay = !!p.razorpay_payment_id;
+          return (
+            <div key={p.id} className="rounded border border-green-200 bg-white/60 px-2.5 py-2 space-y-1.5">
+              {/* Row 1: amount + mode */}
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-green-900 tabular-nums">{formatCurrency(p.amount)}</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-800 border border-green-200 font-medium">
+                  {paymentModeLabel(p.payment_mode)}
+                </span>
+              </div>
+              {isRazorpay ? (
+                /* Razorpay payment detail */
+                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
+                  <span className="text-muted-foreground">Txn ID</span>
+                  <span className="font-mono text-green-800 break-all">{p.razorpay_payment_id}</span>
+                  <span className="text-muted-foreground">Transacted on</span>
+                  <span>{txnDate}</span>
+                  {p.settled === true ? (
+                    <>
+                      <span className="text-muted-foreground">Settled to bank</span>
+                      <span className="text-green-700 font-medium">
+                        {p.settled_at ? new Date(p.settled_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "Yes"}
+                      </span>
+                      {p.settlement_utr && (
+                        <>
+                          <span className="text-muted-foreground">Bank UTR</span>
+                          <span className="font-mono text-green-800">{p.settlement_utr}</span>
+                        </>
+                      )}
+                    </>
+                  ) : p.settled === false ? (
+                    <>
+                      <span className="text-muted-foreground">Settlement</span>
+                      <span className="text-amber-700 font-medium">Pending — not yet settled to bank</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-muted-foreground">Settlement</span>
+                      <span className="text-muted-foreground italic">Not synced yet</span>
+                    </>
+                  )}
+                </div>
+              ) : (
+                /* Manual / offline payment detail */
+                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
+                  <span className="text-muted-foreground">Date recorded</span>
+                  <span>{txnDate}</span>
+                  {p.payment_reference && (
+                    <>
+                      <span className="text-muted-foreground">Reference</span>
+                      <span className="font-mono text-green-800">{p.payment_reference}</span>
+                    </>
+                  )}
+                  {p.verification_notes && (
+                    <>
+                      <span className="text-muted-foreground">Notes</span>
+                      <span className="text-green-900">{p.verification_notes}</span>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

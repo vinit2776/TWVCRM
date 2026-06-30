@@ -544,22 +544,48 @@ export async function GET(req: NextRequest) {
   if (bookingIds.length > 0) {
     const { data: bpRows } = await supabase
       .from("booking_payments")
-      .select("id, booking_id, amount, payment_mode, payment_reference, razorpay_payment_id, created_at, status")
+      .select("id, booking_id, amount, payment_mode, payment_reference, razorpay_payment_id, created_at, status, verification_notes")
       .in("booking_id", bookingIds)
-      .in("status", ["confirmed", "captured"])
+      .in("status", ["confirmed", "captured", "verified"])
       .order("created_at", { ascending: false });
+
+    // Fetch settlement data for all Razorpay payment IDs in one query
+    const rzpIds = (bpRows || [])
+      .map((bp) => bp.razorpay_payment_id as string | null)
+      .filter(Boolean) as string[];
+
+    const settlementMap = new Map<string, { settled: boolean; settled_at: string | null; settlement_utr: string | null }>();
+    if (rzpIds.length > 0) {
+      const { data: sRows } = await supabase
+        .from("razorpay_settlement_cache")
+        .select("razorpay_payment_id, settled, settled_at, settlement_utr")
+        .in("razorpay_payment_id", rzpIds);
+      for (const s of sRows || []) {
+        settlementMap.set(s.razorpay_payment_id as string, {
+          settled: s.settled as boolean,
+          settled_at: (s.settled_at as string | null) ?? null,
+          settlement_utr: (s.settlement_utr as string | null) ?? null,
+        });
+      }
+    }
 
     for (const bp of bpRows || []) {
       const bid = (bp as { booking_id: string }).booking_id;
+      const rzpId = (bp.razorpay_payment_id as string | null) ?? null;
+      const settlement = rzpId ? (settlementMap.get(rzpId) ?? null) : null;
       const list = bookingPaymentsMap.get(bid) ?? [];
       list.push({
         id: bp.id as string,
         amount: Number(bp.amount),
         payment_mode: bp.payment_mode as string,
         payment_reference: (bp.payment_reference as string | null) ?? null,
-        razorpay_payment_id: (bp.razorpay_payment_id as string | null) ?? null,
+        razorpay_payment_id: rzpId,
         created_at: bp.created_at as string,
         status: bp.status as string,
+        verification_notes: (bp.verification_notes as string | null) ?? null,
+        settled: settlement?.settled ?? null,
+        settled_at: settlement?.settled_at ?? null,
+        settlement_utr: settlement?.settlement_utr ?? null,
       });
       bookingPaymentsMap.set(bid, list);
     }
@@ -662,6 +688,10 @@ export async function GET(req: NextRequest) {
             razorpay_payment_id: null,
             created_at: t.updated_at,
             status: "paid",
+            verification_notes: null,
+            settled: null,
+            settled_at: null,
+            settlement_utr: null,
           } satisfies BookingPaymentConfirmation];
         }
         return [];
