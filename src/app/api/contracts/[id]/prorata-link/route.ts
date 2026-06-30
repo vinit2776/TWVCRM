@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { dispatchProforma } from "@/lib/send-proforma";
+import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
 import { logAudit } from "@/lib/audit";
 
 /**
@@ -193,11 +193,14 @@ export async function POST(
       .eq("id", id);
   }
 
-  // Dispatch proforma (Razorpay link + email + PDF)
-  const result = await dispatchProforma(admin, statementId!, dbUser.id);
+  const mode = body.mode === "gst_direct" ? "gst_direct" : "proforma";
 
-  if (!result.success && !result.emailSkipped) {
-    return NextResponse.json({ error: result.error || "Failed to dispatch proforma" }, { status: 500 });
+  const result = mode === "gst_direct"
+    ? await dispatchGstDirect(admin, statementId!, dbUser.id)
+    : await dispatchProforma(admin, statementId!, dbUser.id);
+
+  if (!result.success && !result.emailSkipped && !result.routedToTally) {
+    return NextResponse.json({ error: result.error || "Failed to dispatch" }, { status: 500 });
   }
 
   logAudit(admin, {
@@ -214,6 +217,7 @@ export async function POST(
 
   return NextResponse.json({
     success: true,
+    mode,
     statementId,
     totalAmount,
     prorataDays,
@@ -223,5 +227,6 @@ export async function POST(
     emailedTo: result.emailedTo,
     emailSkipped: result.emailSkipped,
     noContact: result.noContact,
+    routedToTally: result.routedToTally,
   });
 }

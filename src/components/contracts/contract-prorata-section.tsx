@@ -1,11 +1,11 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, Send, ExternalLink, CheckCircle2, AlertTriangle } from "lucide-react";
+import { Loader2, Send, ExternalLink, CheckCircle2, AlertTriangle, FileText } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -18,6 +18,13 @@ import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import type { Contract } from "@/types";
 
+interface StatementState {
+  payment_status: string | null;
+  proforma_sent_at: string | null;
+  handoff_state: string | null;
+  gst_invoice_number: string | null;
+}
+
 interface Props {
   contract: Contract;
   userRole: string | null;
@@ -29,6 +36,20 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
   const [waiveOpen, setWaiveOpen] = useState(false);
   const [waiveReason, setWaiveReason] = useState("");
   const [waiving, setWaiving] = useState(false);
+  const [stmtState, setStmtState] = useState<StatementState | null>(null);
+
+  const fetchStmtState = useCallback(async () => {
+    if (!contract.prorata_billing_statement_id) return;
+    const res = await fetch(
+      `/api/billing-statements/${contract.prorata_billing_statement_id}?fields=payment_status,proforma_sent_at,handoff_state,gst_invoice_number`
+    );
+    if (res.ok) {
+      const json = await res.json();
+      setStmtState(json.data || null);
+    }
+  }, [contract.prorata_billing_statement_id]);
+
+  useEffect(() => { fetchStmtState(); }, [fetchStmtState]);
 
   if (!contract.is_renewal || contract.prorata_payment_status === "not_applicable") {
     return null;
@@ -48,29 +69,55 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
   const prorataSubtotal = Math.round((monthlySubtotal / daysInMonth) * prorataDays * 100) / 100;
   const prorataTotal = Math.round(prorataSubtotal * (1 + taxPercentage / 100) * 100) / 100;
 
-  const status = contract.prorata_payment_status as string;
+  const contractStatus = contract.prorata_payment_status as string;
 
-  const handleSendPI = async () => {
+  // Derive display state from billing statement + contract column
+  type DisplayState = "unsent" | "pi_sent" | "gst_in_tally" | "paid" | "waived";
+  let displayState: DisplayState = "unsent";
+  if (contractStatus === "paid") {
+    displayState = "paid";
+  } else if (contractStatus === "waived") {
+    displayState = "waived";
+  } else if (stmtState) {
+    if (stmtState.payment_status === "paid") {
+      displayState = "paid";
+    } else if (
+      stmtState.handoff_state === "direct_gst_requested" ||
+      stmtState.handoff_state === "name_check_pending" ||
+      stmtState.handoff_state === "ready_to_send" ||
+      stmtState.handoff_state === "gst_sent" ||
+      stmtState.handoff_state === "gst_sent_awaiting_payment"
+    ) {
+      displayState = "gst_in_tally";
+    } else if (stmtState.proforma_sent_at) {
+      displayState = "pi_sent";
+    }
+  }
+
+  const canSendGst = ["admin", "accounts"].includes(userRole ?? "");
+
+  const handleDispatch = async (mode: "proforma" | "gst_direct") => {
     setSending(true);
     try {
       const res = await fetch(`/api/contracts/${contract.id}/prorata-link`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({}),
+        body: JSON.stringify({ mode }),
       });
       if (res.ok) {
         const data = await res.json();
-        if (data.noContact) {
-          toast.warning("PI created but no email/phone on file — client will need to be contacted manually.");
-        } else if (data.emailSkipped) {
-          toast.success("PI created. Email skipped (no contact).");
+        if (mode === "gst_direct") {
+          toast.success(data.routedToTally ? "Routed to Tally inbox — accounts will issue the GST invoice" : "GST invoice dispatched");
+        } else if (data.noContact) {
+          toast.warning("PI created but no email/phone on file — contact client manually.");
         } else {
           toast.success(`PI sent to ${data.emailedTo}`);
         }
+        await fetchStmtState();
         onSuccess();
       } else {
         const err = await res.json().catch(() => null);
-        toast.error(err?.error || "Failed to send PI");
+        toast.error(err?.error || "Failed to send");
       }
     } finally {
       setSending(false);
@@ -78,10 +125,7 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
   };
 
   const handleWaive = async () => {
-    if (!waiveReason.trim()) {
-      toast.error("Waiver reason is required");
-      return;
-    }
+    if (!waiveReason.trim()) { toast.error("Waiver reason is required"); return; }
     setWaiving(true);
     try {
       const res = await fetch(`/api/contracts/${contract.id}/prorata-link`, {
@@ -103,24 +147,27 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
     }
   };
 
+  const borderColor =
+    displayState === "paid" ? "border-green-300" :
+    displayState === "waived" ? "border-gray-200" :
+    displayState === "gst_in_tally" ? "border-blue-300" :
+    "border-amber-300";
+
   return (
     <>
-      <Card className={status === "pending" ? "border-amber-300" : status === "paid" ? "border-green-300" : "border-gray-200"}>
+      <Card className={borderColor}>
         <CardHeader className="pb-3">
           <CardTitle className="text-base flex items-center justify-between">
             <span>Pro-Rata Collection</span>
-            {status === "pending" && (
-              <Badge className="bg-amber-100 text-amber-800 border-amber-300">Pending</Badge>
-            )}
-            {status === "paid" && (
+            {displayState === "unsent" && <Badge className="bg-amber-100 text-amber-800 border-amber-300">Pending</Badge>}
+            {displayState === "pi_sent" && <Badge className="bg-amber-100 text-amber-800 border-amber-300">PI Sent — Awaiting Payment</Badge>}
+            {displayState === "gst_in_tally" && <Badge className="bg-blue-100 text-blue-800 border-blue-300">GST Invoice in Tally</Badge>}
+            {displayState === "paid" && (
               <Badge className="bg-green-100 text-green-800 border-green-300">
-                <CheckCircle2 className="h-3 w-3 mr-1" />
-                Paid
+                <CheckCircle2 className="h-3 w-3 mr-1" />Paid
               </Badge>
             )}
-            {status === "waived" && (
-              <Badge className="bg-gray-100 text-gray-700 border-gray-300">Waived</Badge>
-            )}
+            {displayState === "waived" && <Badge className="bg-gray-100 text-gray-700 border-gray-300">Waived</Badge>}
           </CardTitle>
         </CardHeader>
         <CardContent className="space-y-3 text-sm">
@@ -148,51 +195,78 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
             <span>{formatCurrency(prorataTotal)}</span>
           </div>
 
-          {status === "pending" && (
+          {/* Unsent — show both send options */}
+          {displayState === "unsent" && (
             <>
               <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-start gap-2">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                <p>Contract cannot be activated until this pro-rata is paid or waived by admin.</p>
+                <p>Contract cannot be activated until pro-rata is paid or waived.</p>
               </div>
-              <div className="flex gap-2 pt-1">
-                <Button size="sm" className="flex-1" onClick={handleSendPI} disabled={sending}>
-                  {sending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
-                  Send PI
+              <Button size="sm" className="w-full" onClick={() => handleDispatch("proforma")} disabled={sending}>
+                {sending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
+                Send PI
+              </Button>
+              {canSendGst && (
+                <Button size="sm" variant="outline" className="w-full text-blue-700 border-blue-300 hover:bg-blue-50" onClick={() => handleDispatch("gst_direct")} disabled={sending}>
+                  {sending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <FileText className="mr-1.5 h-3.5 w-3.5" />}
+                  Send GST Direct → Tally Inbox
                 </Button>
-                {userRole === "admin" && (
-                  <Button size="sm" variant="outline" onClick={() => setWaiveOpen(true)}>
-                    Waive
-                  </Button>
-                )}
-              </div>
+              )}
+              {userRole === "admin" && (
+                <Button size="sm" variant="ghost" className="w-full text-muted-foreground" onClick={() => setWaiveOpen(true)}>
+                  Waive Collection
+                </Button>
+              )}
             </>
           )}
 
-          {status === "paid" && (
-            <p className="text-xs text-green-700 font-medium">
-              ✓ Payment received — contract can be activated
-            </p>
-          )}
-
-          {status === "waived" && (
-            <p className="text-xs text-muted-foreground">
-              Admin waived pro-rata collection for this renewal.
-            </p>
-          )}
-
-          {/* If PI was already sent, show re-send option */}
-          {status === "pending" && contract.prorata_billing_statement_id && (
-            <div className="pt-1">
-              <Button
-                size="sm"
-                variant="ghost"
-                className="w-full text-xs text-muted-foreground"
-                onClick={() => window.open(`/billing/${contract.prorata_billing_statement_id}`, "_blank")}
-              >
-                <ExternalLink className="mr-1.5 h-3 w-3" />
-                View Statement
+          {/* PI sent — allow resend + option to switch to GST direct */}
+          {displayState === "pi_sent" && (
+            <>
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-start gap-2">
+                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                <p>PI sent. Contract activates once payment is received.</p>
+              </div>
+              <Button size="sm" variant="outline" className="w-full" onClick={() => handleDispatch("proforma")} disabled={sending}>
+                {sending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
+                Resend PI (fresh link)
               </Button>
+              {canSendGst && (
+                <Button size="sm" variant="outline" className="w-full text-blue-700 border-blue-300 hover:bg-blue-50" onClick={() => handleDispatch("gst_direct")} disabled={sending}>
+                  {sending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <FileText className="mr-1.5 h-3.5 w-3.5" />}
+                  Switch to GST Direct → Tally Inbox
+                </Button>
+              )}
+            </>
+          )}
+
+          {/* GST in Tally inbox — no send buttons, just status */}
+          {displayState === "gst_in_tally" && (
+            <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
+              <p className="font-semibold mb-1">GST invoice in Tally inbox</p>
+              <p>Accounts is issuing the GST invoice. Once sent and paid, contract will be activatable.</p>
             </div>
+          )}
+
+          {displayState === "paid" && (
+            <p className="text-xs text-green-700 font-medium">✓ Payment received — contract can be activated</p>
+          )}
+
+          {displayState === "waived" && (
+            <p className="text-xs text-muted-foreground">Admin waived pro-rata collection for this renewal.</p>
+          )}
+
+          {/* View statement link when one exists */}
+          {contract.prorata_billing_statement_id && displayState !== "paid" && displayState !== "waived" && (
+            <Button
+              size="sm"
+              variant="ghost"
+              className="w-full text-xs text-muted-foreground"
+              onClick={() => window.open(`/billing/${contract.prorata_billing_statement_id}`, "_blank")}
+            >
+              <ExternalLink className="mr-1.5 h-3 w-3" />
+              View Statement
+            </Button>
           )}
         </CardContent>
       </Card>
@@ -212,17 +286,13 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
               type="text"
               value={waiveReason}
               onChange={(e) => setWaiveReason(e.target.value)}
-              placeholder="e.g. Collected offline / already included in deposit"
+              placeholder="e.g. Collected offline / included in deposit"
               className="w-full text-sm border rounded px-3 py-1.5"
             />
           </div>
           <DialogFooter>
             <Button variant="outline" onClick={() => setWaiveOpen(false)}>Cancel</Button>
-            <Button
-              variant="destructive"
-              disabled={!waiveReason.trim() || waiving}
-              onClick={handleWaive}
-            >
+            <Button variant="destructive" disabled={!waiveReason.trim() || waiving} onClick={handleWaive}>
               {waiving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Waive Collection
             </Button>

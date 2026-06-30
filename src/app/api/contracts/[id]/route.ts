@@ -194,15 +194,35 @@ export async function PATCH(
           }, { status: 400 });
         }
       }
-      // For mid-month renewals: pro-rata must be paid before activation
+      // For mid-month renewals: pro-rata must be paid before activation.
+      // Check the billing statement directly so all payment paths (Razorpay,
+      // AR manual record, Tally inbox record) unblock activation automatically.
       if (
         oldContract.is_renewal &&
         oldContract.prorata_payment_status === "pending" &&
         !body.payment_override_reason
       ) {
-        return NextResponse.json({
-          error: "Cannot activate: pro-rata payment for the partial first month has not been collected. Send the PI from the Pro-Rata section and collect payment first.",
-        }, { status: 400 });
+        let prorataSettled = false;
+        if (oldContract.prorata_billing_statement_id) {
+          const { data: prorataStmt } = await supabase
+            .from("billing_statements")
+            .select("payment_status")
+            .eq("id", oldContract.prorata_billing_statement_id)
+            .single();
+          if (prorataStmt?.payment_status === "paid") {
+            prorataSettled = true;
+            // Sync the contract column so future checks are fast
+            await supabase
+              .from("contracts")
+              .update({ prorata_payment_status: "paid" })
+              .eq("id", id);
+          }
+        }
+        if (!prorataSettled) {
+          return NextResponse.json({
+            error: "Cannot activate: pro-rata payment for the partial first month has not been collected. Send the PI or GST invoice from the Pro-Rata section and collect payment first.",
+          }, { status: 400 });
+        }
       }
 
       allowedFields.activated_at = now;
