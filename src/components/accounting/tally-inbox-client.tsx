@@ -15,7 +15,7 @@
 
 import { Fragment, useEffect, useMemo, useState, useCallback } from "react";
 import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee } from "lucide-react";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, formatDate } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -1453,6 +1453,27 @@ function BookingInboxRowItem({
             Payment
             {paymentOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
           </button>
+          {row.lead_id && row.lead_id_proof_path && (
+            <a
+              href={`/api/leads/${row.lead_id}/id-proof`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+              title="Open the customer's KYC identity document"
+            >
+              <FileText className="h-3 w-3" />
+              View KYC
+            </a>
+          )}
+          {row.lead_id && !row.lead_id_proof_path && (
+            <span
+              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-dashed text-muted-foreground cursor-default"
+              title="No KYC document uploaded for this customer"
+            >
+              <FileText className="h-3 w-3" />
+              No KYC
+            </span>
+          )}
           {hasUpload && (
             <a
               href={`/api/booking-gst-tasks/${row.task_id}/gst-invoice-pdf`}

@@ -440,7 +440,7 @@ export async function GET(req: NextRequest) {
         guest_name, guest_email, guest_phone, guest_company,
         space:spaces!bookings_space_id_fkey(id, name),
         location:locations!bookings_location_id_fkey(id, name),
-        lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, gst_number),
+        lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, gst_number, id_proof_path),
         booking_addons(id, description, addon_type, quantity, unit_price, amount, gst_rate, gst_amount, total_with_gst, unit_label)
       )
     `);
@@ -493,6 +493,7 @@ export async function GET(req: NextRequest) {
         email: string | null;
         phone: string | null;
         gst_number: string | null;
+        id_proof_path: string | null;
       } | null;
       booking_addons: {
         id: string;
@@ -638,6 +639,8 @@ export async function GET(req: NextRequest) {
       customer_name: customerName,
       customer_email: lead?.email ?? t.booking?.guest_email ?? null,
       customer_phone: lead?.phone ?? t.booking?.guest_phone ?? null,
+      lead_id: lead?.id ?? null,
+      lead_id_proof_path: lead?.id_proof_path ?? null,
       customer_gstin: customerGstin,
       irn_required: customerHasGstin,
       expected_series: customerHasGstin ? "SDIPL-REG" : "SDIPL-UNREG",

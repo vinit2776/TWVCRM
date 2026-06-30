@@ -268,6 +268,8 @@ export interface BookingInboxRow {
   customer_name: string | null;
   customer_email: string | null;
   customer_phone: string | null;
+  lead_id: string | null;
+  lead_id_proof_path: string | null;
   customer_gstin: string | null;
   irn_required: boolean;
   expected_series: "SDIPL-REG" | "SDIPL-UNREG";

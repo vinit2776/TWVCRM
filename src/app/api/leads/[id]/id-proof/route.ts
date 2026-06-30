@@ -7,6 +7,45 @@ import {
   PDF_MIME_TYPE,
 } from "@/lib/uploads/normalize-upload-server";
 
+export const dynamic = "force-dynamic";
+
+/**
+ * GET /api/leads/[id]/id-proof
+ * Returns a short-lived signed URL for the lead's KYC id_proof document.
+ * Used by the Tally Inbox to let accounts view the KYC before issuing a GST invoice.
+ */
+export async function GET(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const supabase = await createClient();
+  const adminSupabase = createAdminClient();
+
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data: lead } = await supabase
+    .from("leads")
+    .select("id, id_proof_path")
+    .eq("id", id)
+    .maybeSingle();
+
+  if (!lead) return NextResponse.json({ error: "Lead not found" }, { status: 404 });
+  if (!lead.id_proof_path) return NextResponse.json({ error: "No KYC document uploaded" }, { status: 404 });
+
+  const { data: signed, error: signErr } = await adminSupabase.storage
+    .from("crm-documents")
+    .createSignedUrl(lead.id_proof_path as string, 3600);
+
+  if (signErr || !signed?.signedUrl) {
+    return NextResponse.json({ error: "Could not generate download URL" }, { status: 500 });
+  }
+
+  // Redirect directly to the signed URL so the browser opens the file inline
+  return NextResponse.redirect(signed.signedUrl);
+}
+
 export async function POST(
   request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
