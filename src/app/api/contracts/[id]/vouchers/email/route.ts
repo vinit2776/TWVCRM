@@ -100,7 +100,15 @@ export async function POST(
         console.error("[voucher-email] UniFi code lookup failed:", err);
       }
     }
-    const displayCode = voucherCode || "—";
+
+    if (!voucherCode) {
+      return NextResponse.json(
+        { error: "Voucher code is not available. The UniFi controller may be unreachable. Please retry voucher issuance once the controller is back online, then resend." },
+        { status: 503 }
+      );
+    }
+
+    const displayCode = voucherCode;
 
     const validFrom = issuance.valid_from
       ? new Date(issuance.valid_from).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" })
