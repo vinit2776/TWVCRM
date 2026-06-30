@@ -17,6 +17,7 @@ import {
   Send,
   RefreshCw,
 } from "lucide-react";
+import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { toast } from "sonner";
 import { formatDate, getValidityLabel } from "@/lib/utils";
 import { EmptyState } from "@/components/shared/empty-state";
@@ -49,6 +50,7 @@ interface VoucherIssuance {
   emailed_at?: string;
   is_active: boolean;
   replaces_issuance_id?: string;
+  unifi_code?: string | null;
   voucher?: {
     id: string;
     voucher_code: string;
@@ -75,8 +77,12 @@ interface ContractVouchersSectionProps {
 // ── Helpers ────────────────────────────────────────────────────────────────────
 
 function maskCode(code: string) {
-  if (!code || code.length <= 5) return code;
-  return "•••••" + code.slice(-5);
+  if (!code || code === "—" || code.length <= 2) return code;
+  return "•".repeat(code.length - 2) + code.slice(-2);
+}
+
+function resolveCode(issuance: VoucherIssuance): string {
+  return issuance.voucher?.voucher_code || issuance.unifi_code || "";
 }
 
 // ── Main component ─────────────────────────────────────────────────────────────
@@ -120,6 +126,8 @@ export function ContractVouchersSection({
     voucherCode: string;
     seatEmail?: string;
   }>({ open: false, issuanceId: "", seatNumber: 0, voucherCode: "" });
+
+  const [previewIssuance, setPreviewIssuance] = useState<VoucherIssuance | null>(null);
 
   // ── Data loading ─────────────────────────────────────────────────────────────
 
@@ -447,7 +455,7 @@ export function ContractVouchersSection({
                       </td>
                       <td className="px-3 py-3 font-mono text-xs text-muted-foreground">
                         {hasVoucher
-                          ? maskCode(issuance.voucher?.voucher_code || "—")
+                          ? maskCode(resolveCode(issuance) || "—")
                           : <span className="italic text-muted-foreground/60">Not issued</span>
                         }
                       </td>
@@ -459,9 +467,13 @@ export function ContractVouchersSection({
                       </td>
                       <td className="px-3 py-3 hidden lg:table-cell">
                         {hasVoucher && issuance.emailed_at ? (
-                          <span className="text-xs text-green-700 flex items-center gap-1">
+                          <button
+                            className="text-xs text-green-700 flex items-center gap-1 hover:underline cursor-pointer"
+                            onClick={() => setPreviewIssuance(issuance)}
+                            title="Preview sent email"
+                          >
                             <Mail className="h-3 w-3" />Sent {formatDate(issuance.emailed_at)}
-                          </span>
+                          </button>
                         ) : hasVoucher ? (
                           <span className="text-xs text-muted-foreground">Not sent</span>
                         ) : "—"}
@@ -557,7 +569,7 @@ export function ContractVouchersSection({
                       <tr key={iss.id} className="border-b hover:bg-muted/20 transition-colors">
                         <td className="px-3 py-2.5 text-center text-muted-foreground">{iss.seat_number}</td>
                         <td className="px-3 py-2.5 text-xs text-muted-foreground">{iss.seat_occupant_email ?? <span className="italic">—</span>}</td>
-                        <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">{maskCode(iss.voucher?.voucher_code || "—")}</td>
+                        <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">{maskCode(resolveCode(iss) || "—")}</td>
                         <td className="px-3 py-2.5 hidden sm:table-cell">
                           <Badge variant="outline" className="text-xs">{getValidityLabel(iss.voucher?.validity_days)}</Badge>
                         </td>
@@ -637,6 +649,11 @@ export function ContractVouchersSection({
         )}
       </CardContent>
 
+      <VoucherEmailPreviewDialog
+        issuance={previewIssuance}
+        onClose={() => setPreviewIssuance(null)}
+      />
+
       <VoucherReplaceDialog
         open={replaceDialog.open}
         onOpenChange={(open) => setReplaceDialog((prev) => ({ ...prev, open }))}
@@ -648,6 +665,90 @@ export function ContractVouchersSection({
         onSuccess={load}
       />
     </Card>
+  );
+}
+
+// ── Email Preview Dialog ───────────────────────────────────────────────────────
+
+function VoucherEmailPreviewDialog({
+  issuance,
+  onClose,
+}: {
+  issuance: VoucherIssuance | null;
+  onClose: () => void;
+}) {
+  if (!issuance) return null;
+
+  const code = resolveCode(issuance);
+  const maskedCode = code ? maskCode(code) : "—";
+  const validFrom = issuance.valid_from
+    ? new Date(issuance.valid_from).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" })
+    : "—";
+  const validUntil = issuance.valid_until
+    ? new Date(issuance.valid_until).toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", year: "numeric", month: "short", day: "numeric" })
+    : "—";
+  const recipient = issuance.seat_occupant_email || "—";
+  const sentAt = issuance.emailed_at
+    ? new Date(issuance.emailed_at).toLocaleString("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" })
+    : null;
+
+  return (
+    <Dialog open={!!issuance} onOpenChange={(open) => { if (!open) onClose(); }}>
+      <DialogContent className="max-w-sm p-0 overflow-hidden">
+        <DialogHeader className="px-4 pt-4 pb-0">
+          <DialogTitle className="text-sm font-medium text-muted-foreground">
+            Email Preview — Seat #{issuance.seat_number}
+          </DialogTitle>
+          {sentAt && (
+            <p className="text-xs text-muted-foreground mt-0.5">Sent {sentAt} → {recipient}</p>
+          )}
+        </DialogHeader>
+
+        {/* Email preview card */}
+        <div className="mx-4 mb-4 mt-3 rounded-lg border overflow-hidden text-sm">
+          {/* Header */}
+          <div className="bg-[#015E65] px-4 py-3">
+            <p className="text-white font-bold text-base">The WorkVilla</p>
+            <p className="text-[#00AE6C] text-xs mt-0.5">Your WiFi Access Code</p>
+          </div>
+
+          {/* Body */}
+          <div className="px-4 py-3 space-y-3 bg-white">
+            <p className="text-gray-800 text-xs">Hello <span className="font-medium">{recipient.split("@")[0]}</span>,</p>
+            <p className="text-gray-600 text-xs">Here is your personal internet access code for The WorkVilla (Seat #{issuance.seat_number}).</p>
+
+            {/* Code box */}
+            <div className="text-center py-3 px-4 bg-[#f0faf5] rounded-lg border-2 border-[#015E65]">
+              <p className="text-[#015E65] text-xs mb-1">Your Voucher Code</p>
+              <p className="text-[#015E65] font-bold text-xl tracking-widest font-mono">{maskedCode}</p>
+            </div>
+
+            {/* Validity */}
+            <div className="border rounded divide-y text-xs">
+              <div className="flex justify-between px-3 py-1.5">
+                <span className="text-gray-500">Valid From</span>
+                <span className="font-medium text-gray-800">{validFrom}</span>
+              </div>
+              <div className="flex justify-between px-3 py-1.5">
+                <span className="text-gray-500">Valid Until</span>
+                <span className="font-medium text-gray-800">{validUntil}</span>
+              </div>
+            </div>
+
+            {/* WiFi instructions */}
+            <div className="bg-gray-50 rounded-lg border px-3 py-2">
+              <p className="text-[#015E65] text-xs font-semibold mb-1">How to Connect</p>
+              <ol className="text-gray-600 text-xs space-y-0.5 list-decimal list-inside">
+                <li>Connect to: <span className="font-semibold text-[#015E65]">Workvilla Clients</span></li>
+                <li>A login page will appear in your browser</li>
+                <li>Enter the voucher code above</li>
+                <li>Click <span className="font-semibold">Connect</span> — you&apos;re online!</li>
+              </ol>
+            </div>
+          </div>
+        </div>
+      </DialogContent>
+    </Dialog>
   );
 }
 
