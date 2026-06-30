@@ -440,8 +440,8 @@ function buildPiNumber(caseNumber: string, sequence: number): string {
   return `TWV/VO/${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, "0")}/${caseNumber}-R${sequence}`;
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 async function openRenewalStatement(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   adminSupabase: any,
   caseData: VoCaseForRenewal,
   reminderNumber: number
