@@ -133,6 +133,10 @@ export function createPdfContext(doc: jsPDF, startY: number) {
     const lines = doc.splitTextToSize(text, width);
     for (const line of lines) {
       checkPageBreak(lineHeight + 2);
+      // Re-apply font/color after checkPageBreak — addFooter resets text color to mint green
+      doc.setFontSize(fontSize);
+      doc.setFont("helvetica", style);
+      doc.setTextColor(...color);
       doc.text(line, x, y);
       y += lineHeight;
     }
