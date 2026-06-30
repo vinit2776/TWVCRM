@@ -92,13 +92,21 @@ export async function POST(
   endDate.setUTCDate(endDate.getUTCDate() - 1);
   const endDateStr = endDate.toISOString().slice(0, 10);
 
-  // Calculate next billing date
+  // Calculate next billing date.
+  // If the renewal starts mid-month (not the 1st), snap to the 1st of the
+  // following month so the partial first month is billed as pro-rata and
+  // subsequent cycles align to clean calendar months.
   const nextBillingDate = new Date(startDate);
-  switch (billingCycle) {
-    case "monthly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 1); break;
-    case "quarterly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 3); break;
-    case "half_yearly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 6); break;
-    case "yearly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 12); break;
+  if (startDate.getUTCDate() !== 1) {
+    nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 1);
+    nextBillingDate.setUTCDate(1);
+  } else {
+    switch (billingCycle) {
+      case "monthly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 1); break;
+      case "quarterly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 3); break;
+      case "half_yearly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 6); break;
+      case "yearly": nextBillingDate.setUTCMonth(nextBillingDate.getUTCMonth() + 12); break;
+    }
   }
 
   // 4. Apply escalation to items
