@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, Send, ExternalLink, CheckCircle2, AlertTriangle, FileText, X, Mail } from "lucide-react";
+import { Loader2, Send, ExternalLink, CheckCircle2, AlertTriangle, FileText, X, Mail, Copy, Clock } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -24,6 +24,7 @@ interface StatementState {
   handoff_state: string | null;
   gst_invoice_number: string | null;
   issuance_channel: string | null;
+  razorpay_payment_link_url: string | null;
 }
 
 interface Props {
@@ -46,7 +47,7 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
   const fetchStmtState = useCallback(async () => {
     if (!contract.prorata_billing_statement_id) return;
     const res = await fetch(
-      `/api/billing-statements/${contract.prorata_billing_statement_id}?fields=payment_status,proforma_sent_at,handoff_state,gst_invoice_number`
+      `/api/billing-statements/${contract.prorata_billing_statement_id}?fields=payment_status,proforma_sent_at,handoff_state,gst_invoice_number,razorpay_payment_link_url`
     );
     if (res.ok) {
       const json = await res.json();
@@ -258,9 +259,37 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
 
           {displayState === "pi_sent" && (
             <>
-              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-start gap-2">
-                <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
-                <p>PI sent. Contract activates once payment is received.</p>
+              <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 space-y-2">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                  <p>PI sent. Contract activates once payment is received.</p>
+                </div>
+                {stmtState?.proforma_sent_at && (
+                  <div className="flex items-center gap-1.5 text-amber-700">
+                    <Clock className="h-3 w-3 shrink-0" />
+                    <span>Sent on {new Date(stmtState.proforma_sent_at).toLocaleString("en-IN", { day: "numeric", month: "short", year: "numeric", hour: "2-digit", minute: "2-digit" })}</span>
+                  </div>
+                )}
+                {stmtState?.razorpay_payment_link_url && (
+                  <div className="space-y-1">
+                    <p className="text-amber-700 font-medium">Payment link (for WhatsApp / manual share):</p>
+                    <div className="flex items-center gap-1.5">
+                      <span className="flex-1 truncate font-mono text-[10px] bg-white border border-amber-200 rounded px-2 py-1 select-all">
+                        {stmtState.razorpay_payment_link_url}
+                      </span>
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(stmtState.razorpay_payment_link_url!);
+                          toast.success("Payment link copied");
+                        }}
+                        className="shrink-0 p-1.5 rounded hover:bg-amber-100 text-amber-700"
+                        title="Copy link"
+                      >
+                        <Copy className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                )}
               </div>
               <Button size="sm" variant="outline" className="w-full" onClick={() => setPiPreviewOpen(true)} disabled={sending}>
                 <Send className="mr-1.5 h-3.5 w-3.5" />
