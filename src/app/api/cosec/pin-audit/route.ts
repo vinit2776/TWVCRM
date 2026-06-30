@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { listAllUsersFromDevice } from "@/lib/cosec";
+import { listAllUsersFromDevice, getUserPin } from "@/lib/cosec";
 
 /**
  * GET /api/cosec/pin-audit
@@ -112,8 +112,19 @@ export async function GET() {
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const loc = Array.isArray(device.location) ? device.location[0] : (device.location as any);
 
+        // The list action doesn't include user-pin in its XML — check each user individually.
+        // Batch in groups of 10 to avoid overwhelming the device.
+        const BATCH = 10;
+        for (let i = 0; i < liveUsers.length; i += BATCH) {
+          const batch = liveUsers.slice(i, i + BATCH);
+          const pins = await Promise.all(
+            batch.map(lu => getUserPin({ ip: device.device_ip, port: device.device_port, password: device.device_password }, lu.refUserId))
+          );
+          batch.forEach((lu, idx) => { lu.hasPin = pins[idx] !== ""; });
+        }
+
         for (const lu of liveUsers) {
-          if (!lu.hasPin) continue; // skip users with no PIN
+          if (!lu.hasPin) continue;
 
           const crm = crmMap.get(lu.userId);
           const entity = crm ? entityMap.get(crm.entity_id) : null;

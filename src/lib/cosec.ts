@@ -494,6 +494,24 @@ export async function listAllUsersFromDevice(device: CosecDevice): Promise<Cosec
   return users;
 }
 
+/**
+ * Check whether a specific user has a PIN set on the device.
+ * Uses action=get (individual lookup) because the list action does not
+ * include user-pin in its response XML.
+ */
+export async function getUserPin(device: CosecDevice, refUserId: number): Promise<string> {
+  try {
+    const xml = await cosecGet(device, "users", {
+      action: "get",
+      "ref-user-id": refUserId,
+      format: "xml",
+    });
+    return xmlValue(xml, "user-pin");
+  } catch {
+    return "";
+  }
+}
+
 /** Query a COSEC device to get user info by numeric ref-user-id */
 export async function getUserByRefId(device: CosecDevice, refUserId: number): Promise<CosecUserInfo | null> {
   try {
