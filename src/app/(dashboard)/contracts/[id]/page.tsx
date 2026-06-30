@@ -39,6 +39,7 @@ import { ContractAddonsSection } from "@/components/contracts/contract-addons-se
 import { ContractDocumentsTab } from "@/components/contracts/contract-documents-tab";
 import { ContractElectricityTab } from "@/components/contracts/contract-electricity-tab";
 import { ContractBillingSection } from "@/components/accounting/contract-billing-section";
+import { ContractMoratoriumSection } from "@/components/contracts/contract-moratorium-section";
 import { ContractDepositSection } from "@/components/contracts/contract-deposit-section";
 import { ContractInvoicesSection } from "@/components/contracts/contract-invoices-section";
 import { ContractAccessLogsSection } from "@/components/contracts/contract-access-logs-section";
@@ -940,6 +941,14 @@ export default function ContractDetailPage({
               </>
             );
           })()}
+
+          {/* Billing Moratorium */}
+          {["active", "renewal_in_progress"].includes(contract.status) && (
+            <ContractMoratoriumSection
+              contract={contract}
+              currentUserRole={user?.role ?? ""}
+            />
+          )}
 
           {/* Billing Section */}
           {["active", "completed"].includes(contract.status) && (

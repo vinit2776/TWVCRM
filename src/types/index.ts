@@ -740,7 +740,7 @@ export interface BillingStatement {
 // ==========================================
 // Audit Log Types
 // ==========================================
-export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view";
+export type AuditAction = "create" | "update" | "delete" | "login" | "email_sent" | "direct_future_contract" | "disable" | "enable" | "cheque_signed" | "view" | "moratorium_requested" | "moratorium_approved" | "moratorium_rejected" | "moratorium_applied" | "moratorium_overridden";
 export type AuditEntityType =
   | "lead"
   | "activity"
@@ -818,6 +818,7 @@ export type AuditEntityType =
   | "electricity_bill"
   | "location_electricity_config"
   | "asset_document"
+  | "contract_billing_moratorium"
   | "user_location"
   | "transfer_billing_policy";
 
@@ -3550,5 +3551,27 @@ export interface ContractElectricityConfig {
   customer_gst_rate: number;
   created_at: string;
   updated_at: string;
+}
+
+export type MoratoriumStatus = "pending" | "approved" | "rejected";
+
+export interface ContractBillingMoratorium {
+  id: string;
+  contract_id: string;
+  moratorium_month: string; // "YYYY-MM-DD" (first of month)
+  reason: string;
+  status: MoratoriumStatus;
+  requested_by: string | null;
+  requested_at: string;
+  authorized_by: string | null;
+  authorized_at: string | null;
+  authorization_note: string | null;
+  overridden_at: string | null;
+  overridden_by: string | null;
+  created_at: string;
+  updated_at: string;
+  // joined
+  requested_by_user?: { full_name: string } | null;
+  authorized_by_user?: { full_name: string } | null;
 }
 

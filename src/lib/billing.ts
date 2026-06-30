@@ -25,6 +25,7 @@
 
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { computeGstAndRounding } from "@/lib/gst-math";
+import { logAudit } from "@/lib/audit";
 
 export interface GenerateOptions {
   /** Target month (1-12). Defaults to current month in IST. */
@@ -319,10 +320,35 @@ export async function generateMonthlyStatements(
     bookingsByContract.set(b.contract_id, list);
   }
 
+  // 3b. Pre-fetch approved moratoriums for this billing period
+  const { data: moratoriumRows } = await supabase
+    .from("contract_billing_moratoriums")
+    .select("contract_id")
+    .in("contract_id", contractIds)
+    .eq("moratorium_month", firstOfMonth)
+    .eq("status", "approved");
+
+  const moratoriumContracts = new Set(
+    (moratoriumRows ?? []).map((m: { contract_id: string }) => m.contract_id)
+  );
+
   // 4. Generate drafts
   for (const contract of contracts as Array<Record<string, unknown>>) {
     if (alreadyBilled.has(contract.id as string)) {
       result.skipped++;
+      continue;
+    }
+
+    // Skip if an approved moratorium covers this month (true waiver — not deferred)
+    if (moratoriumContracts.has(contract.id as string)) {
+      result.skipped++;
+      logAudit(supabase, {
+        entityType: "contract_billing_moratorium",
+        entityId: contract.id as string,
+        action: "moratorium_applied",
+        performedBy: "system",
+        changes: { month: { old: null, new: firstOfMonth } },
+      }).catch(() => {});
       continue;
     }
 
