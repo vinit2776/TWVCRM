@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/server";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { revokeUnifiVoucher } from "@/lib/unifi";
+import { setUserActive } from "@/lib/cosec";
 
 /**
  * GET /api/cron/contract-expiry
@@ -135,6 +136,53 @@ export async function GET(request: NextRequest) {
     } catch (err) {
       console.error(`[contract-expiry] import voucher revoke failed for ${contract.contract_number}:`, err);
     }
+  }
+
+  // ── COSEC access revocation for expired contracts ─────────────────────────
+  // Deactivate all member access users on the device. Non-fatal.
+  try {
+    const { data: memberIds } = await admin
+      .from("contract_members")
+      .select("id")
+      .in("contract_id", expireIds);
+
+    if (memberIds && memberIds.length > 0) {
+      const { data: accessUsers } = await admin
+        .from("cosec_access_users")
+        .select("id, cosec_user_id, device_id")
+        .in("entity_id", memberIds.map(m => m.id))
+        .not("enrollment_status", "in", "(blocked,deleted)");
+
+      if (accessUsers && accessUsers.length > 0) {
+        const { data: deviceRows } = await admin
+          .from("cosec_devices")
+          .select("id, device_ip, device_port, device_password")
+          .in("id", accessUsers.map(a => a.device_id));
+
+        const devMap = new Map((deviceRows ?? []).map(d => [d.id, d]));
+        const nowStr = new Date().toISOString();
+
+        await Promise.allSettled(accessUsers.map(async (au) => {
+          const dev = devMap.get(au.device_id);
+          if (dev) {
+            try {
+              await setUserActive(
+                { ip: dev.device_ip, port: dev.device_port, password: dev.device_password },
+                au.cosec_user_id,
+                false,
+              );
+            } catch { /* device may be offline — DB update still proceeds */ }
+          }
+          await admin.from("cosec_access_users")
+            .update({ enrollment_status: "blocked", blocked_at: nowStr, updated_at: nowStr })
+            .eq("id", au.id);
+        }));
+
+        console.log(`[contract-expiry] COSEC: deactivated ${accessUsers.length} member access user(s)`);
+      }
+    }
+  } catch (err) {
+    console.error("[contract-expiry] COSEC revocation failed:", err);
   }
 
   // Notify staff via email

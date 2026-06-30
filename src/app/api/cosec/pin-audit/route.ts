@@ -132,7 +132,13 @@ export async function GET() {
       if (!pin) return; // no PIN on device
 
       const entity = entityMap.get(r.entity_id);
-      const isStale = r.enrollment_status === "deleted" || r.enrollment_status === "blocked";
+      // Stale = access revoked in CRM OR the underlying contract/booking has expired/cancelled
+      const isStale =
+        r.enrollment_status === "deleted" ||
+        r.enrollment_status === "blocked" ||
+        entity?.status === "expired" ||
+        entity?.status === "cancelled" ||
+        entity?.status === "terminated";
 
       results.push({
         device_id: dev.id,
