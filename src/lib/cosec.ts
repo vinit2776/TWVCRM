@@ -66,13 +66,12 @@ function deviceUrl(device: CosecDevice, endpoint: string, params: Record<string,
   return qs ? `${base}?${qs}` : base;
 }
 
-async function cosecGet(device: CosecDevice, endpoint: string, params: Record<string, string | number>): Promise<string> {
+async function cosecGet(device: CosecDevice, endpoint: string, params: Record<string, string | number>, timeoutMs = 8000): Promise<string> {
   const url = deviceUrl(device, endpoint, params);
   const res = await fetch(url, {
     method: "GET",
     headers: { Authorization: basicAuth(device.password) },
-    // Short timeout — device is on LAN, should respond in <3s
-    signal: AbortSignal.timeout(8000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) {
     throw new Error(`COSEC HTTP ${res.status} for ${endpoint}`);
@@ -465,12 +464,13 @@ export interface CosecLiveUser {
  * Each <UserInfo> block in the response contains one user's data.
  */
 export async function listAllUsersFromDevice(device: CosecDevice): Promise<CosecLiveUser[]> {
+  // List response can be large — use a longer timeout than single-record calls
   const xml = await cosecGet(device, "users", {
     action: "list",
     format: "xml",
     "start-ref-user-id": 0,
     count: 5000,
-  });
+  }, 45000);
 
   const blocks = xmlBlocks(xml, "UserInfo");
   const users: CosecLiveUser[] = [];
