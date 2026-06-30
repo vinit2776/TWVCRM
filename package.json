@@ -1,6 +1,6 @@
 {
   "name": "twv-crm",
-  "version": "1.0.98.26",
+  "version": "1.0.98.27",
   "private": true,
   "scripts": {
     "dev": "next dev",
