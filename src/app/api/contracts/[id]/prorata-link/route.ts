@@ -194,10 +194,13 @@ export async function POST(
   }
 
   const mode = body.mode === "gst_direct" ? "gst_direct" : "proforma";
+  const additionalCc: string[] = Array.isArray(body.cc)
+    ? body.cc.filter((e: unknown) => typeof e === "string" && (e as string).includes("@"))
+    : [];
 
   const result = mode === "gst_direct"
-    ? await dispatchGstDirect(admin, statementId!, dbUser.id)
-    : await dispatchProforma(admin, statementId!, dbUser.id);
+    ? await dispatchGstDirect(admin, statementId!, dbUser.id, additionalCc)
+    : await dispatchProforma(admin, statementId!, dbUser.id, additionalCc);
 
   if (!result.success && !result.emailSkipped && !result.routedToTally) {
     return NextResponse.json({ error: result.error || "Failed to dispatch" }, { status: 500 });

@@ -5,7 +5,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Separator } from "@/components/ui/separator";
-import { Loader2, Send, ExternalLink, CheckCircle2, AlertTriangle, FileText } from "lucide-react";
+import { Loader2, Send, ExternalLink, CheckCircle2, AlertTriangle, FileText, X, Mail } from "lucide-react";
 import {
   Dialog,
   DialogContent,
@@ -34,6 +34,9 @@ interface Props {
 
 export function ContractProrataSection({ contract, userRole, onSuccess }: Props) {
   const [sending, setSending] = useState(false);
+  const [piPreviewOpen, setPiPreviewOpen] = useState(false);
+  const [ccEmails, setCcEmails] = useState<string[]>([]);
+  const [ccInput, setCcInput] = useState("");
   const [gstConfirmOpen, setGstConfirmOpen] = useState(false);
   const [waiveOpen, setWaiveOpen] = useState(false);
   const [waiveReason, setWaiveReason] = useState("");
@@ -65,15 +68,21 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
   const daysInMonth = new Date(Date.UTC(startYear, startMonth + 1, 0)).getUTCDate();
   const prorataDays = daysInMonth - startDay + 1;
   const periodEndDate = new Date(Date.UTC(startYear, startMonth + 1, 0)).toISOString().slice(0, 10);
+  const monthNames = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 
   const monthlySubtotal = Number(contract.subtotal || 0);
   const taxPercentage = Number(contract.tax_percentage || 18);
   const prorataSubtotal = Math.round((monthlySubtotal / daysInMonth) * prorataDays * 100) / 100;
   const prorataTotal = Math.round(prorataSubtotal * (1 + taxPercentage / 100) * 100) / 100;
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lead = contract.lead as any;
+  const primaryEmail = lead?.email as string | undefined;
+  const leadName = lead ? `${lead.first_name || ""} ${lead.last_name || ""}`.trim() : "";
+  const company = lead?.company as string | undefined;
+
   const contractStatus = contract.prorata_payment_status as string;
 
-  // Derive display state from billing statement + contract column
   type DisplayState = "unsent" | "pi_sent" | "gst_in_tally" | "paid" | "waived";
   let displayState: DisplayState = "unsent";
   if (contractStatus === "paid") {
@@ -99,13 +108,32 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
 
   const canSendGst = ["admin", "accounts"].includes(userRole ?? "");
 
-  const handleDispatch = async (mode: "proforma" | "gst_direct") => {
+  const addCcEmail = () => {
+    const email = ccInput.trim().toLowerCase();
+    if (!email) return;
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) {
+      toast.error("Invalid email address");
+      return;
+    }
+    if (email === primaryEmail?.toLowerCase()) {
+      toast.error("That is already the primary recipient");
+      return;
+    }
+    if (ccEmails.includes(email)) {
+      toast.error("Already added");
+      return;
+    }
+    setCcEmails(prev => [...prev, email]);
+    setCcInput("");
+  };
+
+  const handleDispatch = async (mode: "proforma" | "gst_direct", cc: string[] = []) => {
     setSending(true);
     try {
       const res = await fetch(`/api/contracts/${contract.id}/prorata-link`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, cc }),
       });
       if (res.ok) {
         const data = await res.json();
@@ -125,6 +153,12 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
     } finally {
       setSending(false);
     }
+  };
+
+  const handleSendPI = async () => {
+    setPiPreviewOpen(false);
+    await handleDispatch("proforma", ccEmails);
+    setCcEmails([]);
   };
 
   const handleWaive = async () => {
@@ -198,15 +232,14 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
             <span>{formatCurrency(prorataTotal)}</span>
           </div>
 
-          {/* Unsent — show both send options */}
           {displayState === "unsent" && (
             <>
               <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-start gap-2">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <p>Contract cannot be activated until pro-rata is paid or waived.</p>
               </div>
-              <Button size="sm" className="w-full" onClick={() => handleDispatch("proforma")} disabled={sending}>
-                {sending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
+              <Button size="sm" className="w-full" onClick={() => setPiPreviewOpen(true)} disabled={sending}>
+                <Send className="mr-1.5 h-3.5 w-3.5" />
                 Send PI
               </Button>
               {canSendGst && (
@@ -223,15 +256,14 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
             </>
           )}
 
-          {/* PI sent — allow resend + option to switch to GST direct */}
           {displayState === "pi_sent" && (
             <>
               <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 flex items-start gap-2">
                 <AlertTriangle className="h-3.5 w-3.5 mt-0.5 shrink-0" />
                 <p>PI sent. Contract activates once payment is received.</p>
               </div>
-              <Button size="sm" variant="outline" className="w-full" onClick={() => handleDispatch("proforma")} disabled={sending}>
-                {sending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Send className="mr-1.5 h-3.5 w-3.5" />}
+              <Button size="sm" variant="outline" className="w-full" onClick={() => setPiPreviewOpen(true)} disabled={sending}>
+                <Send className="mr-1.5 h-3.5 w-3.5" />
                 Resend PI (fresh link)
               </Button>
               {canSendGst && (
@@ -243,7 +275,6 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
             </>
           )}
 
-          {/* GST in Tally inbox — no send buttons, just status */}
           {displayState === "gst_in_tally" && (
             <div className="rounded-md border border-blue-200 bg-blue-50 px-3 py-2 text-xs text-blue-800">
               <p className="font-semibold mb-1">GST invoice in Tally inbox</p>
@@ -259,7 +290,6 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
             <p className="text-xs text-muted-foreground">Admin waived pro-rata collection for this renewal.</p>
           )}
 
-          {/* View statement link when one exists */}
           {contract.prorata_billing_statement_id && displayState !== "paid" && displayState !== "waived" && (
             <Button
               size="sm"
@@ -274,6 +304,98 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
         </CardContent>
       </Card>
 
+      {/* Send PI Preview Dialog */}
+      <Dialog open={piPreviewOpen} onOpenChange={(open) => { setPiPreviewOpen(open); if (!open) { setCcEmails([]); setCcInput(""); } }}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Send Proforma Invoice</DialogTitle>
+            <DialogDescription>
+              Review the recipient and amount before sending. A Razorpay payment link will be included.
+            </DialogDescription>
+          </DialogHeader>
+
+          {/* What's being sent */}
+          <div className="rounded-md border bg-muted/30 p-3 space-y-2 text-sm">
+            <p className="font-medium text-xs text-muted-foreground uppercase tracking-wide">Invoice Summary</p>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Pro-Rata Workspace Fee</span>
+              <span>{monthNames[startMonth]} {startDay}–{daysInMonth}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">Subtotal</span>
+              <span>{formatCurrency(prorataSubtotal)}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-muted-foreground">GST ({taxPercentage}%)</span>
+              <span>{formatCurrency(prorataTotal - prorataSubtotal)}</span>
+            </div>
+            <Separator />
+            <div className="flex justify-between font-semibold">
+              <span>Total Due</span>
+              <span>{formatCurrency(prorataTotal)}</span>
+            </div>
+          </div>
+
+          {/* Recipients */}
+          <div className="space-y-3">
+            <div className="space-y-1">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">To (primary — cannot be removed)</p>
+              <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-3 py-2">
+                <Mail className="h-3.5 w-3.5 text-muted-foreground shrink-0" />
+                <div className="text-sm min-w-0">
+                  {primaryEmail ? (
+                    <>
+                      <span className="font-medium">{leadName}{company ? ` · ${company}` : ""}</span>
+                      <span className="text-muted-foreground ml-1.5 truncate">&lt;{primaryEmail}&gt;</span>
+                    </>
+                  ) : (
+                    <span className="text-amber-600 text-xs">No email on file — PI will be created but not emailed</span>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            <div className="space-y-2">
+              <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">CC (optional)</p>
+              {ccEmails.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {ccEmails.map(email => (
+                    <span key={email} className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-xs">
+                      {email}
+                      <button onClick={() => setCcEmails(prev => prev.filter(e => e !== email))} className="text-muted-foreground hover:text-foreground">
+                        <X className="h-3 w-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <div className="flex gap-2">
+                <input
+                  type="email"
+                  value={ccInput}
+                  onChange={e => setCcInput(e.target.value)}
+                  onKeyDown={e => { if (e.key === "Enter" || e.key === ",") { e.preventDefault(); addCcEmail(); } }}
+                  placeholder="Add CC email and press Enter"
+                  className="flex-1 text-sm border rounded px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-ring"
+                />
+                <Button size="sm" variant="outline" onClick={addCcEmail} type="button">Add</Button>
+              </div>
+            </div>
+          </div>
+
+          <DialogFooter>
+            <Button variant="outline" onClick={() => { setPiPreviewOpen(false); setCcEmails([]); setCcInput(""); }}>
+              Cancel
+            </Button>
+            <Button disabled={sending} onClick={handleSendPI}>
+              {sending ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : <Send className="mr-2 h-4 w-4" />}
+              {displayState === "pi_sent" ? "Resend PI" : "Send PI"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* GST Direct Confirm Dialog */}
       <Dialog open={gstConfirmOpen} onOpenChange={setGstConfirmOpen}>
         <DialogContent>
           <DialogHeader>
@@ -307,6 +429,7 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
         </DialogContent>
       </Dialog>
 
+      {/* Waive Dialog */}
       <Dialog open={waiveOpen} onOpenChange={setWaiveOpen}>
         <DialogContent>
           <DialogHeader>
