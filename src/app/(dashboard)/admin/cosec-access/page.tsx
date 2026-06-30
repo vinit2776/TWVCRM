@@ -111,13 +111,19 @@ export default function CosecAccessPage() {
   };
   const [pinAudit, setPinAudit] = useState<PinAuditRow[]>([]);
   const [pinAuditLoading, setPinAuditLoading] = useState(false);
+  const [pinAuditErrors, setPinAuditErrors] = useState<{ device_label: string; error: string }[]>([]);
 
   const loadPinAudit = useCallback(async () => {
     setPinAuditLoading(true);
+    setPinAuditErrors([]);
     try {
       const res = await fetch("/api/cosec/pin-audit");
       const json = await res.json();
       setPinAudit(json.data ?? []);
+      setPinAuditErrors(json.device_errors ?? []);
+      if (json.device_errors?.length) {
+        toast.error(`${json.device_errors.length} device(s) failed to respond`);
+      }
     } catch {
       toast.error("Failed to load PIN audit");
     } finally {
@@ -411,15 +417,37 @@ export default function CosecAccessPage() {
             <Loader2 className="animate-spin" size={20} />Polling devices for active PINs…
           </div>
         ) : pinAudit.length === 0 ? (
-          <Card>
-            <CardContent className="py-14 text-center text-muted-foreground">
-              <KeyRound size={36} className="mx-auto mb-3 opacity-30" />
-              <p className="font-medium">No active PINs found on any device</p>
-              <p className="text-sm mt-1">No enrolled users currently have a PIN set on the device.</p>
-            </CardContent>
-          </Card>
+          <div className="space-y-2">
+            {pinAuditErrors.length > 0 && (
+              <Card className="border-red-200 bg-red-50/40">
+                <CardContent className="py-3 px-4 text-sm text-red-700 space-y-1">
+                  <p className="font-medium">Device errors:</p>
+                  {pinAuditErrors.map((e, i) => (
+                    <p key={i} className="text-xs">{e.device_label}: {e.error}</p>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
+            <Card>
+              <CardContent className="py-14 text-center text-muted-foreground">
+                <KeyRound size={36} className="mx-auto mb-3 opacity-30" />
+                <p className="font-medium">No active PINs found on any device</p>
+                <p className="text-sm mt-1">No enrolled users currently have a PIN set on the device.</p>
+              </CardContent>
+            </Card>
+          </div>
         ) : (
           <div className="space-y-2">
+            {pinAuditErrors.length > 0 && (
+              <Card className="border-red-200 bg-red-50/40">
+                <CardContent className="py-2 px-4 text-xs text-red-700 space-y-0.5">
+                  <p className="font-medium">Some devices failed:</p>
+                  {pinAuditErrors.map((e, i) => (
+                    <p key={i}>{e.device_label}: {e.error}</p>
+                  ))}
+                </CardContent>
+              </Card>
+            )}
             <p className="text-xs text-muted-foreground px-1">
               {pinAudit.length} user{pinAudit.length !== 1 ? "s" : ""} with an active PIN on the device
               · <span className="text-amber-600">{pinAudit.filter(r => r.is_unlinked).length} unlinked</span>

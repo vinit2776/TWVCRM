@@ -7,8 +7,10 @@ import { listAllUsersFromDevice, getUserPin } from "@/lib/cosec";
  *
  * Polls every COSEC device and returns all users that currently have an
  * active PIN set on the device, enriched with their CRM name and entity type.
- * Used to identify PINs that exist on the device but may have no CRM record
- * (legacy/orphaned) or are tied to expired entities.
+ *
+ * Note: The COSEC list action XML does NOT include user-pin in its response.
+ * We fetch PIN status per-user via individual action=get calls, parallelised
+ * across all users on a device.
  */
 export async function GET() {
   const supabase = await createClient();
@@ -22,7 +24,7 @@ export async function GET() {
     .select("id, label, device_ip, device_port, device_password, location:locations(name)");
 
   if (!devices || devices.length === 0) {
-    return NextResponse.json({ data: [] });
+    return NextResponse.json({ data: [], total: 0, device_errors: [] });
   }
 
   // Fetch all CRM enrollments so we can cross-reference by cosec_user_id
@@ -81,72 +83,70 @@ export async function GET() {
     entityMap.set(m.id, { name: m.name, ref: contract?.contract_number, status: contract?.status });
   });
 
-  // Poll each device for users with PINs
   type PinAuditRow = {
     device_id: string;
     device_label: string;
     location_name: string;
     cosec_user_id: string;
-    device_name: string;       // name stored on device
+    device_name: string;
     is_active: boolean;
-    crm_name: string | null;   // name from CRM entity
+    crm_name: string | null;
     crm_ref: string | null;
     crm_type: string | null;
     crm_status: string | null;
     enrollment_status: string | null;
     pin_issued_at: string | null;
-    is_unlinked: boolean;      // true = no CRM record at all
+    is_unlinked: boolean;
   };
 
   const results: PinAuditRow[] = [];
+  const device_errors: { device_label: string; error: string }[] = [];
 
   await Promise.allSettled(
     devices.map(async (device) => {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const loc = Array.isArray(device.location) ? device.location[0] : (device.location as any);
+      const dev = { ip: device.device_ip, port: device.device_port, password: device.device_password };
+
+      let liveUsers;
       try {
-        const liveUsers = await listAllUsersFromDevice({
-          ip: device.device_ip,
-          port: device.device_port,
-          password: device.device_password,
+        liveUsers = await listAllUsersFromDevice(dev);
+      } catch (err) {
+        device_errors.push({ device_label: device.label, error: err instanceof Error ? err.message : String(err) });
+        return;
+      }
+
+      if (!liveUsers.length) return;
+
+      // Fetch PIN status for all users in parallel (list action doesn't include user-pin)
+      const pinResults = await Promise.allSettled(
+        liveUsers.map(lu => getUserPin(dev, lu.refUserId))
+      );
+
+      for (let i = 0; i < liveUsers.length; i++) {
+        const lu = liveUsers[i];
+        const pinResult = pinResults[i];
+        const hasPin = pinResult.status === "fulfilled" && pinResult.value !== "";
+        if (!hasPin) continue;
+
+        const crm = crmMap.get(lu.userId);
+        const entity = crm ? entityMap.get(crm.entity_id) : null;
+
+        results.push({
+          device_id: device.id,
+          device_label: device.label,
+          location_name: loc?.name ?? "",
+          cosec_user_id: lu.userId,
+          device_name: lu.name,
+          is_active: lu.isActive,
+          crm_name: entity?.name ?? null,
+          crm_ref: entity?.ref ?? null,
+          crm_type: crm?.user_type ?? null,
+          crm_status: entity?.status ?? null,
+          enrollment_status: crm?.enrollment_status ?? null,
+          pin_issued_at: crm?.pin_issued_at ?? null,
+          is_unlinked: !crm,
         });
-
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        const loc = Array.isArray(device.location) ? device.location[0] : (device.location as any);
-
-        // The list action doesn't include user-pin in its XML — check each user individually.
-        // Batch in groups of 10 to avoid overwhelming the device.
-        const BATCH = 10;
-        for (let i = 0; i < liveUsers.length; i += BATCH) {
-          const batch = liveUsers.slice(i, i + BATCH);
-          const pins = await Promise.all(
-            batch.map(lu => getUserPin({ ip: device.device_ip, port: device.device_port, password: device.device_password }, lu.refUserId))
-          );
-          batch.forEach((lu, idx) => { lu.hasPin = pins[idx] !== ""; });
-        }
-
-        for (const lu of liveUsers) {
-          if (!lu.hasPin) continue;
-
-          const crm = crmMap.get(lu.userId);
-          const entity = crm ? entityMap.get(crm.entity_id) : null;
-
-          results.push({
-            device_id: device.id,
-            device_label: device.label,
-            location_name: loc?.name ?? "",
-            cosec_user_id: lu.userId,
-            device_name: lu.name,
-            is_active: lu.isActive,
-            crm_name: entity?.name ?? null,
-            crm_ref: entity?.ref ?? null,
-            crm_type: crm?.user_type ?? null,
-            crm_status: entity?.status ?? null,
-            enrollment_status: crm?.enrollment_status ?? null,
-            pin_issued_at: crm?.pin_issued_at ?? null,
-            is_unlinked: !crm,
-          });
-        }
-      } catch {
-        // device offline — skip
       }
     })
   );
@@ -156,5 +156,5 @@ export async function GET() {
     return a.device_label.localeCompare(b.device_label) || a.device_name.localeCompare(b.device_name);
   });
 
-  return NextResponse.json({ data: results, total: results.length });
+  return NextResponse.json({ data: results, total: results.length, device_errors });
 }
