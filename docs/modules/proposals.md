@@ -442,10 +442,10 @@ If `security_deposit_amount` is not supplied, it defaults to `security_deposit_m
 9. Updates `deposit_payment_status: 'paid'`, `deposit_payment_amount`, `deposit_payment_reference`, `deposit_payment_medium`, `deposit_payment_received_at`, `deposit_payment_screenshot_url`.
 10. Sends confirmation email to customer.
 
-### Flow 5: Send GST Invoice (Pro-rata First Month)
+### Flow 5: Send Proforma Invoice (Pro-rata First Month)
 
 1. Deposit must be paid (or no deposit required).
-2. User opens Email dropdown → "GST Invoice — First Month" → GST dialog.
+2. User opens Email dropdown → "GST Invoice — First Month" → dialog.
 3. User enters occupation start date, clicks "Generate Preview".
 4. `POST .../send-invoice` with `{ occupation_start_date, preview: true }`.
 5. Server calculates: `daysRemaining = daysInMonth - dayOfMonth + 1`, `prorationFactor = daysRemaining / daysInMonth`, prorated amounts, GST (always CGST+SGST for TN intra-state).
@@ -453,15 +453,16 @@ If `security_deposit_amount` is not supplied, it defaults to `security_deposit_m
 7. User clicks "Send Invoice".
 8. `POST .../send-invoice` without `preview: true`.
 9. Server creates fresh Razorpay link for prorated amount (always a new link, overwrites `razorpay_payment_link_url`).
-10. Generates GST invoice PDF (`generateGstInvoicePDF()`), uploads to storage.
-11. Assigns invoice number: `TWV/INV/YY-YY/NNNN` (based on count of billing_statements with that FY prefix).
+10. Generates **Proforma Invoice** PDF (`generateGstInvoicePDF()` with `isProforma: true`), uploads to storage. PDF header reads "PROFORMA INVOICE"; number is labelled "Proforma Ref:".
+11. Assigns proforma ref number: `TWV/INV/YY-YY/NNNN` (based on count of billing_statements with that FY prefix — shared sequence with GST invoices).
 12. Emails customer (+ CCs admin/manager/accounts); PDF attached.
 13. Sends WhatsApp text + WhatsApp document.
 14. Sets `occupation_start_date` on proposal.
+15. Once customer pays the PI via the Razorpay link → it surfaces in **Tally Inbox** (`/accounting/inbox`). Accounts team then issues the actual GST invoice from Tally and enters the GST invoice number in the Tally Inbox page, which is sent to the customer.
 
-### Flow 6: Revise and Resend GST Invoice
+### Flow 6: Revise and Resend Proforma Invoice
 
-Same as Flow 5 but triggered when `proposal.occupation_start_date` is already set. The dialog shows "Revise & Resend". A completely new invoice number is issued; no cancellation of the prior invoice is performed automatically.
+Same as Flow 5 but triggered when `proposal.occupation_start_date` is already set. The dialog shows "Revise & Resend". A completely new proforma ref number is issued; no cancellation of the prior PI is performed automatically.
 
 ### Flow 7: Razorpay Webhook Auto-accept
 
@@ -528,9 +529,9 @@ No feature flags beyond `razorpay_enabled` in `app_settings`. Razorpay disabled 
 
 ---
 
-## GST Invoice Numbering
+## Proforma Invoice Numbering
 
-Invoice numbers follow: `TWV/INV/YY-YY/NNNN`
+Proforma ref numbers follow: `TWV/INV/YY-YY/NNNN` (shared sequence with GST invoices on billing statements)
 
 - `YY-YY` = Indian financial year (April–March). If current month ≥ April, `fyStart = currentYear`.
 - `NNNN` = count of existing `billing_statements` with same FY prefix + 1 (padded to 4 digits).
