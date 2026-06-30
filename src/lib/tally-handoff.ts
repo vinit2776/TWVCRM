@@ -228,12 +228,35 @@ export interface BookingPaymentConfirmation {
   status: string;
 }
 
+export interface BookingInboxAddon {
+  id: string;
+  description: string;
+  addon_type: string;
+  quantity: number;
+  unit_price: number;
+  amount: number;
+  gst_rate: number;
+  gst_amount: number;
+  total_with_gst: number;
+  unit_label: string | null;
+}
+
 export interface BookingInboxRow {
   row_type: "booking";
   task_id: string;
   booking_id: string;
   booking_number: string | null;
   booking_date: string | null;
+  start_time: string | null;
+  end_time: string | null;
+  check_in_at: string | null;
+  check_out_at: string | null;
+  duration_hours: number | null;
+  pricing_model: string | null;
+  base_amount: number;
+  gst_amount: number;
+  gst_rate: number;
+  addons: BookingInboxAddon[];
   space_name: string | null;
   location_name: string | null;
   statement_total_amount: number;   // total_amount_with_gst (GST-inclusive)

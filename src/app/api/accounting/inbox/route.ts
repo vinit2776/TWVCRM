@@ -433,12 +433,15 @@ export async function GET(req: NextRequest) {
       id, handoff_state, updated_at, created_at,
       gst_invoice_number, tally_invoice_number, gst_invoice_sent_at,
       booking:bookings!booking_gst_tasks_booking_id_fkey(
-        id, booking_number, total_amount_with_gst, payment_status,
-        payment_mode, payment_reference,
-        booking_date, guest_name, guest_email, guest_phone, guest_company,
+        id, booking_number, total_amount_with_gst, total_amount, gst_amount, gst_rate,
+        payment_status, payment_mode, payment_reference,
+        booking_date, start_time, end_time, check_in_at, check_out_at,
+        duration_hours, pricing_model,
+        guest_name, guest_email, guest_phone, guest_company,
         space:spaces!bookings_space_id_fkey(id, name),
         location:locations!bookings_location_id_fkey(id, name),
-        lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, gst_number)
+        lead:leads!bookings_lead_id_fkey(id, first_name, last_name, company, email, phone, gst_number),
+        booking_addons(id, description, addon_type, quantity, unit_price, amount, gst_rate, gst_amount, total_with_gst, unit_label)
       )
     `);
 
@@ -463,10 +466,19 @@ export async function GET(req: NextRequest) {
       id: string;
       booking_number: string | null;
       total_amount_with_gst: number;
+      total_amount: number;
+      gst_amount: number | null;
+      gst_rate: number | null;
       payment_status: string;
       payment_mode: string | null;
       payment_reference: string | null;
       booking_date: string | null;
+      start_time: string | null;
+      end_time: string | null;
+      check_in_at: string | null;
+      check_out_at: string | null;
+      duration_hours: number | null;
+      pricing_model: string | null;
       guest_name: string | null;
       guest_email: string | null;
       guest_phone: string | null;
@@ -482,6 +494,18 @@ export async function GET(req: NextRequest) {
         phone: string | null;
         gst_number: string | null;
       } | null;
+      booking_addons: {
+        id: string;
+        description: string;
+        addon_type: string;
+        quantity: number;
+        unit_price: number;
+        amount: number;
+        gst_rate: number;
+        gst_amount: number;
+        total_with_gst: number;
+        unit_label: string | null;
+      }[];
     } | null;
   };
 
@@ -593,6 +617,16 @@ export async function GET(req: NextRequest) {
       booking_id: t.booking?.id ?? "",
       booking_number: t.booking?.booking_number ?? null,
       booking_date: t.booking?.booking_date ?? null,
+      start_time: t.booking?.start_time ?? null,
+      end_time: t.booking?.end_time ?? null,
+      check_in_at: t.booking?.check_in_at ?? null,
+      check_out_at: t.booking?.check_out_at ?? null,
+      duration_hours: t.booking?.duration_hours ?? null,
+      pricing_model: t.booking?.pricing_model ?? null,
+      base_amount: Number(t.booking?.total_amount ?? 0),
+      gst_amount: Number(t.booking?.gst_amount ?? 0),
+      gst_rate: Number(t.booking?.gst_rate ?? 18),
+      addons: (t.booking?.booking_addons ?? []),
       space_name: t.booking?.space?.name ?? null,
       location_name: t.booking?.location?.name ?? null,
       statement_total_amount: Math.round(Number(t.booking?.total_amount_with_gst ?? 0)),

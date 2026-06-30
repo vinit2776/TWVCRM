@@ -1371,6 +1371,62 @@ function BookingInboxRowItem({
         {/* Lifecycle tracker */}
         <BookingInboxLifecycleTracker state={row.handoff_state} />
 
+        {/* Booking usage details */}
+        <div className="col-span-2 rounded-md bg-muted/40 border px-3 py-2 text-xs space-y-1.5">
+          {/* Date + time */}
+          <div className="flex flex-wrap gap-x-4 gap-y-1">
+            <span className="text-muted-foreground">Date</span>
+            <span className="font-medium">
+              {row.booking_date ? formatDate(row.booking_date) : "—"}
+            </span>
+            <span className="text-muted-foreground ml-auto sm:ml-0">Time</span>
+            <span className="font-medium">
+              {row.start_time && row.end_time
+                ? `${row.start_time} – ${row.end_time}`
+                : row.check_in_at && row.check_out_at
+                  ? `${new Date(row.check_in_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })} – ${new Date(row.check_out_at).toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit", timeZone: "Asia/Kolkata" })}`
+                  : "—"}
+              {row.duration_hours != null && (
+                <span className="text-muted-foreground ml-1">({row.duration_hours}h)</span>
+              )}
+            </span>
+          </div>
+
+          {/* Charge breakup */}
+          <table className="w-full text-xs">
+            <tbody>
+              <tr>
+                <td className="text-muted-foreground py-0.5 pr-2">
+                  {row.space_name ?? "Room charge"}
+                  {row.pricing_model === "daily" ? " (day pass)" : ""}
+                </td>
+                <td className="text-right tabular-nums">{formatCurrency(row.base_amount)}</td>
+              </tr>
+              {row.addons.map((a) => (
+                <tr key={a.id}>
+                  <td className="text-muted-foreground py-0.5 pr-2">
+                    {a.description}
+                    {a.quantity > 1 && a.unit_label
+                      ? ` × ${a.quantity} ${a.unit_label}`
+                      : a.quantity > 1
+                        ? ` × ${a.quantity}`
+                        : ""}
+                  </td>
+                  <td className="text-right tabular-nums">{formatCurrency(a.amount)}</td>
+                </tr>
+              ))}
+              <tr className="border-t border-border/50">
+                <td className="text-muted-foreground py-0.5 pr-2">GST ({row.gst_rate}%)</td>
+                <td className="text-right tabular-nums">{formatCurrency(row.gst_amount)}</td>
+              </tr>
+              <tr>
+                <td className="font-medium py-0.5 pr-2">Total</td>
+                <td className="text-right tabular-nums font-semibold">{formatCurrency(row.statement_total_amount)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+
         {/* Discrepancy banner */}
         {row.has_discrepancy && row.discrepancy_reason && (
           <div className="col-span-2 text-xs text-red-700 flex items-start gap-1">
