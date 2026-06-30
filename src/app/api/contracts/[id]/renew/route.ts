@@ -179,7 +179,7 @@ export async function POST(
       member_signatory_pan: source.member_signatory_pan,
       member_signatory_id_type: source.member_signatory_id_type || "pan",
       agreement_date: new Date().toISOString().slice(0, 10),
-      department_id: source.department_id,
+      department_id: null, // can't copy — parent still holds the (location_id, department_id) pair until it moves to "renewed"
       // Renewal-specific fields
       parent_contract_id: id,
       is_renewal: true,

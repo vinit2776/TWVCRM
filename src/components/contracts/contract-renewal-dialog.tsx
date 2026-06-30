@@ -96,11 +96,13 @@ export function ContractRenewalDialog({
   type Item = { unit_price: number; quantity: number };
   const previewSubtotal = useMemo(() => {
     const items = (contract.items || []) as Item[];
+    const oldSeats = contract.seats || 1;
     return items.reduce((sum, item) => {
+      const newQuantity = item.quantity === oldSeats ? seats : item.quantity;
       const newPrice = roundToTen(item.unit_price * multiplier);
-      return sum + newPrice * item.quantity;
+      return sum + newPrice * newQuantity;
     }, 0);
-  }, [contract.items, multiplier]);
+  }, [contract.items, multiplier, seats, contract.seats]);
 
   const taxPct = Number(contract.tax_percentage || 18);
   const discountPct = Number(contract.discount_percentage || 0);
