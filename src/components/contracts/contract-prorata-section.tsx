@@ -33,6 +33,7 @@ interface Props {
 
 export function ContractProrataSection({ contract, userRole, onSuccess }: Props) {
   const [sending, setSending] = useState(false);
+  const [gstConfirmOpen, setGstConfirmOpen] = useState(false);
   const [waiveOpen, setWaiveOpen] = useState(false);
   const [waiveReason, setWaiveReason] = useState("");
   const [waiving, setWaiving] = useState(false);
@@ -207,8 +208,8 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
                 Send PI
               </Button>
               {canSendGst && (
-                <Button size="sm" variant="outline" className="w-full text-blue-700 border-blue-300 hover:bg-blue-50" onClick={() => handleDispatch("gst_direct")} disabled={sending}>
-                  {sending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <FileText className="mr-1.5 h-3.5 w-3.5" />}
+                <Button size="sm" variant="outline" className="w-full text-blue-700 border-blue-300 hover:bg-blue-50" onClick={() => setGstConfirmOpen(true)} disabled={sending}>
+                  <FileText className="mr-1.5 h-3.5 w-3.5" />
                   Send GST Direct → Tally Inbox
                 </Button>
               )}
@@ -232,8 +233,8 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
                 Resend PI (fresh link)
               </Button>
               {canSendGst && (
-                <Button size="sm" variant="outline" className="w-full text-blue-700 border-blue-300 hover:bg-blue-50" onClick={() => handleDispatch("gst_direct")} disabled={sending}>
-                  {sending ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <FileText className="mr-1.5 h-3.5 w-3.5" />}
+                <Button size="sm" variant="outline" className="w-full text-blue-700 border-blue-300 hover:bg-blue-50" onClick={() => setGstConfirmOpen(true)} disabled={sending}>
+                  <FileText className="mr-1.5 h-3.5 w-3.5" />
                   Switch to GST Direct → Tally Inbox
                 </Button>
               )}
@@ -270,6 +271,39 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
           )}
         </CardContent>
       </Card>
+
+      <Dialog open={gstConfirmOpen} onOpenChange={setGstConfirmOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Send GST Invoice Direct?</DialogTitle>
+            <DialogDescription>
+              This skips the Proforma Invoice and routes the pro-rata directly to the
+              Tally inbox. The accounts team will issue a GST tax invoice which is then
+              sent to the client with a payment link.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="rounded-md border border-amber-200 bg-amber-50 px-3 py-2 text-xs text-amber-800 space-y-1">
+            <p className="font-semibold">Only use this when the client specifically requests a GST invoice upfront.</p>
+            <p>For most renewals, use <strong>Send PI</strong> instead — it is faster and does not require accounts team involvement.</p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setGstConfirmOpen(false)}>
+              Cancel — use Send PI instead
+            </Button>
+            <Button
+              className="bg-blue-600 hover:bg-blue-700 text-white"
+              disabled={sending}
+              onClick={async () => {
+                setGstConfirmOpen(false);
+                await handleDispatch("gst_direct");
+              }}
+            >
+              {sending && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Yes, route to Tally Inbox
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={waiveOpen} onOpenChange={setWaiveOpen}>
         <DialogContent>
