@@ -23,6 +23,7 @@ interface StatementState {
   proforma_sent_at: string | null;
   handoff_state: string | null;
   gst_invoice_number: string | null;
+  issuance_channel: string | null;
 }
 
 interface Props {
@@ -83,6 +84,7 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
     if (stmtState.payment_status === "paid") {
       displayState = "paid";
     } else if (
+      stmtState.issuance_channel === "tally" ||
       stmtState.handoff_state === "direct_gst_requested" ||
       stmtState.handoff_state === "name_check_pending" ||
       stmtState.handoff_state === "ready_to_send" ||
