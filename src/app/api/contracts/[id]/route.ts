@@ -194,6 +194,17 @@ export async function PATCH(
           }, { status: 400 });
         }
       }
+      // For mid-month renewals: pro-rata must be paid before activation
+      if (
+        oldContract.is_renewal &&
+        oldContract.prorata_payment_status === "pending" &&
+        !body.payment_override_reason
+      ) {
+        return NextResponse.json({
+          error: "Cannot activate: pro-rata payment for the partial first month has not been collected. Send the PI from the Pro-Rata section and collect payment first.",
+        }, { status: 400 });
+      }
+
       allowedFields.activated_at = now;
       allowedFields.activated_by = actorId;
     } else if (body.status === "terminated") {

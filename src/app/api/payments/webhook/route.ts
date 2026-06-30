@@ -331,6 +331,21 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      // If this statement is a renewal pro-rata, mark the contract as paid
+      if (newStatus === "paid") {
+        const { data: prorataContract } = await supabase
+          .from("contracts")
+          .select("id")
+          .eq("prorata_billing_statement_id", billingStatement.id)
+          .maybeSingle();
+        if (prorataContract) {
+          await supabase
+            .from("contracts")
+            .update({ prorata_payment_status: "paid" })
+            .eq("id", prorataContract.id);
+        }
+      }
+
       logWebhookReceipt(supabase, { event, razorpay_payment_id: razorpayPaymentId, razorpay_payment_link_id: paymentLinkId, entity: "billing_statement", outcome: "processed", outcome_detail: newStatus });
       return NextResponse.json({ status: "ok", entity: "billing_statement" });
     }

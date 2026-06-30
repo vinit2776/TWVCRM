@@ -549,6 +549,9 @@ export interface Contract {
   renewal_declined_reason?: string | null;
   renewal_declined_at?: string | null;
   renewal_declined_by?: string | null;
+  // Pro-rata collection for mid-month renewals
+  prorata_billing_statement_id?: string | null;
+  prorata_payment_status?: "not_applicable" | "pending" | "paid" | "waived";
   created_by?: string;
   created_at: string;
   updated_at: string;

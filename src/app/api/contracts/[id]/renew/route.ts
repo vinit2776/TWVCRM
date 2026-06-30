@@ -195,6 +195,9 @@ export async function POST(
       deposit_carried_from: id,
       deposit_shortfall: depositShortfall,
       created_by: dbUser.id,
+      // Pro-rata gate: mid-month starts require collecting the partial first month
+      // before activation. 1st-of-month starts are not applicable.
+      prorata_payment_status: startDate.getUTCDate() !== 1 ? "pending" : "not_applicable",
     })
     .select("id, contract_number")
     .single();

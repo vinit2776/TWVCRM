@@ -77,6 +77,7 @@ import { toast } from "sonner";
 import { prepareUpload, UploadTooLargeError } from "@/lib/uploads/upload-gate";
 import { SeatOccupantsPanel } from "@/components/spaces/seat-occupants-panel";
 import { ContractChainStrip } from "@/components/contracts/contract-chain-strip";
+import { ContractProrataSection } from "@/components/contracts/contract-prorata-section";
 import type { Contract, ContractSpaceAllocation } from "@/types";
 
 export default function ContractDetailPage({
@@ -515,7 +516,8 @@ export default function ContractDetailPage({
             const depositRequired = linkedProposal ? Number(linkedProposal.security_deposit_months || 0) > 0 : false;
             const depositPaid = !linkedProposal || !depositRequired || linkedProposal.deposit_payment_status === "paid";
             const kycComplete = kycStatus.total === 0 || kycStatus.allSatisfied;
-            const canActivate = proposalPaid && depositPaid && kycComplete;
+            const prorataRequired = !!(contract.is_renewal && contract.prorata_payment_status === "pending");
+            const canActivate = proposalPaid && depositPaid && kycComplete && !prorataRequired;
             const hasDeferred = kycStatus.deferred > 0;
 
             return canActivate ? (
@@ -539,6 +541,7 @@ export default function ContractDetailPage({
                     <p className="font-semibold mb-1">Cannot activate until:</p>
                     {!proposalPaid && <p>• Proposal payment collected</p>}
                     {!depositPaid && <p>• Security deposit collected</p>}
+                    {prorataRequired && <p>• Pro-rata payment (partial first month) — send PI from the Pro-Rata section below</p>}
                     {!kycComplete && (
                       <p>• KYC documents — {kycStatus.approved} approved, {kycStatus.deferred} deferred, {kycStatus.total - kycStatus.approved - kycStatus.deferred} still missing ({kycStatus.approved + kycStatus.deferred}/{kycStatus.total} satisfied)</p>
                     )}
@@ -619,6 +622,15 @@ export default function ContractDetailPage({
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Main Content */}
         <div className="lg:col-span-2 space-y-6">
+          {/* Pro-Rata Collection Card — renewal contracts starting mid-month */}
+          {contract.is_renewal && contract.prorata_payment_status !== "not_applicable" && (
+            <ContractProrataSection
+              contract={contract}
+              userRole={userRole}
+              onSuccess={() => fetchContract(false)}
+            />
+          )}
+
           {/* Renewal Chain Banner — visible on renewal contracts */}
           {contract.is_renewal && contract.parent_contract_id && (
             <div className="flex items-center gap-3 rounded-lg border border-blue-200 bg-blue-50 px-4 py-3">
