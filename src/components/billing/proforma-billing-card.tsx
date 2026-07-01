@@ -7,6 +7,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/u
 import { Receipt, Eye, Send, ChevronRight } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
+import { DispatchRunPanel } from "@/components/billing/dispatch-run-panel";
 
 type Mode = "rent" | "usage";
 
@@ -80,6 +81,8 @@ export function ProformaBillingCard({
   const [running, setRunning]           = useState(false);
   const [confirmOpen, setConfirmOpen]   = useState(false);
   const [doneThisCycle, setDoneThisCycle] = useState<boolean | null>(null);
+  // Background dispatch run state (rent mode only)
+  const [activeRunId, setActiveRunId]   = useState<string | null>(null);
 
   const handlePreview = async () => {
     setPreviewing(true);
@@ -112,37 +115,53 @@ export function ProformaBillingCard({
   const handleRun = async () => {
     setRunning(true);
     try {
-      const res = await fetch("/api/billing/auto-generate", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode, ...(month ? { month } : {}), ...(year ? { year } : {}) }),
-      });
-      const json = await res.json();
-      if (!res.ok) { toast.error(json.error || "Run failed"); return; }
-      const generated = isRent ? (json.rent_proformas?.generated ?? 0) : (json.usage_statements?.generated ?? 0);
-      const noContact = isRent ? (json.rent_proformas?.no_contact ?? []) : [];
-      const errors: string[] = json.errors ?? [];
-      const message = isRent
-        ? `${generated} rent proforma${generated !== 1 ? "s" : ""} sent to clients`
-        : `${generated} usage draft${generated !== 1 ? "s" : ""} created for review`;
-      toast.success(message);
-      if (noContact.length > 0) {
-        toast.warning(`${noContact.length} contract${noContact.length > 1 ? "s" : ""} have no email/phone — proforma not sent: ${noContact.join(", ")}`);
+      if (isRent) {
+        // Rent mode: background dispatch — returns immediately with run_id
+        const res = await fetch("/api/billing/dispatch-run", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode: "rent", ...(month ? { month } : {}), ...(year ? { year } : {}) }),
+        });
+        const json = await res.json();
+        if (!res.ok) {
+          if (res.status === 409 && json.run_id) {
+            // Already running — surface the existing panel
+            toast.info("A dispatch run is already in progress for this month.");
+            setActiveRunId(json.run_id as string);
+            setConfirmOpen(false);
+            return;
+          }
+          toast.error(json.error || "Failed to start dispatch run");
+          return;
+        }
+        setActiveRunId(json.run_id as string);
+        setConfirmOpen(false);
+        setPreviewItems(null);
+        setAlreadySent([]);
+        setPreviewed(false);
+        toast.success(`Dispatch run started — ${json.total_jobs} contract${json.total_jobs !== 1 ? "s" : ""} queued. Processing in the background.`);
+      } else {
+        // Usage mode: synchronous (creates drafts only, no client dispatch)
+        const res = await fetch("/api/billing/auto-generate", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ mode, ...(month ? { month } : {}), ...(year ? { year } : {}) }),
+        });
+        const json = await res.json();
+        if (!res.ok) { toast.error(json.error || "Run failed"); return; }
+        const generated = json.usage_statements?.generated ?? 0;
+        const errors: string[] = json.errors ?? [];
+        toast.success(`${generated} usage draft${generated !== 1 ? "s" : ""} created for review`);
+        if (errors.length > 0) {
+          toast.error(`${errors.length} contract${errors.length !== 1 ? "s" : ""} failed`);
+        }
+        setConfirmOpen(false);
+        setPreviewItems(null);
+        setAlreadySent([]);
+        setPreviewed(false);
+        setDoneThisCycle(true);
+        if (onSuccess) await onSuccess();
       }
-      // Itemize failures cleanly. One summary toast + a single info toast
-      // listing all failed contract numbers so the operator can target
-      // recovery via the per-row Resend Proforma button instead of guessing.
-      if (errors.length > 0) {
-        toast.error(`${errors.length} contract${errors.length !== 1 ? "s" : ""} failed — use Resend Proforma on the affected rows`);
-        const summary = errors.slice(0, 10).join("\n") + (errors.length > 10 ? `\n…and ${errors.length - 10} more` : "");
-        toast(summary, { duration: 15000 });
-      }
-      setConfirmOpen(false);
-      setPreviewItems(null);
-      setAlreadySent([]);
-      setPreviewed(false);
-      setDoneThisCycle(true);
-      if (onSuccess) await onSuccess();
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Run failed");
     } finally {
@@ -361,7 +380,7 @@ export function ProformaBillingCard({
             )}
             <p className="text-muted-foreground">
               {isRent
-                ? "Rent proformas are dispatched immediately on confirm."
+                ? "Rent proformas are dispatched in the background — the page stays free. Track progress in the panel below."
                 : "Usage drafts can be reviewed individually in the Pending Review queue before sending."}
             </p>
           </div>
@@ -377,6 +396,23 @@ export function ProformaBillingCard({
           </div>
         </DialogContent>
       </Dialog>
+
+      {/* Background dispatch panel — shown after Run & Send starts (rent mode only) */}
+      {activeRunId && (
+        <div className="mt-4 rounded-lg border bg-card p-4">
+          <div className="flex items-center gap-2 mb-3">
+            <Receipt className="h-4 w-4 text-muted-foreground" />
+            <h3 className="text-sm font-semibold">Dispatch Progress</h3>
+          </div>
+          <DispatchRunPanel
+            runId={activeRunId}
+            onClose={() => {
+              setActiveRunId(null);
+              if (onSuccess) void onSuccess();
+            }}
+          />
+        </div>
+      )}
     </div>
   );
 }
