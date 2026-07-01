@@ -64,6 +64,8 @@ interface ReceivableRow {
   balance_due: number;
   payment_status: "unpaid" | "partially_paid";
   proforma_sent_at: string | null;
+  proforma_viewed_at?: string | null;
+  gst_invoice_viewed_at?: string | null;
   razorpay_payment_link_url: string | null;
   last_reminder_sent_at: string | null;
   reminder_count: number;
@@ -587,6 +589,8 @@ export default function AccountsReceivablePage() {
                             status={r.status}
                             payment_status={r.payment_status}
                             proforma_sent_at={r.proforma_sent_at}
+                            proforma_viewed_at={r.proforma_viewed_at}
+                            gst_invoice_viewed_at={r.gst_invoice_viewed_at}
                             gst_invoice_number={r.gst_invoice_number}
                             pi_cancelled_at={r.pi_cancelled_at}
                             accounted={r.accounted}

@@ -285,6 +285,9 @@ export async function dispatchProforma(
     .upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
 
   // ── Send email ────────────────────────────────────────────────────────────
+  const appBaseUrl = (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "https://twv-crm.vercel.app").trim();
+  const proformaTrackingUrl = `${appBaseUrl}/api/billing-statements/${statement.id}/track?type=proforma`;
+
   const periodLabel = new Date((statement.period_start as string) + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" });
   const dueDateStr = statement.due_date
     ? new Date((statement.due_date as string) + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" })
@@ -319,8 +322,11 @@ export async function dispatchProforma(
           <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:600;color:#015E65;font-size:16px;">Rs. ${Math.round(totalAmount).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</td></tr>
         </table>
         ${paymentOptionsHtml}
+        <div style="text-align:center;margin:24px 0 12px;">
+          <a href="${proformaTrackingUrl}" style="background:#f0faf5;color:#015E65;padding:10px 24px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:13px;border:1px solid #015E65;">View Invoice Online</a>
+        </div>
         ${razorpayLinkUrl ? `
-        <div style="text-align:center;margin:24px 0;">
+        <div style="text-align:center;margin:12px 0;">
           <a href="${razorpayLinkUrl}" style="background:#015E65;color:white;padding:12px 32px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:14px;">Pay Now</a>
           <p style="color:#888;font-size:11px;margin:8px 0 0;">This payment link is valid for 15 days. If expired, please contact us to regenerate a new link.</p>
         </div>` : ""}

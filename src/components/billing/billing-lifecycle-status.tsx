@@ -2,7 +2,7 @@
 
 import {
   FileText, CheckCircle2, Send, CreditCard, Receipt, BookCheck,
-  XCircle, Clock, AlertCircle, AlertTriangle,
+  XCircle, Clock, AlertCircle, AlertTriangle, Eye,
 } from "lucide-react";
 
 /**
@@ -30,6 +30,10 @@ interface LifecycleProps {
   proforma_sent_at?: string | null;
   /** Set when the PI was cancelled early and a GST invoice was issued before payment */
   pi_cancelled_at?: string | null;
+  /** Set when the client clicks "View Invoice" in the proforma email */
+  proforma_viewed_at?: string | null;
+  /** Set when the client clicks "View Invoice" in the GST invoice email */
+  gst_invoice_viewed_at?: string | null;
   /** compact = badge only; full = badge + next-action hint below */
   variant?: "compact" | "full";
 }
@@ -39,11 +43,13 @@ type Stage =
   | "draft"
   | "finalized"
   | "proforma_sent"
+  | "proforma_viewed"
   | "partially_paid"
   | "paid"
   | "gst_sent_unpaid"
   | "gst_override_unpaid"
   | "gst_direct_unpaid"
+  | "gst_invoice_viewed"
   | "invoiced"
   | "complete";
 
@@ -86,6 +92,13 @@ const STAGE_CONFIG: Record<Stage, StageConfig> = {
     iconColor: "text-blue-500",
     Icon: Send,
   },
+  proforma_viewed: {
+    label: "Proforma Viewed",
+    next: "Awaiting payment",
+    pill: "bg-sky-50 text-sky-700 border border-sky-200",
+    iconColor: "text-sky-500",
+    Icon: Eye,
+  },
   partially_paid: {
     label: "Partially Paid",
     next: "Balance payment pending",
@@ -121,6 +134,13 @@ const STAGE_CONFIG: Record<Stage, StageConfig> = {
     iconColor: "text-teal-500",
     Icon: Send,
   },
+  gst_invoice_viewed: {
+    label: "Tax Invoice Viewed",
+    next: "Awaiting payment",
+    pill: "bg-sky-50 text-sky-700 border border-sky-200",
+    iconColor: "text-sky-500",
+    Icon: Eye,
+  },
   invoiced: {
     label: "GST Invoice Sent",
     next: "Mark as accounted",
@@ -145,6 +165,8 @@ function resolveStage(props: LifecycleProps): Stage {
     gst_invoice_number,
     proforma_sent_at,
     pi_cancelled_at,
+    proforma_viewed_at,
+    gst_invoice_viewed_at,
   } = props;
 
   if (status === "voided") return "voided";
@@ -164,11 +186,13 @@ function resolveStage(props: LifecycleProps): Stage {
   // GST issued early (manual override) — PI was cancelled
   if (hasGstInvoice && isGstOverride) return "gst_override_unpaid";
   // GST issued directly (billing_mode = gst_direct) — no PI was ever sent
-  if (hasGstInvoice && !hasProforma && !isGstOverride) return "gst_direct_unpaid";
+  if (hasGstInvoice && !hasProforma && !isGstOverride) {
+    return gst_invoice_viewed_at ? "gst_invoice_viewed" : "gst_direct_unpaid";
+  }
   if (hasGstInvoice) return "gst_sent_unpaid"; // edge case: post-payment but unpaid
   if (isPaid) return "paid";
   if (isPartiallyPaid) return "partially_paid";
-  if (hasProforma) return "proforma_sent";
+  if (hasProforma) return proforma_viewed_at ? "proforma_viewed" : "proforma_sent";
   return "finalized";
 }
 

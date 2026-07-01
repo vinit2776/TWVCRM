@@ -102,6 +102,8 @@ interface ContractSummary {
     booking_usage_amount?: number | null;
     finalized_at?: string | null;
     proforma_sent_at?: string | null;
+    proforma_viewed_at?: string | null;
+    gst_invoice_viewed_at?: string | null;
     gst_invoice_number?: string | null;
     payment_status?: string | null;
     accounted?: boolean | null;
@@ -308,6 +310,8 @@ export function ContractAccountingRow({
                   finalized_at={statement.finalized_at}
                   gst_invoice_number={statement.gst_invoice_number}
                   proforma_sent_at={statement.proforma_sent_at}
+                  proforma_viewed_at={statement.proforma_viewed_at}
+                  gst_invoice_viewed_at={statement.gst_invoice_viewed_at}
                   variant="compact"
                 />
                 <TallyStatusBadge
@@ -670,6 +674,8 @@ export function ContractAccountingRow({
                     finalized_at={statement.finalized_at}
                     gst_invoice_number={statement.gst_invoice_number}
                     proforma_sent_at={statement.proforma_sent_at}
+                    proforma_viewed_at={statement.proforma_viewed_at}
+                    gst_invoice_viewed_at={statement.gst_invoice_viewed_at}
                   />
                   <TallyStatusBadge
                     variant="compact"
