@@ -107,6 +107,7 @@ export async function GET(req: NextRequest) {
       .range((page - 1) * CLOSED_PAGE_SIZE, page * CLOSED_PAGE_SIZE);
   } else {
     query = query.in("handoff_state", INBOX_OPEN_STATES as readonly string[])
+      .is("voided_at", null)
       .order("updated_at", { ascending: true });
   }
 
