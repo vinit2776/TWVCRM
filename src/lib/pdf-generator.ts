@@ -1223,8 +1223,11 @@ export function generateMembershipAgreementPDF(
   doc.setFillColor(...BRAND_GREEN);
   doc.rect(0, 25, pageWidth, 1.5, "F");
 
-  // Logo in header
-  doc.addImage(TWV_LOGO_BASE64, "PNG", marginLeft, 5, 50, 12.5);
+  // Brand name in white so it prints clearly on the teal header
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.setTextColor(255, 255, 255);
+  doc.text(BRAND_NAME, marginLeft, 14);
 
   // Company details in header (right side)
   doc.setFontSize(7);
@@ -1347,7 +1350,22 @@ export function generateMembershipAgreementPDF(
       "\u2022 Additional printouts - A4 - Color Rs.20 per sheet / B&W Rs. 5 per sheet. A3 - Color Rs.25 per sheet.\n" +
       "\u2022 Coffee/Tea twice a day compliment, additional cups @ Rs.20/-\n" +
       "\u2022 Additional Car & Bike parking slots - subject to availability."],
-    ["8", "Monthly Membership Fees (MMF)", `${formatCurrencyPDF(monthlyFee)} + GST per month\n(${amountInWords(monthlyFee)})`],
+    ["8", "Monthly Membership Fees (MMF)", (() => {
+      const phases = (contract.rate_phases ?? []).slice().sort((a, b) => a.phase_order - b.phase_order);
+      if (phases.length === 0) {
+        return `${formatCurrencyPDF(monthlyFee)} + GST per month\n(${amountInWords(monthlyFee)})`;
+      }
+      let cursor = 1;
+      const lines = phases.map((p) => {
+        const start = cursor;
+        const end = cursor + p.duration_months - 1;
+        cursor = end + 1;
+        return `Month ${start}–${end}: ${formatCurrencyPDF(p.monthly_rate)} + GST per month`;
+      });
+      const lastRate = phases[phases.length - 1].monthly_rate;
+      lines.push(`Month ${cursor} onwards: ${formatCurrencyPDF(lastRate)} + GST per month (flat, subject to escalation on renewal)`);
+      return lines.join("\n");
+    })()],
     ["9", "Commencement Date", formatDatePDF(contract.start_date)],
     ["10", "Term", `${contract.tenure_months} months from the Commencement Date`],
     ["11", "Commitment Term",

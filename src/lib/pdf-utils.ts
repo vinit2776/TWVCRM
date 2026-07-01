@@ -58,10 +58,13 @@ export function addBrandHeader(doc: jsPDF): number {
   doc.setFillColor(...BRAND_GREEN);
   doc.rect(0, 25, pageWidth, 1.5, "F");
 
-  doc.addImage(TWV_LOGO_BASE64, "PNG", marginLeft, 5, 50, 12.5);
-
-  doc.setFontSize(7);
+  // Render brand name in white so it prints clearly on the teal header
+  doc.setFont("helvetica", "bold");
+  doc.setFontSize(16);
+  doc.setTextColor(255, 255, 255);
+  doc.text(BRAND_NAME, marginLeft, 14);
   doc.setFont("helvetica", "normal");
+  doc.setFontSize(7);
   doc.setTextColor(255, 255, 255);
   doc.text(COMPANY_NAME, pageWidth - marginRight, 10, { align: "right" });
   doc.text(COMPANY_ADDRESS.join(" "), pageWidth - marginRight, 14, { align: "right" });
