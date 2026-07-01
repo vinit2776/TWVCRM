@@ -29,6 +29,10 @@ interface ProformaBillingCardProps {
   mode: Mode;
   /** Human label shown in card title — e.g. "June 2026" for rent, "May 2026" for usage */
   periodLabel: string;
+  /** Operations month (1–12) passed to the API so preview/run use the selected month, not server-now */
+  month?: number;
+  /** Operations year passed to the API */
+  year?: number;
   /** Operational deadline label — e.g. "Sat, 30 May" for rent. Pass undefined for usage. */
   deadlineLabel?: string;
   /** When true, show the amber reminder banner at the top of the card */
@@ -58,6 +62,8 @@ interface ProformaBillingCardProps {
 export function ProformaBillingCard({
   mode,
   periodLabel,
+  month,
+  year,
   deadlineLabel,
   showReminder = false,
   reminderText,
@@ -81,7 +87,7 @@ export function ProformaBillingCard({
       const res = await fetch("/api/billing/auto-generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ dry_run: true, mode }),
+        body: JSON.stringify({ dry_run: true, mode, ...(month ? { month } : {}), ...(year ? { year } : {}) }),
       });
       const json = await res.json();
       if (!res.ok) { toast.error(json.error || "Preview failed"); return; }
@@ -109,7 +115,7 @@ export function ProformaBillingCard({
       const res = await fetch("/api/billing/auto-generate", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ mode }),
+        body: JSON.stringify({ mode, ...(month ? { month } : {}), ...(year ? { year } : {}) }),
       });
       const json = await res.json();
       if (!res.ok) { toast.error(json.error || "Run failed"); return; }

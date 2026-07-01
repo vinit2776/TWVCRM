@@ -280,6 +280,8 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
           <ProformaBillingCard
             mode="rent"
             periodLabel={rentLabel}
+            month={month}
+            year={year}
             onSuccess={async () => { await loadRent(); if (onFinalized) await onFinalized(); }}
           />
           {q && !rentLoading && (
