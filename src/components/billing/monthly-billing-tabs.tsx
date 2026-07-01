@@ -31,7 +31,7 @@ import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { Loader2, Send, FileDown, ChevronDown, ChevronRight, Search, X, Copy, ExternalLink } from "lucide-react";
+import { Loader2, Send, FileDown, ChevronDown, ChevronRight, Search, X, Copy, ExternalLink, RotateCcw } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
@@ -289,7 +289,7 @@ export function MonthlyBillingTabs({ year, month, userRole, onFinalized, onViewS
               {filteredRentStmts.length} of {rentStmts.length} statements match &ldquo;{searchQuery}&rdquo;
             </p>
           )}
-          <RentTable rows={filteredRentStmts} loading={rentLoading} opsLabel={opsLabel} onViewStatement={onViewStatement} />
+          <RentTable rows={filteredRentStmts} loading={rentLoading} opsLabel={opsLabel} onViewStatement={onViewStatement} onRefresh={loadRent} />
         </div>
       )}
 
@@ -349,7 +349,29 @@ function Pill({ label, counts, active, onClick }: { label: string; counts: { sen
   );
 }
 
-function RentTable({ rows, loading, opsLabel, onViewStatement }: { rows: RentStmt[]; loading: boolean; opsLabel: string; onViewStatement?: (id: string) => void }) {
+function RentTable({ rows, loading, opsLabel, onViewStatement, onRefresh }: { rows: RentStmt[]; loading: boolean; opsLabel: string; onViewStatement?: (id: string) => void; onRefresh?: () => void }) {
+  const [sendingId, setSendingId] = useState<string | null>(null);
+
+  const retrySend = useCallback(async (stmtId: string) => {
+    setSendingId(stmtId);
+    try {
+      const res = await fetch(`/api/billing-statements/${stmtId}/send-proforma`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({}) });
+      const json = await res.json();
+      if (!res.ok) {
+        toast.error(json.error || "Send failed");
+      } else if (json.noContact) {
+        toast.warning("No email or phone on file for this client — proforma could not be delivered. Add contact details to the lead first.");
+      } else {
+        toast.success("Proforma sent successfully");
+        onRefresh?.();
+      }
+    } catch {
+      toast.error("Network error — please try again");
+    } finally {
+      setSendingId(null);
+    }
+  }, [onRefresh]);
+
   const sorted = useMemo(() => {
     return [...rows].sort((a, b) => (a.contract?.contract_number || "").localeCompare(b.contract?.contract_number || ""));
   }, [rows]);
@@ -423,6 +445,22 @@ function RentTable({ rows, loading, opsLabel, onViewStatement }: { rows: RentStm
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap text-right">
                       <div className="flex items-center justify-end gap-1.5">
+                        {/* Retry send — only for finalized statements that were never dispatched */}
+                        {!isSent && s.status === "finalized" && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            disabled={sendingId === s.id}
+                            onClick={() => retrySend(s.id)}
+                            className="h-7 text-xs border-amber-400 text-amber-700 hover:bg-amber-50"
+                            title="Proforma was finalized but never sent — click to dispatch now"
+                          >
+                            {sendingId === s.id
+                              ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              : <RotateCcw className="h-3 w-3 mr-1" />}
+                            Send PI
+                          </Button>
+                        )}
                         {(s.reminder_count ?? 0) > 0 && (
                           <span className="text-[10px] text-amber-700 bg-amber-50 border border-amber-200 rounded-full px-1.5 py-0.5">
                             +{s.reminder_count} reminder{s.reminder_count! > 1 ? "s" : ""}
