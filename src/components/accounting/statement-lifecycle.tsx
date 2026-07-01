@@ -123,8 +123,13 @@ function badgeClass(row: InboxRow | null | undefined): string {
   }
 }
 
-function badgeLabel(row: InboxRow | null | undefined): string {
-  if (!row) return "Draft";
+function badgeLabel(row: InboxRow | null | undefined, fallbackStatus?: string): string {
+  if (!row) {
+    if (fallbackStatus === "finalized") return "Finalized";
+    if (fallbackStatus === "exported") return "Exported";
+    if (fallbackStatus === "voided") return "Voided";
+    return "Draft";
+  }
   if (row.is_voided) return "Voided";
   if (row.has_discrepancy) return "Discrepancy";
   if (!row.handoff_state) return "Draft";
@@ -137,6 +142,8 @@ export interface StatementLifecycleBadgeProps {
   row?: InboxRow | null;
   /** Smaller padding for use inside table rows / list rows. */
   compact?: boolean;
+  /** Fallback label source when no Tally inbox row exists (e.g. PI First statements). */
+  fallbackStatus?: string;
   className?: string;
 }
 
@@ -144,6 +151,7 @@ export function StatementLifecycleBadge({
   statementId,
   row: presetRow,
   compact = false,
+  fallbackStatus,
   className = "",
 }: StatementLifecycleBadgeProps) {
   const { row, loading } = useLifecycle(statementId, presetRow);
@@ -162,9 +170,9 @@ export function StatementLifecycleBadge({
   return (
     <span
       className={`inline-block ${compact ? "text-[11px] px-1.5 py-0.5" : "text-xs px-2 py-0.5"} rounded-full border ${badgeClass(row)} ${className}`}
-      title={row?.void_reason ?? row?.discrepancy_reason ?? badgeLabel(row)}
+      title={row?.void_reason ?? row?.discrepancy_reason ?? badgeLabel(row, fallbackStatus)}
     >
-      {badgeLabel(row)}
+      {badgeLabel(row, fallbackStatus)}
     </span>
   );
 }
