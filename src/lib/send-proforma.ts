@@ -76,7 +76,7 @@ export async function dispatchProforma(
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, title, total_amount, subtotal, tax_percentage,
         start_date, end_date, next_billing_date, billing_cycle, location_id, items,
-        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile)
+        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, billing_emails)
       ),
       usage_charges:usage_charges(id, description, quantity, unit_price, total)
     `)
@@ -347,12 +347,14 @@ export async function dispatchProforma(
 
   if (customerEmail) {
     try {
+      const billingEmails = (lead?.billing_emails as string[] | null) ?? [];
+      const toList = Array.from(new Set([customerEmail, ...billingEmails].filter(Boolean)));
       const ccList = additionalCc.filter(Boolean);
       await withTimeout(
         resend.emails.send({
           from: EMAIL_FROM,
           replyTo: EMAIL_REPLY_TO,
-          to: [customerEmail],
+          to: toList,
           cc: ccList.length > 0 ? ccList : undefined,
           bcc: BILLING_BCC,
           subject: `Proforma Invoice ${proformaRef} — ${contract.contract_number} — The WorkVilla`,
@@ -442,7 +444,7 @@ export async function dispatchGstDirect(
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, title, total_amount, subtotal, tax_percentage,
         start_date, end_date, billing_cycle, location_id, items,
-        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile)
+        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, billing_emails)
       ),
       usage_charges:usage_charges(id, description, quantity, unit_price, total)
     `)
@@ -696,12 +698,14 @@ export async function dispatchGstDirect(
   let emailedSuccessfully = false;
   if (customerEmail) {
     try {
+      const billingEmails2 = (lead?.billing_emails as string[] | null) ?? [];
+      const toList2 = Array.from(new Set([customerEmail, ...billingEmails2].filter(Boolean)));
       const ccList = additionalCc.filter(Boolean);
       await withTimeout(
         resend.emails.send({
           from: EMAIL_FROM,
           replyTo: EMAIL_REPLY_TO,
-          to: [customerEmail],
+          to: toList2,
           cc: ccList.length > 0 ? ccList : undefined,
           bcc: BILLING_BCC,
           subject: `Tax Invoice ${invoiceNumber} — ${contract.contract_number} — The WorkVilla`,

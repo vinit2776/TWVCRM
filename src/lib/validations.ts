@@ -71,6 +71,7 @@ export const createLeadSchema = z.object({
   tags: z.array(z.string()),
   assigned_to: z.string().uuid().optional(),
   lost_reason: z.string().optional(),
+  billing_emails: z.array(z.string().email("Invalid email in billing list")).optional(),
 });
 
 // source and status accept any string on update so legacy DB values (e.g. sources

@@ -17,6 +17,7 @@ import {
   Plus,
   Printer,
   AlertTriangle,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -71,10 +72,14 @@ export default function LeadDetailPage({
   const searchParams = useSearchParams();
   const initialTab = searchParams.get("tab") ?? "overview";
   const highlightActivityId = searchParams.get("highlight") ?? undefined;
-  const { data: lead, loading } = useLead(id);
+  const { data: lead, loading, refetch: refetchLead } = useLead(id);
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [activityFormOpen, setActivityFormOpen] = useState(false);
+  // Billing emails inline editor
+  const [billingEmailInput, setBillingEmailInput] = useState("");
+  const [billingEmailError, setBillingEmailError] = useState<string | null>(null);
+  const [billingEmailSaving, setBillingEmailSaving] = useState(false);
   const [activityDefaultType, setActivityDefaultType] = useState<"call" | "meeting" | "note" | "tour">("call");
   const [activityRefreshKey, setActivityRefreshKey] = useState(0);
   const [printEntryOpen, setPrintEntryOpen] = useState(false);
@@ -89,6 +94,51 @@ export default function LeadDetailPage({
     setActivityDefaultType(type);
     setActivityFormOpen(true);
   }, []);
+
+  const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  const handleBillingEmailAdd = async () => {
+    const val = billingEmailInput.trim().toLowerCase();
+    if (!val) return;
+    if (!EMAIL_RE.test(val)) { setBillingEmailError("Invalid email address"); return; }
+    const existing = lead?.billing_emails ?? [];
+    if (existing.includes(val) || lead?.email === val) { setBillingEmailError("Already in list"); return; }
+    const updated = [...existing, val];
+    setBillingEmailSaving(true);
+    setBillingEmailError(null);
+    try {
+      const res = await fetch(`/api/leads/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ billing_emails: updated }),
+      });
+      if (!res.ok) throw new Error("Save failed");
+      setBillingEmailInput("");
+      refetchLead();
+    } catch {
+      setBillingEmailError("Failed to save — please retry");
+    } finally {
+      setBillingEmailSaving(false);
+    }
+  };
+
+  const handleBillingEmailRemove = async (email: string) => {
+    const updated = (lead?.billing_emails ?? []).filter((e) => e !== email);
+    setBillingEmailSaving(true);
+    try {
+      const res = await fetch(`/api/leads/${id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ billing_emails: updated }),
+      });
+      if (!res.ok) throw new Error("Remove failed");
+      refetchLead();
+    } catch {
+      toast.error("Failed to remove email — please retry");
+    } finally {
+      setBillingEmailSaving(false);
+    }
+  };
 
   const handleDelete = async () => {
     setDeleting(true);
@@ -267,11 +317,55 @@ export default function LeadDetailPage({
                       label="Email"
                       value={lead.email}
                     />
-                    <InfoRow
-                      icon={Mail}
-                      label="Secondary Email"
-                      value={lead.secondary_email}
-                    />
+                    {/* Billing Emails — spans full width */}
+                    <div className="col-span-2 space-y-2 pt-1">
+                      <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide flex items-center gap-1.5">
+                        <Mail className="h-3.5 w-3.5" /> Billing Emails
+                      </p>
+                      {/* Primary — read-only */}
+                      {lead.email && (
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded">{lead.email}</span>
+                          <span className="text-[10px] text-muted-foreground border px-1.5 py-0.5 rounded">Primary</span>
+                        </div>
+                      )}
+                      {/* Additional billing emails */}
+                      {(lead.billing_emails ?? []).map((email) => (
+                        <div key={email} className="flex items-center gap-2 text-sm">
+                          <span className="font-mono text-xs bg-muted px-2 py-0.5 rounded">{email}</span>
+                          <button
+                            onClick={() => void handleBillingEmailRemove(email)}
+                            disabled={billingEmailSaving}
+                            className="text-muted-foreground hover:text-destructive transition-colors"
+                            title="Remove"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                      {/* Add new */}
+                      <div className="flex items-center gap-2 pt-1">
+                        <input
+                          type="email"
+                          value={billingEmailInput}
+                          onChange={(e) => { setBillingEmailInput(e.target.value); setBillingEmailError(null); }}
+                          onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); void handleBillingEmailAdd(); } }}
+                          placeholder="Add billing email…"
+                          disabled={billingEmailSaving}
+                          className="flex-1 text-xs border rounded px-2 py-1 bg-background focus:outline-none focus:ring-1 focus:ring-ring min-w-0"
+                        />
+                        <button
+                          onClick={() => void handleBillingEmailAdd()}
+                          disabled={billingEmailSaving || !billingEmailInput.trim()}
+                          className="shrink-0 text-xs flex items-center gap-1 border rounded px-2 py-1 hover:bg-muted disabled:opacity-40"
+                        >
+                          <Plus className="h-3 w-3" /> Add
+                        </button>
+                      </div>
+                      {billingEmailError && (
+                        <p className="text-xs text-destructive">{billingEmailError}</p>
+                      )}
+                    </div>
                     <InfoRow
                       icon={Phone}
                       label="Phone"

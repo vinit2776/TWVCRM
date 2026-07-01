@@ -30,7 +30,7 @@ import {
 export const dynamic = "force-dynamic";
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
@@ -62,7 +62,7 @@ export async function POST(
       gst_invoice_number, statement_number,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, billing_mode,
-        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email)
+        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, billing_emails)
       )
     `)
     .eq("id", id)
@@ -90,6 +90,7 @@ export async function POST(
         last_name: string | null;
         company: string | null;
         email: string | null;
+        billing_emails: string[] | null;
       } | null;
     } | null;
   };
@@ -137,6 +138,14 @@ export async function POST(
 
   const pdfBuffer = Buffer.from(await fileBlob.arrayBuffer());
 
+  // ── Resolve recipient list ───────────────────────────────────────────────
+  // Parse optional one-time extra recipients from request body.
+  let extraRecipients: string[] = [];
+  try {
+    const body = await request.json().catch(() => ({})) as { extra_recipients?: string[] };
+    if (Array.isArray(body.extra_recipients)) extraRecipients = body.extra_recipients;
+  } catch { /* body may be empty */ }
+
   // ── Compose + send email ────────────────────────────────────────────────
   const lead = statement.contract?.lead;
   const recipientEmail = lead?.email;
@@ -146,6 +155,13 @@ export async function POST(
       { status: 422 },
     );
   }
+
+  // Combine primary + billing list + one-time extras, deduped
+  const allRecipients = Array.from(new Set([
+    recipientEmail,
+    ...(lead?.billing_emails ?? []),
+    ...extraRecipients,
+  ].filter(Boolean)));
 
   const partyName = lead?.company
     || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ")
@@ -181,7 +197,7 @@ export async function POST(
 
   const result = await resend.emails.send({
     from: EMAIL_FROM,
-    to: recipientEmail,
+    to: allRecipients,
     bcc: [EMAIL_REPLY_TO],
     replyTo: EMAIL_REPLY_TO,
     subject,
@@ -223,7 +239,7 @@ export async function POST(
 
   return NextResponse.json({
     ok: true,
-    emailed_to: recipientEmail,
+    emailed_to: allRecipients.join(","),
     handoff_state: nextState,
     invoice_number: invoiceNumber,
   });

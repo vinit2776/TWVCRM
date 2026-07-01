@@ -202,14 +202,6 @@ export function LeadForm({ lead, onSubmit, onCancel }: LeadFormProps) {
             )}
           </div>
           <div className="space-y-2">
-            <Label htmlFor="secondary_email">Secondary Email</Label>
-            <Input
-              id="secondary_email"
-              type="email"
-              {...register("secondary_email")}
-            />
-          </div>
-          <div className="space-y-2">
             <Label htmlFor="phone">Phone</Label>
             <Input id="phone" {...register("phone")} />
           </div>

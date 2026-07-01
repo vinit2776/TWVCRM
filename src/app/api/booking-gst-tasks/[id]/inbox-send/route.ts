@@ -15,7 +15,7 @@ import { isHandoffV2Enabled } from "@/lib/tally-handoff-server";
 export const dynamic = "force-dynamic";
 
 export async function POST(
-  _request: NextRequest,
+  request: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
@@ -47,7 +47,7 @@ export async function POST(
       booking:bookings!booking_gst_tasks_booking_id_fkey(
         id, booking_number, total_amount_with_gst,
         guest_name, guest_email,
-        lead:leads!bookings_lead_id_fkey(first_name, last_name, company, email)
+        lead:leads!bookings_lead_id_fkey(first_name, last_name, company, email, billing_emails)
       )
     `)
     .eq("id", id)
@@ -66,7 +66,7 @@ export async function POST(
       total_amount_with_gst: number;
       guest_name: string | null;
       guest_email: string | null;
-      lead: { first_name: string | null; last_name: string | null; company: string | null; email: string | null } | null;
+      lead: { first_name: string | null; last_name: string | null; company: string | null; email: string | null; billing_emails: string[] | null } | null;
     } | null;
   };
 
@@ -112,12 +112,25 @@ export async function POST(
 
   const pdfBuffer = Buffer.from(await fileBlob.arrayBuffer());
 
+  // ── Resolve recipient list ───────────────────────────────────────────────
+  let extraRecipients: string[] = [];
+  try {
+    const body = await request.json().catch(() => ({})) as { extra_recipients?: string[] };
+    if (Array.isArray(body.extra_recipients)) extraRecipients = body.extra_recipients;
+  } catch { /* body may be empty */ }
+
   // ── Compose email ────────────────────────────────────────────────────────
   const lead = task.booking?.lead;
   const recipientEmail = lead?.email ?? task.booking?.guest_email ?? null;
   if (!recipientEmail) {
     return NextResponse.json({ error: "Customer has no email on file." }, { status: 422 });
   }
+
+  const allRecipients = Array.from(new Set([
+    recipientEmail,
+    ...(lead?.billing_emails ?? []),
+    ...extraRecipients,
+  ].filter(Boolean)));
 
   const partyName = lead?.company
     || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ")
@@ -130,7 +143,7 @@ export async function POST(
 
   const result = await resend.emails.send({
     from: EMAIL_FROM,
-    to: recipientEmail,
+    to: allRecipients,
     bcc: [EMAIL_REPLY_TO],
     replyTo: EMAIL_REPLY_TO,
     subject: `GST tax invoice ${invoiceNumber} — ${totalDisplay} — The WorkVilla`,
@@ -162,5 +175,5 @@ export async function POST(
     })
     .eq("id", id);
 
-  return NextResponse.json({ ok: true, emailed_to: recipientEmail, handoff_state: "complete" });
+  return NextResponse.json({ ok: true, emailed_to: allRecipients.join(","), handoff_state: "complete" });
 }

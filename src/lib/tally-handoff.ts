@@ -94,6 +94,7 @@ export interface InboxLead {
   email: string | null;
   phone: string | null;
   gst_number: string | null;
+  billing_emails?: string[] | null;
 }
 
 export interface InboxContract {
@@ -279,6 +280,7 @@ export interface BookingInboxRow {
   customer_phone: string | null;
   lead_id: string | null;
   lead_id_proof_path: string | null;
+  lead_billing_emails: string[] | null;
   customer_gstin: string | null;
   irn_required: boolean;
   expected_series: "SDIPL-REG" | "SDIPL-UNREG";
