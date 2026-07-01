@@ -227,6 +227,32 @@ export default function GatewayActivityPage() {
     );
   });
 
+  // Group by settlement date; rows without settled_at go into "pending"
+  const groupedRows: { dateKey: string; label: string; rows: GatewayTransaction[] }[] = (() => {
+    const dateMap = new Map<string, GatewayTransaction[]>();
+    const pending: GatewayTransaction[] = [];
+    for (const r of filtered) {
+      if (r.settled && r.settled_at) {
+        const key = r.settled_at.slice(0, 10);
+        if (!dateMap.has(key)) dateMap.set(key, []);
+        dateMap.get(key)!.push(r);
+      } else {
+        pending.push(r);
+      }
+    }
+    const sorted = Array.from(dateMap.entries())
+      .sort((a, b) => b[0].localeCompare(a[0]))
+      .map(([key, rows]) => ({
+        dateKey: key,
+        label: formatDate(key),
+        rows,
+      }));
+    if (pending.length > 0) {
+      sorted.push({ dateKey: "pending", label: "Pending Settlement", rows: pending });
+    }
+    return sorted;
+  })();
+
   const lastSyncText = lastSync
     ? `Last synced ${formatDate(lastSync.synced_at)}${lastSync.error_message ? " (with errors)" : ""}`
     : "Never synced";
@@ -420,7 +446,25 @@ export default function GatewayActivityPage() {
                 </tr>
               </thead>
               <tbody className="divide-y">
-                {filtered.map((row) => {
+                {groupedRows.map((group) => (
+                  <Fragment key={group.dateKey}>
+                    {/* Settlement date group header */}
+                    <tr className="bg-muted/60 border-y">
+                      <td colSpan={9} className="px-4 py-2">
+                        <div className="flex items-center justify-between">
+                          <span className={`text-xs font-semibold uppercase tracking-wide ${group.dateKey === "pending" ? "text-amber-700" : "text-green-700"}`}>
+                            {group.dateKey === "pending"
+                              ? <span className="flex items-center gap-1"><Clock className="h-3.5 w-3.5" />{group.label}</span>
+                              : <span className="flex items-center gap-1"><ArrowDownToLine className="h-3.5 w-3.5" />Settled {group.label}</span>
+                            }
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            {group.rows.length} txn · {formatCurrency(group.rows.reduce((s, r) => s + r.amount, 0))}
+                          </span>
+                        </div>
+                      </td>
+                    </tr>
+                    {group.rows.map((row) => {
                   const isExpanded = expandedId === row.id;
                   return (
                     <Fragment key={row.id}>
@@ -553,6 +597,8 @@ export default function GatewayActivityPage() {
                     </Fragment>
                   );
                 })}
+                  </Fragment>
+                ))}
               </tbody>
             </table>
           </div>
