@@ -27,6 +27,7 @@ import {
   type BookingHandoffState,
   type BookingInboxRow,
   type HandoffBucket,
+  type InboxPayment,
   type InboxResponse,
   type InboxRow,
 } from "@/lib/tally-handoff";
@@ -782,6 +783,7 @@ function InboxRowItem({
   const [gstinInput, setGstinInput] = useState("");
   const [gstinSaving, setGstinSaving] = useState(false);
   const [gstinError, setGstinError] = useState<string | null>(null);
+  const [paymentOpen, setPaymentOpen] = useState(false);
 
   const handleGstinSave = async () => {
     const val = gstinInput.trim().toUpperCase();
@@ -995,6 +997,19 @@ function InboxRowItem({
 
         {/* ── Actions row ── */}
         <div className="col-span-2 flex items-center gap-1.5 flex-wrap justify-end pt-1">
+          {row.payments_received.length > 0 && (
+            <button
+              type="button"
+              onClick={() => setPaymentOpen((v) => !v)}
+              className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded border transition-colors ${
+                paymentOpen ? "bg-green-50 border-green-300 text-green-800" : "hover:bg-muted"
+              }`}
+            >
+              <IndianRupee className="h-3 w-3" />
+              Payment ({row.payments_received.length})
+              {paymentOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
+            </button>
+          )}
           {!row.pi_was_cancelled && (
             <a
               href={`/api/billing-statements/${row.statement_id}/proforma-pdf`}
@@ -1099,7 +1114,100 @@ function InboxRowItem({
           onCancel={onCancelUpload}
         />
       )}
+      {paymentOpen && row.payments_received.length > 0 && (
+        <StatementPaymentPanel payments={row.payments_received} totalAmount={row.statement_total_amount} />
+      )}
     </li>
+  );
+}
+
+// ── Billing statement payment panel ────────────────────────────────────────
+
+function StatementPaymentPanel({
+  payments,
+  totalAmount,
+}: {
+  payments: InboxPayment[];
+  totalAmount: number;
+}) {
+  const totalPaid = payments.reduce((s, p) => s + p.amount, 0);
+  const isFullyPaid = Math.abs(totalPaid - totalAmount) < 0.5;
+
+  return (
+    <div className="mx-3 mb-2 md:mx-4 p-3 rounded-lg bg-green-50 border border-green-200 text-xs">
+      <div className="flex items-center justify-between mb-2">
+        <span className="font-medium text-green-900 flex items-center gap-1.5">
+          <CheckCircle2 className="h-3.5 w-3.5" />
+          Payment collected
+        </span>
+        <span className={`text-[10px] px-1.5 py-0.5 rounded border font-medium ${
+          isFullyPaid
+            ? "bg-green-100 text-green-800 border-green-300"
+            : "bg-amber-100 text-amber-800 border-amber-200"
+        }`}>
+          {isFullyPaid ? "Fully paid" : `Partial · ${formatCurrency(totalPaid)} of ${formatCurrency(totalAmount)}`}
+        </span>
+      </div>
+      <div className="space-y-2">
+        {payments.map((p) => {
+          const txnDate = new Date(p.payment_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" });
+          const isRazorpay = !!p.razorpay_payment_id;
+          return (
+            <div key={p.id} className="rounded border border-green-200 bg-white/60 px-2.5 py-2 space-y-1.5">
+              <div className="flex items-center justify-between">
+                <span className="font-semibold text-green-900 tabular-nums">{formatCurrency(p.amount)}</span>
+                <span className="text-[10px] px-1.5 py-0.5 rounded bg-green-100 text-green-800 border border-green-200 font-medium">
+                  {paymentModeLabel(p.payment_mode)}
+                </span>
+              </div>
+              {isRazorpay ? (
+                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
+                  <span className="text-muted-foreground">Txn ID</span>
+                  <span className="font-mono text-green-800 break-all">{p.razorpay_payment_id}</span>
+                  <span className="text-muted-foreground">Transacted on</span>
+                  <span>{txnDate}</span>
+                  {p.settled === true ? (
+                    <>
+                      <span className="text-muted-foreground">Settled to bank</span>
+                      <span className="text-green-700 font-medium">
+                        {p.settled_at ? new Date(p.settled_at).toLocaleDateString("en-IN", { day: "2-digit", month: "short", year: "numeric" }) : "—"}
+                      </span>
+                      {p.settlement_utr && (
+                        <>
+                          <span className="text-muted-foreground">Bank UTR</span>
+                          <span className="font-mono text-green-800">{p.settlement_utr}</span>
+                        </>
+                      )}
+                    </>
+                  ) : p.settled === false ? (
+                    <>
+                      <span className="text-muted-foreground">Settlement</span>
+                      <span className="text-amber-700">Pending — not yet settled to bank</span>
+                    </>
+                  ) : (
+                    <>
+                      <span className="text-muted-foreground">Settlement</span>
+                      <span className="text-muted-foreground italic">Not synced yet</span>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-x-4 gap-y-0.5 text-[11px]">
+                  <span className="text-muted-foreground">Date recorded</span>
+                  <span>{txnDate}</span>
+                  {p.payment_reference && (
+                    <>
+                      <span className="text-muted-foreground">Reference</span>
+                      <span className="font-mono text-green-800">{p.payment_reference}</span>
+                    </>
+                  )}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
   );
 }
 

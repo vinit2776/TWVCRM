@@ -275,10 +275,31 @@ export async function GET(req: NextRequest) {
   // Last bridge sync (any voucher).
   const lastSyncedAt = ((lastSyncRes as { data: { last_synced_at: string } | null }).data?.last_synced_at) ?? null;
 
-  // Payments per statement.
+  // Payments per statement — with settlement data joined from razorpay_settlement_cache.
+  const stmtRzpIds = (paymentsRes.data || [])
+    .map((p) => p.razorpay_payment_id as string | null)
+    .filter(Boolean) as string[];
+
+  const stmtSettlementMap = new Map<string, { settled: boolean; settled_at: string | null; settlement_utr: string | null }>();
+  if (stmtRzpIds.length > 0) {
+    const { data: stmtSRows } = await supabase
+      .from("razorpay_settlement_cache")
+      .select("razorpay_payment_id, settled, settled_at, settlement_utr")
+      .in("razorpay_payment_id", stmtRzpIds);
+    for (const s of stmtSRows || []) {
+      stmtSettlementMap.set(s.razorpay_payment_id as string, {
+        settled: s.settled as boolean,
+        settled_at: (s.settled_at as string | null) ?? null,
+        settlement_utr: (s.settlement_utr as string | null) ?? null,
+      });
+    }
+  }
+
   const paymentsByStatement = new Map<string, InboxPayment[]>();
   for (const p of paymentsRes.data || []) {
     const sid = (p as { billing_statement_id: string }).billing_statement_id;
+    const rzpId = (p.razorpay_payment_id as string | null) ?? null;
+    const settlement = rzpId ? (stmtSettlementMap.get(rzpId) ?? null) : null;
     const list = paymentsByStatement.get(sid) ?? [];
     list.push({
       id: p.id as string,
@@ -286,7 +307,10 @@ export async function GET(req: NextRequest) {
       payment_date: p.payment_date as string,
       payment_mode: p.payment_mode as string,
       payment_reference: (p.payment_reference as string | null) ?? null,
-      razorpay_payment_id: (p.razorpay_payment_id as string | null) ?? null,
+      razorpay_payment_id: rzpId,
+      settled: settlement?.settled ?? null,
+      settled_at: settlement?.settled_at ?? null,
+      settlement_utr: settlement?.settlement_utr ?? null,
     });
     paymentsByStatement.set(sid, list);
   }
