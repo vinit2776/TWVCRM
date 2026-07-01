@@ -420,9 +420,19 @@ function RentTable({ rows, loading, opsLabel, onViewStatement, onRefresh }: { ro
                       <BillingModeTag mode={s.contract?.billing_mode} />
                     </td>
                     <td className="px-4 py-3">
-                      <Link href={`/api/billing-statements/${s.id}/${s.contract?.billing_mode === 'gst_direct' ? 'gst-invoice-pdf' : 'proforma-pdf'}`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
-                        {s.statement_number}<FileDown className="h-3 w-3" />
-                      </Link>
+                      {isGstDirect ? (
+                        s.gst_invoice_number ? (
+                          <Link href={`/api/billing-statements/${s.id}/gst-invoice-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
+                            {s.gst_invoice_number}<FileDown className="h-3 w-3" />
+                          </Link>
+                        ) : (
+                          <span className="text-xs text-muted-foreground italic">GST Pending</span>
+                        )
+                      ) : (
+                        <Link href={`/api/billing-statements/${s.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
+                          {s.statement_number}<FileDown className="h-3 w-3" />
+                        </Link>
+                      )}
                     </td>
                     <td className="px-4 py-3 text-xs whitespace-nowrap text-muted-foreground">{formatDate(s.period_start)} → {formatDate(s.period_end)}</td>
                     <td className="px-4 py-3 whitespace-nowrap">

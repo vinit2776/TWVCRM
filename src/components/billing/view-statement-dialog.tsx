@@ -1341,7 +1341,7 @@ export function ViewStatementDialog({
             </div>
           )}
           {/* Early GST override — admin/manager, finalized, unpaid, no GST yet */}
-          {statement?.status === "finalized" && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.payment_status !== "paid" && userRole && ["admin", "manager"].includes(userRole) && (
+          {statement?.status === "finalized" && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.payment_status !== "paid" && statement?.contract?.billing_mode !== "gst_direct" && userRole && ["admin", "manager"].includes(userRole) && (
             <Button
               variant="outline"
               className="border-amber-400 text-amber-700 hover:bg-amber-50"
