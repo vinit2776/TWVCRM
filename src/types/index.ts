@@ -105,6 +105,7 @@ export interface Lead {
   website?: string;
   title?: string;
   secondary_email?: string;
+  billing_emails?: string[];
   status: LeadStatus;
   source: LeadSource;
   industry?: string;

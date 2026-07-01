@@ -33,6 +33,7 @@ import {
 } from "@/lib/tally-handoff";
 import { TallyInboxUploadForm } from "./tally-inbox-upload-form";
 import { BookingGstUploadForm } from "./booking-gst-upload-form";
+import { InboxSendDialog } from "./inbox-send-dialog";
 
 type FilterTab = "all" | "gst_to_issue" | "payment_to_record" | "discrepancy" | "closed";
 
@@ -110,6 +111,9 @@ export function TallyInboxClient() {
   const [sentConfirmedBookingId, setSentConfirmedBookingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [closedPage, setClosedPage] = useState(1);
+  // Pre-send dialog
+  const [sendDialogOpen, setSendDialogOpen] = useState(false);
+  const [pendingSend, setPendingSend] = useState<{ type: "statement"; id: string; recipients: string[] } | { type: "booking"; id: string; recipients: string[] } | null>(null);
   // Record Payment dialog state
   const [payRow, setPayRow] = useState<{ id: string; statement_number: string | null; balance_due: number } | null>(null);
   const [payAmount, setPayAmount] = useState("");
@@ -179,22 +183,45 @@ export function TallyInboxClient() {
     return () => clearTimeout(handle);
   }, [data]);
 
-  const handleSend = useCallback(async (statementId: string) => {
-    setSendingId(statementId);
+  const handleSend = useCallback((statementId: string, row: InboxRow) => {
+    const lead = row.contract?.lead;
+    const recipients = Array.from(new Set([
+      lead?.email,
+      ...(lead?.billing_emails ?? []),
+    ].filter((e): e is string => !!e)));
+    setPendingSend({ type: "statement", id: statementId, recipients });
+    setSendDialogOpen(true);
+  }, []);
+
+  const handleSendConfirm = useCallback(async (extraRecipients: string[]) => {
+    if (!pendingSend) return;
+    const { type, id } = pendingSend;
+    if (type === "statement") setSendingId(id);
+    else setSendingBookingId(id);
     setActionError(null);
+    setSendDialogOpen(false);
     try {
-      const res = await fetch(`/api/billing-statements/${statementId}/inbox-send`, { method: "POST" });
+      const url = type === "statement"
+        ? `/api/billing-statements/${id}/inbox-send`
+        : `/api/booking-gst-tasks/${id}/inbox-send`;
+      const res = await fetch(url, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ extra_recipients: extraRecipients }),
+      });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
+        throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
       }
       await load();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Send failed");
     } finally {
       setSendingId(null);
+      setSendingBookingId(null);
+      setPendingSend(null);
     }
-  }, [load]);
+  }, [pendingSend, load]);
 
   const handleUploaded = useCallback(async () => {
     setExpandedId(null);
@@ -285,22 +312,14 @@ export function TallyInboxClient() {
     }
   }, [load]);
 
-  const handleBookingSend = useCallback(async (taskId: string) => {
-    setSendingBookingId(taskId);
-    setActionError(null);
-    try {
-      const res = await fetch(`/api/booking-gst-tasks/${taskId}/inbox-send`, { method: "POST" });
-      if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
-        throw new Error(body.error || `HTTP ${res.status}`);
-      }
-      await load();
-    } catch (e) {
-      setActionError(e instanceof Error ? e.message : "Send failed");
-    } finally {
-      setSendingBookingId(null);
-    }
-  }, [load]);
+  const handleBookingSend = useCallback((taskId: string, row: BookingInboxRow) => {
+    const recipients = Array.from(new Set([
+      row.customer_email,
+      ...(row.lead_billing_emails ?? []),
+    ].filter((e): e is string => !!e)));
+    setPendingSend({ type: "booking", id: taskId, recipients });
+    setSendDialogOpen(true);
+  }, []);
 
   const handleBookingClose = useCallback(async (taskId: string) => {
     setClosingBookingId(taskId);
@@ -470,7 +489,7 @@ export function TallyInboxClient() {
                 resending={resendingId === row.statement_id}
                 sentConfirmed={sentConfirmedId === row.statement_id}
                 onToggle={() => setExpandedId(expandedId === row.statement_id ? null : row.statement_id)}
-                onSend={() => handleSend(row.statement_id)}
+                onSend={() => handleSend(row.statement_id, row)}
                 onClose={() => handleAccounted(row.statement_id)}
                 onResend={() => handleResend(row.statement_id)}
                 onUploaded={handleUploaded}
@@ -489,7 +508,7 @@ export function TallyInboxClient() {
                 resending={resendingBookingId === row.task_id}
                 sentConfirmed={sentConfirmedBookingId === row.task_id}
                 onToggle={() => setExpandedBookingId(expandedBookingId === row.task_id ? null : row.task_id)}
-                onSend={() => handleBookingSend(row.task_id)}
+                onSend={() => handleBookingSend(row.task_id, row)}
                 onClose={() => handleBookingClose(row.task_id)}
                 onResend={() => handleBookingResend(row.task_id)}
                 onUploaded={handleUploaded}
@@ -584,6 +603,15 @@ export function TallyInboxClient() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Pre-send confirmation dialog */}
+      <InboxSendDialog
+        open={sendDialogOpen}
+        onOpenChange={(v) => { if (!v) setPendingSend(null); setSendDialogOpen(v); }}
+        savedRecipients={pendingSend?.recipients ?? []}
+        sending={!!(sendingId || sendingBookingId)}
+        onConfirm={handleSendConfirm}
+      />
     </div>
   );
 }
