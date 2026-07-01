@@ -420,7 +420,7 @@ function RentTable({ rows, loading, opsLabel, onViewStatement, onRefresh }: { ro
                       <BillingModeTag mode={s.contract?.billing_mode} />
                     </td>
                     <td className="px-4 py-3">
-                      <Link href={`/api/billing-statements/${s.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
+                      <Link href={`/api/billing-statements/${s.id}/${s.contract?.billing_mode === 'gst_direct' ? 'gst-invoice-pdf' : 'proforma-pdf'}`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
                         {s.statement_number}<FileDown className="h-3 w-3" />
                       </Link>
                     </td>
