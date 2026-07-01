@@ -1257,7 +1257,7 @@ export function ViewStatementDialog({
             </Button>
           )}
           {/* Finalized: Send / Resend proforma — only when PI not yet cancelled */}
-          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && userRole && ["admin", "manager", "accounts"].includes(userRole) && !showResendChoice && (
+          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.contract?.billing_mode !== "gst_direct" && userRole && ["admin", "manager", "accounts"].includes(userRole) && !showResendChoice && (
             <Button
               onClick={() => {
                 // First send: go directly. Resend: offer link-renewal choice.
@@ -1275,7 +1275,7 @@ export function ViewStatementDialog({
             </Button>
           )}
           {/* Inline resend-choice panel — appears when Resend Proforma is clicked and a link already exists */}
-          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && showResendChoice && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
+          {(statement?.status === "finalized" || statement?.status === "exported") && !statement?.gst_invoice_number && !statement?.pi_cancelled_at && statement?.contract?.billing_mode !== "gst_direct" && showResendChoice && userRole && ["admin", "manager", "accounts"].includes(userRole) && (
             <div className="flex w-full flex-col gap-2 rounded-md border border-blue-200 bg-blue-50 p-3">
               <p className="text-sm font-medium text-blue-800">
                 A payment link was previously sent. How would you like to resend?
