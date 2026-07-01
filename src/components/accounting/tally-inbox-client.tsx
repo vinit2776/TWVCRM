@@ -1084,7 +1084,7 @@ function InboxRowItem({
               className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-foreground text-background hover:opacity-90 disabled:opacity-50"
             >
               {sending ? <Loader2 className="h-3 w-3 animate-spin" /> : <Send className="h-3 w-3" />}
-              {sending ? "Sending…" : "Save & send"}
+              {sending ? "Sending…" : "Retry send"}
             </button>
           )}
           {canRecordPayment && (

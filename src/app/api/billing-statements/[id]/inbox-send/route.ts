@@ -59,10 +59,10 @@ export async function POST(
     .from("billing_statements")
     .select(`
       id, total_amount, payment_status, handoff_state, tally_delivered_at,
-      gst_invoice_number, statement_number,
+      gst_invoice_number, statement_number, razorpay_payment_link_url,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, billing_mode,
-        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, billing_emails)
+        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, billing_emails, mobile, phone)
       )
     `)
     .eq("id", id)
@@ -80,6 +80,7 @@ export async function POST(
     tally_delivered_at: string | null;
     gst_invoice_number: string | null;
     statement_number: string | null;
+    razorpay_payment_link_url: string | null;
     contract: {
       id: string;
       contract_number: string;
@@ -91,6 +92,8 @@ export async function POST(
         company: string | null;
         email: string | null;
         billing_emails: string[] | null;
+        mobile: string | null;
+        phone: string | null;
       } | null;
     } | null;
   };
@@ -169,6 +172,68 @@ export async function POST(
   const totalDisplay = formatCurrency(Number(statement.total_amount));
   const isReceipt = statement.payment_status === "paid";
   const invoiceNumber = upload.tally_invoice_number as string;
+  const contractNumber = statement.contract?.contract_number ?? "";
+  const totalAmount = Number(statement.total_amount);
+  const customerPhone = lead?.mobile || lead?.phone || "";
+
+  // ── Create Razorpay payment link (only for unpaid direct-GST sends) ──────
+  let rzpLinkId: string | null = null;
+  let rzpLinkUrl: string | null = null;
+  if (!isReceipt && !statement.razorpay_payment_link_url) {
+    const { data: settingsRows } = await adminClient
+      .from("app_settings").select("key, value")
+      .in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret"]);
+    const settings = (settingsRows || []).reduce((m: Record<string, string>, r: { key: string; value: string }) => {
+      m[r.key] = r.value; return m;
+    }, {});
+    const rzpEnabled = settings.razorpay_enabled === "true" && !!settings.razorpay_key_id && !!settings.razorpay_key_secret;
+    if (rzpEnabled) {
+      const rzpAuth = Buffer.from(`${settings.razorpay_key_id}:${settings.razorpay_key_secret}`).toString("base64");
+      try {
+        const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
+        const refId = `${invoiceNumber.replace(/[^a-zA-Z0-9_-]/g, "-")}-gst`;
+        const payload: Record<string, unknown> = {
+          amount: Math.round(totalAmount * 100),
+          currency: "INR",
+          description: `Tax Invoice ${invoiceNumber} — ${contractNumber} — The WorkVilla`,
+          reference_id: refId,
+          expire_by: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
+          notify: { sms: !!customerPhone, email: !!recipientEmail },
+          reminder_enable: true,
+          notes: { statement_id: id, contract_number: contractNumber, gst_invoice: invoiceNumber },
+          callback_url: `${appUrl}/billing`,
+          callback_method: "get",
+        };
+        if (partyName || recipientEmail || customerPhone) {
+          payload.customer = {
+            ...(partyName ? { name: partyName } : {}),
+            ...(recipientEmail ? { email: recipientEmail } : {}),
+            ...(customerPhone ? { contact: customerPhone.replace(/\s/g, "") } : {}),
+          };
+        }
+        const rzpRes = await fetch("https://api.razorpay.com/v1/payment_links", {
+          method: "POST",
+          headers: { Authorization: `Basic ${rzpAuth}`, "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+        if (rzpRes.ok) {
+          const linkData = await rzpRes.json() as { id: string; short_url: string };
+          rzpLinkId = linkData.id;
+          rzpLinkUrl = linkData.short_url;
+          await adminClient.from("billing_statements").update({
+            razorpay_payment_link_id: rzpLinkId,
+            razorpay_payment_link_url: rzpLinkUrl,
+          }).eq("id", id);
+        } else {
+          console.error("[inbox-send] Razorpay link failed:", await rzpRes.text());
+        }
+      } catch (err) {
+        console.error("[inbox-send] Razorpay link threw:", err);
+      }
+    }
+  } else if (statement.razorpay_payment_link_url) {
+    rzpLinkUrl = statement.razorpay_payment_link_url;
+  }
 
   const subject = isReceipt
     ? `GST tax invoice ${invoiceNumber} — receipt`
@@ -179,17 +244,15 @@ export async function POST(
       <p>Dear ${partyName},</p>
       <p>Thank you for your payment. Please find attached the GST tax invoice
          <strong>${invoiceNumber}</strong> for <strong>${totalDisplay}</strong>,
-         as recorded against contract ${statement.contract?.contract_number ?? ""}.</p>
+         as recorded against contract ${contractNumber}.</p>
       <p>This invoice is for your records. No further action is required.</p>
       <p>Regards,<br/>The WorkVilla — Accounts</p>
     `
     : `
       <p>Dear ${partyName},</p>
       <p>Please find attached the GST tax invoice <strong>${invoiceNumber}</strong>
-         for <strong>${totalDisplay}</strong>, against contract
-         ${statement.contract?.contract_number ?? ""}.</p>
-      <p>Kindly arrange payment at the earliest. If a payment link is needed,
-         please reply to this email and we will share one promptly.</p>
+         for <strong>${totalDisplay}</strong>, against contract ${contractNumber}.</p>
+      ${rzpLinkUrl ? `<p>Pay online: <a href="${rzpLinkUrl}">${rzpLinkUrl}</a></p>` : "<p>Kindly arrange payment at the earliest.</p>"}
       <p>Regards,<br/>The WorkVilla — Accounts</p>
     `;
 

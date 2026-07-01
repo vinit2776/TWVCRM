@@ -34,6 +34,8 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   const [irn, setIrn] = useState("");
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().slice(0, 10));
   const [invoiceAmount, setInvoiceAmount] = useState(String(row.statement_total_amount));
+  const [partyNameOnInvoice, setPartyNameOnInvoice] = useState("");
+  const [nameOverride, setNameOverride] = useState(false);
   const [pdfFile, setPdfFile] = useState<File | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [previewing, setPreviewing] = useState(false);
@@ -78,6 +80,10 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
         setInvoiceAmount(String(data.fields.invoice_amount));
         filled.add("invoice_amount");
       }
+      if (data.fields.party_name) {
+        setPartyNameOnInvoice(data.fields.party_name);
+        filled.add("party_name");
+      }
       setAutofilledFields(filled);
       setAutofillSource(data.source);
       setBridgeMatched(data.bridge_match);
@@ -89,6 +95,12 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
   }
 
   // ── Client-side validation (mirrors server's hard-blocks) ─────────────────
+  const nameMismatch = useMemo(() => {
+    const invoiceName = partyNameOnInvoice.trim().toLowerCase();
+    const crmName = partyName.trim().toLowerCase();
+    return invoiceName.length > 0 && invoiceName !== crmName;
+  }, [partyNameOnInvoice, partyName]);
+
   const validation = useMemo(() => {
     const errors: string[] = [];
     if (!invoiceNumber.trim()) errors.push("Tally invoice number is required.");
@@ -110,8 +122,9 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
       );
     }
     if (!pdfFile) errors.push("Invoice PDF is required.");
+    if (nameMismatch && !nameOverride) errors.push("Party name mismatch — tick 'Proceed anyway' below to override.");
     return errors;
-  }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount]);
+  }, [invoiceNumber, irn, invoiceDate, invoiceAmount, pdfFile, customerHasGstin, expectedPrefix, row.statement_total_amount, nameMismatch, nameOverride]);
 
   const canSubmit = validation.length === 0 && !submitting;
 
@@ -159,7 +172,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           irn: customerHasGstin ? irn.trim() : null,
           invoice_date: invoiceDate,
           invoice_amount: Number(invoiceAmount),
-          party_name_matches_contract: true,
+          party_name_matches_contract: !nameMismatch || nameOverride,
           autofill_source: autofillSource ?? "manual",
           qr_payload: null,
           nic_signature_verified: false,
@@ -397,6 +410,42 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
         </label>
       </div>
 
+      {/* Party name check — compare Tally invoice name against CRM record */}
+      <label className="block text-xs">
+        <span className="block mb-1 text-muted-foreground">
+          Party name on Tally invoice
+          <span className="ml-1 text-muted-foreground/70">(cross-check with CRM: <strong className="text-foreground">{partyName}</strong>)</span>
+        </span>
+        <input
+          type="text"
+          value={partyNameOnInvoice}
+          onChange={(e) => { setPartyNameOnInvoice(e.target.value); setNameOverride(false); }}
+          placeholder={partyName}
+          className={`w-full rounded border px-2 py-1.5 text-sm ${nameMismatch ? "border-amber-400 bg-amber-50" : ""}`}
+          autoComplete="off"
+        />
+      </label>
+      {nameMismatch && (
+        <div className="rounded border border-amber-300 bg-amber-50 p-2.5 text-xs text-amber-900 space-y-2">
+          <div className="flex items-start gap-1.5 font-medium">
+            <AlertCircle className="h-3.5 w-3.5 mt-0.5 flex-shrink-0" aria-hidden />
+            Name mismatch — invoice says &ldquo;{partyNameOnInvoice}&rdquo; but CRM has &ldquo;{partyName}&rdquo;.
+          </div>
+          <p className="text-amber-800">
+            Fix the name in Tally before uploading, or tick below if this is intentional (e.g. trading name vs registered name).
+          </p>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <input
+              type="checkbox"
+              checked={nameOverride}
+              onChange={(e) => setNameOverride(e.target.checked)}
+              className="rounded"
+            />
+            <span>Proceed anyway — I confirm the names refer to the same entity</span>
+          </label>
+        </div>
+      )}
+
       <label className="block text-xs">
         <span className="block mb-1 text-muted-foreground">
           Invoice PDF<span className="text-red-600">*</span>
@@ -478,7 +527,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
           className="px-3 py-1.5 text-xs rounded bg-foreground text-background hover:opacity-90 disabled:opacity-40 disabled:cursor-not-allowed inline-flex items-center gap-1.5"
         >
           {submitting ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Upload className="h-3.5 w-3.5" />}
-          {submitting ? "Uploading…" : "Save upload"}
+          {submitting ? "Uploading & sending…" : "Upload & Send"}
         </button>
       </div>
     </form>
