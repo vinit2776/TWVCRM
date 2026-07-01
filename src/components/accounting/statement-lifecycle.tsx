@@ -124,16 +124,17 @@ function badgeClass(row: InboxRow | null | undefined): string {
 }
 
 function badgeLabel(row: InboxRow | null | undefined, fallbackStatus?: string): string {
-  if (!row) {
+  if (row?.is_voided) return "Voided";
+  if (row?.has_discrepancy) return "Discrepancy";
+  // When there's no handoff_state (PI First statements never get one until
+  // payment is captured), fall back to the statement's own status field.
+  if (!row?.handoff_state) {
     if (fallbackStatus === "sent") return "Emailed, Awaiting Payment";
     if (fallbackStatus === "finalized") return "Finalized";
     if (fallbackStatus === "exported") return "Exported";
     if (fallbackStatus === "voided") return "Voided";
     return "Draft";
   }
-  if (row.is_voided) return "Voided";
-  if (row.has_discrepancy) return "Discrepancy";
-  if (!row.handoff_state) return "Draft";
   return HANDOFF_STATE_LABELS[row.handoff_state];
 }
 
