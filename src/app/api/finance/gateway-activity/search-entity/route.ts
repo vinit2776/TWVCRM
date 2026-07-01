@@ -85,7 +85,7 @@ export async function GET(request: NextRequest) {
 
     // Also fetch lead info for contract_number matches that may not be in leadMap
     const refLeadIds = (byRef ?? []).map(c => c.lead_id).filter(Boolean) as string[];
-    let extraLeadMap = new Map<string, { name: string }>();
+    const extraLeadMap = new Map<string, { name: string }>();
     if (refLeadIds.length > 0) {
       const { data: extraLeads } = await admin
         .from("leads")
@@ -132,7 +132,7 @@ export async function GET(request: NextRequest) {
 
     // Fetch lead info for booking_number matches
     const refLeadIds = (byRef ?? []).map(b => b.lead_id).filter(Boolean) as string[];
-    let extraLeadMap = new Map<string, { name: string }>();
+    const extraLeadMap = new Map<string, { name: string }>();
     if (refLeadIds.length > 0) {
       const { data: extraLeads } = await admin
         .from("leads")
