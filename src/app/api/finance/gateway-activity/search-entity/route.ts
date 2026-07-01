@@ -51,41 +51,63 @@ export async function GET(request: NextRequest) {
 
   const results: SearchResult[] = [];
 
+  // Find lead IDs matching the search term (used by contracts + bookings)
+  const { data: matchedLeads } = await admin
+    .from("leads")
+    .select("id, first_name, last_name, company")
+    .or(`first_name.ilike.${like},last_name.ilike.${like},company.ilike.${like}`)
+    .limit(50);
+
+  const leadMap = new Map<string, { name: string }>();
+  for (const l of matchedLeads ?? []) {
+    const name = [l.first_name, l.last_name].filter(Boolean).join(" ") || l.company || "—";
+    leadMap.set(l.id, { name });
+  }
+  const matchedLeadIds = [...leadMap.keys()];
+
   // ── Contracts ─────────────────────────────────────────────────────────────
   if (type === "all" || type === "contract") {
-    const { data: contracts } = await admin
+    // Search by contract_number
+    const { data: byRef } = await admin
       .from("contracts")
-      .select(`
-        id, contract_number, status, monthly_rent, start_date,
-        leads(first_name, last_name, company)
-      `)
-      .or(`contract_number.ilike.${like}`)
+      .select("id, contract_number, status, monthly_rent, start_date, lead_id")
+      .ilike("contract_number", like)
       .limit(10);
 
-    // Also search by lead name/company
-    const { data: byLead } = await admin
-      .from("contracts")
-      .select(`
-        id, contract_number, status, monthly_rent, start_date,
-        leads!inner(first_name, last_name, company)
-      `)
-      .or(`leads.first_name.ilike.${like},leads.last_name.ilike.${like},leads.company.ilike.${like}`)
-      .limit(10);
+    // Search by lead name (if any leads matched)
+    const { data: byLeadId } = matchedLeadIds.length > 0
+      ? await admin
+          .from("contracts")
+          .select("id, contract_number, status, monthly_rent, start_date, lead_id")
+          .in("lead_id", matchedLeadIds)
+          .limit(10)
+      : { data: [] };
+
+    // Also fetch lead info for contract_number matches that may not be in leadMap
+    const refLeadIds = (byRef ?? []).map(c => c.lead_id).filter(Boolean) as string[];
+    let extraLeadMap = new Map<string, { name: string }>();
+    if (refLeadIds.length > 0) {
+      const { data: extraLeads } = await admin
+        .from("leads")
+        .select("id, first_name, last_name, company")
+        .in("id", refLeadIds);
+      for (const l of extraLeads ?? []) {
+        const name = [l.first_name, l.last_name].filter(Boolean).join(" ") || l.company || "—";
+        extraLeadMap.set(l.id, { name });
+      }
+    }
+    const allLeadMap = new Map([...extraLeadMap, ...leadMap]);
 
     const seen = new Set<string>();
-    for (const c of [...(contracts ?? []), ...(byLead ?? [])]) {
+    for (const c of [...(byRef ?? []), ...(byLeadId ?? [])]) {
       if (seen.has(c.id)) continue;
       seen.add(c.id);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const lead = Array.isArray((c as any).leads) ? (c as any).leads[0] : (c as any).leads;
-      const name = lead
-        ? [lead.first_name, lead.last_name].filter(Boolean).join(" ") || lead.company || "—"
-        : "—";
+      const leadInfo = c.lead_id ? allLeadMap.get(c.lead_id) : undefined;
       results.push({
         entity_type: "contract",
         entity_id:   c.id,
         ref:         c.contract_number,
-        customer:    name,
+        customer:    leadInfo?.name ?? "—",
         detail:      `₹${c.monthly_rent?.toLocaleString("en-IN") ?? "—"}/mo · from ${c.start_date ?? "—"}`,
         status:      c.status ?? null,
       });
@@ -94,38 +116,45 @@ export async function GET(request: NextRequest) {
 
   // ── Bookings ──────────────────────────────────────────────────────────────
   if (type === "all" || type === "booking") {
-    const { data: bookings } = await admin
+    const { data: byRef } = await admin
       .from("bookings")
-      .select(`
-        id, booking_number, status, total_amount, booking_date,
-        leads(first_name, last_name, company)
-      `)
-      .or(`booking_number.ilike.${like}`)
+      .select("id, booking_number, status, total_amount, booking_date, lead_id")
+      .ilike("booking_number", like)
       .limit(10);
 
-    const { data: byLeadB } = await admin
-      .from("bookings")
-      .select(`
-        id, booking_number, status, total_amount, booking_date,
-        leads!inner(first_name, last_name, company)
-      `)
-      .or(`leads.first_name.ilike.${like},leads.last_name.ilike.${like},leads.company.ilike.${like}`)
-      .limit(10);
+    const { data: byLeadId } = matchedLeadIds.length > 0
+      ? await admin
+          .from("bookings")
+          .select("id, booking_number, status, total_amount, booking_date, lead_id")
+          .in("lead_id", matchedLeadIds)
+          .limit(10)
+      : { data: [] };
+
+    // Fetch lead info for booking_number matches
+    const refLeadIds = (byRef ?? []).map(b => b.lead_id).filter(Boolean) as string[];
+    let extraLeadMap = new Map<string, { name: string }>();
+    if (refLeadIds.length > 0) {
+      const { data: extraLeads } = await admin
+        .from("leads")
+        .select("id, first_name, last_name, company")
+        .in("id", refLeadIds);
+      for (const l of extraLeads ?? []) {
+        const name = [l.first_name, l.last_name].filter(Boolean).join(" ") || l.company || "—";
+        extraLeadMap.set(l.id, { name });
+      }
+    }
+    const allLeadMap = new Map([...extraLeadMap, ...leadMap]);
 
     const seen = new Set<string>();
-    for (const b of [...(bookings ?? []), ...(byLeadB ?? [])]) {
+    for (const b of [...(byRef ?? []), ...(byLeadId ?? [])]) {
       if (seen.has(b.id)) continue;
       seen.add(b.id);
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const lead = Array.isArray((b as any).leads) ? (b as any).leads[0] : (b as any).leads;
-      const name = lead
-        ? [lead.first_name, lead.last_name].filter(Boolean).join(" ") || lead.company || "—"
-        : "—";
+      const leadInfo = b.lead_id ? allLeadMap.get(b.lead_id) : undefined;
       results.push({
         entity_type: "booking",
         entity_id:   b.id,
         ref:         b.booking_number,
-        customer:    name,
+        customer:    leadInfo?.name ?? "—",
         detail:      `₹${b.total_amount?.toLocaleString("en-IN") ?? "—"} · ${b.booking_date ?? "—"}`,
         status:      b.status ?? null,
       });
@@ -138,12 +167,12 @@ export async function GET(request: NextRequest) {
       .from("billing_statements")
       .select(`
         id, statement_number, status, total_amount, billing_period_start,
-        contracts(
+        contracts!billing_statements_contract_id_fkey(
           contract_number,
-          leads(first_name, last_name, company)
+          leads!contracts_lead_id_fkey(first_name, last_name, company)
         )
       `)
-      .or(`statement_number.ilike.${like}`)
+      .ilike("statement_number", like)
       .limit(10);
 
     const seen = new Set<string>();
