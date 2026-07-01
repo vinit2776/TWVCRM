@@ -323,6 +323,7 @@ export interface ExtractedFields {
   series?: "SDIPL-REG" | "SDIPL-UNREG";
   irn?: string;
   party_gstin?: string;
+  party_name?: string;
   invoice_date?: string; // YYYY-MM-DD
   invoice_amount?: number;
 }
