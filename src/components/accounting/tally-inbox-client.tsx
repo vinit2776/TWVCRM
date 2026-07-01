@@ -1457,6 +1457,40 @@ function BookingInboxRowItem({
   onCancelUpload: () => void;
 }) {
   const [paymentOpen, setPaymentOpen] = useState(false);
+  const [gstinEditing, setGstinEditing] = useState(false);
+  const [gstinInput, setGstinInput] = useState("");
+  const [gstinSaving, setGstinSaving] = useState(false);
+  const [gstinError, setGstinError] = useState<string | null>(null);
+
+  const handleGstinSave = async () => {
+    const val = gstinInput.trim().toUpperCase();
+    if (!GSTIN_RE.test(val)) {
+      setGstinError("Invalid GSTIN format (e.g. 29AABCU9603R1ZX)");
+      return;
+    }
+    if (!row.lead_id) return;
+    setGstinSaving(true);
+    setGstinError(null);
+    try {
+      const res = await fetch(`/api/leads/${row.lead_id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ gst_number: val }),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
+      }
+      setGstinEditing(false);
+      setGstinInput("");
+      // Refresh inbox to pick up new GSTIN
+      onUploaded();
+    } catch (e) {
+      setGstinError(e instanceof Error ? e.message : "Save failed");
+    } finally {
+      setGstinSaving(false);
+    }
+  };
 
   const aging = row.aging_hours;
   const agingClass =
@@ -1506,8 +1540,50 @@ function BookingInboxRowItem({
             <span className="font-mono px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground" title="Customer GSTIN">
               {row.customer_gstin}
             </span>
+          ) : gstinEditing ? (
+            <span className="flex items-center gap-1 flex-wrap">
+              <input
+                autoFocus
+                type="text"
+                value={gstinInput}
+                onChange={(e) => { setGstinInput(e.target.value.toUpperCase()); setGstinError(null); }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void handleGstinSave();
+                  if (e.key === "Escape") { setGstinEditing(false); setGstinInput(""); setGstinError(null); }
+                }}
+                placeholder="29AABCU9603R1ZX"
+                maxLength={15}
+                className="font-mono text-[11px] px-1.5 py-0.5 rounded border focus:outline-none focus:ring-1 focus:ring-foreground/30 w-36 uppercase"
+              />
+              <button
+                type="button"
+                onClick={() => void handleGstinSave()}
+                disabled={gstinSaving}
+                className="inline-flex items-center gap-0.5 text-[11px] px-1.5 py-0.5 rounded bg-foreground text-background disabled:opacity-50"
+              >
+                {gstinSaving ? <Loader2 className="h-3 w-3 animate-spin" /> : <Check className="h-3 w-3" />}
+                Save
+              </button>
+              <button
+                type="button"
+                onClick={() => { setGstinEditing(false); setGstinInput(""); setGstinError(null); }}
+                className="text-[11px] px-1.5 py-0.5 rounded border hover:bg-muted"
+              >
+                Cancel
+              </button>
+              {gstinError && <span className="text-red-600 text-[11px]">{gstinError}</span>}
+            </span>
           ) : (
-            <span className="px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">no GSTIN</span>
+            <button
+              type="button"
+              onClick={() => row.lead_id && setGstinEditing(true)}
+              disabled={!row.lead_id}
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed"
+              title={row.lead_id ? "GSTIN missing — click to add" : "No lead linked to this booking"}
+            >
+              <Pencil className="h-2.5 w-2.5" />
+              no GSTIN
+            </button>
           )}
           <span
             className={`px-1.5 py-0.5 rounded border ${row.irn_required ? "bg-blue-50 text-blue-900 border-blue-200" : "bg-muted/60 text-muted-foreground border-transparent"}`}
