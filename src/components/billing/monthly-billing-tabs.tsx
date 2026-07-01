@@ -49,6 +49,9 @@ interface RentStmt {
   proforma_sent_at: string | null; razorpay_payment_link_url: string | null;
   voided_at: string | null;
   reminder_count?: number | null;
+  // GST direct fields — set when the invoice was issued via gst_direct path
+  gst_invoice_number?: string | null;
+  emailed_at?: string | null;
   // Tally fields — present when issuance_channel = 'tally'
   issuance_channel?: string | null;
   lifecycle_stage?: string | null;
@@ -400,7 +403,11 @@ function RentTable({ rows, loading, opsLabel, onViewStatement, onRefresh }: { ro
               {sorted.map((s) => {
                 const isPaid = s.payment_status === "paid";
                 const isPartial = s.payment_status === "partially_paid";
-                const isSent = !!s.proforma_sent_at;
+                const isGstDirect = s.contract?.billing_mode === "gst_direct";
+                // "sent" means: proforma dispatched (proforma_first) OR GST invoice
+                // issued (gst_direct — gst_invoice_number set) OR routed to Tally.
+                const isSent = !!s.proforma_sent_at
+                  || (isGstDirect && (!!s.gst_invoice_number || s.issuance_channel === "tally"));
                 // /api/billing-statements joins lead directly on the statement,
                 // not under contract — use s.lead.
                 const lead = s.lead;
@@ -441,12 +448,13 @@ function RentTable({ rows, loading, opsLabel, onViewStatement, onRefresh }: { ro
                         shared 30s SWR cache so multiple badges in the same
                         page batch into one request per statement. */}
                     <td className="px-4 py-3 whitespace-nowrap">
-                      <StatementLifecycleBadge statementId={s.id} fallbackStatus={s.proforma_sent_at ? "sent" : s.status} compact />
+                      <StatementLifecycleBadge statementId={s.id} fallbackStatus={isSent ? "sent" : s.status} compact />
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap text-right">
                       <div className="flex items-center justify-end gap-1.5">
-                        {/* Retry send — only for finalized statements that were never dispatched */}
-                        {!isSent && s.status === "finalized" && (
+                        {/* Retry send — only for proforma_first contracts that were finalized but never dispatched.
+                            gst_direct contracts never have a proforma — never show this button for them. */}
+                        {!isSent && s.status === "finalized" && !isGstDirect && (
                           <Button
                             size="sm"
                             variant="outline"
