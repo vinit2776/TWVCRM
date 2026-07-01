@@ -13,7 +13,7 @@
  * underlying statement detail page.
  */
 
-import { Fragment, useEffect, useMemo, useState, useCallback } from "react";
+import { Fragment, useEffect, useMemo, useState, useCallback, useRef } from "react";
 import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
@@ -122,6 +122,18 @@ export function TallyInboxClient() {
   const [payRef, setPayRef] = useState("");
   const [payNotes, setPayNotes] = useState("");
   const [paySubmitting, setPaySubmitting] = useState(false);
+
+  // Auto-expand the first pi_paid_awaiting_gst row on initial load so accounts
+  // can see the upload form without an extra click.
+  const hasAutoExpanded = useRef(false);
+  useEffect(() => {
+    if (hasAutoExpanded.current || !data) return;
+    const first = data.rows.find((r) => r.handoff_state === "pi_paid_awaiting_gst");
+    if (first) {
+      setExpandedId(first.statement_id);
+      hasAutoExpanded.current = true;
+    }
+  }, [data]);
 
   const load = useCallback(async (opts?: { tab?: FilterTab; q?: string; page?: number }) => {
     setLoading(true);
@@ -1003,6 +1015,24 @@ function InboxRowItem({
         {/* ── Lifecycle tracker ── */}
         <InboxRowLifecycleTracker row={row} />
 
+        {/* ── Payment-received callout — draws attention when GST invoice is needed ── */}
+        {row.handoff_state === "pi_paid_awaiting_gst" && row.payments_received.length > 0 && (
+          <div className="col-span-2 rounded-lg border border-green-300 bg-green-50 px-3 py-2.5 flex items-start gap-2.5">
+            <CheckCircle2 className="h-4 w-4 text-green-600 flex-shrink-0 mt-0.5" aria-hidden />
+            <div className="min-w-0 flex-1 text-xs">
+              <p className="font-semibold text-green-900">
+                Payment received · {formatCurrency(row.total_paid)}
+                {row.payments_received[0]?.payment_date && (
+                  <span className="font-normal text-green-700 ml-1.5">
+                    on {new Date(row.payments_received[0].payment_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
+                  </span>
+                )}
+              </p>
+              <p className="text-green-700 mt-0.5">Issue the GST invoice in Tally, then upload it here.</p>
+            </div>
+          </div>
+        )}
+
         {/* ── Discrepancy or upload-pending banner (only when present) ── */}
         {(row.has_discrepancy || (row.latest_upload && !canSend)) && (
           <div className="col-span-2">
@@ -1066,13 +1096,17 @@ function InboxRowItem({
             <button
               type="button"
               onClick={onToggle}
-              className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border hover:bg-muted"
+              className={`inline-flex items-center gap-1 text-xs px-2 py-1 rounded ${
+                row.handoff_state === "pi_paid_awaiting_gst"
+                  ? "bg-foreground text-background hover:opacity-90"
+                  : "border hover:bg-muted"
+              }`}
               aria-expanded={expanded}
             >
               {expanded ? (
                 <><ChevronUp className="h-3 w-3" /> Close</>
               ) : (
-                <><Upload className="h-3 w-3" /> Upload <ChevronDown className="h-3 w-3" /></>
+                <><Upload className="h-3 w-3" /> Upload GST invoice <ChevronDown className="h-3 w-3" /></>
               )}
             </button>
           )}
