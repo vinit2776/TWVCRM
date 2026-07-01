@@ -66,6 +66,9 @@ export async function POST(
   const filename = `GST-${invoiceNum.replace(/\//g, "-")}.pdf`;
   const senderName = dbUser.full_name || "TWV Team";
 
+  const appBaseUrl = (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "https://twv-crm.vercel.app").trim();
+  const gstTrackingUrl = `${appBaseUrl}/api/billing-statements/${id}/track?type=gst`;
+
   const { error: emailError } = await resend.emails.send({
     from: EMAIL_FROM,
     replyTo: EMAIL_REPLY_TO,
@@ -86,6 +89,9 @@ export async function POST(
             <tr><td style="padding: 10px 16px; color: #666; border-bottom: 1px solid #e5e7eb;">Contract:</td><td style="padding: 10px 16px; color: #333; border-bottom: 1px solid #e5e7eb;">${contract?.contract_number || ""}</td></tr>
             <tr><td style="padding: 10px 16px; color: #666;">Company:</td><td style="padding: 10px 16px; color: #333;">${customerName}</td></tr>
           </table>
+          <div style="text-align:center;margin:20px 0 4px;">
+            <a href="${gstTrackingUrl}" style="background:#f0faf5;color:#015E65;padding:10px 24px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:13px;border:1px solid #015E65;">View Invoice Online</a>
+          </div>
           <p style="color: #333; font-size: 14px;">Please retain this invoice for your tax records. If you have any questions, feel free to reach out.</p>
           <p style="color: #333; font-size: 14px;">Warm regards,<br/><strong>${senderName}</strong><br/>The WorkVilla</p>
           <p style="color: #666; font-size: 12px; margin-top: 16px;">For queries, write to <a href="mailto:contact@theworkvilla.com" style="color: #015E65;">contact@theworkvilla.com</a> or call <strong>+91 97910 97900</strong>.</p>

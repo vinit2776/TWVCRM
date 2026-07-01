@@ -31,7 +31,8 @@ export async function GET(_req: NextRequest) {
     .select(`
       id, statement_number, statement_type, period_start, period_end, due_date,
       subtotal, tax_amount, total_amount, payment_status, status,
-      proforma_sent_at, razorpay_payment_link_url, razorpay_payment_link_id,
+      proforma_sent_at, proforma_viewed_at, gst_invoice_viewed_at,
+      razorpay_payment_link_url, razorpay_payment_link_id,
       last_reminder_sent_at, reminder_count, voided_at, created_at,
       gst_invoice_number, pi_cancelled_at, accounted,
       contract:contracts!billing_statements_contract_id_fkey(

@@ -557,6 +557,18 @@ export interface Contract {
   updated_at: string;
   // Electricity sub-billing overrides (stores overrides only; falls back to location config)
   electricity_settings?: ContractElectricitySettings | null;
+  // Tiered rate phases
+  phase_start_date?: string | null;
+  rate_phases?: ContractRatePhase[];
+}
+
+export interface ContractRatePhase {
+  id: string;
+  contract_id: string;
+  phase_order: number;
+  duration_months: number;
+  monthly_rate: number;
+  created_at: string;
 }
 
 export interface BillingPayment {
@@ -721,6 +733,8 @@ export interface BillingStatement {
   // Proforma tracking
   proforma_sent_at?: string | null;
   proforma_sent_by?: string | null;
+  proforma_viewed_at?: string | null;
+  gst_invoice_viewed_at?: string | null;
   // Usage amounts split (set by generators)
   service_usage_amount?: number;
   booking_usage_amount?: number;
