@@ -1038,7 +1038,7 @@ function InboxRowItem({
               {paymentOpen ? <ChevronUp className="h-3 w-3" /> : <ChevronDown className="h-3 w-3" />}
             </button>
           )}
-          {!row.pi_was_cancelled && (
+          {!row.pi_was_cancelled && row.contract?.billing_mode !== "gst_direct" && (
             <a
               href={`/api/billing-statements/${row.statement_id}/proforma-pdf`}
               target="_blank"

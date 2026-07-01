@@ -49,6 +49,7 @@ interface Contract {
   id: string;
   contract_number: string;
   title?: string;
+  billing_mode?: "proforma_first" | "gst_direct" | null;
   lead?: Lead;
 }
 
@@ -570,10 +571,21 @@ export default function AccountsReceivablePage() {
                           </div>
                         </td>
                         <td className="px-4 py-3">
-                          <Link href={`/api/billing-statements/${r.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
-                            {r.statement_number}
-                            <FileDown className="h-3 w-3" />
-                          </Link>
+                          {r.contract.billing_mode === "gst_direct" ? (
+                            r.gst_invoice_number ? (
+                              <Link href={`/api/billing-statements/${r.id}/gst-invoice-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
+                                {r.gst_invoice_number}
+                                <FileDown className="h-3 w-3" />
+                              </Link>
+                            ) : (
+                              <span className="font-mono text-xs text-muted-foreground">GST Pending</span>
+                            )
+                          ) : (
+                            <Link href={`/api/billing-statements/${r.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
+                              {r.statement_number}
+                              <FileDown className="h-3 w-3" />
+                            </Link>
+                          )}
                           <Badge variant="outline" className="text-[10px] mt-1 capitalize">{r.statement_type}</Badge>
                         </td>
                         <td className="px-4 py-3 text-xs whitespace-nowrap">
