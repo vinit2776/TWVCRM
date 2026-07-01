@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, Fragment } from "react";
+import { useState, useEffect, useCallback, Fragment, useRef } from "react";
 import Link from "next/link";
 import {
   RefreshCw,
@@ -17,6 +17,10 @@ import {
   Smartphone,
   Globe,
   ChevronDown,
+  Link2,
+  Unlink,
+  History,
+  X,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -35,7 +39,7 @@ import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/financ
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
-type EntityType = "booking" | "billing_statement" | "unmatched";
+type EntityType = "contract" | "booking" | "billing_statement" | "unmatched";
 
 interface GatewayTransaction {
   id: string;
@@ -58,6 +62,30 @@ interface GatewayTransaction {
   tax: number | null;
   payment_method: string | null;
   in_crm: boolean;
+  manually_linked: boolean;
+  link_notes: string | null;
+  link_linked_at: string | null;
+  link_linked_by: string | null;
+}
+
+interface SearchResult {
+  entity_type: "contract" | "booking" | "billing_statement";
+  entity_id: string;
+  ref: string;
+  customer: string;
+  detail: string;
+  status: string | null;
+}
+
+interface LinkLog {
+  id: string;
+  action: "linked" | "relinked" | "unlinked";
+  old_entity_type: string | null;
+  new_entity_type: string | null;
+  new_entity_id: string | null;
+  new_notes: string | null;
+  performed_at: string;
+  users: { full_name: string } | null;
 }
 
 interface Summary {
@@ -136,6 +164,15 @@ function MethodIcon({ method }: { method: string | null }) {
 }
 
 function EntityTypeBadge({ row }: { row: GatewayTransaction }) {
+  if (row.manually_linked) {
+    const label = row.entity_type === "contract" ? "Contract (linked)"
+      : row.entity_type === "booking" ? "Booking (linked)"
+      : "Invoice (linked)";
+    return <Badge variant="secondary" className="text-[10px] bg-violet-100 text-violet-800">{label}</Badge>;
+  }
+  if (row.entity_type === "contract") {
+    return <Badge variant="secondary" className="text-[10px] bg-emerald-100 text-emerald-800">Contract</Badge>;
+  }
   if (row.entity_type === "booking") {
     return <Badge variant="secondary" className="text-[10px] bg-cyan-100 text-cyan-800">Booking</Badge>;
   }
@@ -143,6 +180,277 @@ function EntityTypeBadge({ row }: { row: GatewayTransaction }) {
     return <Badge variant="secondary" className="text-[10px] bg-indigo-100 text-indigo-800">Invoice</Badge>;
   }
   return <Badge variant="secondary" className="text-[10px] bg-orange-100 text-orange-700">Not in CRM</Badge>;
+}
+
+// ── Link Drawer ───────────────────────────────────────────────────────────────
+
+function LinkDrawer({
+  row,
+  onClose,
+  onSuccess,
+}: {
+  row: GatewayTransaction;
+  onClose: () => void;
+  onSuccess: () => void;
+}) {
+  const [query, setQuery]           = useState("");
+  const [typeFilter, setTypeFilter] = useState<"all" | "contract" | "booking" | "billing_statement">("all");
+  const [results, setResults]       = useState<SearchResult[]>([]);
+  const [searching, setSearching]   = useState(false);
+  const [selected, setSelected]     = useState<SearchResult | null>(null);
+  const [note, setNote]             = useState(row.link_notes ?? "");
+  const [saving, setSaving]         = useState(false);
+  const [unlinking, setUnlinking]   = useState(false);
+  const [logs, setLogs]             = useState<LinkLog[]>([]);
+  const [showHistory, setShowHistory] = useState(false);
+  const debounceRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const isLinked = row.manually_linked;
+
+  // Load history
+  useEffect(() => {
+    if (!row.razorpay_payment_id) return;
+    fetch(`/api/finance/gateway-activity/link?payment_id=${row.razorpay_payment_id}`)
+      .then(r => r.json())
+      .then(d => setLogs(d.logs ?? []));
+  }, [row.razorpay_payment_id]);
+
+  // Debounced search
+  useEffect(() => {
+    if (debounceRef.current) clearTimeout(debounceRef.current);
+    if (query.length < 2) { setResults([]); return; }
+    debounceRef.current = setTimeout(async () => {
+      setSearching(true);
+      try {
+        const res = await fetch(`/api/finance/gateway-activity/search-entity?q=${encodeURIComponent(query)}&type=${typeFilter}`);
+        const d = await res.json();
+        setResults(d.results ?? []);
+      } finally {
+        setSearching(false);
+      }
+    }, 300);
+  }, [query, typeFilter]);
+
+  async function handleLink() {
+    if (!selected || !row.razorpay_payment_id) return;
+    setSaving(true);
+    try {
+      const res = await fetch("/api/finance/gateway-activity/link", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          razorpay_payment_id: row.razorpay_payment_id,
+          entity_type: selected.entity_type,
+          entity_id: selected.entity_id,
+          notes: note || undefined,
+        }),
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        toast.error(d.error || "Failed to link");
+      } else {
+        toast.success("Payment linked successfully");
+        onSuccess();
+      }
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleUnlink() {
+    if (!row.razorpay_payment_id) return;
+    setUnlinking(true);
+    try {
+      const res = await fetch("/api/finance/gateway-activity/link", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ razorpay_payment_id: row.razorpay_payment_id }),
+      });
+      if (!res.ok) {
+        const d = await res.json();
+        toast.error(d.error || "Failed to unlink");
+      } else {
+        toast.success("Payment unlinked");
+        onSuccess();
+      }
+    } finally {
+      setUnlinking(false);
+    }
+  }
+
+  const entityTypeLabel = (t: string) =>
+    t === "contract" ? "Contract" : t === "booking" ? "Booking" : "Invoice";
+
+  return (
+    <>
+      {/* Backdrop */}
+      <div className="fixed inset-0 bg-black/30 z-40" onClick={onClose} />
+
+      {/* Drawer */}
+      <div className="fixed right-0 top-0 h-full w-full max-w-md bg-background border-l shadow-xl z-50 flex flex-col">
+        {/* Header */}
+        <div className="flex items-center justify-between px-5 py-4 border-b">
+          <div>
+            <h2 className="font-semibold text-base flex items-center gap-2">
+              <Link2 className="h-4 w-4 text-violet-600" />
+              {isLinked ? "Re-link Payment" : "Link to CRM Record"}
+            </h2>
+            <p className="text-xs text-muted-foreground mt-0.5 font-mono">
+              {row.razorpay_payment_id} · {formatCurrency(row.amount)}
+            </p>
+          </div>
+          <button onClick={onClose} className="p-1.5 rounded hover:bg-muted">
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        {/* Currently linked banner */}
+        {isLinked && (
+          <div className="mx-4 mt-4 rounded-lg bg-violet-50 border border-violet-200 px-4 py-3 text-sm">
+            <p className="font-medium text-violet-800">Currently linked to</p>
+            <p className="text-violet-700 mt-0.5">
+              {entityTypeLabel(row.entity_type)}: {row.entity_ref ?? row.entity_label}
+              {" · "}{row.customer_name}
+            </p>
+            {row.link_notes && <p className="text-xs text-violet-600 mt-1">Note: {row.link_notes}</p>}
+            {row.link_linked_by && (
+              <p className="text-xs text-violet-500 mt-0.5">
+                Linked by {row.link_linked_by} · {row.link_linked_at ? formatDate(row.link_linked_at) : ""}
+              </p>
+            )}
+          </div>
+        )}
+
+        {/* Search */}
+        <div className="px-4 pt-4 space-y-3">
+          <p className="text-xs font-medium text-muted-foreground uppercase tracking-wide">
+            {isLinked ? "Search to re-link" : "Search for a record to link"}
+          </p>
+
+          {/* Type filter pills */}
+          <div className="flex gap-1.5 flex-wrap">
+            {(["all", "contract", "booking", "billing_statement"] as const).map((t) => (
+              <button
+                key={t}
+                onClick={() => setTypeFilter(t)}
+                className={`text-xs px-2.5 py-1 rounded-full border transition-colors ${
+                  typeFilter === t
+                    ? "bg-violet-600 text-white border-violet-600"
+                    : "border-border text-muted-foreground hover:border-violet-400"
+                }`}
+              >
+                {t === "all" ? "All" : t === "billing_statement" ? "Invoices" : t === "contract" ? "Contracts" : "Bookings"}
+              </button>
+            ))}
+          </div>
+
+          <div className="relative">
+            <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 text-muted-foreground" />
+            <input
+              className="w-full pl-8 pr-3 py-2 text-sm border rounded-lg bg-background focus:outline-none focus:ring-2 focus:ring-violet-500"
+              placeholder="Name, contract #, booking #, invoice #…"
+              value={query}
+              onChange={(e) => setQuery(e.target.value)}
+              autoFocus
+            />
+            {searching && <Loader2 className="absolute right-2.5 top-1/2 -translate-y-1/2 h-3.5 w-3.5 animate-spin text-muted-foreground" />}
+          </div>
+        </div>
+
+        {/* Results */}
+        <div className="flex-1 overflow-y-auto px-4 py-2 space-y-1.5 mt-1">
+          {results.length === 0 && query.length >= 2 && !searching && (
+            <p className="text-sm text-center text-muted-foreground py-8">No records found</p>
+          )}
+          {results.length === 0 && query.length < 2 && (
+            <p className="text-xs text-center text-muted-foreground py-6">Type at least 2 characters to search</p>
+          )}
+          {results.map((r) => (
+            <button
+              key={`${r.entity_type}-${r.entity_id}`}
+              onClick={() => setSelected(r)}
+              className={`w-full text-left rounded-lg border px-3 py-2.5 transition-colors ${
+                selected?.entity_id === r.entity_id
+                  ? "border-violet-500 bg-violet-50"
+                  : "border-border hover:border-violet-300 hover:bg-muted/30"
+              }`}
+            >
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-xs font-semibold text-muted-foreground uppercase tracking-wide">
+                  {entityTypeLabel(r.entity_type)}
+                </span>
+                {r.status && (
+                  <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-muted text-muted-foreground">{r.status}</span>
+                )}
+              </div>
+              <p className="text-sm font-medium mt-0.5">{r.ref} · {r.customer}</p>
+              <p className="text-xs text-muted-foreground">{r.detail}</p>
+            </button>
+          ))}
+        </div>
+
+        {/* Note + actions */}
+        <div className="border-t px-4 py-4 space-y-3">
+          {selected && (
+            <div className="rounded-lg bg-violet-50 border border-violet-200 px-3 py-2 text-xs text-violet-800">
+              Linking to: <strong>{selected.ref}</strong> · {selected.customer}
+            </div>
+          )}
+          <textarea
+            className="w-full text-sm border rounded-lg px-3 py-2 bg-background focus:outline-none focus:ring-2 focus:ring-violet-500 resize-none"
+            placeholder="Add a note (optional) — e.g. advance rent for June"
+            rows={2}
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+          />
+          <div className="flex gap-2">
+            {isLinked && (
+              <button
+                onClick={handleUnlink}
+                disabled={unlinking}
+                className="flex items-center gap-1.5 text-xs px-3 py-2 border border-red-200 text-red-600 rounded-lg hover:bg-red-50 disabled:opacity-50"
+              >
+                {unlinking ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Unlink className="h-3.5 w-3.5" />}
+                Unlink
+              </button>
+            )}
+            <button
+              onClick={handleLink}
+              disabled={!selected || saving}
+              className="flex-1 flex items-center justify-center gap-1.5 text-sm px-4 py-2 bg-violet-600 text-white rounded-lg hover:bg-violet-700 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              {saving ? <Loader2 className="h-4 w-4 animate-spin" /> : <Link2 className="h-4 w-4" />}
+              {isLinked ? "Re-link" : "Link & Save"}
+            </button>
+          </div>
+
+          {/* History toggle */}
+          {logs.length > 0 && (
+            <button
+              onClick={() => setShowHistory(v => !v)}
+              className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground"
+            >
+              <History className="h-3 w-3" />
+              {showHistory ? "Hide" : "Show"} history ({logs.length})
+            </button>
+          )}
+          {showHistory && (
+            <div className="space-y-1.5 max-h-40 overflow-y-auto">
+              {logs.map((l) => (
+                <div key={l.id} className="text-xs border rounded px-2.5 py-1.5 bg-muted/30">
+                  <span className={`font-medium ${l.action === "unlinked" ? "text-red-600" : "text-violet-700"}`}>
+                    {l.action}
+                  </span>
+                  {l.new_entity_type && <span className="text-muted-foreground"> → {entityTypeLabel(l.new_entity_type)}</span>}
+                  <span className="text-muted-foreground"> · {l.users?.full_name ?? "—"} · {formatDate(l.performed_at)}</span>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+    </>
+  );
 }
 
 // ── Page ─────────────────────────────────────────────────────────────────────
@@ -166,6 +474,9 @@ export default function GatewayActivityPage() {
 
   // Settlement detail expansion
   const [expandedId, setExpandedId] = useState<string | null>(null);
+
+  // Link drawer
+  const [linkRow, setLinkRow] = useState<GatewayTransaction | null>(null);
 
   const fetchData = useCallback(async () => {
     setLoading(true);
@@ -259,6 +570,13 @@ export default function GatewayActivityPage() {
 
   return (
     <div className="p-6 space-y-6 max-w-[1400px]">
+      {linkRow && (
+        <LinkDrawer
+          row={linkRow}
+          onClose={() => setLinkRow(null)}
+          onSuccess={() => { setLinkRow(null); fetchData(); }}
+        />
+      )}
       {/* ── Header ── */}
       <div className="flex items-start justify-between gap-4 flex-wrap">
         <div>
@@ -588,6 +906,28 @@ export default function GatewayActivityPage() {
                                     {row.entity_label}
                                     <ExternalLink className="h-3 w-3" />
                                   </Link>
+                                </div>
+                              )}
+                              {row.manually_linked && row.link_notes && (
+                                <div>
+                                  <p className="text-muted-foreground uppercase tracking-wider mb-1">Link note</p>
+                                  <p className="text-violet-700">{row.link_notes}</p>
+                                </div>
+                              )}
+                              {/* Link / Re-link action */}
+                              {(!row.in_crm) && (
+                                <div className="col-span-2 sm:col-span-4 pt-1">
+                                  <button
+                                    onClick={(e) => { e.stopPropagation(); setLinkRow(row); }}
+                                    className={`inline-flex items-center gap-1.5 text-xs px-3 py-1.5 rounded-lg border font-medium transition-colors ${
+                                      row.manually_linked
+                                        ? "border-violet-300 text-violet-700 hover:bg-violet-50"
+                                        : "border-orange-300 text-orange-700 hover:bg-orange-50"
+                                    }`}
+                                  >
+                                    <Link2 className="h-3.5 w-3.5" />
+                                    {row.manually_linked ? "Re-link or Unlink" : "Link to CRM record"}
+                                  </button>
                                 </div>
                               )}
                             </div>

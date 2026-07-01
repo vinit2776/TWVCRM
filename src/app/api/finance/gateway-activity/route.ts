@@ -73,6 +73,101 @@ export async function GET(request: NextRequest) {
   const paymentIds = cache.map((r) => r.razorpay_payment_id).filter(Boolean);
   const orderIds   = cache.map((r) => r.order_id).filter(Boolean) as string[];
 
+  // ── 2b. Manual links enrichment ───────────────────────────────────────────
+  const { data: manualLinks } = await adminSupabase
+    .from("razorpay_manual_links")
+    .select("razorpay_payment_id, entity_type, entity_id, notes, linked_at, users:linked_by(full_name)")
+    .in("razorpay_payment_id", paymentIds.length ? paymentIds : ["__none__"]);
+
+  const manualLinkMap = new Map<string, {
+    entity_type: string; entity_id: string; notes: string | null;
+    linked_at: string; linked_by_name: string | null;
+  }>();
+  for (const ml of manualLinks ?? []) {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const u = (ml as any).users;
+    manualLinkMap.set(ml.razorpay_payment_id, {
+      entity_type:    ml.entity_type,
+      entity_id:      ml.entity_id,
+      notes:          ml.notes ?? null,
+      linked_at:      ml.linked_at,
+      linked_by_name: u ? (Array.isArray(u) ? u[0]?.full_name : u.full_name) : null,
+    });
+  }
+
+  // Resolve entity labels for manual links (contracts / booking / billing_statement)
+  const manualContractIds  = [...manualLinkMap.values()].filter(m => m.entity_type === "contract").map(m => m.entity_id);
+  const manualBookingIds   = [...manualLinkMap.values()].filter(m => m.entity_type === "booking").map(m => m.entity_id);
+  const manualStatementIds = [...manualLinkMap.values()].filter(m => m.entity_type === "billing_statement").map(m => m.entity_id);
+
+  const [{ data: mlContracts }, { data: mlBookings }, { data: mlStatements }] = await Promise.all([
+    manualContractIds.length
+      ? adminSupabase.from("contracts").select("id, contract_number, leads(first_name, last_name, company)").in("id", manualContractIds)
+      : Promise.resolve({ data: [] }),
+    manualBookingIds.length
+      ? adminSupabase.from("bookings").select("id, booking_number, leads(first_name, last_name, company)").in("id", manualBookingIds)
+      : Promise.resolve({ data: [] }),
+    manualStatementIds.length
+      ? adminSupabase.from("billing_statements").select("id, statement_number, contracts(contract_number, leads(first_name, last_name, company))").in("id", manualStatementIds)
+      : Promise.resolve({ data: [] }),
+  ]);
+
+  type ManualEnriched = {
+    entity_type: "contract" | "booking" | "billing_statement";
+    entity_id: string; entity_ref: string | null; entity_label: string;
+    entity_href: string | null; customer_name: string;
+    notes: string | null; linked_at: string; linked_by_name: string | null;
+  };
+  const manualEnrichedMap = new Map<string, ManualEnriched>();
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const getLead = (obj: any) => {
+    const l = obj?.leads;
+    return l ? (Array.isArray(l) ? l[0] : l) : null;
+  };
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const leadName = (lead: any) =>
+    lead ? ([lead.first_name, lead.last_name].filter(Boolean).join(" ") || lead.company || "—") : "—";
+
+  for (const [pid, ml] of manualLinkMap.entries()) {
+    if (ml.entity_type === "contract") {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const c = (mlContracts ?? []).find((x: any) => x.id === ml.entity_id) as any;
+      manualEnrichedMap.set(pid, {
+        entity_type: "contract", entity_id: ml.entity_id,
+        entity_ref: c?.contract_number ?? null,
+        entity_label: c?.contract_number ? `Contract ${c.contract_number}` : "Contract",
+        entity_href: c ? `/contracts/${c.id}` : null,
+        customer_name: leadName(getLead(c)),
+        notes: ml.notes, linked_at: ml.linked_at, linked_by_name: ml.linked_by_name,
+      });
+    } else if (ml.entity_type === "booking") {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const b = (mlBookings ?? []).find((x: any) => x.id === ml.entity_id) as any;
+      manualEnrichedMap.set(pid, {
+        entity_type: "booking", entity_id: ml.entity_id,
+        entity_ref: b?.booking_number ?? null,
+        entity_label: b?.booking_number ? `Booking ${b.booking_number}` : "Booking",
+        entity_href: b ? `/bookings/${b.id}` : null,
+        customer_name: leadName(getLead(b)),
+        notes: ml.notes, linked_at: ml.linked_at, linked_by_name: ml.linked_by_name,
+      });
+    } else {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const s = (mlStatements ?? []).find((x: any) => x.id === ml.entity_id) as any;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const contract = s?.contracts ? (Array.isArray(s.contracts) ? s.contracts[0] : s.contracts) as any : null;
+      manualEnrichedMap.set(pid, {
+        entity_type: "billing_statement", entity_id: ml.entity_id,
+        entity_ref: s?.statement_number ?? null,
+        entity_label: s?.statement_number ? `Invoice ${s.statement_number}` : "Invoice",
+        entity_href: contract ? `/billing?contract=${contract.id}` : null,
+        customer_name: leadName(getLead(contract)),
+        notes: ml.notes, linked_at: ml.linked_at, linked_by_name: ml.linked_by_name,
+      });
+    }
+  }
+
   // ── 3. CRM enrichment: booking_payments ───────────────────────────────────
   const bookingPaymentsRes = await adminSupabase
     .from("booking_payments")
@@ -191,15 +286,16 @@ export async function GET(request: NextRequest) {
     const crm = crmByPaymentId.get(c.razorpay_payment_id)
               ?? (c.order_id ? crmByOrderId.get(c.order_id) : null)
               ?? null;
+    const manual = crm ? null : (manualEnrichedMap.get(c.razorpay_payment_id) ?? null);
 
     return {
       id:                   c.razorpay_payment_id,
-      entity_type:          crm?.entity_type ?? ("unmatched" as const),
-      entity_id:            crm?.entity_id ?? null,
-      entity_ref:           crm?.entity_ref ?? null,
-      entity_label:         crm?.entity_label ?? "Razorpay (not in CRM)",
-      entity_href:          crm?.entity_href ?? null,
-      customer_name:        crm?.customer_name ?? "—",
+      entity_type:          crm?.entity_type ?? manual?.entity_type ?? ("unmatched" as const),
+      entity_id:            crm?.entity_id   ?? manual?.entity_id   ?? null,
+      entity_ref:           crm?.entity_ref  ?? manual?.entity_ref  ?? null,
+      entity_label:         crm?.entity_label ?? manual?.entity_label ?? "Razorpay (not in CRM)",
+      entity_href:          crm?.entity_href  ?? manual?.entity_href  ?? null,
+      customer_name:        crm?.customer_name ?? manual?.customer_name ?? "—",
       amount:               crm?.crm_amount ?? (c.amount != null ? Number(c.amount) : 0),
       razorpay_payment_id:  c.razorpay_payment_id,
       payment_reference:    c.order_id ?? null,
@@ -213,6 +309,10 @@ export async function GET(request: NextRequest) {
       tax:                  c.tax != null ? Number(c.tax) : null,
       payment_method:       c.payment_method ?? null,
       in_crm:               crm !== null,
+      manually_linked:      manual !== null,
+      link_notes:           manual?.notes ?? null,
+      link_linked_at:       manual?.linked_at ?? null,
+      link_linked_by:       manual?.linked_by_name ?? null,
     };
   });
 
