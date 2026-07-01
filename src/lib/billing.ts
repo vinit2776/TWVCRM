@@ -700,7 +700,7 @@ export async function generateRentProformas(
   // but whose line items embed next-month rent).
   const { data: coveringStmts } = await supabase
     .from("billing_statements")
-    .select("id, contract_id, statement_number, prepaid_month, prepaid_year, period_start, statement_type, proforma_sent_at, gst_invoice_number, billing_payments:billing_payments(id)")
+    .select("id, contract_id, statement_number, prepaid_month, prepaid_year, period_start, statement_type, status, proforma_sent_at, gst_invoice_number, billing_payments:billing_payments(id)")
     .in("contract_id", contractIds)
     .in("statement_type", ["rent", "combined"])
     .is("voided_at", null)
@@ -709,11 +709,15 @@ export async function generateRentProformas(
   const alreadySent = new Set<string>();
   const supersedable = new Map<string, { id: string; statement_number: string }>();
   for (const s of (coveringStmts || []) as Array<{
-    id: string; contract_id: string; statement_number: string;
+    id: string; contract_id: string; statement_number: string; status: string;
     proforma_sent_at: string | null; gst_invoice_number: string | null;
     billing_payments: { id: string }[];
   }>) {
-    const wasSentOrPaid = !!s.proforma_sent_at || !!s.gst_invoice_number || (s.billing_payments?.length ?? 0) > 0;
+    // A finalized/exported statement must never be superseded — it may be a GST Direct
+    // statement (proforma_sent_at always null) or a PI First statement whose dispatch
+    // failed but was later retried. Status is the authoritative guard here.
+    const wasSentOrPaid = !!s.proforma_sent_at || !!s.gst_invoice_number || (s.billing_payments?.length ?? 0) > 0
+      || s.status === "finalized" || s.status === "exported";
     if (wasSentOrPaid) {
       alreadySent.add(s.contract_id);
     } else if (!supersedable.has(s.contract_id)) {
