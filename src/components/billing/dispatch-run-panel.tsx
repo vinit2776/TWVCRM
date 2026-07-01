@@ -68,8 +68,22 @@ function JobRow({ job, onRetry }: { job: DispatchJob; onRetry: (jobId: string) =
   const Icon = cfg.icon;
   const billingLabel = job.billing_mode === "gst_direct" ? "GST Direct" : "Proforma First";
 
+  const isFailed = job.status === "failed";
+
   return (
-    <div className={`border rounded-lg p-3 ${job.status === "failed" ? "border-destructive/40 bg-destructive/5" : "border-border"}`}>
+    <div className={`rounded-lg p-3 ${
+      isFailed
+        ? "border-2 border-red-500 bg-red-50 shadow-sm shadow-red-200"
+        : "border border-border"
+    }`}>
+      {/* Failed banner */}
+      {isFailed && (
+        <div className="flex items-center gap-1.5 mb-2">
+          <AlertCircle className="h-4 w-4 text-red-600 shrink-0" />
+          <span className="text-xs font-bold text-red-700 uppercase tracking-wide">Action Required</span>
+        </div>
+      )}
+
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-center gap-2 min-w-0">
           <Icon
@@ -77,41 +91,45 @@ function JobRow({ job, onRetry }: { job: DispatchJob; onRetry: (jobId: string) =
           />
           <div className="min-w-0">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="font-mono text-sm font-medium">{job.contract_number}</span>
+              <span className={`font-mono text-sm font-medium ${isFailed ? "text-red-800" : ""}`}>
+                {job.contract_number}
+              </span>
               {job.customer_name && (
-                <span className="text-sm text-muted-foreground truncate max-w-[200px]">{job.customer_name}</span>
+                <span className={`text-sm truncate max-w-[200px] ${isFailed ? "text-red-700" : "text-muted-foreground"}`}>
+                  {job.customer_name}
+                </span>
               )}
               <Badge variant="outline" className="text-xs">{billingLabel}</Badge>
             </div>
             {job.dispatched_to && job.status === "sent" && (
               <p className="text-xs text-muted-foreground mt-0.5">→ {job.dispatched_to}</p>
             )}
-            {job.error_suggestion && job.status === "failed" && (
-              <p className="text-xs text-destructive mt-1">{job.error_suggestion}</p>
+            {job.error_suggestion && isFailed && (
+              <p className="text-xs text-red-700 font-medium mt-1">{job.error_suggestion}</p>
             )}
           </div>
         </div>
 
         <div className="flex items-center gap-2 shrink-0">
           {job.status !== "pending" && job.status !== "processing" && (
-            <span className="text-xs text-muted-foreground whitespace-nowrap">
+            <span className={`text-xs whitespace-nowrap ${isFailed ? "text-red-600 font-semibold" : "text-muted-foreground"}`}>
               {job.attempt_count}/{job.max_attempts} attempts
             </span>
           )}
-          <Badge className={`text-xs capitalize ${
-            job.status === "sent"     ? "bg-green-100 text-green-700" :
-            job.status === "failed"   ? "bg-red-100 text-red-700" :
-            job.status === "skipped"  ? "bg-gray-100 text-gray-600" :
+          <Badge className={`text-xs capitalize font-semibold ${
+            job.status === "sent"       ? "bg-green-100 text-green-700" :
+            job.status === "failed"     ? "bg-red-600 text-white" :
+            job.status === "skipped"    ? "bg-gray-100 text-gray-600" :
             job.status === "processing" ? "bg-blue-100 text-blue-700" :
             "bg-muted text-muted-foreground"
           }`}>
             {cfg.label}
           </Badge>
-          {job.status === "failed" && (
+          {isFailed && (
             <Button
               size="sm"
-              variant="outline"
-              className="h-7 px-2 text-xs"
+              variant="destructive"
+              className="h-7 px-3 text-xs font-semibold"
               onClick={() => onRetry(job.id)}
             >
               <RefreshCw className="h-3 w-3 mr-1" />
@@ -255,19 +273,25 @@ export function DispatchRunPanel({ runId, onClose }: Props) {
 
       {/* Terminal state message */}
       {run.status === "completed" && (
-        <p className="text-xs text-green-600 text-center font-medium">
-          All {run.total_jobs} invoices dispatched successfully.
-        </p>
+        <div className="rounded-md bg-green-50 border border-green-200 px-3 py-2 text-center">
+          <p className="text-sm text-green-700 font-semibold">All {run.total_jobs} invoices dispatched successfully.</p>
+        </div>
       )}
       {run.status === "partial" && (
-        <p className="text-xs text-yellow-700 text-center">
-          {run.done_jobs} sent, {run.failed_jobs} failed. Review the failed items above and click Retry.
-        </p>
+        <div className="rounded-md bg-yellow-50 border-2 border-yellow-400 px-3 py-2 flex items-center gap-2">
+          <AlertCircle className="h-4 w-4 text-yellow-600 shrink-0" />
+          <p className="text-sm text-yellow-800 font-semibold">
+            {run.done_jobs} sent — {run.failed_jobs} failed. Fix the issues above and click Retry on each red row.
+          </p>
+        </div>
       )}
       {run.status === "failed" && (
-        <p className="text-xs text-destructive text-center">
-          All jobs failed. Fix the suggested issues and click Retry on each.
-        </p>
+        <div className="rounded-md bg-red-50 border-2 border-red-500 px-3 py-2 flex items-center gap-2">
+          <AlertCircle className="h-5 w-5 text-red-600 shrink-0" />
+          <p className="text-sm text-red-700 font-bold">
+            All {run.total_jobs} jobs failed. Fix the suggested issues on each row and click Retry.
+          </p>
+        </div>
       )}
     </div>
   );
