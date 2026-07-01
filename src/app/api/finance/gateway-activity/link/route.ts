@@ -153,7 +153,7 @@ export async function DELETE(request: NextRequest) {
   await logAudit(supabase, {
     entityType: "invoice",
     entityId:   razorpay_payment_id,
-    action:     "deleted",
+    action:     "delete",
     performedBy: dbUser.id,
     changes: {
       entity_type: { old: existing.entity_type, new: null },
