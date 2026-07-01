@@ -40,7 +40,7 @@ export async function GET(request: NextRequest) {
   const { data: contracts } = await adminSupabase
     .from("contracts")
     .select(
-      "id, contract_number, title, status, start_date, seats, total_amount, billing_cycle, tenure_months, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, secondary_email)"
+      "id, contract_number, title, status, start_date, seats, total_amount, billing_cycle, tenure_months, billing_mode, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, secondary_email)"
     )
     .lte("start_date", periodEnd)
     .in("status", ["active", "renewal_in_progress"]);

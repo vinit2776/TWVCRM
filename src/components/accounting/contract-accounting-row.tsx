@@ -20,6 +20,7 @@ interface ContractSummary {
     contract_number: string;
     title: string;
     total_amount: number;
+    billing_mode?: "proforma_first" | "gst_direct" | null;
     lead?: {
       id: string;
       first_name: string;
@@ -761,8 +762,8 @@ export function ContractAccountingRow({
                     </Button>
                   )}
 
-                  {/* Send / Resend Proforma — only while payment not yet fully received */}
-                  {isFinalized && onSendProforma && !statement.gst_invoice_number && statement.payment_status !== "paid" && (
+                  {/* Send / Resend Proforma — proforma_first contracts only */}
+                  {isFinalized && onSendProforma && !statement.gst_invoice_number && statement.payment_status !== "paid" && summary.contract.billing_mode !== "gst_direct" && (
                     <Button
                       size="sm"
                       variant="outline"
@@ -817,8 +818,8 @@ export function ContractAccountingRow({
                     </Button>
                   )}
 
-                  {/* Download proforma PDF */}
-                  {isFinalized && (
+                  {/* Download proforma PDF — proforma_first contracts only */}
+                  {isFinalized && summary.contract.billing_mode !== "gst_direct" && (
                     <Button size="sm" variant="ghost" className="h-7 text-xs" asChild>
                       <a
                         href={`/api/billing-statements/${statement.id}/proforma-pdf`}

@@ -212,16 +212,18 @@ export function StatementQuickActions({
 
   return (
     <div className={`inline-flex items-center gap-1 ${className}`}>
-      <a
-        href={`/api/billing-statements/${statementId}/proforma-pdf`}
-        target="_blank"
-        rel="noopener noreferrer"
-        className={`inline-flex items-center gap-1 ${btnSize} rounded border hover:bg-muted`}
-        title="Open the CRM-generated proforma invoice PDF"
-      >
-        <FileDown className="h-3 w-3" />
-        PI
-      </a>
+      {row?.contract?.billing_mode !== "gst_direct" && (
+        <a
+          href={`/api/billing-statements/${statementId}/proforma-pdf`}
+          target="_blank"
+          rel="noopener noreferrer"
+          className={`inline-flex items-center gap-1 ${btnSize} rounded border hover:bg-muted`}
+          title="Open the CRM-generated proforma invoice PDF"
+        >
+          <FileDown className="h-3 w-3" />
+          PI
+        </a>
+      )}
       {hasUpload && (
         <a
           href={`/api/billing-statements/${statementId}/gst-invoice-pdf`}
