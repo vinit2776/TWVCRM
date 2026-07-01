@@ -419,7 +419,7 @@ function RentTable({ rows, loading, opsLabel, onViewStatement }: { rows: RentStm
                         shared 30s SWR cache so multiple badges in the same
                         page batch into one request per statement. */}
                     <td className="px-4 py-3 whitespace-nowrap">
-                      <StatementLifecycleBadge statementId={s.id} fallbackStatus={s.status} compact />
+                      <StatementLifecycleBadge statementId={s.id} fallbackStatus={s.proforma_sent_at ? "sent" : s.status} compact />
                     </td>
                     <td className="px-4 py-3 whitespace-nowrap text-right">
                       <div className="flex items-center justify-end gap-1.5">

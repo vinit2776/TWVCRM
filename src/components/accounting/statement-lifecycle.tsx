@@ -125,6 +125,7 @@ function badgeClass(row: InboxRow | null | undefined): string {
 
 function badgeLabel(row: InboxRow | null | undefined, fallbackStatus?: string): string {
   if (!row) {
+    if (fallbackStatus === "sent") return "Emailed, Awaiting Payment";
     if (fallbackStatus === "finalized") return "Finalized";
     if (fallbackStatus === "exported") return "Exported";
     if (fallbackStatus === "voided") return "Voided";
