@@ -434,9 +434,6 @@ export function generateAddendumPdf(data: AddendumData): jsPDF {
   doc.text(data.client_name, ctx.marginLeft + halfWidth + 10, ctx.y);
   ctx.y += 4;
   doc.text(COMPANY_NAME, ctx.marginLeft, ctx.y);
-  if (data.client_contact_person) {
-    doc.text(data.client_contact_person, ctx.marginLeft + halfWidth + 10, ctx.y);
-  }
   ctx.y += 15;
 
   // Signature lines
