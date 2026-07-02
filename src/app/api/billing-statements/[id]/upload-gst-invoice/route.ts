@@ -143,7 +143,10 @@ export async function POST(
   };
 
   // ── Hard-block rules ──────────────────────────────────────────────────────
-  if (Number(meta.invoice_amount).toFixed(2) !== Number(statement.total_amount).toFixed(2)) {
+  // Compare at whole-rupee level — Razorpay collects in paise and the stored
+  // amount may differ by a few paise from the rounded GST invoice amount
+  // (GST invoices in Tally are always whole rupees).
+  if (Math.round(Number(meta.invoice_amount)) !== Math.round(Number(statement.total_amount))) {
     return badRequest(
       `Tally amount ₹${meta.invoice_amount} does not match statement total ₹${statement.total_amount}. ` +
       `Fix the Tally voucher or void+reissue the statement; no override is allowed.`,

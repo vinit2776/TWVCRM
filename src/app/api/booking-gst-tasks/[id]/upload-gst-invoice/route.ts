@@ -330,7 +330,7 @@ export async function POST(
         })
         .eq("id", task.id);
 
-      return NextResponse.json({ ok: true, upload_id: insertedUpload.id, handoff_state: "complete" });
+      return NextResponse.json({ ok: true, upload_id: insertedUpload.id, handoff_state: "complete", emailed_to: customerEmail });
     } catch (err) {
       const errMsg = err instanceof Error ? err.message : String(err);
       emailWarning = `Email delivery failed: ${errMsg}. Invoice uploaded — use Save & send to retry.`;
