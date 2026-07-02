@@ -1223,11 +1223,10 @@ export function generateMembershipAgreementPDF(
   doc.setFillColor(...BRAND_GREEN);
   doc.rect(0, 25, pageWidth, 1.5, "F");
 
-  // Brand name in white so it prints clearly on the teal header
-  doc.setFont("helvetica", "bold");
-  doc.setFontSize(16);
-  doc.setTextColor(255, 255, 255);
-  doc.text(BRAND_NAME, marginLeft, 14);
+  // White background behind logo so it prints clearly on the teal header
+  doc.setFillColor(255, 255, 255);
+  doc.rect(marginLeft - 2, 3, 54, 18, "F");
+  doc.addImage(TWV_LOGO_BASE64, "PNG", marginLeft, 5, 50, 12.5);
 
   // Company details in header (right side)
   doc.setFontSize(7);
