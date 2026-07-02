@@ -37,6 +37,20 @@ import { InboxSendDialog } from "./inbox-send-dialog";
 
 type FilterTab = "all" | "gst_to_issue" | "payment_to_record" | "discrepancy" | "closed";
 
+// Success confirmation shown in place of a row once an action closes it out —
+// the row itself drops out of the "open" list on the next reload, so without
+// this the user has no way to tell whether the last click actually worked.
+type CompletionInfo = {
+  id: string;
+  kind: "statement" | "booking";
+  partyName: string;
+  identifierLabel: string;
+  amount: number;
+  invoiceNumber: string | null;
+  emailedTo: string | null;
+  action: "invoice_sent" | "marked_complete";
+};
+
 const FILTER_TABS: { key: FilterTab; label: string }[] = [
   { key: "all", label: "All open" },
   { key: "gst_to_issue", label: "GST to issue" },
@@ -111,6 +125,15 @@ export function TallyInboxClient() {
   const [sentConfirmedBookingId, setSentConfirmedBookingId] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [closedPage, setClosedPage] = useState(1);
+  // Completion confirmations — kept visible until the user dismisses them,
+  // even after the underlying row drops out of the "open" list.
+  const [completions, setCompletions] = useState<CompletionInfo[]>([]);
+  const pushCompletion = useCallback((c: CompletionInfo) => {
+    setCompletions((prev) => [c, ...prev.filter((x) => x.id !== c.id)]);
+  }, []);
+  const dismissCompletion = useCallback((id: string) => {
+    setCompletions((prev) => prev.filter((x) => x.id !== id));
+  }, []);
   // Pre-send dialog
   const [sendDialogOpen, setSendDialogOpen] = useState(false);
   const [pendingSend, setPendingSend] = useState<{ type: "statement"; id: string; recipients: string[] } | { type: "booking"; id: string; recipients: string[] } | null>(null);
@@ -221,9 +244,38 @@ export function TallyInboxClient() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ extra_recipients: extraRecipients }),
       });
+      const body = await res.json().catch(() => ({} as { error?: string; emailed_to?: string }));
       if (!res.ok) {
-        const body = await res.json().catch(() => ({}));
         throw new Error((body as { error?: string }).error || `HTTP ${res.status}`);
+      }
+      if (type === "statement") {
+        const row = data?.rows.find((r) => r.statement_id === id);
+        if (row) {
+          pushCompletion({
+            id,
+            kind: "statement",
+            partyName: partyDisplay(row),
+            identifierLabel: row.statement_number ?? "—",
+            amount: row.statement_total_amount,
+            invoiceNumber: row.latest_upload?.tally_invoice_number ?? null,
+            emailedTo: (body as { emailed_to?: string }).emailed_to ?? row.contract?.lead?.email ?? null,
+            action: "invoice_sent",
+          });
+        }
+      } else {
+        const row = data?.booking_rows?.find((r) => r.task_id === id);
+        if (row) {
+          pushCompletion({
+            id,
+            kind: "booking",
+            partyName: row.customer_name ?? row.customer_email ?? "(walk-in)",
+            identifierLabel: row.booking_number ?? "—",
+            amount: row.statement_total_amount,
+            invoiceNumber: row.latest_upload?.tally_invoice_number ?? null,
+            emailedTo: (body as { emailed_to?: string }).emailed_to ?? row.customer_email ?? null,
+            action: "invoice_sent",
+          });
+        }
       }
       await load();
     } catch (e) {
@@ -233,12 +285,30 @@ export function TallyInboxClient() {
       setSendingBookingId(null);
       setPendingSend(null);
     }
-  }, [pendingSend, load]);
+  }, [pendingSend, load, data, pushCompletion]);
 
   const handleUploaded = useCallback(async () => {
     setExpandedId(null);
     await load();
   }, [load]);
+
+  const handleBookingUploaded = useCallback(async (
+    row: BookingInboxRow,
+    info: { invoiceNumber: string; amount: number; emailedTo: string | null },
+  ) => {
+    setExpandedBookingId(null);
+    pushCompletion({
+      id: row.task_id,
+      kind: "booking",
+      partyName: row.customer_name ?? row.customer_email ?? "(walk-in)",
+      identifierLabel: row.booking_number ?? "—",
+      amount: info.amount,
+      invoiceNumber: info.invoiceNumber,
+      emailedTo: info.emailedTo,
+      action: info.emailedTo ? "invoice_sent" : "marked_complete",
+    });
+    await load();
+  }, [load, pushCompletion]);
 
   const handleClose = useCallback(async (statementId: string) => {
     setClosingId(statementId);
@@ -249,13 +319,26 @@ export function TallyInboxClient() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${res.status}`);
       }
+      const row = data?.rows.find((r) => r.statement_id === statementId);
+      if (row) {
+        pushCompletion({
+          id: statementId,
+          kind: "statement",
+          partyName: partyDisplay(row),
+          identifierLabel: row.statement_number ?? "—",
+          amount: row.statement_total_amount,
+          invoiceNumber: row.latest_upload?.tally_invoice_number ?? null,
+          emailedTo: null,
+          action: "marked_complete",
+        });
+      }
       await load();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Close failed");
     } finally {
       setClosingId(null);
     }
-  }, [load]);
+  }, [load, data, pushCompletion]);
 
   const handleResend = useCallback(async (statementId: string) => {
     setResendingId(statementId);
@@ -316,13 +399,26 @@ export function TallyInboxClient() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${res.status}`);
       }
+      const row = data?.rows.find((r) => r.statement_id === statementId);
+      if (row) {
+        pushCompletion({
+          id: statementId,
+          kind: "statement",
+          partyName: partyDisplay(row),
+          identifierLabel: row.statement_number ?? "—",
+          amount: row.statement_total_amount,
+          invoiceNumber: row.latest_upload?.tally_invoice_number ?? null,
+          emailedTo: null,
+          action: "marked_complete",
+        });
+      }
       await load();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Failed");
     } finally {
       setClosingId(null);
     }
-  }, [load]);
+  }, [load, data, pushCompletion]);
 
   const handleBookingSend = useCallback((taskId: string, row: BookingInboxRow) => {
     const recipients = Array.from(new Set([
@@ -342,13 +438,26 @@ export function TallyInboxClient() {
         const body = await res.json().catch(() => ({}));
         throw new Error(body.error || `HTTP ${res.status}`);
       }
+      const row = data?.booking_rows?.find((r) => r.task_id === taskId);
+      if (row) {
+        pushCompletion({
+          id: taskId,
+          kind: "booking",
+          partyName: row.customer_name ?? row.customer_email ?? "(walk-in)",
+          identifierLabel: row.booking_number ?? "—",
+          amount: row.statement_total_amount,
+          invoiceNumber: row.latest_upload?.tally_invoice_number ?? null,
+          emailedTo: null,
+          action: "marked_complete",
+        });
+      }
       await load();
     } catch (e) {
       setActionError(e instanceof Error ? e.message : "Close failed");
     } finally {
       setClosingBookingId(null);
     }
-  }, [load]);
+  }, [load, data, pushCompletion]);
 
   const handleBookingResend = useCallback(async (taskId: string) => {
     setResendingBookingId(taskId);
@@ -490,6 +599,9 @@ export function TallyInboxClient() {
               <span>{actionError}</span>
             </div>
           )}
+          {completions.map((c) => (
+            <CompletionBanner key={c.id} completion={c} onDismiss={() => dismissCompletion(c.id)} />
+          ))}
           <ul className="rounded-lg border overflow-hidden divide-y" role="list">
             {visibleRows.map((row) => (
               <InboxRowItem
@@ -524,6 +636,7 @@ export function TallyInboxClient() {
                 onClose={() => handleBookingClose(row.task_id)}
                 onResend={() => handleBookingResend(row.task_id)}
                 onUploaded={handleUploaded}
+                onInvoiceUploaded={(info) => handleBookingUploaded(row, info)}
                 onCancelUpload={() => setExpandedBookingId(null)}
               />
             ))}
@@ -648,6 +761,32 @@ function StatCard({
         <Icon className="h-3.5 w-3.5" aria-hidden />
       </div>
       <div className={`text-2xl font-semibold mt-1 ${valueClass}`}>{value}</div>
+    </div>
+  );
+}
+
+function CompletionBanner({ completion, onDismiss }: { completion: CompletionInfo; onDismiss: () => void }) {
+  const c = completion;
+  return (
+    <div className="rounded-lg border border-green-200 bg-green-50 p-3 text-sm text-green-900 flex items-start gap-3">
+      <CheckCircle2 className="h-4 w-4 mt-0.5 flex-shrink-0 text-green-600" aria-hidden />
+      <div className="min-w-0 flex-1">
+        <p className="font-medium">
+          {c.action === "invoice_sent" ? "GST invoice sent" : "Marked complete"}
+          {c.invoiceNumber && <> — <span className="font-mono">{c.invoiceNumber}</span></>}
+        </p>
+        <p className="text-xs text-green-800 mt-0.5">
+          {c.identifierLabel} · {c.partyName} · {formatCurrency(c.amount)}
+          {c.emailedTo && <> · emailed to <span className="font-medium">{c.emailedTo}</span></>}
+        </p>
+      </div>
+      <button
+        type="button"
+        onClick={onDismiss}
+        className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded border border-green-300 text-green-800 hover:bg-green-100 flex-shrink-0"
+      >
+        <Check className="h-3 w-3" /> Dismiss
+      </button>
     </div>
   );
 }
@@ -1497,6 +1636,7 @@ function BookingInboxRowItem({
   onClose,
   onResend,
   onUploaded,
+  onInvoiceUploaded,
   onCancelUpload,
 }: {
   row: BookingInboxRow;
@@ -1510,6 +1650,7 @@ function BookingInboxRowItem({
   onClose: () => void;
   onResend: () => void;
   onUploaded: () => void;
+  onInvoiceUploaded: (info: { invoiceNumber: string; amount: number; emailedTo: string | null }) => void;
   onCancelUpload: () => void;
 }) {
   const [paymentOpen, setPaymentOpen] = useState(false);
@@ -1848,7 +1989,7 @@ function BookingInboxRowItem({
           irnRequired={row.irn_required}
           expectedSeries={row.expected_series ?? (row.irn_required ? "SDIPL-REG" : "SDIPL-UNREG")}
           expectedPrefix={row.expected_prefix ?? (row.irn_required ? "SD/A/" : "SD/B/")}
-          onUploaded={onUploaded}
+          onUploaded={onInvoiceUploaded}
           onCancel={onCancelUpload}
         />
       )}

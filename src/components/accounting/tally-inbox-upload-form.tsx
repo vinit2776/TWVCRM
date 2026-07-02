@@ -116,7 +116,7 @@ export function TallyInboxUploadForm({ row, onUploaded, onCancel }: Props) {
     if (!invoiceDate) errors.push("Invoice date is required.");
     const amount = Number(invoiceAmount);
     if (!Number.isFinite(amount) || amount <= 0) errors.push("Invoice amount must be positive.");
-    if (amount.toFixed(2) !== Number(row.statement_total_amount).toFixed(2)) {
+    if (Math.round(amount) !== Math.round(Number(row.statement_total_amount))) {
       errors.push(
         `Amount ₹${amount} does not match statement total ₹${row.statement_total_amount}. Fix Tally or void+reissue — no override.`,
       );

@@ -15,7 +15,7 @@ interface Props {
   irnRequired: boolean;
   expectedSeries: string;
   expectedPrefix: string;
-  onUploaded: () => void;
+  onUploaded: (info: { invoiceNumber: string; amount: number; emailedTo: string | null }) => void;
   onCancel: () => void;
 }
 
@@ -91,7 +91,7 @@ export function BookingGstUploadForm({
     if (!invoiceDate) errors.push("Invoice date is required.");
     const amount = Number(invoiceAmount);
     if (!Number.isFinite(amount) || amount <= 0) errors.push("Invoice amount must be positive.");
-    if (amount.toFixed(2) !== Number(totalAmount).toFixed(2)) {
+    if (Math.round(amount) !== Math.round(Number(totalAmount))) {
       errors.push(`Amount ₹${amount} does not match booking total ₹${totalAmount}. Fix Tally or contact admin — no override.`);
     }
     if (!pdfFile) errors.push("Invoice PDF is required.");
@@ -141,7 +141,11 @@ export function BookingGstUploadForm({
         return;
       }
 
-      onUploaded();
+      onUploaded({
+        invoiceNumber: invoiceNumber.trim(),
+        amount: Number(invoiceAmount),
+        emailedTo: body.emailed_to ?? null,
+      });
     } catch (err) {
       setServerError(err instanceof Error ? err.message : "Upload failed");
       setSubmitting(false);
