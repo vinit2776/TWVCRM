@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import Link from "next/link";
 import {
   Phone,
@@ -497,10 +497,18 @@ interface LeadTimelineProps {
   highlightId?: string;
 }
 
+const BILLING_COMMS_PAGE_SIZE = 50;
+
 export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
   const [items, setItems] = useState<TimelineItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshKey, setRefreshKey] = useState(0);
+
+  // Billing communications are kept separate from `items` so "Load more" can
+  // fetch and append the next page without re-fetching activities/proposals/etc.
+  const [billingComms, setBillingComms] = useState<BillingCommEvent[]>([]);
+  const [billingCommsHasMore, setBillingCommsHasMore] = useState(false);
+  const [billingCommsLoadingMore, setBillingCommsLoadingMore] = useState(false);
 
   // Stable refs — avoid re-creating fetchAll (and re-fetching) on every parent render.
   // The lead object changes reference on every parent render; keeping it in useCallback
@@ -521,7 +529,7 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
           fetch(`/api/invoices?lead_id=${leadId}`, opts),
           fetch(`/api/contracts?lead_id=${leadId}`, opts),
           fetch(`/api/bookings?lead_id=${leadId}&limit=50`, opts),
-          fetch(`/api/leads/${leadId}/billing-communications`, opts),
+          fetch(`/api/leads/${leadId}/billing-communications?limit=${BILLING_COMMS_PAGE_SIZE}&offset=0`, opts),
         ]);
 
       if (signal?.aborted) return;
@@ -561,9 +569,11 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
       // 403 for roles outside admin/manager/accounts — silently omit, not an error.
       if (billingCommsRes.ok) {
         const json = await billingCommsRes.json();
-        (json.data || []).forEach((e: BillingCommEvent) =>
-          merged.push({ kind: "billing_comm", date: e.occurred_at, event: e })
-        );
+        setBillingComms(json.data || []);
+        setBillingCommsHasMore(Boolean(json.has_more));
+      } else {
+        setBillingComms([]);
+        setBillingCommsHasMore(false);
       }
 
       // Sort newest-first; lead creation is pinned at the very end
@@ -588,6 +598,42 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
 
   const handleRefresh = useCallback(() => setRefreshKey((k) => k + 1), []);
 
+  const loadMoreBillingComms = useCallback(async () => {
+    setBillingCommsLoadingMore(true);
+    try {
+      const res = await fetch(
+        `/api/leads/${leadId}/billing-communications?limit=${BILLING_COMMS_PAGE_SIZE}&offset=${billingComms.length}`
+      );
+      if (res.ok) {
+        const json = await res.json();
+        setBillingComms((prev) => [...prev, ...(json.data || [])]);
+        setBillingCommsHasMore(Boolean(json.has_more));
+      }
+    } catch (err) {
+      console.error("[timeline] load more billing comms failed:", err);
+    } finally {
+      setBillingCommsLoadingMore(false);
+    }
+  }, [leadId, billingComms.length]);
+
+  // Merge the currently-loaded billing comm events into the sorted item list.
+  // Kept separate from `items` (see fetchAll) so "Load more" only appends here
+  // instead of re-fetching activities/proposals/contracts/bookings.
+  const displayItems = useMemo(() => {
+    const created = items[items.length - 1];
+    const rest = items.slice(0, -1);
+    const billingItems: TimelineItem[] = billingComms.map((e) => ({
+      kind: "billing_comm",
+      date: e.occurred_at,
+      event: e,
+    }));
+    const merged = [...rest, ...billingItems].sort(
+      (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+    );
+    if (created) merged.push(created);
+    return merged;
+  }, [items, billingComms]);
+
   if (loading) {
     return (
       <div className="space-y-4">
@@ -606,8 +652,8 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
 
   return (
     <div>
-      {items.map((item, idx) => {
-        const isLast = idx === items.length - 1;
+      {displayItems.map((item, idx) => {
+        const isLast = idx === displayItems.length - 1;
 
         if (item.kind === "created") {
           return <LeadCreatedItem key="created" lead={item.lead} />;
@@ -711,6 +757,18 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
 
         return null;
       })}
+
+      {billingCommsHasMore && (
+        <div className="flex justify-center pb-6">
+          <button
+            onClick={loadMoreBillingComms}
+            disabled={billingCommsLoadingMore}
+            className="text-xs font-medium text-primary hover:underline disabled:opacity-40"
+          >
+            {billingCommsLoadingMore ? "Loading…" : "Load more billing communications"}
+          </button>
+        </div>
+      )}
 
       {items.length === 1 && items[0].kind === "created" && (
         <p className="text-sm text-muted-foreground text-center py-6">
