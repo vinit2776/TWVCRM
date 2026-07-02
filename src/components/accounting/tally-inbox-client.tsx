@@ -823,7 +823,11 @@ function InboxRowItem({
   const [gstinInput, setGstinInput] = useState("");
   const [gstinSaving, setGstinSaving] = useState(false);
   const [gstinError, setGstinError] = useState<string | null>(null);
-  const [paymentOpen, setPaymentOpen] = useState(false);
+  // Auto-open the payment panel for pi_paid_awaiting_gst so the amount is
+  // immediately visible — user can still collapse it via the toggle button.
+  const [paymentOpen, setPaymentOpen] = useState(
+    row.handoff_state === "pi_paid_awaiting_gst" && row.payments_received.length > 0,
+  );
 
   const handleGstinSave = async () => {
     const val = gstinInput.trim().toUpperCase();
@@ -1015,24 +1019,6 @@ function InboxRowItem({
         {/* ── Lifecycle tracker ── */}
         <InboxRowLifecycleTracker row={row} />
 
-        {/* ── Payment-received callout — draws attention when GST invoice is needed ── */}
-        {row.handoff_state === "pi_paid_awaiting_gst" && row.payments_received.length > 0 && (
-          <div className="col-span-2 rounded-lg border border-green-300 bg-green-50 px-3 py-2.5 flex items-start gap-2.5">
-            <CheckCircle2 className="h-4 w-4 text-green-600 flex-shrink-0 mt-0.5" aria-hidden />
-            <div className="min-w-0 flex-1 text-xs">
-              <p className="font-semibold text-green-900">
-                Payment received · {formatCurrency(row.total_paid)}
-                {row.payments_received[0]?.payment_date && (
-                  <span className="font-normal text-green-700 ml-1.5">
-                    on {new Date(row.payments_received[0].payment_date).toLocaleDateString("en-IN", { day: "2-digit", month: "short" })}
-                  </span>
-                )}
-              </p>
-              <p className="text-green-700 mt-0.5">Issue the GST invoice in Tally, then upload it here.</p>
-            </div>
-          </div>
-        )}
-
         {/* ── Discrepancy or upload-pending banner (only when present) ── */}
         {(row.has_discrepancy || (row.latest_upload && !canSend)) && (
           <div className="col-span-2">
@@ -1177,7 +1163,15 @@ function InboxRowItem({
         />
       )}
       {paymentOpen && row.payments_received.length > 0 && (
-        <StatementPaymentPanel payments={row.payments_received} totalAmount={row.statement_total_amount} />
+        <>
+          <StatementPaymentPanel payments={row.payments_received} totalAmount={row.statement_total_amount} />
+          {row.handoff_state === "pi_paid_awaiting_gst" && (
+            <div className="px-4 py-2 flex items-center gap-1.5 text-xs text-green-800 bg-green-50 border-t border-green-100">
+              <CheckCircle2 className="h-3.5 w-3.5 flex-shrink-0 text-green-600" aria-hidden />
+              Payment confirmed — issue the GST invoice in Tally, then upload it here.
+            </div>
+          )}
+        </>
       )}
     </li>
   );
