@@ -411,6 +411,21 @@ export async function dispatchProforma(
     });
   }
 
+  if (customerEmail) {
+    const billingEmails = (lead?.billing_emails as string[] | null) ?? [];
+    const recipients = Array.from(new Set([customerEmail, ...billingEmails].filter(Boolean)));
+    await adminSupabase.from("billing_send_log").insert(
+      recipients.map((recipient) => ({
+        billing_statement_id: statementId,
+        send_type: "proforma" as const,
+        recipient,
+        status: emailedSuccessfully ? ("sent" as const) : ("failed" as const),
+        triggered_by: dispatchedBy ? ("manual" as const) : ("cron" as const),
+        triggered_by_user_id: dispatchedBy || null,
+      })),
+    );
+  }
+
   return {
     success: true,
     proformaRef,
@@ -756,6 +771,21 @@ export async function dispatchGstDirect(
         billing_mode: { old: null, new: "gst_direct" },
       },
     });
+  }
+
+  if (customerEmail) {
+    const billingEmails2 = (lead?.billing_emails as string[] | null) ?? [];
+    const recipients = Array.from(new Set([customerEmail, ...billingEmails2].filter(Boolean)));
+    await adminSupabase.from("billing_send_log").insert(
+      recipients.map((recipient) => ({
+        billing_statement_id: statementId,
+        send_type: "gst_invoice" as const,
+        recipient,
+        status: emailedSuccessfully ? ("sent" as const) : ("failed" as const),
+        triggered_by: dispatchedBy ? ("manual" as const) : ("cron" as const),
+        triggered_by_user_id: dispatchedBy || null,
+      })),
+    );
   }
 
   return {

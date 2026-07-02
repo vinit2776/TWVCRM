@@ -288,11 +288,33 @@ export async function POST(
       performed_by: null,
       changes: { error: result.error.message, recipient: recipientEmail, trigger: "inbox_send" },
     });
+    await adminClient.from("billing_send_log").insert(
+      allRecipients.map((recipient) => ({
+        billing_statement_id: id,
+        send_type: "gst_invoice" as const,
+        recipient,
+        status: "failed" as const,
+        error: result.error!.message,
+        triggered_by: "manual" as const,
+        triggered_by_user_id: dbUser.id,
+      })),
+    );
     return NextResponse.json(
       { error: `Email delivery failed: ${result.error.message}` },
       { status: 500 },
     );
   }
+
+  await adminClient.from("billing_send_log").insert(
+    allRecipients.map((recipient) => ({
+      billing_statement_id: id,
+      send_type: "gst_invoice" as const,
+      recipient,
+      status: "sent" as const,
+      triggered_by: "manual" as const,
+      triggered_by_user_id: dbUser.id,
+    })),
+  );
 
   // ── Stamp delivery + transition handoff_state ───────────────────────────
   const now = new Date().toISOString();
