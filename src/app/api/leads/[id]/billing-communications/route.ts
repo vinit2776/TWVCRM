@@ -27,8 +27,11 @@ interface CommEvent {
   amount?: number;
 }
 
+const DEFAULT_LIMIT = 50;
+const MAX_LIMIT = 200;
+
 export async function GET(
-  _req: NextRequest,
+  req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id: leadId } = await params;
@@ -42,6 +45,10 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
+  const { searchParams } = new URL(req.url);
+  const offset = Math.max(0, parseInt(searchParams.get("offset") || "0", 10) || 0);
+  const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(searchParams.get("limit") || "", 10) || DEFAULT_LIMIT));
+
   const { data: contracts } = await supabase
     .from("contracts")
     .select("id, contract_number")
@@ -50,7 +57,7 @@ export async function GET(
   const contractNumberById = new Map((contracts || []).map((c) => [c.id, c.contract_number]));
 
   if (contractIds.length === 0) {
-    return NextResponse.json({ data: [] });
+    return NextResponse.json({ data: [], total: 0, has_more: false });
   }
 
   const { data: statements } = await supabase
@@ -66,7 +73,7 @@ export async function GET(
   );
 
   if (statementIds.length === 0) {
-    return NextResponse.json({ data: [] });
+    return NextResponse.json({ data: [], total: 0, has_more: false });
   }
 
   const [sendLogRes, reminderRes, paymentsRes] = await Promise.all([
@@ -129,5 +136,11 @@ export async function GET(
 
   events.sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime());
 
-  return NextResponse.json({ data: events });
+  const page = events.slice(offset, offset + limit);
+
+  return NextResponse.json({
+    data: page,
+    total: events.length,
+    has_more: offset + limit < events.length,
+  });
 }
