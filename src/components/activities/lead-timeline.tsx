@@ -17,6 +17,10 @@ import {
   Receipt,
   ScrollText,
   CalendarDays,
+  Send,
+  BellRing,
+  CheckCircle2,
+  XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/shared/loading-skeleton";
@@ -39,6 +43,19 @@ import type {
 } from "@/types";
 import { ActivityForm } from "@/components/activities/activity-form";
 
+// ─── Billing communication event (from /api/leads/[id]/billing-communications) ─
+interface BillingCommEvent {
+  kind: "proforma_sent" | "gst_invoice_sent" | "reminder_sent" | "payment_received";
+  occurred_at: string;
+  statement_id: string;
+  statement_number: string | null;
+  contract_number: string | null;
+  detail: string;
+  recipient?: string;
+  status?: "sent" | "failed";
+  amount?: number;
+}
+
 // ─── Unified timeline item type ───────────────────────────────────────────────
 type TimelineItem =
   | { kind: "created"; date: string; lead: Lead }
@@ -46,7 +63,8 @@ type TimelineItem =
   | { kind: "proposal"; date: string; proposal: Proposal }
   | { kind: "invoice"; date: string; invoice: ProformaInvoice }
   | { kind: "contract"; date: string; contract: Contract }
-  | { kind: "booking"; date: string; booking: Booking };
+  | { kind: "booking"; date: string; booking: Booking }
+  | { kind: "billing_comm"; date: string; event: BillingCommEvent };
 
 // ─── Activity-type icon + colour maps ────────────────────────────────────────
 const ACTIVITY_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {
@@ -373,6 +391,68 @@ function RecordItem({
   );
 }
 
+// ─── Billing communication row (proforma/GST send, reminder, payment) ─────────
+const BILLING_COMM_ICONS: Record<BillingCommEvent["kind"], React.ComponentType<{ className?: string }>> = {
+  proforma_sent: Send,
+  gst_invoice_sent: Send,
+  reminder_sent: BellRing,
+  payment_received: CheckCircle2,
+};
+
+const BILLING_COMM_COLORS: Record<BillingCommEvent["kind"], string> = {
+  proforma_sent: "bg-cyan-100 text-cyan-600",
+  gst_invoice_sent: "bg-emerald-100 text-emerald-600",
+  reminder_sent: "bg-amber-100 text-amber-600",
+  payment_received: "bg-green-100 text-green-600",
+};
+
+const BILLING_COMM_LABELS: Record<BillingCommEvent["kind"], string> = {
+  proforma_sent: "Proforma",
+  gst_invoice_sent: "GST Invoice",
+  reminder_sent: "Reminder",
+  payment_received: "Payment",
+};
+
+function BillingCommItem({ event, isLast }: { event: BillingCommEvent; isLast?: boolean }) {
+  const Icon = BILLING_COMM_ICONS[event.kind];
+  const colorClass = BILLING_COMM_COLORS[event.kind];
+  const failed = event.status === "failed";
+
+  return (
+    <div className="flex gap-3">
+      <TimelineIcon colorClass={colorClass} icon={Icon} isLast={isLast} />
+      <div className="flex-1 pb-6">
+        <div className="flex items-start justify-between gap-2">
+          <div>
+            <div className="flex items-center gap-2 flex-wrap">
+              <Badge variant="outline" className="text-xs">
+                {BILLING_COMM_LABELS[event.kind]}
+              </Badge>
+              <span className="font-medium text-sm">{event.detail}</span>
+              {failed && (
+                <span className="flex items-center gap-0.5 text-xs text-red-600">
+                  <XCircle className="h-3 w-3" /> failed
+                </span>
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground mt-0.5">
+              {[
+                event.contract_number,
+                event.statement_number,
+                event.recipient,
+                event.amount != null ? formatCurrency(event.amount) : null,
+              ].filter(Boolean).join(" · ")}
+            </p>
+          </div>
+          <p className="text-xs text-muted-foreground shrink-0 whitespace-nowrap">
+            {formatDate(event.occurred_at)}
+          </p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ─── Lead created anchor (always last in the list) ────────────────────────────
 function LeadCreatedItem({ lead }: { lead: Lead }) {
   return (
@@ -434,13 +514,14 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
     setLoading(true);
     try {
       const opts = signal ? { signal } : {};
-      const [activitiesRes, proposalsRes, invoicesRes, contractsRes, bookingsRes] =
+      const [activitiesRes, proposalsRes, invoicesRes, contractsRes, bookingsRes, billingCommsRes] =
         await Promise.all([
           fetch(`/api/leads/${leadId}/activities`, opts),
           fetch(`/api/proposals?lead_id=${leadId}`, opts),
           fetch(`/api/invoices?lead_id=${leadId}`, opts),
           fetch(`/api/contracts?lead_id=${leadId}`, opts),
           fetch(`/api/bookings?lead_id=${leadId}&limit=50`, opts),
+          fetch(`/api/leads/${leadId}/billing-communications`, opts),
         ]);
 
       if (signal?.aborted) return;
@@ -475,6 +556,13 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
         const json = await bookingsRes.json();
         (json.data || []).forEach((b: Booking) =>
           merged.push({ kind: "booking", date: b.created_at, booking: b })
+        );
+      }
+      // 403 for roles outside admin/manager/accounts — silently omit, not an error.
+      if (billingCommsRes.ok) {
+        const json = await billingCommsRes.json();
+        (json.data || []).forEach((e: BillingCommEvent) =>
+          merged.push({ kind: "billing_comm", date: e.occurred_at, event: e })
         );
       }
 
@@ -583,6 +671,16 @@ export function LeadTimeline({ leadId, lead, highlightId }: LeadTimelineProps) {
               href={`/contracts/${c.id}`}
               subtitle={`${CONTRACT_STATUS_LABELS[c.status] ?? c.status} · ${formatCurrency(c.total_amount)}`}
               date={c.created_at}
+              isLast={isLast}
+            />
+          );
+        }
+
+        if (item.kind === "billing_comm") {
+          return (
+            <BillingCommItem
+              key={`bc-${item.event.statement_id}-${item.event.kind}-${item.event.occurred_at}-${item.event.recipient ?? ""}`}
+              event={item.event}
               isLast={isLast}
             />
           );
