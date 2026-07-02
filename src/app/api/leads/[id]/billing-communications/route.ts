@@ -3,9 +3,18 @@
  *
  * Unified billing-communication timeline for a lead: every proforma/GST
  * invoice send, payment reminder, and payment received across ALL contracts
- * owned by this lead. Feeds the "Communications" section on LeadTimeline —
- * answers "what have we sent this customer, and did they pay?" without
- * digging through billing/AR pages statement by statement.
+ * owned by this lead, PLUS proposal-level deposit and pro-rata payments
+ * (a separate revenue stream — see CLAUDE.md "Proposal → Contract Flow").
+ * Feeds the "Communications" section on LeadTimeline — answers "what have
+ * we sent this customer, and did they pay?" without digging through
+ * billing/AR pages or individual proposals.
+ *
+ * Proposal payments have no dedicated line-item table (unlike billing_payments) —
+ * they're status flags + a single timestamp/amount/reference on the proposal
+ * row itself, so each one becomes at most one deposit event and one pro-rata
+ * event, regardless of contract activation state. This matters for leads
+ * whose contract hasn't activated yet (no billing_statements exist yet) —
+ * without this, their proposal payment wouldn't show anywhere on the timeline.
  *
  * Auth: admin, manager, accounts — mirrors billing_send_log / billing_reminder_sends RLS.
  */
@@ -16,7 +25,8 @@ import { createClient } from "@/lib/supabase/server";
 export const dynamic = "force-dynamic";
 
 interface CommEvent {
-  kind: "proforma_sent" | "gst_invoice_sent" | "reminder_sent" | "payment_received";
+  kind: "proforma_sent" | "gst_invoice_sent" | "reminder_sent" | "payment_received"
+    | "proposal_deposit_paid" | "proposal_prorata_paid";
   occurred_at: string;
   statement_id: string;
   statement_number: string | null;
@@ -49,6 +59,45 @@ export async function GET(
   const offset = Math.max(0, parseInt(searchParams.get("offset") || "0", 10) || 0);
   const limit = Math.min(MAX_LIMIT, Math.max(1, parseInt(searchParams.get("limit") || "", 10) || DEFAULT_LIMIT));
 
+  const events: CommEvent[] = [];
+
+  // ── Proposal-level payments (deposit + pro-rata) ────────────────────────
+  // Independent of contracts/statements existing — a proposal can be paid
+  // long before its contract activates.
+  const { data: proposals } = await supabase
+    .from("proposals")
+    .select(`
+      id, proposal_number,
+      payment_status, payment_received_at, payment_amount, payment_reference,
+      deposit_payment_status, deposit_payment_received_at, deposit_payment_amount, deposit_payment_reference
+    `)
+    .eq("lead_id", leadId);
+
+  for (const p of proposals || []) {
+    if (p.deposit_payment_status === "paid" && p.deposit_payment_received_at) {
+      events.push({
+        kind: "proposal_deposit_paid",
+        occurred_at: p.deposit_payment_received_at,
+        statement_id: p.id,
+        statement_number: p.proposal_number,
+        contract_number: null,
+        detail: "Security deposit paid",
+        amount: p.deposit_payment_amount != null ? Number(p.deposit_payment_amount) : undefined,
+      });
+    }
+    if (p.payment_status === "paid" && p.payment_received_at) {
+      events.push({
+        kind: "proposal_prorata_paid",
+        occurred_at: p.payment_received_at,
+        statement_id: p.id,
+        statement_number: p.proposal_number,
+        contract_number: null,
+        detail: "Pro-rata invoice paid",
+        amount: p.payment_amount != null ? Number(p.payment_amount) : undefined,
+      });
+    }
+  }
+
   const { data: contracts } = await supabase
     .from("contracts")
     .select("id, contract_number")
@@ -56,8 +105,18 @@ export async function GET(
   const contractIds = (contracts || []).map((c) => c.id);
   const contractNumberById = new Map((contracts || []).map((c) => [c.id, c.contract_number]));
 
+  const finish = () => {
+    events.sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime());
+    const page = events.slice(offset, offset + limit);
+    return NextResponse.json({
+      data: page,
+      total: events.length,
+      has_more: offset + limit < events.length,
+    });
+  };
+
   if (contractIds.length === 0) {
-    return NextResponse.json({ data: [], total: 0, has_more: false });
+    return finish();
   }
 
   const { data: statements } = await supabase
@@ -73,7 +132,7 @@ export async function GET(
   );
 
   if (statementIds.length === 0) {
-    return NextResponse.json({ data: [], total: 0, has_more: false });
+    return finish();
   }
 
   const [sendLogRes, reminderRes, paymentsRes] = await Promise.all([
@@ -90,8 +149,6 @@ export async function GET(
       .select("billing_statement_id, amount, payment_date, payment_mode, created_at")
       .in("billing_statement_id", statementIds),
   ]);
-
-  const events: CommEvent[] = [];
 
   for (const row of sendLogRes.data || []) {
     const meta = statementMeta.get(row.billing_statement_id);
@@ -134,13 +191,5 @@ export async function GET(
     });
   }
 
-  events.sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime());
-
-  const page = events.slice(offset, offset + limit);
-
-  return NextResponse.json({
-    data: page,
-    total: events.length,
-    has_more: offset + limit < events.length,
-  });
+  return finish();
 }
