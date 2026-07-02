@@ -45,7 +45,8 @@ import { ActivityForm } from "@/components/activities/activity-form";
 
 // ─── Billing communication event (from /api/leads/[id]/billing-communications) ─
 interface BillingCommEvent {
-  kind: "proforma_sent" | "gst_invoice_sent" | "reminder_sent" | "payment_received";
+  kind: "proforma_sent" | "gst_invoice_sent" | "reminder_sent" | "payment_received"
+    | "proposal_deposit_paid" | "proposal_prorata_paid";
   occurred_at: string;
   statement_id: string;
   statement_number: string | null;
@@ -397,6 +398,8 @@ const BILLING_COMM_ICONS: Record<BillingCommEvent["kind"], React.ComponentType<{
   gst_invoice_sent: Send,
   reminder_sent: BellRing,
   payment_received: CheckCircle2,
+  proposal_deposit_paid: CheckCircle2,
+  proposal_prorata_paid: CheckCircle2,
 };
 
 const BILLING_COMM_COLORS: Record<BillingCommEvent["kind"], string> = {
@@ -404,6 +407,8 @@ const BILLING_COMM_COLORS: Record<BillingCommEvent["kind"], string> = {
   gst_invoice_sent: "bg-emerald-100 text-emerald-600",
   reminder_sent: "bg-amber-100 text-amber-600",
   payment_received: "bg-green-100 text-green-600",
+  proposal_deposit_paid: "bg-green-100 text-green-600",
+  proposal_prorata_paid: "bg-green-100 text-green-600",
 };
 
 const BILLING_COMM_LABELS: Record<BillingCommEvent["kind"], string> = {
@@ -411,6 +416,8 @@ const BILLING_COMM_LABELS: Record<BillingCommEvent["kind"], string> = {
   gst_invoice_sent: "GST Invoice",
   reminder_sent: "Reminder",
   payment_received: "Payment",
+  proposal_deposit_paid: "Deposit",
+  proposal_prorata_paid: "Pro-rata",
 };
 
 function BillingCommItem({ event, isLast }: { event: BillingCommEvent; isLast?: boolean }) {
