@@ -14,8 +14,10 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Card, CardContent } from "@/components/ui/card";
 import { toast } from "sonner";
 import { emitApprovalChanged, onApprovalChanged } from "@/lib/approval-events";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, apiErrorMessage } from "@/lib/utils";
 import { poValidity, PO_VALIDITY_CLASS, waitingSince } from "@/lib/approval-display";
+import { computeBatchDate, formatBatchDate, type PaymentBatchType } from "@/lib/payment-batch";
+import { PAYMENT_BATCH_TYPES, PAYMENT_BATCH_TYPE_LABELS } from "@/lib/constants";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Receipt } from "lucide-react";
 
@@ -126,7 +128,7 @@ function CompRequestRow({
       });
       const json = await res.json();
       if (!res.ok) {
-        toast.error(json.error || `Failed to ${action}`);
+        toast.error(apiErrorMessage(json.error, `Failed to ${action}`));
         return;
       }
       toast.success(json.message || `Request ${action}d`);
@@ -275,13 +277,20 @@ function VendorBillRow({
   const [acting, setActing] = useState(false);
   const [rejecting, setRejecting] = useState(false);
   const [rejectionReason, setRejectionReason] = useState("");
+  // Approve is two-step: first click reveals the payment batch chooser,
+  // picking a batch fires the request (batch_type is mandatory on the API).
+  const [choosingBatch, setChoosingBatch] = useState(false);
 
   const validity = poValidity(bill.purchase_orders?.expected_delivery_date);
   const waiting = waitingSince(bill.created_at);
 
-  const handleAction = async (action: "approve" | "reject") => {
+  const handleAction = async (action: "approve" | "reject", batchType?: PaymentBatchType) => {
     if (action === "reject" && !rejectionReason.trim()) {
       toast.error("Please provide a rejection reason");
+      return;
+    }
+    if (action === "approve" && !batchType) {
+      toast.error("Select a payment batch schedule");
       return;
     }
     setActing(true);
@@ -291,15 +300,17 @@ function VendorBillRow({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           action,
+          ...(action === "approve" ? { batch_type: batchType } : {}),
           ...(action === "reject" ? { rejection_reason: rejectionReason.trim() } : {}),
         }),
       });
       if (!res.ok) {
         const json = await res.json().catch(() => null);
-        toast.error(json?.error || `Failed to ${action} bill`);
+        toast.error(apiErrorMessage(json?.error, `Failed to ${action} bill`));
         return;
       }
       toast.success(action === "approve" ? `${bill.bill_number} approved` : `${bill.bill_number} rejected`);
+      setChoosingBatch(false);
       emitApprovalChanged();
       onActed();
     } finally {
@@ -358,14 +369,44 @@ function VendorBillRow({
               className="h-8 text-xs"
             />
           )}
+          {choosingBatch && !rejecting && (
+            <div className="space-y-1.5">
+              <p className="text-xs text-muted-foreground">When should accounts process this payment?</p>
+              <div className="grid grid-cols-3 gap-1.5">
+                {PAYMENT_BATCH_TYPES.map((bt) => (
+                  <button
+                    key={bt}
+                    type="button"
+                    disabled={acting}
+                    onClick={() => handleAction("approve", bt)}
+                    className="rounded-md border border-emerald-200 bg-emerald-50/50 px-2 py-1.5 text-left hover:bg-emerald-100 transition-colors disabled:opacity-50"
+                  >
+                    <p className="text-xs font-semibold">{PAYMENT_BATCH_TYPE_LABELS[bt]}</p>
+                    <p className="text-[10px] text-muted-foreground">{formatBatchDate(computeBatchDate(bt))}</p>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="flex gap-2">
             {!rejecting ? (
+              choosingBatch ? (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="flex-1 h-8 text-xs"
+                  disabled={acting}
+                  onClick={() => setChoosingBatch(false)}
+                >
+                  {acting ? <Loader2 className="h-3 w-3 animate-spin" /> : "Cancel"}
+                </Button>
+              ) : (
               <>
                 <Button
                   size="sm"
                   className="flex-1 h-8 text-xs bg-emerald-600 hover:bg-emerald-700"
                   disabled={acting}
-                  onClick={() => handleAction("approve")}
+                  onClick={() => setChoosingBatch(true)}
                 >
                   {acting ? <Loader2 className="h-3 w-3 animate-spin" /> : (<><CheckCircle2 className="h-3 w-3 mr-1" />Approve</>)}
                 </Button>
@@ -378,6 +419,7 @@ function VendorBillRow({
                   <XCircle className="h-3 w-3 mr-1" />Reject
                 </Button>
               </>
+              )
             ) : (
               <>
                 <Button
@@ -418,6 +460,7 @@ export default function ApprovalsPage() {
   const [pendingBills, setPendingBills] = useState<PendingBill[]>([]);
   const [selectedBillIds, setSelectedBillIds] = useState<Set<string>>(new Set());
   const [bulkApproving, setBulkApproving] = useState(false);
+  const [bulkBatchType, setBulkBatchType] = useState<PaymentBatchType | "">("");
   const [loading, setLoading]       = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -498,6 +541,10 @@ export default function ApprovalsPage() {
 
   const handleBulkApprove = async () => {
     if (selectedBillIds.size === 0) return;
+    if (!bulkBatchType) {
+      toast.error("Select a payment batch schedule for the selected bills");
+      return;
+    }
     setBulkApproving(true);
     const ids = Array.from(selectedBillIds);
     const results = await Promise.allSettled(
@@ -505,11 +552,11 @@ export default function ApprovalsPage() {
         fetch(`/api/procurement/bills/${id}`, {
           method: "PATCH",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ action: "approve" }),
+          body: JSON.stringify({ action: "approve", batch_type: bulkBatchType }),
         }).then(async r => {
           if (!r.ok) {
             const json = await r.json().catch(() => null);
-            throw new Error(json?.error || `Failed`);
+            throw new Error(apiErrorMessage(json?.error, "Failed"));
           }
         })
       )
@@ -602,7 +649,7 @@ export default function ApprovalsPage() {
                           <Button
                             size="sm"
                             className="h-7 text-xs bg-emerald-600 hover:bg-emerald-700"
-                            disabled={selectedBillIds.size === 0 || bulkApproving}
+                            disabled={selectedBillIds.size === 0 || !bulkBatchType || bulkApproving}
                             onClick={handleBulkApprove}
                           >
                             {bulkApproving ? (
@@ -614,6 +661,30 @@ export default function ApprovalsPage() {
                         </div>
                       )}
                     </div>
+                    {canActOnBills && selectedBillIds.size > 0 && (
+                      <div className="flex items-center gap-2 rounded-md border bg-muted/30 px-3 py-2">
+                        <span className="text-xs text-muted-foreground shrink-0">Payment batch:</span>
+                        <div className="flex gap-1.5">
+                          {PAYMENT_BATCH_TYPES.map((bt) => (
+                            <button
+                              key={bt}
+                              type="button"
+                              onClick={() => setBulkBatchType(bt)}
+                              className={`rounded-md border px-2.5 py-1 text-xs transition-colors ${
+                                bulkBatchType === bt
+                                  ? "border-emerald-500 bg-emerald-50 text-emerald-900 font-semibold"
+                                  : "border-muted hover:bg-muted/50"
+                              }`}
+                            >
+                              {PAYMENT_BATCH_TYPE_LABELS[bt]}
+                              <span className="ml-1 text-[10px] text-muted-foreground">
+                                {formatBatchDate(computeBatchDate(bt))}
+                              </span>
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
                     {pendingBills.map(bill => (
                       <VendorBillRow
                         key={bill.id}

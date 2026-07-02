@@ -153,3 +153,19 @@ export function getValidityLabel(days: number | null | undefined): string {
   }
   return `${days} Days`;
 }
+
+/**
+ * Coerce an API error payload's `error` field into a string safe for toasts.
+ * Some routes return Zod fieldErrors objects in `error` — rendering an object
+ * as a React child crashes the whole app, so never pass `json.error` to a
+ * toast directly; route it through this helper.
+ */
+export function apiErrorMessage(error: unknown, fallback: string): string {
+  if (typeof error === "string" && error.trim()) return error;
+  if (error && typeof error === "object") {
+    const parts = Object.entries(error as Record<string, unknown>)
+      .map(([field, v]) => `${field}: ${Array.isArray(v) ? v.join(", ") : String(v)}`);
+    if (parts.length) return parts.join("; ");
+  }
+  return fallback;
+}
