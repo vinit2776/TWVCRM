@@ -13,11 +13,13 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
-import { formatCurrency } from "@/lib/utils";
+import { formatCurrency, apiErrorMessage } from "@/lib/utils";
 import { toast } from "sonner";
 import { buildShareableMessage, fmtDuration } from "@/lib/unifi-share";
 import { emitApprovalChanged, onApprovalChanged } from "@/lib/approval-events";
 import { poValidity, PO_VALIDITY_CLASS, waitingSince } from "@/lib/approval-display";
+import { computeBatchDate, formatBatchDate, type PaymentBatchType } from "@/lib/payment-batch";
+import { PAYMENT_BATCH_TYPES, PAYMENT_BATCH_TYPE_LABELS } from "@/lib/constants";
 
 function timeAgo(iso: string): string {
   const diff = Math.floor((Date.now() - new Date(iso).getTime()) / 1000);
@@ -86,6 +88,9 @@ export function ApprovalBell() {
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const [pendingBills, setPendingBills] = useState<PendingBill[]>([]);
   const [billActingOnId, setBillActingOnId] = useState<string | null>(null);
+  // Approve is two-step: first click reveals the payment batch chooser for
+  // that bill, picking a batch fires the request (batch_type is mandatory).
+  const [billChoosingBatchId, setBillChoosingBatchId] = useState<string | null>(null);
 
   const fetchApprovals = useCallback(async () => {
     try {
@@ -121,6 +126,7 @@ export function ApprovalBell() {
     } else {
       setApprovals(prev => prev.filter(a => a.status !== "approved"));
       setIssuedVouchers({});
+      setBillChoosingBatchId(null);
     }
   }, [open, fetchApprovals]);
 
@@ -133,21 +139,29 @@ export function ApprovalBell() {
 
   const pendingCount = approvals.length + pendingBills.length;
 
-  const handleBillAction = async (bill: PendingBill, action: "approve" | "reject") => {
+  const handleBillAction = async (bill: PendingBill, action: "approve" | "reject", batchType?: PaymentBatchType) => {
+    if (action === "approve" && !batchType) {
+      toast.error("Select a payment batch schedule");
+      return;
+    }
     setBillActingOnId(bill.id);
     try {
       const res = await fetch(`/api/procurement/bills/${bill.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ action }),
+        body: JSON.stringify({
+          action,
+          ...(action === "approve" ? { batch_type: batchType } : {}),
+        }),
       });
       if (res.ok) {
         toast.success(action === "approve" ? `${bill.bill_number} approved` : `${bill.bill_number} rejected`);
         setPendingBills(prev => prev.filter(b => b.id !== bill.id));
+        setBillChoosingBatchId(null);
         emitApprovalChanged();
       } else {
         const err = await res.json().catch(() => null);
-        toast.error(err?.error || `Failed to ${action} bill`);
+        toast.error(apiErrorMessage(err?.error, `Failed to ${action} bill`));
       }
     } catch {
       toast.error("Network error");
@@ -190,7 +204,7 @@ export function ApprovalBell() {
         emitApprovalChanged();
       } else {
         const err = await res.json().catch(() => null);
-        toast.error(err?.error || `Failed to ${action}`);
+        toast.error(apiErrorMessage(err?.error, `Failed to ${action}`));
       }
     } catch {
       toast.error("Network error");
@@ -618,6 +632,25 @@ export function ApprovalBell() {
                     {bill.notes && <p className="italic truncate">&ldquo;{bill.notes}&rdquo;</p>}
                   </div>
 
+                  {billChoosingBatchId === bill.id && (
+                    <div className="space-y-1">
+                      <p className="text-[10px] text-muted-foreground">When should accounts process this payment?</p>
+                      <div className="grid grid-cols-3 gap-1">
+                        {PAYMENT_BATCH_TYPES.map((bt) => (
+                          <button
+                            key={bt}
+                            type="button"
+                            disabled={billActingOnId === bill.id}
+                            onClick={() => handleBillAction(bill, "approve", bt)}
+                            className="rounded-md border border-green-200 bg-green-50/50 px-1.5 py-1 text-left hover:bg-green-100 transition-colors disabled:opacity-50"
+                          >
+                            <p className="text-[10px] font-semibold leading-tight">{PAYMENT_BATCH_TYPE_LABELS[bt]}</p>
+                            <p className="text-[9px] text-muted-foreground">{formatBatchDate(computeBatchDate(bt))}</p>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  )}
                   <div className="flex items-center gap-2">
                     <button
                       className="text-xs font-medium text-primary hover:underline"
@@ -626,26 +659,42 @@ export function ApprovalBell() {
                       View bill →
                     </button>
                     <div className="flex gap-1.5 ml-auto">
-                      <Button
-                        size="sm"
-                        className="h-7 text-xs bg-green-600 hover:bg-green-700"
-                        disabled={billActingOnId === bill.id}
-                        onClick={() => handleBillAction(bill, "approve")}
-                      >
-                        {billActingOnId === bill.id
-                          ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
-                          : <CheckCircle2 className="h-3 w-3 mr-1" />}
-                        Approve
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
-                        className="h-7 text-xs text-destructive hover:text-destructive"
-                        disabled={billActingOnId === bill.id}
-                        onClick={() => { setOpen(false); router.push(`/procurement/bills/${bill.id}`); }}
-                      >
-                        View to Reject
-                      </Button>
+                      {billChoosingBatchId === bill.id ? (
+                        <Button
+                          size="sm"
+                          variant="outline"
+                          className="h-7 text-xs"
+                          disabled={billActingOnId === bill.id}
+                          onClick={() => setBillChoosingBatchId(null)}
+                        >
+                          {billActingOnId === bill.id
+                            ? <Loader2 className="h-3 w-3 animate-spin" />
+                            : "Cancel"}
+                        </Button>
+                      ) : (
+                        <>
+                          <Button
+                            size="sm"
+                            className="h-7 text-xs bg-green-600 hover:bg-green-700"
+                            disabled={billActingOnId === bill.id}
+                            onClick={() => setBillChoosingBatchId(bill.id)}
+                          >
+                            {billActingOnId === bill.id
+                              ? <Loader2 className="h-3 w-3 animate-spin mr-1" />
+                              : <CheckCircle2 className="h-3 w-3 mr-1" />}
+                            Approve
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="h-7 text-xs text-destructive hover:text-destructive"
+                            disabled={billActingOnId === bill.id}
+                            onClick={() => { setOpen(false); router.push(`/procurement/bills/${bill.id}`); }}
+                          >
+                            View to Reject
+                          </Button>
+                        </>
+                      )}
                     </div>
                   </div>
                 </div>

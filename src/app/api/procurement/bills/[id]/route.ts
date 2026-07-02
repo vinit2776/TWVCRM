@@ -166,7 +166,13 @@ export async function PATCH(
   const body = await request.json();
   const parsed = patchBillSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+    // `error` must always be a string — clients render it directly in toasts,
+    // and an object here crashes React ("Objects are not valid as a React child").
+    const fieldErrors = parsed.error.flatten().fieldErrors;
+    const message = Object.entries(fieldErrors)
+      .map(([field, errs]) => `${field}: ${(errs ?? []).join(", ")}`)
+      .join("; ") || "Invalid request";
+    return NextResponse.json({ error: message, details: fieldErrors }, { status: 400 });
   }
 
   let updatePayload: Record<string, unknown> = {};
