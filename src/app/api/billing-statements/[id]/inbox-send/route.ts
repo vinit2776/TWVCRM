@@ -100,8 +100,20 @@ export async function POST(
 
   // D3 (deliver once): refuse to re-dispatch a statement that's already gone out.
   if (statement.tally_delivered_at) {
+    // Auto-heal: if the email was sent but the state transition failed (step 3
+    // succeeded, step 4 threw), the row is stuck in ready_to_send with
+    // tally_delivered_at already set. Fix the state so the UI switches to
+    // showing "Resend email" instead of "Retry send" after refresh.
+    if (statement.handoff_state === "ready_to_send") {
+      const healedState = statement.payment_status === "paid" ? "complete" : "gst_sent_awaiting_payment";
+      await adminClient
+        .from("billing_statements")
+        .update({ lifecycle_stage: "sent", status: "exported" })
+        .eq("id", statement.id);
+      await setHandoffState(adminClient, statement.id, healedState, "inbox_send_heal");
+    }
     return NextResponse.json(
-      { error: "Statement already delivered. Use admin/tally/redispatch to resend." },
+      { error: "Statement already delivered. Refresh the page and use the 'Resend email' button." },
       { status: 409 },
     );
   }
