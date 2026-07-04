@@ -8,7 +8,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { Plus, Wrench, AlertTriangle, ChevronRight } from "lucide-react";
+import { Plus, Wrench, AlertTriangle, ChevronRight, UserPlus } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -16,6 +16,7 @@ import {
   PRIORITY_STYLES, STATUS_STYLES, timeAgo, timeUntil,
 } from "@/lib/facility-ui";
 import { FacilityReportWizard } from "@/components/facility/report-wizard";
+import { DelegateTaskDialog } from "@/components/facility/delegate-task-dialog";
 import type { FacilityIssue, FacilityIssueStatus } from "@/types";
 
 type Tab = "open" | "in_progress" | "resolved_today";
@@ -31,6 +32,7 @@ export default function MyFacilityIssuesPage() {
   const [issues, setIssues] = useState<FacilityIssue[]>([]);
   const [loading, setLoading] = useState(true);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [delegateOpen, setDelegateOpen] = useState(false);
 
   // Counts for tabs (co-located with fetchData so both update on tab change)
   const [counts, setCounts] = useState({ open: 0, in_progress: 0, resolved_today: 0 });
@@ -52,10 +54,10 @@ export default function MyFacilityIssuesPage() {
     try {
       const res = await fetch(`/api/facility/issues?${params.toString()}`);
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to load issues");
+      if (!res.ok) throw new Error(json.error || "Failed to load tasks");
       setIssues(json.data || []);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load issues");
+      toast.error(e instanceof Error ? e.message : "Failed to load tasks");
       setIssues([]);
     } finally {
       setLoading(false);
@@ -86,12 +88,17 @@ export default function MyFacilityIssuesPage() {
     <div className="p-4 md:p-6 max-w-3xl mx-auto pb-24 md:pb-6 space-y-4">
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl md:text-2xl font-semibold">My Issues</h1>
+          <h1 className="text-xl md:text-2xl font-semibold">My Tasks</h1>
           <p className="text-xs text-muted-foreground">Tickets assigned to you</p>
         </div>
-        <Button size="sm" onClick={() => setWizardOpen(true)} className="hidden md:inline-flex">
-          <Plus className="h-4 w-4 mr-1" /> Report Issue
-        </Button>
+        <div className="hidden md:flex items-center gap-2">
+          <Button variant="outline" size="sm" onClick={() => setDelegateOpen(true)}>
+            <UserPlus className="h-4 w-4 mr-1" /> Delegate
+          </Button>
+          <Button size="sm" onClick={() => setWizardOpen(true)}>
+            <Plus className="h-4 w-4 mr-1" /> New Task
+          </Button>
+        </div>
       </div>
 
       {/* Tab strip */}
@@ -140,6 +147,7 @@ export default function MyFacilityIssuesPage() {
       </div>
 
       <FacilityReportWizard open={wizardOpen} onOpenChange={setWizardOpen} onCreated={() => fetchData()} />
+      <DelegateTaskDialog open={delegateOpen} onOpenChange={setDelegateOpen} onCreated={() => fetchData()} />
     </div>
   );
 }
@@ -157,6 +165,11 @@ function Card({ issue }: { issue: FacilityIssue }) {
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-1.5 flex-wrap">
             <code className="text-[10px] font-mono text-muted-foreground">{issue.issue_number}</code>
+            {issue.task_type === "delegated_task" && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full ring-1 bg-teal-50 text-teal-700 ring-teal-200 inline-flex items-center gap-0.5">
+                <UserPlus className="h-2.5 w-2.5" /> Delegated
+              </span>
+            )}
             <span className={cn("text-[10px] px-1.5 py-0.5 rounded-full ring-1", STATUS_STYLES[issue.status].chip)}>
               {STATUS_STYLES[issue.status].label}
             </span>

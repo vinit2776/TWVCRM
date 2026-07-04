@@ -14,13 +14,14 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
-  Plus, Search, Filter, X, Wifi, AlertTriangle, ChevronRight, RefreshCw, ChevronDown,
+  Plus, Search, Filter, X, Wifi, AlertTriangle, ChevronRight, RefreshCw, ChevronDown, UserPlus,
 } from "lucide-react";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { cn } from "@/lib/utils";
 import { FacilityReportWizard } from "@/components/facility/report-wizard";
+import { DelegateTaskDialog } from "@/components/facility/delegate-task-dialog";
 import {
   PRIORITY_LIST, PRIORITY_STYLES, STATUS_LIST, STATUS_STYLES,
   timeAgo, timeUntil,
@@ -42,6 +43,7 @@ export default function FacilityIssuesPage() {
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
   const [wizardOpen, setWizardOpen] = useState(false);
+  const [delegateOpen, setDelegateOpen] = useState(false);
   // resolved + closed start collapsed; active groups start expanded
   const [collapsedGroups, setCollapsedGroups] = useState<Set<FacilityIssueStatus>>(
     new Set(["resolved", "closed"]),
@@ -78,10 +80,10 @@ export default function FacilityIssuesPage() {
     try {
       const res = await fetch(`/api/facility/issues?${params.toString()}`);
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to load issues");
+      if (!res.ok) throw new Error(json.error || "Failed to load tasks");
       setIssues(json.data || []);
     } catch (e) {
-      toast.error(e instanceof Error ? e.message : "Failed to load issues");
+      toast.error(e instanceof Error ? e.message : "Failed to load tasks");
       setIssues([]);
     } finally {
       setLoading(false);
@@ -155,7 +157,7 @@ export default function FacilityIssuesPage() {
       {/* ───── Header ──────────────────────────────────────────────────────── */}
       <div className="flex items-center justify-between gap-3">
         <div>
-          <h1 className="text-xl md:text-2xl font-semibold">Facility Issues</h1>
+          <h1 className="text-xl md:text-2xl font-semibold">Internal Tasks</h1>
           <p className="text-xs md:text-sm text-muted-foreground">
             {showGrouped ? "All tickets · grouped by status" : "IT infrastructure tickets across all locations"}
           </p>
@@ -164,8 +166,11 @@ export default function FacilityIssuesPage() {
           <Button variant="outline" size="icon" onClick={fetchData} title="Refresh" className="hidden sm:inline-flex">
             <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
           </Button>
+          <Button variant="outline" size="sm" onClick={() => setDelegateOpen(true)}>
+            <UserPlus className="h-4 w-4 mr-1" /> Delegate
+          </Button>
           <Button size="sm" onClick={() => setWizardOpen(true)}>
-            <Plus className="h-4 w-4 mr-1" /> Report Issue
+            <Plus className="h-4 w-4 mr-1" /> New Task
           </Button>
         </div>
       </div>
@@ -353,6 +358,12 @@ export default function FacilityIssuesPage() {
         onOpenChange={setWizardOpen}
         onCreated={() => fetchData()}
       />
+
+      <DelegateTaskDialog
+        open={delegateOpen}
+        onOpenChange={setDelegateOpen}
+        onCreated={() => fetchData()}
+      />
     </div>
   );
 }
@@ -394,6 +405,11 @@ function IssueCard({ issue, inGroup }: { issue: FacilityIssue; inGroup?: boolean
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 flex-wrap">
             <code className="text-xs font-mono text-muted-foreground">{issue.issue_number}</code>
+            {issue.task_type === "delegated_task" && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full ring-1 bg-teal-50 text-teal-700 ring-teal-200 inline-flex items-center gap-0.5">
+                <UserPlus className="h-2.5 w-2.5" /> Delegated
+              </span>
+            )}
             {isUnowned && (
               <span className={cn(
                 "text-[10px] px-1.5 py-0.5 rounded-full ring-1 font-medium",
