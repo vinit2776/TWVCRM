@@ -20,32 +20,31 @@ export async function GET(request: NextRequest) {
 
   const { searchParams } = new URL(request.url);
   const scope = searchParams.get("scope");
+  const taskType = searchParams.get("task_type"); // reported_problem | delegated_task | omit for both
   const format = searchParams.get("format");
 
   const now = new Date();
   const dateFrom = searchParams.get("date_from") ?? new Date(now.getTime() - 30 * 86400000).toISOString();
   const dateTo = searchParams.get("date_to") ?? now.toISOString();
 
-  // 1) Pull all IT technicians + IT managers (assignable users)
-  const { data: techs, error: tErr } = await supabase
-    .from("users")
-    .select("id, full_name, role, is_active")
-    .in("role", ["it_technician", "it_manager", "it_team"])
-    .eq("is_active", true);
-  if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
-
-  // 2) Pull issues for the period
+  // 1) Pull issues for the period FIRST, then only fetch the users who actually
+  // have tasks in range — not the other way around. Generalizing beyond IT
+  // roles means the assignee pool can be any active employee; fetching every
+  // active user up front (the old role-filtered approach) doesn't scale once
+  // "assignable" isn't a small fixed role list anymore.
   let issuesQ = supabase
     .from("facility_issues")
     .select(`
-      id, status, priority, scope,
+      id, status, priority, scope, task_type,
       reported_at, acknowledged_at, resolved_at,
       sla_target_at, sla_breached, reopen_count,
       satisfaction_rating, assigned_to
     `)
     .gte("created_at", dateFrom)
-    .lte("created_at", dateTo);
+    .lte("created_at", dateTo)
+    .not("assigned_to", "is", null);
   if (scope) issuesQ = issuesQ.eq("scope", scope);
+  if (taskType) issuesQ = issuesQ.eq("task_type", taskType);
 
   const { data: issues, error: iErr } = await issuesQ;
   if (iErr) return NextResponse.json({ error: iErr.message }, { status: 500 });
@@ -64,6 +63,17 @@ export async function GET(request: NextRequest) {
     arr.push(i);
     byTech.set(i.assigned_to, arr);
   }
+
+  // 2) Fetch only the users who showed up as an assignee above.
+  const assigneeIds = [...byTech.keys()];
+  const { data: techs, error: tErr } = assigneeIds.length === 0
+    ? { data: [] as { id: string; full_name: string; role: string; is_active: boolean }[], error: null }
+    : await supabase
+        .from("users")
+        .select("id, full_name, role, is_active")
+        .in("id", assigneeIds)
+        .eq("is_active", true);
+  if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 });
 
   const rows: FacilityTechnicianKpi[] = (techs ?? []).map((t) => {
     const list = byTech.get(t.id) ?? [];

@@ -87,6 +87,21 @@ export function computeSlaTarget(
 }
 
 /**
+ * Can `delegator` delegate a task to `assignee`?
+ *
+ * v1: any active user can delegate to any other active user — a
+ * location-scoped model (via user_locations) was designed but dropped
+ * before implementation because user_locations is populated for only
+ * 2 of 15 active users today (inventory/transfer scoping, not an org
+ * chart). Revisit scoping this once user_locations coverage improves;
+ * keeping this as a named function (not an inline check) is what makes
+ * that a one-function change later instead of a route rewrite.
+ */
+export function canDelegateTo(assignee: { is_active: boolean } | null | undefined): boolean {
+  return !!assignee?.is_active;
+}
+
+/**
  * Compute the time-to-claim SLA deadline from priority.
  * Hardcoded targets: critical=2h, high=4h, medium=8h, low=24h.
  */

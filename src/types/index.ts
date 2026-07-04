@@ -2676,6 +2676,7 @@ export type FacilityRootCause =
   | "unknown"
   | "other";
 export type FacilityReportedVia = "walk_in" | "phone" | "whatsapp" | "email" | "self_service" | "proactive" | "feedback";
+export type FacilityTaskType = "reported_problem" | "delegated_task";
 export type FacilityAssetStatus = "active" | "maintenance" | "retired";
 export type FacilityLifecycleStage = "procured" | "installed" | "testing_commissioning" | "operational" | "under_amc" | "decommissioned";
 export type FacilityAttachmentPhase = "report" | "progress" | "resolution";
@@ -2826,6 +2827,7 @@ export interface FacilityIssue {
   reporter_phone?: string | null;
   reported_via: FacilityReportedVia;
   linked_feedback_id?: string | null;
+  task_type: FacilityTaskType;
   assigned_to?: string | null;
   assignee?: { id: string; full_name: string } | null;
   assigned_at?: string | null;
