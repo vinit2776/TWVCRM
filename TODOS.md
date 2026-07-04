@@ -24,6 +24,21 @@
 - Server specs / access to install Node + Windows service.
 - TallyVault: is a company password set? Who unlocks after reboot?
 
+## Internal Tasks (from /office-hours + /plan-eng-review)
+- [P2] Build `task_categories` (non-asset category taxonomy) + `task_recurrence_rules`
+  (cron-spawned recurring tasks) — deliberately deferred out of v1 to keep the first
+  delegation/TAT/KPI slice small. Do this once v1 usage shows what categories and
+  cadences people actually delegate, rather than guessing upfront. Depends on: v1
+  (one-time delegation + task_type, any-active-user authorization) shipping first.
+  Context: design doc `~/.gstack/projects/vinit2776-TWVCRM/vinitchordia-main-design-20260702-211234-internal-tasks.md`.
+- [P3] Revisit location-scoped delegation once `user_locations` coverage improves.
+  v1 dropped location-scoping (any active user can delegate to any active user)
+  because only 2 of 15 active users had a `user_locations` row when checked
+  (2026-07-04) — the table is populated for inventory/transfer scoping, not as an
+  org chart. `canDelegateTo()` in `src/lib/facility.ts` is written as a single
+  named function specifically so this is a one-function change later, not a route
+  rewrite. Depends on: `user_locations` being backfilled for non-warehouse roles.
+
 ## Tally billing redesign (from /plan-eng-review)
 - [BLOCKING B2B QR] Capture one real B2B invoice's IRN data from Tally; confirm the
   signed IRP QR content is fully returned + valid before rendering it on the PDF (D4).

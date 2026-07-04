@@ -5,14 +5,16 @@ import {
   generateIssueNumber,
   computeSlaTarget,
   computeClaimSlaTarget,
+  canDelegateTo,
   logIssueEvent,
 } from "@/lib/facility";
 import { notifyIssueAssignee, notifyAdminsStaleAssignee } from "@/lib/facility-notifications";
 import { createAdminClient } from "@/lib/supabase/server";
-import type { FacilityScope, FacilityIssuePriority, FacilityReportedVia } from "@/types";
+import type { FacilityScope, FacilityIssuePriority, FacilityReportedVia, FacilityTaskType } from "@/types";
 
 const VALID_PRIORITY: FacilityIssuePriority[] = ["low", "medium", "high", "critical"];
 const VALID_VIA: FacilityReportedVia[] = ["walk_in", "phone", "whatsapp", "email", "self_service", "proactive", "feedback"];
+const VALID_TASK_TYPE: FacilityTaskType[] = ["reported_problem", "delegated_task"];
 
 export async function GET(request: NextRequest) {
   const supabase = await createClient();
@@ -90,6 +92,7 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json();
   const {
+    task_type = "reported_problem",
     scope = "it",
     category_id,
     location_id, floor_id, space_unit_id, asset_id,
@@ -98,6 +101,8 @@ export async function POST(request: NextRequest) {
     reported_via = "walk_in",
     reporter_name, reporter_email, reporter_phone,
     linked_feedback_id,
+    assigned_to: delegateAssignedTo,   // delegated_task only — the person being delegated to
+    due_date,                          // delegated_task only — manual TAT, required (D4)
     attachments,           // optional array of { file_url, file_path, file_type, caption }
   } = body;
 
@@ -110,6 +115,30 @@ export async function POST(request: NextRequest) {
   }
   if (!VALID_VIA.includes(reported_via)) {
     return NextResponse.json({ error: `Invalid reported_via` }, { status: 400 });
+  }
+  if (!VALID_TASK_TYPE.includes(task_type)) {
+    return NextResponse.json({ error: `Invalid task_type. Use one of: ${VALID_TASK_TYPE.join(", ")}` }, { status: 400 });
+  }
+
+  // Delegated tasks: required assignee + TAT, validated before any DB writes.
+  let delegatedAssignee: { id: string; full_name: string; is_active: boolean } | null = null;
+  if (task_type === "delegated_task") {
+    if (!delegateAssignedTo) {
+      return NextResponse.json({ error: "assigned_to is required when delegating a task" }, { status: 400 });
+    }
+    if (!due_date || isNaN(new Date(due_date).getTime())) {
+      return NextResponse.json({ error: "due_date is required when delegating a task" }, { status: 400 });
+    }
+    const adminClient = createAdminClient();
+    const { data: assignee } = await adminClient
+      .from("users")
+      .select("id, full_name, is_active")
+      .eq("id", delegateAssignedTo)
+      .single();
+    if (!canDelegateTo(assignee)) {
+      return NextResponse.json({ error: "Selected assignee is not an active user" }, { status: 403 });
+    }
+    delegatedAssignee = assignee;
   }
 
   // Look up category for SLA computation (optional — reporters may only pick scope)
@@ -132,12 +161,19 @@ export async function POST(request: NextRequest) {
   }
 
   const issueNumber = await generateIssueNumber(supabase, scope as FacilityScope);
-  const slaTargetAt = computeSlaTarget(slaSource, priority);
+  // Delegated tasks use the caller-supplied due date directly as the TAT — they
+  // bypass computeSlaTarget() (category/priority-derived), which still runs
+  // unchanged for reported_problem.
+  const slaTargetAt = task_type === "delegated_task"
+    ? new Date(due_date).toISOString()
+    : computeSlaTarget(slaSource, priority);
   const claimSlaTargetAt = computeClaimSlaTarget(priority);
 
-  // Auto-assign based on category's default_assignee_id (any scope, any category)
+  // Auto-assign based on category's default_assignee_id — reported_problem only.
+  // Delegated tasks are assigned explicitly (delegatedAssignee above), not via
+  // category defaults.
   let autoAssignee: { id: string; full_name: string } | null = null;
-  if (categoryDefaultAssigneeId) {
+  if (task_type === "reported_problem" && categoryDefaultAssigneeId) {
     const adminClient = createAdminClient();
     const { data: assignee } = await adminClient
       .from("users")
@@ -153,10 +189,12 @@ export async function POST(request: NextRequest) {
   }
 
   const now = new Date().toISOString();
+  const finalAssignee = delegatedAssignee ?? autoAssignee;
   const { data: issue, error } = await supabase
     .from("facility_issues")
     .insert({
       issue_number: issueNumber,
+      task_type,
       scope,
       category_id: category_id || null,
       location_id,
@@ -175,8 +213,8 @@ export async function POST(request: NextRequest) {
       linked_feedback_id: linked_feedback_id || null,
       sla_target_at: slaTargetAt,
       claim_sla_target_at: claimSlaTargetAt,
-      ...(autoAssignee ? {
-        assigned_to: autoAssignee.id,
+      ...(finalAssignee ? {
+        assigned_to: finalAssignee.id,
         assigned_at: now,
         assigned_by: dbUser.id,
         claimed_at: now,
@@ -219,8 +257,10 @@ export async function POST(request: NextRequest) {
     eventType: "created",
     actorId: dbUser.id,
     actorLabel: dbUser.full_name,
-    message: `Reported via ${reported_via}`,
-    payload: { priority, scope, category_id },
+    message: task_type === "delegated_task"
+      ? `Delegated to ${delegatedAssignee?.full_name ?? "assignee"} by ${dbUser.full_name}`
+      : `Reported via ${reported_via}`,
+    payload: { priority, scope, category_id, task_type },
   });
 
   logAudit(supabase, {
