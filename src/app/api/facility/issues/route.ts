@@ -57,15 +57,23 @@ export async function GET(request: NextRequest) {
   else if (onlyOpen) query = query.in("status", ["new", "acknowledged", "in_progress", "reopened"]);
   if (priority) query = query.eq("priority", priority);
   if (locationId) query = query.eq("location_id", locationId);
-  if (assignedTo === "me") {
+  let currentDbUserId: string | null = null;
+  if (assignedTo === "me" || reportedBy === "me") {
     const { data: dbUser } = await supabase.from("users").select("id").eq("auth_id", user.id).single();
-    if (dbUser) query = query.eq("assigned_to", dbUser.id);
+    currentDbUserId = dbUser?.id ?? null;
+  }
+  if (assignedTo === "me") {
+    if (currentDbUserId) query = query.eq("assigned_to", currentDbUserId);
   } else if (assignedTo === "unassigned") {
     query = query.is("assigned_to", null);
   } else if (assignedTo) {
     query = query.eq("assigned_to", assignedTo);
   }
-  if (reportedBy) query = query.eq("reported_by", reportedBy);
+  if (reportedBy === "me") {
+    if (currentDbUserId) query = query.eq("reported_by", currentDbUserId);
+  } else if (reportedBy) {
+    query = query.eq("reported_by", reportedBy);
+  }
   if (categoryId) query = query.eq("category_id", categoryId);
   if (assetId) query = query.eq("asset_id", assetId);
   if (slaBreached === "true") query = query.eq("sla_breached", true);
