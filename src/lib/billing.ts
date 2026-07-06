@@ -388,12 +388,15 @@ export async function generateMonthlyStatements(
         }
       }
 
+      const prepaidSeatQty = Number(contract.seats) || 1;
       const prepaidSection: LineItemSection = {
         type: "prepaid_rent",
         label: `Prepaid Rent — ${monthLabel(prepaid.month, prepaid.year)}`,
         items: prepaidRentAmount > 0
           ? [{
               description: `Monthly rent${contract.seats ? ` (${contract.seats} seat${Number(contract.seats) > 1 ? "s" : ""})` : ""}`,
+              qty: prepaidSeatQty,
+              unit_price: prepaidRentAmount / prepaidSeatQty,
               amount: prepaidRentAmount,
             }]
           : [],
@@ -833,11 +836,14 @@ export async function generateRentProformas(
       if (opts.dryRun) {
         const addonNote = addonsSubtotal > 0 ? ` + ₹${addonsSubtotal.toLocaleString("en-IN")} add-ons` : "";
         const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || undefined;
+        const previewSeatQty = Number(contract.seats) || 1;
         // Build line-item breakdown for the expandable detail view
-        const previewLineItems: { description: string; amount: number; note?: string }[] = [
+        const previewLineItems: { description: string; amount: number; qty?: number; unit_price?: number; note?: string }[] = [
           {
             description: `Monthly rent${contract.seats ? ` (${contract.seats} seat${Number(contract.seats) > 1 ? "s" : ""})` : ""}`,
             amount: prepaidRentAmount,
+            qty: previewSeatQty,
+            unit_price: prepaidRentAmount / previewSeatQty,
             ...(prepaidRentAmount < baseAmount ? { note: `Pro-rated (contract ends mid-month)` } : {}),
           },
           ...addonLineItems,
@@ -887,12 +893,15 @@ export async function generateRentProformas(
         result.superseded.push(toSupersede.statement_number);
       }
 
+      const liveSeatQty = Number(contract.seats) || 1;
       const lineItems = [{
         type: "prepaid_rent" as const,
         label: `Prepaid Rent — ${monthLabel(prepaid.month, prepaid.year)}`,
         items: [
           {
             description: `Monthly rent${contract.seats ? ` (${contract.seats} seat${Number(contract.seats) > 1 ? "s" : ""})` : ""}`,
+            qty: liveSeatQty,
+            unit_price: prepaidRentAmount / liveSeatQty,
             amount: prepaidRentAmount,
           },
           ...addonLineItems,
