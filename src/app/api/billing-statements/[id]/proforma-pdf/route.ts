@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
-import { resolveLineItemQty, resolveLineItemRate } from "@/lib/billing-pdf-utils";
+import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
 import QRCode from "qrcode";
 
@@ -100,7 +100,7 @@ export async function GET(
           label = [String(item.date), item.space ? String(item.space) : "", item.time ? String(item.time) : "", item.duration ? String(item.duration) : ""].filter(Boolean).join(" · ");
         }
         lineItems.push({
-          description: label || section.label,
+          description: withProrationBreakdown(label || section.label, item),
           hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label),
           qty: resolveLineItemQty(item, "proforma-pdf"),
           rate: resolveLineItemRate(item),

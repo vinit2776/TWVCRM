@@ -789,15 +789,19 @@ export async function generateRentProformas(
       const pLast         = new Date(prepaidLastOfMonth  + "T00:00:00Z");
 
       let prepaidRentAmount: number;
+      let rentBillableDays: number | null = null; // set when prorated — persisted on the line item for PDF display
       if (contractEnd < pFirst) {
         prepaidRentAmount = 0; // contract ends before next month — nothing to bill
       } else {
         const billStart   = contractStart > pFirst ? contractStart : pFirst;
         const billEnd     = contractEnd   < pLast  ? contractEnd   : pLast;
         const billableDays = Math.floor((billEnd.getTime() - billStart.getTime()) / 86400000) + 1;
-        prepaidRentAmount = billableDays >= prepaidDaysInMonth
-          ? baseAmount
-          : Math.round((baseAmount / prepaidDaysInMonth) * billableDays);
+        if (billableDays >= prepaidDaysInMonth) {
+          prepaidRentAmount = baseAmount;
+        } else {
+          prepaidRentAmount = Math.round((baseAmount / prepaidDaysInMonth) * billableDays);
+          rentBillableDays = billableDays;
+        }
       }
 
       if (prepaidRentAmount <= 0) {
@@ -811,20 +815,27 @@ export async function generateRentProformas(
       const addons = addonsByContractId.get(cid) ?? null;
 
       let addonsSubtotal = 0;
-      const addonLineItems: { description: string; amount: number; note?: string }[] = [];
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const addonLineItems: Record<string, any>[] = [];
       for (const addon of (addons ?? [])) {
         const aFrom = new Date(addon.effective_from + "T00:00:00Z");
         const aUntil = addon.effective_until ? new Date(addon.effective_until + "T00:00:00Z") : null;
         const billStart = aFrom > pFirst ? aFrom : pFirst;
         const billEnd   = (aUntil && aUntil < pLast) ? aUntil : pLast;
         const billDays  = Math.floor((billEnd.getTime() - billStart.getTime()) / 86400000) + 1;
-        const addonAmt  = billDays >= prepaidDaysInMonth
-          ? addon.amount
-          : Math.round((addon.amount / prepaidDaysInMonth) * billDays * 100) / 100;
+        const isProrated = billDays < prepaidDaysInMonth;
+        const addonAmt  = isProrated
+          ? Math.round((addon.amount / prepaidDaysInMonth) * billDays * 100) / 100
+          : addon.amount;
         addonLineItems.push({
           description: addon.description,
           amount: addonAmt,
-          ...(billDays < prepaidDaysInMonth ? { note: `Pro-rated ${billDays}/${prepaidDaysInMonth} days` } : {}),
+          ...(isProrated ? {
+            note: `Pro-rated ${billDays}/${prepaidDaysInMonth} days`,
+            monthly_rate: addon.amount,
+            days_used: billDays,
+            days_in_month: prepaidDaysInMonth,
+          } : {}),
         });
         addonsSubtotal += addonAmt;
       }
@@ -903,6 +914,14 @@ export async function generateRentProformas(
             qty: liveSeatQty,
             unit_price: prepaidRentAmount / liveSeatQty,
             amount: prepaidRentAmount,
+            // Persisted (not recomputed at display time) so the PDF breakdown always
+            // reflects the rate actually charged, even if the contract's rate later
+            // changes (e.g. a rate-phase escalation) before the PDF is re-downloaded.
+            ...(rentBillableDays !== null ? {
+              monthly_rate: baseAmount / liveSeatQty,
+              days_used: rentBillableDays,
+              days_in_month: prepaidDaysInMonth,
+            } : {}),
           },
           ...addonLineItems,
         ],

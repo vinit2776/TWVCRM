@@ -19,7 +19,7 @@ import { getCachedSettings } from "@/lib/app-settings-cache";
 import { routeGstGenerationToTally, isCrmGstEnabled } from "@/lib/tally/enqueue";
 import QRCode from "qrcode";
 import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
-import { resolveLineItemQty, resolveLineItemRate } from "@/lib/billing-pdf-utils";
+import { resolveLineItemQty, resolveLineItemRate, withProrationBreakdown } from "@/lib/billing-pdf-utils";
 import { computeGstAndRounding } from "@/lib/gst-math";
 
 /** Per-call timeout (ms) for outbound HTTP and the Resend SDK send. A single
@@ -217,7 +217,7 @@ export async function dispatchProforma(
           label = [String(item.date), item.space ? String(item.space) : "", item.time ? String(item.time) : "", item.duration ? String(item.duration) : ""].filter(Boolean).join(" · ");
         }
         lineItems.push({
-          description: label || section.label,
+          description: withProrationBreakdown(label || section.label, item),
           hsnSac: resolveHsnCode(section.type, String(item.hsn_sac_code || ""), section.label),
           qty: resolveLineItemQty(item, "send-proforma"),
           rate: resolveLineItemRate(item),
@@ -620,7 +620,7 @@ export async function dispatchGstDirect(
         if (section.type === "booking_usage" && item.date) {
           label = [String(item.date), item.space ? String(item.space) : "", item.time ? String(item.time) : "", item.duration ? String(item.duration) : ""].filter(Boolean).join(" · ");
         }
-        lineItems.push({ description: label || section.label, hsnSac: "997212", qty: resolveLineItemQty(item, "gst-direct"), rate: resolveLineItemRate(item), amount: Number(item.amount || 0) });
+        lineItems.push({ description: withProrationBreakdown(label || section.label, item), hsnSac: "997212", qty: resolveLineItemQty(item, "gst-direct"), rate: resolveLineItemRate(item), amount: Number(item.amount || 0) });
       }
     }
   } else {

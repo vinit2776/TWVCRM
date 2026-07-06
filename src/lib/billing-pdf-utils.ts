@@ -31,3 +31,19 @@ export function resolveLineItemQty(item: LineItem, context?: string): number {
 export function resolveLineItemRate(item: LineItem): number {
   return Number(item.unit_price || item.rate || item.amount || 0);
 }
+
+/**
+ * Appends a pro-rata calculation sub-line to a line item's description when the
+ * item was prorated at generation time (contract ending before month-end).
+ * `monthly_rate` / `days_used` / `days_in_month` are stashed on the item by
+ * billing.ts at generation time — never recomputed from the contract's CURRENT
+ * rate here, since a rate-phase change after generation would otherwise make
+ * old statements display the wrong historical rate.
+ */
+export function withProrationBreakdown(description: string, item: LineItem): string {
+  const { monthly_rate: monthlyRate, days_used: daysUsed, days_in_month: daysInMonth } = item;
+  if (monthlyRate == null || daysUsed == null || daysInMonth == null) return description;
+  const fmt = (n: number) => Number(n).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  const proratedRate = resolveLineItemRate(item);
+  return `${description}\nMonthly Rate: Rs. ${fmt(monthlyRate)} | Days: ${daysUsed}/${daysInMonth} | Prorated Rate: Rs. ${fmt(proratedRate)}`;
+}
