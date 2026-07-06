@@ -6,6 +6,7 @@
  */
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { Download, Star } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
@@ -102,7 +103,15 @@ export default function FacilityTeamKpiPage() {
                     : "text-red-600";
                 return (
                   <tr key={r.technician_id} className="border-t hover:bg-muted/20">
-                    <td className="px-3 py-2 font-medium">{r.technician_name}</td>
+                    <td className="px-3 py-2 font-medium">
+                      <Link
+                        href={`/facility/issues?assigned_to=${r.technician_id}&only_open=true`}
+                        className="hover:underline hover:text-[#015E65]"
+                        title="View this person's open tasks"
+                      >
+                        {r.technician_name}
+                      </Link>
+                    </td>
                     <td className="px-3 py-2 text-right">{r.assigned}</td>
                     <td className="px-3 py-2 text-right">{r.resolved}</td>
                     <td className="px-3 py-2 text-right">{formatDuration(r.avg_ack_minutes)}</td>
