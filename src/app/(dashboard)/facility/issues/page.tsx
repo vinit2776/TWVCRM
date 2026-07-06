@@ -13,6 +13,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useSearchParams } from "next/navigation";
 import {
   Plus, Search, Filter, X, Wifi, AlertTriangle, ChevronRight, RefreshCw, ChevronDown, UserPlus,
 } from "lucide-react";
@@ -39,6 +40,7 @@ const STATUS_ORDER: FacilityIssueStatus[] = [
 const ACTIVE_STATUSES = new Set<FacilityIssueStatus>(["new", "acknowledged", "in_progress", "reopened"]);
 
 export default function FacilityIssuesPage() {
+  const searchParams = useSearchParams();
   const [issues, setIssues] = useState<FacilityIssue[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
@@ -50,15 +52,18 @@ export default function FacilityIssuesPage() {
   );
 
   // ---- filters -------------------------------------------------------------
+  // Seeded from the URL on first render so links like Team KPI's
+  // "?assigned_to=<id>&only_open=true" actually pre-filter the list.
   const [search, setSearch] = useState("");
   const [statusFilters, setStatusFilters] = useState<FacilityIssueStatus[]>([]);
   const [priority, setPriority] = useState<FacilityIssuePriority | "">("");
   const [locationId, setLocationId] = useState("");
-  const [onlyOpen, setOnlyOpen] = useState(false);
+  const [onlyOpen, setOnlyOpen] = useState(() => searchParams.get("only_open") === "true");
   const [onlyMine, setOnlyMine] = useState(false);
   const [onlyUnowned, setOnlyUnowned] = useState(false);
   const [slaBreached, setSlaBreached] = useState(false);
-  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [assignedToFilter, setAssignedToFilter] = useState(() => searchParams.get("assigned_to") ?? "");
+  const [filtersOpen, setFiltersOpen] = useState(() => !!searchParams.get("assigned_to"));
 
   const fetchData = async () => {
     setLoading(true);
@@ -67,7 +72,11 @@ export default function FacilityIssuesPage() {
     if (locationId) params.set("location_id", locationId);
     if (slaBreached) params.set("sla_breached", "true");
     if (onlyMine) params.set("assigned_to", "me");
-    if (onlyUnowned) params.set("assigned_to", "unassigned");
+    else if (onlyUnowned) params.set("assigned_to", "unassigned");
+    // Note: assignedToFilter (the "Assigned to" person picker) is applied
+    // client-side in `filtered` below, not here — sending it server-side would
+    // shrink `issues` to just that person's tasks, collapsing the picker's own
+    // option list down to a single name the moment you pick someone.
     if (statusFilters.length > 0) {
       for (const s of statusFilters) params.append("status", s);
     } else if (onlyUnowned) {
@@ -101,6 +110,18 @@ export default function FacilityIssuesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [priority, locationId, slaBreached, onlyMine, onlyOpen, onlyUnowned, statusFilters]);
 
+  // Distinct assignees currently present in the loaded set — only people who
+  // actually have a task show up, so the dropdown doesn't list the whole company.
+  const assigneeOptions = useMemo(() => {
+    const byId = new Map<string, string>();
+    for (const i of issues) {
+      if (i.assignee) byId.set(i.assignee.id, i.assignee.full_name);
+    }
+    return [...byId.entries()]
+      .map(([id, full_name]) => ({ id, full_name }))
+      .sort((a, b) => a.full_name.localeCompare(b.full_name));
+  }, [issues]);
+
   // Client-side text search + sort for unowned view
   const filtered = useMemo(() => {
     let result = issues;
@@ -112,6 +133,9 @@ export default function FacilityIssuesPage() {
         (i.description ?? "").toLowerCase().includes(q) ||
         (i.location?.name ?? "").toLowerCase().includes(q)
       );
+    }
+    if (assignedToFilter) {
+      result = result.filter((i) => i.assigned_to === assignedToFilter);
     }
     if (onlyUnowned) {
       // Sort: claim_sla_breached first, then by priority (critical → low), then by created_at
@@ -127,7 +151,7 @@ export default function FacilityIssuesPage() {
       });
     }
     return result;
-  }, [issues, search, onlyUnowned]);
+  }, [issues, search, onlyUnowned, assignedToFilter]);
 
   // Group by status in canonical order; only include groups that have issues
   const grouped = useMemo(() => {
@@ -198,7 +222,7 @@ export default function FacilityIssuesPage() {
 
       {/* ───── Quick filter chips (always visible) ────────────────────────── */}
       <div className="flex flex-wrap gap-1.5">
-        <Chip active={onlyUnowned} onClick={() => { setOnlyUnowned((v) => !v); setOnlyOpen(false); setOnlyMine(false); setStatusFilters([]); }}>
+        <Chip active={onlyUnowned} onClick={() => { setOnlyUnowned((v) => !v); setOnlyOpen(false); setOnlyMine(false); setAssignedToFilter(""); setStatusFilters([]); }}>
           Unowned{issues.filter((i) => !i.assigned_to && (i.status === "new" || i.status === "reopened")).length > 0 && !onlyUnowned && (
             <span className="ml-1 bg-amber-500 text-white text-[9px] px-1 py-0.5 rounded-full font-bold">
               {issues.filter((i) => !i.assigned_to && (i.status === "new" || i.status === "reopened")).length}
@@ -206,14 +230,14 @@ export default function FacilityIssuesPage() {
           )}
         </Chip>
         <Chip active={onlyOpen} onClick={() => { setOnlyOpen((v) => !v); setOnlyUnowned(false); setStatusFilters([]); }}>Open only</Chip>
-        <Chip active={onlyMine} onClick={() => { setOnlyMine((v) => !v); setOnlyUnowned(false); }}>Mine</Chip>
+        <Chip active={onlyMine} onClick={() => { setOnlyMine((v) => !v); setOnlyUnowned(false); setAssignedToFilter(""); }}>Mine</Chip>
         <Chip active={slaBreached} onClick={() => setSlaBreached((v) => !v)}>
           <AlertTriangle className="h-3 w-3 mr-1 inline" /> SLA breached
         </Chip>
-        {(statusFilters.length > 0 || priority || locationId) && (
+        {(statusFilters.length > 0 || priority || locationId || assignedToFilter) && (
           <button
             type="button"
-            onClick={() => { setStatusFilters([]); setPriority(""); setLocationId(""); }}
+            onClick={() => { setStatusFilters([]); setPriority(""); setLocationId(""); setAssignedToFilter(""); }}
             className="px-2 py-1 text-xs rounded-full border border-dashed text-muted-foreground hover:bg-muted/40 inline-flex items-center"
           >
             <X className="h-3 w-3 mr-1" /> Clear
@@ -281,6 +305,28 @@ export default function FacilityIssuesPage() {
                 <option key={l.id} value={l.id}>{l.name}</option>
               ))}
             </select>
+          </div>
+
+          <div>
+            <div className="text-xs font-medium mb-1.5">Assigned to</div>
+            <select
+              value={assignedToFilter}
+              onChange={(e) => {
+                setAssignedToFilter(e.target.value);
+                if (e.target.value) { setOnlyMine(false); setOnlyUnowned(false); }
+              }}
+              className="h-9 px-2 rounded-md border bg-background text-sm w-full"
+            >
+              <option value="">Everyone</option>
+              {assigneeOptions.map((a) => (
+                <option key={a.id} value={a.id}>{a.full_name}</option>
+              ))}
+            </select>
+            {assigneeOptions.length === 0 && (
+              <p className="text-[11px] text-muted-foreground mt-1">
+                No one has a task in the currently loaded set — clear other filters to widen it.
+              </p>
+            )}
           </div>
         </div>
       )}
