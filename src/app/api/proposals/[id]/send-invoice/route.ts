@@ -155,8 +155,13 @@ export async function POST(
   const periodEnd = `${year}-${String(month + 1).padStart(2, "0")}-${daysInMonth}`;
   const lineItems: GstInvoiceData["lineItems"] = (proposal.items || []).map((item: { description: string; quantity: number; unit_price: number; unit?: string }) => {
     const proratedRate = Math.round(item.unit_price * prorationFactor * 100) / 100;
+    const monthlyRateFmt = item.unit_price.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+    const proratedRateFmt = proratedRate.toLocaleString("en-IN", { maximumFractionDigits: 0 });
+    const calcLine = prorationFactor < 1
+      ? `\nMonthly Rate: Rs. ${monthlyRateFmt} | Days: ${daysRemaining}/${daysInMonth} | Prorated Rate: Rs. ${proratedRateFmt}`
+      : "";
     return {
-      description: item.description + (prorationFactor < 1 ? ` (${daysRemaining}/${daysInMonth} days)` : ""),
+      description: item.description + calcLine,
       hsnSac: "997212",
       qty: item.quantity,
       rate: proratedRate,
