@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
-import { createAdminClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { createVendorBill } from "@/lib/vendor-bills";
 
@@ -29,12 +29,18 @@ const createSchema = z.object({
   landlord_bill_date: z.string().nullish(),
   notes: z.string().nullish(),
   lines: z.array(lineSchema).min(1, "At least one line is required"),
+  // Per-bill override — some landlords charge GST, some don't, and it can
+  // change month to month, so this isn't fixed at the location config level.
+  landlord_gst_applicable: z.boolean().default(false),
+  landlord_gst_rate: z.number().min(0).nullish(),
 });
 
 export async function GET(request: NextRequest) {
-  const supabase = createAdminClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const authClient = await createClient();
+  const { data: { user } } = await authClient.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const supabase = createAdminClient();
 
   const { searchParams } = new URL(request.url);
   const locationId = searchParams.get("location_id");
@@ -50,7 +56,7 @@ export async function GET(request: NextRequest) {
       *,
       electricity_bill_lines(*),
       locations(id, name, code),
-      contracts(id, client_name),
+      contracts(id, contract_number, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)),
       created_by_user:users!electricity_bills_created_by_fkey(id, full_name),
       confirmed_by_user:users!electricity_bills_confirmed_by_fkey(id, full_name)
     `)
@@ -66,13 +72,55 @@ export async function GET(request: NextRequest) {
   const { data, error } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Reconciliation enrichment: for landlord bills, attach the linked vendor bill
+  // (inward payable) and any generated customer bills + their billing statements
+  // (outward receivable) so the UI can show both legs of the same transaction together.
+  if (billSide === "landlord" && data && data.length > 0) {
+    const landlordIds = data.map((b) => b.id);
+    const vendorBillIds = data.map((b) => b.vendor_bill_id).filter((id): id is string => !!id);
+
+    const [vendorBillsRes, customerBillsRes] = await Promise.all([
+      vendorBillIds.length > 0
+        ? supabase
+            .from("vendor_bills")
+            .select("id, invoice_number, total_amount, amount_paid, payment_status, approval_status, due_date, vendor:procurement_vendors(id, name)")
+            .in("id", vendorBillIds)
+        : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+      supabase
+        .from("electricity_bills")
+        .select(`
+          id, landlord_bill_id, contract_id, status, customer_total, billing_statement_id, created_by,
+          contract:contracts(id, contract_number, billing_mode, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)),
+          billing_statement:billing_statements(id, statement_number, status, payment_status, total_amount)
+        `)
+        .in("landlord_bill_id", landlordIds)
+        .eq("bill_side", "customer"),
+    ]);
+
+    const vendorBillMap = new Map((vendorBillsRes.data ?? []).map((v) => [(v as { id: string }).id, v]));
+    const customerBillsByLandlord = new Map<string, Record<string, unknown>[]>();
+    for (const cb of (customerBillsRes.data ?? []) as Record<string, unknown>[]) {
+      const key = cb.landlord_bill_id as string;
+      const arr = customerBillsByLandlord.get(key) ?? [];
+      arr.push(cb);
+      customerBillsByLandlord.set(key, arr);
+    }
+
+    for (const bill of data as Record<string, unknown>[]) {
+      bill.vendor_bill = bill.vendor_bill_id ? vendorBillMap.get(bill.vendor_bill_id as string) ?? null : null;
+      bill.customer_bills = customerBillsByLandlord.get(bill.id as string) ?? [];
+    }
+  }
+
   return NextResponse.json({ data });
 }
 
 export async function POST(request: NextRequest) {
-  const supabase = createAdminClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const authClient = await createClient();
+  const { data: { user } } = await authClient.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const supabase = createAdminClient();
 
   const { data: dbUser } = await supabase
     .from("users")
@@ -81,7 +129,7 @@ export async function POST(request: NextRequest) {
     .single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  if (!["admin", "manager", "accounts"].includes(dbUser.role)) {
+  if (!["admin", "manager", "accounts", "office_admin"].includes(dbUser.role)) {
     return NextResponse.json({ error: "Access denied" }, { status: 403 });
   }
 
@@ -91,7 +139,10 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
-  const { location_id, bill_month, bill_year, landlord_bill_number, landlord_bill_date, notes, lines } = parsed.data;
+  const {
+    location_id, bill_month, bill_year, landlord_bill_number, landlord_bill_date, notes, lines,
+    landlord_gst_applicable, landlord_gst_rate,
+  } = parsed.data;
 
   // ── Fetch config ──────────────────────────────────────────────────────────
   const { data: config } = await supabase
@@ -130,6 +181,13 @@ export async function POST(request: NextRequest) {
     return s + (l.units ?? 0) * (l.rate ?? 0);
   }, 0);
 
+  // Per-bill GST override — some landlords charge GST, some don't, and it can
+  // vary month to month, so this is captured on the bill, not just the
+  // location's one-time default.
+  const landlordGstAmount = landlord_gst_applicable
+    ? Math.round(landlordTotal * (Number(landlord_gst_rate ?? 0) / 100) * 100) / 100
+    : 0;
+
   // ── Insert electricity_bills (landlord side) ──────────────────────────────
   const { data: bill, error: billError } = await supabase
     .from("electricity_bills")
@@ -141,6 +199,9 @@ export async function POST(request: NextRequest) {
       landlord_bill_number: landlord_bill_number ?? null,
       landlord_bill_date: landlord_bill_date ?? null,
       landlord_total_amount: landlordTotal,
+      landlord_gst_applicable,
+      landlord_gst_rate: landlord_gst_applicable ? (landlord_gst_rate ?? 18) : null,
+      landlord_gst_amount: landlordGstAmount,
       reimbursement_enabled: config.reimbursement_enabled,
       landlord_utility_pct: config.landlord_utility_pct,
       landlord_generator_pct: config.landlord_generator_pct,
@@ -189,7 +250,7 @@ export async function POST(request: NextRequest) {
         invoice_date: landlord_bill_date ?? today,
         due_date: dueDate,
         total_amount: landlordTotal,
-        gst_amount: config.landlord_gst_applicable ? landlordTotal * (Number(config.landlord_gst_rate ?? 0) / 100) : 0,
+        gst_amount: landlordGstAmount,
         notes: notes ?? null,
         electricity_bill_id: bill.id,
         created_by: dbUser.id,

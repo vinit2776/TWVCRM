@@ -834,6 +834,7 @@ export type AuditEntityType =
   | "payroll_slip"
   | "unifi_voucher"
   | "electricity_bill"
+  | "electricity_billing_profile"
   | "location_electricity_config"
   | "asset_document"
   | "contract_billing_moratorium"

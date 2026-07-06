@@ -7,7 +7,6 @@ import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Label } from "@/components/ui/label";
-import { Input } from "@/components/ui/input";
 import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import { Badge } from "@/components/ui/badge";
@@ -19,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { formatCurrency } from "@/lib/utils";
+import { computeCustomerRate } from "@/lib/electricity";
 
 interface Location { id: string; name: string; code: string }
 
@@ -31,16 +31,27 @@ interface LocationConfig {
   landlord_generator_pct: number;
 }
 
+interface BillingProfile {
+  id: string;
+  name: string;
+  description: string | null;
+  customer_utility_pct: number;
+  customer_generator_pct: number;
+  utility_markup_type: "per_unit" | "percent";
+  utility_markup_value: number;
+  generator_markup_type: "per_unit" | "percent";
+  generator_markup_value: number;
+  customer_gst_rate: number;
+  is_active: boolean;
+}
+
 interface ContractElectricityConfig {
   id: string;
   contract_id: string;
   location_id: string;
   enabled: boolean;
-  utility_ratio: number;
-  generator_ratio: number;
-  customer_utility_rate: number;
-  customer_generator_rate: number;
-  customer_gst_rate: number;
+  billing_profile_id: string | null;
+  billing_profile?: BillingProfile | null;
 }
 
 interface Props {
@@ -53,26 +64,24 @@ interface Props {
 const DEFAULTS = {
   location_id: "",
   enabled: false,
-  utility_ratio: 0,
-  generator_ratio: 0,
-  customer_utility_rate: 0,
-  customer_generator_rate: 0,
-  customer_gst_rate: 18,
+  billing_profile_id: null as string | null,
 };
 
-export function ContractElectricityTab({ contractId, contractGstRate = 18, canEdit }: Props) {
+export function ContractElectricityTab({ contractId, canEdit }: Props) {
   const [cfg, setCfg] = useState<ContractElectricityConfig | null>(null);
   const [locationConfig, setLocationConfig] = useState<LocationConfig | null>(null);
-  const [form, setForm] = useState({ ...DEFAULTS, customer_gst_rate: contractGstRate });
+  const [profiles, setProfiles] = useState<BillingProfile[]>([]);
+  const [form, setForm] = useState(DEFAULTS);
   const [locations, setLocations] = useState<Location[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
   const fetch_ = useCallback(async () => {
     setLoading(true);
-    const [cfgRes, locRes] = await Promise.all([
+    const [cfgRes, locRes, profilesRes] = await Promise.all([
       fetch(`/api/contracts/${contractId}/electricity-config`),
       fetch(`/api/locations?limit=50`),
+      fetch(`/api/admin/electricity-billing-profiles`),
     ]);
 
     if (cfgRes.ok) {
@@ -82,11 +91,7 @@ export function ContractElectricityTab({ contractId, contractGstRate = 18, canEd
         setForm({
           location_id: json.data.location_id,
           enabled: json.data.enabled,
-          utility_ratio: json.data.utility_ratio,
-          generator_ratio: json.data.generator_ratio,
-          customer_utility_rate: json.data.customer_utility_rate,
-          customer_generator_rate: json.data.customer_generator_rate,
-          customer_gst_rate: json.data.customer_gst_rate,
+          billing_profile_id: json.data.billing_profile_id ?? null,
         });
       }
       if (json.locationConfig) setLocationConfig(json.locationConfig);
@@ -95,6 +100,11 @@ export function ContractElectricityTab({ contractId, contractGstRate = 18, canEd
     if (locRes.ok) {
       const json = await locRes.json();
       setLocations(json.data ?? []);
+    }
+
+    if (profilesRes.ok) {
+      const json = await profilesRes.json();
+      setProfiles(json.data ?? []);
     }
 
     setLoading(false);
@@ -116,6 +126,10 @@ export function ContractElectricityTab({ contractId, contractGstRate = 18, canEd
   const handleSave = async () => {
     if (!form.location_id) {
       toast.error("Please select a location first");
+      return;
+    }
+    if (form.enabled && !form.billing_profile_id) {
+      toast.error("Please select a billing profile");
       return;
     }
     setSaving(true);
@@ -146,6 +160,22 @@ export function ContractElectricityTab({ contractId, contractGstRate = 18, canEd
   }
 
   const readOnly = !canEdit;
+  const selectedProfile = profiles.find((p) => p.id === form.billing_profile_id) ?? cfg?.billing_profile ?? null;
+  // Profiles the dropdown offers: active ones, plus the currently-assigned one even if deactivated.
+  const selectableProfiles = profiles.filter((p) => p.is_active || p.id === form.billing_profile_id);
+
+  const previewUtilityRate = selectedProfile && locationConfig
+    ? computeCustomerRate(
+        { markup_type: selectedProfile.utility_markup_type, markup_value: selectedProfile.utility_markup_value },
+        locationConfig.landlord_utility_rate,
+      )
+    : null;
+  const previewGeneratorRate = selectedProfile && locationConfig
+    ? computeCustomerRate(
+        { markup_type: selectedProfile.generator_markup_type, markup_value: selectedProfile.generator_markup_value },
+        locationConfig.landlord_generator_rate,
+      )
+    : null;
 
   return (
     <div className="space-y-6">
@@ -210,7 +240,8 @@ export function ContractElectricityTab({ contractId, contractGstRate = 18, canEd
                 <span>DG: {formatCurrency(locationConfig.landlord_generator_rate)}/unit</span>
               </div>
               <p className="text-xs text-muted-foreground">
-                Customer rates below are independent — mark them up as needed.
+                Reference rates only — the actual customer rate each month is derived from that
+                month&apos;s captured landlord bill + the billing profile&apos;s margin.
               </p>
               {form.location_id && (
                 <Link
@@ -225,105 +256,81 @@ export function ContractElectricityTab({ contractId, contractGstRate = 18, canEd
         </CardContent>
       </Card>
 
-      {/* Customer allocation */}
+      {/* Billing profile */}
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">Customer Allocation</CardTitle>
+          <CardTitle className="text-base">Billing Profile</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            Percentage of the building&apos;s total landlord units this contract is billed for.
-            Multiple contracts can be mapped to the same location; ratios are independent.
+            The profile defines how this contract&apos;s units and rate are derived from the
+            landlord bill each month — no manual monthly rate entry needed.
           </p>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <Label>Grid % of building utility units</Label>
-              <div className="relative">
-                <Input
-                  type="number" min={0} max={100} step={0.01}
-                  value={form.utility_ratio}
-                  onChange={(e) => setForm((f) => ({ ...f, utility_ratio: parseFloat(e.target.value) || 0 }))}
-                  disabled={readOnly}
-                  className="pr-8"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">%</span>
-              </div>
-            </div>
-            <div className="space-y-1">
-              <Label>DG % of building generator units</Label>
-              <div className="relative">
-                <Input
-                  type="number" min={0} max={100} step={0.01}
-                  value={form.generator_ratio}
-                  onChange={(e) => setForm((f) => ({ ...f, generator_ratio: parseFloat(e.target.value) || 0 }))}
-                  disabled={readOnly}
-                  className="pr-8"
-                />
-                <span className="absolute right-3 top-1/2 -translate-y-1/2 text-muted-foreground text-sm">%</span>
-              </div>
-            </div>
+          <div className="space-y-1">
+            <Label>Profile</Label>
+            <Select
+              value={form.billing_profile_id ?? "none"}
+              onValueChange={(v) => setForm((f) => ({ ...f, billing_profile_id: v === "none" ? null : v }))}
+              disabled={readOnly}
+            >
+              <SelectTrigger>
+                <SelectValue placeholder="Select a billing profile…" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="none">— None —</SelectItem>
+                {selectableProfiles.map((p) => (
+                  <SelectItem key={p.id} value={p.id}>
+                    {p.name}{!p.is_active ? " (inactive)" : ""}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Link
+              href="/admin/electricity-billing-profiles"
+              className="text-xs text-primary flex items-center gap-1 mt-1 w-fit hover:underline"
+            >
+              Manage profiles <ExternalLink className="h-3 w-3" />
+            </Link>
           </div>
-          {form.utility_ratio === 0 && form.generator_ratio === 0 && form.enabled && (
+
+          {form.enabled && !form.billing_profile_id && (
             <div className="flex items-center gap-2 text-xs text-amber-600">
               <AlertTriangle className="h-3.5 w-3.5" />
-              Both ratios are 0% — this contract will not be billed for any units.
+              A billing profile is required for electricity billing to run.
             </div>
           )}
-        </CardContent>
-      </Card>
 
-      {/* Customer rates */}
-      <Card>
-        <CardHeader>
-          <CardTitle className="text-base">Customer Rates</CardTitle>
-        </CardHeader>
-        <CardContent className="space-y-4">
-          <p className="text-xs text-muted-foreground">
-            Rates charged to this customer — independent of landlord tariff. Set a markup as needed.
-          </p>
-          <div className="grid grid-cols-2 gap-4">
-            <div className="space-y-1">
-              <Label>Grid rate (₹/unit)</Label>
-              <Input
-                type="number" min={0} step={0.01}
-                value={form.customer_utility_rate}
-                onChange={(e) => setForm((f) => ({ ...f, customer_utility_rate: parseFloat(e.target.value) || 0 }))}
-                disabled={readOnly}
-              />
-              {locationConfig && form.customer_utility_rate > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  Markup: {formatCurrency(form.customer_utility_rate - locationConfig.landlord_utility_rate)}/unit
-                  ({locationConfig.landlord_utility_rate > 0
-                    ? `${(((form.customer_utility_rate / locationConfig.landlord_utility_rate) - 1) * 100).toFixed(1)}%`
-                    : "landlord rate not set"})
+          {selectedProfile && (
+            <div className="rounded-md bg-muted/50 border p-3 text-sm space-y-2">
+              <p className="font-medium text-xs text-muted-foreground uppercase tracking-wide">
+                Resolved split &amp; margin
+              </p>
+              <div className="grid grid-cols-2 gap-3 text-xs">
+                <div>
+                  <p className="text-muted-foreground">Customer split</p>
+                  <p>{selectedProfile.customer_utility_pct}% utility / {selectedProfile.customer_generator_pct}% DG</p>
+                  <p className="text-muted-foreground">of the landlord bill&apos;s total units</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground">Margin</p>
+                  <p>
+                    Utility {selectedProfile.utility_markup_type === "per_unit" ? `+${formatCurrency(selectedProfile.utility_markup_value)}/unit` : `+${selectedProfile.utility_markup_value}%`}
+                  </p>
+                  <p>
+                    DG {selectedProfile.generator_markup_type === "per_unit" ? `+${formatCurrency(selectedProfile.generator_markup_value)}/unit` : `+${selectedProfile.generator_markup_value}%`}
+                  </p>
+                </div>
+              </div>
+              {previewUtilityRate !== null && previewGeneratorRate !== null && (
+                <p className="text-xs text-muted-foreground border-t pt-2">
+                  Estimated customer rate at today&apos;s reference landlord tariff:{" "}
+                  {formatCurrency(previewUtilityRate)}/unit utility, {formatCurrency(previewGeneratorRate)}/unit DG.
+                  Actual rate each month uses that bill&apos;s captured landlord rate, not this reference.
                 </p>
               )}
+              <p className="text-xs text-muted-foreground">GST on customer invoice: {selectedProfile.customer_gst_rate}%</p>
             </div>
-            <div className="space-y-1">
-              <Label>DG rate (₹/unit)</Label>
-              <Input
-                type="number" min={0} step={0.01}
-                value={form.customer_generator_rate}
-                onChange={(e) => setForm((f) => ({ ...f, customer_generator_rate: parseFloat(e.target.value) || 0 }))}
-                disabled={readOnly}
-              />
-              {locationConfig && form.customer_generator_rate > 0 && (
-                <p className="text-xs text-muted-foreground">
-                  Markup: {formatCurrency(form.customer_generator_rate - locationConfig.landlord_generator_rate)}/unit
-                </p>
-              )}
-            </div>
-            <div className="space-y-1">
-              <Label>GST %</Label>
-              <Input
-                type="number" min={0} max={28} step={0.01}
-                value={form.customer_gst_rate}
-                onChange={(e) => setForm((f) => ({ ...f, customer_gst_rate: parseFloat(e.target.value) || 18 }))}
-                disabled={readOnly}
-              />
-              <p className="text-xs text-muted-foreground">Defaults from contract GST rate</p>
-            </div>
-          </div>
+          )}
         </CardContent>
       </Card>
 

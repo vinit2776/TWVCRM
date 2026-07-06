@@ -126,14 +126,19 @@ function BillPreview({
 
   if (computeLines.length === 0 && otherTotal === 0) return null;
 
-  const markupType = (config.markup_type as string) === "per_unit" ? "per_unit" : "percent";
+  const markupType = (config.markup_type as string) === "percent" ? "percent" : "per_unit";
   const markupValue = Number(config.markup_value ?? 0);
+  // Location-level config carries one markup value (no profile assigned yet at
+  // landlord-capture time) — applied to both line types as a best-effort estimate.
   const result = computeElectricityBill(
     {
       reimbursement_enabled: Boolean(config.reimbursement_enabled),
-      customer_markup_type: markupType,
-      customer_markup_per_unit: markupType === "per_unit" ? markupValue : 0,
-      customer_markup_percent: markupType === "percent" ? markupValue : 0,
+      customer_utility_pct: Number(config.customer_utility_pct ?? 80),
+      customer_generator_pct: Number(config.customer_generator_pct ?? 20),
+      utility_markup_type: markupType,
+      utility_markup_value: markupValue,
+      generator_markup_type: markupType,
+      generator_markup_value: markupValue,
       landlord_gst_rate: config.landlord_gst_applicable ? Number(config.landlord_gst_rate ?? 0) : 0,
       landlord_tds_rate: Number(config.tds_rate ?? 0),
     },

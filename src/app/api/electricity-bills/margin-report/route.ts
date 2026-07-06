@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 
 /**
  * GET /api/electricity-bills/margin-report?year=2026&months=6
@@ -25,9 +25,11 @@ export interface MarginReportRow {
 }
 
 export async function GET(request: NextRequest) {
-  const supabase = createAdminClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const authClient = await createClient();
+  const { data: { user } } = await authClient.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const supabase = createAdminClient();
 
   const { searchParams } = new URL(request.url);
   const months = Math.min(Math.max(parseInt(searchParams.get("months") ?? "6"), 1), 24);

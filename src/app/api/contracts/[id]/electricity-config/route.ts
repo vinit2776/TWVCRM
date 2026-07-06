@@ -1,24 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabase/server";
+import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 
 const upsertSchema = z.object({
   location_id: z.string().uuid(),
   enabled: z.boolean(),
-  utility_ratio: z.number().min(0).max(100),
-  generator_ratio: z.number().min(0).max(100),
-  customer_utility_rate: z.number().min(0),
-  customer_generator_rate: z.number().min(0),
-  customer_gst_rate: z.number().min(0).max(28),
-});
+  billing_profile_id: z.string().uuid().nullable(),
+}).refine(
+  (d) => !d.enabled || !!d.billing_profile_id,
+  { message: "A billing profile is required when electricity billing is enabled", path: ["billing_profile_id"] },
+);
 
 export async function GET(
   _request: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const supabase = await createAdminClient();
+  const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -27,12 +26,7 @@ export async function GET(
     .select(`
       *,
       locations(id, name, code),
-      location_electricity_config:locations!inner(
-        electricity_config:location_electricity_config(
-          service_number, landlord_utility_rate, landlord_generator_rate,
-          enabled, bill_due_day_of_month
-        )
-      )
+      billing_profile:electricity_billing_profiles(*)
     `)
     .eq("contract_id", id)
     .maybeSingle();
@@ -58,7 +52,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const supabase = await createAdminClient();
+  const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
 
@@ -91,6 +85,20 @@ export async function PUT(
       { error: "Electricity billing is not enabled for the selected location. Enable it under Locations → Electricity tab first." },
       { status: 422 }
     );
+  }
+
+  if (parsed.data.billing_profile_id) {
+    const { data: profile } = await supabase
+      .from("electricity_billing_profiles")
+      .select("id, is_active")
+      .eq("id", parsed.data.billing_profile_id)
+      .maybeSingle();
+    if (!profile) {
+      return NextResponse.json({ error: "Selected billing profile not found" }, { status: 422 });
+    }
+    if (!profile.is_active) {
+      return NextResponse.json({ error: "Selected billing profile is inactive" }, { status: 422 });
+    }
   }
 
   const { data: existing } = await supabase

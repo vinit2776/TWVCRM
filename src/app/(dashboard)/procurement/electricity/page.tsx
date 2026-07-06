@@ -1,12 +1,13 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Plus, Zap, CheckCircle2, ChevronDown, ChevronUp, Trash2 } from "lucide-react";
+import { Plus, Zap, CheckCircle2, ChevronDown, ChevronUp, Trash2, AlertTriangle, Send } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Separator } from "@/components/ui/separator";
 import {
   Dialog,
@@ -24,6 +25,7 @@ import {
 } from "@/components/ui/select";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
+import { BillingModeTag } from "@/components/billing/billing-mode-tag";
 import { formatCurrency, formatDate } from "@/lib/utils";
 import { toast } from "sonner";
 import { useCurrentUser } from "@/providers/current-user-provider";
@@ -36,6 +38,42 @@ interface EbLine {
   rate?: number | null;
   amount?: number | null;
   sort_order: number;
+  // client-only: true once the user has typed a Total for this line, meaning
+  // Rate should be derived from Amount/Units instead of driving Amount
+  amountMode?: boolean;
+}
+
+interface VendorBillInfo {
+  id: string;
+  invoice_number: string | null;
+  total_amount: number;
+  amount_paid: number;
+  payment_status: string;
+  approval_status: string;
+  due_date: string | null;
+  vendor?: { id: string; name: string } | null;
+}
+
+interface CustomerBillInfo {
+  id: string;
+  contract_id: string;
+  status: "draft" | "invoiced" | "revised" | "dispatched";
+  customer_total: number | null;
+  billing_statement_id: string | null;
+  created_by: string;
+  contract?: {
+    id: string;
+    contract_number: string;
+    billing_mode: string | null;
+    lead?: { id: string; first_name: string; last_name: string; company: string | null } | null;
+  } | null;
+  billing_statement?: {
+    id: string;
+    statement_number: string;
+    status: "draft" | "finalized" | "exported" | "voided";
+    payment_status: string;
+    total_amount: number;
+  } | null;
 }
 
 interface EbBill {
@@ -48,10 +86,15 @@ interface EbBill {
   landlord_bill_number?: string | null;
   landlord_bill_date?: string | null;
   landlord_total_amount: number;
+  landlord_gst_applicable?: boolean;
+  landlord_gst_rate?: number | null;
+  landlord_gst_amount?: number;
   vendor_bill_id?: string | null;
   created_at: string;
   electricity_bill_lines: EbLine[];
   locations?: { id: string; name: string; code: string };
+  vendor_bill?: VendorBillInfo | null;
+  customer_bills?: CustomerBillInfo[];
 }
 
 interface LocationConfig {
@@ -59,6 +102,8 @@ interface LocationConfig {
   landlord_utility_rate: number;
   landlord_generator_rate: number;
   enabled: boolean;
+  landlord_gst_applicable: boolean;
+  landlord_gst_rate: number | null;
 }
 
 interface Location { id: string; name: string; code: string }
@@ -79,6 +124,7 @@ export default function ElectricityBillsPage() {
   const [expanded, setExpanded] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [approving, setApproving] = useState<string | null>(null);
+  const [actingOnCustomerBill, setActingOnCustomerBill] = useState<string | null>(null);
 
   // Form state
   const [locations, setLocations] = useState<Location[]>([]);
@@ -90,6 +136,8 @@ export default function ElectricityBillsPage() {
     landlord_bill_number: "",
     landlord_bill_date: "",
     notes: "",
+    landlord_gst_applicable: false,
+    landlord_gst_rate: 18 as number | null,
   });
   const [lines, setLines] = useState<EbLine[]>([emptyLine()]);
   const [submitting, setSubmitting] = useState(false);
@@ -128,14 +176,40 @@ export default function ElectricityBillsPage() {
           { line_type: "utility",   units: 0, rate: cfg.landlord_utility_rate,   sort_order: 0 },
           { line_type: "generator", units: 0, rate: cfg.landlord_generator_rate, sort_order: 1 },
         ]);
+        // Pre-fill GST from the location default — still editable per bill
+        setForm((f) => ({
+          ...f,
+          landlord_gst_applicable: cfg.landlord_gst_applicable,
+          landlord_gst_rate: cfg.landlord_gst_rate ?? 18,
+        }));
       }
     }
   };
 
-  const lineAmount = (l: EbLine) =>
-    l.line_type === "other" ? (l.amount ?? 0) : (l.units ?? 0) * (l.rate ?? 0);
+  const round4 = (n: number) => Math.round(n * 10000) / 10000;
+
+  const lineAmount = (l: EbLine) => {
+    if (l.line_type === "other") return l.amount ?? 0;
+    if (l.amountMode) return l.amount ?? 0;
+    return (l.units ?? 0) * (l.rate ?? 0);
+  };
+
+  // Rate is either what the user typed directly, or — once they've typed a
+  // Total instead — derived back from Total / Units.
+  const lineRate = (l: EbLine) => {
+    if (l.line_type === "other") return 0;
+    if (l.amountMode) {
+      const units = l.units ?? 0;
+      return units > 0 ? round4((l.amount ?? 0) / units) : 0;
+    }
+    return l.rate ?? 0;
+  };
 
   const grandTotal = lines.reduce((s, l) => s + lineAmount(l), 0);
+  const landlordGstAmount = form.landlord_gst_applicable
+    ? round4(grandTotal * (Number(form.landlord_gst_rate ?? 0) / 100))
+    : 0;
+  const landlordPayableTotal = grandTotal + landlordGstAmount;
 
   const addLine = () =>
     setLines((ls) => [...ls, { line_type: "other", label: "", amount: 0, sort_order: ls.length }]);
@@ -163,7 +237,7 @@ export default function ElectricityBillsPage() {
           meter_label: l.meter_label ?? null,
           label: l.label ?? null,
           units: l.line_type !== "other" ? (l.units ?? 0) : null,
-          rate: l.line_type !== "other" ? (l.rate ?? 0) : null,
+          rate: l.line_type !== "other" ? lineRate(l) : null,
           amount: l.line_type === "other" ? (l.amount ?? 0) : null,
           sort_order: l.sort_order,
         })),
@@ -174,7 +248,7 @@ export default function ElectricityBillsPage() {
       toast.success("Bill captured");
       setDialogOpen(false);
       setLines([emptyLine()]);
-      setForm({ location_id: "", bill_month: new Date().getMonth() + 1, bill_year: new Date().getFullYear(), landlord_bill_number: "", landlord_bill_date: "", notes: "" });
+      setForm({ location_id: "", bill_month: new Date().getMonth() + 1, bill_year: new Date().getFullYear(), landlord_bill_number: "", landlord_bill_date: "", notes: "", landlord_gst_applicable: false, landlord_gst_rate: 18 });
       fetchBills();
     } else {
       const msg = typeof json.error === "object" ? Object.values(json.error).flat().join("; ") : json.error;
@@ -197,7 +271,88 @@ export default function ElectricityBillsPage() {
     setApproving(null);
   };
 
+  const handleConfirmCustomerBill = async (id: string) => {
+    setActingOnCustomerBill(id);
+    const res = await fetch(`/api/electricity-bills/${id}/confirm`, { method: "PATCH" });
+    const json = await res.json();
+    if (res.ok) {
+      toast.success("Customer bill confirmed — ready to dispatch");
+      fetchBills();
+    } else {
+      toast.error(json.error || "Failed to confirm");
+    }
+    setActingOnCustomerBill(null);
+  };
+
+  const handleDispatchCustomerBill = async (id: string) => {
+    setActingOnCustomerBill(id);
+    const res = await fetch(`/api/electricity-bills/${id}/dispatch`, { method: "POST" });
+    const json = await res.json();
+    if (res.ok) {
+      if (json.no_contact) {
+        toast.warning(json.message ?? "Statement created — customer has no email/phone on file");
+      } else {
+        toast.success(json.message ?? `Billing statement ${json.statement_number ?? ""} sent`);
+      }
+      fetchBills();
+    } else {
+      toast.error(json.error || "Failed to bill customer");
+    }
+    setActingOnCustomerBill(null);
+  };
+
+  const customerName = (cb: CustomerBillInfo) => {
+    const lead = cb.contract?.lead;
+    if (!lead) return cb.contract?.contract_number ?? "—";
+    return lead.company || `${lead.first_name} ${lead.last_name}`.trim() || cb.contract?.contract_number || "—";
+  };
+
+  const CUSTOMER_STATUS_COLORS: Record<string, string> = {
+    draft: "bg-amber-100 text-amber-800",
+    invoiced: "bg-blue-100 text-blue-800",
+    dispatched: "bg-emerald-100 text-emerald-800",
+    revised: "bg-slate-100 text-slate-600",
+  };
+
+  const daysUntil = (dateStr: string | null) => {
+    if (!dateStr) return null;
+    const diffMs = new Date(dateStr).getTime() - new Date().setHours(0, 0, 0, 0);
+    return Math.round(diffMs / (1000 * 60 * 60 * 24));
+  };
+
+  // Overall flow stage for the main card badge — reflects the furthest-behind
+  // customer bill's progress (Confirm → Dispatch → Finalize/Send → Paid), not
+  // just the landlord bill's own draft/invoiced status.
+  const OVERALL_STAGES: { label: string; className: string }[] = [
+    { label: "Awaiting confirm", className: "bg-amber-100 text-amber-800" },
+    { label: "Ready to dispatch", className: "bg-blue-100 text-blue-800" },
+    { label: "Awaiting send", className: "bg-indigo-100 text-indigo-800" },
+    { label: "Voided", className: "bg-slate-100 text-slate-600" },
+    { label: "Sent — unpaid", className: "bg-orange-100 text-orange-800" },
+    { label: "Paid", className: "bg-emerald-100 text-emerald-800" },
+  ];
+
+  const customerBillRank = (cb: CustomerBillInfo): number => {
+    if (cb.status === "draft") return 0;
+    if (cb.status === "invoiced") return 1;
+    const stmt = cb.billing_statement;
+    if (!stmt || stmt.status === "draft") return 2;
+    if (stmt.status === "voided") return 3;
+    if (stmt.payment_status === "paid") return 5;
+    return 4; // finalized / exported, still unpaid
+  };
+
+  const overallStage = (bill: EbBill) => {
+    if (bill.status === "draft") return { label: "draft", className: STATUS_COLORS.draft };
+    const cbs = bill.customer_bills ?? [];
+    if (cbs.length === 0) return { label: bill.status, className: STATUS_COLORS[bill.status] };
+    const worst = Math.min(...cbs.map(customerBillRank));
+    return OVERALL_STAGES[worst];
+  };
+
+  const canCapture = ["admin", "manager", "accounts", "office_admin"].includes(user?.role ?? "");
   const canApprove = ["admin", "manager"].includes(user?.role ?? "");
+  const canManageCustomerBill = ["admin", "manager", "accounts"].includes(user?.role ?? "");
 
   return (
     <div className="space-y-6">
@@ -210,7 +365,7 @@ export default function ElectricityBillsPage() {
             Capture monthly landlord electricity bills. Approve to auto-generate customer invoices.
           </p>
         </div>
-        {canApprove && (
+        {canCapture && (
           <Button onClick={() => setDialogOpen(true)}>
             <Plus className="mr-2 h-4 w-4" /> New Bill
           </Button>
@@ -253,7 +408,7 @@ export default function ElectricityBillsPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
-                    <Badge className={STATUS_COLORS[bill.status]}>{bill.status}</Badge>
+                    <Badge className={overallStage(bill).className}>{overallStage(bill).label}</Badge>
                     {canApprove && bill.status === "draft" && (
                       <Button
                         size="sm"
@@ -299,6 +454,124 @@ export default function ElectricityBillsPage() {
                     </tfoot>
                   </table>
                   <p className="text-xs text-muted-foreground mt-2">Captured {formatDate(bill.created_at)}</p>
+
+                  {/* Reconciliation: inward payable + outward receivable, same view */}
+                  {bill.status !== "draft" && (() => {
+                    const vb = bill.vendor_bill;
+                    const dueInDays = daysUntil(vb?.due_date ?? null);
+                    const landlordUnpaid = !!vb && vb.payment_status !== "paid";
+                    const landlordAtRisk = landlordUnpaid && dueInDays !== null && dueInDays <= 5;
+                    const customerBills = bill.customer_bills ?? [];
+                    const anyCustomerUnpaid = customerBills.some(
+                      (cb) => !cb.billing_statement || cb.billing_statement.payment_status !== "paid"
+                    );
+
+                    return (
+                      <div className="mt-4 pt-4 border-t space-y-3">
+                        {landlordAtRisk && anyCustomerUnpaid && (
+                          <div className="flex items-start gap-2 text-xs bg-red-50 border border-red-200 rounded px-3 py-2 text-red-700">
+                            <AlertTriangle className="h-3.5 w-3.5 shrink-0 mt-0.5" />
+                            Landlord payment {dueInDays! < 0 ? `overdue by ${-dueInDays!} day(s)` : dueInDays === 0 ? "due today" : `due in ${dueInDays} day(s)`}
+                            {" "}— customer hasn&apos;t paid yet. Don&apos;t hold the landlord payment on collection.
+                          </div>
+                        )}
+
+                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                          {/* Inward — payable */}
+                          <div className="bg-orange-50/50 border border-orange-200 rounded-lg p-3 text-xs space-y-1.5">
+                            <p className="font-semibold text-orange-800 uppercase tracking-wide">Inward — Payable to Landlord</p>
+                            <div className="flex justify-between">
+                              <span className="text-muted-foreground">Base amount</span>
+                              <span>{formatCurrency(bill.landlord_total_amount)}</span>
+                            </div>
+                            {bill.landlord_gst_applicable && (
+                              <div className="flex justify-between text-muted-foreground">
+                                <span>GST ({bill.landlord_gst_rate}%)</span>
+                                <span>{formatCurrency(bill.landlord_gst_amount ?? 0)}</span>
+                              </div>
+                            )}
+                            <div className="flex justify-between font-medium pt-1 border-t border-orange-200/70">
+                              <span>{vb?.vendor?.name ?? "Total payable"}</span>
+                              <span>{formatCurrency(bill.landlord_total_amount + (bill.landlord_gst_amount ?? 0))}</span>
+                            </div>
+                            {vb ? (
+                              <>
+                                <div className="flex justify-between text-muted-foreground">
+                                  <span>Due</span>
+                                  <span>{vb.due_date ? formatDate(vb.due_date) : "—"}</span>
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  <Badge className={vb.payment_status === "paid" ? "bg-emerald-100 text-emerald-800" : "bg-amber-100 text-amber-800"}>
+                                    {vb.payment_status}
+                                  </Badge>
+                                  <Badge variant="outline">{vb.approval_status}</Badge>
+                                </div>
+                              </>
+                            ) : (
+                              <p className="text-muted-foreground">No vendor bill — landlord vendor not configured for this location.</p>
+                            )}
+                          </div>
+
+                          {/* Outward — receivable */}
+                          <div className="bg-blue-50/50 border border-blue-200 rounded-lg p-3 text-xs space-y-1.5">
+                            <p className="font-semibold text-blue-800 uppercase tracking-wide">Outward — Bill to Customer</p>
+                            {customerBills.length === 0 ? (
+                              <p className="text-muted-foreground">No customer bills generated for this bill.</p>
+                            ) : (
+                              customerBills.map((cb) => (
+                                <div key={cb.id} className="py-1 space-y-1">
+                                  <div className="flex items-center justify-between gap-2">
+                                    <div className="flex items-center gap-1.5 min-w-0">
+                                      <span className="font-medium truncate">{customerName(cb)}</span>
+                                      <BillingModeTag mode={cb.contract?.billing_mode} />
+                                    </div>
+                                    <span className="font-medium shrink-0">{formatCurrency(cb.customer_total ?? 0)}</span>
+                                  </div>
+                                  <div className="flex items-center gap-1.5 flex-wrap">
+                                    <Badge className={CUSTOMER_STATUS_COLORS[cb.status] ?? ""}>{cb.status}</Badge>
+                                    {cb.billing_statement && (
+                                      <span className="text-muted-foreground">
+                                        Stmt {cb.billing_statement.statement_number} · {cb.billing_statement.status} · {cb.billing_statement.payment_status}
+                                      </span>
+                                    )}
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    {canManageCustomerBill && cb.status === "draft" && cb.created_by !== user?.id && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 px-2 text-xs"
+                                        disabled={actingOnCustomerBill === cb.id}
+                                        onClick={() => handleConfirmCustomerBill(cb.id)}
+                                      >
+                                        <CheckCircle2 className="mr-1 h-3 w-3" />
+                                        Confirm
+                                      </Button>
+                                    )}
+                                    {canManageCustomerBill && cb.status === "draft" && cb.created_by === user?.id && (
+                                      <span className="text-muted-foreground text-[11px]">Needs another admin/manager/accounts</span>
+                                    )}
+                                    {canManageCustomerBill && cb.status === "invoiced" && (
+                                      <Button
+                                        size="sm"
+                                        className="h-7 px-2 text-xs"
+                                        disabled={actingOnCustomerBill === cb.id}
+                                        onClick={() => handleDispatchCustomerBill(cb.id)}
+                                      >
+                                        <Send className="mr-1 h-3 w-3" />
+                                        {actingOnCustomerBill === cb.id ? "Sending…" : "Bill & Send"}
+                                      </Button>
+                                    )}
+                                  </div>
+                                </div>
+                              ))
+                            )}
+                          </div>
+                        </div>
+
+                      </div>
+                    );
+                  })()}
                 </CardContent>
               )}
             </Card>
@@ -442,20 +715,23 @@ export default function ElectricityBillsPage() {
                             <Input
                               className="h-8 text-xs text-right"
                               type="number" min={0} step={0.01}
-                              value={l.rate ?? 0}
-                              onChange={(e) => updateLine(i, { rate: parseFloat(e.target.value) || 0 })}
+                              title={l.amountMode ? "Auto-calculated from Total ÷ Units" : undefined}
+                              value={lineRate(l)}
+                              onChange={(e) => updateLine(i, { rate: parseFloat(e.target.value) || 0, amountMode: false })}
                             />
-                          ) : (
-                            <Input
-                              className="h-8 text-xs text-right"
-                              type="number" min={0} step={0.01}
-                              value={l.amount ?? 0}
-                              onChange={(e) => updateLine(i, { amount: parseFloat(e.target.value) || 0 })}
-                            />
-                          )}
+                          ) : <span className="text-muted-foreground text-xs px-1">—</span>}
                         </td>
-                        <td className="px-3 py-1.5 text-right font-medium text-xs tabular-nums">
-                          {formatCurrency(lineAmount(l))}
+                        <td className="px-3 py-1.5">
+                          <Input
+                            className="h-8 text-xs text-right font-medium"
+                            type="number" min={0} step={0.01}
+                            title={l.line_type !== "other" && !l.amountMode ? "Auto-calculated from Units × Rate — edit to derive Rate instead" : undefined}
+                            value={lineAmount(l)}
+                            onChange={(e) => updateLine(i, l.line_type === "other"
+                              ? { amount: parseFloat(e.target.value) || 0 }
+                              : { amount: parseFloat(e.target.value) || 0, amountMode: true }
+                            )}
+                          />
                         </td>
                         <td className="px-1 py-1.5">
                           {lines.length > 1 && (
@@ -477,6 +753,48 @@ export default function ElectricityBillsPage() {
                     </tr>
                   </tfoot>
                 </table>
+              </div>
+            </div>
+
+            <Separator />
+
+            {/* Landlord GST — some landlords charge it, some don't; overridable per bill */}
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium">Landlord charges GST on this bill</p>
+                  <p className="text-xs text-muted-foreground">Defaults from the location&apos;s electricity config — adjust here if this month differs.</p>
+                </div>
+                <Switch
+                  checked={form.landlord_gst_applicable}
+                  onCheckedChange={(v) => setForm((f) => ({ ...f, landlord_gst_applicable: v }))}
+                />
+              </div>
+              {form.landlord_gst_applicable && (
+                <div className="flex items-center gap-2 max-w-[200px]">
+                  <Label className="text-xs whitespace-nowrap">GST rate (%)</Label>
+                  <Input
+                    type="number" min={0} step={0.01}
+                    value={form.landlord_gst_rate ?? 18}
+                    onChange={(e) => setForm((f) => ({ ...f, landlord_gst_rate: parseFloat(e.target.value) || 0 }))}
+                  />
+                </div>
+              )}
+              <div className="rounded-md border bg-muted/20 px-3 py-2 space-y-1 text-sm">
+                <div className="flex justify-between text-muted-foreground">
+                  <span>Base amount</span>
+                  <span className="tabular-nums">{formatCurrency(grandTotal)}</span>
+                </div>
+                {form.landlord_gst_applicable && (
+                  <div className="flex justify-between text-muted-foreground">
+                    <span>GST ({form.landlord_gst_rate ?? 18}%)</span>
+                    <span className="tabular-nums">{formatCurrency(landlordGstAmount)}</span>
+                  </div>
+                )}
+                <div className="flex justify-between font-semibold pt-1 border-t">
+                  <span>Total payable to landlord</span>
+                  <span className="tabular-nums">{formatCurrency(landlordPayableTotal)}</span>
+                </div>
               </div>
             </div>
 

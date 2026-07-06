@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
 export async function PATCH(
@@ -7,10 +7,11 @@ export async function PATCH(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const supabase = createAdminClient();
-
-  const { data: { user } } = await supabase.auth.getUser();
+  const authClient = await createClient();
+  const { data: { user } } = await authClient.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const supabase = createAdminClient();
 
   const { data: dbUser } = await supabase
     .from("users")
@@ -19,8 +20,8 @@ export async function PATCH(
     .single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  if (!["admin", "manager"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Only admin or manager can confirm electricity bills" }, { status: 403 });
+  if (!["admin", "manager", "accounts"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Only admin, manager, or accounts can confirm electricity bills" }, { status: 403 });
   }
 
   const { data: bill } = await supabase

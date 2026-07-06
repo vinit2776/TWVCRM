@@ -1,5 +1,5 @@
 import { NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 
 interface EbBillRow {
@@ -17,6 +17,9 @@ interface EbBillRow {
   landlord_tds: number;
   landlord_net_payable: number;
   landlord_total_amount: number;
+  landlord_gst_applicable: boolean;
+  landlord_gst_rate: number | null;
+  landlord_gst_amount: number;
   customer_subtotal: number | null;
   customer_cgst: number | null;
   customer_sgst: number | null;
@@ -42,13 +45,15 @@ export async function POST(
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const supabase = createAdminClient();
 
   // ── Auth ────────────────────────────────────────────────────────────────────
+  const authClient = await createClient();
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await authClient.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const supabase = createAdminClient();
 
   const { data: dbUser } = await supabase
     .from("users")
@@ -145,6 +150,9 @@ export async function POST(
       landlord_tds: bill.landlord_tds,
       landlord_net_payable: bill.landlord_net_payable,
       landlord_total_amount: bill.landlord_total_amount,
+      landlord_gst_applicable: bill.landlord_gst_applicable,
+      landlord_gst_rate: bill.landlord_gst_rate,
+      landlord_gst_amount: bill.landlord_gst_amount,
       customer_subtotal: bill.customer_subtotal,
       customer_cgst: bill.customer_cgst,
       customer_sgst: bill.customer_sgst,

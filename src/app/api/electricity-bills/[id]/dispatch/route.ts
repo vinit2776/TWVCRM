@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
 
 interface EbBillRow {
   id: string;
@@ -10,23 +11,51 @@ interface EbBillRow {
   bill_month: number;
   bill_year: number;
   customer_subtotal: number | null;
-  customer_gst_amount: number | null;
+  customer_cgst: number | null;
+  customer_sgst: number | null;
   customer_total: number | null;
+  customer_utility_pct: number | null;
+  customer_generator_pct: number | null;
+  customer_units_billed: number | null;
+  customer_utility_rate: number | null;
+  customer_generator_rate: number | null;
+  gst_rate: number | null;
   billing_statement_id: string | null;
 }
 
+const round2 = (n: number) => Math.round(n * 100) / 100;
+
+/**
+ * POST /api/electricity-bills/[id]/dispatch
+ *
+ * One-click "bill the customer": creates the billing_statements row with a
+ * proper Utility/DG line-item breakdown, finalizes it immediately, and sends
+ * it per the contract's billing_mode — Proforma+Razorpay link for
+ * proforma_first, or the GST tax invoice directly for gst_direct. No separate
+ * Finalize/Send step exists elsewhere in the app for statement_type=electricity
+ * (it isn't fetched by the Rent or Usage tabs), so this route owns the whole
+ * "bill to customer" action. Once sent, the statement shows up in Receivables
+ * (AR) automatically (that view is generic on status/payment_status).
+ *
+ * If the send fails (e.g. missing customer contact), the statement is deleted
+ * and the electricity bill stays "invoiced" so the operator can fix the
+ * underlying issue and retry — mirrors the rollback pattern in
+ * finalize-and-send/route.ts.
+ */
 export async function POST(
   _request: Request,
   { params }: { params: Promise<{ id: string }> },
 ) {
   const { id } = await params;
-  const supabase = createAdminClient();
 
   // ── Auth ────────────────────────────────────────────────────────────────────
+  const authClient = await createClient();
   const {
     data: { user },
-  } = await supabase.auth.getUser();
+  } = await authClient.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const supabase = createAdminClient();
 
   const { data: dbUser } = await supabase
     .from("users")
@@ -46,7 +75,9 @@ export async function POST(
     .from("electricity_bills")
     .select(
       "id, status, contract_id, location_id, bill_month, bill_year, " +
-        "customer_subtotal, customer_gst_amount, customer_total, billing_statement_id",
+        "customer_subtotal, customer_cgst, customer_sgst, customer_total, " +
+        "customer_utility_pct, customer_generator_pct, customer_units_billed, " +
+        "customer_utility_rate, customer_generator_rate, gst_rate, billing_statement_id",
     )
     .eq("id", id)
     .single();
@@ -83,6 +114,7 @@ export async function POST(
   const periodStart = `${bill.bill_year}-${paddedMonth}-01`;
   const lastDay = new Date(bill.bill_year, bill.bill_month, 0).getDate();
   const periodEnd = `${bill.bill_year}-${paddedMonth}-${String(lastDay).padStart(2, "0")}`;
+  const monthLabel = new Date(bill.bill_year, bill.bill_month - 1).toLocaleString("en-IN", { month: "long", year: "numeric" });
 
   // ── PI-first guard: no non-voided electricity statement for same contract + period ─
   const { data: existing } = await supabase
@@ -104,17 +136,61 @@ export async function POST(
     );
   }
 
-  // ── Fetch contract to get lead_id ─────────────────────────────────────────
+  // ── Fetch contract for lead_id + billing_mode ──────────────────────────────
   const { data: contract } = await supabase
     .from("contracts")
-    .select("id, lead_id")
+    .select("id, lead_id, billing_mode")
     .eq("id", bill.contract_id)
     .single();
   if (!contract) {
     return NextResponse.json({ error: "Contract not found" }, { status: 422 });
   }
 
-  // ── Insert billing_statement ──────────────────────────────────────────────
+  // ── Build the Utility/DG line-item breakdown ───────────────────────────────
+  // Reconstructed from the stored split % + total units — matches exactly how
+  // approve_electricity_landlord_bill computed them (see 00322 migration).
+  const totalUnits = Number(bill.customer_units_billed ?? 0);
+  const utilityUnits = round2((totalUnits * Number(bill.customer_utility_pct ?? 0)) / 100);
+  const generatorUnits = round2((totalUnits * Number(bill.customer_generator_pct ?? 0)) / 100);
+
+  const items: Array<{ description: string; qty: number; unit_price: number; amount: number; hsn_sac_code: string }> = [];
+  if (utilityUnits > 0) {
+    const rate = Number(bill.customer_utility_rate ?? 0);
+    items.push({
+      description: `Electricity — Utility/Grid (${monthLabel})`,
+      qty: utilityUnits,
+      unit_price: rate,
+      amount: round2(utilityUnits * rate),
+      hsn_sac_code: "996912",
+    });
+  }
+  if (generatorUnits > 0) {
+    const rate = Number(bill.customer_generator_rate ?? 0);
+    items.push({
+      description: `Electricity — DG/Generator (${monthLabel})`,
+      qty: generatorUnits,
+      unit_price: rate,
+      amount: round2(generatorUnits * rate),
+      hsn_sac_code: "996912",
+    });
+  }
+
+  const lineItems = [
+    {
+      type: "electricity",
+      label: "Electricity Charges",
+      subtotal: Number(bill.customer_subtotal ?? 0),
+      items,
+    },
+  ];
+
+  // ── Insert billing_statement — finalized immediately, no draft limbo ──────
+  const nowIso = new Date().toISOString();
+  const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
+  const istNow = new Date(Date.now() + IST_OFFSET_MS);
+  istNow.setUTCDate(istNow.getUTCDate() + 7);
+  const dueDate = istNow.toISOString().slice(0, 10);
+
   const { data: statement, error: stmtErr } = await supabase
     .from("billing_statements")
     .insert({
@@ -123,12 +199,16 @@ export async function POST(
       period_start: periodStart,
       period_end: periodEnd,
       statement_type: "electricity",
-      // customer_subtotal → fixed_amount; GST → usage_amount; total → total_amount
+      // customer_subtotal → fixed_amount; GST (CGST+SGST) → usage_amount; total → total_amount
       fixed_amount: bill.customer_subtotal ?? 0,
-      usage_amount: bill.customer_gst_amount ?? 0,
+      usage_amount: (bill.customer_cgst ?? 0) + (bill.customer_sgst ?? 0),
       total_amount: bill.customer_total ?? 0,
-      status: "draft",
-      notes: `Electricity bill — ${new Date(bill.bill_year, bill.bill_month - 1).toLocaleString("en-IN", { month: "long", year: "numeric" })}`,
+      tax_percentage: bill.gst_rate ?? 18,
+      line_items: lineItems,
+      status: "finalized",
+      finalized_at: nowIso,
+      due_date: dueDate,
+      notes: `Electricity bill — ${monthLabel}`,
     })
     .select("id, statement_number")
     .single();
@@ -137,6 +217,24 @@ export async function POST(
     return NextResponse.json(
       { error: stmtErr?.message ?? "Failed to create billing statement" },
       { status: 500 },
+    );
+  }
+
+  // ── Send per the contract's billing mode ───────────────────────────────────
+  const isGstDirect = (contract as { billing_mode?: string | null }).billing_mode === "gst_direct";
+  const dispatchFn = isGstDirect ? dispatchGstDirect : dispatchProforma;
+  const dispatchResult = await dispatchFn(supabase, statement.id, dbUser.id, []);
+
+  if (!dispatchResult.success) {
+    // Send failed — delete the orphaned statement so the operator can retry
+    // cleanly (electricity bill stays "invoiced", not "dispatched").
+    await supabase.from("billing_statements").delete().eq("id", statement.id);
+    return NextResponse.json(
+      {
+        error: `Statement created but sending to the customer failed (rolled back): ${dispatchResult.error || "unknown error"}`,
+        rolled_back: true,
+      },
+      { status: 502 },
     );
   }
 
@@ -151,10 +249,10 @@ export async function POST(
     .eq("id", id);
 
   if (linkErr) {
-    // Best-effort rollback of the orphaned statement
-    await supabase.from("billing_statements").delete().eq("id", statement.id);
+    // The statement was already sent to the customer — can't cleanly roll
+    // that back. Surface the linking failure so it can be fixed manually.
     return NextResponse.json(
-      { error: (linkErr as { message?: string }).message ?? "Failed to link statement" },
+      { error: `Statement sent, but failed to link back to the electricity bill: ${(linkErr as { message?: string }).message}` },
       { status: 500 },
     );
   }
@@ -172,7 +270,12 @@ export async function POST(
 
   return NextResponse.json({
     statement_id: statement.id,
-    statement_number: statement.statement_number,
-    message: `Billing statement ${statement.statement_number} created`,
+    statement_number: dispatchResult.proformaRef,
+    razorpay_link_url: dispatchResult.razorpayLinkUrl,
+    emailed_to: dispatchResult.emailedTo,
+    no_contact: dispatchResult.noContact,
+    message: dispatchResult.noContact
+      ? `Billing statement ${dispatchResult.proformaRef} created — customer has no email/phone on file, nothing was sent`
+      : `Billing statement ${dispatchResult.proformaRef} created and sent to the customer`,
   });
 }

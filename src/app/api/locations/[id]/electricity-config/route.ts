@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { createAdminClient } from "@/lib/supabase/server";
+import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 
@@ -26,9 +26,11 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const supabase = await createAdminClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const authClient = await createClient();
+  const { data: { user } } = await authClient.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const supabase = createAdminClient();
 
   const { data: config, error } = await supabase
     .from("location_electricity_config")
@@ -46,7 +48,7 @@ export async function GET(
     .eq("enabled", true);
 
   const enabledConfigs = (contractConfigs ?? []).filter(
-    (c) => c.enabled && ["active", "renewal"].includes((c.contracts as unknown as { status: string } | null)?.status ?? "")
+    (c) => c.enabled && ["active", "renewal_in_progress"].includes((c.contracts as unknown as { status: string } | null)?.status ?? "")
   );
 
   const utilityAllocated = enabledConfigs.reduce((s, c) => s + (c.utility_ratio ?? 0), 0);
@@ -67,9 +69,11 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const supabase = await createAdminClient();
-  const { data: { user } } = await supabase.auth.getUser();
+  const authClient = await createClient();
+  const { data: { user } } = await authClient.auth.getUser();
   if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const supabase = createAdminClient();
 
   const { data: dbUser } = await supabase
     .from("users")
