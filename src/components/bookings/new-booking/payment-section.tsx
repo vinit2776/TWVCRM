@@ -65,7 +65,13 @@ export const PaymentSection = memo(function PaymentSection() {
                         { mode: "cash", icon: Banknote, label: "Cash" },
                         { mode: "card", icon: CreditCard, label: "Card" },
                         { mode: "upi", icon: Smartphone, label: "UPI" },
-                        ...(razorpayEnabled ? [{ mode: "send_link", icon: Link2, label: "Send Link" }] : []),
+                        // Send Link is a card sub-option (pay by card remotely
+                        // instead of swiping in person) — it must not appear
+                        // as a peer of Cash/UPI, or staff can mis-click it
+                        // while meaning to record a cash payment (see TWV-B-0131).
+                        ...(razorpayEnabled && (advancePaymentMode === "card" || advancePaymentMode === "send_link")
+                          ? [{ mode: "send_link", icon: Link2, label: "Send Link" }]
+                          : []),
                       ].map(({ mode, icon: Icon, label }) => (
                         <Button
                           key={mode} type="button"
