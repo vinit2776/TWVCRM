@@ -815,8 +815,10 @@ export async function generateRentProformas(
       const addons = addonsByContractId.get(cid) ?? null;
 
       let addonsSubtotal = 0;
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const addonLineItems: Record<string, any>[] = [];
+      const addonLineItems: {
+        description: string; amount: number; note?: string;
+        monthly_rate?: number; days_used?: number; days_in_month?: number;
+      }[] = [];
       for (const addon of (addons ?? [])) {
         const aFrom = new Date(addon.effective_from + "T00:00:00Z");
         const aUntil = addon.effective_until ? new Date(addon.effective_until + "T00:00:00Z") : null;
@@ -849,7 +851,10 @@ export async function generateRentProformas(
         const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || undefined;
         const previewSeatQty = Number(contract.seats) || 1;
         // Build line-item breakdown for the expandable detail view
-        const previewLineItems: { description: string; amount: number; qty?: number; unit_price?: number; note?: string }[] = [
+        const previewLineItems: {
+          description: string; amount: number; qty?: number; unit_price?: number; note?: string;
+          monthly_rate?: number; days_used?: number; days_in_month?: number;
+        }[] = [
           {
             description: `Monthly rent${contract.seats ? ` (${contract.seats} seat${Number(contract.seats) > 1 ? "s" : ""})` : ""}`,
             amount: prepaidRentAmount,
