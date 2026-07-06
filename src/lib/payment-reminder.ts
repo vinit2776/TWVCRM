@@ -149,7 +149,9 @@ export async function ensureLivePaymentLink(
   const email = lead?.email || "";
 
   const payload: Record<string, unknown> = {
-    amount: Math.round(Number(statement.total_amount) * 100),
+    // Defensive rupee-rounding — total_amount should already be a whole rupee,
+    // but this guards against any stale/unrounded value ever landing on the row.
+    amount: Math.round(Number(statement.total_amount)) * 100,
     currency: "INR",
     accept_partial: false,
     description: `${statement.statement_number} — ${contract.contract_number}`,

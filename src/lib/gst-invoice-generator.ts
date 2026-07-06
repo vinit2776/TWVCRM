@@ -358,13 +358,15 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     totals.push([`SGST @${halfRate}%`, fmt(data.sgst)]);
   }
 
-  // Round-off line — the gap between (subtotal + tax components) and the
-  // stored totalAmount. With rupee-rounded inputs this is usually 0, but we
-  // show it explicitly per Indian invoice convention so the math is
-  // transparent (and any paise-precision upstream is reconciled here).
-  const taxSum = data.isInterstate ? data.igst : data.cgst + data.sgst;
+  // Round-off line — the gap between the *displayed* rows (each individually
+  // rupee-rounded via fmt(), same as the line-item/totals rows above) and the
+  // stored totalAmount, so the printed numbers always reconcile on paper.
+  const roundedSubtotal = Math.round(data.subtotal);
+  const roundedTaxSum = data.isInterstate
+    ? Math.round(data.igst)
+    : Math.round(data.cgst) + Math.round(data.sgst);
   const roundedTotal = Math.round(data.totalAmount);
-  const roundOff = roundedTotal - (Math.round(data.subtotal) + Math.round(taxSum));
+  const roundOff = roundedTotal - (roundedSubtotal + roundedTaxSum);
   const roundOffStr = (roundOff >= 0 ? "+ " : "- ") + "Rs. " +
     new Intl.NumberFormat("en-IN", { maximumFractionDigits: 0 }).format(Math.abs(roundOff));
   totals.push(["Round Off", roundOffStr]);

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { computeGstAndRounding } from "@/lib/gst-math";
 
 export const maxDuration = 30;
 
@@ -127,12 +128,19 @@ export async function POST(
   const bookingUsageAmount = Number(statement.booking_usage_amount || 0);
   const subtotal = fixedAmount + usageAmount + serviceUsageAmount + bookingUsageAmount;
   const taxPercentage = Number(statement.tax_percentage || 0);
-  const taxAmount = Math.round(subtotal * (taxPercentage / 100) * 100) / 100;
-  const totalAmount = subtotal + taxAmount;
+  const { cgst, sgst, igst, taxAmount, totalAmount } = computeGstAndRounding(subtotal, taxPercentage);
 
   const { data: updated, error: updateErr } = await supabase
     .from("billing_statements")
-    .update({ usage_amount: usageAmount, subtotal, tax_amount: taxAmount, total_amount: totalAmount })
+    .update({
+      usage_amount: usageAmount,
+      subtotal,
+      tax_amount: taxAmount,
+      total_amount: totalAmount,
+      cgst_amount: cgst,
+      sgst_amount: sgst,
+      igst_amount: igst,
+    })
     .eq("id", statementId)
     .select("*")
     .single();

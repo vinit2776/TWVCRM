@@ -89,7 +89,10 @@ export async function POST(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const lead = contract?.lead as any;
   const billingMode = (contract?.billing_mode as string | null) || "proforma_first";
-  const totalAmount = Number(stmt.total_amount || 0);
+  // Defensive rupee-rounding — total_amount should already be a whole rupee
+  // (computeGstAndRounding always rounds it), but this guards against any
+  // stale/unrounded value ever landing on the row.
+  const totalAmount = Math.round(Number(stmt.total_amount || 0));
 
   const appSettings = await getCachedSettings(admin, [
     "razorpay_key_id",
