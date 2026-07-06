@@ -136,6 +136,11 @@ export async function POST(
           unit: "month",
           unit_price: prorataSubtotal,
           amount: prorataSubtotal,
+          // Persisted so the PDF breakdown reflects the rate actually charged at
+          // renewal time, even if the contract's rate later changes.
+          monthly_rate: monthlySubtotal,
+          days_used: prorataDays,
+          days_in_month: daysInMonth,
         },
       ],
       subtotal: prorataSubtotal,
