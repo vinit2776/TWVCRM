@@ -11,7 +11,7 @@
  * Top-right action: Report Issue → opens FacilityReportWizard.
  */
 
-import { useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import {
@@ -40,6 +40,14 @@ const STATUS_ORDER: FacilityIssueStatus[] = [
 const ACTIVE_STATUSES = new Set<FacilityIssueStatus>(["new", "acknowledged", "in_progress", "reopened"]);
 
 export default function FacilityIssuesPage() {
+  return (
+    <Suspense fallback={<div className="p-4 md:p-6 text-sm text-muted-foreground">Loading…</div>}>
+      <FacilityIssuesPageInner />
+    </Suspense>
+  );
+}
+
+function FacilityIssuesPageInner() {
   const searchParams = useSearchParams();
   const [issues, setIssues] = useState<FacilityIssue[]>([]);
   const [locations, setLocations] = useState<Location[]>([]);
