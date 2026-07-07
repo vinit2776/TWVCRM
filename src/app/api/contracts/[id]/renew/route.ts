@@ -116,9 +116,8 @@ export async function POST(
     : Number(source.escalation_percentage || 10);
   const escalationMultiplier = 1 + escalationPct / 100;
 
-  // Round to nearest Rs 10: 49,500 → 49,500 (no change); 49,350 → 49,350 stays;
-  // but we round the final subtotal, not individual items, for cleaner invoicing.
-  const roundToTen = (n: number) => Math.round(n / 10) * 10;
+  // Round to nearest Rupee.
+  const roundToRupee = (n: number) => Math.round(n);
 
   type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string };
   const oldSeats = Number(source.seats || 1);
@@ -127,7 +126,7 @@ export async function POST(
     // Scale seat-based items proportionally; leave flat-fee items (quantity !== oldSeats) unchanged.
     const newQuantity = item.quantity === oldSeats ? seats : item.quantity;
     const rawUnitPrice = item.unit_price * escalationMultiplier;
-    const newUnitPrice = roundToTen(rawUnitPrice);
+    const newUnitPrice = roundToRupee(rawUnitPrice);
     const newTotal = newUnitPrice * newQuantity;
     return { ...item, quantity: newQuantity, unit_price: newUnitPrice, total: newTotal };
   });

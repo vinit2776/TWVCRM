@@ -322,10 +322,10 @@ export async function PATCH(
           type Item = { description: string; quantity: number; unit_price: number; total: number; unit?: string };
           const parentItems = ((Array.isArray(parent) ? parent[0]?.items : parent.items) || []) as Item[];
           const multiplier = 1 + defaultPct / 100;
-          const roundToTen = (n: number) => Math.round(n / 10) * 10;
+          const roundToRupee = (n: number) => Math.round(n);
 
           const newItems: Item[] = parentItems.map((item) => {
-            const newUnitPrice = roundToTen(item.unit_price * multiplier);
+            const newUnitPrice = roundToRupee(item.unit_price * multiplier);
             const newTotal = newUnitPrice * item.quantity;
             return { ...item, unit_price: newUnitPrice, total: newTotal };
           });
