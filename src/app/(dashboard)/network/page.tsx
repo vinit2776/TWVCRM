@@ -6,8 +6,9 @@ import {
   Wifi, RefreshCw, Server, Users, Activity, MonitorSmartphone,
   Signal, Globe, ChevronLeft, ChevronRight, Settings2, Save,
   RotateCcw, Zap, X, Laptop, Bell, Ban, ShieldCheck, LogOut,
-  AlertTriangle, CheckCircle2, Info,
+  AlertTriangle, CheckCircle2, Info, UserCheck,
 } from "lucide-react";
+import { VoucherCustomerGroups } from "@/components/vouchers/voucher-customer-groups";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -120,6 +121,14 @@ interface KnownDevice {
   is_guest: boolean; blocked: boolean; last_seen: string | null; oui: string | null;
 }
 
+interface DeviceLabel {
+  id: string;
+  mac: string;
+  label: string;
+  contract_id: string | null;
+  contracts: { contract_number: string; title: string } | null;
+}
+
 interface NetworkEvent {
   id: string;
   key: string;
@@ -165,9 +174,11 @@ interface DeviceSession {
 
 // ─── Tab definitions ──────────────────────────────────────────────────────────
 
-type Tab = "overview" | "visitors" | "bandwidth" | "sessions" | "devices" | "infrastructure" | "events" | "configuration";
+type Tab = "overview" | "visitors" | "bandwidth" | "sessions" | "devices" | "infrastructure" | "events" | "customers" | "configuration";
 
-const TABS: { id: Tab; label: string; icon: React.ElementType; adminOnly?: boolean }[] = [
+const CUSTOMER_GROUP_ROLES = ["admin", "manager", "it_manager", "it_technician"];
+
+const TABS: { id: Tab; label: string; icon: React.ElementType; adminOnly?: boolean; roles?: string[] }[] = [
   { id: "overview",        label: "Overview",        icon: Activity },
   { id: "visitors",        label: "Visitors",        icon: Users },
   { id: "bandwidth",       label: "Bandwidth",       icon: Globe },
@@ -175,6 +186,7 @@ const TABS: { id: Tab; label: string; icon: React.ElementType; adminOnly?: boole
   { id: "devices",         label: "Devices",         icon: MonitorSmartphone },
   { id: "infrastructure",  label: "Infrastructure",  icon: Server },
   { id: "events",          label: "Events",          icon: Bell },
+  { id: "customers",       label: "Customers",       icon: UserCheck, roles: CUSTOMER_GROUP_ROLES },
   { id: "configuration",   label: "Configuration",   icon: Settings2, adminOnly: true },
 ];
 
@@ -202,6 +214,7 @@ export default function NetworkPage() {
     : false;
   const isAdmin = userRole === "admin";
   const canRunCommands = userRole ? ["admin", "it_manager"].includes(userRole) : false;
+  const canManageLabels = userRole ? ["admin", "manager", "sales_rep"].includes(userRole) : false;
 
   const selectedLocation = locations.find((l) => l.id === locationId) ?? null;
   const selectedHasUnifi = Boolean(selectedLocation?.unifi_site_id);
@@ -240,7 +253,7 @@ export default function NetworkPage() {
 
       {/* Tab bar */}
       <div className="flex gap-1 overflow-x-auto border-b pb-0">
-        {TABS.filter((t) => !t.adminOnly || isAdmin).map((t) => (
+        {TABS.filter((t) => (!t.adminOnly || isAdmin) && (!t.roles || (userRole && t.roles.includes(userRole)))).map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
@@ -286,7 +299,7 @@ export default function NetworkPage() {
               {tab === "visitors"       && <VisitorsTab locationId={locationId} canRunCommands={canRunCommands} />}
               {tab === "bandwidth"      && <BandwidthTab locationId={locationId} />}
               {tab === "sessions"       && <SessionsTab locationId={locationId} />}
-              {tab === "devices"        && <DevicesTab locationId={locationId} canRunCommands={canRunCommands} />}
+              {tab === "devices"        && <DevicesTab locationId={locationId} canRunCommands={canRunCommands} canManageLabels={canManageLabels} />}
               {tab === "infrastructure" && (
                 <InfrastructureTab
                   locationId={locationId}
@@ -295,6 +308,7 @@ export default function NetworkPage() {
                 />
               )}
               {tab === "events"         && <EventsTab locationId={locationId} />}
+              {tab === "customers"      && <VoucherCustomerGroups locationId={locationId} />}
             </>
           )}
         </div>
@@ -402,15 +416,20 @@ function VisitorsTab({ locationId, canRunCommands }: { locationId: string; canRu
   const [stats, setStats] = useState<StatsPoint[]>([]);
   const [clients, setClients] = useState<OccupancyClient[]>([]);
   const [occStats, setOccStats] = useState<{ total: number; guest: number; staff: number } | null>(null);
+  const [aps, setAps] = useState<AccessPoint[]>([]);
+  const [apFilter, setApFilter] = useState<string>("all");
   const [loading, setLoading] = useState(true);
   const [kicking, setKicking] = useState<string | null>(null);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [bulkRunning, setBulkRunning] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [statsRes, occRes] = await Promise.all([
+      const [statsRes, occRes, apRes] = await Promise.all([
         fetch(`/api/unifi/stats?location_id=${locationId}&range=hourly&days=1`),
         fetch(`/api/unifi/occupancy?location_id=${locationId}`),
+        fetch(`/api/unifi/access-points?location_id=${locationId}`),
       ]);
       const [statsJson, occJson] = await Promise.all([statsRes.json(), occRes.json()]);
       if (!statsRes.ok) throw new Error(statsJson.error || "Failed to load stats");
@@ -418,6 +437,13 @@ function VisitorsTab({ locationId, canRunCommands }: { locationId: string; canRu
       setStats(statsJson.data ?? []);
       setClients(occJson.data ?? []);
       setOccStats(occJson.stats ?? null);
+      setSelected(new Set());
+      // AP list is used only for the filter dropdown — some roles that can view
+      // Visitors (sales_rep, office_admin) can't call access-points, so fail quietly.
+      if (apRes.ok) {
+        const apJson = await apRes.json();
+        setAps(apJson.data ?? []);
+      }
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed");
     } finally {
@@ -426,6 +452,26 @@ function VisitorsTab({ locationId, canRunCommands }: { locationId: string; canRu
   }, [locationId]);
 
   useEffect(() => { load(); }, [load]);
+
+  const visibleClients = apFilter === "all" ? clients : clients.filter((c) => c.ap_mac === apFilter);
+
+  function toggleSelect(mac: string) {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(mac)) next.delete(mac); else next.add(mac);
+      return next;
+    });
+  }
+
+  function toggleSelectAll() {
+    setSelected((prev) =>
+      prev.size === visibleClients.length ? new Set() : new Set(visibleClients.map((c) => c.mac))
+    );
+  }
+
+  function selectAllGuests() {
+    setSelected(new Set(visibleClients.filter((c) => c.is_guest).map((c) => c.mac)));
+  }
 
   async function kickClient(mac: string) {
     setKicking(mac);
@@ -446,6 +492,34 @@ function VisitorsTab({ locationId, canRunCommands }: { locationId: string; canRu
     }
   }
 
+  async function bulkAction(cmd: "kick-sta" | "block-sta") {
+    if (selected.size === 0) return;
+    setBulkRunning(true);
+    try {
+      const res = await fetch("/api/unifi/clients/command", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ macs: Array.from(selected), cmd, location_id: locationId }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed");
+      const failed = (json.results ?? []).filter((r: { ok: boolean }) => !r.ok).length;
+      if (failed > 0) {
+        toast.error(`${failed} of ${selected.size} failed`);
+      } else {
+        toast.success(cmd === "kick-sta" ? `Kicked ${selected.size} clients` : `Blocked ${selected.size} clients`);
+      }
+      if (cmd === "kick-sta") {
+        setClients((prev) => prev.filter((c) => !selected.has(c.mac)));
+      }
+      setSelected(new Set());
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Bulk action failed");
+    } finally {
+      setBulkRunning(false);
+    }
+  }
+
   if (loading) return <Skeleton className="h-64" />;
 
   return (
@@ -461,23 +535,77 @@ function VisitorsTab({ locationId, canRunCommands }: { locationId: string; canRu
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-sm font-semibold flex items-center justify-between">
+          <CardTitle className="text-sm font-semibold flex items-center justify-between flex-wrap gap-2">
             <span>Live Clients</span>
-            {occStats && (
-              <span className="text-xs font-normal text-muted-foreground">
-                {occStats.total} total · {occStats.staff} staff · {occStats.guest} guest
-              </span>
-            )}
+            <div className="flex items-center gap-3">
+              {occStats && (
+                <span className="text-xs font-normal text-muted-foreground">
+                  {occStats.total} total · {occStats.staff} staff · {occStats.guest} guest
+                </span>
+              )}
+              {aps.length > 0 && (
+                <Select value={apFilter} onValueChange={setApFilter}>
+                  <SelectTrigger className="h-7 w-[160px] text-xs font-normal"><SelectValue /></SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="all">All APs</SelectItem>
+                    {aps.filter((ap) => ap.mac).map((ap) => (
+                      <SelectItem key={ap._id} value={ap.mac!}>{ap.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              )}
+            </div>
           </CardTitle>
         </CardHeader>
+        {canRunCommands && visibleClients.length > 0 && (
+          <div className="px-6 pb-2 flex items-center gap-2 flex-wrap">
+            <Button variant="outline" size="sm" className="h-7 text-xs" onClick={selectAllGuests}>
+              Select all guests
+            </Button>
+            {selected.size > 0 && (
+              <>
+                <span className="text-xs text-muted-foreground">{selected.size} selected</span>
+                <Button
+                  variant="outline" size="sm"
+                  className="h-7 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 gap-1"
+                  disabled={bulkRunning}
+                  onClick={() => bulkAction("kick-sta")}
+                >
+                  <LogOut className="h-3 w-3" /> Kick selected
+                </Button>
+                <Button
+                  variant="outline" size="sm"
+                  className="h-7 text-xs text-red-600 hover:text-red-700 hover:bg-red-50 gap-1"
+                  disabled={bulkRunning}
+                  onClick={() => bulkAction("block-sta")}
+                >
+                  <Ban className="h-3 w-3" /> Block selected
+                </Button>
+                <Button variant="ghost" size="sm" className="h-7 text-xs" onClick={() => setSelected(new Set())}>
+                  Clear
+                </Button>
+              </>
+            )}
+          </div>
+        )}
         <CardContent className="p-0">
-          {clients.length === 0 ? (
+          {visibleClients.length === 0 ? (
             <p className="px-4 py-6 text-sm text-muted-foreground text-center">No clients connected</p>
           ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
+                    {canRunCommands && (
+                      <th className="px-4 py-2.5 text-left font-medium w-8">
+                        <input
+                          type="checkbox"
+                          className="rounded"
+                          checked={selected.size > 0 && selected.size === visibleClients.length}
+                          onChange={toggleSelectAll}
+                        />
+                      </th>
+                    )}
                     <th className="px-4 py-2.5 text-left font-medium">MAC</th>
                     <th className="px-4 py-2.5 text-left font-medium">Hostname</th>
                     <th className="px-4 py-2.5 text-left font-medium hidden sm:table-cell">SSID</th>
@@ -488,8 +616,18 @@ function VisitorsTab({ locationId, canRunCommands }: { locationId: string; canRu
                   </tr>
                 </thead>
                 <tbody>
-                  {clients.map((c, i) => (
+                  {visibleClients.map((c, i) => (
                     <tr key={i} className="border-b hover:bg-muted/30 transition-colors">
+                      {canRunCommands && (
+                        <td className="px-4 py-2.5">
+                          <input
+                            type="checkbox"
+                            className="rounded"
+                            checked={selected.has(c.mac)}
+                            onChange={() => toggleSelect(c.mac)}
+                          />
+                        </td>
+                      )}
                       <td className="px-4 py-2.5 font-mono text-xs">{c.mac}</td>
                       <td className="px-4 py-2.5">{c.hostname || "—"}</td>
                       <td className="px-4 py-2.5 hidden sm:table-cell text-muted-foreground">{c.essid}</td>
@@ -703,14 +841,20 @@ function DeviceActivitySheet({
   device,
   locationId,
   canRunCommands,
+  canManageLabels,
+  label,
   onClose,
   onBlockToggle,
+  onLabelSaved,
 }: {
   device: KnownDevice | null;
   locationId: string;
   canRunCommands: boolean;
+  canManageLabels: boolean;
+  label: DeviceLabel | null;
   onClose: () => void;
   onBlockToggle: (mac: string, blocked: boolean) => void;
+  onLabelSaved: () => void;
 }) {
   const [live, setLive] = useState<LiveStatus | null>(null);
   const [sessions, setSessions] = useState<DeviceSession[]>([]);
@@ -788,6 +932,17 @@ function DeviceActivitySheet({
             )}
           </div>
         </SheetHeader>
+
+        {device && (canManageLabels || label) && (
+          <DeviceLabelEditor
+            key={device.mac}
+            mac={device.mac}
+            locationId={locationId}
+            label={label}
+            editable={canManageLabels}
+            onSaved={onLabelSaved}
+          />
+        )}
 
         {loading && (
           <div className="space-y-3">
@@ -883,15 +1038,166 @@ function DeviceActivitySheet({
   );
 }
 
+// ─── Device Label Editor ───────────────────────────────────────────────────────
+
+interface ContractSearchResult {
+  id: string;
+  contract_number: string;
+  title: string;
+}
+
+function DeviceLabelEditor({
+  mac,
+  locationId,
+  label,
+  editable,
+  onSaved,
+}: {
+  mac: string;
+  locationId: string;
+  label: DeviceLabel | null;
+  editable: boolean;
+  onSaved: () => void;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(label?.label ?? "");
+  const [contractQuery, setContractQuery] = useState("");
+  const [contractResults, setContractResults] = useState<ContractSearchResult[]>([]);
+  const [selectedContract, setSelectedContract] = useState<ContractSearchResult | null>(
+    label?.contract_id && label.contracts
+      ? { id: label.contract_id, contract_number: label.contracts.contract_number, title: label.contracts.title }
+      : null
+  );
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!editing || contractQuery.trim().length < 2) { setContractResults([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/contracts?search=${encodeURIComponent(contractQuery)}&location_id=${locationId}&limit=8`);
+        const json = await res.json();
+        if (res.ok) setContractResults(json.data ?? []);
+      } catch {
+        // ignore — search is best-effort
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [contractQuery, editing, locationId]);
+
+  async function save() {
+    if (!text.trim()) { toast.error("Label cannot be empty"); return; }
+    setSaving(true);
+    try {
+      const res = await fetch("/api/unifi/device-labels", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          location_id: locationId,
+          mac,
+          label: text.trim(),
+          contract_id: selectedContract?.id ?? null,
+        }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || "Failed to save label");
+      toast.success("Label saved");
+      setEditing(false);
+      onSaved();
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Failed to save label");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  if (!editable && !label) return null;
+
+  if (!editing) {
+    return (
+      <div className="mb-4 rounded-md border bg-muted/20 px-3 py-2 flex items-center justify-between gap-2">
+        <div className="min-w-0">
+          {label ? (
+            <>
+              <p className="text-sm font-medium truncate">{label.label}</p>
+              {label.contracts && (
+                <p className="text-xs text-muted-foreground truncate">
+                  Linked to {label.contracts.contract_number} — {label.contracts.title}
+                </p>
+              )}
+            </>
+          ) : (
+            <p className="text-xs text-muted-foreground">No label set</p>
+          )}
+        </div>
+        {editable && (
+          <Button variant="ghost" size="sm" className="h-7 text-xs shrink-0" onClick={() => setEditing(true)}>
+            {label ? "Edit" : "Add label"}
+          </Button>
+        )}
+      </div>
+    );
+  }
+
+  return (
+    <div className="mb-4 rounded-md border bg-muted/20 p-3 space-y-2">
+      <Input
+        placeholder="e.g. John's laptop"
+        value={text}
+        onChange={(e) => setText(e.target.value)}
+        className="h-8 text-sm"
+      />
+      <div className="relative">
+        <Input
+          placeholder="Search contract to link (optional)…"
+          value={selectedContract ? `${selectedContract.contract_number} — ${selectedContract.title}` : contractQuery}
+          onChange={(e) => { setSelectedContract(null); setContractQuery(e.target.value); }}
+          className="h-8 text-sm"
+        />
+        {contractResults.length > 0 && !selectedContract && (
+          <div className="absolute z-10 mt-1 w-full rounded-md border bg-background shadow-md max-h-48 overflow-y-auto">
+            {contractResults.map((c) => (
+              <button
+                key={c.id}
+                className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50"
+                onClick={() => { setSelectedContract(c); setContractResults([]); }}
+              >
+                <span className="font-medium">{c.contract_number}</span> — {c.title}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+      <div className="flex justify-end gap-2 pt-1">
+        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => setEditing(false)} disabled={saving}>Cancel</Button>
+        <Button size="sm" className="h-7 text-xs" onClick={save} disabled={saving}>{saving ? "Saving…" : "Save"}</Button>
+      </div>
+    </div>
+  );
+}
+
 // ─── Devices Tab ──────────────────────────────────────────────────────────────
 
-function DevicesTab({ locationId, canRunCommands }: { locationId: string; canRunCommands: boolean }) {
+function DevicesTab({ locationId, canRunCommands, canManageLabels }: { locationId: string; canRunCommands: boolean; canManageLabels: boolean }) {
   const [devices, setDevices] = useState<KnownDevice[]>([]);
+  const [labels, setLabels] = useState<Record<string, DeviceLabel>>({});
   const [total, setTotal] = useState(0);
   const [search, setSearch] = useState("");
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [selectedDevice, setSelectedDevice] = useState<KnownDevice | null>(null);
+
+  const loadLabels = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/unifi/device-labels?location_id=${locationId}`);
+      const json = await res.json();
+      if (!res.ok) return;
+      const map: Record<string, DeviceLabel> = {};
+      for (const l of (json.data ?? []) as DeviceLabel[]) map[l.mac] = l;
+      setLabels(map);
+    } catch {
+      // labels are a non-critical enhancement — fail silently
+    }
+  }, [locationId]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -911,6 +1217,7 @@ function DevicesTab({ locationId, canRunCommands }: { locationId: string; canRun
   }, [locationId, query]);
 
   useEffect(() => { load(); }, [load]);
+  useEffect(() => { loadLabels(); }, [loadLabels]);
 
   return (
     <>
@@ -959,7 +1266,18 @@ function DevicesTab({ locationId, canRunCommands }: { locationId: string; canRun
                     onClick={() => setSelectedDevice(d)}
                   >
                     <td className="px-3 py-2.5 font-mono text-xs">{d.mac}</td>
-                    <td className="px-3 py-2.5">{d.hostname || d.name || "—"}</td>
+                    <td className="px-3 py-2.5">
+                      {labels[d.mac] ? (
+                        <div>
+                          <span className="font-medium">{labels[d.mac].label}</span>
+                          {labels[d.mac].contracts && (
+                            <span className="block text-xs text-muted-foreground">{labels[d.mac].contracts!.contract_number}</span>
+                          )}
+                        </div>
+                      ) : (
+                        d.hostname || d.name || "—"
+                      )}
+                    </td>
                     <td className="px-3 py-2.5 hidden md:table-cell text-muted-foreground text-xs">{d.oui || "—"}</td>
                     <td className="px-3 py-2.5">
                       <div className="flex items-center gap-1.5">
@@ -989,11 +1307,14 @@ function DevicesTab({ locationId, canRunCommands }: { locationId: string; canRun
         device={selectedDevice}
         locationId={locationId}
         canRunCommands={canRunCommands}
+        canManageLabels={canManageLabels}
+        label={selectedDevice ? labels[selectedDevice.mac] ?? null : null}
         onClose={() => setSelectedDevice(null)}
         onBlockToggle={(mac, blocked) => {
           setDevices((prev) => prev.map((d) => d.mac === mac ? { ...d, blocked } : d));
           setSelectedDevice((prev) => prev?.mac === mac ? { ...prev, blocked } : prev);
         }}
+        onLabelSaved={loadLabels}
       />
     </>
   );
@@ -1117,9 +1438,11 @@ function EventsTab({ locationId }: { locationId: string }) {
   const [loading, setLoading] = useState(true);
   const [showAlarms, setShowAlarms] = useState(true);
   const [subsystem, setSubsystem] = useState<string>("all");
+  const [unavailable, setUnavailable] = useState<string | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
+    setUnavailable(null);
     try {
       const params = new URLSearchParams({
         location_id: locationId,
@@ -1128,7 +1451,13 @@ function EventsTab({ locationId }: { locationId: string }) {
       });
       const res = await fetch(`/api/unifi/events?${params}`);
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed");
+      if (!res.ok) {
+        // Some consoles don't expose event/alarm history via the proxy API —
+        // show this inline rather than as a transient-looking error toast.
+        setUnavailable(json.error || "Event/alarm history is not available for this console.");
+        setEvents([]);
+        return;
+      }
       setEvents(json.data ?? []);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Failed to load events");
@@ -1169,6 +1498,12 @@ function EventsTab({ locationId }: { locationId: string }) {
 
       {loading ? (
         <div className="space-y-2">{Array.from({ length: 8 }).map((_, i) => <Skeleton key={i} className="h-12" />)}</div>
+      ) : unavailable ? (
+        <div className="flex flex-col items-center py-16 text-muted-foreground gap-2 text-center px-6">
+          <AlertTriangle className="h-8 w-8 opacity-30" />
+          <p className="text-sm">{unavailable}</p>
+          <p className="text-xs">This UniFi console doesn&apos;t expose event/alarm history through the cloud proxy API.</p>
+        </div>
       ) : filtered.length === 0 ? (
         <div className="flex flex-col items-center py-16 text-muted-foreground gap-2">
           <Bell className="h-8 w-8 opacity-30" />

@@ -130,6 +130,19 @@ export async function PATCH(
         },
       });
 
+      if (meta.contract_id) {
+        // Non-fatal: voucher issuance already succeeded above.
+        admin.from("unifi_adhoc_voucher_links").insert({
+          location_id:      String(meta.location_id || approvalReq.entity_id),
+          unifi_voucher_id: unifiId,
+          note:             String(meta.note || `adhoc_${approvalReq.id}`),
+          contract_id:      String(meta.contract_id),
+          issued_by:        dbUser.id,
+        }).then(({ error }) => {
+          if (error) console.error("[approval-requests] adhoc link insert failed:", error);
+        });
+      }
+
       unifiIssuanceResult = {
         code,
         unifiId,

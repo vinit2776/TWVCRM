@@ -13,6 +13,9 @@
  *   note             string  (required) — label for the voucher
  *   quota            number  (optional, default 1) — max simultaneous devices
  *   reason           string  (required for non-admin/manager) — justification
+ *   contract_id      string  (optional) — links this voucher to a contract so
+ *                            connected devices can be resolved back to a
+ *                            customer (see /api/unifi/voucher-devices)
  */
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
@@ -26,6 +29,7 @@ const bodySchema = z.object({
   note:             z.string().min(1).max(200),
   quota:            z.number().int().min(1).max(100).optional().default(1),
   reason:           z.string().max(500).optional(),
+  contract_id:      z.string().uuid().optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -82,6 +86,20 @@ export async function POST(request: NextRequest) {
         },
       });
 
+      if (body.contract_id) {
+        // Non-fatal: the voucher itself already succeeded above, don't fail
+        // the request over a tracking-table write.
+        admin.from("unifi_adhoc_voucher_links").insert({
+          location_id:      body.location_id,
+          unifi_voucher_id: unifiId,
+          note:             body.note,
+          contract_id:      body.contract_id,
+          issued_by:        dbUser.id,
+        }).then(({ error }) => {
+          if (error) console.error("[api/unifi/vouchers/adhoc] link insert failed:", error);
+        });
+      }
+
       return NextResponse.json({
         issued: true,
         code,
@@ -123,6 +141,7 @@ export async function POST(request: NextRequest) {
         duration_minutes: body.duration_minutes,
         note:             body.note,
         quota:            body.quota,
+        contract_id:      body.contract_id ?? null,
         requested_by_name: dbUser.full_name,
       },
     })

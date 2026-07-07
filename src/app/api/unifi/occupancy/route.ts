@@ -21,6 +21,7 @@ interface UnifiSta {
   oui?: string;
   last_seen?: number;
   is_guest?: boolean;
+  ap_mac?: string;
 }
 
 function anonymizeMac(mac: string): string {
@@ -57,6 +58,11 @@ export async function GET(request: NextRequest) {
   try {
     const clients = await cachedUnifiRequest<UnifiSta[]>("/stat/sta", {}, 30, siteCfg);
 
+    // A client counts as "guest" if UniFi flags it directly, or its SSID is the
+    // open/hotspot network (name contains "clients", e.g. "WorkVilla Clients").
+    const isGuestClient = (c: UnifiSta) =>
+      Boolean(c.is_guest) || Boolean(c.essid && c.essid.toLowerCase().includes("clients"));
+
     const data = clients.map((c) => ({
       mac: isAdmin ? c.mac : anonymizeMac(c.mac),
       hostname: c.hostname ?? null,
@@ -68,11 +74,11 @@ export async function GET(request: NextRequest) {
       rx_bytes: c.rx_bytes ?? null,
       oui: c.oui ?? null,
       last_seen: c.last_seen ?? null,
+      ap_mac: c.ap_mac ?? null,
+      is_guest: isGuestClient(c),
     }));
 
-    const guest = clients.filter(
-      (c) => c.essid && c.essid.toLowerCase().includes("clients")
-    ).length;
+    const guest = clients.filter(isGuestClient).length;
     const staff = clients.length - guest;
 
     const stats = { total: clients.length, guest, staff };
