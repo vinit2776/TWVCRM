@@ -247,16 +247,27 @@ export async function POST(
   // ── Mirror onto billing_statements + stamp issuance_channel='tally' ───────
   // D2 (decide once): once stamped, CRM will refuse to generate its own GST invoice.
   // Must use adminClient — accounts role RLS does not permit updating gst_invoice_number.
-  await adminClient
+  // Fix #6 (ported from booking-gst-tasks/upload-gst-invoice): check the error —
+  // this update was previously unchecked and silently failing on every call because
+  // it referenced tally_total_amount, a column that only exists on booking_gst_tasks,
+  // not billing_statements. The invoice amount is already validated equal to
+  // statement.total_amount above, so there's nothing new to mirror there.
+  const { error: mirrorErr } = await adminClient
     .from("billing_statements")
     .update({
       gst_invoice_number: meta.tally_invoice_number,
       tally_invoice_number: meta.tally_invoice_number,
-      tally_total_amount: meta.invoice_amount,
       issuance_channel: "tally",
       tally_sync_status: "issued",
     })
     .eq("id", statement.id);
+
+  if (mirrorErr) {
+    return NextResponse.json(
+      { error: `Invoice saved (id: ${insertedUpload.id}) but mirroring onto the statement failed: ${mirrorErr.message}. Refresh and check statement state.` },
+      { status: 500 },
+    );
+  }
 
   // ── Transition handoff_state ─────────────────────────────────────────────
   await setHandoffState(supabase, statement.id, "ready_to_send", "gst_invoice_uploaded");
