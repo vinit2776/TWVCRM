@@ -111,8 +111,11 @@ export async function POST(
 /**
  * GET /api/billing-statements/[id]/send-reminder
  *
- * Returns the activity log for this statement — every reminder send (cron
- * or manual), most-recent first. Used by the AR page "History" drawer.
+ * Returns the unified send activity log for this statement — every reminder
+ * (cron or manual) AND every proforma/GST invoice send/resend from
+ * billing_send_log, merged and sorted most-recent first. Used by the AR page
+ * "History" drawer, so accounts can answer "what have we sent for this
+ * invoice, to whom, and did it go through" without leaving the page.
  */
 export async function GET(
   _req: NextRequest,
@@ -129,12 +132,45 @@ export async function GET(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const { data, error } = await supabase
-    .from("billing_reminder_sends")
-    .select("id, stage_index, stage_label, channel, recipient, status, error, triggered_by, sent_at, triggered_by_user:users!billing_reminder_sends_triggered_by_user_id_fkey(full_name)")
-    .eq("billing_statement_id", id)
-    .order("sent_at", { ascending: false });
+  const [remindersRes, sendLogRes] = await Promise.all([
+    supabase
+      .from("billing_reminder_sends")
+      .select("id, stage_index, stage_label, channel, recipient, status, error, triggered_by, sent_at, triggered_by_user:users!billing_reminder_sends_triggered_by_user_id_fkey(full_name)")
+      .eq("billing_statement_id", id),
+    supabase
+      .from("billing_send_log")
+      .select("id, send_type, recipient, status, error, triggered_by, triggered_by_user_id, sent_at")
+      .eq("billing_statement_id", id),
+  ]);
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
-  return NextResponse.json({ history: data || [] });
+  if (remindersRes.error) return NextResponse.json({ error: remindersRes.error.message }, { status: 500 });
+  if (sendLogRes.error) return NextResponse.json({ error: sendLogRes.error.message }, { status: 500 });
+
+  const sendLogRows = sendLogRes.data || [];
+  const userIds = Array.from(new Set(sendLogRows.map((r) => r.triggered_by_user_id).filter(Boolean))) as string[];
+  const userNameById = new Map<string, string>();
+  if (userIds.length > 0) {
+    const { data: users } = await supabase.from("users").select("id, full_name").in("id", userIds);
+    for (const u of users || []) userNameById.set(u.id, u.full_name);
+  }
+
+  const sendLogHistory = sendLogRows.map((r) => ({
+    id: r.id,
+    stage_index: -1,
+    stage_label: r.send_type === "proforma" ? "Proforma sent" : "GST invoice sent",
+    channel: "email",
+    recipient: r.recipient,
+    status: r.status,
+    error: r.error,
+    triggered_by: r.triggered_by,
+    sent_at: r.sent_at,
+    triggered_by_user: r.triggered_by_user_id && userNameById.has(r.triggered_by_user_id)
+      ? { full_name: userNameById.get(r.triggered_by_user_id)! }
+      : null,
+  }));
+
+  const history = [...(remindersRes.data || []), ...sendLogHistory]
+    .sort((a, b) => new Date(b.sent_at).getTime() - new Date(a.sent_at).getTime());
+
+  return NextResponse.json({ history });
 }

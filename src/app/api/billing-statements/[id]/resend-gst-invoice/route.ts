@@ -21,6 +21,7 @@ export async function POST(
   const { id } = await params;
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   const additionalCc: string[] = Array.isArray(body.cc) ? (body.cc as string[]).filter(Boolean) : [];
+  const toOverride: string[] = Array.isArray(body.to) ? (body.to as string[]).filter(Boolean) : [];
   const supabase = await createClient();
 
   const { data: { user } } = await supabase.auth.getUser();
@@ -47,7 +48,7 @@ export async function POST(
       id, total_amount, payment_status, statement_number, period_start,
       contract:contracts!billing_statements_contract_id_fkey(
         contract_number,
-        lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email)
+        lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email, billing_emails)
       )
     `)
     .eq("id", id)
@@ -65,7 +66,7 @@ export async function POST(
     period_start: string | null;
     contract: {
       contract_number: string | null;
-      lead: { first_name: string | null; last_name: string | null; company: string | null; email: string | null } | null;
+      lead: { first_name: string | null; last_name: string | null; company: string | null; email: string | null; billing_emails: string[] | null } | null;
     } | null;
   };
 
@@ -77,6 +78,10 @@ export async function POST(
       { status: 422 },
     );
   }
+
+  const toList = toOverride.length > 0
+    ? Array.from(new Set(toOverride.filter(Boolean)))
+    : Array.from(new Set([recipientEmail, ...(lead?.billing_emails ?? [])].filter(Boolean)));
 
   const { data: upload } = await supabase
     .from("gst_invoice_uploads")
@@ -127,7 +132,7 @@ export async function POST(
   const nowIso = new Date().toISOString();
   const sendResult = await resend.emails.send({
     from: EMAIL_FROM,
-    to: recipientEmail,
+    to: toList,
     cc: additionalCc.length > 0 ? additionalCc : undefined,
     bcc: [EMAIL_REPLY_TO],
     replyTo: EMAIL_REPLY_TO,
@@ -136,13 +141,25 @@ export async function POST(
     attachments: [{ filename, content: pdfBuffer, contentType: "application/pdf" }],
   });
 
+  await adminClient.from("billing_send_log").insert(
+    toList.map((recipient) => ({
+      billing_statement_id: id,
+      send_type: "gst_invoice" as const,
+      recipient,
+      status: sendResult.error ? ("failed" as const) : ("sent" as const),
+      error: sendResult.error ? sendResult.error.message : null,
+      triggered_by: "manual" as const,
+      triggered_by_user_id: dbUser.id,
+    })),
+  );
+
   if (sendResult.error) {
     await adminClient.from("audit_trail").insert({
       entity_type: "billing_statement",
       entity_id: id,
       action: "email_failed",
       performed_by: null,
-      changes: { error: sendResult.error.message, recipient: recipientEmail, trigger: "resend_gst_invoice" },
+      changes: { error: sendResult.error.message, recipient: toList.join(", "), trigger: "resend_gst_invoice" },
     });
     return NextResponse.json(
       { error: `Email delivery failed: ${sendResult.error.message}` },
@@ -159,8 +176,8 @@ export async function POST(
     entity_id: id,
     action: "email_resent",
     performed_by: null,
-    changes: { recipient: recipientEmail, cc: additionalCc.length > 0 ? additionalCc : undefined, invoice_number: invoiceNumber, trigger: "resend_gst_invoice" },
+    changes: { recipient: toList.join(", "), cc: additionalCc.length > 0 ? additionalCc : undefined, invoice_number: invoiceNumber, trigger: "resend_gst_invoice" },
   });
 
-  return NextResponse.json({ ok: true, emailed_to: recipientEmail });
+  return NextResponse.json({ ok: true, emailed_to: toList.join(", ") });
 }

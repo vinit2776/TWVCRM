@@ -37,7 +37,7 @@ export async function GET(_req: NextRequest) {
       gst_invoice_number, pi_cancelled_at, accounted,
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, title, billing_mode,
-        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)
+        lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, billing_emails)
       )
     `)
     .in("status", ["finalized", "exported"])

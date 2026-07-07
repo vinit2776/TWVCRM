@@ -44,6 +44,7 @@ export async function POST(
   const { id } = await params;
   const body = await request.json().catch(() => ({})) as Record<string, unknown>;
   const additionalCc: string[] = Array.isArray(body.cc) ? (body.cc as string[]).filter(Boolean) : [];
+  const toOverride: string[] = Array.isArray(body.to) ? (body.to as string[]).filter(Boolean) : [];
 
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -219,7 +220,7 @@ export async function POST(
   // ── proforma_first: dispatchProforma sees the stored new link and reuses it.
   // It regenerates the PI PDF with the fresh QR code and re-emails the customer.
   if (billingMode !== "gst_direct" || !stmt.gst_invoice_number) {
-    const result = await dispatchProforma(admin, id, dbUser.id, additionalCc);
+    const result = await dispatchProforma(admin, id, dbUser.id, additionalCc, toOverride);
     if (!result.success) {
       return NextResponse.json(
         { error: result.error || "Payment link created but email dispatch failed" },

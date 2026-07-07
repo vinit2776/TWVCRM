@@ -66,10 +66,11 @@ export async function POST(
   }
 
   const additionalCc: string[] = Array.isArray(body.cc) ? (body.cc as string[]).filter(Boolean) : [];
+  const toOverride: string[] = Array.isArray(body.to) ? (body.to as string[]).filter(Boolean) : [];
 
   const result = billingMode === "gst_direct"
-    ? await dispatchGstDirect(adminSupabase, id, dbUserId, additionalCc)
-    : await dispatchProforma(adminSupabase, id, dbUserId, additionalCc);
+    ? await dispatchGstDirect(adminSupabase, id, dbUserId, additionalCc, toOverride)
+    : await dispatchProforma(adminSupabase, id, dbUserId, additionalCc, toOverride);
 
   if (!result.success) {
     return NextResponse.json({ error: result.error || "Dispatch failed" }, { status: 500 });
