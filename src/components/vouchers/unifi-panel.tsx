@@ -33,6 +33,7 @@ import { toast } from "sonner";
 import {
   buildShareableMessage, fmtDuration, type ShareableVoucher,
 } from "@/lib/unifi-share";
+import { VoucherCustomerGroups } from "@/components/vouchers/voucher-customer-groups";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -129,12 +130,16 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
   const [issueNote, setIssueNote] = useState("");
   const [issueQuota, setIssueQuota] = useState("1");
   const [issueReason, setIssueReason] = useState("");
+  const [issueContract, setIssueContract] = useState<{ id: string; contract_number: string; title: string } | null>(null);
+  const [issueContractQuery, setIssueContractQuery] = useState("");
+  const [issueContractResults, setIssueContractResults] = useState<{ id: string; contract_number: string; title: string }[]>([]);
   // After direct issuance (admin/manager) — show code + shareable message in dialog
   const [directIssued, setDirectIssued] = useState<ShareableVoucher | null>(null);
   const [ssid, setSsid] = useState<string | null>(null);
 
   const canApprove = ["admin", "manager"].includes(userRole);
   const canIssueDirect = canApprove;
+  const canViewCustomerGroups = ["admin", "manager", "it_manager", "it_technician"].includes(userRole);
 
   // Fetch SSID once
   useEffect(() => {
@@ -143,6 +148,21 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
       .then(d => { if (d.ssid) setSsid(d.ssid); })
       .catch(() => {});
   }, []);
+
+  // Contract search for the optional "Link to contract" field on Issue Ad-hoc
+  useEffect(() => {
+    if (issueContractQuery.trim().length < 2) { setIssueContractResults([]); return; }
+    const t = setTimeout(async () => {
+      try {
+        const res = await fetch(`/api/contracts?search=${encodeURIComponent(issueContractQuery)}&location_id=${locationId}&limit=8`);
+        const json = await res.json();
+        if (res.ok) setIssueContractResults(json.data ?? []);
+      } catch {
+        // ignore — search is best-effort
+      }
+    }, 300);
+    return () => clearTimeout(t);
+  }, [issueContractQuery, locationId]);
 
   const fetchVouchers = useCallback(async (targetPage = 1) => {
     setLoading(true); setError(null);
@@ -247,6 +267,7 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
           location_id: locationId, duration_minutes: minutes,
           note: issueNote.trim(), quota: parseInt(issueQuota) || 1,
           reason: issueReason.trim() || undefined,
+          contract_id: issueContract?.id,
         }),
       });
       const json = await res.json();
@@ -275,6 +296,7 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
   function resetIssueForm() {
     setDurationPreset("480"); setCustomMinutes(""); setIssueNote("");
     setIssueQuota("1"); setIssueReason(""); setDirectIssued(null);
+    setIssueContract(null); setIssueContractQuery(""); setIssueContractResults([]);
   }
 
   async function handleReveal(voucherId: string) {
@@ -574,6 +596,9 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
         </>
       )}
 
+      {/* ── Devices by Customer ── */}
+      {canViewCustomerGroups && <VoucherCustomerGroups locationId={locationId} />}
+
       {/* ── Issue Ad-hoc Dialog ── */}
       <Dialog open={issueOpen} onOpenChange={(v) => { setIssueOpen(v); if (!v) resetIssueForm(); }}>
         <DialogContent className="max-w-md">
@@ -629,6 +654,32 @@ export function UnifiPanel({ locationId, locationName, userRole }: UnifiPanelPro
                 <Input placeholder="e.g. Guest day pass, Meeting room visitor"
                   value={issueNote} onChange={(e) => setIssueNote(e.target.value)} maxLength={200} />
                 <p className="text-xs text-muted-foreground">Stored on the voucher in UniFi for reference.</p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label>Link to contract (optional)</Label>
+                <div className="relative">
+                  <Input
+                    placeholder="Search contract to link…"
+                    value={issueContract ? `${issueContract.contract_number} — ${issueContract.title}` : issueContractQuery}
+                    onChange={(e) => { setIssueContract(null); setIssueContractQuery(e.target.value); }}
+                  />
+                  {issueContractResults.length > 0 && !issueContract && (
+                    <div className="absolute z-10 mt-1 w-full rounded-md border bg-background shadow-md max-h-48 overflow-y-auto">
+                      {issueContractResults.map((c) => (
+                        <button
+                          key={c.id}
+                          type="button"
+                          className="w-full text-left px-3 py-1.5 text-xs hover:bg-muted/50"
+                          onClick={() => { setIssueContract(c); setIssueContractResults([]); }}
+                        >
+                          <span className="font-medium">{c.contract_number}</span> — {c.title}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+                <p className="text-xs text-muted-foreground">Lets &quot;Devices by Customer&quot; resolve who this voucher belongs to.</p>
               </div>
 
               <div className="space-y-1.5">

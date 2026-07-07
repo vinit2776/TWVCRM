@@ -107,6 +107,10 @@
     {
       "path": "/api/cron/billing-dispatch-pump",
       "schedule": "* * * * *"
+    },
+    {
+      "path": "/api/cron/unifi-ap-health",
+      "schedule": "*/15 * * * *"
     }
   ],
   "headers": [

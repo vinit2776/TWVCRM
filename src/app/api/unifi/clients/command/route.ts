@@ -1,8 +1,9 @@
 /**
  * POST /api/unifi/clients/command
  *
- * Execute a management command on a connected or known WiFi client.
- * Body: { mac: string, cmd: "block-sta" | "unblock-sta" | "kick-sta" | "unauthorize-guest", location_id?: string }
+ * Execute a management command on one or more connected/known WiFi clients.
+ * Body: { mac: string, cmd, location_id? } — single client (backward compatible)
+ *    or { macs: string[], cmd, location_id? } — bulk
  *
  * kick-sta     — disconnect a currently-connected client (they can reconnect)
  * block-sta    — permanently block a MAC from connecting to this site
@@ -18,6 +19,8 @@ import { unifiRequest, siteConfigFromLocation } from "@/lib/unifi";
 const ALLOWED_CMDS = ["block-sta", "unblock-sta", "kick-sta", "unauthorize-guest"] as const;
 type ClientCmd = typeof ALLOWED_CMDS[number];
 
+const MAX_BULK = 200;
+
 export async function POST(request: NextRequest) {
   const supabase = await createClient();
   const { data: { user } } = await supabase.auth.getUser();
@@ -31,16 +34,23 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ error: "Insufficient permissions" }, { status: 403 });
   }
 
-  let body: { mac?: string; cmd?: string; location_id?: string };
+  let body: { mac?: string; macs?: string[]; cmd?: string; location_id?: string };
   try {
     body = await request.json();
   } catch {
     return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
   }
 
-  const { mac, cmd, location_id } = body;
-  if (!mac || typeof mac !== "string") {
-    return NextResponse.json({ error: "mac is required" }, { status: 400 });
+  const { mac, macs, cmd, location_id } = body;
+  const macList = macs && macs.length > 0 ? macs : mac ? [mac] : [];
+  if (macList.length === 0) {
+    return NextResponse.json({ error: "mac or macs is required" }, { status: 400 });
+  }
+  if (macList.length > MAX_BULK) {
+    return NextResponse.json({ error: `Too many clients — max ${MAX_BULK} per request` }, { status: 400 });
+  }
+  if (!macList.every((m) => typeof m === "string" && m.length > 0)) {
+    return NextResponse.json({ error: "All entries in macs must be non-empty strings" }, { status: 400 });
   }
   if (!cmd || !ALLOWED_CMDS.includes(cmd as ClientCmd)) {
     return NextResponse.json(
@@ -56,18 +66,30 @@ export async function POST(request: NextRequest) {
     if (loc) siteCfg = siteConfigFromLocation(loc);
   }
 
-  try {
-    await unifiRequest(
-      "/cmd/stamgr",
-      { method: "POST", body: JSON.stringify({ cmd, mac }) },
-      siteCfg
-    );
-    return NextResponse.json({ ok: true, cmd, mac });
-  } catch (err) {
-    console.error("[api/unifi/clients/command] failed:", err);
-    return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Command failed" },
-      { status: 502 }
-    );
+  const results = await Promise.all(
+    macList.map(async (m) => {
+      try {
+        await unifiRequest(
+          "/cmd/stamgr",
+          { method: "POST", body: JSON.stringify({ cmd, mac: m }) },
+          siteCfg
+        );
+        return { mac: m, ok: true as const };
+      } catch (err) {
+        console.error("[api/unifi/clients/command] failed:", m, err);
+        return { mac: m, ok: false as const, error: err instanceof Error ? err.message : "Command failed" };
+      }
+    })
+  );
+
+  const allOk = results.every((r) => r.ok);
+
+  // Preserve the original single-client response shape when only one mac was requested.
+  if (!macs) {
+    const r = results[0];
+    if (!r.ok) return NextResponse.json({ error: r.error }, { status: 502 });
+    return NextResponse.json({ ok: true, cmd, mac: r.mac });
   }
+
+  return NextResponse.json({ ok: allOk, cmd, results });
 }

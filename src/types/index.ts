@@ -839,7 +839,9 @@ export type AuditEntityType =
   | "asset_document"
   | "contract_billing_moratorium"
   | "user_location"
-  | "transfer_billing_policy";
+  | "transfer_billing_policy"
+  | "unifi_device_label"
+  | "unifi_ap_alert";
 
 export interface AuditLog {
   id: string;

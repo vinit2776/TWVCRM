@@ -96,30 +96,44 @@ export async function GET(request: NextRequest) {
     if (loc) siteCfg = siteConfigFromLocation(loc);
   }
 
+  // Some consoles/proxies don't expose /stat/event or /stat/alarm (404
+  // api.err.NotFound) even though /stat/device, /stat/sta, etc. work fine —
+  // observed on at least one UDM SE behind the cloud connector proxy. Treat
+  // each independently as non-fatal so the tab degrades to "unavailable"
+  // instead of hard-failing the whole page.
+  let events: ReturnType<typeof mapEvent>[] = [];
+  let eventsUnavailable = false;
   try {
-    const requests: [Promise<UnifiEvent[]>, Promise<UnifiAlarm[]> | null] = [
-      unifiRequest<UnifiEvent[]>(`/stat/event?_limit=${limit}`, {}, siteCfg),
-      includeAlarms
-        ? unifiRequest<UnifiAlarm[]>("/stat/alarm?archived=false", {}, siteCfg)
-        : null,
-    ];
-
-    const [eventsRaw, alarmsRaw] = await Promise.all(requests);
-
-    const events = eventsRaw.map(mapEvent);
-    const alarms = (alarmsRaw ?? []).map(mapAlarm);
-
-    // Merge and sort newest-first
-    const all = [...alarms, ...events].sort(
-      (a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()
-    );
-
-    return NextResponse.json({ data: all, total: all.length });
+    const eventsRaw = await unifiRequest<UnifiEvent[]>(`/stat/event?_limit=${limit}`, {}, siteCfg);
+    events = eventsRaw.map(mapEvent);
   } catch (err) {
-    console.error("[api/unifi/events] failed:", err);
+    console.warn("[api/unifi/events] events unavailable:", err);
+    eventsUnavailable = true;
+  }
+
+  let alarms: ReturnType<typeof mapAlarm>[] = [];
+  let alarmsUnavailable = false;
+  if (includeAlarms) {
+    try {
+      const alarmsRaw = await unifiRequest<UnifiAlarm[]>("/stat/alarm?archived=false", {}, siteCfg);
+      alarms = alarmsRaw.map(mapAlarm);
+    } catch (err) {
+      console.warn("[api/unifi/events] alarms unavailable:", err);
+      alarmsUnavailable = true;
+    }
+  }
+
+  if (eventsUnavailable && alarmsUnavailable) {
     return NextResponse.json(
-      { error: err instanceof Error ? err.message : "Failed to reach UniFi device" },
+      { error: "Event/alarm history is not available for this console." },
       { status: 502 }
     );
   }
+
+  // Merge and sort newest-first
+  const all = [...alarms, ...events].sort(
+    (a, b) => new Date(b.time).getTime() - new Date(a.time).getTime()
+  );
+
+  return NextResponse.json({ data: all, total: all.length, events_unavailable: eventsUnavailable });
 }
