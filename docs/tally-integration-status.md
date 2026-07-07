@@ -1,7 +1,23 @@
 # Tally Integration — Status & Resume Notes
 
-**Last updated:** 2026-06-04
-**State:** HAND-OFF. Full Tally billing lifecycle BUILT + every voucher format VERIFIED against real exports, across 7 PRs (none merged). Sync PAUSED. Remaining is the live dress rehearsal only — no code left.
+**Last updated:** 2026-07-07
+**State:** ⚠️ SHELVED. This automated bridge-sync feature (the whole plan documented below) is
+intentionally shelved — GST invoicing for both `billing_mode`s now goes through the separate
+**Tally Inbox** manual-handoff workflow instead (`tally_handoff_v2_enabled=true`, unrelated
+system, fully active, no restriction). `tally_handoff_v2_enabled` already bypasses this entire
+pipeline — see `handleStatementFinalized()` in `billing.ts` and the payment webhook's
+`v2Enabled` branch, both of which skip `dispatchGstDirect`/`generate-gst-invoice` (and therefore
+`routeGstGenerationToTally`) before this doc's flow is ever reached.
+
+`app_settings.tally_sync_enabled` was found flipped to `true` in production on 2026-07-06
+(no migration or commit ever set it — it was toggled manually via the control page, most
+likely mid–go-live rehearsal, then left on with a stale bridge heartbeat and no new sync jobs
+for ~12 days). It was flipped back to `false` on 2026-07-07 and the go-live rehearsal below
+is now considered abandoned in favor of Tally Inbox.
+
+**Do not resume this feature, flip `tally_sync_enabled` back to `true`, or build further on
+`src/lib/tally/enqueue.ts` / `dispatchGstDirect` without an explicit request.** The rest of this
+document is kept for historical/reference value only.
 
 ---
 

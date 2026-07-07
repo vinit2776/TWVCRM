@@ -205,6 +205,21 @@ export default function TallySyncPage() {
         </Button>
       </div>
 
+      {/* ── Archived notice ───────────────────────────────────────────────── */}
+      {/* This automated bridge-sync feature is intentionally shelved — GST
+          invoicing now goes through the Tally Inbox (manual handoff, gated by
+          tally_handoff_v2_enabled) instead. Page kept functional (not deleted)
+          for reference/audit only. Do not re-enable without explicit request —
+          see docs/tally-integration-status.md. */}
+      <div className="rounded-md border border-amber-300 bg-amber-50 p-3 text-sm text-amber-900 flex items-start gap-2">
+        <AlertTriangle className="h-4 w-4 mt-0.5 shrink-0" />
+        <span>
+          <strong>Archived.</strong> This automated bridge-sync feature is paused and shelved — GST
+          invoicing currently goes through <strong>Tally Inbox</strong> instead. Do not re-enable
+          without an explicit request. See <code>docs/tally-integration-status.md</code>.
+        </span>
+      </div>
+
       {/* ── Publish Bridge Update ─────────────────────────────────────────── */}
       <PublishBridgeCard />
 

@@ -28,6 +28,20 @@ TWV CRM is the internal operations platform for **The WorkVilla**, a coworking s
 - Never refactor unrelated code in a feature PR. Open a separate PR for refactors.
 - Never use the Supabase service role key in client code — service role is server-only.
 - Never log PII, passwords, tokens, or API keys even at debug level.
+- Never re-enable `tally_sync_enabled` or build on `src/lib/tally/enqueue.ts` (the automated Tally bridge-sync) without an explicit request — see "Shelved features" below.
+
+---
+
+## Shelved Features — Do Not Resume Without Explicit Request
+
+**Automated Tally bridge-sync** (`app_settings.tally_sync_enabled`, `src/lib/tally/enqueue.ts`,
+`routeGstGenerationToTally`, `dispatchGstDirect`'s Tally routing, the Admin → Tally Sync page).
+Shelved 2026-07-07 — superseded by the separate **Tally Inbox** manual-handoff workflow
+(`tally_handoff_v2_enabled`, `/accounting/inbox`), which is unrelated, fully active, and has no
+restriction or connection to the sync flag. `tally_sync_enabled` is currently `false` in
+production; do not flip it back on or extend the bridge-sync code path unless the user
+specifically asks for it. Full history: `docs/tally-integration-status.md`. The "Tally Sync"
+sidebar entry is intentionally hidden (commented out in `sidebar.tsx`), not deleted.
 
 ---
 

@@ -212,7 +212,11 @@ const navSections: NavSection[] = [
       { href: "/admin/transfer-billing-policies",  label: "Transfer Billing",        icon: ArrowLeftRight, roles: ["admin"] },
       { href: "/admin/electricity-billing-profiles", label: "Electricity Profiles",  icon: Zap,            roles: ["admin", "manager"] },
       { href: "/audit-logs",                       label: "Audit Logs",              icon: ClipboardList, roles: ["admin", "manager"] },
-      { href: "/admin/tally-sync",    label: "Tally Sync",     icon: RefreshCw,     roles: ["admin"] },
+      // "Tally Sync" nav entry intentionally hidden — the automated bridge-sync
+      // feature is shelved (superseded by Tally Inbox / tally_handoff_v2_enabled).
+      // Page itself is NOT deleted — see docs/tally-integration-status.md before
+      // re-adding this entry. Do not re-enable without explicit request.
+      // { href: "/admin/tally-sync",    label: "Tally Sync",     icon: RefreshCw,     roles: ["admin"] },
       { href: "/infrastructure",      label: "Infrastructure", icon: Server,        roles: ["admin"] },
       { href: "/support",             label: "Support",        icon: LifeBuoy,      roles: ["admin"] },
       { href: "/settings",            label: "Settings",       icon: Settings,      roles: ["admin"] },
