@@ -253,8 +253,10 @@ export function ElectricityConfigTab({ locationId, canEdit }: Props) {
         </CardHeader>
         <CardContent className="space-y-4">
           <p className="text-xs text-muted-foreground">
-            Rates the landlord charges TWV. These are shown as reference on the bill entry form.
-            Customer rates are set per contract.
+            Optional — for reference only. These rates just pre-fill the Rate column when capturing
+            a monthly bill for this location; they don&apos;t drive any actual billing. Enter the real
+            rate on each month&apos;s bill instead, since it can change month to month. Customer rates
+            are set separately, per contract.
           </p>
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-1">

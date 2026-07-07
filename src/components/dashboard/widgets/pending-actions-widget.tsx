@@ -2,7 +2,7 @@
 
 import { useState, useEffect } from "react";
 import Link from "next/link";
-import { ClipboardCheck, ShieldAlert, FileText, Package, ChevronRight } from "lucide-react";
+import { ClipboardCheck, ShieldAlert, FileText, Package, Zap, ChevronRight } from "lucide-react";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import type { PendingActionItem } from "@/app/api/dashboard/pending-actions/route";
@@ -11,12 +11,14 @@ const MODULE_ICONS: Record<string, React.ReactNode> = {
   "Deposit Waiver": <ShieldAlert className="h-4 w-4 text-amber-600" />,
   "Vendor Bills": <FileText className="h-4 w-4 text-blue-600" />,
   "Material Requests": <Package className="h-4 w-4 text-purple-600" />,
+  "Electricity Bills": <Zap className="h-4 w-4 text-orange-600" />,
 };
 
 const MODULE_COLORS: Record<string, string> = {
   "Deposit Waiver": "bg-amber-100 text-amber-800 border-amber-200",
   "Vendor Bills": "bg-blue-100 text-blue-800 border-blue-200",
   "Material Requests": "bg-purple-100 text-purple-800 border-purple-200",
+  "Electricity Bills": "bg-orange-100 text-orange-800 border-orange-200",
 };
 
 function timeAgo(iso: string): string {

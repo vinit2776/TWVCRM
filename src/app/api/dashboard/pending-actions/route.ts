@@ -34,7 +34,7 @@ export async function GET() {
   const items: PendingActionItem[] = [];
 
   // Run queries in parallel
-  const [waiverRes, billsRes, materialsRes] = await Promise.all([
+  const [waiverRes, billsRes, materialsRes, electricityRes] = await Promise.all([
     // 1. Deposit waiver OTP requests (zero-deposit proposals awaiting admin OTP)
     supabase
       .from("proposals")
@@ -58,6 +58,15 @@ export async function GET() {
       .from("material_requests")
       .select("id, request_number, title, created_at")
       .eq("status", "pending")
+      .order("created_at", { ascending: true })
+      .limit(20),
+
+    // 4. Landlord electricity bills awaiting Approve & Generate
+    supabase
+      .from("electricity_bills")
+      .select("id, landlord_bill_number, landlord_total_amount, bill_month, bill_year, created_at, locations(name, code)")
+      .eq("bill_side", "landlord")
+      .eq("status", "draft")
       .order("created_at", { ascending: true })
       .limit(20),
   ]);
@@ -103,6 +112,23 @@ export async function GET() {
         link: `/procurement/requests/${m.id}`,
         created_at: m.created_at,
         id: `mr-${m.id}`,
+      });
+    }
+  }
+
+  // Map electricity bills
+  const MONTH_NAMES = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  if (electricityRes.data) {
+    for (const b of electricityRes.data) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const location = b.locations as any;
+      items.push({
+        module: "Electricity Bills",
+        title: `${b.landlord_bill_number || "Landlord bill"} — Approval Required`,
+        subtitle: `${location?.name ?? "Unknown location"} · ${MONTH_NAMES[b.bill_month - 1]} ${b.bill_year} · ₹${Number(b.landlord_total_amount).toLocaleString("en-IN")}`,
+        link: `/procurement/electricity`,
+        created_at: b.created_at,
+        id: `eb-${b.id}`,
       });
     }
   }
