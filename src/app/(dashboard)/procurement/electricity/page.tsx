@@ -345,6 +345,17 @@ export default function ElectricityBillsPage() {
     revised: "bg-slate-100 text-slate-600",
   };
 
+  // Display labels only — the underlying "invoiced" status value is unchanged
+  // (still what confirm/dispatch check against). "Invoiced" reads as if the
+  // invoice already went out; nothing's been sent yet at this point, so it's
+  // shown as "Ready for Invoice" instead.
+  const CUSTOMER_STATUS_LABELS: Record<string, string> = {
+    draft: "Draft",
+    invoiced: "Ready for Invoice",
+    dispatched: "Dispatched",
+    revised: "Revised",
+  };
+
   const daysUntil = (dateStr: string | null) => {
     if (!dateStr) return null;
     const diffMs = new Date(dateStr).getTime() - new Date().setHours(0, 0, 0, 0);
@@ -559,7 +570,7 @@ export default function ElectricityBillsPage() {
                                     <span className="font-medium shrink-0">{formatCurrency(cb.customer_total ?? 0)}</span>
                                   </div>
                                   <div className="flex items-center gap-1.5 flex-wrap">
-                                    <Badge className={CUSTOMER_STATUS_COLORS[cb.status] ?? ""}>{cb.status}</Badge>
+                                    <Badge className={CUSTOMER_STATUS_COLORS[cb.status] ?? ""}>{CUSTOMER_STATUS_LABELS[cb.status] ?? cb.status}</Badge>
                                     {cb.billing_statement && (
                                       <span className="text-muted-foreground">
                                         Stmt {cb.billing_statement.statement_number} · {cb.billing_statement.status} · {cb.billing_statement.payment_status}

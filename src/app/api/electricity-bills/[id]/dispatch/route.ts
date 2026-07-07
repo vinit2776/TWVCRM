@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
+import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 
 interface EbBillRow {
   id: string;
@@ -221,9 +222,36 @@ export async function POST(
   }
 
   // ── Send per the contract's billing mode ───────────────────────────────────
-  const isGstDirect = (contract as { billing_mode?: string | null }).billing_mode === "gst_direct";
-  const dispatchFn = isGstDirect ? dispatchGstDirect : dispatchProforma;
-  const dispatchResult = await dispatchFn(supabase, statement.id, dbUser.id, []);
+  const billingMode = (contract as { billing_mode?: string | null }).billing_mode;
+  const isGstDirect = billingMode === "gst_direct";
+
+  // Handoff v2 hook — same gate the regular rent/usage dispatch (billing.ts)
+  // applies: when the flag is on and this is a gst_direct contract, skip the
+  // CRM's own PDF/email and route to Tally Inbox instead — accounts issues
+  // the signed GST invoice in Tally and uploads it from /accounting/inbox,
+  // which is what actually sends it to the customer. Without this gate the
+  // electricity dispatch route would always take the legacy CRM-direct path,
+  // bypassing Tally Inbox regardless of the flag.
+  const handoff = await handleStatementFinalized(
+    supabase,
+    statement.id,
+    (billingMode as "proforma_first" | "gst_direct" | null) ?? null,
+    "electricity_dispatch",
+  );
+
+  const dispatchResult = handoff.skipLegacyDispatch
+    ? {
+        success: true,
+        proformaRef: statement.statement_number as string,
+        totalAmount: bill.customer_total ?? 0,
+        razorpayLinkUrl: null,
+        emailedTo: null,
+        emailSkipped: true,
+        noContact: false,
+      }
+    : isGstDirect
+      ? await dispatchGstDirect(supabase, statement.id, dbUser.id, [])
+      : await dispatchProforma(supabase, statement.id, dbUser.id, []);
 
   if (!dispatchResult.success) {
     // Send failed — delete the orphaned statement so the operator can retry
@@ -274,8 +302,11 @@ export async function POST(
     razorpay_link_url: dispatchResult.razorpayLinkUrl,
     emailed_to: dispatchResult.emailedTo,
     no_contact: dispatchResult.noContact,
-    message: dispatchResult.noContact
-      ? `Billing statement ${dispatchResult.proformaRef} created — customer has no email/phone on file, nothing was sent`
-      : `Billing statement ${dispatchResult.proformaRef} created and sent to the customer`,
+    routed_to_tally: handoff.skipLegacyDispatch,
+    message: handoff.skipLegacyDispatch
+      ? `Billing statement ${dispatchResult.proformaRef} created and routed to Tally Inbox — accounts will issue the signed GST invoice and it'll be sent to the customer on upload`
+      : dispatchResult.noContact
+        ? `Billing statement ${dispatchResult.proformaRef} created — customer has no email/phone on file, nothing was sent`
+        : `Billing statement ${dispatchResult.proformaRef} created and sent to the customer`,
   });
 }
