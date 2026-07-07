@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { Plus, Zap, CheckCircle2, ChevronDown, ChevronUp, Trash2, AlertTriangle, Send } from "lucide-react";
+import { Plus, Zap, CheckCircle2, ChevronDown, ChevronUp, Trash2, AlertTriangle, Send, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -61,6 +61,16 @@ interface CustomerBillInfo {
   customer_total: number | null;
   billing_statement_id: string | null;
   created_by: string;
+  customer_units_billed: number | null;
+  customer_utility_pct: number | null;
+  customer_generator_pct: number | null;
+  customer_utility_rate: number | null;
+  customer_generator_rate: number | null;
+  customer_subtotal: number | null;
+  customer_cgst: number | null;
+  customer_sgst: number | null;
+  customer_round_off: number | null;
+  gst_rate: number | null;
   contract?: {
     id: string;
     contract_number: string;
@@ -307,6 +317,27 @@ export default function ElectricityBillsPage() {
     return lead.company || `${lead.first_name} ${lead.last_name}`.trim() || cb.contract?.contract_number || "—";
   };
 
+  // Full Utility/DG breakdown for accounts to verify before dispatch — mirrors
+  // exactly how the dispatch route reconstructs line items from the same
+  // stored split % + rate fields, so what's shown here matches the invoice.
+  const customerBillBreakdown = (cb: CustomerBillInfo) => {
+    const totalUnits = Number(cb.customer_units_billed ?? 0);
+    const utilityUnits = Math.round((totalUnits * Number(cb.customer_utility_pct ?? 0)) / 100 * 100) / 100;
+    const generatorUnits = Math.round((totalUnits * Number(cb.customer_generator_pct ?? 0)) / 100 * 100) / 100;
+    const utilityRate = Number(cb.customer_utility_rate ?? 0);
+    const generatorRate = Number(cb.customer_generator_rate ?? 0);
+    return {
+      utilityUnits, utilityRate, utilityAmount: Math.round(utilityUnits * utilityRate * 100) / 100,
+      generatorUnits, generatorRate, generatorAmount: Math.round(generatorUnits * generatorRate * 100) / 100,
+      subtotal: Number(cb.customer_subtotal ?? 0),
+      cgst: Number(cb.customer_cgst ?? 0),
+      sgst: Number(cb.customer_sgst ?? 0),
+      roundOff: Number(cb.customer_round_off ?? 0),
+      gstRate: Number(cb.gst_rate ?? 18),
+      total: Number(cb.customer_total ?? 0),
+    };
+  };
+
   const CUSTOMER_STATUS_COLORS: Record<string, string> = {
     draft: "bg-amber-100 text-amber-800",
     invoiced: "bg-blue-100 text-blue-800",
@@ -535,7 +566,58 @@ export default function ElectricityBillsPage() {
                                       </span>
                                     )}
                                   </div>
+
+                                  {/* Full breakup for accounts to verify before dispatch */}
+                                  {(() => {
+                                    const b = customerBillBreakdown(cb);
+                                    return (
+                                      <div className="rounded border border-blue-200 bg-white/60 px-2 py-1.5 space-y-0.5">
+                                        {b.utilityUnits > 0 && (
+                                          <div className="flex justify-between text-muted-foreground">
+                                            <span>Utility/Grid: {b.utilityUnits} units × {formatCurrency(b.utilityRate)}</span>
+                                            <span>{formatCurrency(b.utilityAmount)}</span>
+                                          </div>
+                                        )}
+                                        {b.generatorUnits > 0 && (
+                                          <div className="flex justify-between text-muted-foreground">
+                                            <span>DG/Generator: {b.generatorUnits} units × {formatCurrency(b.generatorRate)}</span>
+                                            <span>{formatCurrency(b.generatorAmount)}</span>
+                                          </div>
+                                        )}
+                                        <div className="flex justify-between text-muted-foreground border-t border-dashed pt-0.5 mt-0.5">
+                                          <span>Subtotal</span>
+                                          <span>{formatCurrency(b.subtotal)}</span>
+                                        </div>
+                                        <div className="flex justify-between text-muted-foreground">
+                                          <span>GST ({b.gstRate}%): CGST {formatCurrency(b.cgst)} + SGST {formatCurrency(b.sgst)}</span>
+                                          <span>{formatCurrency(b.cgst + b.sgst)}</span>
+                                        </div>
+                                        {b.roundOff !== 0 && (
+                                          <div className="flex justify-between text-muted-foreground">
+                                            <span>Round off</span>
+                                            <span>{formatCurrency(b.roundOff)}</span>
+                                          </div>
+                                        )}
+                                        <div className="flex justify-between font-medium pt-0.5 border-t">
+                                          <span>Total</span>
+                                          <span>{formatCurrency(b.total)}</span>
+                                        </div>
+                                      </div>
+                                    );
+                                  })()}
+
                                   <div className="flex items-center gap-2">
+                                    {canManageCustomerBill && (cb.status === "draft" || cb.status === "invoiced") && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 px-2 text-xs"
+                                        onClick={() => window.open(`/api/electricity-bills/${cb.id}/preview`, "_blank")}
+                                      >
+                                        <Eye className="mr-1 h-3 w-3" />
+                                        Preview
+                                      </Button>
+                                    )}
                                     {canManageCustomerBill && cb.status === "draft" && cb.created_by !== user?.id && (
                                       <Button
                                         size="sm"
@@ -583,7 +665,7 @@ export default function ElectricityBillsPage() {
       <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>New Electricity Bill</DialogTitle>
+            <DialogTitle>New Electricity bill - Landlord</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             {/* Location + period */}

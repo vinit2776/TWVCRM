@@ -131,3 +131,55 @@ export async function PUT(
 
   return NextResponse.json({ data });
 }
+
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> }
+) {
+  const { id } = await params;
+  const supabase = await createClient();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const { data: dbUser } = await supabase
+    .from("users")
+    .select("id, role")
+    .eq("auth_id", user.id)
+    .single();
+  if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
+
+  if (!["admin", "manager"].includes(dbUser.role)) {
+    return NextResponse.json({ error: "Admin or Manager role required" }, { status: 403 });
+  }
+
+  // location_id is NOT NULL on this table — there's no such thing as a config
+  // with "no location", so deselecting the location means removing the
+  // config entirely, not saving it with an empty location.
+  const { data: existing } = await supabase
+    .from("contract_electricity_config")
+    .select("id, location_id")
+    .eq("contract_id", id)
+    .maybeSingle();
+
+  if (!existing) return NextResponse.json({ data: null });
+
+  const { error } = await supabase
+    .from("contract_electricity_config")
+    .delete()
+    .eq("contract_id", id);
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  await logAudit(supabase, {
+    entityType: "electricity_bill",
+    entityId: existing.id,
+    action: "delete",
+    performedBy: dbUser.id,
+    changes: {
+      contract_id: { old: id, new: null },
+      location_id: { old: existing.location_id, new: null },
+    },
+  });
+
+  return NextResponse.json({ data: null });
+}

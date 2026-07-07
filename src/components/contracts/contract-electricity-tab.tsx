@@ -124,8 +124,26 @@ export function ContractElectricityTab({ contractId, canEdit }: Props) {
   };
 
   const handleSave = async () => {
+    // location_id is NOT NULL in the DB — a config can never be saved without
+    // one. So picking "— None —" when a config already exists means "remove
+    // electricity billing from this contract", not "save with no location".
     if (!form.location_id) {
-      toast.error("Please select a location first");
+      if (!cfg) {
+        toast.error("Please select a location first");
+        return;
+      }
+      setSaving(true);
+      const res = await fetch(`/api/contracts/${contractId}/electricity-config`, { method: "DELETE" });
+      if (res.ok) {
+        setCfg(null);
+        setForm(DEFAULTS);
+        setLocationConfig(null);
+        toast.success("Electricity billing removed for this contract");
+      } else {
+        const json = await res.json().catch(() => ({}));
+        toast.error(json.error || "Failed to remove electricity settings");
+      }
+      setSaving(false);
       return;
     }
     if (form.enabled && !form.billing_profile_id) {
@@ -336,9 +354,15 @@ export function ContractElectricityTab({ contractId, canEdit }: Props) {
 
       {canEdit && (
         <div className="flex justify-end">
-          <Button onClick={handleSave} disabled={saving}>
+          <Button
+            onClick={handleSave}
+            disabled={saving}
+            variant={!form.location_id && cfg ? "destructive" : "default"}
+          >
             <Save className="mr-2 h-4 w-4" />
-            {saving ? "Saving…" : cfg ? "Update Settings" : "Save Settings"}
+            {saving
+              ? (!form.location_id && cfg ? "Removing…" : "Saving…")
+              : !form.location_id && cfg ? "Remove Electricity Billing" : cfg ? "Update Settings" : "Save Settings"}
           </Button>
         </div>
       )}
