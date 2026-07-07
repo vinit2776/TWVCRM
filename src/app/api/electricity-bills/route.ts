@@ -94,7 +94,7 @@ export async function GET(request: NextRequest) {
           customer_utility_rate, customer_generator_rate,
           customer_subtotal, customer_cgst, customer_sgst, customer_round_off, gst_rate,
           contract:contracts(id, contract_number, billing_mode, lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company)),
-          billing_statement:billing_statements(id, statement_number, status, payment_status, total_amount)
+          billing_statement:billing_statements(id, statement_number, status, payment_status, total_amount, handoff_state)
         `)
         .in("landlord_bill_id", landlordIds)
         .eq("bill_side", "customer"),

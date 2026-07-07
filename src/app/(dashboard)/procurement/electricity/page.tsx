@@ -83,6 +83,7 @@ interface CustomerBillInfo {
     status: "draft" | "finalized" | "exported" | "voided";
     payment_status: string;
     total_amount: number;
+    handoff_state: string | null;
   } | null;
 }
 
@@ -392,6 +393,68 @@ export default function ElectricityBillsPage() {
     return OVERALL_STAGES[worst];
   };
 
+  // ── Lifecycle view — full step-by-step picture of where a bill actually is ──
+  // Distinct from overallStage()'s single badge: this walks the whole journey
+  // (capture → approve → confirm → dispatch → invoice issuance → paid) as
+  // discrete steps, and — critically — distinguishes "dispatched" meaning
+  // "sent to the customer" from "dispatched" meaning "handed off to Tally,
+  // awaiting accounts to issue the signed invoice" (see handleStatementFinalized
+  // in the dispatch route). Those look identical as a single status but are
+  // very different states of the actual transaction.
+  const LIFECYCLE_STEPS = ["Captured", "Approved", "Confirmed", "Dispatched", "Paid"] as const;
+
+  const HANDOFF_PENDING_STATES = new Set([
+    "pi_awaiting_payment", "pi_paid_awaiting_gst", "direct_gst_requested",
+    "name_check_pending", "ready_to_send",
+  ]);
+
+  interface LifecycleResult {
+    /** Index of the CURRENT step — everything before it is done, this one is in progress (unless complete). */
+    stepIndex: number;
+    complete: boolean; // true only once fully paid — the current step itself is also "done"
+    voided: boolean;
+    subLabel: string | null; // what's being waited on right now
+  }
+
+  const resolveLifecycle = (bill: EbBill): LifecycleResult => {
+    if (bill.status === "draft") {
+      return { stepIndex: 1, complete: false, voided: false, subLabel: "Awaiting approval" };
+    }
+
+    const cbs = bill.customer_bills ?? [];
+    if (cbs.length === 0) {
+      return { stepIndex: 2, complete: false, voided: false, subLabel: "No contract billed at this location" };
+    }
+
+    // Walk every customer bill and report the one furthest behind — matches
+    // the same "worst case wins" convention as overallStage()/customerBillRank.
+    let result: LifecycleResult = { stepIndex: 4, complete: true, voided: false, subLabel: null };
+    for (const cb of cbs) {
+      let r: LifecycleResult;
+      if (cb.status === "draft") {
+        r = { stepIndex: 2, complete: false, voided: false, subLabel: "Awaiting confirmation" };
+      } else if (cb.status === "invoiced") {
+        r = { stepIndex: 3, complete: false, voided: false, subLabel: "Ready to dispatch" };
+      } else {
+        const stmt = cb.billing_statement;
+        const handoff = stmt?.handoff_state ?? null;
+        if (stmt?.status === "voided") {
+          r = { stepIndex: 3, complete: false, voided: true, subLabel: "Statement voided" };
+        } else if (handoff && HANDOFF_PENDING_STATES.has(handoff)) {
+          r = { stepIndex: 4, complete: false, voided: false, subLabel: "Awaiting Tally GST invoice" };
+        } else if (stmt?.payment_status === "paid") {
+          r = { stepIndex: 4, complete: true, voided: false, subLabel: null };
+        } else {
+          r = { stepIndex: 4, complete: false, voided: false, subLabel: "Sent — awaiting payment" };
+        }
+      }
+      const rank = r.stepIndex - (r.complete ? 0 : 0.5); // pending step ranks worse than a completed one at the same index
+      const resultRank = result.stepIndex - (result.complete ? 0 : 0.5);
+      if (rank < resultRank || (r.voided && !result.voided)) result = r;
+    }
+    return result;
+  };
+
   const canCapture = ["admin", "manager", "accounts", "office_admin"].includes(user?.role ?? "");
   const canApprove = ["admin", "manager"].includes(user?.role ?? "");
   const canManageCustomerBill = ["admin", "manager", "accounts"].includes(user?.role ?? "");
@@ -496,6 +559,53 @@ export default function ElectricityBillsPage() {
                     </tfoot>
                   </table>
                   <p className="text-xs text-muted-foreground mt-2">Captured {formatDate(bill.created_at)}</p>
+
+                  {/* Lifecycle view — step-by-step picture of where this transaction actually is */}
+                  {(() => {
+                    const lc = resolveLifecycle(bill);
+                    return (
+                      <div className="mt-4 pt-4 border-t">
+                        <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wide mb-3">Lifecycle</p>
+                        <div className="flex items-center">
+                          {LIFECYCLE_STEPS.map((label, i) => {
+                            const done = i < lc.stepIndex || (i === lc.stepIndex && lc.complete);
+                            const isCurrentPending = i === lc.stepIndex && !lc.complete;
+                            const isVoidedHere = i === lc.stepIndex && lc.voided;
+                            return (
+                              <div key={label} className="flex items-center flex-1 last:flex-none">
+                                <div className="flex flex-col items-center gap-1 shrink-0">
+                                  <div
+                                    className={`h-6 w-6 rounded-full flex items-center justify-center text-[10px] font-semibold shrink-0 ${
+                                      isVoidedHere
+                                        ? "bg-red-100 text-red-700 border-2 border-red-300"
+                                        : done
+                                          ? "bg-emerald-500 text-white"
+                                          : isCurrentPending
+                                            ? "bg-blue-50 text-blue-700 border-2 border-blue-400"
+                                            : "bg-muted text-muted-foreground"
+                                    }`}
+                                  >
+                                    {isVoidedHere ? "!" : done ? "✓" : i + 1}
+                                  </div>
+                                  <span className={`text-[10px] whitespace-nowrap ${done || isCurrentPending || isVoidedHere ? "font-medium text-foreground" : "text-muted-foreground"}`}>
+                                    {label}
+                                  </span>
+                                </div>
+                                {i < LIFECYCLE_STEPS.length - 1 && (
+                                  <div className={`h-0.5 flex-1 mx-1.5 ${i < lc.stepIndex ? "bg-emerald-500" : "bg-muted"}`} />
+                                )}
+                              </div>
+                            );
+                          })}
+                        </div>
+                        {lc.subLabel && (
+                          <p className={`text-xs mt-2 ${lc.voided ? "text-red-600 font-medium" : "text-muted-foreground"}`}>
+                            {lc.voided ? "⚠ " : "→ "}{lc.subLabel}
+                          </p>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {/* Reconciliation: inward payable + outward receivable, same view */}
                   {bill.status !== "draft" && (() => {
