@@ -86,8 +86,8 @@ export function ContractRenewalDialog({
     return end.toISOString().slice(0, 10);
   });
 
-  // Round to nearest Rs 10
-  const roundToTen = (n: number) => Math.round(n / 10) * 10;
+  // Round to nearest Rupee
+  const roundToRupee = (n: number) => Math.round(n);
 
   const currentSubtotal = Number(contract.subtotal);
   const multiplier = 1 + escalationPct / 100;
@@ -99,7 +99,7 @@ export function ContractRenewalDialog({
     const oldSeats = contract.seats || 1;
     return items.reduce((sum, item) => {
       const newQuantity = item.quantity === oldSeats ? seats : item.quantity;
-      const newPrice = roundToTen(item.unit_price * multiplier);
+      const newPrice = roundToRupee(item.unit_price * multiplier);
       return sum + newPrice * newQuantity;
     }, 0);
   }, [contract.items, multiplier, seats, contract.seats]);
@@ -221,7 +221,7 @@ export function ContractRenewalDialog({
             <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">Rate Negotiation</p>
             <div className="grid grid-cols-3 gap-3 items-end">
               <div className="space-y-1">
-                <Label className="text-xs">Escalation %<FieldHelp tip="Annual rate increase applied to each line item. Set to 0 for no change. The escalated rate is rounded to the nearest ₹10." /></Label>
+                <Label className="text-xs">Escalation %<FieldHelp tip="Annual rate increase applied to each line item. Set to 0 for no change. The escalated rate is rounded to the nearest ₹1." /></Label>
                 <Input
                   type="number"
                   min={0}
@@ -258,7 +258,7 @@ export function ContractRenewalDialog({
               </div>
             </div>
             <p className="text-[10px] text-muted-foreground text-center">
-              Rates rounded to nearest ₹10 for cleaner invoicing
+              Rates rounded to nearest ₹1 for cleaner invoicing
             </p>
           </div>
 
