@@ -20,7 +20,7 @@ import {
 import { toast } from "sonner";
 import { ItemHistoryDialog } from "@/components/procurement/item-history-dialog";
 import {
-  PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS,
+  PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_EXAMPLES,
   ITEM_UNITS,
 } from "@/lib/constants";
 import { formatCurrency } from "@/lib/utils";
@@ -566,10 +566,20 @@ function NewPurchaseRequestForm() {
               </SelectTrigger>
               <SelectContent>
                 {PROCUREMENT_DEPARTMENTS.map((d) => (
-                  <SelectItem key={d} value={d}>{PROCUREMENT_DEPARTMENT_LABELS[d]}</SelectItem>
+                  <SelectItem key={d} value={d}>
+                    <div className="flex flex-col">
+                      <span>{PROCUREMENT_DEPARTMENT_LABELS[d]}</span>
+                      <span className="text-xs text-muted-foreground">{PROCUREMENT_DEPARTMENT_EXAMPLES[d]}</span>
+                    </div>
+                  </SelectItem>
                 ))}
               </SelectContent>
             </Select>
+            {department && (
+              <p className="text-xs text-muted-foreground">
+                e.g. {PROCUREMENT_DEPARTMENT_EXAMPLES[department]}
+              </p>
+            )}
           </div>
 
           <div className="space-y-1.5">

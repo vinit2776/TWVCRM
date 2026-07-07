@@ -1471,6 +1471,15 @@ export const PROCUREMENT_DEPARTMENT_LABELS: Record<string, string> = {
   amc: "AMC",
 };
 
+/** Example items per department — shown as guidance when selecting a department on a Material Request. */
+export const PROCUREMENT_DEPARTMENT_EXAMPLES: Record<string, string> = {
+  pantry: "Coffee/tea, materials, water can, water bottles",
+  maintenance: "HK consumables, pest control, spare parts for asset replacement",
+  administration: "Machine rent, ISP bills, stationery",
+  asset: "Chairs, AC, WS, vacuum cleaner, TV, projector, HVAC, UPS, DG, RO",
+  amc: "HVAC, UPS, DG, RO and other AMC-covered assets",
+};
+
 export const PROCUREMENT_DEPARTMENT_COLORS: Record<string, string> = {
   pantry: "bg-orange-100 text-orange-800",
   maintenance: "bg-blue-100 text-blue-800",
