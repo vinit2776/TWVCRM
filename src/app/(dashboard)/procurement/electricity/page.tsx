@@ -1,7 +1,7 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
-import { Plus, Zap, CheckCircle2, ChevronDown, ChevronUp, Trash2, AlertTriangle, Send, Eye } from "lucide-react";
+import { useState, useEffect, useCallback, useMemo } from "react";
+import { Plus, Zap, CheckCircle2, ChevronDown, ChevronUp, Trash2, AlertTriangle, Send, Eye, Pencil } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -23,6 +23,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { BillingModeTag } from "@/components/billing/billing-mode-tag";
@@ -101,6 +102,7 @@ interface EbBill {
   landlord_gst_rate?: number | null;
   landlord_gst_amount?: number;
   vendor_bill_id?: string | null;
+  notes?: string | null;
   created_at: string;
   electricity_bill_lines: EbLine[];
   locations?: { id: string; name: string; code: string };
@@ -132,8 +134,11 @@ export default function ElectricityBillsPage() {
   const { user } = useCurrentUser();
   const [bills, setBills] = useState<EbBill[]>([]);
   const [loading, setLoading] = useState(true);
+  const [activeTab, setActiveTab] = useState<"open" | "completed">("open");
+  const [listLocationFilter, setListLocationFilter] = useState("");
   const [expanded, setExpanded] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
+  const [editingBillId, setEditingBillId] = useState<string | null>(null);
   const [approving, setApproving] = useState<string | null>(null);
   const [actingOnCustomerBill, setActingOnCustomerBill] = useState<string | null>(null);
 
@@ -231,35 +236,77 @@ export default function ElectricityBillsPage() {
   const updateLine = (i: number, patch: Partial<EbLine>) =>
     setLines((ls) => ls.map((l, idx) => idx === i ? { ...l, ...patch } : l));
 
+  // Edit only ever opens on a still-draft landlord bill (the button is
+  // hidden past that point), so pre-fill straight from the already-fetched
+  // bill — no extra round-trip needed.
+  const handleEditClick = (bill: EbBill) => {
+    setEditingBillId(bill.id);
+    setForm({
+      location_id: bill.location_id,
+      bill_month: bill.bill_month,
+      bill_year: bill.bill_year,
+      landlord_bill_number: bill.landlord_bill_number ?? "",
+      landlord_bill_date: bill.landlord_bill_date ?? "",
+      notes: bill.notes ?? "",
+      landlord_gst_applicable: bill.landlord_gst_applicable ?? false,
+      landlord_gst_rate: bill.landlord_gst_rate ?? 18,
+    });
+    setLines(
+      bill.electricity_bill_lines.length > 0
+        ? bill.electricity_bill_lines.map((l, i) => ({ ...l, sort_order: l.sort_order ?? i }))
+        : [emptyLine()],
+    );
+    setDialogOpen(true);
+  };
+
+  const closeDialog = () => {
+    setDialogOpen(false);
+    setEditingBillId(null);
+    setLines([emptyLine()]);
+    setForm({ location_id: "", bill_month: new Date().getMonth() + 1, bill_year: new Date().getFullYear(), landlord_bill_number: "", landlord_bill_date: "", notes: "", landlord_gst_applicable: false, landlord_gst_rate: 18 });
+  };
+
   const handleSubmit = async () => {
     if (!form.location_id) { toast.error("Select a location"); return; }
     if (lines.length === 0) { toast.error("Add at least one line"); return; }
     setSubmitting(true);
-    const res = await fetch("/api/electricity-bills", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        ...form,
-        landlord_bill_number: form.landlord_bill_number || null,
-        landlord_bill_date: form.landlord_bill_date || null,
-        notes: form.notes || null,
-        lines: lines.map((l) => ({
-          line_type: l.line_type,
-          meter_label: l.meter_label ?? null,
-          label: l.label ?? null,
-          units: l.line_type !== "other" ? (l.units ?? 0) : null,
-          rate: l.line_type !== "other" ? lineRate(l) : null,
-          amount: l.line_type === "other" ? (l.amount ?? 0) : null,
-          sort_order: l.sort_order,
-        })),
-      }),
-    });
+    const linesPayload = lines.map((l) => ({
+      line_type: l.line_type,
+      meter_label: l.meter_label ?? null,
+      label: l.label ?? null,
+      units: l.line_type !== "other" ? (l.units ?? 0) : null,
+      rate: l.line_type !== "other" ? lineRate(l) : null,
+      amount: l.line_type === "other" ? (l.amount ?? 0) : null,
+      sort_order: l.sort_order,
+    }));
+    const res = editingBillId
+      ? await fetch(`/api/electricity-bills/${editingBillId}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            landlord_bill_number: form.landlord_bill_number || null,
+            landlord_bill_date: form.landlord_bill_date || null,
+            notes: form.notes || null,
+            landlord_gst_applicable: form.landlord_gst_applicable,
+            landlord_gst_rate: form.landlord_gst_rate,
+            lines: linesPayload,
+          }),
+        })
+      : await fetch("/api/electricity-bills", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            ...form,
+            landlord_bill_number: form.landlord_bill_number || null,
+            landlord_bill_date: form.landlord_bill_date || null,
+            notes: form.notes || null,
+            lines: linesPayload,
+          }),
+        });
     const json = await res.json();
     if (res.ok) {
-      toast.success("Bill captured");
-      setDialogOpen(false);
-      setLines([emptyLine()]);
-      setForm({ location_id: "", bill_month: new Date().getMonth() + 1, bill_year: new Date().getFullYear(), landlord_bill_number: "", landlord_bill_date: "", notes: "", landlord_gst_applicable: false, landlord_gst_rate: 18 });
+      toast.success(editingBillId ? "Bill updated" : "Bill captured");
+      closeDialog();
       fetchBills();
     } else {
       const msg = typeof json.error === "object" ? Object.values(json.error).flat().join("; ") : json.error;
@@ -269,6 +316,9 @@ export default function ElectricityBillsPage() {
   };
 
   const handleApprove = async (billId: string) => {
+    if (!window.confirm("Approving will generate the customer bill from these numbers and lock this landlord bill from further edits. Continue?")) {
+      return;
+    }
     setApproving(billId);
     const res = await fetch(`/api/electricity-bills/${billId}/approve`, { method: "POST" });
     const json = await res.json();
@@ -455,6 +505,24 @@ export default function ElectricityBillsPage() {
     return result;
   };
 
+  // Location filter + Open/Completed bucketing — "Completed" reuses the same
+  // resolveLifecycle() the stepper renders, so a bill only leaves the default
+  // worklist once every customer bill on it has actually reached Paid (voided
+  // and Tally-pending bills correctly stay in Open).
+  const listFilteredBills = useMemo(
+    () => (listLocationFilter ? bills.filter((b) => b.location_id === listLocationFilter) : bills),
+    [bills, listLocationFilter],
+  );
+  const openBills = useMemo(
+    () => listFilteredBills.filter((b) => !resolveLifecycle(b).complete),
+    [listFilteredBills],
+  );
+  const completedBills = useMemo(
+    () => listFilteredBills.filter((b) => resolveLifecycle(b).complete),
+    [listFilteredBills],
+  );
+  const visibleBills = activeTab === "open" ? openBills : completedBills;
+
   const canCapture = ["admin", "manager", "accounts", "office_admin"].includes(user?.role ?? "");
   const canApprove = ["admin", "manager"].includes(user?.role ?? "");
   const canManageCustomerBill = ["admin", "manager", "accounts"].includes(user?.role ?? "");
@@ -477,6 +545,28 @@ export default function ElectricityBillsPage() {
         )}
       </div>
 
+      {!loading && bills.length > 0 && (
+        <div className="flex items-center justify-between gap-3 flex-wrap">
+          <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "open" | "completed")}>
+            <TabsList>
+              <TabsTrigger value="open">Open ({openBills.length})</TabsTrigger>
+              <TabsTrigger value="completed">Completed ({completedBills.length})</TabsTrigger>
+            </TabsList>
+          </Tabs>
+          <Select value={listLocationFilter || "all"} onValueChange={(v) => setListLocationFilter(v === "all" ? "" : v)}>
+            <SelectTrigger className="w-[220px]">
+              <SelectValue placeholder="All locations" />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="all">All locations</SelectItem>
+              {locations.map((l) => (
+                <SelectItem key={l.id} value={l.id}>{l.name} ({l.code})</SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      )}
+
       {loading ? (
         <TableSkeleton rows={4} />
       ) : bills.length === 0 ? (
@@ -485,9 +575,19 @@ export default function ElectricityBillsPage() {
           title="No electricity bills"
           description="Capture a landlord bill to get started."
         />
+      ) : visibleBills.length === 0 ? (
+        <EmptyState
+          icon={Zap}
+          title={activeTab === "open" ? "No open bills" : "No completed bills"}
+          description={
+            activeTab === "open"
+              ? "Everything is fully paid and closed out — you're all caught up."
+              : "Nothing has reached Paid yet for this view."
+          }
+        />
       ) : (
         <div className="space-y-3">
-          {bills.map((bill) => (
+          {visibleBills.map((bill) => (
             <Card key={bill.id}>
               <CardHeader className="py-3 px-4">
                 <div className="flex items-center justify-between gap-3">
@@ -514,6 +614,16 @@ export default function ElectricityBillsPage() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge className={overallStage(bill).className}>{overallStage(bill).label}</Badge>
+                    {canCapture && bill.status === "draft" && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleEditClick(bill)}
+                      >
+                        <Pencil className="mr-1.5 h-3.5 w-3.5" />
+                        Edit
+                      </Button>
+                    )}
                     {canApprove && bill.status === "draft" && (
                       <Button
                         size="sm"
@@ -783,10 +893,10 @@ export default function ElectricityBillsPage() {
       )}
 
       {/* New bill dialog */}
-      <Dialog open={dialogOpen} onOpenChange={setDialogOpen}>
+      <Dialog open={dialogOpen} onOpenChange={(open) => { if (!open) closeDialog(); else setDialogOpen(true); }}>
         <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>New Electricity bill - Landlord</DialogTitle>
+            <DialogTitle>{editingBillId ? "Edit Electricity bill - Landlord" : "New Electricity bill - Landlord"}</DialogTitle>
           </DialogHeader>
           <div className="space-y-4">
             {/* Location + period */}
@@ -796,6 +906,7 @@ export default function ElectricityBillsPage() {
                 <Select
                   value={form.location_id || "none"}
                   onValueChange={(v) => handleLocationChange(v === "none" ? "" : v)}
+                  disabled={!!editingBillId}
                 >
                   <SelectTrigger><SelectValue placeholder="Select location…" /></SelectTrigger>
                   <SelectContent>
@@ -811,12 +922,16 @@ export default function ElectricityBillsPage() {
                 {locCfg && !locCfg.enabled && (
                   <p className="text-xs text-destructive">Electricity billing is not enabled for this location.</p>
                 )}
+                {editingBillId && (
+                  <p className="text-xs text-muted-foreground">Location, month, and year can&apos;t be changed once captured.</p>
+                )}
               </div>
               <div className="space-y-1">
                 <Label>Month</Label>
                 <Select
                   value={String(form.bill_month)}
                   onValueChange={(v) => setForm((f) => ({ ...f, bill_month: parseInt(v) }))}
+                  disabled={!!editingBillId}
                 >
                   <SelectTrigger><SelectValue /></SelectTrigger>
                   <SelectContent>
@@ -832,6 +947,7 @@ export default function ElectricityBillsPage() {
                   type="number" min={2020} max={2099}
                   value={form.bill_year}
                   onChange={(e) => setForm((f) => ({ ...f, bill_year: parseInt(e.target.value) || new Date().getFullYear() }))}
+                  disabled={!!editingBillId}
                 />
               </div>
               <div className="space-y-1">
@@ -1011,9 +1127,9 @@ export default function ElectricityBillsPage() {
             </div>
           </div>
           <DialogFooter>
-            <Button variant="outline" onClick={() => setDialogOpen(false)}>Cancel</Button>
+            <Button variant="outline" onClick={closeDialog}>Cancel</Button>
             <Button onClick={handleSubmit} disabled={submitting}>
-              {submitting ? "Saving…" : "Save as Draft"}
+              {submitting ? "Saving…" : editingBillId ? "Save Changes" : "Save as Draft"}
             </Button>
           </DialogFooter>
         </DialogContent>
