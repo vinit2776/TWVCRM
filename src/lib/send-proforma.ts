@@ -61,12 +61,17 @@ export interface DispatchResult {
  * @param statementId    ID of the finalized billing_statements row
  * @param dispatchedBy   User ID to record in audit log (null for cron-triggered sends)
  * @param additionalCc   Extra CC emails (e.g. from request body when triggered manually)
+ * @param toOverride     Explicit recipient list (e.g. from the resend dialog's
+ *                       checkbox picker). When non-empty, replaces the default
+ *                       customerEmail + lead.billing_emails auto-merge — lets a
+ *                       user deliberately exclude an address for one send.
  */
 export async function dispatchProforma(
   adminSupabase: SupabaseClient,
   statementId: string,
   dispatchedBy: string | null = null,
   additionalCc: string[] = [],
+  toOverride: string[] = [],
 ): Promise<DispatchResult> {
   // ── Fetch statement with contract + lead ────────────────────────────────
   const { data: statement, error: fetchErr } = await adminSupabase
@@ -100,6 +105,10 @@ export async function dispatchProforma(
   const customerEmail = lead?.email as string | undefined;
   const customerPhone = (lead?.phone || lead?.mobile) as string | undefined;
   const noContact = !customerEmail && !customerPhone;
+  const billingEmails = (lead?.billing_emails as string[] | null) ?? [];
+  const toList = toOverride.length > 0
+    ? Array.from(new Set(toOverride.filter(Boolean)))
+    : Array.from(new Set([customerEmail, ...billingEmails].filter((e): e is string => Boolean(e))));
 
   // ── Calculate GST totals ─────────────────────────────────────────────────
   const usageCharges = (statement.usage_charges || []) as { description: string; quantity: number; unit_price: number; total: number }[];
@@ -345,10 +354,8 @@ export async function dispatchProforma(
   const now = new Date().toISOString();
   let emailedSuccessfully = false;
 
-  if (customerEmail) {
+  if (toList.length > 0) {
     try {
-      const billingEmails = (lead?.billing_emails as string[] | null) ?? [];
-      const toList = Array.from(new Set([customerEmail, ...billingEmails].filter(Boolean)));
       const ccList = additionalCc.filter(Boolean);
       await withTimeout(
         resend.emails.send({
@@ -411,11 +418,9 @@ export async function dispatchProforma(
     });
   }
 
-  if (customerEmail) {
-    const billingEmails = (lead?.billing_emails as string[] | null) ?? [];
-    const recipients = Array.from(new Set([customerEmail, ...billingEmails].filter(Boolean)));
+  if (toList.length > 0) {
     await adminSupabase.from("billing_send_log").insert(
-      recipients.map((recipient) => ({
+      toList.map((recipient) => ({
         billing_statement_id: statementId,
         send_type: "proforma" as const,
         recipient,
@@ -431,8 +436,8 @@ export async function dispatchProforma(
     proformaRef,
     totalAmount,
     razorpayLinkUrl,
-    emailedTo: emailedSuccessfully ? (customerEmail ?? null) : null,
-    emailSkipped: !customerEmail,
+    emailedTo: emailedSuccessfully ? (toList.join(", ") || null) : null,
+    emailSkipped: toList.length === 0,
     noContact,
   };
 }
@@ -450,6 +455,7 @@ export async function dispatchGstDirect(
   statementId: string,
   dispatchedBy: string | null = null,
   additionalCc: string[] = [],
+  toOverride: string[] = [],
 ): Promise<DispatchResult> {
   // ── Fetch statement with contract + lead ──────────────────────────────────
   const { data: statement, error: fetchErr } = await adminSupabase
@@ -481,6 +487,10 @@ export async function dispatchGstDirect(
   const customerEmail = lead?.email as string | undefined;
   const customerPhone = (lead?.phone || lead?.mobile) as string | undefined;
   const noContact = !customerEmail && !customerPhone;
+  const billingEmails = (lead?.billing_emails as string[] | null) ?? [];
+  const toList = toOverride.length > 0
+    ? Array.from(new Set(toOverride.filter(Boolean)))
+    : Array.from(new Set([customerEmail, ...billingEmails].filter((e): e is string => Boolean(e))));
 
   // ── Tally routing gate (surgical swap point #1) ───────────────────────────
   // If Tally GST issuance is active, hand the GST invoice to Tally: stamp the
@@ -711,16 +721,14 @@ export async function dispatchGstDirect(
 
   const nowIso = new Date().toISOString();
   let emailedSuccessfully = false;
-  if (customerEmail) {
+  if (toList.length > 0) {
     try {
-      const billingEmails2 = (lead?.billing_emails as string[] | null) ?? [];
-      const toList2 = Array.from(new Set([customerEmail, ...billingEmails2].filter(Boolean)));
       const ccList = additionalCc.filter(Boolean);
       await withTimeout(
         resend.emails.send({
           from: EMAIL_FROM,
           replyTo: EMAIL_REPLY_TO,
-          to: toList2,
+          to: toList,
           cc: ccList.length > 0 ? ccList : undefined,
           bcc: BILLING_BCC,
           subject: `Tax Invoice ${invoiceNumber} — ${contract.contract_number} — The WorkVilla`,
@@ -773,11 +781,9 @@ export async function dispatchGstDirect(
     });
   }
 
-  if (customerEmail) {
-    const billingEmails2 = (lead?.billing_emails as string[] | null) ?? [];
-    const recipients = Array.from(new Set([customerEmail, ...billingEmails2].filter(Boolean)));
+  if (toList.length > 0) {
     await adminSupabase.from("billing_send_log").insert(
-      recipients.map((recipient) => ({
+      toList.map((recipient) => ({
         billing_statement_id: statementId,
         send_type: "gst_invoice" as const,
         recipient,
@@ -793,8 +799,8 @@ export async function dispatchGstDirect(
     proformaRef: stmtRef,
     totalAmount,
     razorpayLinkUrl,
-    emailedTo: emailedSuccessfully ? (customerEmail ?? null) : null,
-    emailSkipped: !customerEmail,
+    emailedTo: emailedSuccessfully ? (toList.join(", ") || null) : null,
+    emailSkipped: toList.length === 0,
     noContact,
   };
 }

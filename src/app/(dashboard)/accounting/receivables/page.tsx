@@ -43,6 +43,7 @@ interface Lead {
   email?: string;
   phone?: string;
   mobile?: string;
+  billing_emails?: string[];
 }
 
 interface Contract {
@@ -118,6 +119,19 @@ function customerName(lead?: Lead): string {
   return `${lead.first_name || ""} ${lead.last_name || ""}`.trim() || "—";
 }
 
+/** gst_direct contracts never have a proforma stage — the invoice route is
+ *  the contract's billing_mode, not just whether a GST invoice number has
+ *  been generated yet (which can lag behind for a brand-new statement). */
+function isGstRoute(row: Pick<ReceivableRow, "gst_invoice_number" | "contract">): boolean {
+  return row.contract.billing_mode === "gst_direct" || !!row.gst_invoice_number;
+}
+
+/** Primary contact email + lead billing_emails, deduped, primary first. */
+function candidateRecipients(lead?: Lead): string[] {
+  if (!lead) return [];
+  return Array.from(new Set([lead.email, ...(lead.billing_emails || [])].filter(Boolean))) as string[];
+}
+
 function daysOverdueBadge(days: number | null) {
   if (days === null) return <Badge variant="outline" className="text-muted-foreground">No due date</Badge>;
   if (days < 0) return <Badge variant="outline" className="bg-emerald-50 text-emerald-700 border-emerald-200">Due in {Math.abs(days)}d</Badge>;
@@ -152,6 +166,9 @@ export default function AccountsReceivablePage() {
   const [resendCc, setResendCc] = useState("");
   const [resendSubmitting, setResendSubmitting] = useState(false);
   const [resendNewLink, setResendNewLink] = useState(false);
+  // All addresses on file (primary contact email + lead billing_emails) default
+  // checked; user can uncheck one-off for a specific send.
+  const [resendRecipients, setResendRecipients] = useState<Set<string>>(new Set());
 
   // History drawer state
   const [historyRow, setHistoryRow] = useState<ReceivableRow | null>(null);
@@ -318,12 +335,23 @@ export default function AccountsReceivablePage() {
     setResendRow(row);
     setResendCc("");
     setResendNewLink(false);
+    setResendRecipients(new Set(candidateRecipients(row.contract.lead)));
+  };
+
+  const toggleResendRecipient = (email: string) => {
+    setResendRecipients((prev) => {
+      const next = new Set(prev);
+      if (next.has(email)) next.delete(email); else next.add(email);
+      return next;
+    });
   };
 
   const submitResend = async () => {
     if (!resendRow) return;
+    if (resendRecipients.size === 0) { toast.error("Select at least one recipient"); return; }
     setResendSubmitting(true);
     const ccList = resendCc.split(/[,;\s]+/).map(s => s.trim()).filter(Boolean);
+    const toList = Array.from(resendRecipients);
     const hasGst = !!resendRow.gst_invoice_number;
 
     // New-link path: cancel old link, create fresh one, resend invoice
@@ -332,7 +360,7 @@ export default function AccountsReceivablePage() {
         const res = await fetch(`/api/billing-statements/${resendRow.id}/reissue-payment-link`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ cc: ccList.length > 0 ? ccList : undefined }),
+          body: JSON.stringify({ to: toList, cc: ccList.length > 0 ? ccList : undefined }),
         });
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || "Failed");
@@ -355,12 +383,12 @@ export default function AccountsReceivablePage() {
       const res = await fetch(endpoint, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ cc: ccList.length > 0 ? ccList : undefined }),
+        body: JSON.stringify({ to: toList, cc: ccList.length > 0 ? ccList : undefined }),
       });
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed");
       const sentTo = json.emailedTo || json.emailed_to || "";
-      toast.success(`${hasGst ? "GST invoice" : "Proforma"} resent${sentTo ? ` to ${sentTo}` : ""}${ccList.length > 0 ? ` (CC: ${ccList.join(", ")})` : ""}`);
+      toast.success(`${isGstRoute(resendRow) ? "GST invoice" : "Proforma"} resent${sentTo ? ` to ${sentTo}` : ""}${ccList.length > 0 ? ` (CC: ${ccList.join(", ")})` : ""}`);
       setResendRow(null);
       await load();
     } catch (e) {
@@ -571,15 +599,17 @@ export default function AccountsReceivablePage() {
                           </div>
                         </td>
                         <td className="px-4 py-3">
-                          {r.contract.billing_mode === "gst_direct" ? (
-                            r.gst_invoice_number ? (
-                              <Link href={`/api/billing-statements/${r.id}/gst-invoice-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
-                                {r.gst_invoice_number}
-                                <FileDown className="h-3 w-3" />
-                              </Link>
-                            ) : (
-                              <span className="font-mono text-xs text-muted-foreground">GST Pending</span>
-                            )
+                          {/* A GST invoice number can be present regardless of billing_mode —
+                              gst_direct issues it directly, but proforma_first contracts get
+                              one too once accounts uploads it via the Tally Inbox handoff. The
+                              invoice number, once it exists, always wins over the proforma link. */}
+                          {r.gst_invoice_number ? (
+                            <Link href={`/api/billing-statements/${r.id}/gst-invoice-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
+                              {r.gst_invoice_number}
+                              <FileDown className="h-3 w-3" />
+                            </Link>
+                          ) : r.contract.billing_mode === "gst_direct" ? (
+                            <span className="font-mono text-xs text-muted-foreground">GST Pending</span>
                           ) : (
                             <Link href={`/api/billing-statements/${r.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
                               {r.statement_number}
@@ -627,10 +657,10 @@ export default function AccountsReceivablePage() {
                             <Button size="sm" variant="ghost" onClick={() => sendReminder(r)} disabled={remindingId === r.id} title="Send next reminder now (bypasses 48h throttle)">
                               {remindingId === r.id ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Bell className="h-3.5 w-3.5" />}
                             </Button>
-                            <Button size="sm" variant="ghost" onClick={() => openHistory(r)} title="View reminder history">
+                            <Button size="sm" variant="ghost" onClick={() => openHistory(r)} title="View send history (reminders, proforma, GST invoice)">
                               <History className="h-3.5 w-3.5" />
                             </Button>
-                            <Button size="sm" variant="ghost" onClick={() => openResendDialog(r)} title={r.gst_invoice_number ? "Resend GST invoice" : "Resend proforma email"}>
+                            <Button size="sm" variant="ghost" onClick={() => openResendDialog(r)} title={isGstRoute(r) ? "Resend GST invoice" : "Resend proforma email"}>
                               <Send className="h-3.5 w-3.5" />
                             </Button>
                             {r.razorpay_payment_link_url && (
@@ -653,12 +683,12 @@ export default function AccountsReceivablePage() {
       <Dialog open={!!historyRow} onOpenChange={(o) => !o && setHistoryRow(null)}>
         <DialogContent className="max-w-2xl">
           <DialogHeader>
-            <DialogTitle>Reminder history — {historyRow?.statement_number}</DialogTitle>
+            <DialogTitle>Send history — {historyRow?.statement_number}</DialogTitle>
           </DialogHeader>
           {historyLoading ? (
             <div className="p-6 text-center text-muted-foreground"><Loader2 className="h-5 w-5 animate-spin inline mr-2" /> Loading…</div>
           ) : historyItems.length === 0 ? (
-            <div className="p-6 text-center text-muted-foreground">No reminders sent yet for this statement.</div>
+            <div className="p-6 text-center text-muted-foreground">Nothing sent yet for this statement.</div>
           ) : (
             <div className="max-h-[400px] overflow-y-auto">
               <table className="w-full text-sm">
@@ -709,7 +739,7 @@ export default function AccountsReceivablePage() {
         <DialogContent>
           <DialogHeader>
             <DialogTitle>
-              Resend {resendRow?.gst_invoice_number ? "GST Invoice" : "Proforma"} — {resendRow?.statement_number}
+              Resend {resendRow && isGstRoute(resendRow) ? "GST Invoice" : "Proforma"} — {resendRow?.statement_number}
             </DialogTitle>
           </DialogHeader>
           {resendRow && (
@@ -721,9 +751,25 @@ export default function AccountsReceivablePage() {
                   <><br />GST Invoice: <strong>{resendRow.gst_invoice_number}</strong></>
                 )}
               </div>
-              <div className="rounded-md bg-gray-50 p-3 text-sm">
-                <span className="text-muted-foreground">To: </span>
-                <span className="font-medium">{resendRow.contract.lead?.email || "No email on file"}</span>
+              <div className="rounded-md bg-gray-50 p-3 space-y-1.5">
+                <p className="text-xs font-medium text-muted-foreground">To</p>
+                {candidateRecipients(resendRow.contract.lead).length === 0 ? (
+                  <p className="text-sm text-red-600">No email on file for this contact</p>
+                ) : (
+                  candidateRecipients(resendRow.contract.lead).map((email) => (
+                    <label key={email} className="flex items-center gap-2 cursor-pointer text-sm">
+                      <input
+                        type="checkbox"
+                        checked={resendRecipients.has(email)}
+                        onChange={() => toggleResendRecipient(email)}
+                      />
+                      <span className="font-medium">{email}</span>
+                      {email === resendRow.contract.lead?.email && (
+                        <Badge variant="outline" className="text-[10px]">Primary</Badge>
+                      )}
+                    </label>
+                  ))
+                )}
               </div>
               {/* Payment link renewal option — only for proforma statements with an existing link */}
               {!resendRow.gst_invoice_number && !!resendRow.razorpay_payment_link_url && (
@@ -770,7 +816,7 @@ export default function AccountsReceivablePage() {
           )}
           <DialogFooter>
             <Button variant="ghost" onClick={() => setResendRow(null)} disabled={resendSubmitting}>Cancel</Button>
-            <Button onClick={submitResend} disabled={resendSubmitting || !resendRow?.contract.lead?.email}>
+            <Button onClick={submitResend} disabled={resendSubmitting || resendRecipients.size === 0}>
               {resendSubmitting
                 ? <><Loader2 className="h-4 w-4 animate-spin mr-2" />Sending…</>
                 : resendNewLink && !resendRow?.gst_invoice_number
