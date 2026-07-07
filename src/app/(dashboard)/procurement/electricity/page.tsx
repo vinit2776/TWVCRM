@@ -136,6 +136,7 @@ export default function ElectricityBillsPage() {
   const [loading, setLoading] = useState(true);
   const [activeTab, setActiveTab] = useState<"open" | "completed">("open");
   const [listLocationFilter, setListLocationFilter] = useState("");
+  const [tallyHandoffV2Enabled, setTallyHandoffV2Enabled] = useState(false);
   const [expanded, setExpanded] = useState<string | null>(null);
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingBillId, setEditingBillId] = useState<string | null>(null);
@@ -176,7 +177,17 @@ export default function ElectricityBillsPage() {
     }
   }, []);
 
-  useEffect(() => { fetchBills(); fetchLocations(); }, [fetchBills, fetchLocations]);
+  // Drives the accuracy of the Bill & Send "next step" hint — GST-direct
+  // bills route to Tally Inbox instead of sending directly when this is on.
+  const fetchTallyHandoffSetting = useCallback(async () => {
+    const res = await fetch("/api/settings/public");
+    if (res.ok) {
+      const json = await res.json();
+      setTallyHandoffV2Enabled(json.data?.tally_handoff_v2_enabled === "true");
+    }
+  }, []);
+
+  useEffect(() => { fetchBills(); fetchLocations(); fetchTallyHandoffSetting(); }, [fetchBills, fetchLocations, fetchTallyHandoffSetting]);
 
   const handleLocationChange = async (locId: string) => {
     setForm((f) => ({ ...f, location_id: locId }));
@@ -503,6 +514,35 @@ export default function ElectricityBillsPage() {
       if (rank < resultRank || (r.voided && !result.voided)) result = r;
     }
     return result;
+  };
+
+  // "Next step" hint shown under the action buttons on each customer bill —
+  // describes what CLICKING the button will actually do, not just the status,
+  // so the person doesn't have to guess (this is exactly the distinction that
+  // caused confusion earlier: "dispatched" looks identical whether it went
+  // straight to the customer or got routed to Tally Inbox for accounts to
+  // issue by hand).
+  const customerBillNextStepHint = (cb: CustomerBillInfo): string => {
+    if (cb.status === "draft") {
+      return cb.created_by === user?.id
+        ? "Waiting for another admin, manager, or accounts user to confirm — you captured this one, so you can't also confirm it."
+        : "Confirming will lock this amount in and enable Bill & Send.";
+    }
+    if (cb.status === "invoiced") {
+      const isGstDirect = cb.contract?.billing_mode === "gst_direct";
+      return isGstDirect && tallyHandoffV2Enabled
+        ? "Sending will route this to Tally Inbox — accounts issues the signed GST invoice there, which is what actually reaches the customer."
+        : "Sending will generate the invoice and email it to the customer with a payment link.";
+    }
+    // dispatched
+    const handoff = cb.billing_statement?.handoff_state ?? null;
+    if (handoff && HANDOFF_PENDING_STATES.has(handoff)) {
+      return "Awaiting Tally GST invoice — accounts needs to issue and upload it before the customer receives anything.";
+    }
+    if (cb.billing_statement?.payment_status === "paid") {
+      return "Paid — nothing further needed.";
+    }
+    return "Sent — awaiting customer payment.";
   };
 
   // Location filter + Open/Completed bucketing — "Completed" reuses the same
@@ -876,6 +916,9 @@ export default function ElectricityBillsPage() {
                                       </Button>
                                     )}
                                   </div>
+                                  {canManageCustomerBill && (
+                                    <p className="text-muted-foreground text-[11px]">{customerBillNextStepHint(cb)}</p>
+                                  )}
                                 </div>
                               ))
                             )}
