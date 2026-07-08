@@ -1,11 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
-import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
-import { generateGstInvoicePDF, type GstInvoiceData } from "@/lib/gst-invoice-generator";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
 import { logWhatsAppActivity } from "@/lib/audit";
 import { calcGst } from "@/lib/tax";
+import { dispatchProforma } from "@/lib/send-proforma";
+import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 
 /**
  * POST /api/proposals/[id]/send-invoice
@@ -15,11 +15,15 @@ import { calcGst } from "@/lib/tax";
  * Modes:
  *   - { occupation_start_date, preview: true } → returns computed figures + HTML,
  *     does NOT send email, does NOT persist the occupation date, does NOT create
- *     a Razorpay link or upload the PDF.
- *   - { occupation_start_date }                → sends the invoice email,
- *     persists the occupation date, uploads PDF, creates a Razorpay link if
- *     one does not already exist. Can be called again (revise & resend) —
- *     each send produces a new GST invoice number.
+ *     a billing_statements row or a Razorpay link.
+ *   - { occupation_start_date, additionalCc? } → creates a billing_statements
+ *     row (proposal_id set, no contract yet) and dispatches it through the same
+ *     shared proforma pipeline every contract invoice uses (Razorpay link, PDF,
+ *     email to customer + lead.billing_emails + additionalCc, audit log). This
+ *     is what makes the PI show up in Accounts Receivable and, once paid, the
+ *     Tally Inbox. Persists the occupation date, sends WhatsApp. Can be called
+ *     again (revise & resend) — each send creates a new billing_statements row;
+ *     the prior one is not automatically voided.
  */
 export async function POST(
   request: NextRequest,
@@ -34,7 +38,7 @@ export async function POST(
     .from("users").select("id").eq("auth_id", user.id).single();
 
   const body = await request.json();
-  const { occupation_start_date, preview } = body;
+  const { occupation_start_date, preview, additionalCc } = body;
   const isPreview = preview === true;
 
   if (!occupation_start_date) {
@@ -79,169 +83,77 @@ export async function POST(
   const taxPercentage = Number(proposal.tax_percentage || 18);
 
   // Always intra-state Tamil Nadu — calcGst enforces CGST+SGST only (IGST=0)
-  const { cgst, sgst, igst, taxAmount, grandTotal: totalAmount } = calcGst(proratedSubtotal, taxPercentage);
+  const { taxAmount, grandTotal: totalAmount } = calcGst(proratedSubtotal, taxPercentage);
 
-  // ── Invoice number ─────────────────────────────────────────────────────────
-  const adminSupabase = createAdminClient();
-  const fyStart = new Date().getMonth() >= 3 ? new Date().getFullYear() : new Date().getFullYear() - 1;
-  const fyEnd = fyStart + 1;
-  const fyPrefix = `TWV/INV/${String(fyStart).slice(-2)}-${String(fyEnd).slice(-2)}/`;
-  const { count: existingCount } = await adminSupabase
-    .from("billing_statements")
-    .select("id", { count: "exact", head: true })
-    .like("gst_invoice_number", `${fyPrefix}%`);
-  const invoiceNumber = `${fyPrefix}${String((existingCount || 0) + 1).padStart(4, "0")}`;
-
-  // ── Razorpay link ──────────────────────────────────────────────────────────
-  // Always create a FRESH link in send mode so the amount matches the computed
-  // pro-rata total. Never reuse an existing link — the existing link could be
-  // for a different amount (e.g. a full-month deposit link created first).
-  // In preview mode: show the existing link if one exists (no new link created).
-  let razorpayUrl: string | null = isPreview ? (proposal.razorpay_payment_link_url || null) : null;
-
-  if (!isPreview) {
-    const { data: rzpSettings } = await adminSupabase
-      .from("app_settings")
-      .select("key, value")
-      .in("key", ["razorpay_enabled", "razorpay_key_id", "razorpay_key_secret"]);
-
-    const rzpMap: Record<string, string> = {};
-    (rzpSettings || []).forEach((s) => { rzpMap[s.key] = s.value; });
-
-    if (rzpMap.razorpay_enabled === "true" && rzpMap.razorpay_key_id && rzpMap.razorpay_key_secret) {
-      const auth = Buffer.from(`${rzpMap.razorpay_key_id}:${rzpMap.razorpay_key_secret}`).toString("base64");
-      const appUrl = (process.env.NEXT_PUBLIC_APP_URL || "https://twv-crm.vercel.app").trim();
-      const customerPhone = lead?.phone || lead?.mobile;
-
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const payload: Record<string, any> = {
-        amount: Math.round(totalAmount * 100),
-        currency: "INR",
-        description: `Invoice ${invoiceNumber} — ${proposal.proposal_number} — The WorkVilla`,
-        reference_id: `${proposal.proposal_number}-MON-${Date.now()}`,
-        expire_by: Math.floor(Date.now() / 1000) + 30 * 24 * 60 * 60,
-        notify: { sms: !!customerPhone, email: !!customerEmail },
-        reminder_enable: true,
-        notes: { proposal_id: id, proposal_number: proposal.proposal_number, type: "monthly_charge" },
-        callback_url: `${appUrl}/proposals`,
-        callback_method: "get",
-      };
-
-      if (customerName || customerEmail || customerPhone) {
-        payload.customer = {};
-        if (customerName) payload.customer.name = customerName;
-        if (customerEmail) payload.customer.email = customerEmail;
-        if (customerPhone) payload.customer.contact = customerPhone.replace(/\s/g, "");
-      }
-
-      const rzpRes = await fetch("https://api.razorpay.com/v1/payment_links", {
-        method: "POST",
-        headers: { Authorization: `Basic ${auth}`, "Content-Type": "application/json" },
-        body: JSON.stringify(payload),
-      });
-
-      if (rzpRes.ok) {
-        const linkData = await rzpRes.json();
-        razorpayUrl = linkData.short_url;
-        await supabase.from("proposals").update({
-          razorpay_payment_link_id: linkData.id,
-          razorpay_payment_link_url: linkData.short_url,
-        }).eq("id", id);
-      }
-    }
-  }
-
-  // ── Build line items + email HTML ──────────────────────────────────────────
   const periodEnd = `${year}-${String(month + 1).padStart(2, "0")}-${daysInMonth}`;
-  const lineItems: GstInvoiceData["lineItems"] = (proposal.items || []).map((item: { description: string; quantity: number; unit_price: number; unit?: string }) => {
-    const proratedRate = Math.round(item.unit_price * prorationFactor * 100) / 100;
-    const monthlyRateFmt = item.unit_price.toLocaleString("en-IN", { maximumFractionDigits: 0 });
-    const proratedRateFmt = proratedRate.toLocaleString("en-IN", { maximumFractionDigits: 0 });
-    const calcLine = prorationFactor < 1
-      ? `\nMonthly Rate: Rs. ${monthlyRateFmt} | Days: ${daysRemaining}/${daysInMonth} | Prorated Rate: Rs. ${proratedRateFmt}`
-      : "";
-    return {
-      description: item.description + calcLine,
-      hsnSac: "997212",
-      qty: item.quantity,
-      rate: proratedRate,
-      amount: Math.round(item.quantity * proratedRate * 100) / 100,
-    };
-  });
-
   const periodLabel = startDate.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "long", year: "numeric" });
   const startLabel = startDate.toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });
   const endLabel = new Date(periodEnd + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short", year: "numeric" });
 
-  const payBlock = razorpayUrl
-    ? `<div style="text-align:center;margin:24px 0;">
-         <a href="${razorpayUrl}" style="background:#015E65;color:white;padding:14px 40px;text-decoration:none;border-radius:8px;font-weight:bold;display:inline-block;font-size:15px;">Pay Now — Rs. ${totalAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</a>
-         <p style="color:#666;font-size:11px;margin:8px 0 0;">Secure payment via Razorpay</p>
-       </div>`
-    : (isPreview
-        ? `<div style="text-align:center;margin:24px 0;padding:14px;border:1px dashed #015E65;border-radius:8px;background:#f0faf5;">
-             <p style="color:#015E65;font-size:13px;margin:0;font-style:italic;">A Razorpay payment link will be generated and inserted here when you click <strong>Send Invoice</strong>.</p>
-           </div>`
-        : "");
+  // Prorated line items — same shape billing.ts uses (qty/unit_price + the
+  // monthly_rate/days_used/days_in_month trio that withProrationBreakdown()
+  // turns into the "Monthly Rate: ... | Prorated Rate: ..." sub-line on the PDF).
+  const lineItems = (proposal.items || []).map((item: { description: string; quantity: number; unit_price: number; unit?: string }) => {
+    const proratedRate = Math.round(item.unit_price * prorationFactor * 100) / 100;
+    return {
+      description: item.description,
+      qty: item.quantity,
+      unit_price: proratedRate,
+      amount: Math.round(item.quantity * proratedRate * 100) / 100,
+      monthly_rate: item.unit_price,
+      days_used: daysRemaining,
+      days_in_month: daysInMonth,
+      hsn_sac_code: resolveHsnCode("rent"),
+    };
+  });
 
-  const subject = `Invoice ${invoiceNumber} — ${proposal.proposal_number} — The WorkVilla`;
-  const html = `
+  // Preview mode — return computed figures + a lightweight HTML preview.
+  // No DB writes, no Razorpay link, no email/WhatsApp. The final invoice
+  // number is assigned by the DB trigger when the statement is inserted on
+  // send, so preview cannot show it in advance.
+  if (isPreview) {
+    const payBlock = `<div style="text-align:center;margin:24px 0;padding:14px;border:1px dashed #015E65;border-radius:8px;background:#f0faf5;">
+             <p style="color:#015E65;font-size:13px;margin:0;font-style:italic;">A Razorpay payment link will be generated and inserted here when you click <strong>Send Invoice</strong>.</p>
+           </div>`;
+    const html = `
     <div style="font-family:sans-serif;max-width:640px;margin:0 auto;border:1px solid #e5e7eb;border-radius:8px;overflow:hidden;">
       <div style="background:#015E65;padding:24px 32px;">
         <h1 style="color:white;margin:0;font-size:20px;">The WorkVilla</h1>
-        <p style="color:#00AE6C;margin:4px 0 0;font-size:12px;">Tax Invoice</p>
+        <p style="color:#00AE6C;margin:4px 0 0;font-size:12px;">Proforma Invoice</p>
       </div>
       <div style="padding:32px;">
         <p style="color:#333;font-size:14px;">Dear ${customerName},</p>
-        <p style="color:#333;font-size:14px;">Thank you for choosing The WorkVilla. Please find attached your tax invoice for the period <strong>${startLabel}</strong> to <strong>${endLabel}</strong>.</p>
-
+        <p style="color:#333;font-size:14px;">Please find attached your proforma invoice for the period <strong>${startLabel}</strong> to <strong>${endLabel}</strong>.</p>
         ${prorationFactor < 1 ? `
         <div style="background:#f0faf5;border-left:4px solid #015E65;padding:14px 18px;margin:16px 0;border-radius:0 6px 6px 0;">
           <p style="color:#015E65;font-size:13px;font-weight:600;margin:0 0 8px;">About this invoice</p>
-          <p style="color:#333;font-size:13px;margin:0 0 4px;">Your regular monthly charge is <strong>Rs. ${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })} + GST</strong> per month.</p>
-          <p style="color:#333;font-size:13px;margin:0 0 4px;">Since your occupation begins on <strong>${startLabel}</strong>, this invoice covers <strong>${daysRemaining} of ${daysInMonth} days</strong> in ${periodLabel}.</p>
           <p style="color:#333;font-size:13px;margin:0;">Prorated amount: Rs. ${subtotal.toLocaleString("en-IN")} × ${daysRemaining}/${daysInMonth} = <strong>Rs. ${proratedSubtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</strong> + GST</p>
-          <p style="color:#666;font-size:12px;margin:8px 0 0;font-style:italic;">From next month onwards, you will be billed the full monthly amount of Rs. ${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })} + GST.</p>
-        </div>` : `
-        <p style="color:#333;font-size:13px;margin:8px 0 0;">Your monthly charge: <strong>Rs. ${subtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })} + GST</strong></p>
-        `}
-
+        </div>` : ""}
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;background:#f7f8fa;border-radius:6px;">
-          <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Invoice No.</td><td style="padding:10px 16px;font-weight:600;">${invoiceNumber}</td></tr>
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Proposal Ref.</td><td style="padding:10px 16px;">${proposal.proposal_number}</td></tr>
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Subtotal${prorationFactor < 1 ? " (prorated)" : ""}</td><td style="padding:10px 16px;">Rs. ${proratedSubtotal.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
           <tr><td style="padding:10px 16px;color:#666;border-bottom:1px solid #e5e7eb;">GST @${taxPercentage}%</td><td style="padding:10px 16px;">Rs. ${taxAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
           <tr style="background:#015E65;"><td style="padding:10px 16px;color:white;font-weight:600;">Amount Payable</td><td style="padding:10px 16px;color:white;font-weight:700;font-size:16px;">Rs. ${totalAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 })}</td></tr>
         </table>
-
         ${payBlock}
-
         <p style="color:#015E65;font-size:13px;font-weight:bold;margin:20px 0 8px;">Bank Transfer</p>
         <table style="border-collapse:collapse;width:100%;background:#f0faf5;border-radius:6px;">
           <tr><td style="padding:8px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Account Name</td><td style="padding:8px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${COMPANY_BANK_DETAILS.accountName}</td></tr>
           <tr><td style="padding:8px 16px;color:#666;border-bottom:1px solid #e5e7eb;">Account No.</td><td style="padding:8px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${COMPANY_BANK_DETAILS.accountNumber}</td></tr>
-          <tr><td style="padding:8px 16px;color:#666;border-bottom:1px solid #e5e7eb;">IFSC Code</td><td style="padding:8px 16px;color:#333;border-bottom:1px solid #e5e7eb;">${COMPANY_BANK_DETAILS.ifscCode}</td></tr>
-          <tr><td style="padding:8px 16px;color:#666;">Bank & Branch</td><td style="padding:8px 16px;color:#333;">${COMPANY_BANK_DETAILS.bank}, ${COMPANY_BANK_DETAILS.branch}</td></tr>
+          <tr><td style="padding:8px 16px;color:#666;">IFSC Code</td><td style="padding:8px 16px;color:#333;">${COMPANY_BANK_DETAILS.ifscCode}</td></tr>
         </table>
-        ${razorpayUrl ? `<p style="color:#666;font-size:12px;margin-top:4px;">Online: <a href="${razorpayUrl}" style="color:#015E65;">${razorpayUrl}</a></p>` : ""}
-
-        <p style="color:#333;font-size:14px;margin-top:24px;">We look forward to welcoming you to The WorkVilla.</p>
-        <p style="color:#333;font-size:14px;">Warm regards,<br/><strong>The WorkVilla Team</strong></p>
-        <p style="color:#666;font-size:12px;margin-top:12px;">For any queries, write to us at <a href="mailto:space@theworkvilla.com" style="color:#015E65;">space@theworkvilla.com</a> or call <strong>+91 97910 97900</strong>.</p>
       </div>
       <div style="background:#015E65;padding:12px 32px;text-align:center;">
         <p style="color:#fff;margin:0;font-size:10px;">SREE DESIGN INFRASTRUCTURE PVT LTD | GSTIN: 33AAACU4245J1ZF</p>
       </div>
     </div>`;
 
-  // Preview mode — return HTML + computed figures
-  if (isPreview) {
     return NextResponse.json({
       preview: true,
-      subject,
+      subject: `Proforma Invoice — ${proposal.proposal_number} — The WorkVilla`,
       html,
       to: customerEmail ? [customerEmail] : [],
-      invoiceNumber,
+      invoiceNumber: null, // assigned by the DB trigger when the statement is created on send
       proratedSubtotal,
       taxAmount,
       totalAmount,
@@ -251,112 +163,103 @@ export async function POST(
       periodLabel,
       startLabel,
       endLabel,
-      razorpayUrl,
+      razorpayUrl: null,
       is_revise: !!proposal.occupation_start_date,
       previous_occupation_start_date: proposal.occupation_start_date || null,
     });
   }
 
-  // ── Send mode: generate PDF, upload, email ─────────────────────────────────
-  const invoiceData: GstInvoiceData = {
-    invoiceNumber,
-    invoiceDate: new Date().toISOString().slice(0, 10),
-    buyerName: lead?.company || customerName,
-    buyerGstin: lead?.gst_number || undefined,
-    buyerState: lead?.state || undefined,
-    periodStart: occupation_start_date,
-    periodEnd,
-    contractNumber: proposal.proposal_number,
-    lineItems,
-    subtotal: proratedSubtotal,
-    cgst, sgst, igst,
-    totalAmount,
-    isInterstate: false, // always intra-state Tamil Nadu
-    taxPercentage,
-    razorpayUrl: razorpayUrl || undefined,
-  };
+  // ── Send mode: create the billing_statements row, dispatch through the ────
+  // shared proforma pipeline (Razorpay link, PDF, email, audit, AR eligibility) ─
+  const adminSupabase = createAdminClient();
 
-  const doc = generateGstInvoicePDF(invoiceData);
-  const pdfBuffer = Buffer.from(doc.output("arraybuffer"));
+  const { data: newStatement, error: insertErr } = await adminSupabase
+    .from("billing_statements")
+    .insert({
+      proposal_id: id,
+      contract_id: null,
+      statement_type: "rent",
+      created_via: "proposal_pi",
+      status: "finalized",
+      payment_status: "unpaid",
+      handoff_state: "pi_awaiting_payment",
+      period_start: occupation_start_date,
+      period_end: periodEnd,
+      fixed_amount: proratedSubtotal,
+      tax_percentage: taxPercentage,
+      line_items: [{ type: "rent", label: "Proposal Items", items: lineItems, subtotal: proratedSubtotal }],
+      due_date: new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10),
+      created_by: dbUser?.id || null,
+    })
+    .select("id")
+    .single();
 
-  const storagePath = `invoices/${invoiceNumber.replace(/\//g, "-")}.pdf`;
-  await adminSupabase.storage.from("crm-documents").upload(storagePath, pdfBuffer, { contentType: "application/pdf", upsert: true });
+  if (insertErr || !newStatement) {
+    return NextResponse.json({ error: insertErr?.message || "Failed to create invoice statement" }, { status: 500 });
+  }
 
-  // Generate a long-lived signed URL for WhatsApp document delivery
-  const { data: signedUrlData } = await adminSupabase.storage
-    .from("crm-documents")
-    .createSignedUrl(storagePath, 365 * 24 * 3600);
-  const invoicePdfUrl = signedUrlData?.signedUrl ?? null;
+  const cc: string[] = Array.isArray(additionalCc) ? additionalCc.filter(Boolean) : [];
+  const dispatchResult = await dispatchProforma(adminSupabase, newStatement.id, dbUser?.id || null, cc);
+
+  if (!dispatchResult.success) {
+    return NextResponse.json({ error: dispatchResult.error || "Failed to dispatch invoice" }, { status: 500 });
+  }
 
   await supabase.from("proposals").update({ occupation_start_date }).eq("id", id);
 
-  if (customerEmail) {
-    const { data: ccUsers } = await adminSupabase
-      .from("users")
-      .select("email")
-      .in("role", ["admin", "manager", "accounts"])
-      .eq("is_active", true);
-    const ccEmails = (ccUsers || []).map((u) => u.email).filter(Boolean);
-    const allRecipients = [customerEmail, ...ccEmails].filter(Boolean);
-
-    await resend.emails.send({
-      from: EMAIL_FROM,
-      replyTo: EMAIL_REPLY_TO,
-      to: allRecipients,
-      subject,
-      html,
-      attachments: [{ filename: `${invoiceNumber.replace(/\//g, "-")}.pdf`, content: pdfBuffer, contentType: "application/pdf" }],
-    }).catch(console.error);
-  }
-
-  // WhatsApp — fire to phone if available (fire-and-forget)
+  // WhatsApp — fire to phone if available (fire-and-forget), unchanged from before.
   const customerPhone = lead?.phone || lead?.mobile;
-  if (customerPhone && razorpayUrl) {
+  if (customerPhone && dispatchResult.razorpayLinkUrl) {
     const amountFormatted = totalAmount.toLocaleString("en-IN", { minimumFractionDigits: 2 });
     messaging.proposalInvoice(
       customerPhone,
       customerName,
-      invoiceNumber,
+      dispatchResult.proformaRef,
       amountFormatted,
-      razorpayUrl,
+      dispatchResult.razorpayLinkUrl,
       id
     ).catch((e: unknown) => console.error("[messaging] invoice WhatsApp failed:", e));
 
-    // Log in lead activities
     if (proposal.lead_id && dbUser?.id) {
       logWhatsAppActivity(supabase, {
         leadId: proposal.lead_id,
-        subject: `Invoice ${invoiceNumber} sent`,
-        description: `Prorated GST invoice ${invoiceNumber} for ₹${amountFormatted} sent via WhatsApp to ${customerPhone}. Payment link: ${razorpayUrl}`,
+        subject: `Invoice ${dispatchResult.proformaRef} sent`,
+        description: `Prorated proforma invoice ${dispatchResult.proformaRef} for ₹${amountFormatted} sent via WhatsApp to ${customerPhone}. Payment link: ${dispatchResult.razorpayLinkUrl}`,
         createdBy: dbUser.id,
       });
     }
 
     // WhatsApp document (invoice PDF) — fire-and-forget
-    if (invoicePdfUrl) {
-      messaging.invoiceDocument(
-        customerPhone,
-        customerName,
-        invoiceNumber,
-        amountFormatted,
-        razorpayUrl,
-        invoicePdfUrl,
-        id
-      ).catch((e: unknown) => console.error("[messaging] invoice WA doc failed:", e));
+    if (dispatchResult.pdfStoragePath) {
+      const { data: signedUrlData } = await adminSupabase.storage
+        .from("crm-documents")
+        .createSignedUrl(dispatchResult.pdfStoragePath, 365 * 24 * 3600);
+      const invoicePdfUrl = signedUrlData?.signedUrl ?? null;
+      if (invoicePdfUrl) {
+        messaging.invoiceDocument(
+          customerPhone,
+          customerName,
+          dispatchResult.proformaRef,
+          amountFormatted,
+          dispatchResult.razorpayLinkUrl,
+          invoicePdfUrl,
+          id
+        ).catch((e: unknown) => console.error("[messaging] invoice WA doc failed:", e));
+      }
     }
   }
 
   return NextResponse.json({
     success: true,
-    invoiceNumber,
+    invoiceNumber: dispatchResult.proformaRef,
     proratedSubtotal,
     taxAmount,
     totalAmount,
     daysRemaining,
     daysInMonth,
     prorationFactor: Math.round(prorationFactor * 100) / 100,
-    razorpayUrl,
-    sent_to: customerEmail,
+    razorpayUrl: dispatchResult.razorpayLinkUrl,
+    sent_to: dispatchResult.emailedTo,
     is_revise: !!proposal.occupation_start_date,
   });
 }

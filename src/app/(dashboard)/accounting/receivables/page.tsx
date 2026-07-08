@@ -54,6 +54,42 @@ interface Contract {
   lead?: Lead;
 }
 
+interface ProposalRef {
+  id: string;
+  proposal_number: string;
+  lead?: Lead;
+}
+
+interface InvoiceRef {
+  id: string;
+  invoice_number: string;
+  lead?: Lead;
+}
+
+/** Normalizes a row's owner (contract, proposal PI, or ad-hoc lead invoice) into
+ *  one shape so the UI doesn't need a branch per site. */
+interface Party {
+  id: string;
+  number: string;
+  lead?: Lead;
+  href: string;
+  isProposal: boolean;
+  kind: "contract" | "proposal" | "invoice" | "unknown";
+}
+
+function partyOf(row: { contract: Contract | null; proposal?: ProposalRef | null; invoice?: InvoiceRef | null }): Party {
+  if (row.contract) {
+    return { id: row.contract.id, number: row.contract.contract_number, lead: row.contract.lead, href: `/contracts/${row.contract.id}`, isProposal: false, kind: "contract" };
+  }
+  if (row.proposal) {
+    return { id: row.proposal.id, number: row.proposal.proposal_number, lead: row.proposal.lead, href: `/proposals/${row.proposal.id}`, isProposal: true, kind: "proposal" };
+  }
+  if (row.invoice) {
+    return { id: row.invoice.id, number: row.invoice.invoice_number, lead: row.invoice.lead, href: `/leads/${row.invoice.lead?.id ?? ""}`, isProposal: false, kind: "invoice" };
+  }
+  return { id: "", number: "—", lead: undefined, href: "#", isProposal: false, kind: "unknown" };
+}
+
 interface ReceivableRow {
   id: string;
   statement_number: string;
@@ -76,7 +112,9 @@ interface ReceivableRow {
   gst_invoice_number: string | null;
   pi_cancelled_at: string | null;
   accounted: boolean;
-  contract: Contract;
+  contract: Contract | null;
+  proposal?: ProposalRef | null;
+  invoice?: InvoiceRef | null;
 }
 
 interface Summary {
@@ -97,6 +135,7 @@ interface AgingRow {
   contractNumber: string;
   customerName: string;
   lead?: Lead;
+  href: string;
   notDue: number;     // days_overdue < 0
   d1_15: number;      // 0 – 15
   d16_30: number;     // 16 – 30
@@ -123,7 +162,7 @@ function customerName(lead?: Lead): string {
  *  the contract's billing_mode, not just whether a GST invoice number has
  *  been generated yet (which can lag behind for a brand-new statement). */
 function isGstRoute(row: Pick<ReceivableRow, "gst_invoice_number" | "contract">): boolean {
-  return row.contract.billing_mode === "gst_direct" || !!row.gst_invoice_number;
+  return row.contract?.billing_mode === "gst_direct" || !!row.gst_invoice_number;
 }
 
 /** Primary contact email + lead billing_emails, deduped, primary first. */
@@ -213,26 +252,31 @@ export default function AccountsReceivablePage() {
 
     if (search.trim()) {
       const q = search.toLowerCase();
-      r = r.filter((x) =>
-        x.contract.contract_number?.toLowerCase().includes(q) ||
-        x.statement_number?.toLowerCase().includes(q) ||
-        customerName(x.contract.lead).toLowerCase().includes(q),
-      );
+      r = r.filter((x) => {
+        const party = partyOf(x);
+        return (
+          party.number?.toLowerCase().includes(q) ||
+          x.statement_number?.toLowerCase().includes(q) ||
+          customerName(party.lead).toLowerCase().includes(q)
+        );
+      });
     }
     return r;
   }, [rows, filter, search]);
 
-  // ── Ageing view: group filtered statements by contract ───────────────────
+  // ── Ageing view: group filtered statements by contract (or proposal) ─────
   const agingRows = useMemo((): AgingRow[] => {
     const byContract = new Map<string, AgingRow>();
     for (const r of filtered) {
-      const key = r.contract.id;
+      const party = partyOf(r);
+      const key = party.id;
       if (!byContract.has(key)) {
         byContract.set(key, {
-          contractId: r.contract.id,
-          contractNumber: r.contract.contract_number,
-          customerName: customerName(r.contract.lead),
-          lead: r.contract.lead,
+          contractId: party.id,
+          contractNumber: party.number,
+          customerName: customerName(party.lead),
+          lead: party.lead,
+          href: party.href,
           notDue: 0, d1_15: 0, d16_30: 0, d31_45: 0, d45plus: 0, total: 0,
         });
       }
@@ -335,7 +379,7 @@ export default function AccountsReceivablePage() {
     setResendRow(row);
     setResendCc("");
     setResendNewLink(false);
-    setResendRecipients(new Set(candidateRecipients(row.contract.lead)));
+    setResendRecipients(new Set(candidateRecipients(partyOf(row).lead)));
   };
 
   const toggleResendRecipient = (email: string) => {
@@ -509,7 +553,7 @@ export default function AccountsReceivablePage() {
                       <tr key={r.contractId} className="hover:bg-gray-50">
                         <td className="px-4 py-3">
                           <div className="font-medium">
-                            <Link href={`/contracts/${r.contractId}`} className="text-teal-700 hover:underline">
+                            <Link href={r.href} className="text-teal-700 hover:underline">
                               {r.contractNumber}
                             </Link>
                           </div>
@@ -570,29 +614,36 @@ export default function AccountsReceivablePage() {
                 </thead>
                 <tbody className="divide-y">
                   {filtered.map((r) => {
-                    const avg = avgDays[r.contract.id];
+                    const party = partyOf(r);
+                    const avg = avgDays[party.id];
                     return (
                       <tr key={r.id} className="hover:bg-gray-50">
                         <td className="px-4 py-3">
                           <div className="font-medium">
-                            <Link href={`/contracts/${r.contract.id}`} className="text-teal-700 hover:underline">
-                              {r.contract.contract_number}
+                            <Link href={party.href} className="text-teal-700 hover:underline">
+                              {party.number}
                             </Link>
+                            {party.kind === "proposal" && (
+                              <Badge variant="outline" className="ml-1.5 text-[10px]">Proposal PI</Badge>
+                            )}
+                            {party.kind === "invoice" && (
+                              <Badge variant="outline" className="ml-1.5 text-[10px]">Ad-hoc Invoice</Badge>
+                            )}
                           </div>
-                          <div className="text-xs text-muted-foreground">{customerName(r.contract.lead)}</div>
+                          <div className="text-xs text-muted-foreground">{customerName(party.lead)}</div>
                           {avg !== undefined && (
                             <div className={`text-[10px] mt-0.5 font-medium ${avg > 0 ? "text-red-600" : "text-emerald-600"}`}>
                               avg {avg > 0 ? `${avg}d late` : `${Math.abs(avg)}d early`}
                             </div>
                           )}
                           <div className="flex gap-2 mt-1">
-                            {r.contract.lead?.email && (
-                              <a href={`mailto:${r.contract.lead.email}`} title={r.contract.lead.email} className="text-muted-foreground hover:text-teal-700">
+                            {party.lead?.email && (
+                              <a href={`mailto:${party.lead.email}`} title={party.lead.email} className="text-muted-foreground hover:text-teal-700">
                                 <Mail className="h-3.5 w-3.5" />
                               </a>
                             )}
-                            {(r.contract.lead?.mobile || r.contract.lead?.phone) && (
-                              <a href={`tel:${r.contract.lead.mobile || r.contract.lead.phone}`} title={r.contract.lead.mobile || r.contract.lead.phone} className="text-muted-foreground hover:text-teal-700">
+                            {(party.lead?.mobile || party.lead?.phone) && (
+                              <a href={`tel:${party.lead.mobile || party.lead.phone}`} title={party.lead.mobile || party.lead.phone} className="text-muted-foreground hover:text-teal-700">
                                 <Phone className="h-3.5 w-3.5" />
                               </a>
                             )}
@@ -608,7 +659,7 @@ export default function AccountsReceivablePage() {
                               {r.gst_invoice_number}
                               <FileDown className="h-3 w-3" />
                             </Link>
-                          ) : r.contract.billing_mode === "gst_direct" ? (
+                          ) : r.contract?.billing_mode === "gst_direct" ? (
                             <span className="font-mono text-xs text-muted-foreground">GST Pending</span>
                           ) : (
                             <Link href={`/api/billing-statements/${r.id}/proforma-pdf`} target="_blank" className="text-teal-700 hover:underline font-mono text-xs flex items-center gap-1">
@@ -745,7 +796,7 @@ export default function AccountsReceivablePage() {
           {resendRow && (
             <div className="space-y-3">
               <div className="text-sm text-muted-foreground">
-                {resendRow.contract.contract_number} · {customerName(resendRow.contract.lead)}<br />
+                {partyOf(resendRow).number} · {customerName(partyOf(resendRow).lead)}<br />
                 Amount: <strong className="text-teal-700">{formatCurrency(resendRow.total_amount)}</strong>
                 {resendRow.gst_invoice_number && (
                   <><br />GST Invoice: <strong>{resendRow.gst_invoice_number}</strong></>
@@ -753,10 +804,10 @@ export default function AccountsReceivablePage() {
               </div>
               <div className="rounded-md bg-gray-50 p-3 space-y-1.5">
                 <p className="text-xs font-medium text-muted-foreground">To</p>
-                {candidateRecipients(resendRow.contract.lead).length === 0 ? (
+                {candidateRecipients(partyOf(resendRow).lead).length === 0 ? (
                   <p className="text-sm text-red-600">No email on file for this contact</p>
                 ) : (
-                  candidateRecipients(resendRow.contract.lead).map((email) => (
+                  candidateRecipients(partyOf(resendRow).lead).map((email) => (
                     <label key={email} className="flex items-center gap-2 cursor-pointer text-sm">
                       <input
                         type="checkbox"
@@ -764,7 +815,7 @@ export default function AccountsReceivablePage() {
                         onChange={() => toggleResendRecipient(email)}
                       />
                       <span className="font-medium">{email}</span>
-                      {email === resendRow.contract.lead?.email && (
+                      {email === partyOf(resendRow).lead?.email && (
                         <Badge variant="outline" className="text-[10px]">Primary</Badge>
                       )}
                     </label>
@@ -834,7 +885,7 @@ export default function AccountsReceivablePage() {
           {payRow && (
             <div className="space-y-3">
               <div className="text-sm text-muted-foreground">
-                {payRow.contract.contract_number} · {customerName(payRow.contract.lead)}<br />
+                {partyOf(payRow).number} · {customerName(partyOf(payRow).lead)}<br />
                 Balance due: <strong className="text-teal-700">{formatCurrency(payRow.balance_due)}</strong>
               </div>
               <div className="grid grid-cols-2 gap-3">

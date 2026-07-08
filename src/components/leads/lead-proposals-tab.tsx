@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import { useRouter } from "next/navigation";
-import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye, CreditCard, Copy } from "lucide-react";
+import { Plus, FileText, Receipt, MoreHorizontal, Download, Mail, Send, CheckCircle2, XCircle, Eye, CreditCard, Copy, Ban } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -56,6 +56,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
     number: string;
     leadEmail?: string;
     leadPhone?: string;
+    defaultCc?: string[];
     generatePDF: () => Promise<string>;
   } | null>(null);
 
@@ -138,6 +139,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       number: inv.invoice_number,
       leadEmail: lead?.email || undefined,
       leadPhone: lead?.phone || lead?.mobile || undefined,
+      defaultCc: lead?.billing_emails || undefined,
       generatePDF: async () => {
         const { generateInvoicePDF } = await import("@/lib/pdf-generator");
         const doc = generateInvoicePDF(inv, lead || undefined);
@@ -228,12 +230,31 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
     if (res.ok) {
       toast.success(
         json.customer_email
-          ? `Invoice paid. GST invoice sent to ${json.customer_email}.`
-          : "Invoice marked as paid."
+          ? `Payment recorded. Confirmation sent to ${json.customer_email} — GST invoice will follow from accounts.`
+          : "Invoice marked as paid — routed to accounts for GST invoice issuance."
       );
       fetchData();
     } else {
       toast.error(json.error || "Failed to record payment");
+    }
+  };
+
+  // ── Cancel Invoice ──
+  const handleCancelInvoice = async (inv: ProformaInvoice) => {
+    if (!window.confirm(`Cancel invoice ${inv.invoice_number}? This cannot be undone.`)) return;
+    const reason = window.prompt("Reason for cancelling (optional):") || undefined;
+
+    const res = await fetch(`/api/invoices/${inv.id}/cancel`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ reason }),
+    });
+    const json = await res.json();
+    if (res.ok) {
+      toast.success(`Invoice ${inv.invoice_number} cancelled`);
+      fetchData();
+    } else {
+      toast.error(json.error || "Failed to cancel invoice");
     }
   };
 
@@ -380,9 +401,10 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
       <Card>
         <CardHeader className="flex flex-row items-center justify-between">
           <div>
-            <CardTitle className="text-base">Proforma Invoices</CardTitle>
+            <CardTitle className="text-base">Ad-Hoc Proforma Invoice</CardTitle>
             <p className="text-xs text-muted-foreground mt-0.5">
-              For adhoc or additional charges only — not for security deposit or monthly rentals
+              For unlisted ad-hoc charges only — e.g. interest, breakage, repair, or recovery of any
+              charges paid on the customer&apos;s behalf. Not for security deposit or monthly rentals.
             </p>
           </div>
           <Button size="sm" onClick={() => setInvoiceFormOpen(true)}>
@@ -487,7 +509,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                                 className="text-green-600"
                               >
                                 <CheckCircle2 className="mr-2 h-4 w-4" />
-                                Mark Paid + Send GST Invoice
+                                Mark Paid
                               </DropdownMenuItem>
                             )}
                             {inv.status === "sent" && (
@@ -497,6 +519,15 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
                               >
                                 <XCircle className="mr-2 h-4 w-4" />
                                 Mark as Overdue
+                              </DropdownMenuItem>
+                            )}
+                            {["draft", "sent", "overdue"].includes(inv.status) && (
+                              <DropdownMenuItem
+                                onClick={() => handleCancelInvoice(inv)}
+                                className="text-red-600"
+                              >
+                                <Ban className="mr-2 h-4 w-4" />
+                                Cancel Invoice
                               </DropdownMenuItem>
                             )}
                           </DropdownMenuContent>
@@ -536,6 +567,7 @@ export function LeadProposalsTab({ leadId, leadLocationId }: LeadProposalsTabPro
           documentNumber={emailConfig.number}
           leadEmail={emailConfig.leadEmail}
           leadPhone={emailConfig.leadPhone}
+          defaultCc={emailConfig.defaultCc}
           onGeneratePDF={emailConfig.generatePDF}
           onSuccess={handleSuccess}
         />

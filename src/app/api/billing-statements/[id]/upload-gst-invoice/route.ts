@@ -107,6 +107,14 @@ export async function POST(
       contract:contracts!billing_statements_contract_id_fkey(
         id, billing_mode, contract_number,
         lead:leads!contracts_lead_id_fkey(id, gst_number, first_name, last_name, company, email, mobile, phone)
+      ),
+      proposal:proposals!billing_statements_proposal_id_fkey(
+        id, proposal_number,
+        lead:leads!proposals_lead_id_fkey(id, gst_number, first_name, last_name, company, email, mobile, phone)
+      ),
+      invoice:proforma_invoices!billing_statements_invoice_id_fkey(
+        id, invoice_number,
+        lead:leads!proforma_invoices_lead_id_fkey(id, gst_number, first_name, last_name, company, email, mobile, phone)
       )
     `)
     .eq("id", id)
@@ -140,7 +148,39 @@ export async function POST(
         phone: string | null;
       } | null;
     } | null;
+    proposal: {
+      id: string;
+      proposal_number: string | null;
+      lead: {
+        id: string;
+        gst_number: string | null;
+        first_name: string | null;
+        last_name: string | null;
+        company: string | null;
+        email: string | null;
+        mobile: string | null;
+        phone: string | null;
+      } | null;
+    } | null;
+    invoice: {
+      id: string;
+      invoice_number: string | null;
+      lead: {
+        id: string;
+        gst_number: string | null;
+        first_name: string | null;
+        last_name: string | null;
+        company: string | null;
+        email: string | null;
+        mobile: string | null;
+        phone: string | null;
+      } | null;
+    } | null;
   };
+
+  const partyId = statement.contract?.id ?? statement.proposal?.id ?? statement.invoice?.id ?? "unknown";
+  const partyRef = statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number ?? "";
+  const partyLead = statement.contract?.lead ?? statement.proposal?.lead ?? statement.invoice?.lead;
 
   // ── Hard-block rules ──────────────────────────────────────────────────────
   // Compare at whole-rupee level — Razorpay collects in paise and the stored
@@ -153,7 +193,7 @@ export async function POST(
     );
   }
 
-  const customerHasGstin = !!statement.contract?.lead?.gst_number;
+  const customerHasGstin = !!partyLead?.gst_number;
 
   if (customerHasGstin && meta.tally_invoice_series !== "SDIPL-REG") {
     return badRequest(
@@ -208,7 +248,7 @@ export async function POST(
 
   const timestamp = Date.now();
   const safeNumber = meta.tally_invoice_number.replace(/[^\w-]/g, "_");
-  const filePath = `tally-handoff/${statement.contract?.id ?? "unknown"}/${timestamp}-${safeNumber}.${normalized.ext}`;
+  const filePath = `tally-handoff/${partyId}/${timestamp}-${safeNumber}.${normalized.ext}`;
 
   const { error: uploadError } = await supabase.storage
     .from("crm-documents")
@@ -278,11 +318,11 @@ export async function POST(
   if (statement.payment_status !== "paid") {
     const adminSupabase = await createAdminClient();
 
-    const lead = statement.contract?.lead;
+    const lead = partyLead;
     const customerEmail = lead?.email ?? null;
     const customerName = lead?.company || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ") || "Customer";
     const customerPhone = (lead?.mobile || lead?.phone || "").replace(/\s/g, "");
-    const contractNumber = statement.contract?.contract_number ?? "";
+    const contractNumber = partyRef;
     const invoiceNumber = meta.tally_invoice_number;
     const totalAmount = Number(meta.invoice_amount);
 
@@ -392,7 +432,7 @@ export async function POST(
             <p style="color:#333;font-size:14px;">Please find attached your GST tax invoice for <strong>${periodLabel}</strong>. Kindly make payment at your earliest convenience.</p>
             <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
               <tr><td style="padding:6px 0;color:#666;">Invoice No.</td><td style="padding:6px 0;font-weight:600;">${invoiceNumber}</td></tr>
-              <tr><td style="padding:6px 0;color:#666;">Contract</td><td style="padding:6px 0;">${contractNumber}</td></tr>
+              <tr><td style="padding:6px 0;color:#666;">${statement.contract ? "Contract" : statement.proposal ? "Proposal Ref" : "Invoice"}</td><td style="padding:6px 0;">${contractNumber}</td></tr>
               <tr><td style="padding:6px 0;color:#666;">Period</td><td style="padding:6px 0;">${periodLabel}</td></tr>
               <tr><td style="padding:6px 0;color:#666;">Invoice Date</td><td style="padding:6px 0;">${invoiceDateFormatted}</td></tr>
               <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:600;color:#015E65;font-size:16px;">Rs. ${amountFormatted}</td></tr>

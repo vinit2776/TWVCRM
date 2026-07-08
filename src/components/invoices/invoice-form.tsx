@@ -110,7 +110,7 @@ export function InvoiceForm({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-3xl max-h-[90vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>Create Proforma Invoice</DialogTitle>
+          <DialogTitle>Create Ad-Hoc Proforma Invoice</DialogTitle>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-6">
           <div className="space-y-2">

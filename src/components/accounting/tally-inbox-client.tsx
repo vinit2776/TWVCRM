@@ -60,7 +60,7 @@ const FILTER_TABS: { key: FilterTab; label: string }[] = [
 ];
 
 function partyDisplay(row: InboxRow): string {
-  const lead = row.contract?.lead;
+  const lead = row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead;
   if (!lead) return "(unknown party)";
   if (lead.company) return lead.company;
   const name = [lead.first_name, lead.last_name].filter(Boolean).join(" ");
@@ -223,7 +223,7 @@ export function TallyInboxClient() {
   }, [data]);
 
   const handleSend = useCallback((statementId: string, row: InboxRow) => {
-    const lead = row.contract?.lead;
+    const lead = row.contract?.lead ?? row.proposal?.lead ?? row.invoice?.lead;
     const recipients = Array.from(new Set([
       lead?.email,
       ...(lead?.billing_emails ?? []),
@@ -262,7 +262,7 @@ export function TallyInboxClient() {
             identifierLabel: row.statement_number ?? "—",
             amount: row.statement_total_amount,
             invoiceNumber: row.latest_upload?.tally_invoice_number ?? null,
-            emailedTo: (body as { emailed_to?: string }).emailed_to ?? row.contract?.lead?.email ?? null,
+            emailedTo: (body as { emailed_to?: string }).emailed_to ?? row.contract?.lead?.email ?? row.proposal?.lead?.email ?? row.invoice?.lead?.email ?? null,
             action: "invoice_sent",
           });
         }
@@ -1046,7 +1046,7 @@ function InboxRowItem({
       setGstinError("Invalid GSTIN format (e.g. 29AABCU9603R1ZX)");
       return;
     }
-    const leadId = row.contract?.lead?.id;
+    const leadId = row.contract?.lead?.id ?? row.proposal?.lead?.id ?? row.invoice?.lead?.id;
     if (!leadId) return;
     setGstinSaving(true);
     setGstinError(null);
@@ -1138,13 +1138,25 @@ function InboxRowItem({
 
         {/* ── Line 2 ── meta: contract / statement / state / aging */}
         <div className="min-w-0 text-xs text-muted-foreground truncate">
-          {row.contract && (
+          {row.contract ? (
             <>
               <span className="font-mono">{row.contract.contract_number}</span>
               {row.contract.title && <span> · {row.contract.title}</span>}
               <span> · </span>
             </>
-          )}
+          ) : row.proposal ? (
+            <>
+              <span className="font-mono">{row.proposal.proposal_number}</span>
+              <span className="text-[10px] ml-1 px-1 py-0.5 rounded bg-muted/60">Proposal PI</span>
+              <span> · </span>
+            </>
+          ) : row.invoice ? (
+            <>
+              <span className="font-mono">{row.invoice.invoice_number}</span>
+              <span className="text-[10px] ml-1 px-1 py-0.5 rounded bg-muted/60">Ad-hoc Invoice</span>
+              <span> · </span>
+            </>
+          ) : null}
           <span className="font-mono">{row.statement_number ?? "(no number)"}</span>
           {row.latest_upload?.tally_invoice_number && (
             <span className="font-mono text-foreground"> → {row.latest_upload.tally_invoice_number}</span>
@@ -1158,9 +1170,9 @@ function InboxRowItem({
 
         {/* ── Line 3 ── pills: GSTIN · IRN req · Tally · period */}
         <div className="col-span-2 flex items-center gap-1.5 flex-wrap text-[11px]">
-          {row.contract?.lead?.gst_number ? (
+          {(row.contract?.lead?.gst_number ?? row.proposal?.lead?.gst_number ?? row.invoice?.lead?.gst_number) ? (
             <span className="font-mono px-1.5 py-0.5 rounded bg-muted/60 text-muted-foreground" title="Customer GSTIN">
-              {row.contract.lead.gst_number}
+              {row.contract?.lead?.gst_number ?? row.proposal?.lead?.gst_number ?? row.invoice?.lead?.gst_number}
             </span>
           ) : gstinEditing ? (
             <span className="flex items-center gap-1 flex-wrap">
@@ -1195,8 +1207,8 @@ function InboxRowItem({
           ) : (
             <button
               type="button"
-              onClick={() => row.contract?.lead?.id && setGstinEditing(true)}
-              disabled={!row.contract?.lead?.id}
+              onClick={() => (row.contract?.lead?.id ?? row.proposal?.lead?.id ?? row.invoice?.lead?.id) && setGstinEditing(true)}
+              disabled={!(row.contract?.lead?.id ?? row.proposal?.lead?.id ?? row.invoice?.lead?.id)}
               className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 hover:bg-amber-100 disabled:opacity-40 disabled:cursor-not-allowed"
               title="GSTIN missing — click to add"
             >

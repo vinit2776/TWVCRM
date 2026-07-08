@@ -105,6 +105,23 @@ export interface InboxContract {
   lead: InboxLead | null;
 }
 
+/** Owner of a statement that hasn't converted into a contract yet — the
+ *  proposal's own first-month pro-rata PI. Always behaves like a
+ *  proforma_first flow (no billing_mode concept exists at proposal stage). */
+export interface InboxProposal {
+  id: string;
+  proposal_number: string;
+  lead: InboxLead | null;
+}
+
+/** Owner of a statement created from an ad-hoc lead invoice (proforma_invoices) —
+ *  no contract or proposal exists, always behaves like a proforma_first flow. */
+export interface InboxInvoice {
+  id: string;
+  invoice_number: string;
+  lead: InboxLead | null;
+}
+
 export interface InboxPayment {
   id: string;
   amount: number;
@@ -195,6 +212,8 @@ export interface InboxRow {
    *  the override path from the normal proforma_first path at terminal states. */
   pi_was_cancelled: boolean;
   contract: InboxContract | null;
+  proposal: InboxProposal | null;
+  invoice: InboxInvoice | null;
   latest_upload: InboxUpload | null;
   latest_snapshot: InboxSnapshot | null;
   has_discrepancy: boolean;

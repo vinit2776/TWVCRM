@@ -4,6 +4,7 @@ import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { logEmailActivity } from "@/lib/audit";
 import { COMPANY_BANK_DETAILS } from "@/lib/constants";
 import { messaging } from "@/lib/whatsapp";
+import { resolveHsnCode } from "@/lib/e-invoice/sac-codes";
 
 export const maxDuration = 30;
 
@@ -222,6 +223,62 @@ export async function POST(
       .from("proforma_invoices")
       .update({ status: "sent" })
       .eq("id", id);
+
+    // ── Mirror into billing_statements so this flows through the same AR ────────
+    // follow-up ladder and Tally Inbox GST-handoff pipeline every other invoice
+    // type in the system uses. Idempotent on invoice_id — a resend refreshes the
+    // Razorpay link on the existing row instead of piling up duplicate AR entries.
+    try {
+      const adminForStatement = createAdminClient();
+      const { data: existingStatement } = await adminForStatement
+        .from("billing_statements")
+        .select("id")
+        .eq("invoice_id", id)
+        .maybeSingle();
+
+      if (existingStatement) {
+        if (paymentLinkUrl) {
+          await adminForStatement
+            .from("billing_statements")
+            .update({ razorpay_payment_link_id: invoice.razorpay_link_id, razorpay_payment_link_url: paymentLinkUrl })
+            .eq("id", existingStatement.id);
+        }
+      } else {
+        const todayYmd = new Date().toISOString().slice(0, 10);
+        const dueDate = (invoice.due_date as string | null) || new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString().slice(0, 10);
+        const lineItems = ((invoice.items || []) as Array<{ description: string; quantity: number; unit_price: number; total: number }>).map((item) => ({
+          description: item.description,
+          qty: item.quantity,
+          unit_price: item.unit_price,
+          amount: item.total,
+          hsn_sac_code: resolveHsnCode("ad_hoc_charges"),
+        }));
+
+        await adminForStatement.from("billing_statements").insert({
+          invoice_id: id,
+          contract_id: null,
+          proposal_id: invoice.proposal_id ?? null,
+          statement_type: "usage",
+          created_via: "adhoc_invoice",
+          status: "finalized",
+          payment_status: "unpaid",
+          handoff_state: "pi_awaiting_payment",
+          period_start: todayYmd,
+          period_end: todayYmd,
+          subtotal: invoice.subtotal,
+          fixed_amount: invoice.subtotal,
+          tax_percentage: invoice.tax_percentage,
+          tax_amount: invoice.tax_amount,
+          total_amount: invoice.total_amount,
+          due_date: dueDate,
+          razorpay_payment_link_id: invoice.razorpay_link_id ?? null,
+          razorpay_payment_link_url: paymentLinkUrl,
+          line_items: [{ type: "usage", label: invoice.title, items: lineItems, subtotal: invoice.subtotal }],
+        });
+      }
+    } catch (e) {
+      console.error("[invoice email] billing_statements mirror failed (non-fatal):", e);
+    }
 
     if (invoice.lead_id && sender?.id) {
       logEmailActivity(supabase, {

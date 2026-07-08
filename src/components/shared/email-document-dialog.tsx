@@ -25,8 +25,15 @@ interface EmailDocumentDialogProps {
   leadEmail?: string;
   /** If provided, shows the "Also send via WhatsApp" checkbox */
   leadPhone?: string;
+  /** Saved CC addresses (e.g. lead.billing_emails) pre-filled alongside leadEmail;
+   *  still editable/removable before send. */
+  defaultCc?: string[];
   onGeneratePDF: () => string | Promise<string>; // Returns base64 string (sync or async)
   onSuccess?: () => void;
+}
+
+function initialRecipients(leadEmail?: string, defaultCc?: string[]): string[] {
+  return Array.from(new Set([leadEmail, ...(defaultCc ?? [])].filter((e): e is string => !!e)));
 }
 
 export function EmailDocumentDialog({
@@ -37,11 +44,12 @@ export function EmailDocumentDialog({
   documentNumber,
   leadEmail,
   leadPhone,
+  defaultCc,
   onGeneratePDF,
   onSuccess,
 }: EmailDocumentDialogProps) {
   const [recipients, setRecipients] = useState<string[]>(
-    leadEmail ? [leadEmail] : []
+    initialRecipients(leadEmail, defaultCc)
   );
   const [newEmail, setNewEmail] = useState("");
   const [sending, setSending] = useState(false);
@@ -154,7 +162,7 @@ export function EmailDocumentDialog({
   // Reset state when dialog opens/closes
   const handleOpenChange = (isOpen: boolean) => {
     if (isOpen) {
-      setRecipients(leadEmail ? [leadEmail] : []);
+      setRecipients(initialRecipients(leadEmail, defaultCc));
       setNewEmail("");
       setDepositLinkError(null);
       setCachedPdfBlob(null);

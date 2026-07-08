@@ -41,6 +41,14 @@ export async function GET(
         start_date, end_date, next_billing_date, billing_cycle, location_id, items,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, street, city, zip_code)
       ),
+      proposal:proposals!billing_statements_proposal_id_fkey(
+        id, proposal_number,
+        lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, street, city, zip_code)
+      ),
+      invoice:proforma_invoices!billing_statements_invoice_id_fkey(
+        id, invoice_number,
+        lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, street, city, zip_code)
+      ),
       usage_charges:usage_charges(id, description, quantity, unit_price, total)
     `)
     .eq("id", id)
@@ -59,10 +67,15 @@ export async function GET(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const contract = statement.contract as any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const lead = contract?.lead as any;
+  const proposal = statement.proposal as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const invoice = statement.invoice as any;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lead = (contract?.lead ?? proposal?.lead ?? invoice?.lead) as any;
+  const partyRef: string = contract?.contract_number ?? proposal?.proposal_number ?? invoice?.invoice_number ?? "";
 
-  if (!contract) {
-    return NextResponse.json({ error: "No contract linked to this statement" }, { status: 400 });
+  if (!contract && !proposal && !invoice) {
+    return NextResponse.json({ error: "No contract, proposal, or invoice linked to this statement" }, { status: 400 });
   }
 
   // Recalculate totals
@@ -110,7 +123,7 @@ export async function GET(
     }
   } else {
     if (fixedAmount > 0) {
-      lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
+      lineItems.push({ description: contract?.title || `Workspace — ${partyRef}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
     }
     for (const charge of usageCharges) {
       lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
@@ -147,7 +160,7 @@ export async function GET(
     buyerState: lead?.state || undefined,
     periodStart: statement.period_start as string,
     periodEnd: statement.period_end as string,
-    contractNumber: contract.contract_number,
+    contractNumber: partyRef,
     lineItems,
     subtotal,
     cgst,
