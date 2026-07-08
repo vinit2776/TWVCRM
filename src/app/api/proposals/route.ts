@@ -28,8 +28,32 @@ export async function GET(request: NextRequest) {
   const { data, error, count } = await query;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
+  // Latest PI billing_statements row per proposal (for the flow-status badge).
+  // One extra round-trip, reduced to "most recent per proposal_id" in JS —
+  // same pattern as the paid-amount aggregation in receivables/route.ts.
+  const proposalIds = (data || []).map((p) => p.id as string);
+  const latestByProposal = new Map<string, { handoff_state: string | null; payment_status: string }>();
+  if (proposalIds.length > 0) {
+    const { data: statements } = await supabase
+      .from("billing_statements")
+      .select("proposal_id, handoff_state, payment_status, created_at")
+      .in("proposal_id", proposalIds)
+      .order("created_at", { ascending: false });
+    for (const s of statements || []) {
+      const pid = s.proposal_id as string;
+      if (!latestByProposal.has(pid)) {
+        latestByProposal.set(pid, { handoff_state: s.handoff_state as string | null, payment_status: s.payment_status as string });
+      }
+    }
+  }
+
+  const enriched = (data || []).map((p) => ({
+    ...p,
+    latest_billing_statement: latestByProposal.get(p.id as string) ?? null,
+  }));
+
   return NextResponse.json({
-    data,
+    data: enriched,
     pagination: { page, limit, total: count || 0, totalPages: Math.ceil((count || 0) / limit) },
   });
 }

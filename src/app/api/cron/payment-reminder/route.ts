@@ -50,6 +50,14 @@ export async function GET(request: NextRequest) {
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)
+      ),
+      proposal:proposals!billing_statements_proposal_id_fkey(
+        id, proposal_number,
+        lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)
+      ),
+      invoice:proforma_invoices!billing_statements_invoice_id_fkey(
+        id, invoice_number,
+        lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)
       )
     `)
     .in("status", ["finalized", "exported"])
@@ -69,8 +77,12 @@ export async function GET(request: NextRequest) {
   for (const s of statements || []) {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const contract: any = s.contract;
-    if (!contract) { skipped++; summary.push({ id: s.id, stmt: s.statement_number, stage: -1, tone: "—", channel: "—", status: "skip", reason: "no contract" }); continue; }
-    const lead = contract.lead;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const proposal: any = s.proposal;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const invoice: any = s.invoice;
+    if (!contract && !proposal && !invoice) { skipped++; summary.push({ id: s.id, stmt: s.statement_number, stage: -1, tone: "—", channel: "—", status: "skip", reason: "no contract, proposal, or invoice" }); continue; }
+    const lead = contract?.lead ?? proposal?.lead ?? invoice?.lead;
     if (!lead?.email && !(lead?.mobile || lead?.phone)) {
       skipped++; summary.push({ id: s.id, stmt: s.statement_number, stage: -1, tone: "—", channel: "—", status: "skip", reason: "no contact" });
       continue;

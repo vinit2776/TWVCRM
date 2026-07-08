@@ -44,6 +44,14 @@ export async function POST(
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)
+      ),
+      proposal:proposals!billing_statements_proposal_id_fkey(
+        id, proposal_number,
+        lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)
+      ),
+      invoice:proforma_invoices!billing_statements_invoice_id_fkey(
+        id, invoice_number,
+        lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile)
       )
     `)
     .eq("id", id)
@@ -61,7 +69,11 @@ export async function POST(
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const contract: any = statement.contract;
-  const lead = contract?.lead;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const proposal: any = statement.proposal;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const invoice: any = statement.invoice;
+  const lead = contract?.lead ?? proposal?.lead ?? invoice?.lead;
   if (!lead?.email && !(lead?.mobile || lead?.phone)) {
     return NextResponse.json({ error: "Customer has no email or phone — cannot send reminder" }, { status: 400 });
   }

@@ -92,6 +92,18 @@ export async function GET(req: NextRequest) {
         lead:leads!contracts_lead_id_fkey(
           id, first_name, last_name, company, email, phone, gst_number, billing_emails
         )
+      ),
+      proposal:proposals!billing_statements_proposal_id_fkey(
+        id, proposal_number,
+        lead:leads!proposals_lead_id_fkey(
+          id, first_name, last_name, company, email, phone, gst_number, billing_emails
+        )
+      ),
+      invoice:proforma_invoices!billing_statements_invoice_id_fkey(
+        id, invoice_number,
+        lead:leads!proforma_invoices_lead_id_fkey(
+          id, first_name, last_name, company, email, phone, gst_number, billing_emails
+        )
       )
     `);
 
@@ -166,6 +178,32 @@ export async function GET(req: NextRequest) {
         gst_number: string | null;
       } | null;
     } | null;
+    proposal: {
+      id: string;
+      proposal_number: string;
+      lead: {
+        id: string;
+        first_name: string | null;
+        last_name: string | null;
+        company: string | null;
+        email: string | null;
+        phone: string | null;
+        gst_number: string | null;
+      } | null;
+    } | null;
+    invoice: {
+      id: string;
+      invoice_number: string;
+      lead: {
+        id: string;
+        first_name: string | null;
+        last_name: string | null;
+        company: string | null;
+        email: string | null;
+        phone: string | null;
+        gst_number: string | null;
+      } | null;
+    } | null;
   }>;
 
   // JS post-filter for search. The result set is already capped (closed=200,
@@ -186,6 +224,18 @@ export async function GET(req: NextRequest) {
           s.contract?.lead?.first_name ?? "",
           s.contract?.lead?.last_name ?? "",
           s.contract?.lead?.email ?? "",
+          s.proposal?.proposal_number ?? "",
+          s.proposal?.lead?.gst_number ?? "",
+          s.proposal?.lead?.company ?? "",
+          s.proposal?.lead?.first_name ?? "",
+          s.proposal?.lead?.last_name ?? "",
+          s.proposal?.lead?.email ?? "",
+          s.invoice?.invoice_number ?? "",
+          s.invoice?.lead?.gst_number ?? "",
+          s.invoice?.lead?.company ?? "",
+          s.invoice?.lead?.first_name ?? "",
+          s.invoice?.lead?.last_name ?? "",
+          s.invoice?.lead?.email ?? "",
         ];
         return haystack.some((h) => h.toLowerCase().includes(lc));
       })
@@ -339,7 +389,7 @@ export async function GET(req: NextRequest) {
     const agingHours = Math.max(0, Math.round((now - Date.parse(stateChangedAt)) / 3_600_000));
     const bucket = bucketFor(s.handoff_state, hasDiscrepancy) ?? "in_flight";
 
-    const customerHasGstin = !!s.contract?.lead?.gst_number;
+    const customerHasGstin = !!(s.contract?.lead?.gst_number ?? s.proposal?.lead?.gst_number ?? s.invoice?.lead?.gst_number);
     const payments = paymentsByStatement.get(s.id) ?? [];
     const totalPaid = payments.reduce((sum, p) => sum + p.amount, 0);
     const isVoided = !!s.voided_at;
@@ -390,6 +440,20 @@ export async function GET(req: NextRequest) {
             title: s.contract.title,
             billing_mode: s.contract.billing_mode,
             lead: s.contract.lead,
+          }
+        : null,
+      proposal: s.proposal
+        ? {
+            id: s.proposal.id,
+            proposal_number: s.proposal.proposal_number,
+            lead: s.proposal.lead,
+          }
+        : null,
+      invoice: s.invoice
+        ? {
+            id: s.invoice.id,
+            invoice_number: s.invoice.invoice_number,
+            lead: s.invoice.lead,
           }
         : null,
       latest_upload: upload,

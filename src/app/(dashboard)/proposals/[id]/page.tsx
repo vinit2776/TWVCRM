@@ -114,8 +114,9 @@ export default function ProposalDetailPage({
   const [gstPreviewLoading, setGstPreviewLoading] = useState(false);
   const [gstSending, setGstSending] = useState(false);
   const [gstIsRevise, setGstIsRevise] = useState(false);
+  const [gstCc, setGstCc] = useState("");
   const [gstPreview, setGstPreview] = useState<{
-    subject: string; html: string; to: string[]; invoiceNumber: string;
+    subject: string; html: string; to: string[]; invoiceNumber: string | null;
     proratedSubtotal: number; taxAmount: number; totalAmount: number;
     daysRemaining: number; daysInMonth: number; prorationFactor: number;
     periodLabel: string; startLabel: string; endLabel: string;
@@ -270,6 +271,7 @@ export default function ProposalDetailPage({
     setGstDate(initialDate);
     setGstPreview(null);
     setGstIsRevise(forRevise);
+    setGstCc((proposal?.lead?.billing_emails || []).join(", "));
     setGstDialogOpen(true);
   };
 
@@ -302,10 +304,13 @@ export default function ProposalDetailPage({
     if (!gstDate) { toast.error("Date is required"); return; }
     setGstSending(true);
     try {
+      const ccList = Array.from(new Set(
+        gstCc.split(",").map((e) => e.trim()).filter(Boolean)
+      ));
       const res = await fetch(`/api/proposals/${id}/send-invoice`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ occupation_start_date: gstDate }),
+        body: JSON.stringify({ occupation_start_date: gstDate, additionalCc: ccList }),
       });
       const json = await res.json();
       if (res.ok) {
@@ -317,6 +322,19 @@ export default function ProposalDetailPage({
           { duration: 8000 }
         );
         setGstDialogOpen(false);
+
+        // Remember the edited CC list against the lead for next time, matching
+        // the "ad hoc field pre-filled from a saved list" behaviour.
+        const existingCc = proposal?.lead?.billing_emails || [];
+        const ccChanged = ccList.length !== existingCc.length || ccList.some((e) => !existingCc.includes(e));
+        if (ccChanged && proposal?.lead_id) {
+          fetch(`/api/leads/${proposal.lead_id}`, {
+            method: "PATCH",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ billing_emails: ccList }),
+          }).catch(() => {});
+        }
+
         fetchProposal();
       } else {
         toast.error(json.error || "Failed to send invoice");
@@ -1335,6 +1353,18 @@ export default function ProposalDetailPage({
             </Button>
           </div>
 
+          <div className="space-y-1.5">
+            <Label htmlFor="gst-cc">CC (comma-separated)</Label>
+            <Input
+              id="gst-cc"
+              type="text"
+              placeholder="accounts@customer.com, cfo@customer.com"
+              value={gstCc}
+              onChange={(e) => setGstCc(e.target.value)}
+            />
+            <p className="text-xs text-muted-foreground">Pre-filled from the lead&apos;s saved billing contacts. Edited addresses are remembered for next time.</p>
+          </div>
+
           {gstPreviewLoading && !gstPreview && (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
@@ -1347,7 +1377,7 @@ export default function ProposalDetailPage({
               <div className="grid grid-cols-2 md:grid-cols-4 gap-2 text-xs">
                 <div className="rounded-md border bg-muted/30 px-3 py-2">
                   <p className="text-muted-foreground">Invoice No.</p>
-                  <p className="font-mono font-semibold text-foreground">{gstPreview.invoiceNumber}</p>
+                  <p className="font-mono font-semibold text-foreground">{gstPreview.invoiceNumber || "Assigned on send"}</p>
                 </div>
                 <div className="rounded-md border bg-muted/30 px-3 py-2">
                   <p className="text-muted-foreground">Period</p>

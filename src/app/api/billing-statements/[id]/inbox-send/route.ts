@@ -63,6 +63,14 @@ export async function POST(
       contract:contracts!billing_statements_contract_id_fkey(
         id, contract_number, billing_mode,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, billing_emails, mobile, phone)
+      ),
+      proposal:proposals!billing_statements_proposal_id_fkey(
+        id, proposal_number,
+        lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, billing_emails, mobile, phone)
+      ),
+      invoice:proforma_invoices!billing_statements_invoice_id_fkey(
+        id, invoice_number,
+        lead:leads!proforma_invoices_lead_id_fkey(id, first_name, last_name, company, email, billing_emails, mobile, phone)
       )
     `)
     .eq("id", id)
@@ -96,7 +104,38 @@ export async function POST(
         phone: string | null;
       } | null;
     } | null;
+    proposal: {
+      id: string;
+      proposal_number: string;
+      lead: {
+        id: string;
+        first_name: string | null;
+        last_name: string | null;
+        company: string | null;
+        email: string | null;
+        billing_emails: string[] | null;
+        mobile: string | null;
+        phone: string | null;
+      } | null;
+    } | null;
+    invoice: {
+      id: string;
+      invoice_number: string;
+      lead: {
+        id: string;
+        first_name: string | null;
+        last_name: string | null;
+        company: string | null;
+        email: string | null;
+        billing_emails: string[] | null;
+        mobile: string | null;
+        phone: string | null;
+      } | null;
+    } | null;
   };
+
+  const partyRef = statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number ?? "";
+  const partyLead = statement.contract?.lead ?? statement.proposal?.lead ?? statement.invoice?.lead;
 
   // D3 (deliver once): refuse to re-dispatch a statement that's already gone out.
   if (statement.tally_delivered_at) {
@@ -162,7 +201,7 @@ export async function POST(
   } catch { /* body may be empty */ }
 
   // ── Compose + send email ────────────────────────────────────────────────
-  const lead = statement.contract?.lead;
+  const lead = partyLead;
   const recipientEmail = lead?.email;
   if (!recipientEmail) {
     return NextResponse.json(
@@ -184,7 +223,7 @@ export async function POST(
   const totalDisplay = formatCurrency(Number(statement.total_amount));
   const isReceipt = statement.payment_status === "paid";
   const invoiceNumber = upload.tally_invoice_number as string;
-  const contractNumber = statement.contract?.contract_number ?? "";
+  const contractNumber = partyRef;
   const totalAmount = Number(statement.total_amount);
   const customerPhone = lead?.mobile || lead?.phone || "";
 

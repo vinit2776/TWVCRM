@@ -120,6 +120,7 @@ export function daysOverdueFromDueDate(dueDateYmd: string): number {
 export async function ensureLivePaymentLink(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   admin: SupabaseClient, statement: any, contract: any, lead: any, appUrl: string,
+  partyRef?: string,
 ): Promise<string | null> {
   const settings = await getCachedSettings(admin, [
     "razorpay_key_id",
@@ -147,6 +148,7 @@ export async function ensureLivePaymentLink(
   const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer";
   const phone = (lead?.mobile || lead?.phone || "").replace(/\s/g, "");
   const email = lead?.email || "";
+  const ref = partyRef ?? contract?.contract_number ?? "";
 
   const payload: Record<string, unknown> = {
     // Defensive rupee-rounding — total_amount should already be a whole rupee,
@@ -154,12 +156,12 @@ export async function ensureLivePaymentLink(
     amount: Math.round(Number(statement.total_amount)) * 100,
     currency: "INR",
     accept_partial: false,
-    description: `${statement.statement_number} — ${contract.contract_number}`,
+    description: `${statement.statement_number} — ${ref}`,
     reference_id: refId,
     expire_by: Math.floor(Date.now() / 1000) + 15 * 24 * 60 * 60,
     notify: { sms: !!phone, email: !!email },
     reminder_enable: true,
-    notes: { statement_id: statement.id, contract_number: contract.contract_number, reminder_regen: "true" },
+    notes: { statement_id: statement.id, contract_number: ref, reminder_regen: "true" },
     callback_url: `${appUrl}/billing`,
     callback_method: "get",
   };
@@ -194,7 +196,7 @@ export async function ensureLivePaymentLink(
 }
 
 function renderEmail(opts: {
-  customerName: string; stmt: string; contractNumber: string;
+  customerName: string; stmt: string; contractNumber: string; contractLabel?: string;
   periodStart: string; periodEnd: string; dueDate: string;
   amountStr: string; payLinkUrl: string | null; intro: string;
   toneLabel: string;
@@ -237,7 +239,7 @@ function renderEmail(opts: {
         </div>` : ""}
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
           <tr><td style="padding:6px 0;color:#666;">${opts.gstInvoiceNumber ? "Tax Invoice Ref" : "Proforma Ref"}</td><td style="padding:6px 0;font-weight:600;">${opts.gstInvoiceNumber || opts.stmt}</td></tr>
-          <tr><td style="padding:6px 0;color:#666;">Contract</td><td style="padding:6px 0;">${opts.contractNumber}</td></tr>
+          <tr><td style="padding:6px 0;color:#666;">${opts.contractLabel ?? "Contract"}</td><td style="padding:6px 0;">${opts.contractNumber}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">Period</td><td style="padding:6px 0;">${periodLabel}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">Due Date</td><td style="padding:6px 0;font-weight:600;color:#b45309;">${opts.dueDate}</td></tr>
           ${opts.originalTotal && opts.paidSoFar ? `
@@ -300,7 +302,12 @@ export async function sendOneReminder(
   const { statement: s, stageIdx, appUrl, triggeredBy, triggeredByUserId, ccPools } = input;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const contract: any = s.contract;
-  const lead = contract?.lead;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const proposal: any = s.proposal;
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const invoice: any = s.invoice;
+  const lead = contract?.lead ?? proposal?.lead ?? invoice?.lead;
+  const partyRef: string = contract?.contract_number ?? proposal?.proposal_number ?? invoice?.invoice_number ?? "";
   const stage = STAGES[stageIdx];
   const errors: string[] = [];
 
@@ -322,7 +329,7 @@ export async function sendOneReminder(
   const daysOverdue = daysOverdueFromDueDate(s.due_date as string);
   const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || "Customer";
 
-  const payLinkUrl = await ensureLivePaymentLink(admin, s, contract, lead, appUrl);
+  const payLinkUrl = await ensureLivePaymentLink(admin, s, contract, lead, appUrl, partyRef);
 
   // Build CC list per stage.
   const cc: string[] = [];
@@ -358,7 +365,8 @@ export async function sendOneReminder(
     const trackingPixelUrl = `${input.appUrl}/api/tracking/email-open?id=${trackingId}`;
 
     const html = renderEmail({
-      customerName, stmt: s.statement_number, contractNumber: contract.contract_number,
+      customerName, stmt: s.statement_number, contractNumber: partyRef,
+      contractLabel: contract ? "Contract" : proposal ? "Proposal Ref" : "Invoice",
       periodStart: s.period_start as string, periodEnd: s.period_end as string,
       dueDate: dueStr, amountStr, payLinkUrl, intro: dynamicIntro,
       toneLabel: stage.toneLabel,

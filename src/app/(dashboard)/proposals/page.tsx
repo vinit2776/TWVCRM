@@ -13,11 +13,27 @@ import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import { PROPOSAL_STATUSES, PROPOSAL_STATUS_LABELS, PROPOSAL_STATUS_COLORS } from "@/lib/constants";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { HANDOFF_STATE_LABELS, bucketFor, type HandoffState } from "@/lib/tally-handoff";
 import type { Proposal } from "@/types";
+
+type LatestBillingStatement = { handoff_state: HandoffState | null; payment_status: string } | null;
+
+/** Colors mirror the bucket a handoff_state belongs to on the Tally Inbox page —
+ *  same visual vocabulary, so a sales rep who's seen the inbox recognizes it. */
+function flowBadgeClass(state: HandoffState | null | undefined): string {
+  const bucket = bucketFor(state);
+  switch (bucket) {
+    case "gst_to_issue": return "bg-blue-100 text-blue-700 border-blue-200";
+    case "payment_to_record": return "bg-green-100 text-green-700 border-green-200";
+    case "complete": return "bg-emerald-100 text-emerald-700 border-emerald-200";
+    case "in_flight": return "bg-amber-100 text-amber-700 border-amber-200";
+    default: return "bg-gray-100 text-gray-600 border-gray-200";
+  }
+}
 
 export default function ProposalsPage() {
   const router = useRouter();
-  const [proposals, setProposals] = useState<(Proposal & { lead?: { id: string; first_name: string; last_name: string } })[]>([]);
+  const [proposals, setProposals] = useState<(Proposal & { lead?: { id: string; first_name: string; last_name: string }; latest_billing_statement?: LatestBillingStatement })[]>([]);
   const [pagination, setPagination] = useState({ page: 1, limit: 25, total: 0, totalPages: 0 });
   const [loading, setLoading] = useState(true);
   const [page, setPage] = useState(1);
@@ -93,6 +109,13 @@ export default function ProposalsPage() {
                         : "bg-amber-100 text-amber-700 border-amber-200";
                       return <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${color}`}>Activate Contract</span>;
                     })()}
+                    {/* PI flow-status badge — where the proposal's first-month invoice
+                        stands in Accounts Receivable / Tally Inbox. */}
+                    <span className={`text-[10px] font-semibold px-1.5 py-0.5 rounded-full border ${flowBadgeClass(p.latest_billing_statement?.handoff_state)}`}>
+                      {p.latest_billing_statement?.handoff_state
+                        ? HANDOFF_STATE_LABELS[p.latest_billing_statement.handoff_state]
+                        : "No PI Sent"}
+                    </span>
                   </div>
                 </td>
                 <td className="px-4 py-3 text-muted-foreground hidden lg:table-cell">{p.location?.name || "—"}</td>

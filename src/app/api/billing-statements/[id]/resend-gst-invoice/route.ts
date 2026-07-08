@@ -49,6 +49,14 @@ export async function POST(
       contract:contracts!billing_statements_contract_id_fkey(
         contract_number,
         lead:leads!contracts_lead_id_fkey(first_name, last_name, company, email, billing_emails)
+      ),
+      proposal:proposals!billing_statements_proposal_id_fkey(
+        proposal_number,
+        lead:leads!proposals_lead_id_fkey(first_name, last_name, company, email, billing_emails)
+      ),
+      invoice:proforma_invoices!billing_statements_invoice_id_fkey(
+        invoice_number,
+        lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company, email, billing_emails)
       )
     `)
     .eq("id", id)
@@ -68,9 +76,17 @@ export async function POST(
       contract_number: string | null;
       lead: { first_name: string | null; last_name: string | null; company: string | null; email: string | null; billing_emails: string[] | null } | null;
     } | null;
+    proposal: {
+      proposal_number: string | null;
+      lead: { first_name: string | null; last_name: string | null; company: string | null; email: string | null; billing_emails: string[] | null } | null;
+    } | null;
+    invoice: {
+      invoice_number: string | null;
+      lead: { first_name: string | null; last_name: string | null; company: string | null; email: string | null; billing_emails: string[] | null } | null;
+    } | null;
   };
 
-  const lead = statement.contract?.lead;
+  const lead = statement.contract?.lead ?? statement.proposal?.lead ?? statement.invoice?.lead;
   const recipientEmail = lead?.email;
   if (!recipientEmail) {
     return NextResponse.json(
@@ -109,7 +125,7 @@ export async function POST(
 
   const pdfBuffer = Buffer.from(await fileBlob.arrayBuffer());
   const invoiceNumber = upload.tally_invoice_number as string;
-  const contractNumber = statement.contract?.contract_number ?? "";
+  const contractNumber = statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number ?? "";
   const partyName = lead?.company || [lead?.first_name, lead?.last_name].filter(Boolean).join(" ") || "Customer";
   const isReceipt = statement.payment_status === "paid";
   const totalDisplay = formatCurrency(Number(statement.total_amount));

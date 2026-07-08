@@ -13,7 +13,7 @@ export async function GET(
 
   const { data, error } = await supabase
     .from("proposals")
-    .select("*, lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, location_id, entity_type), location:locations!proposals_location_id_fkey(id, name, code, proposal_amenity_icons)")
+    .select("*, lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, mobile, location_id, entity_type, billing_emails), location:locations!proposals_location_id_fkey(id, name, code, proposal_amenity_icons)")
     .eq("id", id)
     .single();
 

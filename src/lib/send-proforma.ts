@@ -51,6 +51,9 @@ export interface DispatchResult {
   routedToTally?: boolean;
   /** True when both GST modes are off — invoice deferred until a mode is activated. */
   standby?: boolean;
+  /** Storage path of the generated PDF in the crm-documents bucket, e.g. for callers
+   *  that need a signed URL to attach the PDF to a WhatsApp message. */
+  pdfStoragePath?: string | null;
   error?: string;
 }
 
@@ -73,7 +76,8 @@ export async function dispatchProforma(
   additionalCc: string[] = [],
   toOverride: string[] = [],
 ): Promise<DispatchResult> {
-  // ── Fetch statement with contract + lead ────────────────────────────────
+  // ── Fetch statement with contract + lead (or proposal + lead, for a PI that ──
+  // hasn't converted into a contract yet) ─────────────────────────────────────
   const { data: statement, error: fetchErr } = await adminSupabase
     .from("billing_statements")
     .select(`
@@ -82,6 +86,10 @@ export async function dispatchProforma(
         id, contract_number, title, total_amount, subtotal, tax_percentage,
         start_date, end_date, next_billing_date, billing_cycle, location_id, items,
         lead:leads!contracts_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, billing_emails)
+      ),
+      proposal:proposals!billing_statements_proposal_id_fkey(
+        id, proposal_number,
+        lead:leads!proposals_lead_id_fkey(id, first_name, last_name, company, email, phone, state, gst_number, mobile, billing_emails)
       ),
       usage_charges:usage_charges(id, description, quantity, unit_price, total)
     `)
@@ -95,11 +103,18 @@ export async function dispatchProforma(
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const contract = statement.contract as any;
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const lead = contract?.lead as any;
+  const proposal = statement.proposal as any;
 
-  if (!contract) {
-    return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: "No contract linked to this statement" };
+  if (!contract && !proposal) {
+    return { success: false, proformaRef: "", totalAmount: 0, razorpayLinkUrl: null, emailedTo: null, emailSkipped: true, noContact: false, error: "No contract or proposal linked to this statement" };
   }
+
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const lead = (contract?.lead ?? proposal?.lead) as any;
+  // Reference label printed on the PDF / in emails wherever a contract number
+  // would normally go — falls back to the proposal number for a PI that hasn't
+  // converted into a contract yet.
+  const partyRef: string = contract?.contract_number ?? proposal?.proposal_number ?? "";
 
   // ── Check for contact info ───────────────────────────────────────────────
   const customerEmail = lead?.email as string | undefined;
@@ -155,12 +170,12 @@ export async function dispatchProforma(
         const payload: Record<string, unknown> = {
           amount: Math.round(totalAmount * 100),
           currency: "INR",
-          description: `Proforma ${proformaRef} — ${contract.contract_number} — The WorkVilla`,
+          description: `Proforma ${proformaRef} — ${partyRef} — The WorkVilla`,
           reference_id: refId,
           expire_by: Math.floor(Date.now() / 1000) + 15 * 24 * 60 * 60,
           notify: { sms: !!customerPhone, email: !!customerEmail },
           reminder_enable: true,
-          notes: { statement_id: statementId, contract_number: contract.contract_number, proforma: "true" },
+          notes: { statement_id: statementId, contract_number: partyRef, proforma: "true" },
           callback_url: `${appUrl}/billing`,
           callback_method: "get",
         };
@@ -236,7 +251,7 @@ export async function dispatchProforma(
     }
   } else {
     if (fixedAmount > 0) {
-      lineItems.push({ description: contract.title || `Workspace — ${contract.contract_number}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
+      lineItems.push({ description: contract?.title || `Workspace — ${partyRef}`, hsnSac: resolveHsnCode("rent"), qty: 1, rate: fixedAmount, amount: fixedAmount });
     }
     for (const charge of usageCharges) {
       lineItems.push({ description: charge.description, hsnSac: resolveHsnCode("ad_hoc_charges", (charge as { hsn_sac_code?: string | null }).hsn_sac_code), qty: Number(charge.quantity || 1), rate: Number(charge.unit_price), amount: Number(charge.total) });
@@ -270,7 +285,7 @@ export async function dispatchProforma(
     periodStart: statement.period_start as string,
     periodEnd: statement.period_end as string,
     dueDate: (statement.due_date as string | null) || undefined,
-    contractNumber: contract.contract_number,
+    contractNumber: partyRef,
     lineItems,
     subtotal,
     cgst,
@@ -325,7 +340,7 @@ export async function dispatchProforma(
         <p style="color:#333;font-size:14px;">Please find attached your proforma invoice for <strong>${periodLabel}</strong>. Kindly make the payment at your earliest convenience.</p>
         <table style="width:100%;border-collapse:collapse;margin:16px 0;font-size:13px;">
           <tr><td style="padding:6px 0;color:#666;">Proforma Ref</td><td style="padding:6px 0;font-weight:600;">${proformaRef}</td></tr>
-          <tr><td style="padding:6px 0;color:#666;">Contract</td><td style="padding:6px 0;">${contract.contract_number}</td></tr>
+          <tr><td style="padding:6px 0;color:#666;">${contract ? "Contract" : "Proposal Ref"}</td><td style="padding:6px 0;">${partyRef}</td></tr>
           <tr><td style="padding:6px 0;color:#666;">Period</td><td style="padding:6px 0;">${periodLabel}</td></tr>
           ${dueDateStr ? `<tr><td style="padding:6px 0;color:#666;">Payment Due By</td><td style="padding:6px 0;font-weight:600;color:#b45309;">${dueDateStr}</td></tr>` : ""}
           <tr><td style="padding:6px 0;color:#666;">Amount Due</td><td style="padding:6px 0;font-weight:600;color:#015E65;font-size:16px;">Rs. ${Math.round(totalAmount).toLocaleString("en-IN", { maximumFractionDigits: 0 })}</td></tr>
@@ -364,7 +379,7 @@ export async function dispatchProforma(
           to: toList,
           cc: ccList.length > 0 ? ccList : undefined,
           bcc: BILLING_BCC,
-          subject: `Proforma Invoice ${proformaRef} — ${contract.contract_number} — The WorkVilla`,
+          subject: `Proforma Invoice ${proformaRef} — ${partyRef} — The WorkVilla`,
           html: emailHtml,
           attachments: [{ filename: `Proforma-${proformaRef.replace(/\//g, "-")}.pdf`, content: pdfBuffer, contentType: "application/pdf" }],
         }),
@@ -439,6 +454,7 @@ export async function dispatchProforma(
     emailedTo: emailedSuccessfully ? (toList.join(", ") || null) : null,
     emailSkipped: toList.length === 0,
     noContact,
+    pdfStoragePath: storagePath,
   };
 }
 

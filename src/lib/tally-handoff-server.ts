@@ -158,6 +158,14 @@ async function notifyAccountsOfHandoffTransition(
       contract:contracts!billing_statements_contract_id_fkey(
         contract_number,
         lead:leads!contracts_lead_id_fkey(first_name, last_name, company)
+      ),
+      proposal:proposals!billing_statements_proposal_id_fkey(
+        proposal_number,
+        lead:leads!proposals_lead_id_fkey(first_name, last_name, company)
+      ),
+      invoice:proforma_invoices!billing_statements_invoice_id_fkey(
+        invoice_number,
+        lead:leads!proforma_invoices_lead_id_fkey(first_name, last_name, company)
       )
     `)
     .eq("id", statementId)
@@ -172,11 +180,21 @@ async function notifyAccountsOfHandoffTransition(
       contract_number: string | null;
       lead: { first_name: string | null; last_name: string | null; company: string | null } | null;
     } | null;
+    proposal: {
+      proposal_number: string | null;
+      lead: { first_name: string | null; last_name: string | null; company: string | null } | null;
+    } | null;
+    invoice: {
+      invoice_number: string | null;
+      lead: { first_name: string | null; last_name: string | null; company: string | null } | null;
+    } | null;
   };
 
+  const party = statement.contract ?? statement.proposal ?? statement.invoice;
+  const partyRef = statement.contract?.contract_number ?? statement.proposal?.proposal_number ?? statement.invoice?.invoice_number ?? "—";
   const partyName =
-    statement.contract?.lead?.company
-    || [statement.contract?.lead?.first_name, statement.contract?.lead?.last_name].filter(Boolean).join(" ")
+    party?.lead?.company
+    || [party?.lead?.first_name, party?.lead?.last_name].filter(Boolean).join(" ")
     || "(unnamed customer)";
 
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL || process.env.APP_URL || "https://twv-crm.vercel.app").trim();
@@ -186,7 +204,7 @@ async function notifyAccountsOfHandoffTransition(
     <p>${intimation.body}</p>
     <table style="border-collapse:collapse;margin:12px 0;font-size:14px;">
       <tr><td style="padding:4px 12px 4px 0;color:#666;">Customer</td><td><strong>${escapeHtml(partyName)}</strong></td></tr>
-      <tr><td style="padding:4px 12px 4px 0;color:#666;">Contract</td><td>${escapeHtml(statement.contract?.contract_number ?? "—")}</td></tr>
+      <tr><td style="padding:4px 12px 4px 0;color:#666;">${statement.contract ? "Contract" : statement.proposal ? "Proposal" : "Invoice"}</td><td>${escapeHtml(partyRef)}</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:#666;">Statement</td><td>${escapeHtml(statement.statement_number ?? "—")}</td></tr>
       <tr><td style="padding:4px 12px 4px 0;color:#666;">Amount</td><td><strong>${formatCurrency(Number(statement.total_amount))}</strong></td></tr>
     </table>
@@ -232,6 +250,9 @@ export async function handleStatementPaid(
     .select(`
       id,
       handoff_state,
+      total_amount,
+      proposal_id,
+      invoice_id,
       contract:contracts!billing_statements_contract_id_fkey(billing_mode)
     `)
     .eq("id", statementId)
@@ -243,11 +264,54 @@ export async function handleStatementPaid(
   }
 
   // Supabase types nested FKs as arrays even when the FK is single-row.
-  const billingMode = ((statement as unknown as {
+  const contract = (statement as unknown as {
     contract: { billing_mode: "proforma_first" | "gst_direct" | null } | null;
-  }).contract)?.billing_mode;
+  }).contract;
+  const billingMode = contract?.billing_mode;
+  const proposalId = (statement as unknown as { proposal_id: string | null }).proposal_id;
+  const invoiceId = (statement as unknown as { invoice_id: string | null }).invoice_id;
 
   const currentState = (statement as unknown as { handoff_state: string | null }).handoff_state;
+
+  // A statement created from a proposal's first-month PI has no contract yet
+  // (and therefore no billing_mode) — it is definitionally a proforma-first
+  // flow, so route it the same way a proforma_first contract statement would be.
+  if (proposalId) {
+    // Mirror payment onto the proposal so the contract-activation gate (which
+    // checks proposals.payment_status/deposit_payment_status) keeps working —
+    // this must happen here, not just in the webhook, because manual payment
+    // entry (billing-statements/[id]/payment) also calls handleStatementPaid.
+    const now = new Date().toISOString();
+    const { data: proposalRow } = await supabase
+      .from("proposals")
+      .select("status, payment_status")
+      .eq("id", proposalId)
+      .maybeSingle();
+    if (proposalRow && proposalRow.payment_status !== "paid") {
+      await supabase
+        .from("proposals")
+        .update({
+          payment_status: "paid",
+          ...(["sent", "viewed"].includes(proposalRow.status) ? { status: "accepted", accepted_at: now } : {}),
+          payment_received_at: now,
+          payment_amount: (statement as unknown as { total_amount: number }).total_amount,
+          payment_reference: `statement:${statementId}`,
+        })
+        .eq("id", proposalId);
+    }
+  }
+
+  // Same reasoning applies to ad-hoc lead invoices (proforma_invoices) — no
+  // contract exists, always proforma-first. No mirror-back needed here: the
+  // /api/invoices/[id]/payment route already updates proforma_invoices itself.
+  if (proposalId || invoiceId) {
+    if (currentState === "gst_sent_awaiting_payment") {
+      await setHandoffState(supabase, statementId, "complete", trigger);
+      return;
+    }
+    await setHandoffState(supabase, statementId, "pi_paid_awaiting_gst", trigger);
+    return;
+  }
 
   // If GST invoice was already sent and we're now recording payment (e.g. bank
   // transfer on an Override/PI-cancelled statement), close the loop directly.
