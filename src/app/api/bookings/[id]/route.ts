@@ -536,17 +536,6 @@ export async function PATCH(
         }, { skipWaitlistOffer: true, revokeReason: "Booking checked out" })
           .catch((err: unknown) => console.error("[checkout] voucher revocation failed:", err));
 
-        // Create a Tally Inbox task when the booking is checked out AND already
-        // paid. The helper is idempotent (UNIQUE ON booking_id) and fire-and-forget.
-        void (async () => {
-          try {
-            const adminClient = await createAdminClient();
-            await maybeCreateBookingGstTask(adminClient, id);
-          } catch (err) {
-            console.error("[checkout] booking-gst-task creation failed:", err);
-          }
-        })();
-
         // Remove COSEC device access immediately on checkout (fire-and-forget).
         // The cron at /api/cron/cosec-booking-cleanup is the fallback for any
         // failures here, but triggering on checkout eliminates the up-to-30-min gap.
@@ -679,6 +668,22 @@ export async function PATCH(
     .single();
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  // Create a Tally Inbox task when the booking is checked out AND already
+  // paid. Must run after the update above commits — maybeCreateBookingGstTask
+  // re-reads booking.status from the DB, so firing it any earlier would see
+  // the pre-checkout status and silently no-op every time. The helper is
+  // idempotent (UNIQUE ON booking_id) and fire-and-forget.
+  if (body.status === "checked_out") {
+    void (async () => {
+      try {
+        const adminClient = createAdminClient();
+        await maybeCreateBookingGstTask(adminClient, id);
+      } catch (err) {
+        console.error("[checkout] booking-gst-task creation failed:", err);
+      }
+    })();
+  }
 
   logAudit(supabase, {
     entityType: "booking",
