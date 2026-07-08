@@ -109,6 +109,10 @@ export function TallyInboxClient() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [tab, setTab] = useState<FilterTab>("all");
+  // Primary split — rental/contract statements vs walk-in booking GST tasks.
+  // These are backed by entirely different tables (billing_statements vs
+  // booking_gst_tasks) and were previously stacked in one unlabeled list.
+  const [activeType, setActiveType] = useState<"contracts" | "bookings">("contracts");
   const [searchInput, setSearchInput] = useState("");
   const [searchTerm, setSearchTerm] = useState("");
   // Statement row state
@@ -476,6 +480,42 @@ export function TallyInboxClient() {
     }
   }, [load]);
 
+  // Per-type stats — data.rows / data.booking_rows already come scoped to the
+  // open/closed apiTab, so these are computed client-side (mirrors the
+  // combined reduce the API does server-side for data.stats).
+  const contractStats = useMemo(() => {
+    const list = data?.rows ?? [];
+    return list.reduce(
+      (acc, r) => {
+        acc.total_open += 1;
+        if (r.has_discrepancy) acc.discrepancies += 1;
+        else if (r.bucket === "gst_to_issue") acc.gst_to_issue += 1;
+        else if (r.bucket === "payment_to_record") acc.payments_to_record += 1;
+        if (r.aging_hours >= AGING_ESCALATE_HOURS) acc.aging_over_48h += 1;
+        return acc;
+      },
+      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0 },
+    );
+  }, [data]);
+
+  const bookingStats = useMemo(() => {
+    const list = (data?.booking_rows ?? []).filter((r) =>
+      tab === "closed" ? r.handoff_state === "complete" : r.handoff_state !== "complete",
+    );
+    return list.reduce(
+      (acc, r) => {
+        acc.total_open += 1;
+        if (r.has_discrepancy) acc.discrepancies += 1;
+        else if (r.bucket === "gst_to_issue") acc.gst_to_issue += 1;
+        if (r.aging_hours >= AGING_ESCALATE_HOURS) acc.aging_over_48h += 1;
+        return acc;
+      },
+      { gst_to_issue: 0, payments_to_record: 0, discrepancies: 0, aging_over_48h: 0, total_open: 0 },
+    );
+  }, [data, tab]);
+
+  const activeStats = activeType === "contracts" ? contractStats : bookingStats;
+
   const visibleRows = useMemo(() => {
     if (!data) return [];
     if (tab === "all" || tab === "closed") return data.rows;
@@ -512,12 +552,44 @@ export function TallyInboxClient() {
         </button>
       </div>
 
-      {/* Stat cards */}
+      {/* Primary type tabs — Contracts (rental billing_statements) vs Bookings (walk-in booking_gst_tasks) */}
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          onClick={() => setActiveType("contracts")}
+          className={`inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-semibold border transition-colors ${
+            activeType === "contracts"
+              ? "bg-foreground text-background border-foreground"
+              : "bg-muted/40 text-muted-foreground border-transparent hover:bg-muted"
+          }`}
+        >
+          Contracts
+          <span className={`text-xs rounded-full px-1.5 py-0.5 ${activeType === "contracts" ? "bg-background/20" : "bg-muted-foreground/10"}`}>
+            {contractStats.total_open}
+          </span>
+        </button>
+        <button
+          type="button"
+          onClick={() => setActiveType("bookings")}
+          className={`inline-flex items-center gap-1.5 rounded-lg px-4 py-2 text-sm font-semibold border transition-colors ${
+            activeType === "bookings"
+              ? "bg-foreground text-background border-foreground"
+              : "bg-muted/40 text-muted-foreground border-transparent hover:bg-muted"
+          }`}
+        >
+          Bookings
+          <span className={`text-xs rounded-full px-1.5 py-0.5 ${activeType === "bookings" ? "bg-background/20" : "bg-muted-foreground/10"}`}>
+            {bookingStats.total_open}
+          </span>
+        </button>
+      </div>
+
+      {/* Stat cards — scoped to the active type */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
-        <StatCard label="GST to issue" value={data?.stats.gst_to_issue ?? 0} icon={FileText} />
-        <StatCard label="Payments to record" value={data?.stats.payments_to_record ?? 0} icon={CheckCircle2} />
-        <StatCard label="Discrepancies" value={data?.stats.discrepancies ?? 0} icon={AlertCircle} variant="danger" />
-        <StatCard label={`Aging > ${AGING_ESCALATE_HOURS}h`} value={data?.stats.aging_over_48h ?? 0} icon={Clock} variant="warning" />
+        <StatCard label="GST to issue" value={activeStats.gst_to_issue} icon={FileText} />
+        <StatCard label="Payments to record" value={activeStats.payments_to_record} icon={CheckCircle2} />
+        <StatCard label="Discrepancies" value={activeStats.discrepancies} icon={AlertCircle} variant="danger" />
+        <StatCard label={`Aging > ${AGING_ESCALATE_HOURS}h`} value={activeStats.aging_over_48h} icon={Clock} variant="warning" />
       </div>
 
       {/* Filter tabs + search */}
@@ -527,11 +599,11 @@ export function TallyInboxClient() {
           // Closed tab can't sensibly show a global count, so it shows the
           // page-size result only when we're on it.
           const count =
-            t.key === "all" ? data?.stats.total_open
-            : t.key === "gst_to_issue" ? data?.stats.gst_to_issue
-            : t.key === "payment_to_record" ? data?.stats.payments_to_record
-            : t.key === "discrepancy" ? data?.stats.discrepancies
-            : t.key === "closed" && tab === "closed" ? data?.rows.length
+            t.key === "all" ? activeStats.total_open
+            : t.key === "gst_to_issue" ? activeStats.gst_to_issue
+            : t.key === "payment_to_record" ? activeStats.payments_to_record
+            : t.key === "discrepancy" ? activeStats.discrepancies
+            : t.key === "closed" && tab === "closed" ? (activeType === "contracts" ? visibleRows.length : visibleBookingRows.length)
             : undefined;
           const active = tab === t.key;
           return (
@@ -589,8 +661,8 @@ export function TallyInboxClient() {
         <div className="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground">
           Loading inbox…
         </div>
-      ) : visibleRows.length === 0 && visibleBookingRows.length === 0 ? (
-        <EmptyState tab={tab} totalOpen={data?.stats.total_open ?? 0} />
+      ) : (activeType === "contracts" ? visibleRows.length === 0 : visibleBookingRows.length === 0) ? (
+        <EmptyState tab={tab} totalOpen={activeStats.total_open} />
       ) : (
         <>
           {actionError && (
@@ -603,7 +675,7 @@ export function TallyInboxClient() {
             <CompletionBanner key={c.id} completion={c} onDismiss={() => dismissCompletion(c.id)} />
           ))}
           <ul className="rounded-lg border overflow-hidden divide-y" role="list">
-            {visibleRows.map((row) => (
+            {activeType === "contracts" && visibleRows.map((row) => (
               <InboxRowItem
                 key={row.statement_id}
                 row={row}
@@ -622,7 +694,7 @@ export function TallyInboxClient() {
                 onRecordPayment={() => openPayDialog(row)}
               />
             ))}
-            {visibleBookingRows.map((row) => (
+            {activeType === "bookings" && visibleBookingRows.map((row) => (
               <BookingInboxRowItem
                 key={row.task_id}
                 row={row}
@@ -641,7 +713,7 @@ export function TallyInboxClient() {
               />
             ))}
           </ul>
-          {tab === "closed" && (
+          {tab === "closed" && activeType === "contracts" && (
             <div className="flex items-center justify-between pt-2 text-xs text-muted-foreground">
               <span>Page {closedPage} · {visibleRows.length} records</span>
               <div className="flex gap-2">
