@@ -286,6 +286,9 @@ export type CreateContractInput = z.input<typeof createContractSchema>;
 export const createUsageChargeSchema = z.object({
   contract_id: z.string().uuid("Invalid contract ID").optional(),
   booking_id: z.string().uuid("Invalid booking ID").optional(),
+  // When set, the server recomputes quantity/unit_price/total against the
+  // facility's free_quota + cost_per_unit — see usage-charges/route.ts POST.
+  contract_facility_id: z.string().uuid("Invalid facility ID").optional(),
   description: z.string().min(1, "Description is required"),
   quantity: z.number().positive("Quantity must be positive"),
   unit_price: z.number().min(0, "Price must be non-negative"),
