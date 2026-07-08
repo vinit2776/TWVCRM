@@ -22,6 +22,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from "@/components/ui/select";
 import { Loader2, Send, X, Pencil, Plus, Printer, AlertCircle, ChevronDown, ChevronUp } from "lucide-react";
 import { toast } from "sonner";
 import { formatCurrency } from "@/lib/utils";
@@ -98,6 +101,15 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
 
   const addTotal = Math.round(addQty * addUnitPrice);
 
+  // ── Contract facilities (e.g. Manpower/OT) — picker for the New charge form ──
+  interface ContractFacility {
+    id: string; name: string; unit: string;
+    free_quota: number; cost_per_unit: number; hours_used_this_month: number;
+  }
+  const [facilities, setFacilities] = useState<ContractFacility[]>([]);
+  const [selectedFacilityId, setSelectedFacilityId] = useState<string>("");
+  const selectedFacility = facilities.find(f => f.id === selectedFacilityId) ?? null;
+
   // ── Print log state ─────────────────────────────────────────────────────────
   const [printBwUsed, setPrintBwUsed]         = useState("");
   const [printColourUsed, setPrintColourUsed] = useState("");
@@ -153,6 +165,8 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
       setAddQty(1);
       setAddUnitPrice(0);
       setAddNotes("");
+      setFacilities([]);
+      setSelectedFacilityId("");
       // Reset print state
       setPrintBwUsed("");
       setPrintColourUsed("");
@@ -234,6 +248,26 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, row?.contract_id, year, month]);
 
+  // ── Fetch contract facilities (e.g. Manpower/OT) for the New charge picker ──
+  useEffect(() => {
+    if (!open || !row) return;
+    fetch(`/api/contracts/${row.contract_id}/facilities`)
+      .then(r => r.json())
+      .then(json => setFacilities(json.data || []))
+      .catch(() => { /* non-critical — form still usable without the picker */ });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, row?.contract_id]);
+
+  // Pre-fill description + rate when a facility is picked — still editable after.
+  const selectFacility = (facilityId: string) => {
+    setSelectedFacilityId(facilityId);
+    if (facilityId === "custom") return;
+    const f = facilities.find(x => x.id === facilityId);
+    if (!f) return;
+    setAddDesc(f.name);
+    setAddUnitPrice(f.cost_per_unit);
+  };
+
   // ── Add-charge handler ──────────────────────────────────────────────────────
 
   const saveCharge = async () => {
@@ -250,6 +284,7 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           contract_id: row.contract_id,
+          contract_facility_id: selectedFacilityId || undefined,
           description: addDesc.trim(),
           quantity: addQty,
           unit_price: addUnitPrice,
@@ -261,10 +296,12 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || "Failed to add charge");
 
-      // Append to local items so it appears immediately in the review list
+      // Append to local items so it appears immediately in the review list.
+      // Use the server-computed total, not addTotal — when a facility is
+      // selected the server may reduce it for free quota already consumed.
       setLocalItems((prev) => [
         ...prev,
-        { description: addDesc.trim(), amount: addTotal, source: "ad_hoc" as const, item_id: json.data.id },
+        { description: addDesc.trim(), amount: Number(json.data.total), source: "ad_hoc" as const, item_id: json.data.id },
       ]);
       toast.success("Charge added");
       setShowAddCharge(false);
@@ -272,6 +309,7 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
       setAddQty(1);
       setAddUnitPrice(0);
       setAddNotes("");
+      setSelectedFacilityId("");
     } catch (e) {
       toast.error(e instanceof Error ? e.message : "Failed to add charge");
     } finally {
@@ -894,6 +932,31 @@ export function UsageReviewDialog({ open, onOpenChange, row, year, month, userRo
                       <X className="h-3.5 w-3.5" />
                     </button>
                   </div>
+
+                  {/* Facility picker — pre-fills description + rate below, still editable */}
+                  {facilities.length > 0 && (
+                    <div>
+                      <Select value={selectedFacilityId || "custom"} onValueChange={selectFacility}>
+                        <SelectTrigger className="h-8 text-sm">
+                          <SelectValue placeholder="Facility (optional)" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="custom">Custom charge (no facility)</SelectItem>
+                          {facilities.map(f => (
+                            <SelectItem key={f.id} value={f.id}>
+                              {f.name} — {formatCurrency(f.cost_per_unit)}/{f.unit}
+                              {f.free_quota > 0 ? ` (${f.free_quota} ${f.unit} free/mo)` : ""}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                      {selectedFacility && selectedFacility.free_quota > 0 && (
+                        <p className="text-[11px] text-muted-foreground mt-1">
+                          Free quota: {selectedFacility.free_quota} {selectedFacility.unit}/mo · already used this month: {selectedFacility.hours_used_this_month} {selectedFacility.unit}
+                        </p>
+                      )}
+                    </div>
+                  )}
 
                   {/* Description */}
                   <Input

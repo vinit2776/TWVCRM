@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { z } from "zod";
 import { logAudit } from "@/lib/audit";
-import { CONTRACT_QUOTA_LOCKED_STATUSES, CONTRACT_QUOTA_ROLES } from "@/lib/constants";
+import { CONTRACT_QUOTA_ROLES } from "@/lib/constants";
 
 const upsertSchema = z.object({
   name: z.string().min(1).max(100),
@@ -17,36 +17,10 @@ const patchSchema = z.object({
   cost_per_unit: z.number().min(0),
 });
 
-// Roles that can ever edit quotas (imported from constants, includes sales_rep)
+// Roles that can ever edit facility quotas (imported from constants, includes sales_rep).
+// Unlike contract_service_quotas, these roles may add/edit/delete facilities
+// regardless of contract status — including after activation.
 const QUOTA_ROLES: readonly string[] = CONTRACT_QUOTA_ROLES;
-
-// On an active (or beyond) contract, only admin may change quotas.
-// Returns an error response if the caller is not allowed, else null.
-async function enforceActiveGate(
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  supabase: any,
-  contractId: string,
-  userRole: string,
-): Promise<NextResponse | null> {
-  if (userRole === "admin") return null; // admin always allowed
-
-  const { data: contract, error } = await supabase
-    .from("contracts")
-    .select("status")
-    .eq("id", contractId)
-    .single();
-
-  if (error || !contract) {
-    return NextResponse.json({ error: "Contract not found" }, { status: 404 });
-  }
-  if ((CONTRACT_QUOTA_LOCKED_STATUSES as readonly string[]).includes(contract.status)) {
-    return NextResponse.json(
-      { error: "Quotas on an active contract can only be changed by an admin." },
-      { status: 403 }
-    );
-  }
-  return null;
-}
 
 // ── GET ──────────────────────────────────────────────────────────────────────
 // Returns active facilities for the contract, with current-month usage data
@@ -119,9 +93,6 @@ export async function POST(
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
 
-  const gate = await enforceActiveGate(supabase, contractId, dbUser.role);
-  if (gate) return gate;
-
   const body = await req.json();
   const result = upsertSchema.safeParse(body);
   if (!result.success) {
@@ -179,9 +150,6 @@ export async function PATCH(
   if (!dbUser || !QUOTA_ROLES.includes(dbUser.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-
-  const gate = await enforceActiveGate(supabase, contractId, dbUser.role);
-  if (gate) return gate;
 
   const body = await req.json();
   const result = patchSchema.safeParse(body);
@@ -243,9 +211,6 @@ export async function DELETE(
   if (!dbUser || !QUOTA_ROLES.includes(dbUser.role)) {
     return NextResponse.json({ error: "Forbidden" }, { status: 403 });
   }
-
-  const gate = await enforceActiveGate(supabase, contractId, dbUser.role);
-  if (gate) return gate;
 
   const { searchParams } = new URL(req.url);
   const facilityId = searchParams.get("facility_id");

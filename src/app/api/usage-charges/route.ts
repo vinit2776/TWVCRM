@@ -101,6 +101,13 @@ export async function POST(request: NextRequest) {
   // GST always matches the statement-level rate.
   let contractTaxPercentage: number | null = null;
 
+  // Defaults to the client-supplied values; overwritten below when
+  // contract_facility_id is set, since quota math is server-authoritative.
+  let facilityQuantity  = result.data.quantity;
+  let facilityUnitPrice = result.data.unit_price;
+  let facilityTotal     = Number(result.data.total);
+  let facilityStatus    = "pending";
+
   if (result.data.contract_id) {
     // Contract-based charge — must exist and be active
     const { data: contract, error: contractError } = await supabase
@@ -136,6 +143,51 @@ export async function POST(request: NextRequest) {
 
     leadId = contract.lead_id;
     contractTaxPercentage = contract.tax_percentage != null ? Number(contract.tax_percentage) : null;
+
+    // ── Facility-linked charge: quota is authoritative server-side ──────────
+    // The client may pre-fill/override description + rate from the facility's
+    // config, but quantity/total are always recomputed here against
+    // free_quota + prior consumption this month — mirrors the booking-side
+    // quota logic in /api/bookings (contractFacilityForQuota).
+    if (result.data.contract_facility_id) {
+      const { data: facility, error: facilityError } = await supabase
+        .from("contract_facilities")
+        .select("id, contract_id, name, free_quota, cost_per_unit, is_active")
+        .eq("id", result.data.contract_facility_id)
+        .eq("contract_id", result.data.contract_id)
+        .single();
+
+      if (facilityError || !facility) {
+        return NextResponse.json({ error: "Facility not found on this contract" }, { status: 404 });
+      }
+
+      const { data: existingCharges } = await supabase
+        .from("usage_charges")
+        .select("quantity")
+        .eq("contract_facility_id", facility.id)
+        .is("billing_statement_id", null)
+        .in("status", ["pending", "waived"])
+        .gte("charge_date", periodFirst)
+        .lte("charge_date", periodLast);
+
+      const consumed = (existingCharges || []).reduce((sum, c) => sum + Number(c.quantity || 0), 0);
+      const freeRemaining = Math.max(0, Number(facility.free_quota) - consumed);
+      const requestedQty = Number(result.data.quantity);
+      const overageQty = Math.max(0, requestedQty - freeRemaining);
+      const rate = Number(result.data.unit_price);
+
+      if (overageQty > 0) {
+        facilityQuantity = overageQty;
+        facilityUnitPrice = rate;
+        facilityTotal = parseFloat((overageQty * rate).toFixed(2));
+        facilityStatus = "pending";
+      } else {
+        facilityQuantity = requestedQty;
+        facilityUnitPrice = 0;
+        facilityTotal = 0;
+        facilityStatus = "waived";
+      }
+    }
   } else if (result.data.booking_id) {
     // Booking-based charge — booking must exist
     const { data: booking, error: bookingError } = await supabase
@@ -157,7 +209,7 @@ export async function POST(request: NextRequest) {
   // but the statement-level total applies 18%. For non-contract charges
   // (booking-based), the client-supplied rate (default 18%) is used.
   const gstRate = contractTaxPercentage ?? result.data.gst_rate ?? 18;
-  const subtotal = Number(result.data.total);
+  const subtotal = facilityTotal;
   const gstAmount = parseFloat((subtotal * gstRate / 100).toFixed(2));
   const totalWithGst = parseFloat((subtotal + gstAmount).toFixed(2));
 
@@ -166,9 +218,10 @@ export async function POST(request: NextRequest) {
     .insert({
       contract_id: result.data.contract_id ?? null,
       booking_id: result.data.booking_id ?? null,
+      contract_facility_id: result.data.contract_facility_id ?? null,
       description: result.data.description,
-      quantity: result.data.quantity,
-      unit_price: result.data.unit_price,
+      quantity: facilityQuantity,
+      unit_price: facilityUnitPrice,
       total: subtotal,
       gst_rate: gstRate,
       gst_amount: gstAmount,
@@ -178,7 +231,7 @@ export async function POST(request: NextRequest) {
       notes: result.data.notes,
       proof_path: body.proof_path || null,
       lead_id: leadId,
-      status: "pending",
+      status: facilityStatus,
       created_by: dbUser?.id,
     })
     .select("*")

@@ -316,8 +316,11 @@ export const CONTRACT_STATUSES = [
 
 export type ContractStatus = (typeof CONTRACT_STATUSES)[number];
 
-// Contracts in these statuses are "locked": only admin may edit quotas/facilities.
-// Mirrors the API gate in /api/contracts/[id]/facilities and /quotas.
+// Contracts in these statuses are "locked": only admin (or admin+manager, depending
+// on the resource) may edit *service* quotas once locked. Mirrors the API gate in
+// /api/contracts/[id]/quotas. Facilities (/api/contracts/[id]/facilities) are NOT
+// gated by this — any CONTRACT_QUOTA_ROLES member may add/edit/delete a facility
+// regardless of contract status, including after activation.
 export const CONTRACT_QUOTA_LOCKED_STATUSES: readonly ContractStatus[] = [
   "active",
   "renewal_in_progress",
@@ -327,8 +330,9 @@ export const CONTRACT_QUOTA_LOCKED_STATUSES: readonly ContractStatus[] = [
 ];
 
 // Roles that may ever edit contract quotas/facilities.
-// On locked contracts (active+), admin and manager are allowed (enforced by API gate).
-// On draft/sent/accepted contracts, all four roles can configure quotas.
+// On locked contracts (active+): service quotas restrict to admin (delete) or
+// admin+manager (add/edit); facilities have no such restriction — all four
+// roles may add/edit/delete facilities at any contract status.
 export const CONTRACT_QUOTA_ROLES = ["admin", "manager", "sales_rep", "accounts"] as const;
 export type ContractQuotaRole = (typeof CONTRACT_QUOTA_ROLES)[number];
 
