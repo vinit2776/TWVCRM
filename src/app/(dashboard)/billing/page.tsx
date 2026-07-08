@@ -57,7 +57,6 @@ import { MonthPicker } from "@/components/accounting/month-picker";
 import { PeriodStatusBar } from "@/components/accounting/period-status-bar";
 import { AgingBuckets } from "@/components/accounting/aging-buckets";
 import { ContractAccountingRow } from "@/components/accounting/contract-accounting-row";
-import { ActionRequiredBanner } from "@/components/accounting/action-required-banner";
 import { FinanceGuideCard, GuideReopenButton } from "@/components/finance/finance-guide-card";
 import { BillingPipelineBar } from "@/components/billing/billing-pipeline-bar";
 import { ProformaBillingCard } from "@/components/billing/proforma-billing-card";
@@ -879,12 +878,6 @@ export default function BillingPage() {
             isLocking={isLocking}
           />
           <AgingBuckets buckets={summary.aging_buckets} />
-          <ActionRequiredBanner
-            contracts={summary.contracts as { contract: { id: string; contract_number: string; title: string; lead?: { first_name: string; last_name: string; company?: string } }; outstanding: number; carried_forward: number }[]}
-            cashHandovers={pendingHandover}
-            gstEntries={gstEntries as { contract_id: string; contract_number: string; company: string; total_billable: number; total_paid: number; gst_invoice_number: string | null; gst_invoice_sent_at: string | null }[]}
-            onSwitchTab={setActiveTab}
-          />
         </>
       )}
 
