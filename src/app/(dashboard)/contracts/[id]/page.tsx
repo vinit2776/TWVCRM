@@ -23,6 +23,7 @@ import {
   Clock,
   Copy,
   Check,
+  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -70,6 +71,7 @@ import {
   DeclineRenewalDialog,
   EscalationWaiverSection,
 } from "@/components/contracts/contract-renewal-dialog";
+import { ContractRenewalEditDialog } from "@/components/contracts/contract-renewal-edit-dialog";
 import { ContractContactsPanel } from "@/components/contracts/contract-contacts-panel";
 import { ContractSpaceManager, validateSpaceAllocation } from "@/components/contracts/contract-space-manager";
 import { toast } from "sonner";
@@ -101,6 +103,7 @@ export default function ContractDetailPage({
   const [copiedLessee, setCopiedLessee] = useState(false);
   const [renewDialogOpen, setRenewDialogOpen] = useState(false);
   const [declineDialogOpen, setDeclineDialogOpen] = useState(false);
+  const [editTermsDialogOpen, setEditTermsDialogOpen] = useState(false);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const [renewalDraft, setRenewalDraft] = useState<any>(null);
   const signedDocInputRef = useRef<HTMLInputElement>(null);
@@ -609,6 +612,12 @@ export default function ContractDetailPage({
             >
               <FileText className="mr-2 h-4 w-4" />
               Addendum
+            </Button>
+          )}
+          {contract.is_renewal && contract.status === "draft" && ["admin", "manager", "sales_rep"].includes(userRole ?? "") && (
+            <Button variant="outline" onClick={() => setEditTermsDialogOpen(true)}>
+              <Pencil className="mr-2 h-4 w-4" />
+              Edit Terms
             </Button>
           )}
         </div>
@@ -1746,6 +1755,14 @@ export default function ContractDetailPage({
       <DeclineRenewalDialog
         open={declineDialogOpen}
         onOpenChange={setDeclineDialogOpen}
+        contract={contract}
+        onSuccess={() => fetchContract(false)}
+      />
+
+      {/* Edit Renewal Terms Dialog */}
+      <ContractRenewalEditDialog
+        open={editTermsDialogOpen}
+        onOpenChange={setEditTermsDialogOpen}
         contract={contract}
         onSuccess={() => fetchContract(false)}
       />
