@@ -68,6 +68,7 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
     status: "active" as "active" | "maintenance" | "retired",
     lifecycle_stage: "operational" as FacilityLifecycleStage,
     installation_date: "",
+    assigned_department: "", next_service_due: "",
     location_notes: "", notes: "", attention_notes: "",
   });
   const [customValues, setCustomValues] = useState<Record<string, unknown>>({});
@@ -111,6 +112,8 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
       status: (asset?.status || "active") as "active" | "maintenance" | "retired",
       lifecycle_stage: (asset?.lifecycle_stage || "operational") as FacilityLifecycleStage,
       installation_date: asset?.installation_date?.slice(0, 10) || "",
+      assigned_department: asset?.assigned_department || "",
+      next_service_due: asset?.next_service_due?.slice(0, 10) || "",
       location_notes: asset?.location_notes || "",
       notes: asset?.notes || "",
       attention_notes: asset?.attention_notes || "",
@@ -220,6 +223,8 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
           warranty_expiry: form.warranty_expiry || null,
           installation_date: form.installation_date || null,
           attention_notes: form.attention_notes || null,
+          assigned_department: form.assigned_department.trim() || null,
+          next_service_due: form.next_service_due || null,
           custom_field_values: customValues,
         }),
       });
@@ -368,6 +373,19 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
             {LIFECYCLE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
           <Hint>Current state — update this as the asset moves through its life.</Hint>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <Label className="text-xs">Assigned to (employee / dept.)</Label>
+          <Input value={form.assigned_department} onChange={(e) => setForm({ ...form, assigned_department: e.target.value })} placeholder="e.g. IT, or a person's name" className="mt-1" />
+          <Hint>Optional — who or which team owns this asset day-to-day.</Hint>
+        </div>
+        <div>
+          <Label className="text-xs">Next service due</Label>
+          <Input type="date" value={form.next_service_due} onChange={(e) => setForm({ ...form, next_service_due: e.target.value })} className="mt-1" />
+          <Hint>Optional — next planned preventive-maintenance date.</Hint>
         </div>
       </div>
 
@@ -605,6 +623,10 @@ export function FacilityAssetFormDialog({ open, onOpenChange, asset, defaultLoca
             {LIFECYCLE_OPTIONS.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
           </select>
         </div>
+      </div>
+      <div className="grid grid-cols-2 gap-3">
+        <div><Label className="text-xs">Assigned to (employee / dept.)</Label><Input value={form.assigned_department} onChange={(e) => setForm({ ...form, assigned_department: e.target.value })} placeholder="e.g. IT, or a person's name" className="mt-1" /></div>
+        <div><Label className="text-xs">Next service due</Label><Input type="date" value={form.next_service_due} onChange={(e) => setForm({ ...form, next_service_due: e.target.value })} className="mt-1" /></div>
       </div>
       <div>
         <Label className="text-xs">Status</Label>

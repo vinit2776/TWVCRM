@@ -51,7 +51,7 @@ export async function POST(
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
   const body = await request.json();
-  const { space_unit_id, occupant_name, occupant_email, occupant_phone, seat_label, start_date, notes } = body;
+  const { space_unit_id, occupant_name, occupant_email, occupant_phone, seat_label, loi_number, start_date, notes } = body;
 
   if (!space_unit_id) return NextResponse.json({ error: "space_unit_id is required" }, { status: 400 });
   if (!occupant_name?.trim()) return NextResponse.json({ error: "occupant_name is required" }, { status: 400 });
@@ -83,6 +83,7 @@ export async function POST(
       contract_id: id,
       location_id: contract.location_id,
       seat_label: seat_label?.trim() || null,
+      loi_number: loi_number?.trim() || null,
       occupant_name: occupant_name.trim(),
       occupant_email: occupant_email?.trim() || null,
       occupant_phone: occupant_phone?.trim() || null,
