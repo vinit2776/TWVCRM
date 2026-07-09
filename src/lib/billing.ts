@@ -97,6 +97,122 @@ interface LineItemSection {
   subtotal: number;
 }
 
+// ── Space allocation → rent line item enrichment ───────────────────────────
+// contract_space_allocations links a contract to one or more space_units
+// (Location/Name/Type/Seats). Most contracts predate this being wired into
+// billing, so a contract with no linked allocation keeps the plain
+// "Monthly rent (N seats)" line it's always had.
+
+const SPACE_UNIT_TYPE_LABELS: Record<string, string> = {
+  hot_desk: "Hot Desk",
+  dedicated_desk: "Dedicated Desk",
+  private_cabin: "Private Cabin",
+  managed_office: "Managed Office",
+  business_centre: "Business Centre",
+};
+
+type SpaceAllocationDetail = { name: string; type: string; capacity: number; locationName: string | null };
+
+/** contract_id → active space_unit allocations, for a set of contracts. */
+async function fetchSpaceAllocationsByContract(
+  supabase: SupabaseClient,
+  contractIds: string[]
+): Promise<Map<string, SpaceAllocationDetail[]>> {
+  const map = new Map<string, SpaceAllocationDetail[]>();
+  if (contractIds.length === 0) return map;
+
+  const { data: allocations } = await supabase
+    .from("contract_space_allocations")
+    .select("contract_id, space_unit:space_units(name, type, capacity, location_id)")
+    .in("contract_id", contractIds)
+    .eq("status", "active");
+
+  type SpaceUnitRow = { name: string; type: string; capacity: number; location_id: string };
+  type AllocationRow = { contract_id: string; space_unit: SpaceUnitRow | SpaceUnitRow[] | null };
+
+  const locationIds = new Set<string>();
+  const parsed: { contract_id: string; name: string; type: string; capacity: number; location_id: string }[] = [];
+  for (const row of (allocations ?? []) as AllocationRow[]) {
+    const unit = Array.isArray(row.space_unit) ? row.space_unit[0] : row.space_unit;
+    if (!unit) continue;
+    parsed.push({ contract_id: row.contract_id, name: unit.name, type: unit.type, capacity: Number(unit.capacity) || 1, location_id: unit.location_id });
+    if (unit.location_id) locationIds.add(unit.location_id);
+  }
+  if (parsed.length === 0) return map;
+
+  const { data: locations } = await supabase
+    .from("locations")
+    .select("id, name")
+    .in("id", Array.from(locationIds));
+  const locationNames = new Map((locations ?? []).map((l) => [l.id as string, l.name as string]));
+
+  for (const p of parsed) {
+    const list = map.get(p.contract_id) ?? [];
+    list.push({ name: p.name, type: p.type, capacity: p.capacity, locationName: locationNames.get(p.location_id) ?? null });
+    map.set(p.contract_id, list);
+  }
+  return map;
+}
+
+/**
+ * Splits a rent amount into one line item per allocated space unit
+ * (Location/Name/Type/Seats), falling back to a single plain line when the
+ * contract has no linked contract_space_allocations rows.
+ *
+ * `seats` on each item always reconciles to `fallbackSeats` (the contract's
+ * actual billed seat count), never to the room's physical capacity — a
+ * contract can bill for fewer seats than a room holds (e.g. 1 seat inside a
+ * 4-seat cabin), and Qty must reflect what's billed so Qty × Rate = Amount
+ * stays truthful. Room capacity is only used as a weighting proxy to split
+ * seats/amount proportionally across multiple rooms.
+ */
+function buildRentLineItems(
+  totalAmount: number,
+  fallbackSeats: number,
+  allocations: SpaceAllocationDetail[]
+): { description: string; seats: number; amount: number }[] {
+  if (allocations.length === 0) {
+    return [{
+      description: `Monthly rent${fallbackSeats ? ` (${fallbackSeats} seat${fallbackSeats > 1 ? "s" : ""})` : ""}`,
+      seats: fallbackSeats,
+      amount: totalAmount,
+    }];
+  }
+
+  const describe = (a: SpaceAllocationDetail, seats: number) =>
+    `Monthly rent | Location: ${a.locationName ?? "—"} | ${a.name} | ${SPACE_UNIT_TYPE_LABELS[a.type] ?? a.type} | ${seats} seat${seats > 1 ? "s" : ""}`;
+
+  if (allocations.length === 1) {
+    // Single room: attribute the contract's full billed seats to it regardless
+    // of the room's own capacity.
+    const a = allocations[0];
+    return [{ description: describe(a, fallbackSeats), seats: fallbackSeats, amount: totalAmount }];
+  }
+
+  // Multiple rooms: split both seats and amount proportionally by each room's
+  // relative capacity share (a reasonable weighting, not a claim that capacity
+  // itself is what's billed).
+  const capacitySum = allocations.reduce((s, a) => s + a.capacity, 0) || 1;
+  const items = allocations.map((a) => {
+    const share = a.capacity / capacitySum;
+    const seats = Math.max(1, Math.round(fallbackSeats * share));
+    return { description: describe(a, seats), seats, amount: Math.round(totalAmount * share) };
+  });
+
+  // Fix rounding drift on the last item so seats sum to fallbackSeats and
+  // amount sums to exactly totalAmount.
+  const seatDrift = fallbackSeats - items.reduce((s, i) => s + i.seats, 0);
+  if (seatDrift !== 0) items[items.length - 1].seats = Math.max(1, items[items.length - 1].seats + seatDrift);
+  const amountDrift = totalAmount - items.reduce((s, i) => s + i.amount, 0);
+  if (amountDrift !== 0) items[items.length - 1].amount += amountDrift;
+  // Description embeds seats, so rebuild it if drift changed the last item's seat count.
+  const last = items[items.length - 1];
+  const lastAlloc = allocations[allocations.length - 1];
+  items[items.length - 1] = { ...last, description: describe(lastAlloc, last.seats) };
+
+  return items;
+}
+
 // ── Helpers ───────────────────────────────────────────────────────────────
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
@@ -332,6 +448,9 @@ export async function generateMonthlyStatements(
     (moratoriumRows ?? []).map((m: { contract_id: string }) => m.contract_id)
   );
 
+  // 3c. Pre-fetch space allocations (Location/Name/Type/Seats) for rent line items
+  const spaceAllocationsByContract = await fetchSpaceAllocationsByContract(supabase, contractIds);
+
   // 4. Generate drafts
   for (const contract of contracts as Array<Record<string, unknown>>) {
     if (alreadyBilled.has(contract.id as string)) {
@@ -370,6 +489,8 @@ export async function generateMonthlyStatements(
 
       const baseAmount = Number(contract.subtotal || contract.total_amount);
       let prepaidRentAmount: number;
+      // set when prorated — persisted on the line item so the PDF can show the calculation
+      let rentBillableDays: number | null = null;
 
       if (contractEnd < prepaidFirstOfMonth) {
         // Contract ends before next month — no prepaid rent
@@ -385,21 +506,31 @@ export async function generateMonthlyStatements(
           prepaidRentAmount = baseAmount;
         } else {
           prepaidRentAmount = Math.round((baseAmount / prepaidDaysInMonth) * billableDays);
+          rentBillableDays = billableDays;
         }
       }
 
       const prepaidSeatQty = Number(contract.seats) || 1;
+      const prepaidRentItems = prepaidRentAmount > 0
+        ? buildRentLineItems(prepaidRentAmount, prepaidSeatQty, spaceAllocationsByContract.get(contract.id as string) ?? [])
+        : [];
       const prepaidSection: LineItemSection = {
         type: "prepaid_rent",
         label: `Prepaid Rent — ${monthLabel(prepaid.month, prepaid.year)}`,
-        items: prepaidRentAmount > 0
-          ? [{
-              description: `Monthly rent${contract.seats ? ` (${contract.seats} seat${Number(contract.seats) > 1 ? "s" : ""})` : ""}`,
-              qty: prepaidSeatQty,
-              unit_price: prepaidRentAmount / prepaidSeatQty,
-              amount: prepaidRentAmount,
-            }]
-          : [],
+        items: prepaidRentItems.map((it) => ({
+          description: it.description,
+          qty: it.seats,
+          unit_price: it.seats ? it.amount / it.seats : it.amount,
+          amount: it.amount,
+          // Persisted (not recomputed at display time) so the PDF breakdown always
+          // reflects the rate actually charged, even if the contract's rate later
+          // changes (e.g. a rate-phase escalation) before the PDF is re-downloaded.
+          ...(rentBillableDays !== null ? {
+            monthly_rate: baseAmount / prepaidSeatQty,
+            days_used: rentBillableDays,
+            days_in_month: prepaidDaysInMonth,
+          } : {}),
+        })),
         subtotal: prepaidRentAmount,
       };
 
@@ -753,6 +884,9 @@ export async function generateRentProformas(
     addonsByContractId.set(addon.contract_id, list);
   }
 
+  // Pre-fetch space allocations (Location/Name/Type/Seats) for rent line items
+  const spaceAllocationsByContract = await fetchSpaceAllocationsByContract(adminSupabase, contractIds);
+
   for (const contract of contracts as Array<Record<string, unknown>>) {
     const cid            = contract.id as string;
     const contractNumber = contract.contract_number as string;
@@ -850,18 +984,19 @@ export async function generateRentProformas(
         const addonNote = addonsSubtotal > 0 ? ` + ₹${addonsSubtotal.toLocaleString("en-IN")} add-ons` : "";
         const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || undefined;
         const previewSeatQty = Number(contract.seats) || 1;
+        const previewRentItems = buildRentLineItems(prepaidRentAmount, previewSeatQty, spaceAllocationsByContract.get(cid) ?? []);
         // Build line-item breakdown for the expandable detail view
         const previewLineItems: {
           description: string; amount: number; qty?: number; unit_price?: number; note?: string;
           monthly_rate?: number; days_used?: number; days_in_month?: number;
         }[] = [
-          {
-            description: `Monthly rent${contract.seats ? ` (${contract.seats} seat${Number(contract.seats) > 1 ? "s" : ""})` : ""}`,
-            amount: prepaidRentAmount,
-            qty: previewSeatQty,
-            unit_price: prepaidRentAmount / previewSeatQty,
+          ...previewRentItems.map((it) => ({
+            description: it.description,
+            amount: it.amount,
+            qty: it.seats,
+            unit_price: it.seats ? it.amount / it.seats : it.amount,
             ...(prepaidRentAmount < baseAmount ? { note: `Pro-rated (contract ends mid-month)` } : {}),
-          },
+          })),
           ...addonLineItems,
         ];
         result.preview.push({
@@ -910,15 +1045,16 @@ export async function generateRentProformas(
       }
 
       const liveSeatQty = Number(contract.seats) || 1;
+      const liveRentItems = buildRentLineItems(prepaidRentAmount, liveSeatQty, spaceAllocationsByContract.get(cid) ?? []);
       const lineItems = [{
         type: "prepaid_rent" as const,
         label: `Prepaid Rent — ${monthLabel(prepaid.month, prepaid.year)}`,
         items: [
-          {
-            description: `Monthly rent${contract.seats ? ` (${contract.seats} seat${Number(contract.seats) > 1 ? "s" : ""})` : ""}`,
-            qty: liveSeatQty,
-            unit_price: prepaidRentAmount / liveSeatQty,
-            amount: prepaidRentAmount,
+          ...liveRentItems.map((it) => ({
+            description: it.description,
+            qty: it.seats,
+            unit_price: it.seats ? it.amount / it.seats : it.amount,
+            amount: it.amount,
             // Persisted (not recomputed at display time) so the PDF breakdown always
             // reflects the rate actually charged, even if the contract's rate later
             // changes (e.g. a rate-phase escalation) before the PDF is re-downloaded.
@@ -927,7 +1063,7 @@ export async function generateRentProformas(
               days_used: rentBillableDays,
               days_in_month: prepaidDaysInMonth,
             } : {}),
-          },
+          })),
           ...addonLineItems,
         ],
         subtotal: totalPrepaidSubtotal,
