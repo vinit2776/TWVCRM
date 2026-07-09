@@ -711,6 +711,9 @@ export async function POST(request: NextRequest) {
       complimentary_details: complimentaryDetails,
       notes: input.notes,
       aggregator_booking_id: input.aggregator_booking_id || null,
+      purpose: input.purpose || null,
+      loi_number: input.loi_number || null,
+      access_provided_by: input.access_provided_by || null,
       num_attendees: input.num_attendees ? Number(input.num_attendees) : null,
       created_by: dbUser.id,
     })

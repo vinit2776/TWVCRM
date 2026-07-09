@@ -61,6 +61,7 @@ export async function PUT(
     "lifecycle_stage", "installation_date", "commissioned_at", "commissioned_by",
     "custom_field_values", "procurement_po_id",
     "location_notes", "notes", "attention_notes", "sort_order",
+    "assigned_department", "next_service_due",
   ];
   const uuidFields = new Set(["floor_id", "space_unit_id", "category_id", "procurement_po_id"]);
   for (const f of allowed) if (f in body) updates[f] = body[f];

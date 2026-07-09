@@ -48,6 +48,7 @@ export function SeatOccupantFormDialog({
   const [email, setEmail] = useState("");
   const [phone, setPhone] = useState("");
   const [seatLabel, setSeatLabel] = useState("");
+  const [loiNumber, setLoiNumber] = useState("");
   const [startDate, setStartDate] = useState(new Date().toISOString().split("T")[0]);
   const [notes, setNotes] = useState("");
   const [saving, setSaving] = useState(false);
@@ -60,6 +61,7 @@ export function SeatOccupantFormDialog({
     setEmail(occupant?.occupant_email || "");
     setPhone(occupant?.occupant_phone || "");
     setSeatLabel(occupant?.seat_label || "");
+    setLoiNumber(occupant?.loi_number || "");
     setStartDate(occupant?.start_date || new Date().toISOString().split("T")[0]);
     setNotes(occupant?.notes || "");
   }, [open, occupant, defaultUnitId, allocatedUnits, skipUnitStep]);
@@ -141,6 +143,7 @@ export function SeatOccupantFormDialog({
             occupant_email: email.trim() || null,
             occupant_phone: phone.trim() || null,
             seat_label: seatLabel.trim() || null,
+            loi_number: loiNumber.trim() || null,
             start_date: startDate,
             notes: notes.trim() || null,
           }),
@@ -155,6 +158,7 @@ export function SeatOccupantFormDialog({
             occupant_email: email.trim() || null,
             occupant_phone: phone.trim() || null,
             seat_label: seatLabel.trim() || null,
+            loi_number: loiNumber.trim() || null,
             start_date: startDate,
             notes: notes.trim() || null,
           }),
@@ -244,6 +248,16 @@ export function SeatOccupantFormDialog({
             onChange={(e) => setStartDate(e.target.value)}
           />
         </div>
+      </div>
+
+      <div className="space-y-1.5">
+        <Label htmlFor="occ-loi">LOI / agreement number <span className="text-xs text-muted-foreground">(optional)</span></Label>
+        <Input
+          id="occ-loi"
+          value={loiNumber}
+          onChange={(e) => setLoiNumber(e.target.value)}
+          placeholder="e.g. #00251-A"
+        />
       </div>
 
       <div className="space-y-1.5">

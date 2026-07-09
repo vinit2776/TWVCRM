@@ -20,6 +20,7 @@ export async function PUT(request: NextRequest, { params }: RouteParams) {
   if (body.occupant_email !== undefined) updates.occupant_email = body.occupant_email?.trim() || null;
   if (body.occupant_phone !== undefined) updates.occupant_phone = body.occupant_phone?.trim() || null;
   if (body.seat_label !== undefined) updates.seat_label = body.seat_label?.trim() || null;
+  if (body.loi_number !== undefined) updates.loi_number = body.loi_number?.trim() || null;
   if (body.start_date !== undefined) updates.start_date = body.start_date;
   if (body.end_date !== undefined) updates.end_date = body.end_date || null;
   if (body.notes !== undefined) updates.notes = body.notes?.trim() || null;
