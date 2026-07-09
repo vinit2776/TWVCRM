@@ -195,7 +195,8 @@ export function ContractInvoicesSection({ contractId, billingMode, contractStatu
                     </td>
                     <td className="py-2.5 pr-4">
                       <Link
-                        href={`/billing/statements/${s.id}`}
+                        href={`/api/billing-statements/${s.id}/proforma-pdf`}
+                        target="_blank"
                         className="font-mono text-xs text-primary hover:underline"
                       >
                         {s.statement_number}

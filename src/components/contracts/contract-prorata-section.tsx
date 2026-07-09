@@ -324,7 +324,7 @@ export function ContractProrataSection({ contract, userRole, onSuccess }: Props)
               size="sm"
               variant="ghost"
               className="w-full text-xs text-muted-foreground"
-              onClick={() => window.open(`/billing/statements/${contract.prorata_billing_statement_id}`, "_blank")}
+              onClick={() => window.open(`/api/billing-statements/${contract.prorata_billing_statement_id}/proforma-pdf`, "_blank")}
             >
               <ExternalLink className="mr-1.5 h-3 w-3" />
               View Statement
