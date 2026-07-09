@@ -18,6 +18,7 @@ export const PaymentSection = memo(function PaymentSection() {
     advancePaymentMode, setAdvancePaymentMode, advancePaymentAmount, setAdvancePaymentAmount,
     advancePaymentReference, setAdvancePaymentReference, razorpayEnabled,
     totalAmountWithGst, notes, setNotes, aggregatorBookingId, setAggregatorBookingId,
+    purpose, setPurpose, loiNumber, setLoiNumber, accessProvidedBy, setAccessProvidedBy,
     spaceId, startTime, endTime, locationId, setRecurringDialogOpen,
   } = useBookingForm();
 
@@ -133,6 +134,20 @@ export const PaymentSection = memo(function PaymentSection() {
           <div className="space-y-1.5 pt-1">
             <Label className="text-sm">Aggregator Booking ID <span className="text-muted-foreground font-normal text-xs">(Optional — if referred by an aggregator)</span></Label>
             <Input value={aggregatorBookingId} onChange={(e) => setAggregatorBookingId(e.target.value)} placeholder="e.g. AGG-12345" />
+          </div>
+          <div className="grid grid-cols-2 gap-3 pt-1">
+            <div className="space-y-1.5">
+              <Label className="text-sm">Purpose of Meeting <span className="text-muted-foreground font-normal text-xs">(Optional)</span></Label>
+              <Input value={purpose} onChange={(e) => setPurpose(e.target.value)} placeholder="e.g. Client meeting" />
+            </div>
+            <div className="space-y-1.5">
+              <Label className="text-sm">LOI No. <span className="text-muted-foreground font-normal text-xs">(Optional)</span></Label>
+              <Input value={loiNumber} onChange={(e) => setLoiNumber(e.target.value)} placeholder="e.g. #00251-A" />
+            </div>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-sm">Access Provided By <span className="text-muted-foreground font-normal text-xs">(Optional)</span></Label>
+            <Input value={accessProvidedBy} onChange={(e) => setAccessProvidedBy(e.target.value)} placeholder="e.g. Floor Incharge" />
           </div>
         </CardContent>
       </Card>

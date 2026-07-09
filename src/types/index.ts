@@ -987,6 +987,9 @@ export interface Booking {
   // Number of attendees collected at booking time — used to determine how
   // many WiFi vouchers to issue (1 voucher supports 2 device logins).
   num_attendees?: number | null;
+  loi_number?: string | null;
+  purpose?: string | null;
+  access_provided_by?: string | null;
   created_by?: string;
   created_at: string;
   updated_at: string;
@@ -2637,6 +2640,7 @@ export interface SpaceSeatOccupant {
   status: SeatOccupantStatus;
   transferred_to_id?: string;
   transferred_to?: SpaceSeatOccupant;
+  loi_number?: string | null;
   notes?: string;
   created_at: string;
   updated_at: string;
@@ -2740,6 +2744,8 @@ export interface FacilityAsset {
   location_notes?: string | null;
   notes?: string | null;
   attention_notes?: string | null;
+  assigned_department?: string | null;
+  next_service_due?: string | null;
   sort_order: number;
   created_by?: string | null;
   creator?: { id: string; full_name: string } | null;

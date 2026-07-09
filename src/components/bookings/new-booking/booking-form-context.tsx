@@ -138,6 +138,12 @@ export interface BookingFormState {
   setNotes: (v: string | ((prev: string) => string)) => void;
   aggregatorBookingId: string;
   setAggregatorBookingId: (v: string) => void;
+  purpose: string;
+  setPurpose: (v: string) => void;
+  loiNumber: string;
+  setLoiNumber: (v: string) => void;
+  accessProvidedBy: string;
+  setAccessProvidedBy: (v: string) => void;
   collectAdvancePayment: boolean;
   setCollectAdvancePayment: (v: boolean) => void;
   advancePaymentMode: string;

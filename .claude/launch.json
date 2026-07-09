@@ -4,7 +4,7 @@
     {
       "name": "twv-crm",
       "runtimeExecutable": "/bin/sh",
-      "runtimeArgs": ["-c", "cd '/Users/vinitchordia/Library/Mobile Documents/com~apple~CloudDocs/Projects/TWV CRM/.claude/worktrees/keen-tu-efa11d' && PATH=/opt/homebrew/bin:$PATH npm run dev"],
+      "runtimeArgs": ["-c", "cd ~/Projects/twv-crm-local && PATH=/opt/homebrew/bin:$PATH npm run dev"],
       "port": 3000,
       "autoPort": true
     }

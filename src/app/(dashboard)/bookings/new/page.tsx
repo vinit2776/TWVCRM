@@ -96,6 +96,9 @@ function NewBookingForm() {
   const [paymentReference, setPaymentReference] = useState("");
   const [notes, setNotes] = useState("");
   const [aggregatorBookingId, setAggregatorBookingId] = useState("");
+  const [purpose, setPurpose] = useState("");
+  const [loiNumber, setLoiNumber] = useState("");
+  const [accessProvidedBy, setAccessProvidedBy] = useState("");
   const [collectAdvancePayment, setCollectAdvancePayment] = useState(false);
   const [advancePaymentMode, setAdvancePaymentMode] = useState<string>("cash");
   const [advancePaymentReference, setAdvancePaymentReference] = useState("");
@@ -524,6 +527,9 @@ function NewBookingForm() {
         guest_email: guestEmail.trim() || undefined, guest_phone: guestPhone.trim() || undefined,
         guest_company: guestCompany.trim() || undefined, booker_gst_number: bookerGstNumber.trim().toUpperCase() || undefined,
         aggregator_booking_id: aggregatorBookingId.trim() || undefined,
+        purpose: purpose.trim() || undefined,
+        loi_number: loiNumber.trim() || undefined,
+        access_provided_by: accessProvidedBy.trim() || undefined,
         num_attendees: numAttendees ? parseInt(numAttendees, 10) : undefined,
         num_seats: isDayPass ? numSeats : undefined,
         facility_ids: selectedFacilities, payment_mode: paymentMode || undefined,
@@ -575,7 +581,7 @@ function NewBookingForm() {
     bookerPhone, spaceId, bookingDate, startTime, endTime, isDayPass, durationHours,
     selectedSpace, totalAmountWithGst, complimentaryReason, complimentaryDetails,
     customerType, contractId, leadId, guestName, guestEmail, guestPhone, guestCompany,
-    bookerGstNumber, aggregatorBookingId, numAttendees, numSeats, selectedFacilities,
+    bookerGstNumber, aggregatorBookingId, purpose, loiNumber, accessProvidedBy, numAttendees, numSeats, selectedFacilities,
     paymentMode, paymentReference, notes, effectiveRate, collectAdvancePayment,
     advancePaymentMode, advancePaymentAmount, advancePaymentReference, usePrepaid,
     activePurchase, appliedCredit, selectedChargeIds, sendSms, sendWhatsapp,
@@ -603,6 +609,7 @@ function NewBookingForm() {
     selectedFacilities, setSelectedFacilities,
     paymentMode, setPaymentMode, paymentReference, setPaymentReference,
     notes, setNotes, aggregatorBookingId, setAggregatorBookingId,
+    purpose, setPurpose, loiNumber, setLoiNumber, accessProvidedBy, setAccessProvidedBy,
     collectAdvancePayment, setCollectAdvancePayment,
     advancePaymentMode, setAdvancePaymentMode,
     advancePaymentReference, setAdvancePaymentReference,
@@ -632,7 +639,7 @@ function NewBookingForm() {
     bookerGstNumber, gstError, selectedCustomer,
     idProofFile, leadHasIdProof, idProofLookingUp, contracts,
     selectedFacilities, paymentMode, paymentReference, notes,
-    aggregatorBookingId, collectAdvancePayment, advancePaymentMode,
+    aggregatorBookingId, purpose, loiNumber, accessProvidedBy, collectAdvancePayment, advancePaymentMode,
     advancePaymentReference, advancePaymentAmount, razorpayEnabled,
     outstandingCharges, selectedChargeIds, expandedChargeId,
     isRecurring, recurringDialogOpen,

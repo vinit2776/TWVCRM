@@ -86,6 +86,7 @@ export async function POST(request: NextRequest) {
     lifecycle_stage = "operational", installation_date,
     custom_field_values, procurement_po_id,
     location_notes, notes, attention_notes, sort_order = 0,
+    assigned_department, next_service_due,
   } = body;
 
   if (!location_id || !category_id || !name || !asset_code) {
@@ -114,6 +115,8 @@ export async function POST(request: NextRequest) {
       location_notes: location_notes || null,
       notes: notes || null,
       attention_notes: attention_notes || null,
+      assigned_department: assigned_department || null,
+      next_service_due: next_service_due || null,
       sort_order: Number(sort_order),
       created_by: dbUser!.id,
     })
