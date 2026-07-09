@@ -184,7 +184,7 @@ export type UpdateTaskInput = z.infer<typeof updateTaskSchema>;
 // ==========================================
 // Proposal Validations
 // ==========================================
-const lineItemSchema = z.object({
+export const lineItemSchema = z.object({
   description: z.string().min(1, "Description is required"),
   quantity: z.number().positive("Quantity must be positive"),
   unit: z.string().optional(),
@@ -384,6 +384,9 @@ export const createBookingSchema = z.object({
   hourly_rate: z.number().min(0).optional(),
   settle_charge_ids: z.array(z.string().uuid()).optional(),
   aggregator_booking_id: z.string().optional(),
+  purpose: z.string().optional(),
+  loi_number: z.string().optional(),
+  access_provided_by: z.string().optional(),
   // Number of people attending — drives multi-voucher issuance (1 per 2 attendees)
   num_attendees: z.number().int().positive().optional(),
   // Number of day-pass seats — for daily-priced spaces; quantity × day_rate = total
