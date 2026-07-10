@@ -65,6 +65,10 @@ export async function GET(request: NextRequest) {
   const page = Math.max(1, parseInt(searchParams.get("page") || "1"));
   const limit = Math.min(50, Math.max(1, parseInt(searchParams.get("limit") || "25")));
   const offset = (page - 1) * limit;
+  // "all" bypasses pagination for summary/grouping views that need every matching row —
+  // capped at 1000 since this endpoint is always scoped to a department/date-range in practice.
+  const fetchAll = searchParams.get("all") === "1";
+  const ALL_ROWS_CAP = 1000;
 
   let query = supabase
     .from("purchase_requests")
@@ -72,8 +76,9 @@ export async function GET(request: NextRequest) {
       `*, locations(id, name), requester:users!purchase_requests_requested_by_fkey(id, full_name, email), approver:users!purchase_requests_approved_by_fkey(id, full_name, email)`,
       { count: "exact" }
     )
-    .order("created_at", { ascending: false })
-    .range(offset, offset + limit - 1);
+    .order("created_at", { ascending: false });
+
+  query = fetchAll ? query.limit(ALL_ROWS_CAP) : query.range(offset, offset + limit - 1);
 
   // Only procurement roles can see all; others are blocked at the route level
   if (!["admin", "manager", "office_admin"].includes(dbUser.role)) {
