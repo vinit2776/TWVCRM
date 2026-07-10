@@ -44,6 +44,5 @@ export function withProrationBreakdown(description: string, item: LineItem): str
   const { monthly_rate: monthlyRate, days_used: daysUsed, days_in_month: daysInMonth } = item;
   if (monthlyRate == null || daysUsed == null || daysInMonth == null) return description;
   const fmt = (n: number) => Number(n).toLocaleString("en-IN", { maximumFractionDigits: 0 });
-  const proratedRate = resolveLineItemRate(item);
-  return `${description}\nMonthly Rate: Rs. ${fmt(monthlyRate)} | Days: ${daysUsed} | Prorated Rate: Rs. ${fmt(proratedRate)}`;
+  return `${description}\nMonthly Rate: Rs. ${fmt(monthlyRate)} | Days: ${daysUsed}`;
 }
