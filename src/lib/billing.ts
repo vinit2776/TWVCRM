@@ -155,6 +155,28 @@ async function fetchSpaceAllocationsByContract(
 }
 
 /**
+ * contract_id → contract's own location name, used as a Location fallback when
+ * no specific room (contract_space_allocations) is mapped — every contract
+ * has a location, only some have a room assigned within it.
+ */
+async function fetchLocationNamesByContract(
+  supabase: SupabaseClient,
+  contracts: Array<{ id: string; location_id?: string | null }>
+): Promise<Map<string, string>> {
+  const map = new Map<string, string>();
+  const locationIds = [...new Set(contracts.map((c) => c.location_id).filter((id): id is string => !!id))];
+  if (locationIds.length === 0) return map;
+
+  const { data: locations } = await supabase.from("locations").select("id, name").in("id", locationIds);
+  const nameById = new Map((locations ?? []).map((l) => [l.id as string, l.name as string]));
+
+  for (const c of contracts) {
+    if (c.location_id && nameById.has(c.location_id)) map.set(c.id, nameById.get(c.location_id) as string);
+  }
+  return map;
+}
+
+/**
  * Splits a rent amount into one line item per allocated space unit
  * (Location/Name/Type/Seats), falling back to a single plain line when the
  * contract has no linked contract_space_allocations rows.
@@ -165,22 +187,28 @@ async function fetchSpaceAllocationsByContract(
  * 4-seat cabin), and Qty must reflect what's billed so Qty × Rate = Amount
  * stays truthful. Room capacity is only used as a weighting proxy to split
  * seats/amount proportionally across multiple rooms.
+ *
+ * `contractLocationName` is used when no room is mapped, so Location still
+ * shows even without a specific room; `billedMonthLabel` (e.g. "Jul26") is
+ * appended to every description regardless of proration or room mapping.
  */
 function buildRentLineItems(
   totalAmount: number,
   fallbackSeats: number,
-  allocations: SpaceAllocationDetail[]
+  allocations: SpaceAllocationDetail[],
+  contractLocationName: string | null,
+  billedMonthLabel: string
 ): { description: string; seats: number; amount: number }[] {
   if (allocations.length === 0) {
-    return [{
-      description: `Monthly rent${fallbackSeats ? ` (${fallbackSeats} seat${fallbackSeats > 1 ? "s" : ""})` : ""}`,
-      seats: fallbackSeats,
-      amount: totalAmount,
-    }];
+    const seatsLabel = fallbackSeats ? `${fallbackSeats} seat${fallbackSeats > 1 ? "s" : ""}` : "";
+    const description = contractLocationName
+      ? `Monthly rent | Location: ${contractLocationName}${seatsLabel ? ` | ${seatsLabel}` : ""} | ${billedMonthLabel}`
+      : `Monthly rent${seatsLabel ? ` (${seatsLabel})` : ""} | ${billedMonthLabel}`;
+    return [{ description, seats: fallbackSeats, amount: totalAmount }];
   }
 
   const describe = (a: SpaceAllocationDetail, seats: number) =>
-    `Monthly rent | Location: ${a.locationName ?? "—"} | ${a.name} | ${SPACE_UNIT_TYPE_LABELS[a.type] ?? a.type} | ${seats} seat${seats > 1 ? "s" : ""}`;
+    `Monthly rent | Location: ${a.locationName ?? contractLocationName ?? "—"} | ${a.name} | ${SPACE_UNIT_TYPE_LABELS[a.type] ?? a.type} | ${seats} seat${seats > 1 ? "s" : ""} | ${billedMonthLabel}`;
 
   if (allocations.length === 1) {
     // Single room: attribute the contract's full billed seats to it regardless
@@ -224,6 +252,13 @@ function istNow(): Date {
 /** Get month name + year label, e.g. "June 2026" */
 function monthLabel(month: number, year: number): string {
   return new Date(year, month - 1).toLocaleDateString("en-IN", { month: "long", year: "numeric" });
+}
+
+const MONTH_ABBREVIATIONS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+
+/** Get the MMMYY label for a billed month, e.g. "Jul26" — used on rent line-item descriptions. */
+function monthLabelShort(month: number, year: number): string {
+  return `${MONTH_ABBREVIATIONS[month - 1]}${String(year).slice(-2)}`;
 }
 
 /**
@@ -450,6 +485,10 @@ export async function generateMonthlyStatements(
 
   // 3c. Pre-fetch space allocations (Location/Name/Type/Seats) for rent line items
   const spaceAllocationsByContract = await fetchSpaceAllocationsByContract(supabase, contractIds);
+  const locationNamesByContract = await fetchLocationNamesByContract(
+    supabase,
+    contracts as Array<{ id: string; location_id?: string | null }>
+  );
 
   // 4. Generate drafts
   for (const contract of contracts as Array<Record<string, unknown>>) {
@@ -512,7 +551,13 @@ export async function generateMonthlyStatements(
 
       const prepaidSeatQty = Number(contract.seats) || 1;
       const prepaidRentItems = prepaidRentAmount > 0
-        ? buildRentLineItems(prepaidRentAmount, prepaidSeatQty, spaceAllocationsByContract.get(contract.id as string) ?? [])
+        ? buildRentLineItems(
+            prepaidRentAmount,
+            prepaidSeatQty,
+            spaceAllocationsByContract.get(contract.id as string) ?? [],
+            locationNamesByContract.get(contract.id as string) ?? null,
+            monthLabelShort(prepaid.month, prepaid.year)
+          )
         : [];
       const prepaidSection: LineItemSection = {
         type: "prepaid_rent",
@@ -886,6 +931,10 @@ export async function generateRentProformas(
 
   // Pre-fetch space allocations (Location/Name/Type/Seats) for rent line items
   const spaceAllocationsByContract = await fetchSpaceAllocationsByContract(adminSupabase, contractIds);
+  const locationNamesByContract = await fetchLocationNamesByContract(
+    adminSupabase,
+    contracts as Array<{ id: string; location_id?: string | null }>
+  );
 
   for (const contract of contracts as Array<Record<string, unknown>>) {
     const cid            = contract.id as string;
@@ -984,7 +1033,13 @@ export async function generateRentProformas(
         const addonNote = addonsSubtotal > 0 ? ` + ₹${addonsSubtotal.toLocaleString("en-IN")} add-ons` : "";
         const customerName = lead?.company || `${lead?.first_name || ""} ${lead?.last_name || ""}`.trim() || undefined;
         const previewSeatQty = Number(contract.seats) || 1;
-        const previewRentItems = buildRentLineItems(prepaidRentAmount, previewSeatQty, spaceAllocationsByContract.get(cid) ?? []);
+        const previewRentItems = buildRentLineItems(
+          prepaidRentAmount,
+          previewSeatQty,
+          spaceAllocationsByContract.get(cid) ?? [],
+          locationNamesByContract.get(cid) ?? null,
+          monthLabelShort(prepaid.month, prepaid.year)
+        );
         // Build line-item breakdown for the expandable detail view
         const previewLineItems: {
           description: string; amount: number; qty?: number; unit_price?: number; note?: string;
@@ -1045,7 +1100,13 @@ export async function generateRentProformas(
       }
 
       const liveSeatQty = Number(contract.seats) || 1;
-      const liveRentItems = buildRentLineItems(prepaidRentAmount, liveSeatQty, spaceAllocationsByContract.get(cid) ?? []);
+      const liveRentItems = buildRentLineItems(
+        prepaidRentAmount,
+        liveSeatQty,
+        spaceAllocationsByContract.get(cid) ?? [],
+        locationNamesByContract.get(cid) ?? null,
+        monthLabelShort(prepaid.month, prepaid.year)
+      );
       const lineItems = [{
         type: "prepaid_rent" as const,
         label: `Prepaid Rent — ${monthLabel(prepaid.month, prepaid.year)}`,
