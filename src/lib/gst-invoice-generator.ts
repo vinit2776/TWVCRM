@@ -308,9 +308,18 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
   const taxRate = data.taxPercentage || 18;
   const halfRate = taxRate / 2;
 
-  const tableColumns = data.isInterstate
-    ? ["#", "Description", "HSN/SAC", "Qty", "Rate", "Amount", `IGST @${taxRate}%`, "Total"]
-    : ["#", "Description", "HSN/SAC", "Qty", "Rate", "Amount", `CGST @${halfRate}%`, `SGST @${halfRate}%`, "Total"];
+  // Qty/Rate are hidden on the Proforma Invoice — it's a pre-payment estimate, not a
+  // tax document, so the compliance requirement to show them only applies to the real
+  // GST Tax Invoice.
+  const showQtyRate = !isProforma;
+
+  const tableColumns = [
+    "#", "Description", "HSN/SAC",
+    ...(showQtyRate ? ["Qty", "Rate"] : []),
+    "Amount",
+    ...(data.isInterstate ? [`IGST @${taxRate}%`] : [`CGST @${halfRate}%`, `SGST @${halfRate}%`]),
+    "Total",
+  ];
 
   const tableRows = data.lineItems.map((item, i) => {
     const itemCgst = Math.round(item.amount * (halfRate / 100));
@@ -318,9 +327,13 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
     const itemIgst = Math.round(item.amount * (taxRate / 100));
     const itemTotal = Math.round(item.amount) + (data.isInterstate ? itemIgst : itemCgst + itemSgst);
 
-    return data.isInterstate
-      ? [String(i + 1), item.description, item.hsnSac, String(item.qty), fmt(item.rate), fmt(item.amount), fmt(itemIgst), fmt(itemTotal)]
-      : [String(i + 1), item.description, item.hsnSac, String(item.qty), fmt(item.rate), fmt(item.amount), fmt(itemCgst), fmt(itemSgst), fmt(itemTotal)];
+    return [
+      String(i + 1), item.description, item.hsnSac,
+      ...(showQtyRate ? [String(item.qty), fmt(item.rate)] : []),
+      fmt(item.amount),
+      ...(data.isInterstate ? [fmt(itemIgst)] : [fmt(itemCgst), fmt(itemSgst)]),
+      fmt(itemTotal),
+    ];
   });
 
   autoTable(doc, {
@@ -334,7 +347,7 @@ export function generateGstInvoicePDF(data: GstInvoiceData): jsPDF {
       0: { cellWidth: 8, halign: "center" },
       1: { cellWidth: "auto" },
       2: { cellWidth: 16, halign: "center" },
-      3: { cellWidth: 12, halign: "center" },
+      ...(showQtyRate ? { 3: { cellWidth: 12, halign: "center" } } : {}),
     },
     margin: { left: 14, right: 14 },
   });
