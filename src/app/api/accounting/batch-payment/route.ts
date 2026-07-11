@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
+import { zodErrorResponse } from "@/lib/validations";
 
 const BANK_MODES = ["neft", "rtgs", "imps", "bank_transfer", "cheque"] as const;
 
@@ -71,7 +72,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const parsed = batchPaymentSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+    return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
   }
 
   const { batch_ref, payment_date, payment_mode, payment_reference, notes, bills } = parsed.data;

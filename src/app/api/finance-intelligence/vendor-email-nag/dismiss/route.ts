@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { recordDismissal } from "@/lib/finance-intelligence";
 import { z } from "zod";
+import { zodErrorResponse } from "@/lib/validations";
 
 const schema = z.object({ vendor_id: z.string().uuid() });
 
@@ -21,7 +22,7 @@ export async function POST(request: NextRequest) {
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
   const parsed = schema.safeParse(await request.json());
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   await recordDismissal(supabase, parsed.data.vendor_id, dbUser.id);
   return NextResponse.json({ ok: true });

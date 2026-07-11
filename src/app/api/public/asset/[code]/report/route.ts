@@ -4,6 +4,7 @@ import { z } from "zod";
 import { generateIssueNumber, computeSlaTarget, logIssueEvent } from "@/lib/facility";
 import { notifyIssueAssignee, notifyAdminsStaleAssignee } from "@/lib/facility-notifications";
 import type { FacilityScope } from "@/types";
+import { zodErrorResponse } from "@/lib/validations";
 
 const reportSchema = z.object({
   title: z.string().min(3).max(200),
@@ -40,7 +41,7 @@ export async function POST(
   const body = await request.json();
   const parsed = reportSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+    return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
   }
 
   // Check if the request comes from an authenticated user
