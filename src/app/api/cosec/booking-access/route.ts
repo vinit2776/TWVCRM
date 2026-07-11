@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { provisionBookingAccess } from "@/lib/provision-booking-access";
+import { zodErrorResponse } from "@/lib/validations";
 
 export const maxDuration = 30; // allow SMTP + COSEC device calls to complete
 
@@ -20,7 +21,7 @@ const schema = z.object({
  */
 export async function POST(request: NextRequest) {
   const parsed = schema.safeParse(await request.json());
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   const result = await provisionBookingAccess(parsed.data.booking_id);
 
