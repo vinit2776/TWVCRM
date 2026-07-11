@@ -1,11 +1,11 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import Link from "next/link";
 import {
   AlertCircle, CheckCircle, CreditCard, ExternalLink,
   FileText, ChevronDown, ChevronUp, Calendar, Download, BookOpen,
-  ArrowDownToLine,
+  ArrowDownToLine, Paperclip, UploadCloud, Loader2,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -35,7 +35,36 @@ type TdsReceivableRow = {
   contract_number: string | null;
   client_name: string;
   pan_number: string | null;
+  tds_certificate_path: string | null;
 };
+
+// ── Monthly grouping helper ─────────────────────────────────────
+type ReceivableMonthGroup = {
+  key: string;
+  year: number;
+  month: number;
+  rows: TdsReceivableRow[];
+  tdsTotal: number;
+  cashTotal: number;
+};
+
+function groupReceivableByMonth(rows: TdsReceivableRow[]): ReceivableMonthGroup[] {
+  const map = new Map<string, ReceivableMonthGroup>();
+  for (const r of rows) {
+    const d = new Date(r.payment_date + "T00:00:00");
+    const year = d.getFullYear();
+    const month = d.getMonth() + 1;
+    const key = `${year}-${month}`;
+    if (!map.has(key)) map.set(key, { key, year, month, rows: [], tdsTotal: 0, cashTotal: 0 });
+    const g = map.get(key)!;
+    g.rows.push(r);
+    g.tdsTotal += r.tds_amount;
+    g.cashTotal += r.amount;
+  }
+  return Array.from(map.values()).sort((a, b) =>
+    a.year !== b.year ? b.year - a.year : b.month - a.month
+  );
+}
 
 // ── Section display helper ────────────────────────────────────
 function fmtSection(code: string | null): string {
@@ -52,6 +81,10 @@ function TdsReceivablePanel() {
   const [loading, setLoading] = useState(true);
   const [quarter, setQuarter] = useState<string>("all");
   const [year, setYear] = useState(String(currentFyYear()));
+  const [collapsedMonths, setCollapsedMonths] = useState<Set<string>>(new Set());
+  const [uploadingId, setUploadingId] = useState<string | null>(null);
+  const pendingUploadRowId = useRef<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -96,6 +129,51 @@ function TdsReceivablePanel() {
     URL.revokeObjectURL(url);
     toast.success("CSV downloaded");
   }
+
+  function triggerCertificateUpload(rowId: string) {
+    pendingUploadRowId.current = rowId;
+    fileInputRef.current?.click();
+  }
+
+  async function handleCertificateFileSelected(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    const rowId = pendingUploadRowId.current;
+    e.target.value = "";
+    if (!file || !rowId) return;
+
+    setUploadingId(rowId);
+    try {
+      const fd = new FormData();
+      fd.append("file", file);
+      const res = await fetch(`/api/tds/receivable/${rowId}/certificate`, { method: "POST", body: fd });
+      const json = await res.json();
+      if (!res.ok) { toast.error(json.error || "Certificate upload failed"); return; }
+      toast.success("Certificate uploaded");
+      setRows((prev) => prev.map((r) =>
+        r.id === rowId ? { ...r, tds_certificate_path: json.data.tds_certificate_path } : r
+      ));
+    } finally {
+      setUploadingId(null);
+      pendingUploadRowId.current = null;
+    }
+  }
+
+  async function viewCertificate(rowId: string) {
+    const res = await fetch(`/api/tds/receivable/${rowId}/certificate`);
+    const json = await res.json();
+    if (!res.ok) { toast.error(json.error || "Could not open certificate"); return; }
+    window.open(json.data.download_url, "_blank", "noopener,noreferrer");
+  }
+
+  function toggleMonth(key: string) {
+    setCollapsedMonths((prev) => {
+      const next = new Set(prev);
+      if (next.has(key)) next.delete(key); else next.add(key);
+      return next;
+    });
+  }
+
+  const monthGroups = groupReceivableByMonth(rows);
 
   return (
     <div className="space-y-5">
@@ -159,7 +237,16 @@ function TdsReceivablePanel() {
         </div>
       )}
 
-      {/* Table */}
+      {/* Hidden file input shared by all per-row "Upload certificate" buttons */}
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="application/pdf,image/jpeg,image/png"
+        className="hidden"
+        onChange={handleCertificateFileSelected}
+      />
+
+      {/* Monthly groups */}
       {loading ? (
         <div className="space-y-2">
           {[...Array(4)].map((_, i) => <div key={i} className="animate-pulse bg-muted rounded h-10" />)}
@@ -171,64 +258,103 @@ function TdsReceivablePanel() {
           <p className="text-sm mt-1">When clients deduct TDS on payments, they appear here.</p>
         </div>
       ) : (
-        <div className="rounded-lg border overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-b">
-              <tr>
-                <th className="px-3 py-2 text-left">Date</th>
-                <th className="px-3 py-2 text-left">Client</th>
-                <th className="px-3 py-2 text-left">Contract</th>
-                <th className="px-3 py-2 text-left">Invoice</th>
-                <th className="px-3 py-2 text-left">Section</th>
-                <th className="px-3 py-2 text-right">TDS Amount</th>
-                <th className="px-3 py-2 text-right">Cash Received</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y">
-              {rows.map((r) => (
-                <tr key={r.id} className="hover:bg-gray-50">
-                  <td className="px-3 py-2.5 whitespace-nowrap text-xs">{formatDate(r.payment_date)}</td>
-                  <td className="px-3 py-2.5">
-                    <p className="font-medium">{r.client_name}</p>
-                    {r.pan_number && <p className="text-[10px] text-muted-foreground font-mono">{r.pan_number}</p>}
-                  </td>
-                  <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">{r.contract_number || "—"}</td>
-                  <td className="px-3 py-2.5 text-xs">
-                    {r.invoice_number
-                      ? <span className="font-mono font-medium">{r.invoice_number}</span>
-                      : <span className="text-muted-foreground">{r.statement_number || "—"}</span>}
-                    {r.period_start && (
-                      <p className="text-[10px] text-muted-foreground">
-                        {new Date(r.period_start + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" })}
-                      </p>
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5">
-                    {r.tds_section ? (
-                      <span className="inline-block px-1.5 py-0.5 rounded bg-teal-100 text-teal-800 text-[11px] font-mono font-semibold">
-                        {fmtSection(r.tds_section)}
-                      </span>
-                    ) : (
-                      <span className="text-muted-foreground text-xs">—</span>
-                    )}
-                  </td>
-                  <td className="px-3 py-2.5 text-right font-semibold text-teal-700">{formatCurrency(r.tds_amount)}</td>
-                  <td className="px-3 py-2.5 text-right text-muted-foreground">{formatCurrency(r.amount)}</td>
-                </tr>
-              ))}
-            </tbody>
-            <tfoot className="border-t bg-gray-50">
-              <tr>
-                <td colSpan={5} className="px-3 py-2 text-xs font-semibold text-right">Total</td>
-                <td className="px-3 py-2 text-right font-bold text-teal-700">
-                  {formatCurrency(rows.reduce((s, r) => s + r.tds_amount, 0))}
-                </td>
-                <td className="px-3 py-2 text-right font-bold text-muted-foreground">
-                  {formatCurrency(rows.reduce((s, r) => s + r.amount, 0))}
-                </td>
-              </tr>
-            </tfoot>
-          </table>
+        <div className="space-y-3">
+          {monthGroups.map((mg) => {
+            const collapsed = collapsedMonths.has(mg.key);
+            return (
+              <div key={mg.key} className="rounded-lg border overflow-hidden">
+                <button
+                  className="w-full flex items-center justify-between px-4 py-2.5 bg-gray-50 hover:bg-gray-100 transition-colors"
+                  onClick={() => toggleMonth(mg.key)}
+                >
+                  <span className="flex items-center gap-2 text-sm font-semibold text-gray-800">
+                    <Calendar className="h-3.5 w-3.5 text-muted-foreground" />
+                    {MONTH_NAMES[mg.month - 1]} {mg.year}
+                    <span className="text-xs font-normal text-muted-foreground">
+                      ({mg.rows.length} deduction{mg.rows.length !== 1 ? "s" : ""})
+                    </span>
+                  </span>
+                  <span className="flex items-center gap-3">
+                    <span className="text-sm font-bold text-teal-700">{formatCurrency(mg.tdsTotal)}</span>
+                    {collapsed ? <ChevronDown className="h-4 w-4 text-muted-foreground" /> : <ChevronUp className="h-4 w-4 text-muted-foreground" />}
+                  </span>
+                </button>
+
+                {!collapsed && (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead className="bg-gray-50 text-xs uppercase text-gray-600 border-y">
+                        <tr>
+                          <th className="px-3 py-2 text-left">Date</th>
+                          <th className="px-3 py-2 text-left">Client</th>
+                          <th className="px-3 py-2 text-left">Contract</th>
+                          <th className="px-3 py-2 text-left">Invoice</th>
+                          <th className="px-3 py-2 text-left">Section</th>
+                          <th className="px-3 py-2 text-right">TDS Amount</th>
+                          <th className="px-3 py-2 text-right">Cash Received</th>
+                          <th className="px-3 py-2 text-left">Certificate</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y">
+                        {mg.rows.map((r) => (
+                          <tr key={r.id} className="hover:bg-gray-50">
+                            <td className="px-3 py-2.5 whitespace-nowrap text-xs">{formatDate(r.payment_date)}</td>
+                            <td className="px-3 py-2.5">
+                              <p className="font-medium">{r.client_name}</p>
+                              {r.pan_number && <p className="text-[10px] text-muted-foreground font-mono">{r.pan_number}</p>}
+                            </td>
+                            <td className="px-3 py-2.5 font-mono text-xs text-muted-foreground">{r.contract_number || "—"}</td>
+                            <td className="px-3 py-2.5 text-xs">
+                              {r.invoice_number
+                                ? <span className="font-mono font-medium">{r.invoice_number}</span>
+                                : <span className="text-muted-foreground">{r.statement_number || "—"}</span>}
+                              {r.period_start && (
+                                <p className="text-[10px] text-muted-foreground">
+                                  {new Date(r.period_start + "T00:00:00").toLocaleDateString("en-IN", { timeZone: "Asia/Kolkata", month: "short", year: "numeric" })}
+                                </p>
+                              )}
+                            </td>
+                            <td className="px-3 py-2.5">
+                              {r.tds_section ? (
+                                <span className="inline-block px-1.5 py-0.5 rounded bg-teal-100 text-teal-800 text-[11px] font-mono font-semibold">
+                                  {fmtSection(r.tds_section)}
+                                </span>
+                              ) : (
+                                <span className="text-muted-foreground text-xs">—</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2.5 text-right font-semibold text-teal-700">{formatCurrency(r.tds_amount)}</td>
+                            <td className="px-3 py-2.5 text-right text-muted-foreground">{formatCurrency(r.amount)}</td>
+                            <td className="px-3 py-2.5">
+                              {uploadingId === r.id ? (
+                                <span className="flex items-center gap-1 text-xs text-muted-foreground">
+                                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Uploading…
+                                </span>
+                              ) : r.tds_certificate_path ? (
+                                <button
+                                  onClick={() => viewCertificate(r.id)}
+                                  className="flex items-center gap-1 text-xs text-teal-700 hover:underline"
+                                >
+                                  <Paperclip className="h-3.5 w-3.5" /> View
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => triggerCertificateUpload(r.id)}
+                                  className="flex items-center gap-1 text-xs text-muted-foreground hover:text-teal-700"
+                                >
+                                  <UploadCloud className="h-3.5 w-3.5" /> Upload
+                                </button>
+                              )}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            );
+          })}
         </div>
       )}
 

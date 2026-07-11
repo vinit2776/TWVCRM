@@ -66,6 +66,7 @@ export async function GET(request: NextRequest) {
       tds_section,
       payment_mode,
       payment_reference,
+      tds_certificate_path,
       billing_statement:billing_statements!billing_payments_billing_statement_id_fkey(
         id,
         statement_number,
@@ -111,6 +112,7 @@ export async function GET(request: NextRequest) {
       tds_section:      p.tds_section ?? null,
       payment_mode:     p.payment_mode,
       payment_reference: p.payment_reference ?? null,
+      tds_certificate_path: p.tds_certificate_path ?? null,
       statement_number: stmt?.statement_number ?? null,
       invoice_number:   stmt?.gst_invoice_number ?? null,
       period_start:     stmt?.period_start ?? null,
