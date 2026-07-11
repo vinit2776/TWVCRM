@@ -18,6 +18,7 @@ import { Loader2, CheckCircle, Upload, Plus, X, Send, FileCheck, Ban, RotateCcw,
 import { Textarea } from "@/components/ui/textarea";
 import { toast } from "sonner";
 import { formatDate, formatCurrency } from "@/lib/utils";
+import { computeSettlement } from "@/lib/settlement";
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { TallyStatusBadge } from "@/components/billing/tally-status-badge";
 import { BillingModeTag } from "@/components/billing/billing-mode-tag";
@@ -746,8 +747,7 @@ export function ViewStatementDialog({
             {/* Payment history — shown on finalized/exported statements */}
             {(statement.status === "finalized" || statement.status === "exported") && (() => {
               const payments = statement.billing_payments || [];
-              const totalReceived = payments.reduce((s, p) => s + Number(p.amount) + Number(p.tds_amount || 0), 0);
-              const balanceDue = Math.max(0, statement.total_amount - totalReceived);
+              const { totalPaid: totalReceived, balanceDue } = computeSettlement(statement.total_amount, payments);
               const isFullyPaid = statement.payment_status === "paid";
 
               return (
@@ -1220,9 +1220,7 @@ export function ViewStatementDialog({
           </Button>
           {/* Record Payment — finalized/exported, not yet fully paid */}
           {(statement?.status === "finalized" || statement?.status === "exported") && statement?.payment_status !== "paid" && onRecordPayment && (() => {
-            const payments = statement.billing_payments || [];
-            const totalReceived = payments.reduce((s, p) => s + Number(p.amount) + Number(p.tds_amount || 0), 0);
-            const balanceDue = Math.max(0, statement.total_amount - totalReceived);
+            const balanceDue = computeSettlement(statement.total_amount, statement.billing_payments).balanceDue;
             return (
               <Button
                 variant="default"
