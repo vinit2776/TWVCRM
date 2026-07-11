@@ -374,13 +374,19 @@ export async function GET(req: NextRequest) {
     // Discrepancy detection. The bridge sees a Tally voucher whose amount
     // doesn't match what we expected, OR the upload's amount diverges from
     // the statement total. Either case blocks send.
+    // Compare at whole-rupee level — Tally GST invoices are always rounded to
+    // the nearest rupee (standard round-off), so a statement total carrying
+    // paisa (e.g. ₹123334.40) will legitimately be invoiced as ₹123334. This
+    // mirrors the tolerance already applied client-side and at upload time
+    // (see upload-gst-invoice/route.ts) — don't flag a real accounting
+    // round-off as a discrepancy.
     let hasDiscrepancy = false;
     let discrepancyReason: string | null = null;
-    if (upload && Number(upload.invoice_amount).toFixed(2) !== Number(s.total_amount).toFixed(2)) {
+    if (upload && Math.round(Number(upload.invoice_amount)) !== Math.round(Number(s.total_amount))) {
       hasDiscrepancy = true;
       discrepancyReason = `Upload amount ₹${upload.invoice_amount} does not match statement total ₹${s.total_amount}`;
     } else if (snapshot && snapshot.voucher_amount != null &&
-               Number(snapshot.voucher_amount).toFixed(2) !== Number(s.total_amount).toFixed(2)) {
+               Math.round(Number(snapshot.voucher_amount)) !== Math.round(Number(s.total_amount))) {
       hasDiscrepancy = true;
       discrepancyReason = `Tally voucher amount ₹${snapshot.voucher_amount} does not match statement total ₹${s.total_amount}`;
     }
@@ -712,9 +718,11 @@ export async function GET(req: NextRequest) {
     const customerHasGstin = !!customerGstin;
     const upload = bookingUploadsMap.get(t.id) ?? null;
 
+    // Whole-rupee comparison — see the matching comment on the statement
+    // discrepancy check above.
     let hasDiscrepancy = false;
     let discrepancyReason: string | null = null;
-    if (upload && Number(upload.invoice_amount).toFixed(2) !== Number(t.booking?.total_amount_with_gst ?? 0).toFixed(2)) {
+    if (upload && Math.round(Number(upload.invoice_amount)) !== Math.round(Number(t.booking?.total_amount_with_gst ?? 0))) {
       hasDiscrepancy = true;
       discrepancyReason = `Upload amount ₹${upload.invoice_amount} does not match booking total ₹${t.booking?.total_amount_with_gst}`;
     }
