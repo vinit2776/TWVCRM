@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { z } from "zod";
 import { createIrpClient, loadPublicConfig, loadCredentials } from "@/lib/e-invoice";
 import { recordIrnCancelled } from "@/lib/e-invoice/persist-invoice";
+import { zodErrorResponse } from "@/lib/validations";
 
 const requestSchema = z.object({
   gst_invoice_id: z.string().uuid(),
@@ -39,7 +40,7 @@ export async function POST(request: NextRequest) {
 
   const parsed = requestSchema.safeParse(await request.json());
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
   }
 
   // ── Load gst_invoice ────────────────────────────────────────────────────

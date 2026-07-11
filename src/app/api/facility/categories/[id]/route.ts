@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { hasRole, FACILITY_ROLES } from "@/lib/facility";
 import { z } from "zod";
+import { zodErrorResponse } from "@/lib/validations";
 
 const assigneeSchema = z.object({
   default_assignee_id: z.string().uuid().nullable(),
@@ -32,7 +33,7 @@ export async function PATCH(
   const body = await request.json();
   const parsed = assigneeSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+    return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
   }
 
   const { data: existing } = await supabase

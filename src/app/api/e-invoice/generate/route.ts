@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
 import { z } from "zod";
+import { zodErrorResponse } from "@/lib/validations";
 import {
   createIrpClient,
   loadPublicConfig,
@@ -43,7 +44,7 @@ export async function POST(request: NextRequest) {
 
   const parsed = requestSchema.safeParse(await request.json());
   if (!parsed.success) {
-    return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+    return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
   }
 
   // ── Load gst_invoice + items ────────────────────────────────────────────
