@@ -33,6 +33,7 @@ import {
 import { t } from "@/lib/translations";
 import { useLanguage, LanguageProvider } from "@/providers/language-provider";
 import { STOCK_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS } from "@/lib/constants";
+import { BeverageLogForm } from "@/components/procurement/beverage-log-form";
 import Link from "next/link";
 import { cn } from "@/lib/utils";
 
@@ -129,6 +130,7 @@ function StepIndicator({ step, lang }: { step: WizardStep; lang: string }) {
 
 function ConsumptionPageContent() {
   const { lang, toggleLang } = useLanguage();
+  const [activeTab, setActiveTab] = useState<"materials" | "beverages">("materials");
   const [step, setStep] = useState<WizardStep>(1);
 
   // User + locations
@@ -400,6 +402,29 @@ function ConsumptionPageContent() {
         </div>
       </div>
 
+      <Tabs value={activeTab} onValueChange={(v) => setActiveTab(v as "materials" | "beverages")}>
+        <TabsList>
+          <TabsTrigger value="materials">
+            {lang === "en" ? "Materials" : "பொருட்கள்"}
+          </TabsTrigger>
+          <TabsTrigger value="beverages">
+            {lang === "en" ? "Coffee / Beverages" : "காபி / பானங்கள்"}
+          </TabsTrigger>
+        </TabsList>
+      </Tabs>
+
+      {activeTab === "beverages" && (
+        <BeverageLogForm
+          lang={lang}
+          locationsLoading={locationsLoading}
+          availableLocations={availableLocations}
+          selectedLocationId={selectedLocationId}
+          onSelectLocation={setSelectedLocationId}
+        />
+      )}
+
+      {activeTab === "materials" && (
+      <>
       <StepIndicator step={step} lang={lang} />
 
       {/* ── STEP 1: Location ─────────────────────────────────────────────────── */}
@@ -755,6 +780,8 @@ function ConsumptionPageContent() {
             </Button>
           </div>
         </div>
+      )}
+      </>
       )}
     </div>
   );

@@ -799,6 +799,7 @@ export type AuditEntityType =
   | "location"
   | "stock_transfer"
   | "consumption_log"
+  | "beverage_log"
   | "location_floor"
   | "space_unit"
   | "contract_space_allocation"
@@ -2499,6 +2500,37 @@ export interface ConsumptionLog {
   logger?: { id: string; full_name?: string } | null;
   consumption_log_items?: ConsumptionLogItem[];
   consumption_corrections?: ConsumptionCorrection[];
+}
+
+export type BeverageType =
+  | "tea"
+  | "warm_milk"
+  | "espresso"
+  | "cappuccino"
+  | "coffee_latte"
+  | "flat_white"
+  | "ristretto"
+  | "milk_foam";
+
+export interface BeverageLogItem {
+  id: string;
+  beverage_log_id: string;
+  drink_type: BeverageType;
+  quantity: number;
+}
+
+export interface BeverageLog {
+  id: string;
+  location_id: string;
+  logged_by: string;
+  logged_at: string;
+  notes?: string;
+  photo_path?: string | null;
+  photo_url?: string | null;
+  created_at: string;
+  locations?: { id: string; name: string } | null;
+  logger?: { id: string; full_name?: string } | null;
+  beverage_log_items?: BeverageLogItem[];
 }
 
 // ==========================================
