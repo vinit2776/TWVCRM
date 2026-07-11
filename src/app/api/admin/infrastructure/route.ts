@@ -20,7 +20,7 @@ const TABLES = [
   "locations",
   "spaces",
   "invoices",
-  "audit_logs",
+  "audit_trail",
   "voucher_issuances",
   "booking_facilities",
   "usage_charges",

@@ -58,7 +58,7 @@ export async function GET(
     if (billIds && billIds.length > 0) {
       const ids = billIds.map((b: { id: string }) => b.id);
       const { data: lastLog } = await supabase
-        .from("audit_logs")
+        .from("audit_trail")
         .select("changes")
         .eq("entity_type", "vendor_bill")
         .eq("action", "email_sent")
