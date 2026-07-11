@@ -1505,6 +1505,24 @@ export const VENDOR_CATEGORY_LABELS: Record<string, string> = {
 export const ITEM_UNITS = ["kg", "litre", "packet", "box", "piece", "roll", "dozen", "bottle", "bag", "set", "pair", "month", "quarter", "year", "nos", "can", "ton"] as const;
 export type ItemUnit = (typeof ITEM_UNITS)[number];
 
+/** Vending machine drink types tracked on the Consumption > Beverages tab. A pure usage tally — not linked to ingredient stock. */
+export const BEVERAGE_TYPES = [
+  "tea", "warm_milk", "espresso", "cappuccino",
+  "coffee_latte", "flat_white", "ristretto", "milk_foam",
+] as const;
+export type BeverageType = (typeof BEVERAGE_TYPES)[number];
+
+export const BEVERAGE_TYPE_LABELS: Record<string, string> = {
+  tea: "Tea",
+  warm_milk: "Warm Milk",
+  espresso: "Espresso",
+  cappuccino: "Cappuccino",
+  coffee_latte: "Coffee Latte",
+  flat_white: "Flat White",
+  ristretto: "Ristretto",
+  milk_foam: "Milk Foam",
+};
+
 export const GST_RATES = [0, 5, 12, 18, 28] as const;
 export const GST_RATE_LABELS: Record<number, string> = {
   0: "0% (Exempt)",
