@@ -17,6 +17,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { messaging } from "@/lib/whatsapp";
 import { getCachedSettings } from "@/lib/app-settings-cache";
+import { totalPaid as settlementTotalPaid, balanceDue as settlementBalanceDue, settlementAmount } from "@/lib/settlement";
 
 const IST_OFFSET_MS = 5.5 * 60 * 60 * 1000;
 
@@ -317,11 +318,13 @@ export async function sendOneReminder(
   // link still tracks against the full statement; if the customer has paid
   // partially, the partial-payment note in the email tells them to pay the
   // balance via bank transfer / UPI (or reply for a fresh balance-only link).
-  const total = Math.round(Number(s.total_amount));
+  // Paid-to-date includes TDS (same settlement definition as the payment
+  // route) — a TDS-bearing partial payment must not inflate the reminder's
+  // balance figure.
   const { data: pays } = await admin
-    .from("billing_payments").select("amount").eq("billing_statement_id", s.id);
-  const paidSoFar = Math.round((pays || []).reduce((acc: number, p: { amount: number }) => acc + Number(p.amount), 0));
-  const balanceDue = Math.max(0, total - paidSoFar);
+    .from("billing_payments").select("amount, tds_amount").eq("billing_statement_id", s.id);
+  const paidSoFar = Math.round(settlementTotalPaid(pays));
+  const balanceDue = settlementBalanceDue(s.total_amount as number, paidSoFar);
   const isPartial = paidSoFar > 0 && balanceDue > 0;
   const amountStr = fmtINR(balanceDue);
 
@@ -373,7 +376,7 @@ export async function sendOneReminder(
       // Pass signed days so the banner can pick the right wording for
       // pre-due (green "due in X days"), due-today (amber), and overdue (red).
       daysOverdue,
-      originalTotal: isPartial ? fmtINR(total) : null,
+      originalTotal: isPartial ? fmtINR(settlementAmount(s.total_amount as number)) : null,
       paidSoFar:     isPartial ? fmtINR(paidSoFar) : null,
       // Early GST override — show invoice number and cancelled PI for continuity
       gstInvoiceNumber: isEarlyGst ? (s.gst_invoice_number as string) : null,

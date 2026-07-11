@@ -52,6 +52,7 @@ const ViewStatementDialog = dynamic(
 import { BillingLifecycleStatus } from "@/components/billing/billing-lifecycle-status";
 import { formatDate, formatCurrency } from "@/lib/utils";
 import { TDS_CLIENT_SECTIONS } from "@/lib/constants";
+import { computeSettlement } from "@/lib/settlement";
 import { toast } from "sonner";
 import { MonthPicker } from "@/components/accounting/month-picker";
 import { PeriodStatusBar } from "@/components/accounting/period-status-bar";
@@ -990,9 +991,7 @@ export default function BillingPage() {
                   onRecordStatementPayment={(statementId) => {
                     // eslint-disable-next-line @typescript-eslint/no-explicit-any
                     const stmtData = (cs as any).billing_statement;
-                    const pmts: Array<{ amount: number; tds_amount?: number }> = stmtData?.billing_payments || [];
-                    const paid = pmts.reduce((s, p) => s + Number(p.amount) + Number(p.tds_amount || 0), 0);
-                    const balance = Math.max(0, Number(stmtData?.total_amount || 0) - paid);
+                    const balance = computeSettlement(stmtData?.total_amount, stmtData?.billing_payments).balanceDue;
                     setRecordPaymentStatementId(statementId);
                     setRecordPaymentBalance(balance);
                     setRecordPaymentDialogOpen(true);

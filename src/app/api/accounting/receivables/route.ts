@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
+import { paymentCredit, balanceDue } from "@/lib/settlement";
 
 /**
  * GET /api/accounting/receivables
@@ -57,14 +58,16 @@ export async function GET(_req: NextRequest) {
 
   const statementIds = (statements || []).map((s) => s.id as string);
   // One round-trip to sum payments per statement instead of N selects.
+  // Paid-to-date includes TDS (same settlement definition as the payment
+  // route) — a TDS-bearing partial payment must not inflate balance_due.
   let paidByStatement = new Map<string, number>();
   if (statementIds.length > 0) {
     const { data: pays } = await supabase
       .from("billing_payments")
-      .select("billing_statement_id, amount")
+      .select("billing_statement_id, amount, tds_amount")
       .in("billing_statement_id", statementIds);
-    paidByStatement = (pays || []).reduce((map, p: { billing_statement_id: string; amount: number }) => {
-      map.set(p.billing_statement_id, (map.get(p.billing_statement_id) || 0) + Number(p.amount));
+    paidByStatement = (pays || []).reduce((map, p: { billing_statement_id: string; amount: number; tds_amount: number | null }) => {
+      map.set(p.billing_statement_id, (map.get(p.billing_statement_id) || 0) + paymentCredit(p));
       return map;
     }, new Map<string, number>());
   }
@@ -76,7 +79,7 @@ export async function GET(_req: NextRequest) {
 
   const rows = (statements || []).map((s) => {
     const paid = paidByStatement.get(s.id as string) || 0;
-    const balance = Math.max(0, Number(s.total_amount) - paid);
+    const balance = balanceDue(s.total_amount as number, paid);
     let daysOverdue: number | null = null;
     if (s.due_date) {
       const dueMs = Date.parse((s.due_date as string) + "T00:00:00Z");

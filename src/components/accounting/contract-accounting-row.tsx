@@ -5,6 +5,7 @@ import { ChevronDown, ChevronRight, IndianRupee, Send, Receipt, CheckCircle, Cal
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { totalPaid as settlementTotalPaid, balanceDue as settlementBalanceDue } from "@/lib/settlement";
 import { FacilityUsageForm } from "./facility-usage-form";
 import { AddContractPaymentDialog } from "./add-contract-payment-dialog";
 import { AddUsageChargeDialog } from "@/components/billing/add-usage-charge-dialog";
@@ -275,10 +276,10 @@ export function ContractAccountingRow({
 
   const stmtPayments = statement?.billing_payments || [];
   const totalReceived = isFinalized
-    ? stmtPayments.reduce((s, p) => s + Number(p.amount) + Number(p.tds_amount || 0), 0)
+    ? settlementTotalPaid(stmtPayments)
     : summary.total_paid_this_month;
   const balanceDue = isFinalized
-    ? Math.max(0, Number(statement?.total_amount || 0) - totalReceived)
+    ? settlementBalanceDue(statement?.total_amount ?? 0, totalReceived)
     : summary.outstanding;
 
   return (

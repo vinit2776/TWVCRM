@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
+import { paymentCredit, balanceDue } from "@/lib/settlement";
 
 /**
  * GET /api/dashboard/cash-aging
@@ -72,9 +73,24 @@ export async function GET() {
       .in("payment_status", ["unpaid", "partially_paid"]),
   ]);
 
+  // Receivables age on the outstanding balance, not the full invoice total —
+  // partial payments (including TDS deductions) reduce what's actually owed.
+  // Same settlement definition as the payment route and the AR view.
+  const stmtIds = (statements ?? []).map((s) => s.id as string);
+  const paidByStmt = new Map<string, number>();
+  if (stmtIds.length > 0) {
+    const { data: pays } = await adminSupabase
+      .from("billing_payments")
+      .select("billing_statement_id, amount, tds_amount")
+      .in("billing_statement_id", stmtIds);
+    for (const p of pays ?? []) {
+      paidByStmt.set(p.billing_statement_id, (paidByStmt.get(p.billing_statement_id) || 0) + paymentCredit(p));
+    }
+  }
+
   const recvRows = (statements ?? []).map((s) => ({
     ref_date: s.period_end,
-    amount: Number(s.total_amount ?? 0),
+    amount: balanceDue(s.total_amount as number, paidByStmt.get(s.id as string) || 0),
   }));
   const payRows = (bills ?? []).map((b) => ({
     ref_date: b.due_date ?? b.invoice_date ?? today,
