@@ -114,9 +114,16 @@ export async function POST(
 
   const totalPaid = (allPayments || []).reduce((s, p) => s + Number(p.amount) + Number(p.tds_amount || 0), 0);
   const invoiceAmount = Number(statement.total_amount);
+  // Settle against the whole-rupee amount, not the raw (possibly paisa-bearing)
+  // total. Tally GST invoices are always rounded to the nearest rupee, so the
+  // customer only ever pays the rounded figure — comparing against the raw
+  // total would leave the statement permanently short by a few paise and
+  // never flip to "paid". Mirrors the tolerance used in the Tally inbox
+  // discrepancy check and the GST invoice upload validation.
+  const settlementAmount = Math.round(invoiceAmount);
 
   let newPaymentStatus = "unpaid";
-  if (totalPaid >= invoiceAmount) {
+  if (totalPaid >= settlementAmount) {
     newPaymentStatus = "paid";
   } else if (totalPaid > 0) {
     newPaymentStatus = "partially_paid";
@@ -167,6 +174,6 @@ export async function POST(
     data: payment,
     payment_status: newPaymentStatus,
     total_paid: totalPaid,
-    balance_due: Math.max(0, invoiceAmount - totalPaid),
+    balance_due: Math.max(0, settlementAmount - totalPaid),
   });
 }
