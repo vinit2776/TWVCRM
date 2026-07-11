@@ -76,6 +76,15 @@ export function formatCurrency(amount: number): string {
   }).format(amount);
 }
 
+export function getMonthDateRange(year: number, month: number): { from: string; to: string } {
+  // Build the date strings from local calendar fields directly — going through
+  // toISOString() (UTC) would shift the date backward by a day in timezones ahead of
+  // UTC (e.g. IST), silently rolling the range into the previous month.
+  const pad = (n: number) => String(n).padStart(2, "0");
+  const lastDay = new Date(year, month, 0).getDate();
+  return { from: `${year}-${pad(month)}-01`, to: `${year}-${pad(month)}-${pad(lastDay)}` };
+}
+
 export function getInitials(name: string): string {
   return name
     .split(" ")

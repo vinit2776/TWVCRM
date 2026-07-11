@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useState, useEffect, useCallback } from "react";
+import { Fragment, Suspense, useState, useEffect, useCallback, useMemo } from "react";
 import { useCurrentUser } from "@/providers/current-user-provider";
 import Link from "next/link";
 import { useRouter, useSearchParams } from "next/navigation";
@@ -11,14 +11,78 @@ import { Input } from "@/components/ui/input";
 import {
   Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
 } from "@/components/ui/select";
+import { MonthPicker } from "@/components/accounting/month-picker";
 import { EmptyState } from "@/components/shared/empty-state";
 import { TableSkeleton } from "@/components/shared/loading-skeleton";
 import {
   PR_STATUSES, PR_STATUS_LABELS, PR_STATUS_COLORS,
   PROCUREMENT_DEPARTMENTS, PROCUREMENT_DEPARTMENT_LABELS, PROCUREMENT_DEPARTMENT_COLORS,
 } from "@/lib/constants";
-import { formatDate, formatCurrency } from "@/lib/utils";
+import { formatDate, formatCurrency, getMonthDateRange } from "@/lib/utils";
 import type { PurchaseRequest } from "@/types";
+
+interface LocationGroup {
+  locationName: string;
+  requests: PurchaseRequest[];
+  count: number;
+  totalAmount: number;
+}
+
+interface ComparisonRow {
+  locationName: string;
+  countA: number;
+  amountA: number;
+  countB: number;
+  amountB: number;
+  deltaAmount: number;
+  deltaPct: number | null; // null = new spend this period (no baseline)
+}
+
+function groupByLocation(items: PurchaseRequest[]): LocationGroup[] {
+  const map = new Map<string, LocationGroup>();
+  for (const pr of items) {
+    const key = pr.locations?.name ?? "Unspecified Location";
+    let group = map.get(key);
+    if (!group) {
+      group = { locationName: key, requests: [], count: 0, totalAmount: 0 };
+      map.set(key, group);
+    }
+    group.requests.push(pr);
+    group.count += 1;
+    group.totalAmount += pr.total_estimated_amount || 0;
+  }
+  return Array.from(map.values()).sort((a, b) => b.totalAmount - a.totalAmount);
+}
+
+function buildComparisonRows(groupsA: LocationGroup[], groupsB: LocationGroup[]): ComparisonRow[] {
+  const names = new Set<string>([
+    ...groupsA.map((g) => g.locationName),
+    ...groupsB.map((g) => g.locationName),
+  ]);
+  return Array.from(names)
+    .map((locationName) => {
+      const a = groupsA.find((g) => g.locationName === locationName);
+      const b = groupsB.find((g) => g.locationName === locationName);
+      const countA = a?.count ?? 0;
+      const amountA = a?.totalAmount ?? 0;
+      const countB = b?.count ?? 0;
+      const amountB = b?.totalAmount ?? 0;
+      // Delta reads as "month A vs month B" (A is the primary/left-hand picker) — positive means
+      // A spent more than B, matching the "June vs May" framing shown in the toolbar.
+      const deltaAmount = amountA - amountB;
+      const deltaPct = amountB > 0 ? (deltaAmount / amountB) * 100 : amountA > 0 ? null : 0;
+      return { locationName, countA, amountA, countB, amountB, deltaAmount, deltaPct };
+    })
+    .sort((x, y) => y.amountA + y.amountB - (x.amountA + x.amountB));
+}
+
+function getPreviousMonth(year: number, month: number) {
+  return month === 1 ? { year: year - 1, month: 12 } : { year, month: month - 1 };
+}
+
+function monthLabel(year: number, month: number) {
+  return new Date(year, month - 1, 1).toLocaleString("en-IN", { month: "short", year: "numeric" });
+}
 
 // Inner component — uses useSearchParams, must be inside <Suspense>
 function PurchaseRequestsContent() {
@@ -35,11 +99,50 @@ function PurchaseRequestsContent() {
   const [deptFilter, setDeptFilter] = useState(() => urlParams?.get("department") ?? "");
   const [searchInput, setSearchInput] = useState("");
   const [search, setSearch] = useState("");
-  // Hidden filters set from URL (budget drill-through)
-  const [fromDate] = useState(() => urlParams?.get("from_date") ?? "");
-  const [toDate] = useState(() => urlParams?.get("to_date") ?? "");
+  // Hidden filter set from URL (budget drill-through) — not exposed in the UI
   const [expenditureType] = useState(() => urlParams?.get("expenditure_type") ?? "");
   const isBudgetView = urlParams?.get("budget_view") === "1";
+
+  // Month filter — defaults to the URL's from_date (budget drill-through) or the current month.
+  const [viewMonth, setViewMonth] = useState(() => {
+    const fd = urlParams?.get("from_date");
+    if (fd) {
+      const d = new Date(fd + "T00:00:00");
+      return { year: d.getFullYear(), month: d.getMonth() + 1 };
+    }
+    const now = new Date();
+    return { year: now.getFullYear(), month: now.getMonth() + 1 };
+  });
+  const [useAllTime, setUseAllTime] = useState(false);
+  const [compareMode, setCompareMode] = useState(false);
+  const [compareMonth, setCompareMonth] = useState(() => getPreviousMonth(viewMonth.year, viewMonth.month));
+
+  const [locationGroups, setLocationGroups] = useState<LocationGroup[]>([]);
+  const [compareRows, setCompareRows] = useState<ComparisonRow[]>([]);
+
+  const { from: monthFrom, to: monthTo } = useMemo(
+    () => getMonthDateRange(viewMonth.year, viewMonth.month),
+    [viewMonth]
+  );
+  const flatFromDate = useAllTime ? "" : monthFrom;
+  const flatToDate = useAllTime ? "" : monthTo;
+  const showFlatList = Boolean(search) || useAllTime;
+
+  // Push from_date/to_date into the URL only when the user explicitly picks a month
+  // (shareable/bookmarkable, consistent with the existing budget-drill-through param
+  // convention) — deliberately NOT a reactive effect on monthFrom/monthTo: Next.js can
+  // remount this Suspense-bound component when searchParams change via router.replace,
+  // which would re-run this same effect and cascade the month backward indefinitely.
+  const handleMonthChange = useCallback((year: number, month: number) => {
+    setViewMonth({ year, month });
+    setUseAllTime(false);
+    const { from, to } = getMonthDateRange(year, month);
+    const params = new URLSearchParams(urlParams?.toString() ?? "");
+    params.set("from_date", from);
+    params.set("to_date", to);
+    router.replace(`/procurement/requests?${params.toString()}`, { scroll: false });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Debounce search: wait 600 ms and require ≥3 chars before querying
   useEffect(() => {
@@ -60,8 +163,8 @@ function PurchaseRequestsContent() {
     if (statusFilter) params.set("status", statusFilter);
     if (deptFilter) params.set("department", deptFilter);
     if (search) params.set("search", search);
-    if (fromDate) params.set("from_date", fromDate);
-    if (toDate) params.set("to_date", toDate);
+    if (flatFromDate) params.set("from_date", flatFromDate);
+    if (flatToDate) params.set("to_date", flatToDate);
     if (expenditureType) params.set("expenditure_type", expenditureType);
     const res = await fetch(`/api/procurement/requests?${params}`);
     if (res.ok) {
@@ -70,14 +173,74 @@ function PurchaseRequestsContent() {
       setPagination(json.pagination);
     }
     setLoading(false);
-  }, [page, statusFilter, deptFilter, search, fromDate, toDate, expenditureType]);
+  }, [page, statusFilter, deptFilter, search, flatFromDate, flatToDate, expenditureType]);
 
-  useEffect(() => { fetchRequests(); }, [fetchRequests]);
+  const fetchAllForRange = useCallback(async (from: string, to: string): Promise<PurchaseRequest[]> => {
+    const params = new URLSearchParams({ all: "1", from_date: from, to_date: to });
+    if (statusFilter) params.set("status", statusFilter);
+    if (deptFilter) params.set("department", deptFilter);
+    if (expenditureType) params.set("expenditure_type", expenditureType);
+    const res = await fetch(`/api/procurement/requests?${params}`);
+    if (!res.ok) return [];
+    const json = await res.json();
+    return json.data || [];
+  }, [statusFilter, deptFilter, expenditureType]);
 
-  // Format month label from from_date for the budget banner
-  const budgetMonthLabel = fromDate
-    ? new Date(fromDate + "T00:00:00").toLocaleString("en-IN", { month: "long", year: "numeric" })
-    : "";
+  useEffect(() => {
+    let cancelled = false;
+    async function run() {
+      if (showFlatList) {
+        await fetchRequests();
+        return;
+      }
+      setLoading(true);
+      if (compareMode) {
+        const rangeA = getMonthDateRange(viewMonth.year, viewMonth.month);
+        const rangeB = getMonthDateRange(compareMonth.year, compareMonth.month);
+        const [itemsA, itemsB] = await Promise.all([
+          fetchAllForRange(rangeA.from, rangeA.to),
+          fetchAllForRange(rangeB.from, rangeB.to),
+        ]);
+        if (cancelled) return;
+        setCompareRows(buildComparisonRows(groupByLocation(itemsA), groupByLocation(itemsB)));
+      } else {
+        const items = await fetchAllForRange(monthFrom, monthTo);
+        if (cancelled) return;
+        setLocationGroups(groupByLocation(items));
+      }
+      if (!cancelled) setLoading(false);
+    }
+    run();
+    return () => { cancelled = true; };
+  }, [showFlatList, compareMode, viewMonth, compareMonth, monthFrom, monthTo, fetchRequests, fetchAllForRange]);
+
+  const budgetMonthLabel = monthLabel(viewMonth.year, viewMonth.month);
+
+  const totalRequestCount = useMemo(
+    () => locationGroups.reduce((sum, g) => sum + g.count, 0),
+    [locationGroups]
+  );
+  const totalAmount = useMemo(
+    () => locationGroups.reduce((sum, g) => sum + g.totalAmount, 0),
+    [locationGroups]
+  );
+  const compareTotals = useMemo(() => {
+    return compareRows.reduce(
+      (acc, r) => ({
+        countA: acc.countA + r.countA,
+        amountA: acc.amountA + r.amountA,
+        countB: acc.countB + r.countB,
+        amountB: acc.amountB + r.amountB,
+      }),
+      { countA: 0, amountA: 0, countB: 0, amountB: 0 }
+    );
+  }, [compareRows]);
+
+  const headerCountLabel = showFlatList
+    ? `${pagination.total} total requests`
+    : compareMode
+      ? `${compareTotals.countA + compareTotals.countB} requests across ${compareRows.length} locations`
+      : `${totalRequestCount} requests across ${locationGroups.length} locations · ${budgetMonthLabel}`;
 
   return (
     <div className="space-y-4">
@@ -99,7 +262,7 @@ function PurchaseRequestsContent() {
       <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold">Material Requests</h1>
-          <p className="text-sm text-muted-foreground">{pagination.total} total requests</p>
+          <p className="text-sm text-muted-foreground">{headerCountLabel}</p>
         </div>
         <div className="flex items-center gap-2 flex-wrap">
           {/* Search */}
@@ -158,13 +321,185 @@ function PurchaseRequestsContent() {
         </div>
       </div>
 
+      {/* Month filter / All time / Compare — hidden while searching, since search always uses the flat list */}
+      {!search && (
+        <div className="flex items-center gap-2 flex-wrap">
+          <MonthPicker
+            year={viewMonth.year}
+            month={viewMonth.month}
+            onChange={handleMonthChange}
+          />
+          <Button
+            variant={useAllTime ? "default" : "outline"}
+            size="sm"
+            onClick={() => { setUseAllTime((v) => !v); setCompareMode(false); }}
+          >
+            All time
+          </Button>
+          {!useAllTime && (
+            <Button
+              variant={compareMode ? "default" : "outline"}
+              size="sm"
+              onClick={() => setCompareMode((v) => !v)}
+            >
+              Compare
+            </Button>
+          )}
+          {!useAllTime && compareMode && (
+            <>
+              <span className="text-sm text-muted-foreground">vs</span>
+              <MonthPicker
+                year={compareMonth.year}
+                month={compareMonth.month}
+                onChange={(year, month) => setCompareMonth({ year, month })}
+              />
+            </>
+          )}
+        </div>
+      )}
+
       {loading ? (
         <TableSkeleton rows={8} />
-      ) : requests.length === 0 ? (
+      ) : showFlatList ? (
+        requests.length === 0 ? (
+          <EmptyState
+            icon={ClipboardList}
+            title="No material requests"
+            description="Create your first material request to get started."
+            actionLabel="New Request"
+            onAction={() => router.push("/procurement/requests/new")}
+          />
+        ) : (
+          <div className="rounded-md border overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/50">
+                  <th className="px-4 py-3 text-left font-medium">PR #</th>
+                  <th className="px-4 py-3 text-left font-medium">Department</th>
+                  <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Location</th>
+                  <th className="px-4 py-3 text-left font-medium">Status</th>
+                  {canSeePrices && <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Est. Amount</th>}
+                  <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Requested By</th>
+                  <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Date</th>
+                </tr>
+              </thead>
+              <tbody>
+                {requests.map((pr) => (
+                  <tr
+                    key={pr.id}
+                    className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
+                    onClick={() => router.push(`/procurement/requests/${pr.id}`)}
+                  >
+                    <td className="px-4 py-3 font-mono text-xs font-medium">
+                      <Link
+                        href={`/procurement/requests/${pr.id}`}
+                        className="text-primary hover:underline"
+                        onClick={(e) => e.stopPropagation()}
+                      >
+                        {pr.pr_number}
+                      </Link>
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge variant="secondary" className={PROCUREMENT_DEPARTMENT_COLORS[pr.department]}>
+                        {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}
+                      </Badge>
+                    </td>
+                    <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
+                      {pr.locations?.name ?? "—"}
+                    </td>
+                    <td className="px-4 py-3">
+                      <Badge variant="secondary" className={PR_STATUS_COLORS[pr.status]}>
+                        {PR_STATUS_LABELS[pr.status]}
+                      </Badge>
+                    </td>
+                    {canSeePrices && (
+                      <td className="px-4 py-3 text-right hidden md:table-cell font-medium">
+                        {pr.total_estimated_amount > 0 ? formatCurrency(pr.total_estimated_amount) : "—"}
+                      </td>
+                    )}
+                    <td className="px-4 py-3 hidden lg:table-cell text-muted-foreground">
+                      {pr.requester?.full_name ?? pr.requester?.email ?? "—"}
+                    </td>
+                    <td className="px-4 py-3 hidden lg:table-cell text-muted-foreground">
+                      {formatDate(pr.created_at)}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )
+      ) : compareMode ? (
+        compareRows.length === 0 ? (
+          <EmptyState
+            icon={ClipboardList}
+            title="No material requests"
+            description="No requests found for either month with the current filters."
+          />
+        ) : (
+          <div className="rounded-md border overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/50">
+                  <th className="px-4 py-3 text-left font-medium">Location</th>
+                  <th className="px-4 py-3 text-right font-medium">{monthLabel(viewMonth.year, viewMonth.month)} Count</th>
+                  {canSeePrices && <th className="px-4 py-3 text-right font-medium">{monthLabel(viewMonth.year, viewMonth.month)} Amount</th>}
+                  <th className="px-4 py-3 text-right font-medium">{monthLabel(compareMonth.year, compareMonth.month)} Count</th>
+                  {canSeePrices && <th className="px-4 py-3 text-right font-medium">{monthLabel(compareMonth.year, compareMonth.month)} Amount</th>}
+                  {canSeePrices && <th className="px-4 py-3 text-right font-medium">Δ Amount</th>}
+                  {canSeePrices && <th className="px-4 py-3 text-right font-medium">Δ %</th>}
+                </tr>
+              </thead>
+              <tbody>
+                {compareRows.map((row) => (
+                  <tr key={row.locationName} className="border-b hover:bg-muted/30">
+                    <td className="px-4 py-3 font-medium">{row.locationName}</td>
+                    <td className="px-4 py-3 text-right text-muted-foreground">{row.countA}</td>
+                    {canSeePrices && <td className="px-4 py-3 text-right">{formatCurrency(row.amountA)}</td>}
+                    <td className="px-4 py-3 text-right text-muted-foreground">{row.countB}</td>
+                    {canSeePrices && <td className="px-4 py-3 text-right">{formatCurrency(row.amountB)}</td>}
+                    {canSeePrices && (
+                      <td className={`px-4 py-3 text-right font-medium ${row.deltaAmount > 0 ? "text-red-600" : row.deltaAmount < 0 ? "text-green-600" : ""}`}>
+                        {row.deltaAmount > 0 ? "+" : ""}{formatCurrency(row.deltaAmount)}
+                      </td>
+                    )}
+                    {canSeePrices && (
+                      <td className={`px-4 py-3 text-right ${row.deltaAmount > 0 ? "text-red-600" : row.deltaAmount < 0 ? "text-green-600" : ""}`}>
+                        {row.deltaPct === null ? "New" : `${row.deltaPct > 0 ? "+" : ""}${row.deltaPct.toFixed(1)}%`}
+                      </td>
+                    )}
+                  </tr>
+                ))}
+              </tbody>
+              <tfoot>
+                <tr className="border-t-2 bg-muted/60 font-semibold">
+                  <td className="px-4 py-3">Total</td>
+                  <td className="px-4 py-3 text-right">{compareTotals.countA}</td>
+                  {canSeePrices && <td className="px-4 py-3 text-right">{formatCurrency(compareTotals.amountA)}</td>}
+                  <td className="px-4 py-3 text-right">{compareTotals.countB}</td>
+                  {canSeePrices && <td className="px-4 py-3 text-right">{formatCurrency(compareTotals.amountB)}</td>}
+                  {canSeePrices && (
+                    <td className="px-4 py-3 text-right">
+                      {formatCurrency(compareTotals.amountA - compareTotals.amountB)}
+                    </td>
+                  )}
+                  {canSeePrices && (
+                    <td className="px-4 py-3 text-right">
+                      {compareTotals.amountB > 0
+                        ? `${(((compareTotals.amountA - compareTotals.amountB) / compareTotals.amountB) * 100).toFixed(1)}%`
+                        : "—"}
+                    </td>
+                  )}
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        )
+      ) : locationGroups.length === 0 ? (
         <EmptyState
           icon={ClipboardList}
           title="No material requests"
-          description="Create your first material request to get started."
+          description={`No requests found for ${budgetMonthLabel} with the current filters.`}
           actionLabel="New Request"
           onAction={() => router.push("/procurement/requests/new")}
         />
@@ -175,7 +510,6 @@ function PurchaseRequestsContent() {
               <tr className="border-b bg-muted/50">
                 <th className="px-4 py-3 text-left font-medium">PR #</th>
                 <th className="px-4 py-3 text-left font-medium">Department</th>
-                <th className="px-4 py-3 text-left font-medium hidden md:table-cell">Location</th>
                 <th className="px-4 py-3 text-left font-medium">Status</th>
                 {canSeePrices && <th className="px-4 py-3 text-right font-medium hidden md:table-cell">Est. Amount</th>}
                 <th className="px-4 py-3 text-left font-medium hidden lg:table-cell">Requested By</th>
@@ -183,53 +517,75 @@ function PurchaseRequestsContent() {
               </tr>
             </thead>
             <tbody>
-              {requests.map((pr) => (
-                <tr
-                  key={pr.id}
-                  className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
-                  onClick={() => router.push(`/procurement/requests/${pr.id}`)}
-                >
-                  <td className="px-4 py-3 font-mono text-xs font-medium">
-                    <Link
-                      href={`/procurement/requests/${pr.id}`}
-                      className="text-primary hover:underline"
-                      onClick={(e) => e.stopPropagation()}
-                    >
-                      {pr.pr_number}
-                    </Link>
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge variant="secondary" className={PROCUREMENT_DEPARTMENT_COLORS[pr.department]}>
-                      {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}
-                    </Badge>
-                  </td>
-                  <td className="px-4 py-3 hidden md:table-cell text-muted-foreground">
-                    {pr.locations?.name ?? "—"}
-                  </td>
-                  <td className="px-4 py-3">
-                    <Badge variant="secondary" className={PR_STATUS_COLORS[pr.status]}>
-                      {PR_STATUS_LABELS[pr.status]}
-                    </Badge>
-                  </td>
-                  {canSeePrices && (
-                    <td className="px-4 py-3 text-right hidden md:table-cell font-medium">
-                      {pr.total_estimated_amount > 0 ? formatCurrency(pr.total_estimated_amount) : "—"}
+              {locationGroups.map((group) => (
+                <Fragment key={group.locationName}>
+                  <tr className="bg-muted/40 border-b">
+                    <td colSpan={canSeePrices ? 6 : 5} className="px-4 py-2">
+                      <div className="flex items-center justify-between font-semibold">
+                        <span>
+                          {group.locationName}{" "}
+                          <span className="text-muted-foreground font-normal">({group.count})</span>
+                        </span>
+                        {canSeePrices && <span>{formatCurrency(group.totalAmount)}</span>}
+                      </div>
                     </td>
-                  )}
-                  <td className="px-4 py-3 hidden lg:table-cell text-muted-foreground">
-                    {pr.requester?.full_name ?? pr.requester?.email ?? "—"}
-                  </td>
-                  <td className="px-4 py-3 hidden lg:table-cell text-muted-foreground">
-                    {formatDate(pr.created_at)}
-                  </td>
-                </tr>
+                  </tr>
+                  {group.requests.map((pr) => (
+                    <tr
+                      key={pr.id}
+                      className="border-b hover:bg-muted/30 transition-colors cursor-pointer"
+                      onClick={() => router.push(`/procurement/requests/${pr.id}`)}
+                    >
+                      <td className="px-4 py-3 font-mono text-xs font-medium">
+                        <Link
+                          href={`/procurement/requests/${pr.id}`}
+                          className="text-primary hover:underline"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          {pr.pr_number}
+                        </Link>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge variant="secondary" className={PROCUREMENT_DEPARTMENT_COLORS[pr.department]}>
+                          {PROCUREMENT_DEPARTMENT_LABELS[pr.department]}
+                        </Badge>
+                      </td>
+                      <td className="px-4 py-3">
+                        <Badge variant="secondary" className={PR_STATUS_COLORS[pr.status]}>
+                          {PR_STATUS_LABELS[pr.status]}
+                        </Badge>
+                      </td>
+                      {canSeePrices && (
+                        <td className="px-4 py-3 text-right hidden md:table-cell font-medium">
+                          {pr.total_estimated_amount > 0 ? formatCurrency(pr.total_estimated_amount) : "—"}
+                        </td>
+                      )}
+                      <td className="px-4 py-3 hidden lg:table-cell text-muted-foreground">
+                        {pr.requester?.full_name ?? pr.requester?.email ?? "—"}
+                      </td>
+                      <td className="px-4 py-3 hidden lg:table-cell text-muted-foreground">
+                        {formatDate(pr.created_at)}
+                      </td>
+                    </tr>
+                  ))}
+                </Fragment>
               ))}
             </tbody>
+            <tfoot>
+              <tr className="border-t-2 bg-muted/60 font-semibold">
+                <td colSpan={3} className="px-4 py-3">Grand Total ({totalRequestCount} requests)</td>
+                {canSeePrices && (
+                  <td className="px-4 py-3 text-right hidden md:table-cell">{formatCurrency(totalAmount)}</td>
+                )}
+                <td className="hidden lg:table-cell" />
+                <td className="hidden lg:table-cell" />
+              </tr>
+            </tfoot>
           </table>
         </div>
       )}
 
-      {pagination.totalPages > 1 && (
+      {showFlatList && pagination.totalPages > 1 && (
         <div className="flex items-center justify-between">
           <p className="text-sm text-muted-foreground">
             Page {pagination.page} of {pagination.totalPages}
