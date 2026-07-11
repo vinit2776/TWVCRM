@@ -728,7 +728,7 @@ All calls are logged to `finance_suggestion_log` for precision measurement.
 ### Flow 5: Vendor Email Missing
 1. Any time a bill is opened for a vendor without `contact_email`, the `VendorEmailBanner` appears
 2. User can enter email directly in the banner; saved via `PATCH /api/procurement/vendors/[id]`
-3. The vendor email history is also surfaced: when `contact_email` is null, the vendor detail API looks up `audit_logs` for the last `email_sent` event to find the last-used TO address
+3. The vendor email history is also surfaced: when `contact_email` is null, the vendor detail API looks up `audit_trail` for the last `email_sent` event to find the last-used TO address
 
 ---
 
