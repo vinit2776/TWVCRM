@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createClient } from "@/lib/supabase/server";
-import { createWaitlistEntrySchema } from "@/lib/validations";
+import { createWaitlistEntrySchema, zodErrorResponse } from "@/lib/validations";
 
 export const dynamic = "force-dynamic";
 
@@ -43,7 +43,7 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json();
   const parsed = createWaitlistEntrySchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   const input = parsed.data;
 

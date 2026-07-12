@@ -3,6 +3,7 @@ import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
 import { RENT_MANAGEMENT_ROLES } from "@/lib/constants";
+import { zodErrorResponse } from "@/lib/validations";
 
 const createLeaseSchema = z.object({
   location_id: z.string().uuid("Valid location required"),
@@ -63,7 +64,7 @@ export async function POST(request: NextRequest) {
 
   const body = await request.json();
   const parsed = createLeaseSchema.safeParse(body);
-  if (!parsed.success) return NextResponse.json({ error: parsed.error.flatten() }, { status: 400 });
+  if (!parsed.success) return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
 
   if (parsed.data.lease_start_date >= parsed.data.lease_end_date)
     return NextResponse.json({ error: "End date must be after start date" }, { status: 400 });
