@@ -2407,7 +2407,7 @@ export interface LocationStock {
   reorder_level: number;
   last_updated: string;
   locations?: { id: string; name: string; code: string } | null;
-  procurement_items?: { id: string; name: string; department: string; unit: string; item_type: string } | null;
+  procurement_items?: { id: string; name: string; department: string; unit: string; item_type: string; is_active?: boolean } | null;
 }
 
 export interface StockTransferItem {

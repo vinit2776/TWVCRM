@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
   let query = supabase
     .from("location_stock")
     .select(
-      `*, procurement_items(id, name, department, unit, item_type), locations(id, name, code)`
+      `*, procurement_items(id, name, department, unit, item_type, is_active), locations(id, name, code)`
     )
     .order("name", { referencedTable: "procurement_items", ascending: true });
 
@@ -48,6 +48,17 @@ export async function GET(request: NextRequest) {
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   let results = data ?? [];
+
+  // Deactivated catalog items are hidden here — a deactivated item can still
+  // have a stale location_stock row (e.g. left over from a catalog rename/merge
+  // that didn't zero it out), which would otherwise show as "available" stock
+  // that no other screen (transfers, consumption) lets you act on.
+  results = results.filter(
+    (row: Record<string, unknown>) => {
+      const item = row.procurement_items as Record<string, unknown> | null;
+      return item?.is_active !== false;
+    }
+  );
 
   // Filter below reorder in JS since Supabase doesn't support column-to-column comparison easily
   if (belowReorder === "true") {
