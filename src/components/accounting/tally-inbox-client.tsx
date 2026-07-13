@@ -14,8 +14,9 @@
  */
 
 import { Fragment, useEffect, useMemo, useState, useCallback, useRef } from "react";
-import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee } from "lucide-react";
+import { RefreshCw, Inbox as InboxIcon, AlertCircle, Clock, CheckCircle2, FileText, Send, Upload, ChevronDown, ChevronUp, Loader2, FileDown, FileCheck, Check, Search, X, Pencil, CalendarDays, IndianRupee, ImageIcon } from "lucide-react";
 import { formatCurrency, formatDate } from "@/lib/utils";
+import { createClient } from "@/lib/supabase/client";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -1535,6 +1536,21 @@ function BookingPaymentPanel({
 }) {
   const totalConfirmed = confirmations.reduce((s, p) => s + p.amount, 0);
   const isFullyPaid = Math.abs(totalConfirmed - totalAmount) < 0.5;
+  const [zoomedUrl, setZoomedUrl] = useState<string | null>(null);
+  const [loadingScreenshotId, setLoadingScreenshotId] = useState<string | null>(null);
+
+  const handleViewScreenshot = useCallback(async (paymentId: string, screenshotPath: string) => {
+    setLoadingScreenshotId(paymentId);
+    try {
+      const supabase = createClient();
+      const { data } = await supabase.storage
+        .from("crm-documents")
+        .createSignedUrl(screenshotPath, 3600);
+      if (data?.signedUrl) setZoomedUrl(data.signedUrl);
+    } finally {
+      setLoadingScreenshotId(null);
+    }
+  }, []);
 
   if (confirmations.length === 0) {
     return (
@@ -1632,10 +1648,48 @@ function BookingPaymentPanel({
                   )}
                 </div>
               )}
+              {p.screenshot_path && (
+                <button
+                  type="button"
+                  className="inline-flex items-center gap-1 text-[11px] text-green-700 hover:text-green-900 underline underline-offset-2"
+                  onClick={() => handleViewScreenshot(p.id, p.screenshot_path!)}
+                  disabled={loadingScreenshotId === p.id}
+                >
+                  {loadingScreenshotId === p.id ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <ImageIcon className="h-3 w-3" />
+                  )}
+                  View payment screenshot
+                </button>
+              )}
             </div>
           );
         })}
       </div>
+
+      {zoomedUrl && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/80 flex flex-col items-center justify-center p-6 cursor-pointer"
+          onClick={() => setZoomedUrl(null)}
+        >
+          <button
+            className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors"
+            onClick={() => setZoomedUrl(null)}
+          >
+            <X className="h-8 w-8" />
+          </button>
+          <div className="bg-white rounded-2xl p-3 shadow-2xl max-w-[90vw] max-h-[85vh]" onClick={(e) => e.stopPropagation()}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={zoomedUrl}
+              alt="UPI payment confirmation screenshot"
+              className="max-w-[85vw] max-h-[80vh] object-contain rounded"
+            />
+          </div>
+          <p className="text-white/40 text-xs mt-3">Tap anywhere to close</p>
+        </div>
+      )}
     </div>
   );
 }
