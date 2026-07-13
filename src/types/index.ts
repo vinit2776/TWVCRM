@@ -842,7 +842,8 @@ export type AuditEntityType =
   | "user_location"
   | "transfer_billing_policy"
   | "unifi_device_label"
-  | "unifi_ap_alert";
+  | "unifi_ap_alert"
+  | "task_recurrence_rule";
 
 export interface AuditLog {
   id: string;
@@ -2715,7 +2716,8 @@ export type FacilityRootCause =
   | "unknown"
   | "other";
 export type FacilityReportedVia = "walk_in" | "phone" | "whatsapp" | "email" | "self_service" | "proactive" | "feedback";
-export type FacilityTaskType = "reported_problem" | "delegated_task";
+export type FacilityTaskType = "reported_problem" | "delegated_task" | "recurring_instance";
+export type TaskRecurrenceCadence = "daily" | "weekly" | "monthly";
 export type FacilityAssetStatus = "active" | "maintenance" | "retired";
 export type FacilityLifecycleStage = "procured" | "installed" | "testing_commissioning" | "operational" | "under_amc" | "decommissioned";
 export type FacilityAttachmentPhase = "report" | "progress" | "resolution";
@@ -2869,6 +2871,7 @@ export interface FacilityIssue {
   reported_via: FacilityReportedVia;
   linked_feedback_id?: string | null;
   task_type: FacilityTaskType;
+  recurrence_rule_id?: string | null;
   assigned_to?: string | null;
   assignee?: { id: string; full_name: string } | null;
   assigned_at?: string | null;
@@ -2898,6 +2901,27 @@ export interface FacilityIssue {
   updated_at: string;
   attachments?: FacilityIssueAttachment[];
   events?: FacilityIssueEvent[];
+}
+
+export interface TaskRecurrenceRule {
+  id: string;
+  title: string;
+  description?: string | null;
+  location_id: string;
+  location?: { id: string; name: string; code: string } | null;
+  assigned_to: string;
+  assignee?: { id: string; full_name: string } | null;
+  priority: FacilityIssuePriority;
+  cadence_type: TaskRecurrenceCadence;
+  day_of_week?: number | null;
+  day_of_month?: number | null;
+  skip_if_open: boolean;
+  is_active: boolean;
+  created_by: string;
+  creator?: { id: string; full_name: string } | null;
+  last_spawned_at?: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 // Analytics shapes
