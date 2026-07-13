@@ -1007,7 +1007,13 @@ export default function BookingDetailPage({ params }: { params: Promise<{ id: st
           with a finance-friendly banner that names the contract, the
           target invoice month, the method (when paid), free-quota math
           (when applicable), or the prepaid pack source. */}
-      <BookingPaymentSummary booking={booking} variant="full" />
+      <BookingPaymentSummary
+        booking={booking}
+        variant="full"
+        payments={existingPayments}
+        onViewScreenshot={handleViewPaymentScreenshot}
+        loadingScreenshotId={loadingScreenshotId}
+      />
 
       {/* Outstanding charges from previous bookings */}
       {outstandingCharges.length > 0 && (
