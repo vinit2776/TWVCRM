@@ -1510,6 +1510,9 @@ function paymentModeLabel(mode: string): string {
 }
 
 function BookingPaymentPill({ confirmations }: { confirmations: BookingPaymentConfirmation[] }) {
+  const [zoomedUrl, setZoomedUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
   if (confirmations.length === 0) {
     return (
       <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200 flex-shrink-0">
@@ -1519,11 +1522,61 @@ function BookingPaymentPill({ confirmations }: { confirmations: BookingPaymentCo
   }
   const latest = confirmations[0];
   const ref = latest.razorpay_payment_id ?? latest.payment_reference;
+
+  const handleViewScreenshot = async () => {
+    setLoading(true);
+    try {
+      const supabase = createClient();
+      const { data } = await supabase.storage
+        .from("crm-documents")
+        .createSignedUrl(latest.screenshot_path!, 3600);
+      if (data?.signedUrl) setZoomedUrl(data.signedUrl);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   return (
-    <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-green-50 text-green-800 border border-green-200 flex-shrink-0">
-      <CheckCircle2 className="h-2.5 w-2.5" />
-      Paid · {paymentModeLabel(latest.payment_mode)}{ref ? ` · ${ref.slice(-8)}` : ""}
-    </span>
+    <>
+      <span className="inline-flex items-center gap-1 text-[11px] px-1.5 py-0.5 rounded bg-green-50 text-green-800 border border-green-200 flex-shrink-0">
+        <CheckCircle2 className="h-2.5 w-2.5" />
+        Paid · {paymentModeLabel(latest.payment_mode)}{ref ? ` · ${ref.slice(-8)}` : ""}
+        {latest.screenshot_path && (
+          <button
+            type="button"
+            onClick={(e) => { e.stopPropagation(); handleViewScreenshot(); }}
+            disabled={loading}
+            title="View payment screenshot"
+            className="ml-0.5 hover:text-green-950"
+          >
+            {loading ? <Loader2 className="h-2.5 w-2.5 animate-spin" /> : <ImageIcon className="h-2.5 w-2.5" />}
+          </button>
+        )}
+      </span>
+
+      {zoomedUrl && (
+        <div
+          className="fixed inset-0 z-[200] bg-black/80 flex flex-col items-center justify-center p-6 cursor-pointer"
+          onClick={() => setZoomedUrl(null)}
+        >
+          <button
+            className="absolute top-4 right-4 text-white/80 hover:text-white transition-colors"
+            onClick={() => setZoomedUrl(null)}
+          >
+            <X className="h-8 w-8" />
+          </button>
+          <div className="bg-white rounded-2xl p-3 shadow-2xl max-w-[90vw] max-h-[85vh]" onClick={(e) => e.stopPropagation()}>
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img
+              src={zoomedUrl}
+              alt="UPI payment confirmation screenshot"
+              className="max-w-[85vw] max-h-[80vh] object-contain rounded"
+            />
+          </div>
+          <p className="text-white/40 text-xs mt-3">Tap anywhere to close</p>
+        </div>
+      )}
+    </>
   );
 }
 
