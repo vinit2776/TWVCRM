@@ -10,6 +10,23 @@ function isOverrideTier(role: string | undefined | null): role is OverrideRole {
   return OVERRIDE_ROLES.includes(role as OverrideRole);
 }
 
+// Mirrors the existing resolved-event auto-log in .../status/route.ts — asset
+// history should also capture who took ownership, not just what got fixed.
+// logged_by references auth.users(id) — pass the Supabase auth user id, not
+// the app-level public.users.id.
+async function logAssetAssignedEvent(
+  supabase: Awaited<ReturnType<typeof createClient>>,
+  params: { assetId: string; issueId: string; issueNumber: string; title: string; assigneeName: string; actorAuthId: string }
+) {
+  await supabase.from("facility_asset_events").insert({
+    asset_id: params.assetId,
+    event_type: "assigned",
+    note: `Assigned to ${params.assigneeName} via ${params.issueNumber}: ${params.title}`,
+    logged_by: params.actorAuthId,
+    issue_id: params.issueId,
+  });
+}
+
 /**
  * POST /api/facility/issues/[id]/assign
  *
@@ -40,7 +57,7 @@ export async function POST(
   // Load current issue state
   const { data: prev, error: prevErr } = await supabase
     .from("facility_issues")
-    .select("id, issue_number, title, status, category_id, assigned_to, assignee:users!facility_issues_assigned_to_fkey(id, full_name)")
+    .select("id, issue_number, title, status, category_id, asset_id, assigned_to, assignee:users!facility_issues_assigned_to_fkey(id, full_name)")
     .eq("id", id).single();
   if (prevErr || !prev) return NextResponse.json({ error: "Not found" }, { status: 404 });
 
@@ -78,6 +95,12 @@ export async function POST(
       { id, category_id: prev.category_id, assigned_to: prevAssigneeId, issue_number: prev.issue_number, title: prev.title },
       { type: "taken_over", newOwnerName: dbUser.full_name }
     );
+    if (prev.asset_id) {
+      await logAssetAssignedEvent(supabase, {
+        assetId: prev.asset_id, issueId: id, issueNumber: prev.issue_number, title: prev.title,
+        assigneeName: dbUser.full_name, actorAuthId: user.id,
+      });
+    }
     return NextResponse.json({ data });
   }
 
@@ -127,6 +150,12 @@ export async function POST(
       { id, category_id: prev.category_id, assigned_to: dbUser.id, issue_number: prev.issue_number, title: prev.title },
       { type: "claimed", claimerName: dbUser.full_name }
     );
+    if (prev.asset_id) {
+      await logAssetAssignedEvent(supabase, {
+        assetId: prev.asset_id, issueId: id, issueNumber: prev.issue_number, title: prev.title,
+        assigneeName: dbUser.full_name, actorAuthId: user.id,
+      });
+    }
     return NextResponse.json({ data });
   }
 
@@ -187,6 +216,13 @@ export async function POST(
     { id, category_id: prev.category_id, assigned_to: assigneeId, issue_number: prev.issue_number, title: prev.title },
     { type: "assigned", assigneeName, actorName: dbUser.full_name }
   );
+
+  if (assigneeId && assigneeName && prev.asset_id) {
+    await logAssetAssignedEvent(supabase, {
+      assetId: prev.asset_id, issueId: id, issueNumber: prev.issue_number, title: prev.title,
+      assigneeName, actorAuthId: user.id,
+    });
+  }
 
   return NextResponse.json({ data });
 }

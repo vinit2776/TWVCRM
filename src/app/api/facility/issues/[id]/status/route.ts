@@ -126,13 +126,23 @@ export async function PATCH(
     { type: "status_changed", from: existing.status, to: next, actorName: dbUser!.full_name, reporterEmail: existing.reporter_email ?? null }
   );
 
-  // Auto-log maintenance event on the linked asset when issue is resolved
+  // Auto-log maintenance/reopened events on the linked asset.
+  // logged_by references auth.users(id), not public.users(id) — use the
+  // Supabase auth user id (`user.id`), not the app-level `dbUser.id`.
   if (next === "resolved" && existing.asset_id) {
     await supabase.from("facility_asset_events").insert({
       asset_id: existing.asset_id,
       event_type: "maintenance",
       note: `Resolved via ${existing.issue_number}: ${existing.title}`,
-      logged_by: dbUser!.id,
+      logged_by: user.id,
+      issue_id: id,
+    });
+  } else if (next === "reopened" && existing.asset_id) {
+    await supabase.from("facility_asset_events").insert({
+      asset_id: existing.asset_id,
+      event_type: "reopened",
+      note: `Reopened via ${existing.issue_number}: ${existing.title}`,
+      logged_by: user.id,
       issue_id: id,
     });
   }
