@@ -141,6 +141,8 @@ interface LocationConfig {
 
 interface Location { id: string; name: string; code: string }
 
+interface MappedContract { contract_id: string; contract_number: string; customer_name: string }
+
 const MONTH_NAMES = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
 const STATUS_COLORS: Record<string, string> = {
   draft:    "bg-amber-100 text-amber-800",
@@ -168,6 +170,7 @@ export default function ElectricityBillsPage() {
   // Form state
   const [locations, setLocations] = useState<Location[]>([]);
   const [locCfg, setLocCfg] = useState<LocationConfig | null>(null);
+  const [mappedContracts, setMappedContracts] = useState<MappedContract[] | null>(null);
   const [form, setForm] = useState({
     location_id: "",
     bill_month: new Date().getMonth() + 1,
@@ -231,12 +234,13 @@ export default function ElectricityBillsPage() {
 
   const handleLocationChange = async (locId: string) => {
     setForm((f) => ({ ...f, location_id: locId }));
-    if (!locId) { setLocCfg(null); return; }
+    if (!locId) { setLocCfg(null); setMappedContracts(null); return; }
     const res = await fetch(`/api/locations/${locId}/electricity-config`);
     if (res.ok) {
       const json = await res.json();
       const cfg = json.data as LocationConfig | null;
       setLocCfg(cfg);
+      setMappedContracts((json.mapped_contracts as MappedContract[] | undefined) ?? []);
       // Pre-fill line rates from location config
       if (cfg) {
         setLines([
@@ -1094,6 +1098,14 @@ export default function ElectricityBillsPage() {
                 )}
                 {locCfg && !locCfg.enabled && (
                   <p className="text-xs text-destructive">Electricity billing is not enabled for this location.</p>
+                )}
+                {mappedContracts && mappedContracts.length > 0 && (
+                  <p className="text-xs text-muted-foreground">
+                    Bills: {mappedContracts.map((c) => `${c.contract_number} — ${c.customer_name}`).join(", ")}
+                  </p>
+                )}
+                {mappedContracts && mappedContracts.length === 0 && (
+                  <p className="text-xs text-muted-foreground">No contract mapped — will route to Accounts Payable on approval.</p>
                 )}
                 {editingBillId && (
                   <p className="text-xs text-muted-foreground">Location, month, and year can&apos;t be changed once captured.</p>

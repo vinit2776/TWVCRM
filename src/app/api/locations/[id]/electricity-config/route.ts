@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { z } from "zod";
-import { zodErrorResponse } from "@/lib/validations";
 
 const upsertSchema = z.object({
   enabled: z.boolean(),
@@ -42,18 +41,46 @@ export async function GET(
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
 
   // Fetch allocation summary: sum of ratios per contract mapped to this location
-  const { data: contractConfigs } = await supabase
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const { data: contractConfigs } = await (supabase as any)
     .from("contract_electricity_config")
-    .select("utility_ratio, generator_ratio, enabled, contract_id, contracts(status)")
+    .select(`
+      utility_ratio, generator_ratio, enabled, contract_id,
+      contracts(contract_number, status, leads!contracts_lead_id_fkey(first_name, last_name, company))
+    `)
     .eq("location_id", id)
     .eq("enabled", true);
 
-  const enabledConfigs = (contractConfigs ?? []).filter(
-    (c) => c.enabled && ["active", "renewal_in_progress"].includes((c.contracts as unknown as { status: string } | null)?.status ?? "")
+  interface ContractConfigRow {
+    utility_ratio: number | null;
+    generator_ratio: number | null;
+    enabled: boolean;
+    contract_id: string;
+    contracts: {
+      contract_number: string;
+      status: string;
+      leads: { first_name: string; last_name: string; company: string | null } | null;
+    } | null;
+  }
+
+  const enabledConfigs = ((contractConfigs ?? []) as ContractConfigRow[]).filter(
+    (c) => c.enabled && ["active", "renewal_in_progress"].includes(c.contracts?.status ?? "")
   );
 
   const utilityAllocated = enabledConfigs.reduce((s, c) => s + (c.utility_ratio ?? 0), 0);
   const generatorAllocated = enabledConfigs.reduce((s, c) => s + (c.generator_ratio ?? 0), 0);
+
+  const mappedContracts = enabledConfigs.map((c) => {
+    const lead = c.contracts?.leads ?? null;
+    const customerName = lead
+      ? lead.company || `${lead.first_name} ${lead.last_name}`.trim()
+      : "—";
+    return {
+      contract_id: c.contract_id,
+      contract_number: c.contracts?.contract_number ?? "—",
+      customer_name: customerName,
+    };
+  });
 
   return NextResponse.json({
     data: config,
@@ -62,6 +89,7 @@ export async function GET(
       generator_allocated: generatorAllocated,
       contract_count: enabledConfigs.length,
     },
+    mapped_contracts: mappedContracts,
   });
 }
 
@@ -90,7 +118,7 @@ export async function PUT(
   const body = await request.json();
   const parsed = upsertSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
+    return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
   const { data: existing } = await supabase
