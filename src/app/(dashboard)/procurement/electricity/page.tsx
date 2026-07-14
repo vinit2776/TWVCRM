@@ -170,6 +170,7 @@ export default function ElectricityBillsPage() {
   const [approving, setApproving] = useState<string | null>(null);
   const [revising, setRevising] = useState<string | null>(null);
   const [deletingBillId, setDeletingBillId] = useState<string | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<{ id: string; billSide: "landlord" | "customer"; label: string } | null>(null);
   const [actingOnCustomerBill, setActingOnCustomerBill] = useState<string | null>(null);
   const [previewsByBillId, setPreviewsByBillId] = useState<Record<string, ApprovalPreviewItem[] | "loading">>({});
 
@@ -437,18 +438,25 @@ export default function ElectricityBillsPage() {
     setRevising(null);
   };
 
-  const handleDeleteBill = async (billId: string, billSide: "landlord" | "customer") => {
-    const warning = billSide === "landlord"
-      ? "This will permanently delete this landlord bill AND its linked customer bill(s), billing statement(s), and vendor bill. Blocked if any payment has been recorded. This cannot be undone. Continue?"
-      : "This will permanently delete this customer bill and its billing statement. Blocked if any payment has been recorded. This cannot be undone. Continue?";
-    if (!window.confirm(warning)) return;
+  // Delete is destructive and irreversible, so it goes through an explicit
+  // in-app confirmation dialog (deleteTarget) rather than a native
+  // window.confirm — a modal the user has to deliberately click a red
+  // "Delete" button on is much harder to trigger by accident (a stray Enter
+  // keypress, a fast double-click) than a browser-native confirm() popup.
+  const requestDeleteBill = (billId: string, billSide: "landlord" | "customer", label: string) => {
+    setDeleteTarget({ id: billId, billSide, label });
+  };
 
+  const handleDeleteBill = async () => {
+    if (!deleteTarget) return;
+    const { id: billId } = deleteTarget;
     setDeletingBillId(billId);
     const res = await fetch(`/api/electricity-bills/${billId}`, { method: "DELETE" });
     const json = await res.json();
     if (res.ok) {
       toast.success("Deleted");
       fetchBills();
+      setDeleteTarget(null);
     } else {
       toast.error(json.error || "Failed to delete");
     }
@@ -809,7 +817,11 @@ export default function ElectricityBillsPage() {
                         size="sm"
                         variant="outline"
                         className="text-destructive hover:text-destructive"
-                        onClick={() => handleDeleteBill(bill.id, "landlord")}
+                        onClick={() => requestDeleteBill(
+                          bill.id,
+                          "landlord",
+                          `${bill.locations?.name ?? bill.location_id} — ${MONTH_NAMES[bill.bill_month - 1]} ${bill.bill_year}`,
+                        )}
                         disabled={deletingBillId === bill.id}
                       >
                         <Trash2 className="mr-1.5 h-3.5 w-3.5" />
@@ -1118,7 +1130,11 @@ export default function ElectricityBillsPage() {
                                         variant="outline"
                                         className="h-7 px-2 text-xs text-destructive hover:text-destructive"
                                         disabled={deletingBillId === cb.id}
-                                        onClick={() => handleDeleteBill(cb.id, "customer")}
+                                        onClick={() => requestDeleteBill(
+                                          cb.id,
+                                          "customer",
+                                          `${customerName(cb)} — ${MONTH_NAMES[bill.bill_month - 1]} ${bill.bill_year}`,
+                                        )}
                                       >
                                         <Trash2 className="mr-1 h-3 w-3" />
                                         {deletingBillId === cb.id ? "Deleting…" : "Delete"}
@@ -1390,6 +1406,37 @@ export default function ElectricityBillsPage() {
             <Button variant="outline" onClick={closeDialog}>Cancel</Button>
             <Button onClick={handleSubmit} disabled={submitting}>
               {submitting ? "Saving…" : editingBillId ? "Save Changes" : "Save as Draft"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Delete confirmation — a dedicated dialog rather than window.confirm()
+          so an accidental click can't cascade a real financial-record delete;
+          the destructive button has to be deliberately clicked. */}
+      <Dialog open={!!deleteTarget} onOpenChange={(open) => !open && setDeleteTarget(null)}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Delete {deleteTarget?.billSide === "landlord" ? "landlord" : "customer"} bill?</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 text-sm">
+            <p className="font-medium">{deleteTarget?.label}</p>
+            <p className="text-muted-foreground">
+              {deleteTarget?.billSide === "landlord"
+                ? "This permanently deletes this landlord bill AND its linked customer bill(s), billing statement(s), and vendor bill."
+                : "This permanently deletes this customer bill and its billing statement."}
+              {" "}Blocked if any payment has been recorded anywhere in the chain. This cannot be undone.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setDeleteTarget(null)}>Cancel</Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteBill}
+              disabled={!!deletingBillId}
+            >
+              <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+              {deletingBillId ? "Deleting…" : "Delete"}
             </Button>
           </DialogFooter>
         </DialogContent>
