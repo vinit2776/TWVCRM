@@ -147,6 +147,12 @@ export async function GET(
       ? lead.company || `${lead.first_name} ${lead.last_name}`.trim()
       : row.contracts?.contract_number ?? "—";
 
+    // The RPC stores subtotal + gst exactly (customer_round_off is hardcoded
+    // to 0, see 00323 migration) — it does NOT round to the nearest rupee the
+    // way computeGstAndRounding()'s totalAmount does. Recompute the total the
+    // same un-rounded way so the preview matches what actually gets created.
+    const exactTotal = result.customer_subtotal + result.customer_gst.cgst + result.customer_gst.sgst;
+
     return {
       contract_id: row.contract_id,
       contract_number: row.contracts?.contract_number ?? "—",
@@ -159,7 +165,7 @@ export async function GET(
       customer_subtotal: result.customer_subtotal,
       customer_cgst: result.customer_gst.cgst,
       customer_sgst: result.customer_gst.sgst,
-      customer_total: result.customer_total,
+      customer_total: exactTotal,
       gst_rate: customerGstRate,
     };
   });
