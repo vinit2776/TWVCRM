@@ -27,7 +27,7 @@ export async function POST(
   // Verify bill exists and is a landlord draft
   const { data: bill } = await supabase
     .from("electricity_bills")
-    .select("id, bill_side, status, location_id, bill_month, bill_year")
+    .select("id, bill_side, status, location_id, bill_month, bill_year, vendor_bill_id")
     .eq("id", id)
     .single();
 
@@ -41,9 +41,11 @@ export async function POST(
 
   // Call the atomic RPC
   const { data: result, error } = await supabase
-    .rpc("approve_electricity_landlord_bill", { p_landlord_bill_id: id });
+    .rpc("approve_electricity_landlord_bill", { p_landlord_bill_id: id, p_approved_by: dbUser.id });
 
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+
+  const customerBillsGenerated = (result as { customer_bills_generated: number }).customer_bills_generated;
 
   await logAudit(supabase, {
     entityType: "electricity_bill",
@@ -52,9 +54,25 @@ export async function POST(
     performedBy: dbUser.id,
     changes: {
       status: { old: "draft", new: "invoiced" },
-      customer_bills_generated: { old: null, new: (result as { customer_bills_generated: number }).customer_bills_generated },
+      customer_bills_generated: { old: null, new: customerBillsGenerated },
     },
   });
+
+  // No contract mapped at this location — the RPC auto-approved the linked
+  // vendor bill so it's immediately payable in Acc Payables, skipping the
+  // usual separate Procurement approval step. Audit that decision too.
+  if (!customerBillsGenerated && bill.vendor_bill_id) {
+    await logAudit(supabase, {
+      entityType: "vendor_bill",
+      entityId: bill.vendor_bill_id,
+      action: "update",
+      performedBy: dbUser.id,
+      changes: {
+        approval_status: { old: "pending", new: "approved" },
+        note: { old: null, new: "Auto-approved on electricity bill approval — no contract mapped at this location" },
+      },
+    });
+  }
 
   return NextResponse.json({ data: result });
 }
