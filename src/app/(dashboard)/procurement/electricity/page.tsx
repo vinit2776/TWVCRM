@@ -542,6 +542,11 @@ export default function ElectricityBillsPage() {
     if (bill.status === "draft") {
       return { stepIndex: 1, complete: false, voided: false, subLabel: "Awaiting approval" };
     }
+    if (bill.status === "revised") {
+      // Superseded by the draft it was cloned into on Revise — dead-end record,
+      // shouldn't linger in the Open worklist even though it has no customer bills.
+      return { stepIndex: 4, complete: true, voided: false, subLabel: "Superseded by a revised bill" };
+    }
 
     const cbs = bill.customer_bills ?? [];
     if (cbs.length === 0) {
