@@ -159,11 +159,17 @@ export default function ElectricityBillsPage() {
   const [activeTab, setActiveTab] = useState<"open" | "completed">("open");
   const [listLocationFilter, setListLocationFilter] = useState("");
   const [tallyHandoffV2Enabled, setTallyHandoffV2Enabled] = useState(false);
-  const [expanded, setExpanded] = useState<string | null>(null);
+  // Draft bills (awaiting approval) default to expanded — the full line-item
+  // breakdown, lifecycle, and inward/outward preview should be visible to an
+  // approver without an extra click. Everything else defaults to collapsed.
+  // Two override sets track manual toggles away from each default.
+  const [collapsedDraftIds, setCollapsedDraftIds] = useState<Set<string>>(new Set());
+  const [expandedOtherIds, setExpandedOtherIds] = useState<Set<string>>(new Set());
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingBillId, setEditingBillId] = useState<string | null>(null);
   const [approving, setApproving] = useState<string | null>(null);
   const [revising, setRevising] = useState<string | null>(null);
+  const [deletingBillId, setDeletingBillId] = useState<string | null>(null);
   const [actingOnCustomerBill, setActingOnCustomerBill] = useState<string | null>(null);
   const [previewsByBillId, setPreviewsByBillId] = useState<Record<string, ApprovalPreviewItem[] | "loading">>({});
 
@@ -221,16 +227,39 @@ export default function ElectricityBillsPage() {
     setPreviewsByBillId((prev) => ({ ...prev, [billId]: res.ok ? (json.data ?? []) : [] }));
   }, []);
 
-  // Fetch the customer-bill preview the moment a still-draft landlord bill is
-  // expanded — cached per bill id so re-collapsing/re-expanding doesn't refetch.
+  // Fetch the customer-bill preview for every draft bill currently expanded
+  // (drafts default to expanded — see collapsedDraftIds) — cached per bill id
+  // so re-collapsing/re-expanding doesn't refetch.
   useEffect(() => {
-    if (!expanded) return;
-    const bill = bills.find((b) => b.id === expanded);
-    if (!bill || bill.status !== "draft") return;
-    if ((bill.customer_bills?.length ?? 0) > 0) return;
-    if (previewsByBillId[expanded] !== undefined) return;
-    fetchApprovalPreview(expanded);
-  }, [expanded, bills, previewsByBillId, fetchApprovalPreview]);
+    for (const bill of bills) {
+      if (bill.status !== "draft") continue;
+      if (collapsedDraftIds.has(bill.id)) continue;
+      if ((bill.customer_bills?.length ?? 0) > 0) continue;
+      if (previewsByBillId[bill.id] !== undefined) continue;
+      fetchApprovalPreview(bill.id);
+    }
+  }, [bills, collapsedDraftIds, previewsByBillId, fetchApprovalPreview]);
+
+  const isExpanded = useCallback(
+    (bill: EbBill) => (bill.status === "draft" ? !collapsedDraftIds.has(bill.id) : expandedOtherIds.has(bill.id)),
+    [collapsedDraftIds, expandedOtherIds],
+  );
+
+  const toggleExpanded = (bill: EbBill) => {
+    if (bill.status === "draft") {
+      setCollapsedDraftIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(bill.id)) next.delete(bill.id); else next.add(bill.id);
+        return next;
+      });
+    } else {
+      setExpandedOtherIds((prev) => {
+        const next = new Set(prev);
+        if (next.has(bill.id)) next.delete(bill.id); else next.add(bill.id);
+        return next;
+      });
+    }
+  };
 
   const handleLocationChange = async (locId: string) => {
     setForm((f) => ({ ...f, location_id: locId }));
@@ -406,6 +435,24 @@ export default function ElectricityBillsPage() {
       toast.error(json.error || "Failed to revise");
     }
     setRevising(null);
+  };
+
+  const handleDeleteBill = async (billId: string, billSide: "landlord" | "customer") => {
+    const warning = billSide === "landlord"
+      ? "This will permanently delete this landlord bill AND its linked customer bill(s), billing statement(s), and vendor bill. Blocked if any payment has been recorded. This cannot be undone. Continue?"
+      : "This will permanently delete this customer bill and its billing statement. Blocked if any payment has been recorded. This cannot be undone. Continue?";
+    if (!window.confirm(warning)) return;
+
+    setDeletingBillId(billId);
+    const res = await fetch(`/api/electricity-bills/${billId}`, { method: "DELETE" });
+    const json = await res.json();
+    if (res.ok) {
+      toast.success("Deleted");
+      fetchBills();
+    } else {
+      toast.error(json.error || "Failed to delete");
+    }
+    setDeletingBillId(null);
   };
 
   const handleConfirmCustomerBill = async (id: string) => {
@@ -634,6 +681,10 @@ export default function ElectricityBillsPage() {
   const canCapture = ["admin", "manager", "accounts", "office_admin"].includes(user?.role ?? "");
   const canApprove = ["admin", "manager"].includes(user?.role ?? "");
   const canManageCustomerBill = ["admin", "manager", "accounts"].includes(user?.role ?? "");
+  // Edit/Delete are corrections tools for mis-entered data — admin only,
+  // stricter than who's allowed to capture a bill in the first place.
+  const canEditBills = user?.role === "admin";
+  const canDeleteBills = user?.role === "admin";
 
   return (
     <div className="space-y-6">
@@ -702,9 +753,9 @@ export default function ElectricityBillsPage() {
                   <div className="flex items-center gap-3 min-w-0">
                     <button
                       className="text-left"
-                      onClick={() => setExpanded(expanded === bill.id ? null : bill.id)}
+                      onClick={() => toggleExpanded(bill)}
                     >
-                      {expanded === bill.id
+                      {isExpanded(bill)
                         ? <ChevronUp className="h-4 w-4 text-muted-foreground" />
                         : <ChevronDown className="h-4 w-4 text-muted-foreground" />}
                     </button>
@@ -722,7 +773,7 @@ export default function ElectricityBillsPage() {
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge className={overallStage(bill).className}>{overallStage(bill).label}</Badge>
-                    {canCapture && bill.status === "draft" && (
+                    {canEditBills && bill.status === "draft" && (
                       <Button
                         size="sm"
                         variant="outline"
@@ -753,10 +804,22 @@ export default function ElectricityBillsPage() {
                         {revising === bill.id ? "Revising…" : "Revise"}
                       </Button>
                     )}
+                    {canDeleteBills && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        className="text-destructive hover:text-destructive"
+                        onClick={() => handleDeleteBill(bill.id, "landlord")}
+                        disabled={deletingBillId === bill.id}
+                      >
+                        <Trash2 className="mr-1.5 h-3.5 w-3.5" />
+                        {deletingBillId === bill.id ? "Deleting…" : "Delete"}
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardHeader>
-              {expanded === bill.id && (
+              {isExpanded(bill) && (
                 <CardContent className="pt-0 pb-4 px-4">
                   <Separator className="mb-3" />
                   <table className="w-full text-sm">
@@ -1047,6 +1110,18 @@ export default function ElectricityBillsPage() {
                                       >
                                         <Send className="mr-1 h-3 w-3" />
                                         {actingOnCustomerBill === cb.id ? "Sending…" : "Bill & Send"}
+                                      </Button>
+                                    )}
+                                    {canDeleteBills && (
+                                      <Button
+                                        size="sm"
+                                        variant="outline"
+                                        className="h-7 px-2 text-xs text-destructive hover:text-destructive"
+                                        disabled={deletingBillId === cb.id}
+                                        onClick={() => handleDeleteBill(cb.id, "customer")}
+                                      >
+                                        <Trash2 className="mr-1 h-3 w-3" />
+                                        {deletingBillId === cb.id ? "Deleting…" : "Delete"}
                                       </Button>
                                     )}
                                   </div>
