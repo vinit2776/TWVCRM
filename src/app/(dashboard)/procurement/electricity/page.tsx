@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo } from "react";
-import { Plus, Zap, CheckCircle2, ChevronDown, ChevronUp, Trash2, AlertTriangle, Send, Eye, Pencil } from "lucide-react";
+import { Plus, Zap, CheckCircle2, ChevronDown, ChevronUp, Trash2, AlertTriangle, Send, Eye, Pencil, RotateCcw } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -88,6 +88,26 @@ interface CustomerBillInfo {
   } | null;
 }
 
+// Read-only dry run of approve_electricity_landlord_bill() — see
+// GET /api/electricity-bills/[id]/approval-preview. Same shape as the
+// customer-side numbers a real customer bill would carry, minus the
+// row id/status that only exist once one is actually generated.
+interface ApprovalPreviewItem {
+  contract_id: string;
+  contract_number: string;
+  billing_mode: string | null;
+  customer_name: string;
+  customer_utility_units: number;
+  customer_generator_units: number;
+  customer_utility_rate: number;
+  customer_generator_rate: number;
+  customer_subtotal: number;
+  customer_cgst: number;
+  customer_sgst: number;
+  customer_total: number;
+  gst_rate: number;
+}
+
 interface EbBill {
   id: string;
   location_id: string;
@@ -141,7 +161,9 @@ export default function ElectricityBillsPage() {
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editingBillId, setEditingBillId] = useState<string | null>(null);
   const [approving, setApproving] = useState<string | null>(null);
+  const [revising, setRevising] = useState<string | null>(null);
   const [actingOnCustomerBill, setActingOnCustomerBill] = useState<string | null>(null);
+  const [previewsByBillId, setPreviewsByBillId] = useState<Record<string, ApprovalPreviewItem[] | "loading">>({});
 
   // Form state
   const [locations, setLocations] = useState<Location[]>([]);
@@ -188,6 +210,24 @@ export default function ElectricityBillsPage() {
   }, []);
 
   useEffect(() => { fetchBills(); fetchLocations(); fetchTallyHandoffSetting(); }, [fetchBills, fetchLocations, fetchTallyHandoffSetting]);
+
+  const fetchApprovalPreview = useCallback(async (billId: string) => {
+    setPreviewsByBillId((prev) => ({ ...prev, [billId]: "loading" }));
+    const res = await fetch(`/api/electricity-bills/${billId}/approval-preview`);
+    const json = await res.json();
+    setPreviewsByBillId((prev) => ({ ...prev, [billId]: res.ok ? (json.data ?? []) : [] }));
+  }, []);
+
+  // Fetch the customer-bill preview the moment a still-draft landlord bill is
+  // expanded — cached per bill id so re-collapsing/re-expanding doesn't refetch.
+  useEffect(() => {
+    if (!expanded) return;
+    const bill = bills.find((b) => b.id === expanded);
+    if (!bill || bill.status !== "draft") return;
+    if ((bill.customer_bills?.length ?? 0) > 0) return;
+    if (previewsByBillId[expanded] !== undefined) return;
+    fetchApprovalPreview(expanded);
+  }, [expanded, bills, previewsByBillId, fetchApprovalPreview]);
 
   const handleLocationChange = async (locId: string) => {
     setForm((f) => ({ ...f, location_id: locId }));
@@ -341,6 +381,27 @@ export default function ElectricityBillsPage() {
       toast.error(json.error || "Approval failed");
     }
     setApproving(null);
+  };
+
+  const handleRevise = async (billId: string) => {
+    if (
+      !window.confirm(
+        "No customer bills were generated when this was approved (the contract wasn't enabled for electricity billing yet). " +
+          "Revising will mark this landlord bill as revised and create a fresh draft with the same numbers, which you can then re-approve. Continue?",
+      )
+    ) {
+      return;
+    }
+    setRevising(billId);
+    const res = await fetch(`/api/electricity-bills/${billId}/revise`, { method: "POST" });
+    const json = await res.json();
+    if (res.ok) {
+      toast.success("Revised — a new draft was created. Approve it to regenerate the customer bill(s).");
+      fetchBills();
+    } else {
+      toast.error(json.error || "Failed to revise");
+    }
+    setRevising(null);
   };
 
   const handleConfirmCustomerBill = async (id: string) => {
@@ -674,6 +735,17 @@ export default function ElectricityBillsPage() {
                         {approving === bill.id ? "Approving…" : "Approve & Generate"}
                       </Button>
                     )}
+                    {canApprove && bill.status === "invoiced" && (bill.customer_bills ?? []).length === 0 && (
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => handleRevise(bill.id)}
+                        disabled={revising === bill.id}
+                      >
+                        <RotateCcw className="mr-1.5 h-3.5 w-3.5" />
+                        {revising === bill.id ? "Revising…" : "Revise"}
+                      </Button>
+                    )}
                   </div>
                 </div>
               </CardHeader>
@@ -757,8 +829,12 @@ export default function ElectricityBillsPage() {
                     );
                   })()}
 
-                  {/* Reconciliation: inward payable + outward receivable, same view */}
-                  {bill.status !== "draft" && (() => {
+                  {/* Reconciliation: inward payable + outward receivable, same view —
+                      shown even while still draft: the vendor bill (if any) is
+                      auto-created at capture time already, and the Outward panel
+                      below renders an approval preview in place of real customer
+                      bills until Approve actually generates them. */}
+                  {(() => {
                     const vb = bill.vendor_bill;
                     const dueInDays = daysUntil(vb?.due_date ?? null);
                     const landlordUnpaid = !!vb && vb.payment_status !== "paid";
@@ -817,7 +893,61 @@ export default function ElectricityBillsPage() {
                           {/* Outward — receivable */}
                           <div className="bg-blue-50/50 border border-blue-200 rounded-lg p-3 text-xs space-y-1.5">
                             <p className="font-semibold text-blue-800 uppercase tracking-wide">Outward — Bill to Customer</p>
-                            {customerBills.length === 0 ? (
+                            {customerBills.length === 0 && bill.status === "draft" ? (() => {
+                              const preview = previewsByBillId[bill.id];
+                              if (preview === undefined || preview === "loading") {
+                                return <p className="text-muted-foreground">Loading preview…</p>;
+                              }
+                              if (preview.length === 0) {
+                                return (
+                                  <p className="text-muted-foreground">
+                                    No contracts are enabled for electricity billing at this location — nothing will be generated on approve.
+                                  </p>
+                                );
+                              }
+                              return (
+                                <>
+                                  <p className="text-muted-foreground text-[10px] italic">Preview — nothing is created until you approve.</p>
+                                  {preview.map((p) => (
+                                    <div key={p.contract_id} className="py-1 space-y-1">
+                                      <div className="flex items-center justify-between gap-2">
+                                        <div className="flex items-center gap-1.5 min-w-0">
+                                          <span className="font-medium truncate">{p.customer_name}</span>
+                                          <BillingModeTag mode={p.billing_mode} />
+                                        </div>
+                                        <span className="font-medium shrink-0">{formatCurrency(p.customer_total)}</span>
+                                      </div>
+                                      <div className="rounded border border-blue-200 bg-white/60 px-2 py-1.5 space-y-0.5">
+                                        {p.customer_utility_units > 0 && (
+                                          <div className="flex justify-between text-muted-foreground">
+                                            <span>Utility/Grid: {p.customer_utility_units} units × {formatCurrency(p.customer_utility_rate)}</span>
+                                            <span>{formatCurrency(p.customer_utility_units * p.customer_utility_rate)}</span>
+                                          </div>
+                                        )}
+                                        {p.customer_generator_units > 0 && (
+                                          <div className="flex justify-between text-muted-foreground">
+                                            <span>DG/Generator: {p.customer_generator_units} units × {formatCurrency(p.customer_generator_rate)}</span>
+                                            <span>{formatCurrency(p.customer_generator_units * p.customer_generator_rate)}</span>
+                                          </div>
+                                        )}
+                                        <div className="flex justify-between text-muted-foreground border-t border-dashed pt-0.5 mt-0.5">
+                                          <span>Subtotal</span>
+                                          <span>{formatCurrency(p.customer_subtotal)}</span>
+                                        </div>
+                                        <div className="flex justify-between text-muted-foreground">
+                                          <span>GST ({p.gst_rate}%): CGST {formatCurrency(p.customer_cgst)} + SGST {formatCurrency(p.customer_sgst)}</span>
+                                          <span>{formatCurrency(p.customer_cgst + p.customer_sgst)}</span>
+                                        </div>
+                                        <div className="flex justify-between font-medium pt-0.5 border-t">
+                                          <span>Total</span>
+                                          <span>{formatCurrency(p.customer_total)}</span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  ))}
+                                </>
+                              );
+                            })() : customerBills.length === 0 ? (
                               <p className="text-muted-foreground">No customer bills generated for this bill.</p>
                             ) : (
                               customerBills.map((cb) => (
