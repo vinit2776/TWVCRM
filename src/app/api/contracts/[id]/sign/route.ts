@@ -1,10 +1,35 @@
 import { NextRequest, NextResponse } from "next/server";
+import { PDFDocument } from "pdf-lib";
+import type { SupabaseClient } from "@supabase/supabase-js";
 import { createClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
+import { buildAddendumPdfBuffer } from "@/lib/addendum-generator";
 import {
   uploadForEStampAndSigning,
   getSigningStatus,
 } from "@/lib/leegality";
+
+/**
+ * Leegality only accepts a single file per envelope, so for renewal
+ * contracts the addendum's pages are appended onto the base agreement
+ * before upload — the client signs one combined document covering both.
+ */
+async function appendAddendumIfRenewal(
+  supabase: SupabaseClient,
+  contractId: string,
+  baseBuffer: Buffer
+): Promise<Buffer> {
+  const addendumBuffer = await buildAddendumPdfBuffer(supabase, contractId);
+  if (!addendumBuffer) return baseBuffer;
+
+  const merged = await PDFDocument.create();
+  for (const buf of [baseBuffer, addendumBuffer]) {
+    const doc = await PDFDocument.load(buf);
+    const pages = await merged.copyPages(doc, doc.getPageIndices());
+    pages.forEach((page) => merged.addPage(page));
+  }
+  return Buffer.from(await merged.save());
+}
 
 /**
  * POST /api/contracts/[id]/sign
@@ -76,7 +101,8 @@ export async function POST(
         );
       }
 
-      const pdfBuffer = Buffer.from(pdfBase64, "base64");
+      const baseBuffer = Buffer.from(pdfBase64, "base64");
+      const pdfBuffer = await appendAddendumIfRenewal(supabase, contractId, baseBuffer);
 
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const lead = contract.lead as any;
