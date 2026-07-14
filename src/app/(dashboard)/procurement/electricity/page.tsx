@@ -590,9 +590,7 @@ export default function ElectricityBillsPage() {
   // issue by hand).
   const customerBillNextStepHint = (cb: CustomerBillInfo): string => {
     if (cb.status === "draft") {
-      return cb.created_by === user?.id
-        ? "Waiting for another admin, manager, or accounts user to confirm — you captured this one, so you can't also confirm it."
-        : "Confirming will lock this amount in and enable Bill & Send.";
+      return "Confirming will lock this amount in and enable Bill & Send.";
     }
     if (cb.status === "invoiced") {
       const isGstDirect = cb.contract?.billing_mode === "gst_direct";
@@ -1024,7 +1022,7 @@ export default function ElectricityBillsPage() {
                                         Preview
                                       </Button>
                                     )}
-                                    {canManageCustomerBill && cb.status === "draft" && cb.created_by !== user?.id && (
+                                    {canManageCustomerBill && cb.status === "draft" && (
                                       <Button
                                         size="sm"
                                         variant="outline"
@@ -1035,9 +1033,6 @@ export default function ElectricityBillsPage() {
                                         <CheckCircle2 className="mr-1 h-3 w-3" />
                                         Confirm
                                       </Button>
-                                    )}
-                                    {canManageCustomerBill && cb.status === "draft" && cb.created_by === user?.id && (
-                                      <span className="text-muted-foreground text-[11px]">Needs another admin/manager/accounts</span>
                                     )}
                                     {canManageCustomerBill && cb.status === "invoiced" && (
                                       <Button
