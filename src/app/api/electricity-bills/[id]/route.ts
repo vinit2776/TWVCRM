@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from "next/server";
 import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
-import { zodErrorResponse } from "@/lib/validations";
 
 const lineSchema = z.object({
   line_type: z.enum(["utility", "generator", "other"]),
@@ -63,13 +62,13 @@ export async function PATCH(
     .single();
   if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
 
-  if (!["admin", "manager", "accounts", "office_admin"].includes(dbUser.role)) {
-    return NextResponse.json({ error: "Access denied" }, { status: 403 });
+  if (dbUser.role !== "admin") {
+    return NextResponse.json({ error: "Admin role required" }, { status: 403 });
   }
 
   const { data: bill, error: billErr } = await supabase
     .from("electricity_bills")
-    .select("id, bill_side, status, vendor_bill_id, landlord_total_amount, landlord_gst_amount")
+    .select("id, bill_side, status, vendor_bill_id, location_id, landlord_total_amount, landlord_gst_amount")
     .eq("id", id)
     .single();
 
@@ -113,9 +112,27 @@ export async function PATCH(
   const body = await request.json();
   const parsed = updateSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
+    return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
   const { landlord_bill_number, landlord_bill_date, notes, lines, landlord_gst_applicable, landlord_gst_rate } = parsed.data;
+
+  if (landlord_bill_number) {
+    const { count: dupeNumber } = await supabase
+      .from("electricity_bills")
+      .select("*", { count: "exact", head: true })
+      .eq("location_id", bill.location_id)
+      .eq("bill_side", "landlord")
+      .eq("landlord_bill_number", landlord_bill_number)
+      .neq("status", "revised")
+      .neq("id", id);
+
+    if (dupeNumber && dupeNumber > 0) {
+      return NextResponse.json(
+        { error: `Bill number "${landlord_bill_number}" is already in use for this location. Check for a duplicate entry.` },
+        { status: 409 },
+      );
+    }
+  }
 
   const landlordTotal = lines.reduce((s, l) => {
     if (l.line_type === "other") return s + (l.amount ?? 0);
@@ -197,4 +214,66 @@ export async function PATCH(
   });
 
   return NextResponse.json({ data: { id, landlord_total_amount: landlordTotal } });
+}
+
+/**
+ * DELETE /api/electricity-bills/[id]
+ *
+ * Admin-only correction tool for mis-entered data — replaces hand-editing the
+ * database directly. Works on either side of a bill:
+ *  - landlord: cascades to its customer bill(s), their billing statement(s),
+ *    and its own vendor bill.
+ *  - customer: removes just that one customer bill + its billing statement.
+ * Blocked entirely (by the delete_electricity_bill RPC) if any payment has
+ * been recorded anywhere in the chain.
+ */
+export async function DELETE(
+  _request: NextRequest,
+  { params }: { params: Promise<{ id: string }> },
+) {
+  const { id } = await params;
+
+  const authClient = await createClient();
+  const { data: { user } } = await authClient.auth.getUser();
+  if (!user) return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+
+  const supabase = createAdminClient();
+
+  const { data: dbUser } = await supabase
+    .from("users")
+    .select("id, role")
+    .eq("auth_id", user.id)
+    .single();
+  if (!dbUser) return NextResponse.json({ error: "User not found" }, { status: 403 });
+
+  if (dbUser.role !== "admin") {
+    return NextResponse.json({ error: "Admin role required" }, { status: 403 });
+  }
+
+  const { data: bill } = await supabase
+    .from("electricity_bills")
+    .select("id, bill_side, location_id, bill_month, bill_year, contract_id, landlord_total_amount, customer_total")
+    .eq("id", id)
+    .single();
+
+  if (!bill) return NextResponse.json({ error: "Bill not found" }, { status: 404 });
+
+  const { data: result, error } = await supabase.rpc("delete_electricity_bill", { p_bill_id: id });
+
+  if (error) return NextResponse.json({ error: error.message }, { status: 422 });
+
+  await logAudit(supabase, {
+    entityType: "electricity_bill",
+    entityId: id,
+    action: "delete",
+    performedBy: dbUser.id,
+    changes: {
+      bill_side: { old: bill.bill_side, new: null },
+      location_id: { old: bill.location_id, new: null },
+      amount: { old: bill.bill_side === "landlord" ? bill.landlord_total_amount : bill.customer_total, new: null },
+      cascade_result: { old: null, new: result },
+    },
+  });
+
+  return NextResponse.json({ data: result });
 }

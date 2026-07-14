@@ -3,7 +3,6 @@ import { z } from "zod";
 import { createClient, createAdminClient } from "@/lib/supabase/server";
 import { logAudit } from "@/lib/audit";
 import { createVendorBill } from "@/lib/vendor-bills";
-import { zodErrorResponse } from "@/lib/validations";
 
 const lineSchema = z.object({
   line_type: z.enum(["utility", "generator", "other"]),
@@ -140,7 +139,7 @@ export async function POST(request: NextRequest) {
   const body = await request.json();
   const parsed = createSchema.safeParse(body);
   if (!parsed.success) {
-    return NextResponse.json(zodErrorResponse(parsed.error), { status: 400 });
+    return NextResponse.json({ error: parsed.error.flatten().fieldErrors }, { status: 400 });
   }
 
   const {
@@ -177,6 +176,26 @@ export async function POST(request: NextRequest) {
       { error: `An active electricity bill already exists for ${bill_month}/${bill_year}. Revise the existing bill instead.` },
       { status: 409 },
     );
+  }
+
+  // ── Idempotency: block duplicate landlord bill number at this location ────
+  // Real-world trigger: the same physical bill captured twice under different
+  // months by mistake, spawning a duplicate vendor bill + customer bill.
+  if (landlord_bill_number) {
+    const { count: dupeNumber } = await supabase
+      .from("electricity_bills")
+      .select("*", { count: "exact", head: true })
+      .eq("location_id", location_id)
+      .eq("bill_side", "landlord")
+      .eq("landlord_bill_number", landlord_bill_number)
+      .neq("status", "revised");
+
+    if (dupeNumber && dupeNumber > 0) {
+      return NextResponse.json(
+        { error: `Bill number "${landlord_bill_number}" is already in use for this location. Check for a duplicate entry.` },
+        { status: 409 },
+      );
+    }
   }
 
   // ── Compute landlord total from bill lines ────────────────────────────────
