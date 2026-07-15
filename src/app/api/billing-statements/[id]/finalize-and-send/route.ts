@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { createAdminClient, createClient } from "@/lib/supabase/server";
-import { dispatchProforma } from "@/lib/send-proforma";
+import { dispatchProforma, dispatchGstDirect } from "@/lib/send-proforma";
+import { handleStatementFinalized } from "@/lib/tally-handoff-server";
 import { logAudit } from "@/lib/audit";
 
 /**
@@ -46,7 +47,7 @@ export async function POST(
   // Pull the statement to verify state before mutating.
   const { data: statement, error: fetchErr } = await admin
     .from("billing_statements")
-    .select("id, status, voided_at, total_amount, due_date, statement_number")
+    .select("id, status, voided_at, total_amount, due_date, statement_number, contract_id")
     .eq("id", id)
     .single();
   if (fetchErr || !statement) return NextResponse.json({ error: "Statement not found" }, { status: 404 });
@@ -83,9 +84,28 @@ export async function POST(
     },
   });
 
-  // 2. Dispatch proforma. If it fails, roll back to draft so the operator
-  //    can fix the underlying issue (e.g. missing customer email) and retry.
-  const dispatchResult = await dispatchProforma(admin, id, dbUser.id, additionalCc);
+  // 2. Dispatch. GST Direct contracts skip the PI and either issue a tax
+  //    invoice directly or (v2 handoff) route to the Tally Inbox instead.
+  //    If it fails, roll back to draft so the operator can fix the
+  //    underlying issue (e.g. missing customer email) and retry.
+  let billingMode: "proforma_first" | "gst_direct" | null = null;
+  if (statement.contract_id) {
+    const { data: contract } = await admin
+      .from("contracts")
+      .select("billing_mode")
+      .eq("id", statement.contract_id)
+      .single();
+    billingMode = (contract?.billing_mode as "proforma_first" | "gst_direct" | null) ?? null;
+  }
+  const isGstDirect = billingMode === "gst_direct";
+
+  const handoff = await handleStatementFinalized(admin, id, billingMode, "finalize_and_send");
+
+  const dispatchResult = handoff.skipLegacyDispatch
+    ? { success: true, noContact: false, emailedTo: null, razorpayLinkUrl: null, proformaRef: null, totalAmount: statement.total_amount, error: undefined }
+    : isGstDirect
+      ? await dispatchGstDirect(admin, id, dbUser.id, additionalCc)
+      : await dispatchProforma(admin, id, dbUser.id, additionalCc);
   if (!dispatchResult.success) {
     await admin.from("billing_statements")
       .update({ status: "draft", finalized_at: null })
