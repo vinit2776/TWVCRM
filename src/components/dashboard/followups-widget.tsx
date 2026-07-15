@@ -6,6 +6,7 @@ import { Check, CalendarClock, CalendarCheck, Phone, Users, FileText, Mail, MapP
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { ACTIVITY_TYPE_LABELS } from "@/lib/constants";
+import { toDatetimeLocalValue } from "@/lib/utils";
 
 interface FollowUpItem {
   id: string;
@@ -213,8 +214,7 @@ export function FollowupsWidget({ locationFilter }: FollowupsWidgetProps) {
                             setReschedulingId(null);
                             setNewDate("");
                           } else {
-                            // Pre-fill with current date (YYYY-MM-DD)
-                            setNewDate(item.follow_up_date.split("T")[0]);
+                            setNewDate(toDatetimeLocalValue(item.follow_up_date));
                             setReschedulingId(item.id);
                           }
                         }}
@@ -231,11 +231,11 @@ export function FollowupsWidget({ locationFilter }: FollowupsWidgetProps) {
                   {isRescheduling && (
                     <div className="mt-2 flex items-center gap-2 pl-7">
                       <input
-                        type="date"
+                        type="datetime-local"
                         value={newDate}
                         onChange={(e) => setNewDate(e.target.value)}
                         className="text-xs border rounded px-2 py-1 bg-background focus:outline-none focus:ring-1 focus:ring-primary"
-                        min={new Date().toISOString().split("T")[0]}
+                        min={toDatetimeLocalValue()}
                       />
                       <button
                         onClick={() => handleReschedule(item.id)}

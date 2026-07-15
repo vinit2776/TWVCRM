@@ -229,9 +229,9 @@ export function ActivityForm({
             <h4 className="text-sm font-medium">Follow-up (optional)</h4>
             <div className="grid grid-cols-2 gap-4">
               <div className="space-y-2">
-                <Label>Follow-up Date</Label>
+                <Label>Follow-up Date &amp; Time</Label>
                 <Input
-                  type="date"
+                  type="datetime-local"
                   value={followUpDate}
                   onChange={(e) => setFollowUpDate(e.target.value)}
                 />

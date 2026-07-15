@@ -28,7 +28,9 @@ export const dynamic = "force-dynamic";
 
 interface CommEvent {
   kind: "proforma_sent" | "gst_invoice_sent" | "reminder_sent" | "payment_received"
-    | "proposal_deposit_paid" | "proposal_prorata_paid";
+    | "proposal_deposit_paid" | "proposal_prorata_paid"
+    | "statement_finalized" | "statement_voided" | "gst_invoice_uploaded"
+    | "contract_payment_received";
   occurred_at: string;
   statement_id: string;
   statement_number: string | null;
@@ -112,6 +114,30 @@ export async function GET(
   const contractIds = (contracts || []).map((c) => c.id);
   const contractNumberById = new Map((contracts || []).map((c) => [c.id, c.contract_number]));
 
+  // Contract payments (Finance > Acc Payables) aren't gated behind a billing
+  // statement existing — a payment can be recorded against a contract before
+  // its first statement is ever generated — so this runs independently of
+  // the statementIds early-return below.
+  if (contractIds.length > 0) {
+    const { data: contractPayments } = await supabase
+      .from("contract_payments")
+      .select("contract_id, amount, payment_mode, status, created_at")
+      .in("contract_id", contractIds)
+      .neq("status", "rejected");
+
+    for (const row of contractPayments || []) {
+      events.push({
+        kind: "contract_payment_received",
+        occurred_at: row.created_at,
+        statement_id: row.contract_id,
+        statement_number: null,
+        contract_number: contractNumberById.get(row.contract_id) ?? null,
+        detail: `Payment received (${row.payment_mode})`,
+        amount: Number(row.amount),
+      });
+    }
+  }
+
   const finish = () => {
     events.sort((a, b) => new Date(b.occurred_at).getTime() - new Date(a.occurred_at).getTime());
     const page = events.slice(offset, offset + limit);
@@ -128,7 +154,7 @@ export async function GET(
 
   const { data: statements } = await supabase
     .from("billing_statements")
-    .select("id, statement_number, contract_id")
+    .select("id, statement_number, contract_id, status, finalized_at, voided_at, void_reason")
     .in("contract_id", contractIds);
   const statementIds = (statements || []).map((s) => s.id);
   const statementMeta = new Map(
@@ -138,11 +164,38 @@ export async function GET(
     ]),
   );
 
+  // Finalized/voided are independent checks, not mutually exclusive on current
+  // `status` — voiding a statement does not clear `finalized_at`, so a
+  // finalized-then-voided statement shows both events in its real history.
+  for (const s of statements || []) {
+    const meta = statementMeta.get(s.id);
+    if (s.finalized_at) {
+      events.push({
+        kind: "statement_finalized",
+        occurred_at: s.finalized_at,
+        statement_id: s.id,
+        statement_number: meta?.statement_number ?? null,
+        contract_number: meta?.contract_number ?? null,
+        detail: "Billing statement finalized",
+      });
+    }
+    if (s.voided_at) {
+      events.push({
+        kind: "statement_voided",
+        occurred_at: s.voided_at,
+        statement_id: s.id,
+        statement_number: meta?.statement_number ?? null,
+        contract_number: meta?.contract_number ?? null,
+        detail: s.void_reason ? `Statement voided: ${s.void_reason}` : "Statement voided",
+      });
+    }
+  }
+
   if (statementIds.length === 0) {
     return finish();
   }
 
-  const [sendLogRes, reminderRes, paymentsRes, commsLogRes] = await Promise.all([
+  const [sendLogRes, reminderRes, paymentsRes, commsLogRes, gstUploadsRes] = await Promise.all([
     supabase
       .from("billing_send_log")
       .select("billing_statement_id, send_type, recipient, status, sent_at")
@@ -160,6 +213,10 @@ export async function GET(
       .select("*")
       .eq("entity_type", "billing_statement")
       .in("entity_id", statementIds),
+    supabase
+      .from("gst_invoice_uploads")
+      .select("billing_statement_id, tally_invoice_number, tally_invoice_series, invoice_amount, uploaded_at")
+      .in("billing_statement_id", statementIds),
   ]);
 
   // communications_log rows carry full content (subject/body/attachment) for
@@ -226,6 +283,19 @@ export async function GET(
       contract_number: meta?.contract_number ?? null,
       detail: `Payment received (${row.payment_mode})`,
       amount: Number(row.amount),
+    });
+  }
+
+  for (const row of gstUploadsRes.data || []) {
+    const meta = statementMeta.get(row.billing_statement_id);
+    events.push({
+      kind: "gst_invoice_uploaded",
+      occurred_at: row.uploaded_at,
+      statement_id: row.billing_statement_id,
+      statement_number: meta?.statement_number ?? null,
+      contract_number: meta?.contract_number ?? null,
+      detail: `Tally GST invoice uploaded: ${row.tally_invoice_number} (${row.tally_invoice_series})`,
+      amount: Number(row.invoice_amount),
     });
   }
 

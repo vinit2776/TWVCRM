@@ -28,6 +28,18 @@ export function formatDateTime(date: string | Date): string {
   }).format(d);
 }
 
+/**
+ * Formats a date for use as the `value` of an `<input type="datetime-local">`
+ * (expects "yyyy-MM-ddTHH:mm" in the browser's local timezone). Falls back to
+ * the current time if the input is missing/invalid, so reschedule dialogs
+ * always open with a sane default.
+ */
+export function toDatetimeLocalValue(date?: string | Date | null): string {
+  const d = date ? new Date(date) : new Date();
+  if (!isValid(d)) return format(new Date(), "yyyy-MM-dd'T'HH:mm");
+  return format(d, "yyyy-MM-dd'T'HH:mm");
+}
+
 export function formatRelativeDate(date: string | Date): string {
   const d = new Date(date);
   if (!isValid(d)) return "Invalid date";
