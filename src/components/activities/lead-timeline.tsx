@@ -25,7 +25,7 @@ import {
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/shared/loading-skeleton";
-import { formatDate, formatDuration, formatCurrency } from "@/lib/utils";
+import { formatDate, formatDateTime, formatDuration, formatCurrency, toDatetimeLocalValue } from "@/lib/utils";
 import {
   ACTIVITY_TYPE_LABELS,
   CALL_OUTCOME_LABELS,
@@ -49,7 +49,9 @@ import { CommunicationLogRow } from "@/components/communications/communication-l
 // ─── Billing communication event (from /api/leads/[id]/billing-communications) ─
 interface BillingCommEvent {
   kind: "proforma_sent" | "gst_invoice_sent" | "reminder_sent" | "payment_received"
-    | "proposal_deposit_paid" | "proposal_prorata_paid";
+    | "proposal_deposit_paid" | "proposal_prorata_paid"
+    | "statement_finalized" | "statement_voided" | "gst_invoice_uploaded"
+    | "contract_payment_received";
   occurred_at: string;
   statement_id: string;
   statement_number: string | null;
@@ -244,7 +246,7 @@ function ActivityItem({
                           : "text-orange-600 font-medium"
                       }
                     >
-                      Follow-up: {formatDate(activity.follow_up_date)}
+                      Follow-up: {formatDateTime(activity.follow_up_date)}
                       {activity.is_follow_up_done ? " (Done)" : ""}
                     </span>
                   </div>
@@ -265,7 +267,7 @@ function ActivityItem({
                             setIsRescheduling(false);
                             setNewDate("");
                           } else {
-                            setNewDate(activity.follow_up_date!.split("T")[0]);
+                            setNewDate(toDatetimeLocalValue(activity.follow_up_date));
                             setIsRescheduling(true);
                           }
                         }}
@@ -283,11 +285,11 @@ function ActivityItem({
                 {isRescheduling && (
                   <div className="flex items-center gap-2 pl-4 pt-0.5">
                     <input
-                      type="date"
+                      type="datetime-local"
                       value={newDate}
                       onChange={(e) => setNewDate(e.target.value)}
                       className="text-xs border rounded px-2 py-0.5 bg-background focus:outline-none focus:ring-1 focus:ring-primary"
-                      min={new Date().toISOString().split("T")[0]}
+                      min={toDatetimeLocalValue()}
                     />
                     <button
                       onClick={handleReschedule}
@@ -406,6 +408,10 @@ const BILLING_COMM_ICONS: Record<BillingCommEvent["kind"], React.ComponentType<{
   payment_received: CheckCircle2,
   proposal_deposit_paid: CheckCircle2,
   proposal_prorata_paid: CheckCircle2,
+  statement_finalized: CheckCircle2,
+  statement_voided: XCircle,
+  gst_invoice_uploaded: Receipt,
+  contract_payment_received: CheckCircle2,
 };
 
 const BILLING_COMM_COLORS: Record<BillingCommEvent["kind"], string> = {
@@ -415,6 +421,10 @@ const BILLING_COMM_COLORS: Record<BillingCommEvent["kind"], string> = {
   payment_received: "bg-green-100 text-green-600",
   proposal_deposit_paid: "bg-green-100 text-green-600",
   proposal_prorata_paid: "bg-green-100 text-green-600",
+  statement_finalized: "bg-teal-100 text-teal-600",
+  statement_voided: "bg-red-100 text-red-600",
+  gst_invoice_uploaded: "bg-purple-100 text-purple-600",
+  contract_payment_received: "bg-green-100 text-green-600",
 };
 
 const BILLING_COMM_LABELS: Record<BillingCommEvent["kind"], string> = {
@@ -424,6 +434,10 @@ const BILLING_COMM_LABELS: Record<BillingCommEvent["kind"], string> = {
   payment_received: "Payment",
   proposal_deposit_paid: "Deposit",
   proposal_prorata_paid: "Pro-rata",
+  statement_finalized: "Finalized",
+  statement_voided: "Voided",
+  gst_invoice_uploaded: "Tally Upload",
+  contract_payment_received: "Rent Payment",
 };
 
 // PDF-serving routes exist for these two kinds — link directly to them rather
