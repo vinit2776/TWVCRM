@@ -67,14 +67,14 @@ export async function PATCH(
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    const newPoints = computeKpiPoints({
+    const kpiResult = computeKpiPoints({
       priority: issue.priority as FacilityIssuePriority,
       slaBreached: issue.sla_breached ?? false,
       reopenCount: issue.reopen_count ?? 0,
       satisfactionRating: issue.satisfaction_rating,
       latestExtensionExempt: latestExt?.kpi_exempt ?? null,
     });
-    await supabase.from("facility_issues").update({ kpi_points: newPoints }).eq("id", id);
+    await supabase.from("facility_issues").update({ kpi_points: kpiResult.total, kpi_breakdown: kpiResult.lines }).eq("id", id);
   }
 
   await logIssueEvent(supabase, {

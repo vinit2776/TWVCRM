@@ -707,6 +707,35 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
 
         {/* Sidebar */}
         <aside className="space-y-4">
+          {/* KPI score breakdown — the "why" behind the score, not just the
+              number, so it's clear what to repeat or fix next time. */}
+          {issue.kpi_points != null && (
+            <section className="rounded-lg border bg-card p-4 space-y-3">
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">KPI Score</div>
+              <div className={cn(
+                "text-3xl font-bold",
+                issue.kpi_points > 0 ? "text-emerald-600" : issue.kpi_points < 0 ? "text-red-600" : "text-muted-foreground",
+              )}>
+                {issue.kpi_points > 0 ? "+" : ""}{issue.kpi_points}
+              </div>
+              {issue.kpi_breakdown && issue.kpi_breakdown.length > 0 && (
+                <div className="space-y-1 pt-1 border-t">
+                  {issue.kpi_breakdown.map((line, i) => (
+                    <div key={i} className="flex items-center justify-between text-xs">
+                      <span className="text-muted-foreground">{line.label}</span>
+                      <span className={cn(
+                        "font-medium tabular-nums",
+                        line.delta > 0 ? "text-emerald-600" : line.delta < 0 ? "text-red-600" : "text-muted-foreground",
+                      )}>
+                        {line.delta > 0 ? "+" : ""}{line.delta}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </section>
+          )}
+
           {/* TAT extension history — kept at the top of the sidebar so TAT
               status/impact is immediately visible without scrolling. */}
           {extensions.length > 0 && (

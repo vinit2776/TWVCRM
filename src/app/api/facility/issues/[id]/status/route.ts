@@ -113,13 +113,15 @@ export async function PATCH(
       .order("created_at", { ascending: false })
       .limit(1)
       .maybeSingle();
-    updates.kpi_points = computeKpiPoints({
+    const kpiResult = computeKpiPoints({
       priority: existing.priority as FacilityIssuePriority,
       slaBreached: (updates.sla_breached ?? existing.sla_breached ?? false) as boolean,
       reopenCount: existing.reopen_count ?? 0,
       satisfactionRating: null,
       latestExtensionExempt: latestExt?.kpi_exempt ?? null,
     });
+    updates.kpi_points = kpiResult.total;
+    updates.kpi_breakdown = kpiResult.lines;
   }
 
   const { data, error } = await supabase
