@@ -45,8 +45,13 @@ export function computeKpiPoints(params: {
   slaBreached: boolean;
   reopenCount: number;
   satisfactionRating?: number | null;
-  /** true = latest extension was tagged/pass-carded exempt, false = controllable, null = no extension used */
-  latestExtensionExempt: boolean | null;
+  /**
+   * kpi_exempt flag of every extension used on this ticket (not just the
+   * latest) — a single controllable (non-exempt) extension is enough to
+   * count a breach against KPI, even if a later extension was exempt.
+   * Empty array = no extensions used.
+   */
+  extensionExemptFlags: boolean[];
 }): KpiResult {
   const lines: KpiBreakdownLine[] = [];
 
@@ -62,9 +67,10 @@ export function computeKpiPoints(params: {
   }
 
   if (params.slaBreached) {
-    const exempt = params.latestExtensionExempt === true;
-    if (exempt) {
-      lines.push({ label: "TAT breached — extension marked exempt, not counted", delta: 0 });
+    const hasControllableExtension = params.extensionExemptFlags.some((exempt) => !exempt);
+    const allExtensionsExempt = params.extensionExemptFlags.length > 0 && !hasControllableExtension;
+    if (allExtensionsExempt) {
+      lines.push({ label: "TAT breached — all extensions marked exempt, not counted", delta: 0 });
     } else {
       lines.push({ label: "TAT breached — counts against KPI", delta: -LATE_CONTROLLABLE_PENALTY });
     }

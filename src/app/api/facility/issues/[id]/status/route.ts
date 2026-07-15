@@ -106,19 +106,16 @@ export async function PATCH(
     // KPI score — satisfaction isn't known yet (requested just above), so this
     // is the base score; the satisfaction endpoint tops it up once a rating
     // comes in (or recomputes on an auto-reopen from a low rating).
-    const { data: latestExt } = await supabase
+    const { data: exts } = await supabase
       .from("facility_issue_tat_extensions")
       .select("kpi_exempt")
-      .eq("issue_id", id)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .eq("issue_id", id);
     const kpiResult = computeKpiPoints({
       priority: existing.priority as FacilityIssuePriority,
       slaBreached: (updates.sla_breached ?? existing.sla_breached ?? false) as boolean,
       reopenCount: existing.reopen_count ?? 0,
       satisfactionRating: null,
-      latestExtensionExempt: latestExt?.kpi_exempt ?? null,
+      extensionExemptFlags: (exts ?? []).map((e) => e.kpi_exempt),
     });
     updates.kpi_points = kpiResult.total;
     updates.kpi_breakdown = kpiResult.lines;
