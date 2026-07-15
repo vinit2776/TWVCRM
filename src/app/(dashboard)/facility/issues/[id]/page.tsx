@@ -234,6 +234,9 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
   const canNudge = !!issue?.assigned_to && !!currentUser &&
     (isOverrideTier || issue.reported_by === currentUser.id);
   const canExtend = isOwner && open && (issue?.tat_extension_count ?? 0) < 2;
+  // Narrower than isOverrideTier — flipping an extension's KPI-exempt flag
+  // is admin/manager only, unlike the rest of the override tier.
+  const canPassCard = ["admin", "manager"].includes(currentUser?.role ?? "");
 
   const claimCountdownMs = useClaimCountdown(isUnowned ? issue?.claim_sla_target_at : null);
 
@@ -724,7 +727,7 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                     {ext.pass_card_by && (
                       <div className="text-muted-foreground italic">Pass-carded{ext.pass_card_note ? `: ${ext.pass_card_note}` : ""}</div>
                     )}
-                    {isOverrideTier && (
+                    {canPassCard && (
                       <div className="flex gap-2 pt-0.5">
                         <button
                           type="button"

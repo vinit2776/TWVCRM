@@ -24,8 +24,8 @@ export async function PATCH(
 
   const { data: dbUser } = await supabase
     .from("users").select("id, full_name, role").eq("auth_id", user.id).single();
-  if (!hasRole(dbUser?.role, FACILITY_ROLES.override)) {
-    return NextResponse.json({ error: "Admin, manager or office_admin access required" }, { status: 403 });
+  if (!hasRole(dbUser?.role, FACILITY_ROLES.passCard)) {
+    return NextResponse.json({ error: "Admin or manager access required" }, { status: 403 });
   }
 
   const body = await request.json();
