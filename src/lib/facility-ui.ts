@@ -9,6 +9,7 @@ import type {
   FacilityRootCause,
   FacilityScope,
   FacilityReportedVia,
+  FacilityTatReason,
 } from "@/types";
 
 /** Tailwind classes for priority pill backgrounds. */
@@ -127,3 +128,35 @@ export const ROOT_CAUSE_LIST: FacilityRootCause[] = [
   "user_error", "wear_and_tear", "scheduled_maintenance",
   "environmental", "unknown", "other",
 ];
+
+/** TAT extension reason categories — grouped by whether a resulting breach is exempt from KPI penalty by default. */
+export const TAT_REASON_LABEL: Record<FacilityTatReason, string> = {
+  vendor_delay: "Vendor non-responsive / delayed",
+  awaiting_parts: "Awaiting spare parts",
+  dependent_team: "Dependent on another team",
+  requester_unavailable: "Requester/tenant unavailable",
+  underestimated_effort: "Underestimated effort",
+  competing_priorities: "Competing priorities",
+  other: "Other",
+};
+
+/** true = external/excusable (KPI-exempt by default), false = controllable (counts against KPI if still breached). */
+export const TAT_REASON_EXEMPT: Record<FacilityTatReason, boolean> = {
+  vendor_delay: true,
+  awaiting_parts: true,
+  dependent_team: true,
+  requester_unavailable: true,
+  underestimated_effort: false,
+  competing_priorities: false,
+  other: false,
+};
+
+export const TAT_REASON_LIST_EXEMPT: FacilityTatReason[] = ["vendor_delay", "awaiting_parts", "dependent_team", "requester_unavailable"];
+export const TAT_REASON_LIST_CONTROLLABLE: FacilityTatReason[] = ["underestimated_effort", "competing_priorities", "other"];
+
+/** Chip style for a ticket's KPI score badge (shown once a ticket has kpi_points). */
+export function kpiPointsStyle(points: number): { className: string; label: string } {
+  if (points > 0) return { className: "bg-emerald-50 text-emerald-700 ring-emerald-200", label: `+${points} pts` };
+  if (points < 0) return { className: "bg-red-50 text-red-700 ring-red-200", label: `${points} pts` };
+  return { className: "bg-slate-50 text-slate-600 ring-slate-200", label: "0 pts" };
+}

@@ -2,6 +2,7 @@ import { createAdminClient } from "@/lib/supabase/server";
 import { sendPushToUsers } from "@/lib/push";
 import { resend, EMAIL_FROM, EMAIL_REPLY_TO } from "@/lib/mailer";
 import { createNotificationsForUsers } from "@/lib/in-app-notifications";
+import { sendWhatsApp } from "@/lib/whatsapp";
 
 type IssueRef = {
   id: string;
@@ -14,10 +15,22 @@ type IssueRef = {
 export type FacilityNotifyEvent =
   | { type: "created"; priority: string; reportedBy: string }
   | { type: "status_changed"; from: string; to: string; actorName: string; reporterEmail?: string | null }
+  | { type: "priority_escalated"; from: string; to: string; actorName: string }
   | { type: "assigned"; assigneeName: string | null; actorName: string }
   | { type: "claimed"; claimerName: string }
   | { type: "taken_over"; newOwnerName: string }
   | { type: "comment"; actorName: string; message: string };
+
+// Events urgent enough to broadcast across every channel (push + email +
+// WhatsApp + in-app). Everything else is push + in-app only — avoids
+// paging someone by email/WhatsApp for routine status changes, comments,
+// or reassignment. See CLAUDE.md-adjacent decision log: only creation and
+// escalation (priority raised, or reopened after resolution) broadcast.
+const FULL_BROADCAST_EVENTS = new Set(["created", "priority_escalated", "reopened"]);
+
+// Approved MSG91 WhatsApp template name for ticket assignment/escalation —
+// set once the template is approved (see draft in facility settings docs).
+const WA_TEMPLATE_ASSIGNED = process.env.MSG91_WA_TEMPLATE_FACILITY_ASSIGNED;
 
 function issueUrl(issueId: string) {
   const base = process.env.NEXT_PUBLIC_APP_URL || "https://app.theworkvilla.com";
@@ -88,33 +101,41 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
 
     let pushUserIds: string[];
     let emailTo: string[];
+    let waPhones: string[];
 
     if (recipientIds.length === 0) {
       // No assignee — route to managers + office_admin
       const { data: routing } = await supabase
         .from("users")
-        .select("id, email")
+        .select("id, email, phone")
         .in("role", ["manager", "office_admin"])
         .eq("is_active", true);
       pushUserIds = (routing ?? []).map((u) => u.id as string);
       emailTo = (routing ?? []).map((u) => u.email as string).filter(Boolean);
+      waPhones = (routing ?? []).map((u) => u.phone as string).filter(Boolean);
     } else {
       pushUserIds = recipientIds;
       const { data: userRows } = await supabase
         .from("users")
-        .select("id, email")
+        .select("id, email, phone")
         .in("id", recipientIds);
       emailTo = (userRows ?? []).map((u) => u.email as string).filter(Boolean);
+      waPhones = (userRows ?? []).map((u) => u.phone as string).filter(Boolean);
     }
 
     if (pushUserIds.length === 0) return;
+
+    // "reopened" arrives as a status_changed event — treat it as its own
+    // broadcast tier without needing a separate event type end-to-end.
+    const broadcastKey = event.type === "status_changed" && event.to === "reopened" ? "reopened" : event.type;
+    const isFullBroadcast = FULL_BROADCAST_EVENTS.has(broadcastKey);
+    const skipEmail = !isFullBroadcast;
 
     let pushTitle: string;
     let pushBody: string;
     let emailSubject: string;
     let emailHeadline: string;
     let emailDetail: string;
-    let skipEmail = false;
 
     switch (event.type) {
       case "created":
@@ -124,11 +145,18 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
         emailHeadline = "New Facility Ticket Submitted";
         emailDetail = `<strong>Priority:</strong> ${event.priority.toUpperCase()}<br/><strong>Reported by:</strong> ${event.reportedBy}`;
         break;
+      case "priority_escalated":
+        pushTitle = `${issue.issue_number} — Priority Escalated`;
+        pushBody = `${event.from} → ${event.to} by ${event.actorName}`;
+        emailSubject = `[${issue.issue_number}] Priority escalated: ${event.from} → ${event.to}`;
+        emailHeadline = "Ticket Priority Escalated";
+        emailDetail = `<strong>Priority:</strong> ${event.from} → ${event.to}<br/><strong>Escalated by:</strong> ${event.actorName}`;
+        break;
       case "status_changed":
-        pushTitle = `${issue.issue_number} — Status Update`;
+        pushTitle = broadcastKey === "reopened" ? `${issue.issue_number} — Reopened` : `${issue.issue_number} — Status Update`;
         pushBody = `${event.from} → ${event.to} by ${event.actorName}`;
         emailSubject = `[${issue.issue_number}] Status: ${event.from} → ${event.to}`;
-        emailHeadline = "Ticket Status Updated";
+        emailHeadline = broadcastKey === "reopened" ? "Ticket Reopened" : "Ticket Status Updated";
         emailDetail = `<strong>Status:</strong> ${event.from} → ${event.to}<br/><strong>Updated by:</strong> ${event.actorName}`;
         // Also email the reporter when resolved or closed
         if ((event.to === "resolved" || event.to === "closed") && event.reporterEmail) {
@@ -171,8 +199,6 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
         emailSubject = `[${issue.issue_number}] Taken over by ${event.newOwnerName}`;
         emailHeadline = "Ticket Taken Over";
         emailDetail = `<strong>${event.newOwnerName}</strong> has taken over ownership of this ticket.`;
-        // Push only for take-over (no email blast)
-        skipEmail = true;
         break;
       case "comment":
         pushTitle = `${issue.issue_number} — New Comment`;
@@ -180,7 +206,6 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
         emailSubject = `[${issue.issue_number}] Comment by ${event.actorName}`;
         emailHeadline = "New Comment on Ticket";
         emailDetail = `<strong>By:</strong> ${event.actorName}<br/><strong>Comment:</strong> ${event.message}`;
-        skipEmail = true; // comments: push + in-app only, no email
         break;
     }
 
@@ -196,7 +221,21 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
           replyTo: EMAIL_REPLY_TO,
         });
 
-    const [pushResult, emailResult, inAppResult] = await Promise.allSettled([
+    // WhatsApp only for the full-broadcast tier (creation / priority escalation /
+    // reopened) — everything else stays push + in-app to avoid paging people.
+    const waPromises = isFullBroadcast && WA_TEMPLATE_ASSIGNED
+      ? waPhones.map((phone) =>
+          sendWhatsApp({
+            to: phone,
+            template: WA_TEMPLATE_ASSIGNED,
+            params: [issue.issue_number, pushBody, url],
+            entityType: "facility_issue",
+            entityId: issue.id,
+          })
+        )
+      : [];
+
+    const [pushResult, emailResult, inAppResult, ...waResults] = await Promise.allSettled([
       sendPushToUsers(pushUserIds, { title: pushTitle, body: pushBody, url, tag: `facility-${issue.id}` }),
       emailPromise,
       createNotificationsForUsers(pushUserIds, {
@@ -207,12 +246,14 @@ export async function notifyIssueAssignee(issue: IssueRef, event: FacilityNotify
         entityType: "facility_issue",
         entityId: issue.id,
       }),
+      ...waPromises,
     ]);
 
     if (pushResult.status === "rejected") console.error("[facility-notify] push failed:", pushResult.reason);
     if (emailResult.status === "rejected") console.error("[facility-notify] email failed:", emailResult.reason);
     if (inAppResult.status === "rejected") console.error("[facility-notify] in-app failed:", inAppResult.reason);
-    console.log(`[facility-notify] ${event.type} — push/in-app to ${pushUserIds.length} users, email to ${emailTo.join(", ")}`);
+    waResults.forEach((r) => { if (r.status === "rejected") console.error("[facility-notify] whatsapp failed:", r.reason); });
+    console.log(`[facility-notify] ${event.type} — push/in-app to ${pushUserIds.length} users, email to ${emailTo.join(", ")}${isFullBroadcast ? `, whatsapp to ${waPhones.length}` : ""}`);
   } catch (err) {
     console.error("[facility-notify] unexpected error:", err);
   }

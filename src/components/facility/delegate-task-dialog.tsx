@@ -21,6 +21,7 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { LocationSelector } from "@/components/shared/location-selector";
+import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { PRIORITY_STYLES } from "@/lib/facility-ui";
 import { toast } from "sonner";
 import type { FacilityIssuePriority } from "@/types";
@@ -48,6 +49,7 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
   const [priority, setPriority] = useState<FacilityIssuePriority>("medium");
   const [assignedTo, setAssignedTo] = useState("");
   const [dueDate, setDueDate] = useState("");
+  const [photos, setPhotos] = useState<FacilityUploadedPhoto[]>([]);
   const [submitting, setSubmitting] = useState(false);
 
   const [assignees, setAssignees] = useState<AssigneeOption[]>([]);
@@ -69,6 +71,7 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
     setPriority("medium");
     setAssignedTo("");
     setDueDate("");
+    setPhotos([]);
   };
 
   const canSubmit = !!locationId && !!title.trim() && !!assignedTo && !!dueDate;
@@ -89,6 +92,10 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
         priority,
         assigned_to: assignedTo,
         due_date: new Date(dueDate).toISOString(),
+        attachments: photos.map((p) => ({
+          file_url: p.file_url, file_path: p.file_path,
+          file_type: p.file_type, caption: p.caption ?? null,
+        })),
       }),
     });
 
@@ -109,7 +116,7 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
     <Dialog open={open} onOpenChange={(next) => { if (!next) resetForm(); onOpenChange(next); }}>
       <DialogContent className="max-w-lg">
         <DialogHeader>
-          <DialogTitle>Delegate a Task</DialogTitle>
+          <DialogTitle>New Task</DialogTitle>
           <DialogDescription>
             Assign a one-time task to a teammate with a due date — no problem report needed.
           </DialogDescription>
@@ -169,6 +176,17 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
           </div>
 
           <div className="space-y-2">
+            <Label>Attachments (optional)</Label>
+            <FacilityPhotoUpload
+              pathPrefix="task"
+              photos={photos}
+              onUploaded={(p) => setPhotos((prev) => [...prev, p])}
+              onRemove={(i) => setPhotos((prev) => prev.filter((_, idx) => idx !== i))}
+              disabled={submitting}
+            />
+          </div>
+
+          <div className="space-y-2">
             <Label>Priority</Label>
             <div className="flex gap-2">
               {PRIORITY_ORDER.map((p) => {
@@ -197,7 +215,7 @@ export function DelegateTaskDialog({ open, onOpenChange, onCreated }: Props) {
             </Button>
             <Button type="submit" disabled={submitting || !canSubmit}>
               {submitting && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-              Delegate Task
+              Create Task
             </Button>
           </div>
         </form>

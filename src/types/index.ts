@@ -808,6 +808,8 @@ export type AuditEntityType =
   | "facility_asset"
   | "facility_issue"
   | "facility_issue_attachment"
+  | "facility_department"
+  | "facility_department_member"
   | "booking_addon"
   | "addon_catalog"
   | "service_catalog"
@@ -2764,6 +2766,9 @@ export type FacilityTaskType = "reported_problem" | "delegated_task";
 export type FacilityAssetStatus = "active" | "maintenance" | "retired";
 export type FacilityLifecycleStage = "procured" | "installed" | "testing_commissioning" | "operational" | "under_amc" | "decommissioned";
 export type FacilityAttachmentPhase = "report" | "progress" | "resolution";
+export type FacilityTatReason =
+  | "vendor_delay" | "awaiting_parts" | "dependent_team" | "requester_unavailable"
+  | "underestimated_effort" | "competing_priorities" | "other";
 
 export interface CategoryCustomField {
   key: string;
@@ -2784,9 +2789,31 @@ export interface FacilityAssetCategory {
   default_sla_high_hrs: number;
   default_sla_medium_hrs: number;
   default_sla_low_hrs: number;
+  default_assignee_id?: string | null;
+  backup_assignee_id?: string | null;
   sort_order: number;
   is_active: boolean;
   custom_field_schema?: CategoryCustomField[] | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface FacilityDepartmentMember {
+  id: string;
+  department_id: string;
+  user_id: string;
+  user?: { id: string; full_name: string; email: string; role: string } | null;
+  added_by?: string | null;
+  added_at: string;
+}
+
+export interface FacilityDepartment {
+  id: string;
+  scope: FacilityScope;
+  head_user_id?: string | null;
+  head?: { id: string; full_name: string; email: string; role: string } | null;
+  is_active: boolean;
+  members?: FacilityDepartmentMember[];
   created_at: string;
   updated_at: string;
 }
@@ -2865,6 +2892,22 @@ export interface FacilityIssueAttachment {
   uploaded_at: string;
 }
 
+export interface FacilityIssueTatExtension {
+  id: string;
+  issue_id: string;
+  requested_by?: string | null;
+  requester?: { id: string; full_name: string } | null;
+  reason_category: FacilityTatReason;
+  explanation: string;
+  added_hours: number;
+  previous_target_at: string;
+  new_target_at: string;
+  kpi_exempt: boolean;
+  pass_card_by?: string | null;
+  pass_card_note?: string | null;
+  created_at: string;
+}
+
 export interface FacilityIssueEvent {
   id: string;
   issue_id: string;
@@ -2925,6 +2968,11 @@ export interface FacilityIssue {
   closed_at?: string | null;
   sla_target_at?: string | null;
   sla_breached: boolean;
+  tat_hours?: number | null;
+  tat_manual_override?: boolean;
+  tat_extension_count?: number;
+  tat_extensions?: FacilityIssueTatExtension[];
+  kpi_points?: number | null;
   claimed_at?: string | null;
   claim_sla_target_at?: string | null;
   claim_sla_breached?: boolean;

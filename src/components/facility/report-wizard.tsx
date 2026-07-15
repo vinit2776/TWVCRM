@@ -22,11 +22,11 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { PRIORITY_LIST, PRIORITY_STYLES, REPORTED_VIA_LABEL, SCOPE_LABEL } from "@/lib/facility-ui";
+import { PRIORITY_LIST, PRIORITY_STYLES, SCOPE_LABEL } from "@/lib/facility-ui";
 import { FacilityPhotoUpload, type FacilityUploadedPhoto } from "@/components/facility/photo-upload";
 import { QRScannerDialog } from "@/components/facility/qr-scanner-dialog";
 import type {
-  FacilityAsset, FacilityIssuePriority, FacilityReportedVia, FacilityScope,
+  FacilityAsset, FacilityIssuePriority, FacilityScope,
 } from "@/types";
 
 interface Location { id: string; name: string; code: string }
@@ -48,8 +48,6 @@ interface Props {
 }
 
 type Step = 1 | 2 | 3;
-
-const VIAS: FacilityReportedVia[] = ["walk_in", "phone", "whatsapp", "email", "proactive"];
 
 const SCOPE_ORDER: FacilityScope[] = ["it", "hvac", "electrical", "plumbing", "housekeeping", "security", "other", "facility"];
 
@@ -79,11 +77,13 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   const [priority, setPriority] = useState<FacilityIssuePriority>("medium");
   const [title, setTitle] = useState("");
   const [description, setDescription] = useState("");
-  const [reportedVia, setReportedVia] = useState<FacilityReportedVia>("walk_in");
   const [reporterName, setReporterName] = useState("");
   const [reporterPhone, setReporterPhone] = useState("");
   const [reporterEmail, setReporterEmail] = useState("");
   const [photos, setPhotos] = useState<FacilityUploadedPhoto[]>([]);
+  const [tatMode, setTatMode] = useState<"hours" | "datetime">("hours");
+  const [tatHours, setTatHours] = useState("");
+  const [tatDateTime, setTatDateTime] = useState("");
 
   // asset search
   const [assetQuery, setAssetQuery] = useState("");
@@ -99,9 +99,11 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     if (!open) return;
     setStep(prefilled ? 2 : 1);
     setPhotos([]);
+    setTatMode("hours");
+    setTatHours("");
+    setTatDateTime("");
     setTitle("");
     setDescription("");
-    setReportedVia("walk_in");
     setReporterName("");
     setReporterPhone("");
     setReporterEmail("");
@@ -174,9 +176,24 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   const canNext2 = !!scope && title.trim().length >= 3;
   const canSubmit = canNext1 && canNext2;
 
+  // TAT override, resolved from whichever mode is active — hours directly,
+  // or a target date/time converted to hours-from-now (fractional is fine).
+  const resolveTatHours = (): number | undefined => {
+    if (tatMode === "hours") {
+      return tatHours.trim() ? Number(tatHours) : undefined;
+    }
+    if (!tatDateTime) return undefined;
+    return (new Date(tatDateTime).getTime() - Date.now()) / 3_600_000;
+  };
+
   // submit
   const submit = async () => {
     if (!canSubmit) return;
+    const tatHoursValue = resolveTatHours();
+    if (tatMode === "datetime" && tatDateTime && (tatHoursValue == null || tatHoursValue <= 0)) {
+      toast.error("TAT date & time must be in the future");
+      return;
+    }
     setSubmitting(true);
     try {
       const res = await fetch("/api/facility/issues", {
@@ -191,7 +208,7 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
           title: title.trim(),
           description: description.trim() || null,
           priority,
-          reported_via: reportedVia,
+          tat_hours: tatHoursValue,
           reporter_name: reporterName.trim() || null,
           reporter_email: reporterEmail.trim() || null,
           reporter_phone: reporterPhone.trim() || null,
@@ -456,6 +473,56 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
       </div>
 
       <div>
+        <Label className="text-sm font-medium">TAT override (optional)</Label>
+        <div className="flex items-center gap-1 mt-1.5 mb-2">
+          <button
+            type="button"
+            onClick={() => setTatMode("hours")}
+            className={cn(
+              "px-2.5 py-1 text-xs rounded-full border",
+              tatMode === "hours" ? "bg-[#015E65] text-white border-[#015E65]" : "bg-muted/40",
+            )}
+          >Hours</button>
+          <button
+            type="button"
+            onClick={() => setTatMode("datetime")}
+            className={cn(
+              "px-2.5 py-1 text-xs rounded-full border",
+              tatMode === "datetime" ? "bg-[#015E65] text-white border-[#015E65]" : "bg-muted/40",
+            )}
+          >Date &amp; time</button>
+        </div>
+        {tatMode === "hours" ? (
+          <div className="flex items-center gap-2">
+            <Input
+              id="tat-hours"
+              type="number"
+              min={1}
+              step={1}
+              value={tatHours}
+              onChange={(e) => setTatHours(e.target.value)}
+              placeholder="Hours"
+              className="max-w-[140px]"
+            />
+            <span className="text-xs text-muted-foreground">
+              Leave blank to use the category/priority default
+            </span>
+          </div>
+        ) : (
+          <div className="flex items-center gap-2">
+            <Input
+              id="tat-datetime"
+              type="datetime-local"
+              value={tatDateTime}
+              onChange={(e) => setTatDateTime(e.target.value)}
+              className="max-w-[220px]"
+            />
+            <span className="text-xs text-muted-foreground">Due by this date &amp; time</span>
+          </div>
+        )}
+      </div>
+
+      <div>
         <Label htmlFor="title" className="text-sm font-medium">Title</Label>
         <Input
           id="title"
@@ -497,23 +564,6 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
   // ── Step 3: Who ────────────────────────────────────────────────
   const Step3 = (
     <div className="space-y-4">
-      <div>
-        <Label className="text-sm font-medium">How was this reported?</Label>
-        <div className="flex flex-wrap gap-2 mt-2">
-          {VIAS.map((v) => (
-            <button
-              key={v}
-              type="button"
-              onClick={() => setReportedVia(v)}
-              className={cn(
-                "px-3 py-1.5 text-xs rounded-full border",
-                reportedVia === v ? "bg-[#015E65] text-white border-[#015E65]" : "bg-muted/40",
-              )}
-            >{REPORTED_VIA_LABEL[v]}</button>
-          ))}
-        </div>
-      </div>
-
       <div className="rounded-lg border bg-muted/30 p-3 space-y-3">
         <p className="text-xs text-muted-foreground">
           If you&apos;re reporting on someone else&apos;s behalf, add their contact so they get the resolution update. Skip if not applicable.
@@ -570,8 +620,8 @@ export function FacilityReportWizard({ open, onOpenChange, defaults, onCreated }
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="max-w-lg p-0 gap-0 max-h-[92vh] flex flex-col">
         <DialogHeader className="p-4 pb-3 border-b">
-          <DialogTitle className="text-base">Report a facility issue</DialogTitle>
-          <DialogDescription className="sr-only">3-step wizard to report a new issue</DialogDescription>
+          <DialogTitle className="text-base">New Work Order</DialogTitle>
+          <DialogDescription className="sr-only">3-step wizard to raise a new work order</DialogDescription>
           <div className="flex items-center gap-3 pt-2">
             {!prefilled && <>{StepHeader(1, "Where")}<ChevronRight className="h-3 w-3 text-muted-foreground" /></>}
             {StepHeader(2, prefilled ? "Details" : "What")}
