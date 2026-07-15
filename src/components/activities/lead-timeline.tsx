@@ -440,13 +440,17 @@ const BILLING_COMM_LABELS: Record<BillingCommEvent["kind"], string> = {
   contract_payment_received: "Rent Payment",
 };
 
-// PDF-serving routes exist for these two kinds — link directly to them rather
+// PDF-serving routes exist for these kinds — link directly to them rather
 // than the commLogEntry attachment (a signed URL that expires and is only
 // present when the send went through logCommunication()). This works for
 // every proforma/GST-invoice send regardless of enrichment status.
+// gst_invoice_uploaded reuses the same gst-invoice-pdf route — it already
+// resolves via gst_invoice_uploads for the statement, which is exactly the
+// row this event kind is sourced from.
 const BILLING_COMM_PDF_HREF: Partial<Record<BillingCommEvent["kind"], string>> = {
   proforma_sent: "proforma-pdf",
   gst_invoice_sent: "gst-invoice-pdf",
+  gst_invoice_uploaded: "gst-invoice-pdf",
 };
 
 function BillingCommItem({ event, isLast }: { event: BillingCommEvent; isLast?: boolean }) {
