@@ -704,6 +704,48 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
 
         {/* Sidebar */}
         <aside className="space-y-4">
+          {/* TAT extension history — kept at the top of the sidebar so TAT
+              status/impact is immediately visible without scrolling. */}
+          {extensions.length > 0 && (
+            <section className="rounded-lg border bg-card p-4 space-y-3">
+              <div className="text-xs uppercase tracking-wide text-muted-foreground">TAT Extensions</div>
+              <div className="space-y-3">
+                {extensions.map((ext) => (
+                  <div key={ext.id} className="text-xs space-y-1 border-l-2 pl-2" style={{ borderColor: ext.kpi_exempt ? "#059669" : "#dc2626" }}>
+                    <div className="flex items-center justify-between">
+                      <span className="font-medium">+{ext.added_hours}h — {TAT_REASON_LABEL[ext.reason_category]}</span>
+                      <span className={cn("px-1.5 py-0.5 rounded-full ring-1 text-[10px] font-medium",
+                        ext.kpi_exempt ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-red-50 text-red-700 ring-red-200")}>
+                        {ext.kpi_exempt ? "KPI exempt" : "Counts vs KPI"}
+                      </span>
+                    </div>
+                    <div className="text-muted-foreground">{ext.explanation}</div>
+                    <div className="text-muted-foreground">{ext.requester?.full_name ?? "—"} · {timeAgo(ext.created_at)}</div>
+                    {ext.pass_card_by && (
+                      <div className="text-muted-foreground italic">Pass-carded{ext.pass_card_note ? `: ${ext.pass_card_note}` : ""}</div>
+                    )}
+                    {isOverrideTier && (
+                      <div className="flex gap-2 pt-0.5">
+                        <button
+                          type="button"
+                          onClick={() => passCard(ext.id, true)}
+                          disabled={busy || ext.kpi_exempt}
+                          className="text-[10px] text-emerald-600 hover:underline disabled:opacity-40 disabled:no-underline"
+                        >Mark exempt</button>
+                        <button
+                          type="button"
+                          onClick={() => passCard(ext.id, false)}
+                          disabled={busy || !ext.kpi_exempt}
+                          className="text-[10px] text-red-600 hover:underline disabled:opacity-40 disabled:no-underline"
+                        >Mark counts vs KPI</button>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </section>
+          )}
+
           {/* Where */}
           <section className="rounded-lg border bg-card p-4 space-y-2">
             <div className="text-xs uppercase tracking-wide text-muted-foreground">Where</div>
@@ -885,47 +927,6 @@ export default function FacilityIssueDetailPage({ params }: { params: Promise<{ 
                     </div>
                   );
                 })}
-              </div>
-            </section>
-          )}
-
-          {/* TAT extension history */}
-          {extensions.length > 0 && (
-            <section className="rounded-lg border bg-card p-4 space-y-3">
-              <div className="text-xs uppercase tracking-wide text-muted-foreground">TAT Extensions</div>
-              <div className="space-y-3">
-                {extensions.map((ext) => (
-                  <div key={ext.id} className="text-xs space-y-1 border-l-2 pl-2" style={{ borderColor: ext.kpi_exempt ? "#059669" : "#dc2626" }}>
-                    <div className="flex items-center justify-between">
-                      <span className="font-medium">+{ext.added_hours}h — {TAT_REASON_LABEL[ext.reason_category]}</span>
-                      <span className={cn("px-1.5 py-0.5 rounded-full ring-1 text-[10px] font-medium",
-                        ext.kpi_exempt ? "bg-emerald-50 text-emerald-700 ring-emerald-200" : "bg-red-50 text-red-700 ring-red-200")}>
-                        {ext.kpi_exempt ? "KPI exempt" : "Counts vs KPI"}
-                      </span>
-                    </div>
-                    <div className="text-muted-foreground">{ext.explanation}</div>
-                    <div className="text-muted-foreground">{ext.requester?.full_name ?? "—"} · {timeAgo(ext.created_at)}</div>
-                    {ext.pass_card_by && (
-                      <div className="text-muted-foreground italic">Pass-carded{ext.pass_card_note ? `: ${ext.pass_card_note}` : ""}</div>
-                    )}
-                    {isOverrideTier && (
-                      <div className="flex gap-2 pt-0.5">
-                        <button
-                          type="button"
-                          onClick={() => passCard(ext.id, true)}
-                          disabled={busy || ext.kpi_exempt}
-                          className="text-[10px] text-emerald-600 hover:underline disabled:opacity-40 disabled:no-underline"
-                        >Mark exempt</button>
-                        <button
-                          type="button"
-                          onClick={() => passCard(ext.id, false)}
-                          disabled={busy || !ext.kpi_exempt}
-                          className="text-[10px] text-red-600 hover:underline disabled:opacity-40 disabled:no-underline"
-                        >Mark counts vs KPI</button>
-                      </div>
-                    )}
-                  </div>
-                ))}
               </div>
             </section>
           )}
